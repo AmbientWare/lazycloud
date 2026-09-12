@@ -82,7 +82,10 @@ def test_status_validates_state_and_never_outputs_agent_token(
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
         credential_generation=TEST_AGENT_CREDENTIAL_GENERATION,
-        bootstrap=AgentBootstrap(gateway_public_http_url=EXAMPLE_URL),
+        bootstrap=AgentBootstrap(
+            gateway_public_http_url=EXAMPLE_URL,
+            gateway_runtime_http_url="http://100.96.0.1:9000",
+        ),
     )
     (tmp_path / "agent-state.json").write_text(state.model_dump_json(), encoding="utf-8")
     slots = [
@@ -163,7 +166,10 @@ def installation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_I
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
         credential_generation=TEST_AGENT_CREDENTIAL_GENERATION,
-        bootstrap=AgentBootstrap(gateway_public_http_url=EXAMPLE_URL),
+        bootstrap=AgentBootstrap(
+            gateway_public_http_url=EXAMPLE_URL,
+            gateway_runtime_http_url="http://100.96.0.1:9000",
+        ),
     )
     installed = _Installation(state_dir, unit_path, sibling_state, sibling_unit, state)
 

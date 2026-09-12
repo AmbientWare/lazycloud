@@ -20,10 +20,19 @@ WIREGUARD_KEEPALIVE_SECONDS = 25
 WIREGUARD_DEFAULT_PORT = 51820
 WIREGUARD_GATEWAY_HEALTH_PORT = 8080
 WIREGUARD_RUNTIME_SERVICE_PORT = 9000
+WIREGUARD_RUNTIME_HTTP_ORIGIN = (
+    f"http://{WIREGUARD_GATEWAY_ADDRESS}:{WIREGUARD_RUNTIME_SERVICE_PORT}"
+)
 WIREGUARD_AGENT_ROUTE_PROXY_PORT = 29443
 WIREGUARD_PLATFORM_PEER_LIMIT = 32
 _AGENT_FIRST_ADDRESS = int(ipaddress.IPv4Address("100.96.1.1"))
 _AGENT_LAST_ADDRESS = int(WIREGUARD_OVERLAY.broadcast_address) - 1
+
+
+def validate_wireguard_runtime_http_origin(value: str) -> str:
+    if value != WIREGUARD_RUNTIME_HTTP_ORIGIN:
+        raise ValueError("worker runtime callbacks must use the WireGuard runtime service")
+    return value
 
 
 class WireGuardError(RuntimeError):

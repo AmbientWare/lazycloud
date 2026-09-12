@@ -87,7 +87,6 @@ class AgentCommandArgs(argparse.Namespace):
     executor: str
     worker_image: str
     worker_route_target: str
-    worker_runtime_http_url: str
     worker_network: str
     worker_host_alias: list[str]
     max_cpu: str
@@ -242,7 +241,6 @@ def _add_daemon_options(
     )
     parser.add_argument("--worker-image", default="")
     parser.add_argument("--worker-route-target", default="127.0.0.1")
-    parser.add_argument("--worker-runtime-http-url", default="")
     parser.add_argument("--worker-network", type=_agent_worker_network_name, default="host")
     # A second agent on the same host must build its containers on its own bridge:
     # each allocates addresses inside its own control-plane scope, so one shared
@@ -266,7 +264,7 @@ def _agent_worker_network_name(value: str) -> str:
     try:
         return AgentWorkerNetwork(name=value).name
     except ValidationError as exc:
-        message = "worker network must be a valid Docker network name"
+        message = "worker network must name a Docker network or container:<id or name>"
         raise argparse.ArgumentTypeError(message) from exc
 
 
@@ -290,7 +288,6 @@ def _daemon_options(args: AgentCommandArgs) -> AgentDaemonOptions:
         executor=WorkerExecutor(args.executor),
         worker_image=args.worker_image,
         worker_route_target=args.worker_route_target,
-        worker_runtime_http_url=args.worker_runtime_http_url,
         worker_network=AgentWorkerNetwork(
             name=args.worker_network,
             bridge_name=args.worker_bridge_name,
@@ -395,8 +392,6 @@ def _install_service_command(
         command.extend(["--worker-image", args.worker_image])
     if args.worker_route_target != "127.0.0.1":
         command.extend(["--worker-route-target", args.worker_route_target])
-    if args.worker_runtime_http_url:
-        command.extend(["--worker-runtime-http-url", args.worker_runtime_http_url])
     if args.worker_network != "host":
         command.extend(["--worker-network", args.worker_network])
     # Re-emitted rather than left to the default: the installed unit is what runs from

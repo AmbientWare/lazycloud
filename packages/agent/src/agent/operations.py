@@ -10,7 +10,9 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
+from compute.agent_control import validate_agent_transport_config
 from compute.telemetry import redact_telemetry_line
+from networking.wireguard import validate_wireguard_runtime_http_origin
 from pydantic import Field, JsonValue, field_validator
 from shared.app_identity import (
     ADMIN_CLI_NAME,
@@ -81,7 +83,7 @@ AGENT_WORKER_CONTAINER_SERVICE_PORT_SPAN = 20000
 AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
 AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
-DOCKER_NETWORK_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"
+DOCKER_NETWORK_NAME_PATTERN = r"^(container:)?[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"
 
 
 class AgentInstallOS(StrEnum):
@@ -902,14 +904,29 @@ class AgentCapacityPlan(ContractModel):
 
 class AgentBootstrap(ContractModel):
     gateway_public_http_url: str
-    gateway_runtime_http_url: str = ""
+    gateway_runtime_http_url: str
     gateway_grpc_host: str = ""
     gateway_grpc_port: int = 443
     gateway_grpc_tls: bool = True
-    transport: BackendRouteTransport = BackendRouteTransport.Direct
+    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     image_local_cache_enabled: bool = True
     image_registry_store: str = "local"
     image_clip_version: int = 2
+
+    @field_validator("gateway_runtime_http_url")
+    @classmethod
+    def require_wireguard_runtime_origin(cls, value: str) -> str:
+        return validate_wireguard_runtime_http_origin(value)
+
+    @field_validator("transport")
+    @classmethod
+    def require_private_network_transport(
+        cls, value: BackendRouteTransport
+    ) -> BackendRouteTransport:
+        plan = validate_agent_transport_config(value)
+        if not plan.accepted:
+            raise ValueError(plan.err_msg)
+        return value
 
     @field_validator("gateway_grpc_port", "image_clip_version")
     @classmethod
@@ -1305,10 +1322,6 @@ def agent_state_payload(
         "capacity_notice_at": (
             state.capacity_notice_at.isoformat() if state.capacity_notice_at is not None else None
         ),
-        # Dumped whole rather than field by field. The hand-written list omitted
-        # `gateway_runtime_http_url`, so the origin survived in memory and was
-        # lost on the next restart: the worker then fell back to the public
-        # origin, which refuses worker RPC at the edge, and never left pending.
         "bootstrap": bootstrap.model_dump(mode="json"),
         "updated_at": state.updated_at.isoformat(),
     }
@@ -1349,7 +1362,7 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
 
 
 def agent_gateway_env(bootstrap: AgentBootstrap) -> dict[str, str]:
-    runtime_http_url = bootstrap.gateway_runtime_http_url or bootstrap.gateway_public_http_url
+    runtime_http_url = bootstrap.gateway_runtime_http_url
     http_host, http_port, http_tls = agent_gateway_http_parts(runtime_http_url)
     grpc_port = bootstrap.gateway_grpc_port or 443
     return {
@@ -1459,11 +1472,6 @@ def plan_worker_container(
         "WORKER_SOURCE_CACHE_STORAGE_ID": f"machine:{slot.machine_id}",
         "WORKER_NETWORK_PREFIX": slot.network_prefix,
         "WORKER_ROUTE_TARGET": target_host,
-        # The same origin the worker's gateway client uses. Computing it a second
-        # time here is what let the two disagree: one honoured the agent's
-        # runtime-URL override and the other did not, so the worker held a
-        # reachable gateway and an unreachable repository and never reported
-        # itself available.
         WORKER_REPOSITORY_URL_ENV: gateway_env[GATEWAY_HTTP_URL_ENV],
     }
     if slot.gpu_count > 0:

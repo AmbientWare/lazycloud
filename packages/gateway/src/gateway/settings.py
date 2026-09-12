@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from networking.wireguard import WIREGUARD_GATEWAY_ADDRESS, WIREGUARD_RUNTIME_SERVICE_PORT
+from networking.wireguard import WIREGUARD_RUNTIME_HTTP_ORIGIN
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.deployment_settings import MissingDeploymentSettingError
@@ -18,17 +18,13 @@ class GatewaySettings(BaseSettings):
     # account, and the address a node enrols against. A localhost default would
     # be accepted everywhere and correct nowhere.
     public_http_url: str = Field(default="", validation_alias=PUBLIC_HTTP_URL_VARIABLE)
-    runtime_callback_http_url: str = Field(
-        default=f"http://{WIREGUARD_GATEWAY_ADDRESS}:{WIREGUARD_RUNTIME_SERVICE_PORT}",
-        validation_alias="LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL",
-    )
 
     model_config = SettingsConfigDict(
         extra="ignore",
         populate_by_name=True,
     )
 
-    @field_validator("public_http_url", "runtime_callback_http_url")
+    @field_validator("public_http_url")
     @classmethod
     def normalize_url(cls, value: str) -> str:
         if not value.strip():
@@ -42,12 +38,11 @@ class GatewaySettings(BaseSettings):
                 PUBLIC_HTTP_URL_VARIABLE,
                 purpose="the public origin this deployment is reached on",
             )
-        if not self.runtime_callback_http_url:
-            raise MissingDeploymentSettingError(
-                "LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL",
-                purpose="the private API service reached through WireGuard",
-            )
         return self
+
+    @property
+    def runtime_callback_http_url(self) -> str:
+        return WIREGUARD_RUNTIME_HTTP_ORIGIN
 
     @property
     def public_base_domain(self) -> str:

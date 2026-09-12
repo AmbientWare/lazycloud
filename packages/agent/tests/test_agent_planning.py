@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from agent.operations import (
+    AgentBootstrap,
     AgentCapacityOptions,
     AgentDetectedResources,
     AgentGpuDevice,
@@ -15,9 +16,33 @@ from agent.operations import (
     same_worker_slot,
     select_agent_gpu_devices,
 )
+from pydantic import ValidationError
 from shared.compute_enrollment import AgentWorkerSlotStatus, PreflightSeverity
 from shared.compute_policy import MachinePool
+from shared.routing import BackendRouteTransport
 from shared.usage import UsageBillingOwner
+
+
+def test_agent_bootstrap_requires_private_runtime_after_serialization() -> None:
+    bootstrap = AgentBootstrap(
+        gateway_public_http_url="https://gateway.example.test",
+        gateway_runtime_http_url="http://100.96.0.1:9000",
+    )
+    serialized = bootstrap.model_dump(mode="json")
+    assert AgentBootstrap.model_validate(serialized) == bootstrap
+
+    del serialized["gateway_runtime_http_url"]
+    with pytest.raises(ValidationError, match="gateway_runtime_http_url"):
+        AgentBootstrap.model_validate(serialized)
+
+    serialized["gateway_runtime_http_url"] = bootstrap.gateway_public_http_url
+    with pytest.raises(ValidationError, match="WireGuard runtime service"):
+        AgentBootstrap.model_validate(serialized)
+
+    serialized = bootstrap.model_dump(mode="json")
+    serialized["transport"] = BackendRouteTransport.Direct.value
+    with pytest.raises(ValidationError, match="transport"):
+        AgentBootstrap.model_validate(serialized)
 
 
 def test_capacity_selection_respects_requested_limits_and_rejects_host_overcommit() -> None:

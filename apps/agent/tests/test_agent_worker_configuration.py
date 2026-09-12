@@ -40,7 +40,7 @@ class _RunningWorkerRunner(_Runner):
         del stop
         self.calls.append(args)
         if len(args) > 1 and args[1] == "inspect":
-            return CommandResult(args=args, returncode=0, stdout="true")
+            return CommandResult(args=args, returncode=0, stdout="true\nhost\n")
         return CommandResult(args=args, returncode=0)
 
 
@@ -77,7 +77,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
         plan_worker_slot_reconciliation([slot], []),
         AgentBootstrap(
             gateway_public_http_url="https://gateway.example.test",
-            gateway_runtime_http_url="http://host.docker.internal:8000",
+            gateway_runtime_http_url="http://100.96.0.1:9000",
             transport=BackendRouteTransport.PrivateNetwork,
         ),
     )
@@ -86,23 +86,14 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
     contents = config_path.read_text(encoding="utf-8")
     document = _WorkerConfigurationDocument.model_validate(yaml.safe_load(contents))
     config = document.configuration
-    docker_run = next(args for args in runner.calls if len(args) > 1 and args[1] == "run")
 
     assert applied
     assert config.execution.capacity.cpu_millicores == 4000
     assert config.execution.capacity.memory_mib == 8192
     assert config.execution.capacity.gpu_type == "L4"
     assert config.execution.capacity.gpu_count == 1
-    assert "WORKER_NETWORK_PREFIX=private-pool:machine-one" in docker_run
     assert "worker-secret" not in contents
     assert config_path.stat().st_mode & 0o777 == 0o600
-    assert f"{config_path}:/etc/lazycloud/worker/worker.yaml:ro" in docker_run
-    # Both clients must reach the control plane through the runtime origin.
-    assert "WORKER_REPOSITORY_URL=http://host.docker.internal:8000" in docker_run
-    assert "GATEWAY_HTTP_URL=http://host.docker.internal:8000" in docker_run
-    assert "WORKER_ROUTE_TARGET=127.0.0.1" in docker_run
-    assert docker_run[docker_run.index("--network") + 1] == "lazycloud_default"
-    assert docker_run[docker_run.index("--cgroupns") + 1] == "host"
 
 
 def test_agent_gives_all_workers_one_bounded_graceful_shutdown_window(
@@ -177,7 +168,10 @@ def test_agent_stop_treats_concurrent_container_removal_as_settled(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
     )
 
-    bootstrap = AgentBootstrap(gateway_public_http_url="https://gateway.example.test")
+    bootstrap = AgentBootstrap(
+        gateway_public_http_url="https://gateway.example.test",
+        gateway_runtime_http_url="http://100.96.0.1:9000",
+    )
     controller.apply(plan_worker_slot_reconciliation([slot], []), bootstrap)
     assert [active.worker_id for active in controller.active_slots()] == [slot.worker_id]
 

@@ -36,6 +36,7 @@ from shared.routing import (
     RoutePrewarmDecision,
 )
 from shared.timestamps import to_utc, utc_now
+from shared.urls import normalize_http_origin
 from shared.usage import UsageBillingOwner
 
 from compute.projection import (
@@ -222,6 +223,11 @@ class AgentBootstrapConfig(ContractModel):
     image_registry_store: str = ""
     image_clip_version: int = 2
     image_local_cache_enabled: bool = True
+
+    @field_validator("gateway_runtime_http_url")
+    @classmethod
+    def require_runtime_origin(cls, value: str) -> str:
+        return normalize_http_origin(value, field_name="agent runtime callback URL")
 
 
 class AgentStreamTimingPlan(ContractModel):
@@ -895,9 +901,6 @@ def validate_agent_transport_config(
     )
 
 
-_LOCAL_RUNTIME_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
-
-
 def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
     """Whether a remote machine could never reach this host.
 
@@ -918,33 +921,6 @@ def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
     )
 
 
-def _reject_unroutable_runtime_url(
-    url: str,
-    *,
-    pool: MachinePool,
-    transport: BackendRouteTransport,
-) -> None:
-    """Refuse a runtime callback a remote machine could never resolve.
-
-    Workers validate readiness by calling this origin. A Compose service name or
-    loopback address resolves on the control-plane host and nowhere else, so a
-    remote machine enrolls, reports healthy, and then crash-loops its worker
-    forever on `Name or service not known`. Failing here names the cause instead
-    of producing a machine that looks ready and can never run work.
-    """
-    if transport is not BackendRouteTransport.PrivateNetwork:
-        return
-    host = urlparse(url).hostname or ""
-    if not host:
-        raise ValueError("remote-machine runtime callback URL has no host")
-    if host in _LOCAL_RUNTIME_HOSTS or host_is_unreachable_from_a_remote_machine(host):
-        raise ValueError(
-            f"pool {pool!r} serves remote machines and cannot use runtime callback host "
-            f"{host!r}: a remote machine cannot resolve it. Set "
-            "LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL to a publicly reachable origin."
-        )
-
-
 def build_agent_bootstrap_config(
     workspace_id: str,
     pool_state: PrivateUnitState,
@@ -961,11 +937,6 @@ def build_agent_bootstrap_config(
     transport_plan = validate_agent_transport_config(normalized.transport)
     if not transport_plan.accepted:
         raise ValueError(transport_plan.err_msg)
-    _reject_unroutable_runtime_url(
-        gateway_runtime_http_url,
-        pool=pool_state.pool,
-        transport=normalized.transport,
-    )
     return AgentBootstrapConfig(
         gateway_public_http_url=gateway.http_url,
         gateway_runtime_http_url=gateway_runtime_http_url,

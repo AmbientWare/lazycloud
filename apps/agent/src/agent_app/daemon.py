@@ -123,7 +123,6 @@ from shared.http.releases import (
 )
 from shared.http_transport import HttpChannel
 from shared.provider_config import ProviderKind
-from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from worker.configuration import WorkerConfiguration, serialize_worker_configuration
 
@@ -218,7 +217,6 @@ class AgentDaemonOptions(ContractModel):
     executor: WorkerExecutor = WorkerExecutor.Container
     worker_image: str = ""
     worker_route_target: str = "127.0.0.1"
-    worker_runtime_http_url: str = ""
     worker_network: AgentWorkerNetwork = Field(default_factory=AgentWorkerNetwork)
     worker_host_aliases: list[str] = Field(default_factory=list)
     docker_binary: str = "docker"
@@ -631,7 +629,6 @@ class DockerAgentWorkerController:
     state_dir: Path
     docker_binary: str = "docker"
     worker_image_override: str = ""
-    worker_runtime_http_url_override: str = ""
     target_host: str = "127.0.0.1"
     worker_network: AgentWorkerNetwork = field(default_factory=AgentWorkerNetwork)
     runner: CommandRunner = field(default_factory=SubprocessCommandRunner)
@@ -779,15 +776,8 @@ class DockerAgentWorkerController:
             raise ValueError(msg)
         if image not in self._images.prepared():
             raise RuntimeError(f"worker image is not prepared for slot {slot.worker_id}")
-        worker_bootstrap = (
-            bootstrap.model_copy(
-                update={"gateway_runtime_http_url": self.worker_runtime_http_url_override}
-            )
-            if self.worker_runtime_http_url_override
-            else bootstrap
-        )
         plan = plan_worker_container(
-            worker_bootstrap,
+            bootstrap,
             slot,
             state_dir=str(self.state_dir),
             image=image,
@@ -901,13 +891,23 @@ class DockerAgentWorkerController:
     def _running_slot(self, slot: AgentWorkerSlot) -> AgentWorkerSlot | None:
         name = f"{AGENT_NAME}-{sanitize_worker_name(slot.worker_id)}"
         template = (
-            "{{.State.Running}}\n{{range .Config.Env}}"
+            "{{.State.Running}}\n{{.HostConfig.NetworkMode}}\n{{range .Config.Env}}"
             '{{if eq (index (split . "=") 0) "WORKER_AGENT_BINARY_SHA256"}}'
             '{{index (split . "=") 1}}{{end}}{{end}}'
         )
         result = self.runner.run([self.docker_binary, "inspect", "-f", template, name])
-        running, _, digest = result.stdout.strip().partition("\n")
+        running, _, remainder = result.stdout.strip().partition("\n")
         if result.returncode != 0 or running != "true":
+            return None
+        network_mode, _, digest = remainder.partition("\n")
+        desired_network_mode = self.worker_network.name
+        if desired_network_mode.startswith("container:"):
+            namespace = desired_network_mode.removeprefix("container:")
+            target = self.runner.run([self.docker_binary, "inspect", "-f", "{{.Id}}", namespace])
+            if target.returncode != 0 or not target.stdout.strip():
+                raise RuntimeError("worker network namespace container is unavailable")
+            desired_network_mode = f"container:{target.stdout.strip()}"
+        if network_mode != desired_network_mode:
             return None
         observed = slot.model_copy()
         observed.agent_binary_sha256 = digest
@@ -1658,12 +1658,10 @@ class AgentDaemonService:
         self,
         state: AgentState,
     ) -> tuple[
-        AgentPrivateNetworkRuntime | None,
+        AgentPrivateNetworkRuntime,
         str,
-        WireGuardPeerConfiguration | None,
+        WireGuardPeerConfiguration,
     ]:
-        if not _agent_uses_private_network(state.bootstrap.transport):
-            return (None, "", None)
         runtime = self.private_network_runtime or WireGuardClientRuntime(
             Path(self.options.state_dir) / "wireguard",
         )
@@ -1713,7 +1711,7 @@ class AgentDaemonService:
         private_network_address: str = "",
     ) -> AgentRouteProxyService:
         config = self.options.route_proxy
-        if private_network_address and _agent_uses_private_network(state.bootstrap.transport):
+        if private_network_address:
             update: dict[str, str] = {}
             if config.bind_host == "127.0.0.1":
                 update["bind_host"] = private_network_address
@@ -1754,7 +1752,6 @@ def build_agent_daemon_service(
             state_dir,
             docker_binary=options.docker_binary,
             worker_image_override=options.worker_image,
-            worker_runtime_http_url_override=options.worker_runtime_http_url,
             target_host=options.worker_route_target,
             worker_network=options.worker_network,
             host_aliases=_worker_host_aliases(options),
@@ -1793,10 +1790,6 @@ def _provider_capacity_interruption_detector(
         )
 
     return detect
-
-
-def _agent_uses_private_network(transport: BackendRouteTransport) -> bool:
-    return transport is BackendRouteTransport.PrivateNetwork
 
 
 def _private_network_host(address: str) -> str:
@@ -1979,17 +1972,12 @@ def _agent_slot_from_gateway(slot: http.AgentWorkerSlot) -> AgentWorkerSlot:
 
 def _agent_bootstrap(
     config: AgentBootstrapConfig | None,
-    *,
-    fallback_gateway_url: str,
 ) -> AgentBootstrap:
     if config is None:
-        return AgentBootstrap(
-            gateway_public_http_url=fallback_gateway_url,
-            gateway_runtime_http_url=fallback_gateway_url,
-        )
+        raise RuntimeError("gateway did not return agent runtime bootstrap configuration")
     return AgentBootstrap(
-        gateway_public_http_url=config.gateway_public_http_url or fallback_gateway_url,
-        gateway_runtime_http_url=config.gateway_runtime_http_url or fallback_gateway_url,
+        gateway_public_http_url=config.gateway_public_http_url,
+        gateway_runtime_http_url=config.gateway_runtime_http_url,
         gateway_grpc_host=config.gateway_grpc_host,
         gateway_grpc_port=config.gateway_grpc_port,
         gateway_grpc_tls=config.gateway_grpc_tls,
@@ -2018,7 +2006,7 @@ def _agent_state_from_join_response(
         credential_id=response.credential_id,
         credential_generation=response.credential_generation,
         capacity_state=response.capacity_state,
-        bootstrap=_agent_bootstrap(response.bootstrap, fallback_gateway_url=gateway_url),
+        bootstrap=_agent_bootstrap(response.bootstrap),
     )
 
 
@@ -2046,10 +2034,7 @@ def _agent_state_from_stream_response(
             "bootstrap": (
                 state.bootstrap
                 if response.bootstrap is None
-                else _agent_bootstrap(
-                    response.bootstrap,
-                    fallback_gateway_url=state.sanitized_gateway_url,
-                )
+                else _agent_bootstrap(response.bootstrap)
             ),
             "updated_at": utc_now(),
         }
