@@ -16,9 +16,9 @@ from worker.container_service.models import (
 )
 from worker.container_service.protocols import WorkerContainerInstanceStore
 from worker.execution import (
+    ContainerNetworkIdentity,
     PortBinding,
     container_port_address_map,
-    select_container_network,
 )
 from worker.oci_spec import OciRuntimeContainerSpec
 from worker.runtime_config import OciRuntimeName
@@ -84,7 +84,6 @@ class OciContainerServiceInstanceRecorder:
             exposed_ports=[binding.container_port for binding in port_bindings],
             address_map=_address_map(
                 context.request.container_id,
-                identity,
                 network_result,
                 port_bindings,
             ),
@@ -104,9 +103,6 @@ class OciContainerServiceInstanceRecorder:
             worker_id=identity.worker_id,
             machine_id=identity.machine_id,
             pool=identity.pool,
-            route_local_target_host=identity.route_local_target_host,
-            route_transport=identity.route_transport,
-            agent_worker=identity.agent_worker,
             image_id=context.request.image_id,
             container_ip=(
                 network_result.identity.container_ip
@@ -125,7 +121,6 @@ class OciContainerServiceInstanceRecorder:
 
 def _address_map(
     container_id: str,
-    route_identity: WorkerRouteIdentity,
     network_result: ContainerNetworkSetupResult | None,
     port_bindings: list[PortBinding],
 ) -> dict[int, str]:
@@ -134,15 +129,8 @@ def _address_map(
         if network_result is not None and network_result.identity is not None
         else ""
     )
-    selection = select_container_network(
-        container_id,
-        pod_address=route_identity.pod_address,
-        persistent=route_identity.persistent,
-        machine_id=route_identity.machine_id,
-        transport=route_identity.route_transport.value,
-        container_ip=container_ip,
-    )
-    return container_port_address_map(selection.identity, port_bindings).addresses
+    identity = ContainerNetworkIdentity(container_id=container_id, container_ip=container_ip)
+    return container_port_address_map(identity, port_bindings).addresses
 
 
 def _spec_root_path(spec: OciRuntimeContainerSpec) -> str:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -29,7 +29,6 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.env import GATEWAY_HTTP_URL_ENV, no_gateway_origin
 from shared.errors import (
     CapacityLimitReachedError,
     ConflictError,
@@ -98,7 +97,6 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(slots=True)
 class FunctionControlService:
     services: ExecutionServices
-    gateway_http_url: Callable[[], str] = no_gateway_origin
     async_database: AsyncDatabaseClient | None = None
     task_changes: AsyncTaskChangeReader | None = None
     control_plane: ControlPlaneService = field(init=False)
@@ -493,7 +491,7 @@ class FunctionControlService:
                 gpu=list(config.runtime.gpu),
                 image_id=config.effective_image_id,
                 checkpoint_enabled=config.runtime.checkpoint_enabled,
-                env=_function_runtime_env(config.env_list, self.gateway_http_url()),
+                env=config.env_list,
                 secret_env=[],
                 lifecycle_hooks=config.lifecycle_hooks,
             )
@@ -1244,13 +1242,6 @@ class FunctionControlService:
         if not task.workspace_id:
             raise InvalidInputError(f"function task {task.id} is missing workspace ownership")
         return task.workspace_id
-
-
-def _function_runtime_env(values: Iterable[str], gateway_http_url: str) -> list[str]:
-    env = list(values)
-    if gateway_http_url:
-        env.append(f"{GATEWAY_HTTP_URL_ENV}={gateway_http_url}")
-    return env
 
 
 def _function_result_payload(task: Task) -> FunctionResultPayload:

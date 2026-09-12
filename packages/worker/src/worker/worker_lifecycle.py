@@ -40,6 +40,7 @@ class WorkerLifecycleAction(StrEnum):
     MarkAvailable = "mark-available"
     ActivateSourceCache = "activate-source-cache"
     ValidateReadiness = "validate-readiness"
+    RestoreRoutes = "restore-routes"
     KeepAlive = "keepalive"
     DisableScheduling = "disable-scheduling"
     DrainRequests = "drain-requests"
@@ -160,6 +161,7 @@ class WorkerActiveContainer:
 @dataclass(slots=True)
 class WorkerLifecycleOrchestrator:
     worker_id: str
+    route_restorer: Callable[[], None]
     repository: WorkerLifecycleRepository | None = None
     stopper: WorkerLifecycleContainerStopper | None = None
     registration: WorkerExecutionRecord | None = None
@@ -246,11 +248,15 @@ class WorkerLifecycleOrchestrator:
                 return [added, readiness]
         else:
             readiness = None
+        routes = self._run_repository_step(WorkerLifecycleAction.RestoreRoutes, self.route_restorer)
+        if not routes.ok:
+            return [added, activation, *([readiness] if readiness is not None else []), routes]
         available = self.mark_available()
         return [
             added,
             activation,
             *([readiness] if readiness is not None else []),
+            routes,
             available,
         ]
 

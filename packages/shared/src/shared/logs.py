@@ -14,7 +14,7 @@ class ContainerLogEntryKind(StringEnum):
     """What a captured entry is, which decides whether a customer sees it.
 
     Only ``Output`` is the container speaking. ``Flush`` is a capture barrier with no
-    message; ``Dropped`` and ``Diagnostic`` are the worker telling the reader why
+    message; ``Dropped`` and ``Diagnostic`` are the platform telling the reader why
     output is missing, which is worth more to them than silence.
     """
 

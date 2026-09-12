@@ -39,7 +39,6 @@ from execution.task_progress import TaskProgressService
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.settings import GatewaySettings
-from networking.settings import BackendRouteSettings
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
@@ -133,11 +132,6 @@ class SchedulerStorageSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class SchedulerNetworkSettings:
-    backend_routes: BackendRouteSettings
-
-
-@dataclass(frozen=True, slots=True)
 class SchedulerCapacitySettings:
     aws_connections: AwsAccountConnectionSettings
     aws_capacity: AwsCapacitySettings
@@ -189,7 +183,6 @@ class SchedulerAppServices:
         gateway_origin: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
-        network: SchedulerNetworkSettings,
         capacity: SchedulerCapacitySettings,
     ) -> SchedulerAppServices:
         context = ServiceContext.create(database, root=root, create_schema=create_schema)
@@ -296,7 +289,6 @@ class SchedulerAppServices:
                 ),
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.endpoint_url,
-                backend_route=network.backend_routes,
             )
             if capacity.aws_connections.configured or platform_capacity.configured
             else None

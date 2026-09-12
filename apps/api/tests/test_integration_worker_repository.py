@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
-import socket
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -16,7 +14,7 @@ from api.server.services import ApiServices
 from api.server.worker_repository_service import (
     WorkerRepositoryService,
 )
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import agent_machine_worker_id, hash_compute_token
 from compute.state import (
     RedisComputeStateRepository,
 )
@@ -32,11 +30,8 @@ from coordination.event_bus import (
 from database.context import ServiceContext
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.compute import (
-    PRIMARY_WIREGUARD_GATEWAY_ID,
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
-    WireGuardGatewayRepository,
-    WireGuardPeerRepository,
 )
 from database.repositories.execution import TaskRepository
 from database.repositories.images import (
@@ -74,14 +69,13 @@ from scheduler.state import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
 )
+from shared.agent_connections import AgentConnectionRecord
 from shared.app_identity import FUNCTION_IMAGE
 from shared.billing_quotes import ContainerShape
 from shared.cache_records import CacheEntry
 from shared.compute_enrollment import (
     ComputePreflightCheck,
     PreflightSeverity,
-    PrivateNetworkEnrollmentPhase,
-    WireGuardGateway,
 )
 from shared.compute_policy import (
     MachinePool,
@@ -91,16 +85,13 @@ from shared.container_requests import ContainerShutdownTarget, StopContainerReas
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
-from shared.http.private_network import (
-    RegisterPrivateNetworkRequest,
-)
 from shared.http.releases import AgentReleaseRequest
 from shared.http.worker_usage import WorkerUsageWindowResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
-from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
+from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from shared.scheduling import WorkerExecutionRecord
 from shared.source_cache_cleanup import (
     WorkerCacheGenerationRecord,
@@ -158,6 +149,7 @@ from worker.repository_payloads import (
     SetContainerAddressMapRequest,
     SetContainerAddressRequest,
     SetContainerExitCodeRequest,
+    SetWorkerAddressRequest,
     StreamWorkerEventsRequest,
     UpdateContainerStatusRequest,
     WorkerCacheSession,
@@ -2141,16 +2133,22 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
     service = isolated_services.worker_repository_service
     containers = RedisSchedulerContainerRepository(redis)
     compute_states = RedisComputeStateRepository(redis)
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    gateway = isolated_services.gateway_service
+    pool = MachinePool("port-route-cleanup")
+    workspace_id, machine_id, _ = _join_gateway_agent(
+        isolated_services, gateway, pool=pool, machine_fingerprint="port-route-cleanup"
+    )
+    worker_id = agent_machine_worker_id(machine_id)
+    unit = gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id)
+    principal = WorkerRepositoryPrincipal(workspace_id=workspace_id, worker_id=worker_id)
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
             runtime_image="container-worker:local",
-            capacity_owner_id=_ROUTE_CAPACITY_OWNER,
-            worker_id="compose-container-worker",
+            capacity_owner_id=unit.capacity_owner_id,
+            worker_id=worker_id,
             workspace_id=workspace_id,
-            machine_id="compose-machine",
-            pool=MachinePool("default"),
+            machine_id=machine_id,
+            pool=pool,
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -2167,7 +2165,8 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
                 image="",
                 command=[],
                 workspace_id=workspace_id,
-                runtime_worker_id="compose-container-worker",
+                runtime_worker_id=worker_id,
+                runtime_machine_id=machine_id,
                 status=ContainerStatus.Running,
             )
         )
@@ -2176,22 +2175,20 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
             container_id=container_id,
             workspace_id=workspace_id,
             stub_id="stub-1",
-            worker_id="compose-container-worker",
+            worker_id=worker_id,
             status=SchedulerContainerStatus.Running,
         )
     )
     routes = [
         AgentBackendRoute(
-            route_id=f"compose-machine:compose-container-worker:{container_id}:container:{port}",
+            route_id=f"{machine_id}:{worker_id}:{container_id}:container:{port}",
             workspace_id=workspace_id,
-            pool=MachinePool("default"),
-            machine_id="compose-machine",
-            worker_id="compose-container-worker",
+            pool=pool,
+            machine_id=machine_id,
+            worker_id=worker_id,
             container_id=container_id,
             port=port,
-            transport=BackendRouteTransport.Direct,
             local_target=f"10.0.0.2:{port}",
-            proxy_target=f"10.0.0.2:{port}",
             state=BackendRouteState.Ready,
         )
         for port in (8080, 9090, 2222)
@@ -2201,44 +2198,61 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
             container_id=container_id,
             address=routes[0].local_target,
             route=routes[0],
-        )
+        ),
+        principal=principal,
     )
     service.set_container_address_map(
         SetContainerAddressMapRequest(
             container_id=container_id,
             address_map={route.port: route.local_target for route in routes},
             routes=routes,
-        )
+        ),
+        principal=principal,
     )
-    containers.set_worker_address(
-        container_id,
-        "10.0.0.2:9000",
-        route=routes[0],
+    worker_route = AgentBackendRoute(
+        route_id=f"{machine_id}:{worker_id}:{container_id}:worker:0",
+        workspace_id=workspace_id,
+        pool=pool,
+        machine_id=machine_id,
+        worker_id=worker_id,
+        container_id=container_id,
+        kind=BackendRouteKind.Worker,
+        local_target="127.0.0.1:9001",
+    )
+    service.set_worker_address(
+        SetWorkerAddressRequest(
+            container_id=container_id,
+            address=worker_route.local_target,
+            route=worker_route,
+        ),
+        principal=principal,
     )
     service.set_container_exit_code(
         SetContainerExitCodeRequest(container_id=container_id, exit_code=0, exited_at=utc_now()),
-        principal=WorkerRepositoryPrincipal(worker_id="compose-container-worker"),
+        principal=principal,
     )
 
     before = compute_states.list_agent_route_states(
         workspace_id,
-        _ROUTE_CAPACITY_OWNER,
-        "compose-machine",
+        unit.capacity_owner_id,
+        machine_id,
     )
     response = service.delete_container_state(
         DeleteContainerStateRequest(container_id=container_id),
-        principal=WorkerRepositoryPrincipal(worker_id="compose-container-worker"),
+        principal=principal,
     )
 
-    assert {route.route_id for route in before} == {route.route_id for route in routes}
+    assert {route.route_id for route in before} == {
+        route.route_id for route in [*routes, worker_route]
+    }
     assert response.deleted
     assert containers.get_container_state(container_id) is None
     assert containers.get_container_address_map(container_id).routes == []
     assert (
         compute_states.list_agent_route_states(
             workspace_id,
-            _ROUTE_CAPACITY_OWNER,
-            "compose-machine",
+            unit.capacity_owner_id,
+            machine_id,
         )
         == []
     )
@@ -2255,16 +2269,21 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
     service = async_services.worker_repository_service
     containers = RedisSchedulerContainerRepository(redis)
     compute_states = RedisComputeStateRepository(redis)
-    with async_services.context.database.session() as session:
-        workspace_id = async_services.context.default_workspace_id(session)
+    gateway = async_services.gateway_service
+    pool = MachinePool("orphan-routes")
+    workspace_id, machine_id, _ = _join_gateway_agent(
+        async_services, gateway, pool=pool, machine_fingerprint="orphan-routes"
+    )
+    worker_id = agent_machine_worker_id(machine_id)
+    unit = gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id)
     RedisSchedulerWorkerRepository(redis).add_worker(
         SchedulerWorkerRecord(
             runtime_image="container-worker:local",
-            capacity_owner_id=_ROUTE_CAPACITY_OWNER,
-            worker_id="worker-1",
+            capacity_owner_id=unit.capacity_owner_id,
+            worker_id=worker_id,
             workspace_id=workspace_id,
-            machine_id="machine-1",
-            pool=MachinePool("default"),
+            machine_id=machine_id,
+            pool=pool,
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -2273,17 +2292,28 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
         )
     )
     container_id = "531a1b89-6f97-4080-80b3-13122218a55b"
+    with async_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name="orphan-routes",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+                runtime_worker_id=worker_id,
+                runtime_machine_id=machine_id,
+                status=ContainerStatus.Running,
+            )
+        )
     active_route = AgentBackendRoute(
-        route_id=f"machine-1:worker-1:{container_id}:container:9090",
+        route_id=f"{machine_id}:{worker_id}:{container_id}:container:9090",
         workspace_id=workspace_id,
-        pool=MachinePool("default"),
-        machine_id="machine-1",
-        worker_id="worker-1",
+        pool=pool,
+        machine_id=machine_id,
+        worker_id=worker_id,
         container_id=container_id,
         port=9090,
-        transport=BackendRouteTransport.Direct,
         local_target="10.0.0.2:9090",
-        proxy_target="10.0.0.2:9090",
         state=BackendRouteState.Ready,
     )
     containers.set_container_state(
@@ -2291,7 +2321,7 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
             container_id=container_id,
             workspace_id=workspace_id,
             stub_id="stub-1",
-            worker_id="worker-1",
+            worker_id=worker_id,
             status=SchedulerContainerStatus.Running,
         )
     )
@@ -2300,14 +2330,15 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
             container_id=container_id,
             address_map={9090: active_route.local_target},
             routes=[active_route],
-        )
+        ),
+        principal=WorkerRepositoryPrincipal(workspace_id=workspace_id, worker_id=worker_id),
     )
     orphan_route = AgentBackendRoute(
         route_id="missing-worker:missing-container:container:9090",
         workspace_id=workspace_id,
-        capacity_owner_id=_ROUTE_CAPACITY_OWNER,
-        pool=MachinePool("default"),
-        machine_id="machine-1",
+        capacity_owner_id=unit.capacity_owner_id,
+        pool=pool,
+        machine_id=machine_id,
         worker_id="missing-worker",
         container_id="missing-container",
         port=9090,
@@ -2322,8 +2353,8 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
     assert (
         compute_states.get_agent_route_state(
             workspace_id,
-            _ROUTE_CAPACITY_OWNER,
-            "machine-1",
+            unit.capacity_owner_id,
+            machine_id,
             active_route.route_id,
         )
         is not None
@@ -2331,8 +2362,8 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
     assert (
         compute_states.get_agent_route_state(
             workspace_id,
-            _ROUTE_CAPACITY_OWNER,
-            "machine-1",
+            unit.capacity_owner_id,
+            machine_id,
             orphan_route.route_id,
         )
         is None
@@ -2360,8 +2391,6 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         machine_fingerprint="route-machine",
     )
     worker_id = agent_machine_worker_id(machine_id)
-    # Routes are filed under the machine's own unit, so the worker record has to name
-    # the unit the agent actually joined rather than one invented here.
     joined_unit = gateway.unit_state_coordinator.unit_by_name(
         UnitName(MachinePool("pool-a")),
         workspace_id=workspace_id,
@@ -2381,46 +2410,65 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
             free_memory_mib=1024,
         )
     )
+    container_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name="route-status",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+                runtime_worker_id=worker_id,
+                runtime_machine_id=machine_id,
+                status=ContainerStatus.Running,
+            )
+        )
+    containers.set_container_state(
+        SchedulerContainerState(
+            container_id=container_id,
+            workspace_id=workspace_id,
+            stub_id="route-status",
+            worker_id=worker_id,
+            status=SchedulerContainerStatus.Running,
+        )
+    )
     route = AgentBackendRoute(
-        route_id=f"{machine_id}:{worker_id}:container-1:container:8001",
+        route_id=f"{machine_id}:{worker_id}:{container_id}:container:8001",
         workspace_id=workspace_id,
         pool=MachinePool("pool-a"),
         machine_id=machine_id,
         worker_id=worker_id,
-        container_id="container-1",
+        container_id=container_id,
         port=8001,
-        transport=BackendRouteTransport.PrivateNetwork,
         local_target="192.168.0.4:8001",
         state=BackendRouteState.Opening,
     )
     service = isolated_services.worker_repository_service
     service.set_container_address(
         SetContainerAddressRequest(
-            container_id="container-1",
+            container_id=container_id,
             address="192.168.0.4:8001",
             route=route,
+        ),
+        principal=WorkerRepositoryPrincipal(workspace_id=workspace_id, worker_id=worker_id),
+    )
+    response = gateway.update_agent_route_status(
+        UpdateAgentRouteStatusRequest(
+            agent_token=agent_token,
+            route_id=route.route_id,
+            state=BackendRouteState.Ready,
         )
     )
-    with socket.create_server(("127.0.0.1", 0)) as listener:
-        target = f"127.0.0.1:{listener.getsockname()[1]}"
-        response = gateway.update_agent_route_status(
-            UpdateAgentRouteStatusRequest(
-                agent_token=agent_token,
-                route_id=route.route_id,
-                state=BackendRouteState.Ready,
-                proxy_target=target,
-            )
-        )
-        resolved = SchedulerBackendRouteResolver(
-            isolated_services.routes,
-            containers,
-        ).get_backend_route(route.route_id)
+    resolved = SchedulerBackendRouteResolver(
+        isolated_services.routes,
+        containers,
+    ).get_backend_route(route.route_id)
 
-        assert response.route_id == route.route_id
-        assert resolved is not None
-        assert resolved.state == BackendRouteState.Ready.value
-        assert resolved.proxy_target == target
-        gateway.route_prewarmer.close()
+    assert response.route_id == route.route_id
+    assert resolved is not None
+    assert resolved.state is BackendRouteState.Ready
+    assert resolved.local_target == route.local_target
 
 
 def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
@@ -2493,8 +2541,11 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     assert stored.region is None
 
 
+@pytest.mark.parametrize("supersede_release", [False, True])
 def test_worker_admission_survives_activation_and_registration_after_redis_loss(
-    isolated_services: ApiServices, monkeypatch: pytest.MonkeyPatch
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+    supersede_release: bool,
 ) -> None:
     gateway = isolated_services.gateway_service
     service = isolated_services.worker_repository_service
@@ -2504,22 +2555,6 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
         pool=MachinePool("release-reconnect"),
         machine_fingerprint="release-reconnect",
     )
-    with isolated_services.context.database.session() as session:
-        enrollments = ComputeMachineEnrollmentRepository(session)
-        enrollment = enrollments.by_machine(workspace_id, machine_id)
-        assert enrollment is not None
-        peers = WireGuardPeerRepository(session)
-        peer = peers.by_enrollment(enrollment.id)
-        assert peer is not None
-        peers.save(peer.model_copy(update={"last_handshake_at": utc_now()}))
-        enrollments.save(
-            enrollment.model_copy(
-                update={
-                    "network_phase": PrivateNetworkEnrollmentPhase.Connected,
-                    "network_verified_at": utc_now(),
-                }
-            )
-        )
     release = DeploymentReleaseService().state()
     stream = gateway.stream_agent(StreamAgentRequest(agent_token=agent_token))
     assert stream.ok and len(stream.slots) == 1
@@ -2586,6 +2621,15 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
         ReleaseSettings().active_file.write_text(following.model_dump_json())
         assert service._worker_release_admitted(current)
         service.workers.remove_worker(slot.worker_id)
+        with isolated_services.context.database.session() as session:
+            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                workspace_id, machine_id
+            )
+            assert enrollment is not None
+        connection = gateway.connections.get(workspace_id, enrollment.id)
+        assert connection is not None
+        assert gateway.connections.release(connection)
+        _record_agent_connection(gateway, workspace_id, machine_id, agent_token)
         recovered = client.post(
             "/worker-repository/add-worker", json=request.model_dump(mode="json"), headers=headers
         )
@@ -2622,6 +2666,9 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
         draining = service.workers.get_worker(slot.worker_id)
         assert draining is not None and draining.status is SchedulerWorkerStatus.Draining
         assert draining.request_poll_expires_at is None
+        superseded_generation = following.generation
+        if supersede_release:
+            following = select_worker_release("worker:latest")
         current_request = request.model_copy(
             update={
                 "worker": request.worker.model_copy(
@@ -2629,6 +2676,62 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
                 )
             }
         )
+        ready = client.post(
+            "/worker-repository/add-worker",
+            json=current_request.model_dump(mode="json"),
+            headers=headers,
+        )
+        assert ready.status_code == 200
+        blocked = service.workers.get_worker(slot.worker_id)
+        assert blocked is not None
+        assert blocked.admitted_release_generation == following.generation
+        if not supersede_release:
+            assert blocked.status is SchedulerWorkerStatus.Pending
+            current_session = WorkerRecordResponse.model_validate_json(ready.content).cache_session
+            assert current_session is not None
+            assert (
+                client.post(
+                    "/worker-repository/toggle-worker-available",
+                    headers=headers,
+                    json=WorkerCacheSessionRequest(
+                        worker_id=slot.worker_id,
+                        cache_generation_id=current_session.generation_id,
+                        cache_session_fence=current_session.session_fence,
+                    ).model_dump(mode="json"),
+                ).status_code
+                == 200
+            )
+            stale_observation = gateway.stream_agent(
+                StreamAgentRequest(
+                    agent_token=agent_token,
+                    active_worker_images={slot.worker_id: release.target.worker_image},
+                    prepared_worker_images=[following.target.worker_image],
+                )
+            )
+            assert stale_observation.ok
+            blocked = service.workers.get_worker(slot.worker_id)
+        assert blocked is not None and blocked.status is SchedulerWorkerStatus.Draining
+        resumed = gateway.stream_agent(
+            StreamAgentRequest(
+                agent_token=agent_token,
+                active_worker_images={slot.worker_id: following.target.worker_image},
+                prepared_worker_images=[following.target.worker_image],
+            )
+        )
+        assert resumed.ok
+        recovering = service.workers.get_worker(slot.worker_id)
+        assert recovering is not None and recovering.status is SchedulerWorkerStatus.Pending
+        assert recovering.request_poll_expires_at is None
+        with isolated_services.context.database.session() as session:
+            assert (
+                WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id)
+                == following.generation
+            )
+        if supersede_release:
+            assert not service.workers.release_worker_rollout_slot(
+                slot.capacity_owner_id, slot.worker_id, str(superseded_generation)
+            )
+        assert service.workers.has_worker_rollout_slot(slot.capacity_owner_id, slot.worker_id)
         ready = client.post(
             "/worker-repository/add-worker",
             json=current_request.model_dump(mode="json"),
@@ -2665,6 +2768,7 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
             assert (
                 WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id) == 0
             )
+        assert not service.workers.has_worker_rollout_slot(slot.capacity_owner_id, slot.worker_id)
         changed = request.model_copy(
             update={
                 "worker": request.worker.model_copy(update={"runtime_image": "worker:unverified"})
@@ -2718,34 +2822,35 @@ def _join_gateway_agent(
             ],
         )
     )
-    with services.context.database.session() as session:
-        WireGuardGatewayRepository(session).save(
-            WireGuardGateway(
-                id=PRIMARY_WIREGUARD_GATEWAY_ID,
-                public_key=_wireguard_public_key("test-gateway"),
-                endpoint="wireguard.test:51820",
-                updated_at=utc_now(),
-            )
-        )
-    gateway.register_private_network(
-        RegisterPrivateNetworkRequest(
-            agent_token=joined.agent_token,
-            public_key=_wireguard_public_key(joined.machine_id),
-        )
-    )
+    _record_agent_connection(gateway, workspace_id, joined.machine_id, joined.agent_token)
     return workspace_id, joined.machine_id, joined.agent_token
 
 
-def _wireguard_public_key(identity: str) -> str:
-    return base64.b64encode(hashlib.sha256(identity.encode()).digest()).decode()
-
-
-_ROUTE_CAPACITY_OWNER = "33333333-3333-4333-8333-333333333333"
-"""Capacity owner the route tests register their worker under.
-
-Routes are filed under the machine's owner read from its worker record, so a read
-that names anything else finds nothing.
-"""
+def _record_agent_connection(
+    gateway: GatewayControlService, workspace_id: str, machine_id: str, agent_token: str
+) -> None:
+    with gateway.services.context.database.session() as session:
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id, machine_id
+        )
+        assert enrollment is not None
+    identity = gateway.tunnel_authority.bind_key(
+        enrollment.id,
+        workspace_id,
+        hash_compute_token(agent_token),
+        hashlib.sha256(machine_id.encode()).hexdigest(),
+    )
+    previous = gateway.connections.get(workspace_id, enrollment.id)
+    assert gateway.connections.claim(
+        AgentConnectionRecord(
+            identity=identity,
+            gateway_id=str(uuid4()),
+            connection_id=str(uuid4()),
+            gateway_address="gateway.test:443",
+            expires_at=utc_now() + timedelta(hours=1),
+        ),
+        previous_connection_id=previous.connection_id if previous is not None else None,
+    )
 
 
 def _worker_token(

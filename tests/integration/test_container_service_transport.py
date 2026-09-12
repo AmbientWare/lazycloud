@@ -1,22 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import sleep
 
-from gateway.container_transport import HttpContainerServiceTransportFactory
-from networking.dialer import BackendRouteDialerConfig
-from shared.compute_policy import MachinePool
 from shared.http_transport import HttpChannel
-from shared.routing import AgentBackendRoute, BackendRouteState, BackendRouteTransport
 from tests.http_server import running_http_server
-from worker.container_client.control import (
-    plan_container_client_connection_options,
-)
 from worker.container_client.models import (
     ContainerCheckpointRequest,
     ContainerCheckpointResponse,
-    ContainerServiceMethod,
 )
 
 
@@ -41,40 +32,10 @@ def test_checkpoint_requests_can_outlast_connection_timeouts() -> None:
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), CheckpointHandler)
     address = f"127.0.0.1:{server.server_port}"
-    with running_http_server(server):
-        transport = HttpContainerServiceTransportFactory(
-            route_resolver=_ReadyRouteResolver(address=address),
-            route_dialer_config=BackendRouteDialerConfig(timeout_seconds=0.05),
-        ).create_transport(
-            plan_container_client_connection_options(address, backend_route_id="route-worker")
-        )
+    with (
+        running_http_server(server),
+        HttpChannel(endpoint=f"http://{address}", timeout_seconds=0.05) as channel,
+    ):
         request = ContainerCheckpointRequest(container_id="container-1")
-        response = transport.unary(
-            ContainerServiceMethod.ContainerCheckpoint,
-            request,
-            timeout_seconds=1.0,
-        )
-        assert ContainerCheckpointResponse.model_validate(response).checkpoint_id == "checkpoint-1"
-
-        channel = HttpChannel(endpoint=f"http://{address}", timeout_seconds=0.05)
         response = channel.post("/checkpoint", request.model_dump(mode="json"), timeout_seconds=1.0)
         assert ContainerCheckpointResponse.model_validate(response).checkpoint_id == "checkpoint-1"
-
-
-@dataclass(slots=True)
-class _ReadyRouteResolver:
-    address: str = "worker.internal:8910"
-
-    def get_backend_route(self, route_id: str) -> AgentBackendRoute | None:
-        if route_id != "route-worker":
-            return None
-        return AgentBackendRoute(
-            route_id=route_id,
-            workspace_id="workspace-1",
-            pool=MachinePool("default"),
-            machine_id="machine-1",
-            worker_id="worker-1",
-            proxy_target=self.address,
-            transport=BackendRouteTransport.Direct,
-            state=BackendRouteState.Ready,
-        )

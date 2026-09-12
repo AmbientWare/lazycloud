@@ -73,7 +73,7 @@ RUN apt-get update \
         fuse3 \
         iproute2 \
         iptables \
-        wireguard-tools \
+        socat \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
@@ -82,7 +82,6 @@ COPY --from=agent-artifact-amazon-linux-test \
     /usr/local/bin/lazycloud-agent
 
 RUN docker --version \
-    && wg --version \
     && lazycloud-agent --help >/dev/null
 
 ENTRYPOINT ["lazycloud-agent"]

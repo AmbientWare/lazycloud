@@ -10,7 +10,6 @@ CONTAINER_STATE_TTL_SECONDS = 120
 CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS = 600
 DEFAULT_WORKER_SPINDOWN_SECONDS = 300.0
 DEFAULT_WORKER_STOP_GRACE_SECONDS = 30
-WORKER_ORPHAN_STATE_MISSING_EVENT_ID = "worker.orphan_state_missing"
 WORKER_PENDING_RECONCILED_EVENT_ID = "worker.pending_reconciled_running"
 WORKER_STOPPING_GRACE_KILL_EVENT_ID = "worker.stopping_grace_kill"
 
@@ -35,7 +34,6 @@ class WorkerStopReason(StrEnum):
 class WorkerStatusHeartbeatAction(StrEnum):
     StopHeartbeat = "stop-heartbeat"
     UpdateStatus = "update-status"
-    StopOrphan = "stop-orphan"
     Error = "error"
 
 
@@ -137,7 +135,6 @@ def plan_worker_status_heartbeat(
     instance_exists: bool = True,
     exit_code: int = -1,
     state_status: WorkerContainerStatus | str | None = WorkerContainerStatus.Running,
-    state_missing: bool = False,
     runtime_started: bool = False,
     runtime_pid: int = 0,
     stop_reason: WorkerStopReason | str = WorkerStopReason.Unknown,
@@ -154,16 +151,6 @@ def plan_worker_status_heartbeat(
             action=WorkerStatusHeartbeatAction.StopHeartbeat,
             done=True,
             reason="container already exited",
-        )
-    if state_missing:
-        return WorkerStatusHeartbeatPlan(
-            action=WorkerStatusHeartbeatAction.StopOrphan,
-            done=True,
-            stop_container=True,
-            kill=True,
-            stop_reason=WorkerStopReason.Unknown,
-            event_id=WORKER_ORPHAN_STATE_MISSING_EVENT_ID,
-            reason="container state is missing",
         )
     if state_status is None:
         return WorkerStatusHeartbeatPlan(

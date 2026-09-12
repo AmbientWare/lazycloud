@@ -68,6 +68,23 @@ resource "cloudflare_dns_record" "wildcard" {
   }
 }
 
+resource "cloudflare_dns_record" "agent_tunnels" {
+  zone_id = var.zone_id
+  name    = "tunnels.${var.public_hostname}"
+  type    = "CNAME"
+  content = var.connection_gateway_endpoint
+  proxied = false
+  ttl     = 60
+  comment = "LazyCloud agent TLS -> connection gateway NLB"
+
+  lifecycle {
+    precondition {
+      condition     = var.confirm_zone_records
+      error_message = "Refusing to write zone records until confirm_zone_records is true."
+    }
+  }
+}
+
 # Every active custom hostname resolves through the fallback origin, so this is
 # the one resource here that can break somebody else's domain rather than this
 # platform's. Off unless asked for, and pointed at the apex — which is what the

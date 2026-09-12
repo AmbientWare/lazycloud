@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -8,6 +9,7 @@ from types import ModuleType
 
 import lazycloud.config
 import pytest
+from identity.tunnel_certificates import create_tunnel_certificate_authority
 from shared.releases import ActiveRelease, ReleaseTarget
 from tests.metric_helpers import install_metric_reader
 
@@ -47,7 +49,12 @@ def metric_reader() -> None:
 _TEST_ENVIRONMENT = _test_environment()
 
 
-def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path, release_dir: Path) -> None:
+def _configure_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    release_dir: Path,
+    tunnel_environment: dict[str, str],
+) -> None:
     # Clearing the prefixes also isolates settings absent from env.test.
     for name in tuple(os.environ):
         if name.startswith(_INHERITED_PREFIXES) and not name.startswith(_RETAINED_PREFIX):
@@ -57,6 +64,8 @@ def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path, release_
     monkeypatch.setenv("LAZYCLOUD_HOME", str(home))
     # Unconfigured external services must fail instead of reaching developer accounts.
     for name, value in _TEST_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    for name, value in tunnel_environment.items():
         monkeypatch.setenv(name, value)
     release_file = release_dir / "active-release.json"
     release_file.write_text(
@@ -73,20 +82,48 @@ def _configure_environment(monkeypatch: pytest.MonkeyPatch, home: Path, release_
 
 
 @pytest.fixture(scope="session", autouse=True)
-def suite_environment(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+def suite_environment(
+    tmp_path_factory: pytest.TempPathFactory, tunnel_environment: dict[str, str]
+) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as monkeypatch:
         _configure_environment(
-            monkeypatch, tmp_path_factory.mktemp("suite"), tmp_path_factory.mktemp("release")
+            monkeypatch,
+            tmp_path_factory.mktemp("suite"),
+            tmp_path_factory.mktemp("release"),
+            tunnel_environment,
         )
         yield
     lazycloud.config.reset_settings_cache()
 
 
+@pytest.fixture(scope="session")
+def tunnel_environment(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
+    root = tmp_path_factory.mktemp("tunnel-issuer")
+    hostname = "localhost"
+    authority = create_tunnel_certificate_authority(deployment_hostname=hostname)
+    certificate_path = root / "issuer.crt"
+    certificate_path.write_text(authority.certificate_pem, encoding="ascii")
+    key_path = root / "issuer.key"
+    key_path.touch(mode=0o600)
+    key_path.write_text(authority.private_key_pem, encoding="ascii")
+    return {
+        "LAZYCLOUD_TUNNEL_HOSTNAME": hostname,
+        "LAZYCLOUD_TUNNEL_GATEWAY_BOOTSTRAP_SECRET": secrets.token_urlsafe(32),
+        "LAZYCLOUD_TUNNEL_ISSUER_CERTIFICATE_FILE": str(certificate_path),
+        "LAZYCLOUD_TUNNEL_ISSUER_PRIVATE_KEY_FILE": str(key_path),
+    }
+
+
 @pytest.fixture(autouse=True)
 def isolated_environment(
-    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    tunnel_environment: dict[str, str],
 ) -> Iterator[None]:
-    _configure_environment(monkeypatch, tmp_path, tmp_path_factory.mktemp("release"))
+    _configure_environment(
+        monkeypatch, tmp_path, tmp_path_factory.mktemp("release"), tunnel_environment
+    )
     yield
     lazycloud.config.reset_settings_cache()
 

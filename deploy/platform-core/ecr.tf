@@ -9,7 +9,7 @@ resource "aws_ecr_repository" "image" {
   for_each = toset([
     "api",
     "scheduler",
-    "tunnel-gateway",
+    "connection-gateway",
     "cache-server",
     "worker-bootstrap",
     "cli",

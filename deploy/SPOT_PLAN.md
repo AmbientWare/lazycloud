@@ -13,10 +13,9 @@ Terraform's final plan reports no changes. The custom NodeClass, NodePool,
 Argo applications and External Secrets are healthy. The node role and its
 existing EC2 access entry were retained, with explicit Terraform ownership.
 
-Both replicas of the API, scheduler, Cloudflare connector and WireGuard
-gateway were observed ready on different hosts and zones. Gateway handovers
-recovered but caused API readiness interruptions. This is not evidence of
-uninterrupted availability or a validated failover SLO.
+Both replicas of the API, scheduler and Cloudflare connector were observed
+ready on different hosts and zones. Connection gateway availability needs
+fresh acceptance after the outbound tunnel deployment.
 
 The cache retained its original 20 GiB EBS volume. An authenticated HTTP write
 and range read succeeded through its Service. The same bytes survived pod
@@ -57,7 +56,7 @@ subnets. Let Auto Mode select instance types, sizes and counts from accurate
 pod resource requests. Do not prescribe two nodes or specific instance sizes.
 
 Keep two replicas each of the API, scheduler, Cloudflare connector and
-WireGuard gateway. Require different hosts and zones for each pair, including
+connection gateway. Require different hosts and zones for each pair, including
 during rollouts. Use workload-wide selectors and minDomains of two for the
 required topology domains. Keep disruption budgets that allow one replica to
 move at a time, without blocking ordinary consolidation.
@@ -85,8 +84,8 @@ bound to us-east-1c, so its replacement requires capacity in that zone. Do not
 increase cache replicas against the same ReadWriteOnce volume or discard the
 volume. Cache unavailability and recovery are explicit acceptance scenarios.
 
-WireGuard is active/standby, not two simultaneous forwarding paths. Test
-handover and worker reconnection. Existing streams can break during node loss.
+Connection gateways accept agents independently. Test graceful drain, gateway
+loss, and worker reconnection. Existing streams can break during node loss.
 A broad Spot shortage can stop the application until replacement capacity is
 available, even though the managed EKS control plane remains available.
 Disruption budgets cannot prevent involuntary EC2 reclamation.
@@ -135,8 +134,8 @@ node services.
 
 Current two-vCPU nodes expose 1,780m CPU and approximately 3,065 MiB memory
 allocatable to pods. Use allocatable resources rather than raw instance
-capacity. Effective pod requests include API sidecars and the gateway's larger
-init-container request.
+capacity. Recalculate requests from the current chart when changing process
+composition.
 
 The two-node cost example can place one API, scheduler, connector and gateway
 on each node. The smaller node would request 1,500m CPU and 2,144 MiB memory;
@@ -168,8 +167,7 @@ the 80 GiB data disks intact: one current node already uses about 32 GiB.
    [AWS NodePools](https://docs.aws.amazon.com/eks/latest/userguide/create-node-pool.html)
 
 3. Update Helm values, schema, placement helpers and workload templates
-   together. Keep current replica counts, database budgets and two platform
-   WireGuard peers. Remove On-Demand placement requirements from this
+   together. Keep current replica counts and database budgets. Remove On-Demand placement requirements from this
    proposal; keep host/zone separation. Include Argo, External Secrets and
    bootstrap jobs in the migration. Preserve production ownership and one
    controller per service. Update deploy/chart/README.md and deploy/RUNBOOK.md.

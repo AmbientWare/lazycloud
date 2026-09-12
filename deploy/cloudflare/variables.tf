@@ -39,6 +39,16 @@ variable "confirm_zone_records" {
   default     = false
 }
 
+variable "connection_gateway_endpoint" {
+  description = "Provisioned TCP NLB hostname for the connection-gateway Service."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9.-]+\\.elb\\.[a-z0-9-]+\\.amazonaws\\.com$", var.connection_gateway_endpoint))
+    error_message = "connection_gateway_endpoint must be the provisioned AWS NLB hostname."
+  }
+}
+
 variable "manage_fallback_origin" {
   description = <<-EOT
     Whether to declare the Cloudflare for SaaS fallback origin. Off by default:

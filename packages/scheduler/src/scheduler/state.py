@@ -1267,6 +1267,35 @@ class RedisSchedulerWorkerRepository:
             )
         )
 
+    def resume_worker_registration(self, worker: SchedulerWorkerRecord) -> SchedulerWorkerRecord:
+        def write() -> SchedulerWorkerRecord:
+            current = self.get_worker(worker.worker_id)
+            if current is None:
+                raise WorkerStateNotFoundError(worker.worker_id)
+            if (
+                current.resource_version != worker.resource_version
+                or current.status is not SchedulerWorkerStatus.Draining
+                or current.machine_id != worker.machine_id
+                or current.runtime_image != worker.runtime_image
+                or current.agent_binary_sha256 != worker.agent_binary_sha256
+                or current.admitted_release_generation != worker.admitted_release_generation
+            ):
+                return current
+            updated = _worker_with_status(
+                current,
+                SchedulerWorkerStatus.Pending,
+                now=utc_now(),
+                unavailable_reason=None,
+                unavailable_detail="",
+            ).model_copy(update={"request_poll_expires_at": None})
+            self.redis.hash_set(
+                self.keys.worker_state(worker.worker_id),
+                mapping=redis_serialization.dump_model_hash(updated),
+            )
+            return updated
+
+        return self._with_worker_lock(worker.worker_id, write)
+
     def renew_worker_update(
         self, worker: SchedulerWorkerRecord, *, expires_at: datetime
     ) -> SchedulerWorkerRecord:

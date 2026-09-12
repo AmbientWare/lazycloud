@@ -207,11 +207,8 @@ export default defineConfig({
     },
   },
   server: {
-    /* Listen on every interface so the dev server is reachable by machine
-       name, and accept the names it will be reached by. Vite rejects an
-       unexpected Host header, so its own machine name has to be named
-       explicitly — that is how the dev server is reached from another device
-       through WireGuard or on the same LAN. */
+    /* Vite checks Host headers even when listening on every interface.
+       Remote development requires listing the machine's hostname. */
     host: true,
     allowedHosts: devAllowedHosts,
     proxy: {

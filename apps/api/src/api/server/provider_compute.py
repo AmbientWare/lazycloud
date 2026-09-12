@@ -15,9 +15,6 @@ from compute.aws_connections import (
 from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.context import ComputeContext
 from coordination.redis_client import RedisClient
-from networking.settings import (
-    BackendRouteSettings,
-)
 from observability.workspace_changes import WorkspaceChangePublisher
 from provider_aws import require_resolvable_aws_credentials
 from provider_aws.provider_node_identity import AWS_STS_PROOF_CONNECT_TIMEOUT_SECONDS
@@ -138,7 +135,6 @@ def aws_account_connection_composition_from_settings(
     connection_settings: AwsAccountConnectionSettings,
     capacity_settings: AwsCapacitySettings,
     gateway_origin: str,
-    backend_route: BackendRouteSettings,
     workspace_changes: WorkspaceChangePublisher,
     capacity_baseline: AwsConnectionCapacityBaseline,
     admission: ConnectedCloudAdmission,
@@ -151,7 +147,6 @@ def aws_account_connection_composition_from_settings(
         connection_settings,
         capacity=capacity_settings,
         gateway_origin=gateway_origin,
-        backend_route=backend_route,
     )
     bucket_access = AwsDeploymentBucketAccessService(
         context=context,

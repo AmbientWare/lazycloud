@@ -4,7 +4,7 @@ import logging
 import shutil
 import time
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
@@ -17,7 +17,6 @@ from shared.contracts import ContractModel
 from shared.routing import (
     AgentBackendRoute,
     BackendRouteKind,
-    BackendRouteTransport,
 )
 from shared.scheduling import (
     SchedulerContainerAddress,
@@ -32,7 +31,6 @@ from worker.container_execution import (
 from worker.container_rootfs import ContainerRootfsReleaser
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import (
-    LocalSandboxPortPublisher,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
     WorkerSandboxDockerLifecycle,
@@ -40,11 +38,9 @@ from worker.container_service.protocols import (
 from worker.events import ContainerEventPayload, ContainerRequestContext, WorkerBuildCancelRegistry
 from worker.execution import (
     ContainerNetworkIdentity,
-    NetworkAddressMode,
     OciLinuxResources,
     PortBinding,
     container_port_address_map,
-    select_container_network,
 )
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.routes import (
@@ -82,6 +78,10 @@ class ContainerIpResolver(Protocol):
     def container_ip(self, container_id: str) -> str: ...
 
 
+class WorkerRouteRuntime(Protocol):
+    def status(self, container_id: str) -> str: ...
+
+
 class WorkerOomWatcherStopper(Protocol):
     def stop_oom_watcher(self, container_id: str) -> None: ...
 
@@ -96,16 +96,6 @@ class WorkerCheckpointSignalCleaner(Protocol):
 
 class WorkerNetworkTeardown(Protocol):
     def teardown_network(self, container_id: str) -> None: ...
-
-
-class WorkerNetworkPortExposer(Protocol):
-    def expose_port(self, container_id: str, binding: PortBinding) -> None: ...
-
-    def unexpose_port(self, container_id: str, binding: PortBinding) -> None: ...
-
-
-class WorkerHostPortAllocator(Protocol):
-    def allocate_ports(self, count: int) -> list[int]: ...
 
 
 @runtime_checkable
@@ -152,9 +142,6 @@ class WorkerRouteIdentity(ContractModel):
     pod_address: str = ""
     container_service_port: int = 0
     persistent: bool = False
-    route_transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
-    route_local_target_host: str = ""
-    agent_worker: bool = True
 
     @field_validator("container_service_port")
     @classmethod
@@ -173,7 +160,7 @@ class WorkerRouteIdentity(ContractModel):
     def route_context(self, request: ContainerRequestContext) -> WorkerRouteContext | None:
         if not (request.workspace_id and request.container_id):
             return None
-        if self.agent_worker and not (self.pool and self.machine_id and self.worker_id):
+        if not (self.pool and self.machine_id and self.worker_id):
             return None
         return WorkerRouteContext(
             workspace_id=request.workspace_id,
@@ -181,8 +168,6 @@ class WorkerRouteIdentity(ContractModel):
             machine_id=self.machine_id,
             worker_id=self.worker_id,
             container_id=request.container_id,
-            transport=self.route_transport,
-            local_target_host=self.route_local_target_host,
         )
 
 
@@ -234,7 +219,6 @@ class SchedulerWorkerAddressPublisher:
             kind=BackendRouteKind.Worker,
             port=0,
             local_target=address,
-            agent_worker=self.identity.agent_worker,
         )
 
 
@@ -262,7 +246,6 @@ class SchedulerContainerRoutePublisher:
             route_context,
             bindings=bindings,
             address_map=address_map,
-            agent_worker=self.identity.agent_worker,
         )
         if not plan.ok:
             raise ValueError(plan.error_message)
@@ -302,30 +285,72 @@ class SchedulerContainerRoutePublisher:
         container_ip = (
             self.container_ips.container_ip(request.container_id) if self.container_ips else ""
         )
-        selection = select_container_network(
-            request.container_id,
-            pod_address=self.identity.pod_address,
-            persistent=self.identity.persistent,
-            machine_id=self.identity.machine_id,
-            transport=self.identity.route_transport.value,
-            container_ip=container_ip,
-        )
         identity = ContainerNetworkIdentity(
             container_id=request.container_id,
-            pod_address=selection.identity.pod_address,
-            container_ip=selection.identity.container_ip,
-            mode=NetworkAddressMode(selection.identity.mode),
+            container_ip=container_ip,
         )
         return container_port_address_map(identity, bindings).addresses
+
+
+@dataclass(slots=True)
+class WorkerRouteRecovery:
+    identity: WorkerRouteIdentity
+    containers: SchedulerContainerRouteRepository
+    instances: WorkerContainerInstanceStore
+    runtime: WorkerRouteRuntime
+
+    def restore(self) -> None:
+        for instance in self.instances.list_container_instances():
+            if instance.build_request:
+                if instance.status != "running":
+                    continue
+            elif self.runtime.status(instance.container_id) not in {
+                RuntimeContainerStatus.Creating.value,
+                RuntimeContainerStatus.Created.value,
+                RuntimeContainerStatus.Running.value,
+                RuntimeContainerStatus.Paused.value,
+            }:
+                continue
+            if not instance.build_request and (
+                instance.worker_id != self.identity.worker_id
+                or instance.machine_id != self.identity.machine_id
+                or instance.pool != self.identity.pool
+            ):
+                raise RuntimeError("Local container belongs to a different worker")
+            request = ContainerRequestContext(
+                container_id=instance.container_id,
+                workspace_id=instance.workspace_id,
+            )
+            context = self.identity.route_context(request)
+            if context is None or not self.identity.worker_address:
+                raise RuntimeError("Live container route ownership is incomplete")
+            if any(not address for address in instance.address_map.values()):
+                raise RuntimeError("Live container has an empty local route target")
+            plan = plan_container_route_registration(
+                context,
+                bindings=[WorkerPortBinding(container_port=port) for port in instance.address_map],
+                address_map=instance.address_map,
+            )
+            if not plan.ok:
+                raise RuntimeError(plan.error_message)
+            SchedulerWorkerAddressPublisher(self.identity, self.containers).publish_worker_address(
+                request
+            )
+            if plan.primary_target:
+                self.containers.set_container_address(
+                    instance.container_id,
+                    plan.primary_target,
+                    route=next(route for route in plan.routes if route.port == plan.primary_port),
+                )
+            self.containers.set_container_address_map(
+                instance.container_id, plan.address_map, routes=plan.routes
+            )
 
 
 @dataclass(slots=True)
 class SchedulerSandboxPortPublisher:
     identity: WorkerRouteIdentity
     containers: SchedulerContainerRouteRepository
-    port_allocator: WorkerHostPortAllocator | None = None
-    network: WorkerNetworkPortExposer | None = None
-    fallback: LocalSandboxPortPublisher = field(default_factory=LocalSandboxPortPublisher)
 
     def allocate_port(
         self,
@@ -333,18 +358,9 @@ class SchedulerSandboxPortPublisher:
         *,
         container_port: int,
     ) -> int:
-        if instance.route_transport is BackendRouteTransport.Direct:
-            if self.port_allocator is None:
-                msg = "host port allocator is required for direct sandbox port exposure"
-                raise RuntimeError(msg)
-            allocated = self.port_allocator.allocate_ports(1)
-            if len(allocated) != 1:
-                msg = "host port allocator did not return one port"
-                raise RuntimeError(msg)
-            return allocated[0]
-        if instance.container_ip:
-            return container_port
-        return self.fallback.allocate_port(instance, container_port=container_port)
+        if not instance.container_ip:
+            raise ValueError(f"container {instance.container_id} has no bridge IP")
+        return container_port
 
     def local_target(
         self,
@@ -353,19 +369,9 @@ class SchedulerSandboxPortPublisher:
         host_port: int,
         container_port: int,
     ) -> str:
-        if instance.route_transport is BackendRouteTransport.Direct:
-            host = instance.route_local_target_host or self.identity.pod_address
-            if not host:
-                msg = "direct sandbox route host is required"
-                raise RuntimeError(msg)
-            return f"{host}:{host_port}"
-        if instance.container_ip:
-            return f"{instance.container_ip}:{container_port}"
-        return self.fallback.local_target(
-            instance,
-            host_port=host_port,
-            container_port=container_port,
-        )
+        if not instance.container_ip:
+            raise ValueError(f"container {instance.container_id} has no bridge IP")
+        return f"{instance.container_ip}:{container_port}"
 
     def publish_exposed_port(
         self,
@@ -377,11 +383,6 @@ class SchedulerSandboxPortPublisher:
         address_map: dict[int, str] | None = None,
         routes: list[AgentBackendRoute] | None = None,
     ) -> str:
-        if binding is not None and instance.route_transport is BackendRouteTransport.Direct:
-            if self.network is None:
-                msg = "network port exposer is required for direct sandbox port exposure"
-                raise RuntimeError(msg)
-            self.network.expose_port(instance.container_id, binding)
         if address_map is not None:
             scheduler_routes = [
                 scheduler_route
@@ -399,14 +400,7 @@ class SchedulerSandboxPortPublisher:
                 address_map,
                 routes=merged_routes,
             )
-        return self.fallback.publish_exposed_port(
-            instance,
-            port=port,
-            local_target=local_target,
-            binding=binding,
-            address_map=address_map,
-            routes=routes,
-        )
+        return f"http://{local_target}"
 
     def unpublish_exposed_port(
         self,
@@ -416,30 +410,11 @@ class SchedulerSandboxPortPublisher:
         local_target: str,
         address_map: dict[int, str],
     ) -> None:
-        if instance.route_transport is BackendRouteTransport.Direct:
-            if self.network is None:
-                msg = "network port exposer is required for direct sandbox port removal"
-                raise RuntimeError(msg)
-            try:
-                host_port = int(local_target.rsplit(":", maxsplit=1)[1])
-            except (IndexError, ValueError) as exc:
-                msg = f"invalid direct sandbox target: {local_target}"
-                raise RuntimeError(msg) from exc
-            self.network.unexpose_port(
-                instance.container_id,
-                PortBinding(host_port=host_port, container_port=port),
-            )
         existing_routes = self.containers.get_container_address_map(instance.container_id).routes
         self.containers.set_container_address_map(
             instance.container_id,
             address_map,
             routes=[route for route in existing_routes if route.port != port],
-        )
-        self.fallback.unpublish_exposed_port(
-            instance,
-            port=port,
-            local_target=local_target,
-            address_map=address_map,
         )
 
 

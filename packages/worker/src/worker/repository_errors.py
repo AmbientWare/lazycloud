@@ -1,0 +1,2 @@
+class WorkerRepositoryClientError(RuntimeError):
+    pass

@@ -23,7 +23,6 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    WireGuardPeerRepository,
 )
 from database.repositories.orchestration import (
     MachineRepository,
@@ -39,8 +38,6 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
-    PrivateNetworkEnrollmentPhase,
-    WireGuardPeerStatus,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
@@ -789,7 +786,6 @@ class ProviderMachineReconciler:
                     continue
                 hot_state_retirements.append(enrollment)
                 if enrollment.status is not ComputeMachineEnrollmentStatus.Deleted:
-                    self._schedule_provider_machine_identity_cleanup(session, enrollment, now=now)
                     enrollments.save(
                         enrollment.model_copy(
                             update={
@@ -797,7 +793,6 @@ class ProviderMachineReconciler:
                                 "heartbeat_confirmed": False,
                                 "schedulable": False,
                                 "readiness_phase": MachineReadinessPhase.Revoked,
-                                "network_phase": PrivateNetworkEnrollmentPhase.Revoked,
                                 "last_disconnect_at": now,
                                 "revoked_at": enrollment.revoked_at or now,
                                 "updated_at": now,
@@ -1097,27 +1092,6 @@ class ProviderMachineReconciler:
                     f"compute pool {unit.name!r} zero-capacity repair was superseded"
                 )
             return intent
-
-    @staticmethod
-    def _schedule_provider_machine_identity_cleanup(
-        session: DatabaseSession,
-        enrollment: ComputeMachineEnrollmentRecord,
-        *,
-        now: datetime,
-    ) -> None:
-        peers = WireGuardPeerRepository(session)
-        peer = peers.by_enrollment(enrollment.id, for_update=True)
-        if peer is None or peer.status is WireGuardPeerStatus.Revoked:
-            return
-        peers.save(
-            peer.model_copy(
-                update={
-                    "status": WireGuardPeerStatus.Revoked,
-                    "revoked_at": now,
-                    "updated_at": now,
-                }
-            )
-        )
 
     def _revoke_provider_join_credential(
         self,

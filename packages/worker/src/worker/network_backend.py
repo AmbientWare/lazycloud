@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import shutil
-import socket
 import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import urlsplit
 
 from foundation.process import ProcessResult, run_process
 from pydantic import Field
+from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT
 from shared.container_requests import WorkerStartupKind
 from shared.contracts import ContractModel
 from shared.scheduling import (
@@ -30,7 +30,6 @@ from worker.execution import (
     DEFAULT_CONTAINER_IPV6_SUBNET,
     DEFAULT_CONTAINER_SUBNET,
     ContainerNetworkIdentity,
-    NetworkAddressMode,
     PortBinding,
     container_ipv6_address,
     container_veth_names,
@@ -68,7 +67,6 @@ DEFAULT_NETWORK_LOCK_RETRIES = 3
 class AgentBridgeNetworkOperation(StrEnum):
     InspectBridge = "inspect-bridge"
     InspectDefaultRoute = "inspect-default-route"
-    InspectGatewayRoute = "inspect-gateway-route"
     InspectFirewall = "inspect-firewall"
     EnableForwarding = "enable-forwarding"
     CheckFirewallRule = "check-firewall-rule"
@@ -82,10 +80,6 @@ class AgentBridgeNetworkOperation(StrEnum):
     AllowForwarding = "allow-forwarding"
     BlockProviderMetadata = "block-provider-metadata"
     ProbeGatewayEgress = "probe-gateway-egress"
-    ExposePort = "expose-port"
-    UnexposePort = "unexpose-port"
-    ListExposedPorts = "list-exposed-ports"
-    DeleteExposedPort = "delete-exposed-port"
     ListNetworkRestrictions = "list-network-restrictions"
     DeleteNetworkRestriction = "delete-network-restriction"
     DeleteOwnedForwardRule = "delete-owned-forward-rule"
@@ -161,11 +155,6 @@ class AgentBridgeNetworkConfig(ContractModel):
 class HostNetworkCapabilities(ContractModel):
     ipv4_interface: str
     ipv6_interface: str = ""
-    # The interface that routes to the control plane's runtime endpoint when it
-    # is not the default-route one. On a managed node the control plane is
-    # reached over WireGuard, so container traffic to it leaves through the
-    # tunnel interface and needs forwarding and NAT there, not on the uplink.
-    gateway_interface: str = ""
 
     @property
     def ipv6_enabled(self) -> bool:
@@ -316,8 +305,6 @@ class CommandNetworkSystem:
     def discover_host_capabilities(
         self,
         config: AgentBridgeNetworkConfig,
-        *,
-        gateway_address: str = "",
     ) -> HostNetworkCapabilities:
         ipv4_route = self.run(
             NetworkCommand(
@@ -328,22 +315,6 @@ class CommandNetworkSystem:
         ipv4_interface = default_route_interface(ipv4_route.stdout)
         if not ipv4_interface:
             raise RuntimeError("worker host has no IPv4 default-route interface")
-
-        gateway_interface = ""
-        if gateway_address:
-            gateway_route = self.run(
-                NetworkCommand(
-                    operation=AgentBridgeNetworkOperation.InspectGatewayRoute,
-                    argv=[config.ip_binary, "-4", "route", "get", gateway_address],
-                )
-            )
-            candidate = route_lookup_interface(gateway_route.stdout)
-            if not candidate:
-                raise RuntimeError(
-                    f"worker host has no route to the control plane at {gateway_address}"
-                )
-            if candidate != ipv4_interface:
-                gateway_interface = candidate
 
         for binary in (config.iptables_binary,):
             for table in ("nat", "filter"):
@@ -380,47 +351,109 @@ class CommandNetworkSystem:
         return HostNetworkCapabilities(
             ipv4_interface=ipv4_interface,
             ipv6_interface=ipv6_interface,
-            gateway_interface=gateway_interface,
         )
 
 
-def _gateway_ipv4_address(gateway_public_http_url: str) -> str:
-    """The IPv4 address the control plane's runtime endpoint routes to.
+@dataclass(slots=True)
+class AgentBridgeCallbackFirewall:
+    config: AgentBridgeNetworkConfig
+    owner_id: str
+    run_command: NetworkCommandRunner = run_process
+    _owned: bool = False
 
-    Resolved before the bridge is built rather than inside the probe: the
-    firewall rules are chosen from the route to this address, and the probe
-    only proves the choice was right.
-    """
-    parsed = urlsplit(gateway_public_http_url)
-    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
-        raise RuntimeError("worker public gateway URL must be an HTTP origin")
-    try:
-        addresses = socket.getaddrinfo(
-            parsed.hostname,
-            parsed.port or (443 if parsed.scheme == "https" else 80),
-            family=socket.AF_INET,
-            type=socket.SOCK_STREAM,
-        )
-    except OSError as exc:
-        raise RuntimeError(
-            f"worker gateway host {parsed.hostname!r} could not be resolved"
-        ) from exc
-    if not addresses:
-        raise RuntimeError(f"worker gateway host {parsed.hostname!r} has no IPv4 address")
-    return str(addresses[0][4][0])
+    @property
+    def chain(self) -> str:
+        if not self.owner_id:
+            raise ValueError("callback firewall requires a machine owner")
+        identity = f"{self.owner_id}:{self.config.bridge_name}:{self.config.subnet}"
+        return "LZY-CB-" + hashlib.sha256(identity.encode()).hexdigest()[:16]
 
+    @property
+    def comment(self) -> list[str]:
+        return ["-m", "comment", "--comment", f"lazycloud-callback:{self.chain}"]
 
-def route_lookup_interface(output: str) -> str:
-    """The device `ip route get` chose, from its one-line answer."""
-    for line in output.splitlines():
-        fields = line.split()
+    def _run(self, *args: str, check: bool = True) -> ProcessResult:
+        result = self.run_command([self.config.iptables_binary, "-w", "5", "-t", "filter", *args])
+        if check and not result.ok:
+            raise RuntimeError(result.stderr or result.stdout or "callback firewall command failed")
+        return result
+
+    def _hooks(self) -> list[list[str]]:
+        return [
+            [
+                "-d",
+                address,
+                "-p",
+                "tcp",
+                "--dport",
+                str(AGENT_TUNNEL_CONTROL_PORT),
+                *self.comment,
+                "-j",
+                self.chain,
+            ]
+            for address in ("127.0.0.1/32", f"{self.config.gateway}/32")
+        ]
+
+    def _owned_rules(self, output: str) -> list[list[str]]:
+        rules: list[list[str]] = []
+        for line in output.splitlines():
+            fields = iptables_rule_fields(line)
+            if fields[:2] == ["-N", self.chain]:
+                continue
+            if fields[:2] != ["-A", self.chain]:
+                raise RuntimeError("callback firewall chain has an unexpected declaration")
+            if "--comment" not in fields:
+                raise RuntimeError("callback firewall chain contains a foreign rule")
+            index = fields.index("--comment")
+            if fields[index + 1 : index + 2] != [f"lazycloud-callback:{self.chain}"]:
+                raise RuntimeError("callback firewall chain contains a foreign rule")
+            rules.append(fields[2:])
+        return rules
+
+    def ensure(self) -> None:
+        existing = self._run("-S", self.chain, check=False)
+        if existing.ok:
+            self._owned_rules(existing.stdout)
+        else:
+            self._run("-N", self.chain)
+        self._owned = True
         try:
-            index = fields.index("dev")
-        except ValueError:
-            continue
-        if index + 1 < len(fields) and fields[index + 1]:
-            return fields[index + 1]
-    return ""
+            rules = [
+                ["-i", "lo", *self.comment, "-j", "ACCEPT"],
+                [
+                    "-i",
+                    self.config.bridge_name,
+                    "-s",
+                    self.config.subnet,
+                    "-d",
+                    f"{self.config.gateway}/32",
+                    *self.comment,
+                    "-j",
+                    "ACCEPT",
+                ],
+                [*self.comment, "-j", "DROP"],
+            ]
+            for rule in rules:
+                if not self._run("-C", self.chain, *rule, check=False).ok:
+                    self._run("-A", self.chain, *rule)
+            for hook in self._hooks():
+                if not self._run("-C", "INPUT", *hook, check=False).ok:
+                    self._run("-I", "INPUT", "1", *hook)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if not self._owned:
+            return
+        rules = self._owned_rules(self._run("-S", self.chain).stdout)
+        for hook in self._hooks():
+            while self._run("-C", "INPUT", *hook, check=False).ok:
+                self._run("-D", "INPUT", *hook)
+        for rule in rules:
+            self._run("-D", self.chain, *rule)
+        self._run("-X", self.chain)
+        self._owned = False
 
 
 def default_route_interface(output: str) -> str:
@@ -465,13 +498,9 @@ class AgentBridgeNetworkBackend:
             raise RuntimeError("worker bridge network has not been initialized")
         return capabilities
 
-    def initialize(self, gateway_public_http_url: str = "") -> HostNetworkCapabilities:
-        gateway_address = (
-            _gateway_ipv4_address(gateway_public_http_url) if gateway_public_http_url else ""
-        )
-        self._ensure_bridge_commands(gateway_address=gateway_address)
-        if gateway_public_http_url:
-            self._probe_gateway_egress(gateway_public_http_url)
+    def initialize(self) -> HostNetworkCapabilities:
+        self._ensure_bridge_commands()
+        self._probe_gateway_egress()
         try:
             self._prepared_networks.initialize()
             if self.egress_counters is not None:
@@ -493,11 +522,8 @@ class AgentBridgeNetworkBackend:
             if self.egress_counters is not None:
                 self.egress_counters.close()
 
-    def _probe_gateway_egress(self, gateway_public_http_url: str) -> None:
-        parsed = urlsplit(gateway_public_http_url)
-        if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
-            raise RuntimeError("worker public gateway URL must be an HTTP origin")
-        origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    def _probe_gateway_egress(self) -> None:
+        origin = f"http://{self.config.gateway}:{AGENT_TUNNEL_CONTROL_PORT}"
         # The worker, not just the bridge: the veth pair this name derives is created
         # and unconditionally deleted in the host namespace, so two workers probing
         # under one name tear down each other's in-flight check.
@@ -521,7 +547,6 @@ class AgentBridgeNetworkBackend:
             self._setup_assigned_network(
                 context,
                 reservation.ip_address,
-                port_bindings=[],
             )
             netns_config_dir = Path(self.config.netns_config_root) / probe_id
             netns_config_dir.mkdir(parents=True, exist_ok=True)
@@ -569,7 +594,6 @@ class AgentBridgeNetworkBackend:
             result = self._setup_assigned_network(
                 context,
                 ip_address,
-                port_bindings=port_bindings,
             )
             if self.egress_counters is not None:
                 self.egress_counters.ensure(
@@ -592,8 +616,6 @@ class AgentBridgeNetworkBackend:
         self,
         context: ContainerExecutionContext,
         ip_address: str,
-        *,
-        port_bindings: list[PortBinding],
     ) -> ContainerNetworkSetupResult:
         container_id = context.request.container_id
         commands: list[NetworkCommand] = []
@@ -602,7 +624,6 @@ class AgentBridgeNetworkBackend:
         setup_commands = self._container_setup_commands(
             container_id,
             ip_address,
-            port_bindings,
         )
         for command in setup_commands:
             self.system.run(command)
@@ -629,7 +650,6 @@ class AgentBridgeNetworkBackend:
             identity=ContainerNetworkIdentity(
                 container_id=container_id,
                 container_ip=ip_address,
-                mode=NetworkAddressMode.AgentBridge,
             ),
             namespace_path=str(Path(self.config.host_netns_path) / container_id),
             veth_host=veth_host,
@@ -647,7 +667,6 @@ class AgentBridgeNetworkBackend:
     def _remove_container_resources(self, container_id: str, *, release_ip: bool) -> None:
         if self.egress_counters is not None:
             self.egress_counters.remove(container_id)
-        self._remove_exposed_ports(container_id)
         self._remove_owned_forward_rules(container_id)
         veth_host, _ = container_veth_names(container_id)
         cleanup_errors: list[Exception] = []
@@ -682,37 +701,6 @@ class AgentBridgeNetworkBackend:
         if release_ip:
             self.ip_allocator.release_container_ip(container_id)
         self.assigned_ips.pop(container_id, None)
-
-    def expose_port(self, container_id: str, binding: PortBinding) -> None:
-        ip_address = self.container_ip(container_id)
-        if not ip_address:
-            msg = f"container {container_id} has no assigned bridge IP"
-            raise RuntimeError(msg)
-        veth_host, _ = container_veth_names(container_id)
-        for command in self._port_commands(container_id, veth_host, ip_address, [binding]):
-            self.system.run(command)
-
-    def unexpose_port(self, container_id: str, binding: PortBinding) -> None:
-        ip_address = self.container_ip(container_id)
-        if not ip_address:
-            msg = f"container {container_id} has no assigned bridge IP"
-            raise RuntimeError(msg)
-        veth_host, _ = container_veth_names(container_id)
-        for command in self._port_commands(container_id, veth_host, ip_address, [binding]):
-            argv = list(command.argv)
-            if argv[3] == "-I":
-                argv[3] = "-D"
-                if len(argv) > 5 and argv[5] == "1":
-                    del argv[5]
-            else:
-                argv[3] = "-D"
-            self.system.run(
-                NetworkCommand(
-                    operation=AgentBridgeNetworkOperation.UnexposePort,
-                    argv=argv,
-                    ignore_failure=True,
-                )
-            )
 
     def container_ip(self, container_id: str) -> str:
         return self.assigned_ips.get(container_id, "")
@@ -768,7 +756,7 @@ class AgentBridgeNetworkBackend:
             operations=[command.operation for command in commands],
         )
 
-    def _ensure_bridge_commands(self, *, gateway_address: str = "") -> list[NetworkCommand]:
+    def _ensure_bridge_commands(self) -> list[NetworkCommand]:
         with self._bridge_lock:
             if self._bridge_ready:
                 return []
@@ -776,7 +764,6 @@ class AgentBridgeNetworkBackend:
             try:
                 capabilities = self.system.discover_host_capabilities(
                     self.config,
-                    gateway_address=gateway_address,
                 )
                 commands = self._ensure_bridge_link()
                 bridge_commands = self._bridge_commands(capabilities)
@@ -794,7 +781,6 @@ class AgentBridgeNetworkBackend:
         self,
         container_id: str,
         ip_address: str,
-        port_bindings: list[PortBinding],
     ) -> list[NetworkCommand]:
         veth_host, veth_container = container_veth_names(container_id)
         return [
@@ -803,7 +789,6 @@ class AgentBridgeNetworkBackend:
                 argv=[self.config.ip_binary, "link", "set", veth_host, "up"],
             ),
             *self._namespace_commands(container_id, veth_container, ip_address),
-            *self._port_commands(container_id, veth_host, ip_address, port_bindings),
         ]
 
     def _container_creation_commands(self, container_id: str) -> list[NetworkCommand]:
@@ -1035,33 +1020,6 @@ class AgentBridgeNetworkBackend:
                 egress_interface=capabilities.ipv4_interface,
             )
         )
-        if capabilities.gateway_interface:
-            # Masqueraded to the host's own address on that interface. A WireGuard
-            # server admits the node's single tunnel address and nothing behind
-            # it, so a container's packet has to leave as the node or it is
-            # dropped at the far end without a reply to explain why.
-            commands.extend(
-                self._ensure_firewall_rule(
-                    binary=self.config.iptables_binary,
-                    table="nat",
-                    chain="POSTROUTING",
-                    rule=[
-                        "-s",
-                        self.config.subnet,
-                        "-o",
-                        capabilities.gateway_interface,
-                        "-j",
-                        "MASQUERADE",
-                    ],
-                    operation=AgentBridgeNetworkOperation.EnableMasquerade,
-                )
-            )
-            commands.extend(
-                self._ensure_forwarding_rules(
-                    binary=self.config.iptables_binary,
-                    egress_interface=capabilities.gateway_interface,
-                )
-            )
         if capabilities.ipv6_enabled:
             commands.extend(
                 self._ensure_firewall_rule(
@@ -1269,69 +1227,6 @@ class AgentBridgeNetworkBackend:
             )
         return commands
 
-    def _port_commands(
-        self,
-        container_id: str,
-        veth_host: str,
-        ip_address: str,
-        port_bindings: list[PortBinding],
-    ) -> list[NetworkCommand]:
-        comment = container_network_comment(veth_host, container_id)
-        commands: list[NetworkCommand] = []
-        for binding in port_bindings:
-            commands.extend(
-                [
-                    NetworkCommand(
-                        operation=AgentBridgeNetworkOperation.ExposePort,
-                        argv=[
-                            self.config.iptables_binary,
-                            "-t",
-                            "nat",
-                            "-A",
-                            "PREROUTING",
-                            "-p",
-                            "tcp",
-                            "--dport",
-                            str(binding.host_port),
-                            "-j",
-                            "DNAT",
-                            "--to-destination",
-                            f"{ip_address}:{binding.container_port}",
-                            "-m",
-                            "comment",
-                            "--comment",
-                            comment,
-                        ],
-                    ),
-                    NetworkCommand(
-                        operation=AgentBridgeNetworkOperation.AllowForwarding,
-                        argv=[
-                            self.config.iptables_binary,
-                            "-t",
-                            "filter",
-                            "-I",
-                            "FORWARD",
-                            "1",
-                            "-d",
-                            ip_address,
-                            "-p",
-                            "tcp",
-                            "--dport",
-                            str(binding.container_port),
-                            "-o",
-                            self.config.bridge_name,
-                            "-j",
-                            "ACCEPT",
-                            "-m",
-                            "comment",
-                            "--comment",
-                            comment,
-                        ],
-                    ),
-                ]
-            )
-        return commands
-
     def _sandbox_control_isolation_commands(
         self,
         container_id: str,
@@ -1413,39 +1308,6 @@ class AgentBridgeNetworkBackend:
                         ignore_failure=True,
                     )
                 )
-
-    def _remove_exposed_ports(self, container_id: str) -> None:
-        list_command = NetworkCommand(
-            operation=AgentBridgeNetworkOperation.ListExposedPorts,
-            argv=[self.config.iptables_binary, "-t", "nat", "-S", "PREROUTING"],
-            ignore_failure=True,
-        )
-        result = self.system.run(list_command)
-        for rule in result.stdout.splitlines():
-            rule_container_id, found = container_id_from_iptables_rule(rule)
-            fields = iptables_rule_fields(rule)
-            if (
-                not found
-                or rule_container_id != container_id
-                or len(fields) < 3
-                or fields[0] != "-A"
-                or fields[1] != "PREROUTING"
-            ):
-                continue
-            self.system.run(
-                NetworkCommand(
-                    operation=AgentBridgeNetworkOperation.DeleteExposedPort,
-                    argv=[
-                        self.config.iptables_binary,
-                        "-t",
-                        "nat",
-                        "-D",
-                        "PREROUTING",
-                        *fields[2:],
-                    ],
-                    ignore_failure=True,
-                )
-            )
 
     def _network_policy_commands(
         self,

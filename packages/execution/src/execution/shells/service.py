@@ -106,7 +106,7 @@ class ShellControlService:
         *,
         scheduler_containers: ContainerSchedulingDirectory | None = None,
         container_clients: SchedulerContainerClientFactory[PodContainerControlClient] | None = None,
-        backend_connector: Callable[[ShellBackendTarget], socket.socket] | None = None,
+        backend_connector: Callable[[ShellBackendTarget], socket.socket],
         async_database: AsyncDatabaseClient | None = None,
         async_scheduler_containers: AsyncShellContainerDirectory | None = None,
         poll_interval_seconds: float = 1.0,
@@ -118,7 +118,7 @@ class ShellControlService:
             candidate if isinstance(candidate, ContainerSchedulingDirectory) else None
         )
         self.container_clients = container_clients
-        self.backend_connector = backend_connector or _connect_direct_shell_backend
+        self.backend_connector = backend_connector
         self.async_database = async_database
         self.async_scheduler_containers = async_scheduler_containers
         self.poll_interval_seconds = poll_interval_seconds
@@ -774,13 +774,6 @@ def _rollback_shell_port(
     if response.ok:
         return ""
     return response.error_msg or "worker rejected shell port rollback"
-
-
-def _connect_direct_shell_backend(target: ShellBackendTarget) -> socket.socket:
-    host, separator, raw_port = target.address.rpartition(":")
-    if not separator or not host:
-        raise OSError(f"invalid shell backend address: {target.address}")
-    return socket.create_connection((host.strip("[]"), int(raw_port)), target.dial_timeout_seconds)
 
 
 def _read_shell_frame(connection: socket.socket) -> tuple[bytes, bytes]:

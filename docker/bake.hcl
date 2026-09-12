@@ -6,7 +6,7 @@ group "default" {
   targets = [
     "api",
     "scheduler",
-    "tunnel-gateway",
+    "connection-gateway",
     "cache-server",
     "worker-bootstrap",
     "cli",
@@ -20,7 +20,7 @@ group "control-plane" {
   targets = [
     "api",
     "scheduler",
-    "tunnel-gateway",
+    "connection-gateway",
     "cache-server",
     "worker-bootstrap",
     "cli",
@@ -45,10 +45,10 @@ target "scheduler" {
   tags     = ["scheduler:${TAG}"]
 }
 
-target "tunnel-gateway" {
+target "connection-gateway" {
   inherits = ["_control-plane"]
-  target   = "tunnel-gateway"
-  tags     = ["tunnel-gateway:${TAG}"]
+  target   = "connection-gateway"
+  tags     = ["connection-gateway:${TAG}"]
   platforms = ["linux/amd64"]
   output = ["type=image,rewrite-timestamp=true"]
   attest = ["type=provenance,mode=min"]

@@ -769,10 +769,12 @@ class RedisClient:
         stream: str,
         *,
         count: int | None = None,
+        before: str | None = None,
     ) -> list[RedisStreamEntry]:
         raw = _sync_response(
             self._transport.xrevrange(
                 stream,
+                max=f"({before}" if before is not None else "+",
                 count=count,
             ),
             "XREVRANGE",

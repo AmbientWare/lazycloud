@@ -1,7 +1,7 @@
 # Networking package
 
-Protocol-neutral route planning, backend dial targets, and private-network control.
-Gateway composition stays outside.
+Authenticated agent tunnels, backend route dialing, and stream forwarding.
+Gateway process composition stays outside.
 
 Environment settings may satisfy runtime options directly where the semantics
 match; add a conversion only to narrow secret or lifecycle scope or to produce a

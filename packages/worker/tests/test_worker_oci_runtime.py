@@ -15,6 +15,7 @@ from foundation.process import (
     ProcessResult,
 )
 from pydantic import JsonValue, TypeAdapter
+from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT
 from worker.container_execution import (
     ContainerExecutionContext,
     ContainerMountSetupResult,
@@ -24,8 +25,9 @@ from worker.container_rootfs import (
     ContainerRootfsStatus,
 )
 from worker.events import ContainerRequestContext
-from worker.execution import OciDevice
+from worker.execution import GatewayEndpointSettings, GatewayServiceSettings, OciDevice
 from worker.gpu import ContainerGpuAssignmentResult
+from worker.network_backend import AgentBridgeNetworkConfig
 from worker.oci_runtime import (
     OciRuntimeCommandController,
     OciRuntimeCommandTimeout,
@@ -272,6 +274,12 @@ def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
     runner = _AbortRunner()
     starter = _Starter()
     builder = OciRuntimeSpecBuilder(
+        gateway_settings=GatewayServiceSettings(
+            http=GatewayEndpointSettings(
+                host=AgentBridgeNetworkConfig().gateway,
+                port=AGENT_TUNNEL_CONTROL_PORT,
+            )
+        ),
         bundle_root=tmp_path / "bundles",
         image_mount_root=tmp_path / "images",
         runtime_configs={
@@ -350,6 +358,12 @@ def test_oci_runtime_bounds_hung_runsc_delete_during_start_abort(tmp_path: Path)
         runsc_path=str(runsc),
     )
     builder = OciRuntimeSpecBuilder(
+        gateway_settings=GatewayServiceSettings(
+            http=GatewayEndpointSettings(
+                host=AgentBridgeNetworkConfig().gateway,
+                port=AGENT_TUNNEL_CONTROL_PORT,
+            )
+        ),
         bundle_root=tmp_path / "bundles",
         image_mount_root=tmp_path / "images",
         runtime_configs={OciRuntimeName.Runsc: runtime_config},

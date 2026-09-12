@@ -2,6 +2,8 @@ account_id      = "your-cloudflare-account-id"
 zone_id         = "your-zone-id"
 public_hostname = "lazycloud.dev"
 environment     = "production"
+# Copy the real hostname from the connection-gateway LoadBalancer Service.
+connection_gateway_endpoint = "provisioned-nlb-hostname-required"
 
 # Both default to false. Turn them on only after importing the existing tunnel
 # and records and reviewing a plan that shows nothing else in the zone moves.

@@ -9,12 +9,6 @@ from shared.enums import StringEnum
 BACKEND_ROUTE_ADDRESS_SCHEME = "route"
 
 
-class BackendRouteTransport(StringEnum):
-    Direct = "direct"
-    PrivateNetwork = "private_network"
-    LocalDirect = "local_direct"
-
-
 class PrivateUnitFallback(StringEnum):
     """What a workload does when the unit it named has no capacity to give it."""
 
@@ -40,16 +34,9 @@ class BackendRouteProtocol(StringEnum):
     Http = "http"
 
 
-class RoutePrewarmDecision(StringEnum):
-    Attempt = "attempt"
-    EmptyTarget = "empty-target"
-    Throttled = "throttled"
-    NotReady = "not-ready"
-    UnsupportedTransport = "unsupported-transport"
-
-
 class AgentBackendRoute(ContractModel):
     route_id: str
+    enrollment_id: str = ""
     workspace_id: str = ""
     pool: MachinePool = MachinePool("")
     capacity_owner_id: str = ""
@@ -59,9 +46,7 @@ class AgentBackendRoute(ContractModel):
     kind: BackendRouteKind = BackendRouteKind.Container
     port: int = 0
     protocol: BackendRouteProtocol = BackendRouteProtocol.Tcp
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     local_target: str = ""
-    proxy_target: str = ""
     state: BackendRouteState = BackendRouteState.Opening
     error: str = ""
     updated_at: int = 0
@@ -89,8 +74,6 @@ __all__ = [
     "BackendRouteKind",
     "BackendRouteProtocol",
     "BackendRouteState",
-    "BackendRouteTransport",
     "PrivateUnitFallback",
-    "RoutePrewarmDecision",
     "parse_backend_route_address",
 ]

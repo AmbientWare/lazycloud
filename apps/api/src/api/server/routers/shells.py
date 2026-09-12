@@ -26,7 +26,7 @@ from identity.websocket_tickets import (
     ShellWebSocketAuthorization,
     WebSocketTicketService,
 )
-from networking.dialer import BackendRouteDialerConfig, BackendRouteResolver
+from networking.dialer import BackendRouteDialer
 from shared.errors import UpstreamUnavailableError
 from shared.http.shells import (
     CreateShellInExistingContainerRequest,
@@ -45,8 +45,7 @@ from api.server.dependencies import (
     websocket_workspace,
 )
 from api.server.service_dependencies import (
-    backend_route_dialer_config,
-    backend_route_resolver,
+    backend_route_dialer,
     shell_service,
 )
 from api.server.services import ApiServices
@@ -157,8 +156,7 @@ async def shell_connect_tunnel(
     container_id: str,
     workspace_id: read_workspace,
     service: ShellControlService = Depends(shell_service),
-    route_resolver: BackendRouteResolver = Depends(backend_route_resolver),
-    route_dialer_config: BackendRouteDialerConfig = Depends(backend_route_dialer_config),
+    route_dialer: BackendRouteDialer = Depends(backend_route_dialer),
 ) -> StreamingResponse:
     target = await service.shell_backend_target_async(
         stub_id=stub_id,
@@ -169,8 +167,7 @@ async def shell_connect_tunnel(
         backend = await asyncio.to_thread(
             connect_shell_backend,
             target,
-            route_resolver=route_resolver,
-            route_dialer_config=route_dialer_config,
+            route_dialer=route_dialer,
         )
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Failed to connect to container") from exc
@@ -188,8 +185,7 @@ async def shell_connect_websocket(
     container_id: str,
     service: ShellControlService = Depends(shell_service),
     services: ApiServices = Depends(current_websocket_services),
-    route_resolver: BackendRouteResolver = Depends(backend_route_resolver),
-    route_dialer_config: BackendRouteDialerConfig = Depends(backend_route_dialer_config),
+    route_dialer: BackendRouteDialer = Depends(backend_route_dialer),
 ) -> None:
     authorization = await _authorize_shell_websocket(
         websocket,
@@ -208,8 +204,7 @@ async def shell_connect_websocket(
         backend = await asyncio.to_thread(
             connect_shell_backend,
             target,
-            route_resolver=route_resolver,
-            route_dialer_config=route_dialer_config,
+            route_dialer=route_dialer,
         )
     except Exception as exc:
         # Surface why the shell tunnel could not be established — without this

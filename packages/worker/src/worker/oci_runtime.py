@@ -499,8 +499,8 @@ class OciRuntimeSpecBuilder:
             ContainerEnvironmentRequest(
                 container_id=context.request.container_id,
                 pod_address=(
-                    identity.pod_address
-                    if identity is not None and identity.pod_address
+                    identity.container_ip
+                    if identity is not None and identity.container_ip
                     else context.request.container_id
                 ),
                 workspace_id=context.request.workspace_id,

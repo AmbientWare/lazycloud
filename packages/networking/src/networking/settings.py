@@ -3,34 +3,12 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from compute.agent_control import host_is_unreachable_from_a_remote_machine
-from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.app_identity import ENV_PREFIX
-
-from networking.dialer import BackendRouteDialerConfig
-from networking.routing import BackendRouteAuthenticator
-
-
-class BackendRouteSettings(BaseSettings):
-    auth_key: SecretStr = SecretStr("")
-
-    model_config = SettingsConfigDict(
-        env_prefix=f"{ENV_PREFIX}_BACKEND_ROUTE_",
-        extra="forbid",
-    )
-
-    def to_authenticator(self) -> BackendRouteAuthenticator:
-        return BackendRouteAuthenticator(self.auth_key)
-
-    def to_dialer_config(self) -> BackendRouteDialerConfig:
-        return BackendRouteDialerConfig(auth_key=self.to_authenticator().secret)
 
 
 def validate_remote_provider_network_configuration(
     *,
     gateway_origin: str,
     presigned_origin: str = "",
-    backend_route: BackendRouteSettings,
 ) -> None:
     issues: list[str] = []
     if not _is_https_origin(gateway_origin):
@@ -54,10 +32,6 @@ def validate_remote_provider_network_configuration(
             f"object store presigned endpoint host {presigned_host!r} is unreachable from a "
             "remote machine; configure the deployment's R2 account endpoint"
         )
-    try:
-        BackendRouteAuthenticator(backend_route.auth_key)
-    except ValueError as exc:
-        issues.append(str(exc))
 
     if issues:
         raise ValueError(
@@ -81,6 +55,5 @@ def _is_https_origin(value: str) -> bool:
 
 
 __all__ = [
-    "BackendRouteSettings",
     "validate_remote_provider_network_configuration",
 ]

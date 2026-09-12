@@ -11,7 +11,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.contracts import ContractModel
-from shared.routing import BackendRouteTransport, PrivateUnitFallback
+from shared.routing import PrivateUnitFallback
 
 DEFAULT_PRIVATE_FALLBACK = "internal"
 
@@ -29,7 +29,6 @@ class PoolConfig(ContractModel):
     name: str
     selector: str = ""
     mode: ComputeUnitMode | str = ComputeUnitMode.Private
-    transport: BackendRouteTransport | str = ""
     fallback: PrivateUnitFallback | str = ""
     priority: int = 0
     gpu: list[str] = Field(default_factory=list)
@@ -54,7 +53,6 @@ class NormalizedUnitConfig(ContractModel):
     name: str
     selector: str = ""
     mode: ComputeUnitMode = ComputeUnitMode.Private
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     priority: int = 0
     gpu: list[str] = Field(default_factory=list)
@@ -139,13 +137,6 @@ class PrivateUnitState(CapacityOwnerIdentity):
     reserved_nodes: int = 0
 
 
-def normalize_backend_route_transport(value: str) -> BackendRouteTransport:
-    normalized = value.strip()
-    if normalized == "":
-        return BackendRouteTransport.PrivateNetwork
-    return BackendRouteTransport(normalized)
-
-
 def normalize_unit_config(config: PoolConfig | None) -> NormalizedUnitConfig | None:
     if config is None:
         return None
@@ -156,7 +147,6 @@ def normalize_unit_config(config: PoolConfig | None) -> NormalizedUnitConfig | N
         name=config.name,
         selector=config.selector or config.name,
         mode=ComputeUnitMode.Private,
-        transport=normalize_backend_route_transport(str(config.transport)),
         fallback=PrivateUnitFallback(str(config.fallback or DEFAULT_PRIVATE_FALLBACK)),
         priority=config.priority,
         gpu=config.gpu,
@@ -182,9 +172,6 @@ def compute_unit_from_config(
     normalized = normalize_unit_config(config)
     if normalized is None:
         msg = "pool config is required"
-        raise ValueError(msg)
-    if normalized.transport is not BackendRouteTransport.PrivateNetwork:
-        msg = f"unsupported agent transport {normalized.transport.value!r}"
         raise ValueError(msg)
     if normalized.fallback not in set(PrivateUnitFallback):
         msg = f"unsupported private pool fallback {normalized.fallback!s}"

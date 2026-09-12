@@ -79,7 +79,7 @@ from shared.errors import (
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
-from shared.routing import BackendRouteTransport, PrivateUnitFallback
+from shared.routing import PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
@@ -1071,7 +1071,6 @@ class ComputeService:
         scale_up_cooldown_seconds: int = 5,
         scale_down_cooldown_seconds: int = 60,
         registration_timeout_seconds: int = 600,
-        transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork,
         fallback: PrivateUnitFallback = PrivateUnitFallback.Internal,
     ) -> ComputeUnitRecord:
         """Create or update a provisioning unit the workspace owns directly.
@@ -1137,7 +1136,6 @@ class ComputeService:
                     scale_up_cooldown_seconds=scale_up_cooldown_seconds,
                     scale_down_cooldown_seconds=scale_down_cooldown_seconds,
                     registration_timeout_seconds=registration_timeout_seconds,
-                    transport=transport,
                     fallback=fallback,
                 )
             )
@@ -3132,18 +3130,45 @@ class ComputeService:
                     or self._machines_holding_active_work(session, pool_id=unit.id)
                 ):
                     return
-                repository.upsert(_without_warm_floor(current))
-            cancelled = self._scale_internal_unit_under_lease(
-                unit.workspace_id,
-                unit.capacity_owner_id,
-                0,
-                before_mutation=_policy_owned_scale,
-                now=now,
+                retained = min(
+                    current.desired_machines,
+                    current.min_machines,
+                    self._warm_unit_ready_count(current),
+                )
+                intent = (
+                    _with_warm_floor(current, retained)
+                    if retained
+                    else _without_warm_floor(current)
+                ).model_copy(
+                    update={
+                        "desired_machines": retained,
+                        "replacement_machine_id": "",
+                        "replacement_template_version": "",
+                        "provider_state": current.provider_state.model_copy(
+                            update={
+                                "degraded_reason": current.provider_state.degraded_reason
+                                or "provider_acquisition_rejected",
+                                "degraded_at": current.provider_state.degraded_at or now,
+                            }
+                        ),
+                    }
+                )
+                if intent != current:
+                    intent = repository.upsert(
+                        intent.model_copy(update={"generation": current.generation + 1})
+                    )
+            # Preserve degradation so cancellation cannot re-enable purchases.
+            provider, offer = self._resolved_internal_unit_provider(intent)
+            if provider.pooled is None:
+                raise UpstreamUnavailableError("failed capacity provider is not pooled")
+            request = self._provider_unit_request(intent, offer)
+            snapshot = provider.pooled.set_unit_capacity(
+                request,
+                desired_machines=request.desired_machines,
+                max_machines=request.max_machines,
             )
-            self._mark_pooled_capacity_degraded(
-                cancelled,
-                reason=current.provider_state.degraded_reason or "provider_acquisition_rejected",
-                now=current.provider_state.degraded_at or now,
+            self.provider_machines._apply_pooled_snapshot(
+                intent, offer, snapshot, provider=provider.pooled, now=now
             )
 
     def _clear_platform_warm_floors(

@@ -75,27 +75,33 @@ def main() -> None:
             },
         )
         if existing.status_code == 404:
-            key = Key.model_validate_json(
-                request(
-                    "POST",
-                    "ImportKey",
-                    body={
-                        "accessKeyId": os.environ["LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"],
-                        "secretAccessKey": os.environ["LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"],
-                        "name": "lazycloud-local-platform",
-                    },
-                )
+            request(
+                "POST",
+                "ImportKey",
+                body={
+                    "accessKeyId": os.environ["LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"],
+                    "secretAccessKey": os.environ["LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"],
+                    "name": "lazycloud-local-platform",
+                },
             )
-        elif existing.is_success:
-            key = Key.model_validate_json(existing.content)
-            if (
-                key.name != "lazycloud-local-platform"
-                or key.secret_access_key.get_secret_value()
-                != os.environ["LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"]
-            ):
-                raise RuntimeError("Existing Garage key does not match this local deployment")
-        else:
+        elif not existing.is_success:
             raise RuntimeError(f"Garage GetKeyInfo failed with HTTP {existing.status_code}")
+        key = Key.model_validate_json(
+            request(
+                "GET",
+                "GetKeyInfo",
+                params={
+                    "id": os.environ["LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"],
+                    "showSecretKey": "true",
+                },
+            )
+        )
+        if (
+            key.name != "lazycloud-local-platform"
+            or key.secret_access_key.get_secret_value()
+            != os.environ["LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"]
+        ):
+            raise RuntimeError("Existing Garage key does not match this local deployment")
         request(
             "POST",
             "UpdateKey",

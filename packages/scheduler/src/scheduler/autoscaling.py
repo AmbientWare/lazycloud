@@ -1414,8 +1414,8 @@ def _stale_reason(
     refreshes it indefinitely, and a durable row that only becomes true when a
     cache entry expires has the ownership backwards.
 
-    A `running` row is the case pods already covered: it has started, so no
-    scheduler state at all means the worker that was running it is gone.
+    Running containers remain capacity during cache recovery. The orphan
+    reconciler confirms loss of the container and its worker before stopping it.
 
     The global backlog owns capacity waits. A worker delivery has a shorter
     deadline until acknowledged; container startup gets its full deadline after
@@ -1428,7 +1428,7 @@ def _stale_reason(
     }:
         return f"scheduler state is {scheduler_status.value}"
     if container.status is ContainerStatus.Running:
-        return "scheduler state missing for running container" if scheduler_status is None else ""
+        return ""
     if scheduler_status is SchedulerContainerStatus.Running:
         # Started, and only the durable row has yet to catch up.
         return ""

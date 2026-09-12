@@ -1,11 +1,14 @@
 {{- include "lazycloud.databaseBudget" . -}}
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: control-plane
 spec:
-  serviceName: control-plane
-  podManagementPolicy: Parallel
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   replicas: {{ .Values.controlPlane.replicas }}
   selector:
     matchLabels:
@@ -27,16 +30,15 @@ spec:
           configMap:
             name: active-release
             optional: true
-        - name: tun
-          hostPath:
-            path: /dev/net/tun
-            type: CharDevice
-        - name: wireguard-keys
+        - name: tunnel-issuer
           secret:
-            secretName: {{ .Values.wireguard.secretName }}
+            secretName: {{ .Values.secrets.name }}
             defaultMode: 0600
-        - name: wireguard-platform-key
-          emptyDir: {}
+            items:
+              - key: LAZYCLOUD_TUNNEL_ISSUER_CERTIFICATE_PEM
+                path: certificate.pem
+              - key: LAZYCLOUD_TUNNEL_ISSUER_PRIVATE_KEY_PEM
+                path: private-key.pem
         # Per pod, because the artifact is immutable and 48MB: a shared volume
         # would tie replicas to one zone to save a fetch that costs seconds.
         - name: agent-binarys
@@ -45,13 +47,6 @@ spec:
           configMap:
             name: aws-chain
       initContainers:
-        - name: wireguard-route-marks
-          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
-          command: ["sysctl", "-w", "net.ipv4.conf.all.src_valid_mark=1"]
-          securityContext:
-            privileged: true
-          resources:
-            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
         # The release publishes the agent binary; the deployment says where it
         # keeps one. Neither holds the whole path, so it is assembled here, and
         # the artifact is fetched before the process that serves it starts:
@@ -73,67 +68,6 @@ spec:
               mountPath: /var/lib/lazycloud/agent-binarys
           resources:
             {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
-        - name: wireguard-platform-key
-          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
-          command:
-            - /bin/sh
-            - -ec
-            - |
-              index="${LAZYCLOUD_WIREGUARD_POD_NAME##*-}"
-              case "$index" in
-                ''|*[!0-9]*) echo "control-plane pod has no ordinal" >&2; exit 2 ;;
-              esac
-              umask 077
-              cp "/var/run/lazycloud/wireguard/platform-${index}-private-key" /var/lib/lazycloud/wireguard/private-key
-          env:
-            - name: LAZYCLOUD_WIREGUARD_POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-          volumeMounts:
-            - name: wireguard-keys
-              mountPath: /var/run/lazycloud/wireguard
-              readOnly: true
-            - name: wireguard-platform-key
-              mountPath: /var/lib/lazycloud/wireguard
-          resources:
-            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
-        - name: wireguard-platform
-          restartPolicy: Always
-          image: {{ include "lazycloud.image" (list . "tunnel-gateway") }}
-          # A native sidecar outlives API shutdown and preserves its draining streams.
-          command: ["lazycloud-wireguard-platform"]
-          securityContext:
-            capabilities:
-              add: ["NET_ADMIN"]
-          env:
-            - name: LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE
-              value: /var/lib/lazycloud/wireguard/private-key
-            {{- include "lazycloud.databaseEnv" .Values.wireguard.database | nindent 12 }}
-            - name: LAZYCLOUD_DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secrets.name }}
-                  key: LAZYCLOUD_DATABASE_URL
-            - name: LAZYCLOUD_REDIS_URL
-              value: {{ required "runtime.LAZYCLOUD_REDIS_URL is required" .Values.runtime.LAZYCLOUD_REDIS_URL | quote }}
-            - name: LAZYCLOUD_WIREGUARD_POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-          volumeMounts:
-            - name: tun
-              mountPath: /dev/net/tun
-            - name: wireguard-platform-key
-              mountPath: /var/lib/lazycloud/wireguard
-          resources:
-            {{- toYaml .Values.wireguard.resources | nindent 12 }}
-          readinessProbe:
-            exec:
-              command: ["test", "-f", "/tmp/lazycloud-wireguard-platform.ready"]
-            periodSeconds: 2
-            timeoutSeconds: 2
-            failureThreshold: 5
       containers:
         - name: control-plane
           image: {{ include "lazycloud.image" (list . "api") }}
@@ -145,10 +79,10 @@ spec:
             {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
-            - name: LAZYCLOUD_WIREGUARD_POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+            - name: LAZYCLOUD_TUNNEL_ISSUER_CERTIFICATE_FILE
+              value: /run/lazycloud/tunnel-issuer/certificate.pem
+            - name: LAZYCLOUD_TUNNEL_ISSUER_PRIVATE_KEY_FILE
+              value: /run/lazycloud/tunnel-issuer/private-key.pem
             - name: AWS_CONFIG_FILE
               value: /run/lazycloud/aws/config
             # Not AWS_PROFILE: boto applies that to every client in the
@@ -157,6 +91,9 @@ spec:
             - name: LAZYCLOUD_AWS_CONNECTION_PROFILE
               value: {{ include "lazycloud.awsProfile" . | quote }}
           volumeMounts:
+            - name: tunnel-issuer
+              mountPath: /run/lazycloud/tunnel-issuer
+              readOnly: true
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
             - name: aws-chain
@@ -166,14 +103,7 @@ spec:
               readOnly: true
           resources:
             {{- toYaml .Values.controlPlane.resources | nindent 12 }}
-          # Loopback rather than the advertised address: a replica has to prove
-          # it serves before it can be one of the things that address resolves
-          # to, so a check going out through WireGuard could never pass cold.
-          #
-          # Startup is a phase, not a delay. uvicorn binds nothing until the
-          # lifespan finishes, so a passing /livez is proof composition ended,
-          # and five minutes of it covers a slow release fetch and peer setup
-          # without the other two probes judging a process that has not started.
+          # Startup completes API composition before dependency probes begin.
           startupProbe:
             httpGet:
               path: /livez
