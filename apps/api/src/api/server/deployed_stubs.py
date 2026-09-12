@@ -23,7 +23,6 @@ def resolve_deployed_stub_id(
 ) -> StubRecord:
     resolve = _stub_by_id(
         control_plane,
-        services,
         stub_id,
         expected_kind,
         public=public,
@@ -46,7 +45,6 @@ async def resolve_deployed_stub_id_async(
 ) -> StubRecord:
     resolve = _stub_by_id(
         control_plane,
-        services,
         stub_id,
         expected_kind,
         public=public,
@@ -99,7 +97,6 @@ async def resolve_deployed_stub_async(
 
 def _stub_by_id(
     control_plane: ControlPlaneService,
-    services: ApiServices,
     stub_id: str,
     expected_kind: StubKind,
     *,
@@ -114,7 +111,7 @@ def _stub_by_id(
             stub = control_plane.get_stub_in_session(session, stub_id, workspace=workspace)
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=f"{name} not found") from exc
-        _validate(services, session, stub, expected_kind, public=public, resource_name=name)
+        _validate(stub, expected_kind, public=public, resource_name=name)
         return stub
 
     return resolve
@@ -139,15 +136,13 @@ def _stub_by_deployment(
             workspace=workspace,
             version=version,
         )
-        _validate(services, session, resource.stub, expected_kind, public=False, resource_name=name)
+        _validate(resource.stub, expected_kind, public=False, resource_name=name)
         return resource.stub
 
     return resolve
 
 
 def _validate(
-    services: ApiServices,
-    session: DatabaseSession,
     stub: StubRecord,
     expected_kind: StubKind,
     *,
@@ -156,24 +151,8 @@ def _validate(
 ) -> None:
     if stub.kind is not expected_kind:
         raise HTTPException(status_code=404, detail=f"{resource_name} not found")
-    if public and not stub_is_public_in_session(services, session, stub):
+    if public and not stub.public:
         raise HTTPException(status_code=404, detail=f"public {resource_name} not found")
-
-
-def stub_is_public_in_session(
-    services: ApiServices,
-    session: DatabaseSession,
-    stub: StubRecord,
-) -> bool:
-    if stub.public:
-        return True
-    if stub.app_id is None:
-        return False
-    try:
-        app = services.apps.get_in_session(session, stub.app_id, workspace=stub.workspace_id)
-    except NotFoundError:
-        return False
-    return app.workspace_id == stub.workspace_id and app.public
 
 
 def _deployment_kind(stub_kind: StubKind) -> DeploymentKind:

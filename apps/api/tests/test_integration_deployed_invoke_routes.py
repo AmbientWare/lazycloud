@@ -416,6 +416,76 @@ def test_private_endpoint_and_asgi_id_routes_use_token_workspace(
         assert service.forward_requests == []
 
 
+def test_public_app_keeps_private_endpoint_authorization(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "mixed-owner")
+    app = isolated_services.apps.create("mixed", workspace=workspace.id, public=True)
+    private_deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="private-endpoint",
+            kind=DeploymentKind.Endpoint,
+            handler="private_endpoint:handler",
+            metadata={"app": app.name, "authorized": True},
+        ),
+        workspace=workspace.id,
+    )
+    private_stub = _stub_for_deployment(isolated_services, private_deployment.id)
+    assert isolated_services.apps.get(app.id, workspace=workspace.id).public
+    public_deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="public-endpoint",
+            kind=DeploymentKind.Endpoint,
+            handler="public_endpoint:handler",
+            metadata={"app": app.name, "authorized": False},
+        ),
+        workspace=workspace.id,
+    )
+    public_stub = _stub_for_deployment(isolated_services, public_deployment.id)
+    assert private_stub.app_id == public_stub.app_id == app.id
+    private_host = f"{private_deployment.subdomain}.{_base_host(BASE_URL)}"
+    private_public_path = f"/api/v1/endpoints/public/{private_stub.id}"
+    service = RecordingEndpointService()
+    with TestClient(create_app(isolated_services, endpoint_service=service)) as client:
+        for headers in ({}, {"authorization": "Bearer invalid-test-token"}):
+            private_response = client.post(
+                "/", headers=headers | {"host": private_host}, json={"value": 107}
+            )
+            public_id_response = client.post(
+                private_public_path, headers=headers, json={"value": 107}
+            )
+            assert private_response.status_code == 401
+            assert public_id_response.status_code == 404
+        assert service.forward_requests == []
+
+        owner_headers = _auth_headers(isolated_services, workspace=workspace.id)
+        authenticated = client.post(
+            "/", headers=owner_headers | {"host": private_host}, json={"value": 107}
+        )
+        public_response = client.post(
+            "/",
+            headers={"host": f"{public_deployment.subdomain}.{_base_host(BASE_URL)}"},
+            json={"value": 107},
+        )
+        assert authenticated.status_code == public_response.status_code == 202
+        assert [request.stub_id for request in service.forward_requests] == [
+            private_stub.id,
+            public_stub.id,
+        ]
+
+        shared = client.post(
+            "/api/v1/apps",
+            headers=owner_headers,
+            json={"name": app.name, "stub_id": private_stub.id, "public": True},
+        )
+        assert shared.status_code == 201
+        shared_response = client.post(private_public_path, json={"value": 107})
+        assert shared_response.status_code == 202
+        assert service.forward_requests[-1].stub_id == private_stub.id
+
+
 def test_generated_asgi_urls_forward_subpaths_and_warmup(
     isolated_services: ApiServices,
 ) -> None:

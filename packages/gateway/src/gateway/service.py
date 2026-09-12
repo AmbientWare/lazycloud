@@ -874,7 +874,6 @@ class GatewayControlService:
                 invoke_url = (
                     self.control_plane.stub_url(
                         resource.stub.id,
-                        apps=self.services.apps,
                         workspace=workspace,
                         external_url=request.external_url,
                         deployment_id=deployment.id,
@@ -906,7 +905,6 @@ class GatewayControlService:
             else:
                 url = self.control_plane.stub_url(
                     request.stub_id,
-                    apps=self.services.apps,
                     workspace=request.workspace,
                     deployment_id=request.deployment_id or None,
                     external_url=request.external_url,

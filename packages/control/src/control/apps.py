@@ -61,7 +61,7 @@ class AppRegistry(AppReader, Protocol):
         stub_id: str | None = None,
         workspace: str = "default",
         version: int = 1,
-        public: bool = False,
+        public: bool | None = None,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> AppRecord: ...
 
@@ -126,7 +126,7 @@ class AppService:
         stub_id: str | None = None,
         workspace: str = "default",
         version: int = 1,
-        public: bool = False,
+        public: bool | None = None,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> AppRecord:
         try:
@@ -157,7 +157,7 @@ class AppService:
                     stub_id=stub.id if stub is not None else None,
                     name=app_name,
                     version=version,
-                    public=public,
+                    public=public if public is not None else False,
                     metadata=dict(metadata or {}),
                     created_at=now,
                     updated_at=now,
@@ -169,7 +169,7 @@ class AppService:
                     update={
                         "stub_id": stub.id if stub is not None else existing.stub_id,
                         "version": version,
-                        "public": public,
+                        "public": public if public is not None else existing.public,
                         "metadata": {**existing.metadata, **(metadata or {})},
                         "updated_at": now,
                     }
@@ -178,7 +178,8 @@ class AppService:
             stub_repository = StubRepository(session)
             if stub is not None:
                 stub.app_id = record.id
-                stub.public = public or stub.public
+                if public is not None:
+                    stub.public = public or stub.public
                 stub.updated_at = now
                 stub_repository.upsert(stub)
         self._publish_change(record, change)
