@@ -58,7 +58,7 @@ export function MarketingLayout({
   }, [hash, pathname]);
 
   return (
-    <MarketingFrame design={design} scrollportRef={scrollportRef}>
+    <MarketingFrame key={design ?? "original"} design={design} scrollportRef={scrollportRef}>
       <a
         className="fixed top-[max(0.75rem,env(safe-area-inset-top))] left-[max(0.75rem,env(safe-area-inset-left))] -translate-y-[160%] rounded-lg bg-foreground px-3.5 py-2.5 text-background focus:translate-y-0"
         href="#marketing-main"
@@ -173,7 +173,7 @@ const designClouds: Record<LandingDesign, CloudsOptions> = {
     blur: 0.9,
     scale: 0.65,
     opacity: 0.24,
-    speed: 0.1,
+    speed: 0.35,
     wind: 0.1,
   },
 };
@@ -187,6 +187,24 @@ function MarketingFrame({
   design?: LandingDesign;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }) {
+  const [cloudsPaused, setCloudsPaused] = useState(false);
+
+  useEffect(() => {
+    const scrollport = scrollportRef.current;
+    if (design !== "studio" || !scrollport) return;
+
+    function pauseOnScroll() {
+      if (scrollport && scrollport.scrollTop > 0) {
+        setCloudsPaused(true);
+        scrollport.removeEventListener("scroll", pauseOnScroll);
+      }
+    }
+
+    scrollport.addEventListener("scroll", pauseOnScroll, { passive: true });
+    pauseOnScroll();
+    return () => scrollport.removeEventListener("scroll", pauseOnScroll);
+  }, [design, scrollportRef]);
+
   const className = cn(
     "dark isolate h-dvh w-full overflow-hidden bg-background text-foreground",
     design && `landing-design landing-design--${design}`,
@@ -212,6 +230,7 @@ function MarketingFrame({
       wind={0.45}
       windRadius={260}
       {...(design ? designClouds[design] : {})}
+      paused={cloudsPaused}
     >
       {children}
     </Clouds>

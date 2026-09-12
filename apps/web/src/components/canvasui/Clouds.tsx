@@ -13,6 +13,7 @@ import {
 import { createRectCache } from "./rect-cache";
 
 export interface CloudsOptions {
+  paused?: boolean;
   scale?: number;
   speed?: number;
   scrollWithContent?: boolean;
@@ -38,6 +39,7 @@ export interface CloudsInstance {
 }
 
 const DEFAULTS: Required<Omit<CloudsOptions, "color">> = {
+  paused: false,
   scale: 1,
   speed: 0.6,
   scrollWithContent: true,
@@ -383,7 +385,7 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
     gl!.uniform2f(windPass.uniforms.uResolution, fieldW, fieldH);
     gl!.uniform1f(windPass.uniforms.uDecay, Math.pow(0.5, delta / 0.7));
     const moved = Math.hypot(pointerX - prevPointerX, pointerY - prevPointerY);
-    const stamping = hasPointer && moved > 0;
+    const stamping = !config.paused && hasPointer && moved > 0;
     gl!.uniform2f(windPass.uniforms.uA, prevPointerX, prevPointerY);
     gl!.uniform2f(windPass.uniforms.uB, pointerX, pointerY);
     gl!.uniform1f(
@@ -433,10 +435,10 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
     }
     const delta = Math.min((now - lastTime) / 1000, 1 / 30);
     lastTime = now;
-    const driftActive = !reducedMotion && config.speed !== 0;
+    const driftActive = !config.paused && !reducedMotion && config.speed !== 0;
     if (driftActive) time += delta * config.speed * 0.03;
-    render(delta);
-    const windActive = now - lastPointerMove < 3000;
+    render(config.paused ? 0 : delta);
+    const windActive = !config.paused && now - lastPointerMove < 3000;
     if (!driftActive && !windActive) {
       running = false;
       return;
@@ -475,6 +477,7 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
   const rectCache = createRectCache(output);
 
   function onPointerMove(event: PointerEvent) {
+    if (config.paused) return;
     const rect = rectCache.current;
     const x = (event.clientX - rect.left) / Math.max(rect.width, 1);
     const y = 1 - (event.clientY - rect.top) / Math.max(rect.height, 1);
@@ -493,9 +496,13 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
     hasPointer = false;
   }
 
+  function onScroll() {
+    if (!config.paused) start();
+  }
+
   content.addEventListener("pointermove", onPointerMove, { passive: true });
   content.addEventListener("pointerleave", onPointerLeave, { passive: true });
-  content.addEventListener("scroll", start, { passive: true });
+  content.addEventListener("scroll", onScroll, { passive: true });
 
   return {
     setOptions(next) {
@@ -516,7 +523,7 @@ function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsI
       motionQuery.removeEventListener("change", onMotionChange);
       content.removeEventListener("pointermove", onPointerMove);
       content.removeEventListener("pointerleave", onPointerLeave);
-      content.removeEventListener("scroll", start);
+      content.removeEventListener("scroll", onScroll);
       gl!.deleteTexture(fieldTexture);
       gl!.deleteTexture(windTextures[0]);
       gl!.deleteTexture(windTextures[1]);

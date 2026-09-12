@@ -75,6 +75,14 @@
   letter-spacing: -0.055em;
 }
 
+.landing-design--studio .marketing-hero {
+  min-height: 100svh;
+}
+
+.landing-design--studio .marketing-hero > div:last-child {
+  min-height: calc(100svh - var(--marketing-header-height) - 1px);
+}
+
 .landing-design--studio .marketing-hero h1 em {
   display: inline;
   font-style: normal;
