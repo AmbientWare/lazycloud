@@ -7,6 +7,8 @@ from foundation.environment_file import load_environment_file
 from observability.process_logs import configure_process_logging
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
 
+from api.server.http_protocol import BoundedHttpProtocol
+
 
 class ApiServerArguments(argparse.Namespace):
     host: str
@@ -38,6 +40,7 @@ def run_api_server(
         port=port,
         log_level=log_level,
         workers=workers,
+        http=BoundedHttpProtocol,
         timeout_graceful_shutdown=120,
     )
 

@@ -18,6 +18,7 @@ dependencies = [
     "fastapi>=0.115,<1",
     "foundation",
     "gateway",
+    "h11>=0.16,<1",
     "identity",
     "images",
     "networking",
