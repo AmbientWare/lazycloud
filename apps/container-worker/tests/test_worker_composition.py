@@ -6,7 +6,7 @@ import pytest
 from container_worker_app.composition import build_worker_process_services
 from container_worker_app.settings import WorkerSettings
 from worker.configuration import WorkerConfiguration, WorkerPathConfiguration
-from worker.repository_client import WorkerRepositoryClientError
+from worker.repository_errors import WorkerRepositoryClientError
 from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig
 
 _CAPACITY_OWNER_ID = "839fc92e-c26d-4e31-84c1-a827c2768607"

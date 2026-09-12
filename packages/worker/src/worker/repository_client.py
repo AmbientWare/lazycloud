@@ -57,6 +57,7 @@ from worker.origin_access import (
     CacheOriginCredentialRequest,
     ImageArchiveUploadCredentialRequest,
 )
+from worker.repository_errors import WorkerRepositoryClientError
 from worker.repository_payloads import (
     AcknowledgeContainerRequestRequest,
     AcknowledgeContainerRequestResponse,
@@ -172,10 +173,6 @@ def _bounded_image_build_log(value: str) -> str:
     if len(encoded) <= 8 * 1024:
         return value
     return encoded[: 8 * 1024].decode("utf-8", errors="ignore")
-
-
-class WorkerRepositoryClientError(RuntimeError):
-    pass
 
 
 class WorkerSourceCacheNotAvailableError(WorkerRepositoryClientError):

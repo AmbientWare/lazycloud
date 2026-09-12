@@ -18,6 +18,7 @@ from shared.usage import UsageBillingOwner
 from shared.worker_events import WorkerEventRecord
 
 from worker.execution import container_veth_names
+from worker.repository_errors import WorkerRepositoryClientError
 from worker.supervision import WorkerEventSink
 
 # These ranges cannot represent customer internet destinations. Routing to the
@@ -52,46 +53,72 @@ _POLICY_REFRESH_SECONDS = 30
 _POLICY_MAX_AGE_SECONDS = 60
 
 
+@dataclass(frozen=True, slots=True)
+class _EgressPolicySnapshot:
+    policy: WorkerEgressPolicy
+    continuity: int
+
+
 @dataclass(slots=True)
 class _EgressPolicyCache:
     load: Callable[[], WorkerEgressPolicy]
     record_failure: Callable[[Exception], None]
-    _policy: WorkerEgressPolicy | None = None
+    _snapshot: _EgressPolicySnapshot | None = None
     _lock: RLock = field(default_factory=RLock, repr=False)
+    _refresh_lock: RLock = field(default_factory=RLock, repr=False)
     _stop: Event = field(default_factory=Event, repr=False)
     _thread: Thread | None = field(default=None, init=False, repr=False)
 
     def start(self) -> None:
-        if self._thread is not None:
-            return
         self._refresh()
-        self._thread = Thread(target=self._run, name="egress-route-evidence", daemon=True)
-        self._thread.start()
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._stop.clear()
+                self._thread = Thread(target=self._run, name="egress-route-evidence", daemon=True)
+                self._thread.start()
 
     def close(self) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join()
 
-    def current(self) -> WorkerEgressPolicy:
+    def current(self) -> _EgressPolicySnapshot:
         with self._lock:
-            policy = self._policy
-        if policy is None:
+            snapshot = self._snapshot
+        if snapshot is None:
             raise RuntimeError("worker egress route evidence has not been initialized")
-        self._validate_age(policy)
-        return policy
+        self._validate_age(snapshot.policy)
+        return snapshot
 
     @staticmethod
-    def _validate_age(policy: WorkerEgressPolicy) -> None:
+    def _is_current(policy: WorkerEgressPolicy) -> bool:
         age = (utc_now() - policy.verified_at).total_seconds()
-        if age < -5 or age >= _POLICY_MAX_AGE_SECONDS:
+        return -5 <= age < _POLICY_MAX_AGE_SECONDS
+
+    @classmethod
+    def _validate_age(cls, policy: WorkerEgressPolicy) -> None:
+        if not cls._is_current(policy):
             raise RuntimeError("worker egress route evidence is not current")
 
+    def refresh_if_stale(self) -> None:
+        with self._refresh_lock:
+            with self._lock:
+                snapshot = self._snapshot
+            if snapshot is None or not self._is_current(snapshot.policy):
+                self._refresh()
+
     def _refresh(self) -> None:
-        policy = self.load()
-        self._validate_age(policy)
-        with self._lock:
-            self._policy = policy
+        with self._refresh_lock:
+            policy = self.load()
+            self._validate_age(policy)
+            with self._lock:
+                previous = self._snapshot
+                continuity = (
+                    previous.continuity + int(not self._is_current(previous.policy))
+                    if previous is not None
+                    else 0
+                )
+                self._snapshot = _EgressPolicySnapshot(policy, continuity)
 
     def _run(self) -> None:
         while not self._stop.wait(_POLICY_REFRESH_SECONDS):
@@ -100,9 +127,12 @@ class _EgressPolicyCache:
             except Exception as refresh_error:
                 try:
                     self.record_failure(refresh_error)
+                except WorkerRepositoryClientError:
+                    LOGGER.warning(
+                        "worker egress route evidence refresh and failure reporting are unavailable"
+                    )
                 except Exception:
                     LOGGER.exception("worker egress route evidence failure could not be recorded")
-                    raise refresh_error from None
 
 
 class NetworkEgressCounterSample(ContractModel):
@@ -149,8 +179,12 @@ class WorkerNetworkEgressCounters:
         self._policy_cache.close()
 
     def ensure(self, container_id: str, *, ipv4_interface: str, ipv6_interface: str) -> None:
+        try:
+            self._policy_cache.current()
+        except RuntimeError:
+            self._policy_cache.refresh_if_stale()
         with self._lock:
-            policy = self._policy_cache.current()
+            policy = self._policy_cache.current().policy
             self._interfaces[container_id] = (ipv4_interface, ipv6_interface)
             if policy.billing_owner is not UsageBillingOwner.PlatformFleet:
                 return
@@ -184,7 +218,8 @@ class WorkerNetworkEgressCounters:
                 raise
 
     def _sample(self, container_id: str) -> NetworkEgressCounterSample:
-        policy = self._policy_cache.current()
+        snapshot = self._policy_cache.current()
+        policy = snapshot.policy
         if policy.billing_owner is not UsageBillingOwner.PlatformFleet:
             return NetworkEgressCounterSample(
                 total_bytes=0, policy_digest=policy.billing_owner.value
@@ -207,7 +242,7 @@ class WorkerNetworkEgressCounters:
             total += int(counters[0][1])
         return NetworkEgressCounterSample(
             total_bytes=total,
-            policy_digest=f"{self._continuity}:"
+            policy_digest=f"{self._continuity}:{snapshot.continuity}:"
             + sha256(policy.routes.model_dump_json().encode()).hexdigest(),
         )
 

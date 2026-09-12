@@ -30,9 +30,7 @@ from worker.container_execution import (
 from worker.container_service.state import LocalWorkerContainerInstanceStore
 from worker.events import WorkerBuildCancelRegistry
 from worker.oci_runtime import OciRuntimeCommandController
-from worker.repository_client import (
-    WorkerRepositoryClientError,
-)
+from worker.repository_errors import WorkerRepositoryClientError
 from worker.scheduler_requests import (
     WorkerSchedulerRequestAction,
     WorkerSchedulerRequestProcessor,
