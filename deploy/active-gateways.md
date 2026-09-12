@@ -17,6 +17,13 @@ keep a tunnel to each gateway. A gateway deployment stops receiving new
 connections before its existing connections drain. Worker addresses and enrollment
 identity survive gateway and API deployments.
 
+API HTTP connections stop accepting another request after 60 seconds. Active
+responses finish before the connection closes. Worker event streams end every
+30 seconds and reconnect through their existing acknowledgement and redelivery
+path. This bounds internal connection draining without interrupting a response
+or replaying a request. WebSocket upgrades transfer connection ownership and
+cancel the HTTP retirement timer.
+
 PostgreSQL owns gateway indices, public keys, endpoints and enrolled peers. Redis
 leases fence processes sharing a gateway identity. Each gateway publishes the
 peer identities and generations that pass a fresh encrypted TCP probe under that

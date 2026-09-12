@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import suppress
 from dataclasses import dataclass, field
 
@@ -100,7 +100,8 @@ class WorkerEventBroker:
         *,
         heartbeat_interval_seconds: float,
         max_events: int,
-    ) -> AsyncIterator[str]:
+        deadline: float,
+    ) -> AsyncGenerator[str]:
         if self._reader is None:
             raise RuntimeError("worker event broker is not running")
         subscriber = _WorkerEventSubscriber(asyncio.Queue(maxsize=self.queue_size))
@@ -112,16 +113,20 @@ class WorkerEventBroker:
             self._subscribers.setdefault(worker_id, set()).add(subscriber)
         emitted = 0
         heartbeat_seconds = max(heartbeat_interval_seconds, 0.1)
+        loop = asyncio.get_running_loop()
         try:
             while max_events <= 0 or emitted < max_events:
-                if subscriber.overflowed:
+                remaining_seconds = deadline - loop.time()
+                if subscriber.overflowed or remaining_seconds <= 0:
                     return
                 try:
                     event_id = await asyncio.wait_for(
                         subscriber.queue.get(),
-                        timeout=heartbeat_seconds,
+                        timeout=min(heartbeat_seconds, remaining_seconds),
                     )
                 except TimeoutError:
+                    if loop.time() >= deadline:
+                        return
                     event_id = WORKER_EVENT_HEARTBEAT_ID
                 if event_id is None:
                     raise WorkerEventBrokerUnavailable("worker event broker reader failed") from (

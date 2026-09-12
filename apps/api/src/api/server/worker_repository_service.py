@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import tempfile
 from collections.abc import AsyncIterator, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import aclosing, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -245,6 +246,7 @@ from api.server.worker_event_broker import worker_event_target
 
 LOGGER = logging.getLogger(__name__)
 WORKER_REQUEST_BLOCK_SECONDS = 1.0
+WORKER_EVENT_STREAM_SECONDS = 30.0
 IMAGE_BUILD_CONTEXT_DOWNLOAD_SECONDS = 300
 _CONTAINER_RESOURCE = "container"
 """What a worker names as the subject of the usage it reports. It is the only
@@ -742,12 +744,16 @@ class WorkerRepositoryService:
         io: ApiAsyncIo,
         request: StreamWorkerEventsRequest,
     ) -> AsyncIterator[WorkerStreamEvent]:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + WORKER_EVENT_STREAM_SECONDS
         emitted = 0
         pending_key = _pending_event_key(io.redis, request.worker_id)
         pending_event_ids = sorted(
             redis_text(event_id) for event_id in await io.redis.set_members(pending_key)
         )
         for event_id in pending_event_ids:
+            if loop.time() >= deadline:
+                return
             event = await self._worker_event_for_worker(io, event_id, request.worker_id)
             if event is None:
                 await io.redis.set_remove(pending_key, event_id)
@@ -757,6 +763,8 @@ class WorkerRepositoryService:
             if request.max_events > 0 and emitted >= request.max_events:
                 return
         for event_id in request.event_ids:
+            if loop.time() >= deadline:
+                return
             event = await self._worker_event_for_worker(io, event_id, request.worker_id)
             if event is None:
                 continue
@@ -769,18 +777,22 @@ class WorkerRepositoryService:
             return
 
         remaining = 0 if request.max_events <= 0 else request.max_events - emitted
-        async for event_id in io.worker_events.stream_event_ids(
-            request.worker_id,
-            heartbeat_interval_seconds=request.heartbeat_interval_seconds,
-            max_events=remaining,
-        ):
-            event = await self._worker_event_for_worker(io, event_id, request.worker_id)
-            if event is None:
-                continue
-            yield event
-            emitted += 1
-            if request.max_events > 0 and emitted >= request.max_events:
-                return
+        async with aclosing(
+            io.worker_events.stream_event_ids(
+                request.worker_id,
+                heartbeat_interval_seconds=request.heartbeat_interval_seconds,
+                max_events=remaining,
+                deadline=deadline,
+            )
+        ) as event_ids:
+            async for event_id in event_ids:
+                event = await self._worker_event_for_worker(io, event_id, request.worker_id)
+                if event is None:
+                    continue
+                yield event
+                emitted += 1
+                if request.max_events > 0 and emitted >= request.max_events:
+                    return
 
     async def acknowledge_worker_event(
         self,
