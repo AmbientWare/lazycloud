@@ -156,7 +156,6 @@ class DeploymentRegistrationService:
                 workspace=workspace,
                 stub_id=stub.id,
                 version=deployment.version,
-                public=not authorized,
                 metadata={
                     "deployment_id": deployment.id,
                     "deployment_kind": deployment.kind.value,

@@ -46,7 +46,7 @@ class _ClaimingAppRegistry:
         stub_id: str | None = None,
         workspace: str = "default",
         version: int = 1,
-        public: bool = False,
+        public: bool | None = None,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> AppRecord:
         if stub_id is not None:
