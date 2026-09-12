@@ -211,6 +211,7 @@ def test_repository_build_context_loader_rejects_incomplete_or_modified_body(
         workspace_id="workspace-1",
         build_id="build-1",
         container_id="container-1",
+        resources=ImageBuildResources(tmp_path),
     )
 
     assert not result.ok
@@ -250,6 +251,7 @@ def test_repository_build_context_error_never_discloses_capability_query(
         workspace_id="workspace-1",
         build_id="build-1",
         container_id="container-1",
+        resources=ImageBuildResources(tmp_path),
     )
 
     assert not result.ok

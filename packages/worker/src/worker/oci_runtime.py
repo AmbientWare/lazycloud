@@ -351,6 +351,7 @@ class OciRuntimeSpecBuilder:
             sandbox_supervisor_token_path=supervisor_token_path,
             spec=spec,
             docker_enabled=context.docker_enabled or self.docker_enabled,
+            image_config=image_config,
         )
 
     def _managed_runtime_catalog(

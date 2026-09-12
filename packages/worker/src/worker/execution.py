@@ -524,15 +524,19 @@ def build_container_environment(
         gateway=gateway,
         hostname=hostname,
         env=[
-            *(
-                value
-                for value in _without_platform_gateway_env(request.image_env)
-                if value.partition("=")[0].strip() != GATEWAY_TOKEN_ENV
-            ),
+            *image_environment(request.image_env),
             *_without_platform_gateway_env(request.request_env),
             *container_env,
         ],
     )
+
+
+def image_environment(values: list[str]) -> list[str]:
+    return [
+        value
+        for value in _without_platform_gateway_env(values)
+        if value.partition("=")[0].strip() != GATEWAY_TOKEN_ENV
+    ]
 
 
 def _gateway_http_url(gateway: GatewayContainerEnvironment, *, tls: bool) -> str:

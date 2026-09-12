@@ -1,0 +1,212 @@
+package storage
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/beam-cloud/clip/pkg/common"
+)
+
+var (
+	ErrContentCacheMiss        = errors.New("content cache miss")
+	ErrContentCacheUnavailable = errors.New("content cache unavailable")
+)
+
+// ContentCache interface for layer caching (e.g., blobcache)
+// Supports range reads for lazy loading
+type ContentCache interface {
+	GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error)
+	StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error)
+}
+
+type ContentCacheReadInto interface {
+	ReadContentInto(hash string, offset int64, dest []byte, opts struct{ RoutingKey string }) (int64, error)
+}
+
+// ContentCacheStream exposes a complete cached object without forcing callers
+// to allocate it in memory. The reported size is used to detect interrupted or
+// incomplete streams before the object is published locally.
+type ContentCacheStream interface {
+	GetContentStream(hash string, opts struct{ RoutingKey string }) (<-chan []byte, int64, error)
+}
+
+type ContentCacheExists interface {
+	ContentExists(hash string, opts struct{ RoutingKey string }) (bool, error)
+}
+
+type ContentCacheStoreLocalPath interface {
+	StoreContentFromLocalPath(path string, hash string, opts struct{ RoutingKey string }) (string, error)
+}
+
+type ClientLocalPageFileView struct {
+	Path   string
+	Offset int64
+	Length int
+}
+
+type ContentCacheClientLocalPageFileViews interface {
+	ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]ClientLocalPageFileView, error)
+}
+
+type ClientLocalFileView struct {
+	Path             string
+	Offset           int64
+	Length           int
+	Source           string
+	LayerDigest      string
+	DecompressedHash string
+	Attrs            map[string]string
+}
+
+type ClipStorageInterface interface {
+	ReadFile(node *common.ClipNode, dest []byte, offset int64) (int, error)
+	Metadata() *common.ClipArchiveMetadata
+	CachedLocally() bool
+	Cleanup() error
+}
+
+type ContextClipStorageInterface interface {
+	ReadFileContext(ctx context.Context, node *common.ClipNode, dest []byte, offset int64) (int, error)
+}
+
+type ClientLocalFileViewer interface {
+	ClientLocalFileView(ctx context.Context, node *common.ClipNode, offset int64, length int64) (ClientLocalFileView, bool, error)
+}
+
+type PrepareProgress struct {
+	Completed int
+	Total     int
+	Bytes     int64
+}
+
+type PrepareOptions struct {
+	Concurrency int
+	Progress    func(PrepareProgress)
+}
+
+type ContentPreparer interface {
+	Prepare(ctx context.Context, opts PrepareOptions) error
+}
+
+type ClipStorageCredentials struct {
+	S3 *S3ClipStorageCredentials
+}
+
+type ClipStorageOpts struct {
+	ArchivePath           string
+	CachePath             string
+	Metadata              *common.ClipArchiveMetadata
+	StorageModeOverride   common.StorageMode
+	StorageInfo           *common.S3StorageInfo
+	Credentials           ClipStorageCredentials
+	ContentCache          ContentCache // For OCI storage remote caching
+	ContentCacheAvailable bool
+	UseCheckpoints        bool        // Enable checkpoint-based partial decompression for OCI layers
+	RegistryCredProvider  interface{} // Registry authentication (for OCI storage)
+	ReadTraceObserver     common.ReadTraceObserver
+}
+
+func NewClipStorage(opts ClipStorageOpts) (ClipStorageInterface, error) {
+	var storage ClipStorageInterface = nil
+	storageType := opts.StorageModeOverride
+	var err error = nil
+
+	header := opts.Metadata.Header
+	metadata := opts.Metadata
+
+	// Determine storage type from header or metadata unless the caller has
+	// materialized remote content into a verified local archive.
+	if storageType == "" {
+		if header.StorageInfoLength > 0 {
+			// Check the actual storage info type
+			if metadata.StorageInfo != nil {
+				switch metadata.StorageInfo.Type() {
+				case string(common.StorageModeOCI):
+					storageType = common.StorageModeOCI
+				case string(common.StorageModeS3):
+					storageType = common.StorageModeS3
+				default:
+					storageType = common.StorageModeS3 // default to S3 for backward compatibility
+				}
+			} else {
+				storageType = common.StorageModeS3
+			}
+		} else {
+			storageType = common.StorageModeLocal
+		}
+	}
+
+	switch storageType {
+	case common.StorageModeS3:
+		if metadata.StorageInfo == nil && opts.StorageInfo == nil {
+			return nil, errors.New("storage info not provided")
+		}
+
+		// If StorageInfo is passed in, we can use that to override the configuration
+		// stored in the metadata. This way you can use a different bucket for the
+		// archive than the one used when the archive was created.
+		var storageInfo common.S3StorageInfo
+		switch info := metadata.StorageInfo.(type) {
+		case common.S3StorageInfo:
+			storageInfo = info
+		case *common.S3StorageInfo:
+			if info != nil {
+				storageInfo = *info
+			}
+		case nil:
+		default:
+			return nil, fmt.Errorf("invalid S3 storage info type %T", metadata.StorageInfo)
+		}
+		if opts.StorageInfo != nil {
+			storageInfo = *opts.StorageInfo
+		}
+
+		var accessKey, secretKey string
+		if opts.Credentials.S3 != nil {
+			accessKey = opts.Credentials.S3.AccessKey
+			secretKey = opts.Credentials.S3.SecretKey
+		}
+
+		storage, err = NewS3ClipStorage(metadata, S3ClipStorageOpts{
+			Bucket:         storageInfo.Bucket,
+			Region:         storageInfo.Region,
+			Key:            storageInfo.Key,
+			Endpoint:       storageInfo.Endpoint,
+			ForcePathStyle: storageInfo.ForcePathStyle,
+			CachePath:      opts.CachePath,
+			AccessKey:      accessKey,
+			SecretKey:      secretKey,
+		})
+	case common.StorageModeOCI:
+		// Convert interface{} to RegistryCredentialProvider if provided
+		var credProvider common.RegistryCredentialProvider
+		if opts.RegistryCredProvider != nil {
+			if provider, ok := opts.RegistryCredProvider.(common.RegistryCredentialProvider); ok {
+				credProvider = provider
+			}
+		}
+
+		storage, err = NewOCIClipStorage(OCIClipStorageOpts{
+			Metadata:              metadata,
+			CredProvider:          credProvider,
+			ContentCache:          opts.ContentCache,
+			ContentCacheAvailable: opts.ContentCacheAvailable,
+			DiskCacheDir:          opts.CachePath,
+			UseCheckpoints:        opts.UseCheckpoints,
+			ReadTraceObserver:     opts.ReadTraceObserver,
+		})
+	case common.StorageModeLocal:
+		storage, err = NewLocalClipStorage(metadata, LocalClipStorageOpts{
+			ArchivePath: opts.ArchivePath,
+		})
+	default:
+		err = errors.New("unsupported storage type")
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return storage, nil
+}

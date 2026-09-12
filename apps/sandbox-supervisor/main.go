@@ -44,6 +44,7 @@ type request struct {
 	Data          []byte   `json:"data,omitempty"`
 	Pattern       string   `json:"pattern,omitempty"`
 	NewString     string   `json:"new_string,omitempty"`
+	ExcludePaths  []string `json:"exclude_paths,omitempty"`
 }
 
 type response struct {
@@ -238,6 +239,8 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 		s.handleKill(encoder, command.PID, command.Signal)
 	case "file":
 		s.handleFile(encoder, command)
+	case "snapshot-filesystem":
+		s.handleFilesystemSnapshot(connection, encoder, command.ExcludePaths)
 	default:
 		_ = encoder.Encode(response{Version: protocolVersion, Type: "error", Error: "unknown operation"})
 	}

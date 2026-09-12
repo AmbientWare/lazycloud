@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import JsonValue, TypeAdapter
+from shared.container_requests import WORKER_USER_CODE_VOLUME
 from worker.adapters import WorkerRouteIdentity
 from worker.container_execution import (
     ContainerExecutionContext,
@@ -11,6 +12,7 @@ from worker.container_execution import (
     ContainerNetworkSetupResult,
 )
 from worker.container_service.models import (
+    ContainerFilesystemSnapshotContext,
     SandboxDockerDaemonStatus,
     WorkerContainerServiceInstance,
 )
@@ -62,12 +64,36 @@ class OciContainerServiceInstanceRecorder:
     ) -> None:
         root_path = _spec_root_path(spec)
         identity = self.identity
+        source_mounts = {
+            (item.mount.mount_path, item.mount.local_path)
+            for item in mount_result.mounts
+            if item.included
+            and item.mount.source_object_id
+            and item.mount.mount_path == WORKER_USER_CODE_VOLUME
+        }
+        oci_mounts = spec.spec.get("mounts")
+        if not isinstance(oci_mounts, list):
+            raise ValueError("container OCI mount list is missing")
+        excluded_paths: list[str] = []
+        for mount in oci_mounts:
+            if not isinstance(mount, dict):
+                raise ValueError("container OCI mount destination is missing")
+            destination, source = mount.get("destination"), mount.get("source")
+            if not isinstance(destination, str) or not isinstance(source, str):
+                raise ValueError("container OCI mount source or destination is missing")
+            if (destination, source) not in source_mounts:
+                excluded_paths.append(destination)
         instance = WorkerContainerServiceInstance(
             container_id=context.request.container_id,
             root_path=root_path,
             bundle_path=spec.bundle_path,
             config_path=spec.config_path,
             top_layer_path=root_path,
+            filesystem_snapshot=ContainerFilesystemSnapshotContext(
+                image_config=spec.image_config,
+                architecture=context.architecture,
+                excluded_paths=excluded_paths,
+            ),
             workspace_path=str(Path(root_path) / "workspace"),
             cwd=context.cwd,
             runtime=context.runtime,

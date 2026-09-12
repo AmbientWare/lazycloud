@@ -216,7 +216,7 @@ class WorkerContainerService:
     def container_archive(
         self,
         request: ContainerArchiveRequest,
-    ) -> tuple[ContainerArchiveResponse, ...]:
+    ) -> Iterable[ContainerArchiveResponse]:
         instance = self._instance(request.container_id)
         if instance is None:
             return (
@@ -235,12 +235,7 @@ class WorkerContainerService:
                 ),
             )
         try:
-            return tuple(
-                self.archives.archive_container(
-                    instance,
-                    image_id=request.image_id,
-                )
-            )
+            return self.archives.archive_container(instance)
         except Exception as exc:
             return (ContainerArchiveResponse(done=True, success=False, error_msg=str(exc)),)
 

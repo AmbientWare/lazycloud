@@ -33,6 +33,19 @@ class ImageBuildStep(ContractModel):
     command: str | None = None
 
 
+class FilesystemSnapshotSource(ContractModel):
+    object_id: str = Field(min_length=1)
+    ownership_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0)
+
+
+class FilesystemSnapshotMetadata(ContractModel):
+    env: list[str] = Field(default_factory=list)
+    workdir: str
+    architecture: LinuxArchitecture
+
+
 class ImageSpec(ContractModel):
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
     base: str = "python:3.12-slim"
@@ -53,9 +66,12 @@ class ImageSpec(ContractModel):
     gpu: str | None = None
     image_id: str | None = None
     ignore_python: bool = False
+    filesystem_snapshot: FilesystemSnapshotSource | None = None
 
 
 __all__ = [
+    "FilesystemSnapshotMetadata",
+    "FilesystemSnapshotSource",
     "ImageBuildStep",
     "ImageBuildStepKind",
     "ImageSpec",

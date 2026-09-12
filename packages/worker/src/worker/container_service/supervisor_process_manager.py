@@ -5,7 +5,7 @@ import json
 import socket
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +63,7 @@ class SupervisorRequest(ContractModel):
     data: str = Field(default="", repr=False)
     pattern: str = ""
     new_string: str = ""
+    exclude_paths: list[str] = Field(default_factory=list)
 
 
 class SupervisorProcess(ContractModel):
@@ -151,6 +152,33 @@ class SupervisorSandboxProcessManager:
     def ready(self) -> bool:
         response = self._request(SupervisorRequest(op="ready"))
         return response.type == "ready"
+
+    def snapshot_filesystem(self, *, exclude_paths: list[str]) -> Generator[bytes, None, None]:
+        transport = _SupervisorTransport.connect(
+            self.host,
+            self.port,
+            token=self.token,
+            timeout_seconds=60.0,
+            retry=False,
+            coordinator=self.connections,
+        )
+        try:
+            transport.send(SupervisorRequest(op="snapshot-filesystem", exclude_paths=exclude_paths))
+            while response := transport.receive():
+                self._validate(response)
+                if response.type == "snapshot-complete":
+                    return
+                if response.type != "snapshot-chunk":
+                    raise SandboxSupervisorError(
+                        response.error or "invalid filesystem snapshot response"
+                    )
+                data = base64.b64decode(response.data, validate=True)
+                if len(data) > 64 * 1024:
+                    raise SandboxSupervisorError("filesystem snapshot chunk exceeds transfer limit")
+                yield data
+            raise SandboxSupervisorError("filesystem snapshot ended before completion")
+        finally:
+            transport.close()
 
     def start_workload(self) -> None:
         response = self._request(SupervisorRequest(op="start-workload"))

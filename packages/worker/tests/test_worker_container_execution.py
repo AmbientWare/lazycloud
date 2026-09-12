@@ -285,6 +285,7 @@ class SpecBuilder:
         }
         return OciRuntimeContainerSpec(
             container_id=container_id,
+            image_config=image_config,
             runtime=RuntimeBinaryConfig(runtime=context.runtime),
             bundle_path=bundle_path,
             config_path=f"{bundle_path}/config.json",

@@ -770,8 +770,14 @@ class ObjectReferenceRepository:
                 select(
                     exists().where(
                         ImageBuildTable.workspace_id == workspace_id,
-                        _image_build_json_text(self.session, "image", "context_object_id")
-                        == object_id,
+                        or_(
+                            _image_build_json_text(self.session, "image", "context_object_id")
+                            == object_id,
+                            _image_build_json_text(
+                                self.session, "image", "filesystem_snapshot", "object_id"
+                            )
+                            == object_id,
+                        ),
                         or_(
                             ImageBuildTable.status.in_(
                                 [BuildStatus.Pending.value, BuildStatus.Running.value]
@@ -1343,10 +1349,16 @@ def _source_object_reference_exists(
         exists()
         .where(
             ImageBuildTable.workspace_id == ObjectTable.workspace_id,
-            _uuid_text_without_hyphens(
-                _image_build_json_text(session, "image", "context_object_id")
-            )
-            == object_id,
+            or_(
+                _uuid_text_without_hyphens(
+                    _image_build_json_text(session, "image", "context_object_id")
+                )
+                == object_id,
+                _uuid_text_without_hyphens(
+                    _image_build_json_text(session, "image", "filesystem_snapshot", "object_id")
+                )
+                == object_id,
+            ),
             or_(
                 _build_active_or_recent(recent_build_after),
                 _direct_image_reference_clause(

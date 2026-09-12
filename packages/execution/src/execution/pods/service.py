@@ -156,6 +156,12 @@ class AsyncPodSchedulerContainerDirectory(Protocol):
     ) -> dict[str, SchedulerContainerAddressMap]: ...
 
 
+class PodFilesystemSnapshotCreator(Protocol):
+    def create(
+        self, container_id: str, *, workspace_id: str, exporter: PodContainerControlClient
+    ) -> str: ...
+
+
 @dataclass(slots=True)
 class PodControlService:
     services: ExecutionServices
@@ -163,6 +169,7 @@ class PodControlService:
     gateway_http_url: str = "http://127.0.0.1:9000"
     scheduler_containers: ContainerSchedulingDirectory | None = None
     container_clients: SchedulerContainerClientFactory[PodContainerControlClient] | None = None
+    image_snapshots: PodFilesystemSnapshotCreator | None = None
     async_database: AsyncDatabaseClient | None = None
     async_scheduler_containers: AsyncPodSchedulerContainerDirectory | None = None
     async_pod_proxy_http_client: AsyncPodProxyForwardClient | None = None
@@ -814,14 +821,11 @@ class PodControlService:
         request: PodSandboxCreateImageFromFilesystemRequest,
     ) -> PodSandboxCreateImageFromFilesystemResponse:
         _ = request
-        container = self._container(container_id)
-        if not container.stub_id:
-            raise InvalidInputError(f"container has no owning stub: {container_id}")
-        image_id = f"image-{container.stub_id}-{uuid4().hex[:8]}"
-        self._client(container_id).archive(
-            container_id,
-            image_id,
-            lambda _: None,
+        container, _stub = self._sandbox_container(container_id)
+        if self.image_snapshots is None:
+            raise RuntimeError("filesystem snapshot image service is not configured")
+        image_id = self.image_snapshots.create(
+            container_id, workspace_id=container.workspace_id, exporter=self._client(container_id)
         )
         return PodSandboxCreateImageFromFilesystemResponse(image_id=image_id)
 

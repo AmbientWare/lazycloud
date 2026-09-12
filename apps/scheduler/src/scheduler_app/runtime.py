@@ -72,6 +72,7 @@ from scheduler.state import (
 )
 from scheduler.worker_rollout import WorkerWorkloadDrainService
 from storage.retention_settings import RetentionSettings
+from storage.service import ObjectStorage
 from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -124,6 +125,7 @@ class SchedulerRuntime:
                 redis_client=app_services.redis_client,
                 container_requests=_container_requests(app_services),
                 image_build_container_settings=image_build_container_settings,
+                snapshot_objects=app_services.object_storage,
                 retention_settings=storage.retention,
                 volume_metering=app_services.volume_metering,
                 storage_access=app_services.storage_access,
@@ -164,6 +166,7 @@ class SchedulerRuntime:
         container_requests: SchedulerContainerRequestService,
         image_build_container_settings: ImageBuildContainerSettings,
         retention_settings: RetentionSettings,
+        snapshot_objects: ObjectStorage,
         volume_metering: SchedulerVolumeMeteringService,
         storage_access: SchedulerStorageAccessService | None,
         volume_deletion: SchedulerVolumeDeletionService,
@@ -224,6 +227,7 @@ class SchedulerRuntime:
                         execution_services.containers,
                         image_build_container_settings,
                     ),
+                    snapshot_objects,
                 ),
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),

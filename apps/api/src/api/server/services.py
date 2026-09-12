@@ -95,6 +95,7 @@ from images.settings import (
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
+from images.snapshots import ImageFilesystemSnapshotService
 from images.submission import ImageBuildSubmissionService
 from networking.async_http import AsyncBackendHttpClient
 from networking.dialer import (
@@ -930,6 +931,7 @@ class ApiServices(ApiServiceCore):
                 DurableImageBuildDispatch(
                     context.database, container_scheduler, containers, image_build_container_config
                 ),
+                object_storage_service,
             ),
             events,
             publication_publisher,
@@ -1432,6 +1434,7 @@ def _pod_control_service(
     async_io = core.async_io
     return PodControlService(
         core,
+        image_snapshots=ImageFilesystemSnapshotService(core.images, core.object_storage),
         gateway_http_url=core.gateway_settings.public_http_url,
         scheduler_containers=scheduler_containers,
         container_clients=container_clients,

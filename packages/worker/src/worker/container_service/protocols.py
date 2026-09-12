@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -82,6 +82,8 @@ class WorkerSandboxProcessManagerFactory(Protocol):
 
 
 class WorkerSandboxControlManager(WorkerSandboxProcessManager, Protocol):
+    def snapshot_filesystem(self, *, exclude_paths: list[str]) -> Generator[bytes, None, None]: ...
+
     def file_operation(self, request: SandboxFileRequest, *, cwd: str) -> SandboxFileResult: ...
 
 
@@ -164,8 +166,6 @@ class WorkerContainerArchiveCreator(Protocol):
     def archive_container(
         self,
         instance: WorkerContainerServiceInstance,
-        *,
-        image_id: str,
     ) -> Iterable[ContainerArchiveResponse]: ...
 
 

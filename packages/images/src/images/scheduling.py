@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
-from shared.image_building.authoring import LinuxArchitecture
+from shared.image_building.authoring import FilesystemSnapshotSource, LinuxArchitecture
 from shared.scheduling import SchedulerWorkerRequest
 from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 
@@ -38,6 +38,7 @@ class ImageBuildContainerBuildOptions(ContractModel):
     build_context_digest: str = ""
     build_secret_names: list[str] = Field(default_factory=list)
     build_arg_names: list[str] = Field(default_factory=list)
+    filesystem_snapshot: FilesystemSnapshotSource | None = None
 
 
 class ImageBuildContainerCredentialMetadata(ContractModel):
@@ -73,6 +74,7 @@ def plan_image_build_container_request(
         source_image=request.plan.spec.base,
         dockerfile=request.plan.dockerfile,
         build_context_object=request.plan.spec.context_object_id or "",
+        filesystem_snapshot=request.plan.spec.filesystem_snapshot,
         build_context_path=(
             request.plan.spec.context_path if not request.plan.spec.context_object_id else ""
         )

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, TypeVar
 
 from foundation.io_utils import OutputMessage
 from shared.checkpoints import CHECKPOINT_OPERATION_TIMEOUT_SECONDS
 from shared.contracts import ContractModel
+from shared.image_building.authoring import FilesystemSnapshotMetadata
 
 from .models import (
     CONTAINER_CLIENT_LOG_KEEPALIVE_SECONDS,
@@ -92,7 +94,7 @@ class ContainerServiceTransport(Protocol):
         request: ContractModel,
         *,
         timeout_seconds: float | None = None,
-    ) -> Iterable[ContainerServicePayload]: ...
+    ) -> Generator[ContainerServicePayload, None, None]: ...
 
 
 class ContainerClientStreamError(RuntimeError):
@@ -428,35 +430,27 @@ class ContainerServiceClient:
             timeout_seconds=CHECKPOINT_OPERATION_TIMEOUT_SECONDS,
         )
 
-    def archive(self, container_id: str, image_id: str, output: OutputCallback) -> None:
-        output(
-            OutputMessage(
-                archiving=True,
-                msg="\nSaving image, this may take a few minutes...\n",
-            )
-        )
-        request = ContainerArchiveRequest(container_id=container_id, image_id=image_id)
+    def archive(self, container_id: str, target: Path) -> FilesystemSnapshotMetadata:
+        request = ContainerArchiveRequest(container_id=container_id)
         stream = self._stream(ContainerServiceMethod.ContainerArchive, request)
         try:
-            for raw in stream:
-                response = ContainerArchiveResponse.model_validate(raw)
-                if response.error_msg:
-                    output(OutputMessage(msg=f"{response.error_msg}\n", archiving=True))
-                if not response.done and not response.error_msg:
-                    message = (
-                        "."
-                        if response.progress == 0
-                        else generate_progress_bar(response.progress, 100)
-                    )
-                    output(OutputMessage(msg=message, archiving=True))
-                if response.done:
-                    if response.success:
-                        return
-                    raise ContainerArchiveError("image archiving failed")
-        except ContainerArchiveError:
+            with target.open("wb") as output:
+                for raw in stream:
+                    response = ContainerArchiveResponse.model_validate(raw)
+                    if response.error_msg:
+                        raise ContainerArchiveError(response.error_msg)
+                    if response.data:
+                        output.write(response.data)
+                    if response.done:
+                        if response.success and response.metadata is not None:
+                            return response.metadata
+                        raise ContainerArchiveError("filesystem snapshot did not complete")
+            raise ContainerArchiveError("filesystem snapshot ended before completion")
+        except BaseException:
+            target.unlink(missing_ok=True)
             raise
-        except Exception as exc:
-            raise ContainerClientStreamError("error receiving from archive stream") from exc
+        finally:
+            stream.close()
 
     def sync_workspace(
         self,
@@ -484,7 +478,7 @@ class ContainerServiceClient:
         self,
         method: ContainerServiceMethod,
         request: ContractModel,
-    ) -> Iterable[ContainerServicePayload]:
+    ) -> Generator[ContainerServicePayload, None, None]:
         try:
             return self.transport.stream(method, request)
         except Exception as exc:

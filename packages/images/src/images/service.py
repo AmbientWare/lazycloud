@@ -260,6 +260,10 @@ class ImageBuildService:
                     clip_version=CURRENT_IMAGE_CLIP_VERSION,
                     archive_published=archive_published,
                 )
+                if completed.image.filesystem_snapshot is not None:
+                    ImageBuildDispatchRepository(session).schedule_cleanup(
+                        build_id, after=utc_now()
+                    )
 
             self._emit(
                 completion_event.kind.value,

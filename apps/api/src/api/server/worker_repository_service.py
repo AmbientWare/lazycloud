@@ -43,6 +43,7 @@ from foundation.network import worker_network_prefix
 from gateway.unit_state import billing_owner_for_unit
 from identity.auth import AuthorizationDeniedError, AuthService
 from images.service import ImageBuildService
+from images.snapshots import validate_snapshot_source
 from observability.container_logs import (
     ContainerLogIngestionService,
     ContainerLogRuntimeAttribution,
@@ -1902,8 +1903,10 @@ class WorkerRepositoryService:
             )
         except NotFoundError as exc:
             raise AuthorizationDeniedError("image build context build is unavailable") from exc
+        snapshot = build.image.filesystem_snapshot
+        expected_object_id = snapshot.object_id if snapshot else build.image.context_object_id
         if (
-            build.image.context_object_id != request.object_id
+            expected_object_id != request.object_id
             or build.status not in {BuildStatus.Pending, BuildStatus.Running}
             or (state.image_id and state.image_id != build.image_id)
         ):
@@ -1916,6 +1919,13 @@ class WorkerRepositoryService:
             )
         except NotFoundError as exc:
             raise AuthorizationDeniedError("image build context object is unavailable") from exc
+        if snapshot is not None:
+            try:
+                validate_snapshot_source(record, snapshot)
+            except ValueError as exc:
+                raise AuthorizationDeniedError(
+                    "filesystem snapshot source ownership is invalid"
+                ) from exc
         download_url = object_storage.generate_presigned_get_url_for_workspace(
             workspace_id=request.workspace_id,
             bucket=record.bucket,

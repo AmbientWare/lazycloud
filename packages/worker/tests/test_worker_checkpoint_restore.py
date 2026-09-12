@@ -29,6 +29,7 @@ from worker.container_execution import (
     ContainerRuntimeRunResult,
 )
 from worker.events import ContainerRequestContext
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.oci_spec import OciRuntimeContainerSpec
 from worker.runtime_config import OciRuntimeName, RuntimeBinaryConfig
 
@@ -524,6 +525,7 @@ def _spec(
 ) -> OciRuntimeContainerSpec:
     return OciRuntimeContainerSpec(
         container_id=container_id,
+        image_config=ImageRuntimeConfig(),
         runtime=RuntimeBinaryConfig(runtime=OciRuntimeName.Runc),
         bundle_path=str(bundle),
         config_path=str(config_path),

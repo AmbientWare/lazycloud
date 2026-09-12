@@ -17,11 +17,13 @@ from images.building.constants import DEFAULT_IMAGE_BASE, UV_PROJECT_ENVIRONMENT
 from images.building.models import ImageInstallCommandMode, PythonRuntimeSetupAction
 from images.building.python_runtime import plan_python_runtime_setup
 
-IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 2
+IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 3
 
 
 def build_image_plan(image: ImageSpec) -> ImageBuildPlan:
-    context_digest = image.context_digest
+    context_digest = (
+        image.filesystem_snapshot.sha256 if image.filesystem_snapshot else image.context_digest
+    )
     if image.context_path and not context_digest:
         context_digest = fingerprint_build_context(image.context_path)
 
@@ -98,6 +100,10 @@ def _normalize_image_spec(image: ImageSpec, *, context_digest: str | None) -> Im
 
 
 def _validate_image_spec(image: ImageSpec) -> None:
+    if image.filesystem_snapshot and (
+        image.dockerfile or image.commands or image.build_steps or image.packages or image.secrets
+    ):
+        raise ValueError("filesystem snapshots cannot include additional build instructions")
     if image.dockerfile and image.base not in {"", DEFAULT_IMAGE_BASE}:
         msg = "dockerfile builds cannot also set a custom base image"
         raise ValueError(msg)
@@ -111,6 +117,11 @@ def _validate_image_spec(image: ImageSpec) -> None:
 
 
 def _initial_dockerfile_lines(image: ImageSpec) -> list[str]:
+    if image.filesystem_snapshot:
+        lines = ["FROM scratch", "ADD snapshot.tar /"]
+        if image.workdir:
+            lines.append(f"WORKDIR {_docker_value(image.workdir)}")
+        return lines
     if image.dockerfile:
         return image.dockerfile.rstrip().splitlines()
 

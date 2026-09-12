@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
@@ -69,6 +70,9 @@ class ProcessManager:
 
     def file_operation(self, request: SandboxFileRequest, *, cwd: str) -> SandboxFileResult:
         raise AssertionError("filesystem operations require the guest supervisor")
+
+    def snapshot_filesystem(self, *, exclude_paths: list[str]) -> Generator[bytes, None, None]:
+        raise AssertionError("filesystem snapshots require the guest supervisor")
 
     def ready(self) -> bool:
         self.ready_calls += 1

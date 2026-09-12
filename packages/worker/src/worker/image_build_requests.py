@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import Field
 from shared.contracts import ContractModel
-from shared.image_building.authoring import LinuxArchitecture
+from shared.image_building.authoring import FilesystemSnapshotSource, LinuxArchitecture
 from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 
 IMAGE_BUILD_REQUEST_KIND = IMAGE_BUILD_WORKLOAD_ID
@@ -39,6 +39,7 @@ class ImageBuildContainerBuildOptions(ContractModel):
     build_context_digest: str = ""
     build_secret_names: list[str] = Field(default_factory=list)
     build_arg_names: list[str] = Field(default_factory=list)
+    filesystem_snapshot: FilesystemSnapshotSource | None = None
 
 
 class ImageBuildContainerCredentialMetadata(ContractModel):

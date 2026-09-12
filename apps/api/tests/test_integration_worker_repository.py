@@ -70,7 +70,7 @@ from scheduler.state import (
     SchedulerWorkerRequest,
 )
 from shared.agent_connections import AgentConnectionRecord
-from shared.app_identity import FUNCTION_IMAGE
+from shared.app_identity import FUNCTION_IMAGE, SOURCE_PACKAGE_BUCKET
 from shared.billing_quotes import ContainerShape
 from shared.cache_records import CacheEntry
 from shared.compute_enrollment import (
@@ -83,12 +83,12 @@ from shared.compute_policy import (
 )
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
 from shared.http.releases import AgentReleaseRequest
 from shared.http.worker_usage import WorkerUsageWindowResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
-from shared.image_building.authoring import ImageSpec
+from shared.image_building.authoring import FilesystemSnapshotSource, ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
 from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
@@ -584,28 +584,49 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
         )
 
 
+@pytest.mark.parametrize("snapshot", [False, True])
 def test_image_build_context_download_is_bound_to_active_assignment_and_object(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
+    snapshot: bool,
 ) -> None:
     redis = real_redis_actors.client()
     service = isolated_services.worker_repository_service
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    ownership_id = uuid4().hex
     context = isolated_services.object_storage.put_bytes_for_workspace(
         workspace_id=workspace_id,
-        bucket=isolated_services.object_storage.default_bucket,
-        key="contexts/remote-v2.zip",
+        bucket=SOURCE_PACKAGE_BUCKET
+        if snapshot
+        else isolated_services.object_storage.default_bucket,
+        key=(
+            f"sources/image-snapshots/{ownership_id}/snapshot.tar"
+            if snapshot
+            else "contexts/remote-v2.zip"
+        ),
         data=b"remote-v2-build-context",
         content_type="application/zip",
+        metadata={"filesystem_snapshot_owner": ownership_id} if snapshot else {},
     )
+    image = ImageSpec(
+        ignore_python=True, context_object_id=context.id, context_digest=context.sha256
+    )
+    if snapshot:
+        image = ImageSpec(
+            ignore_python=True,
+            filesystem_snapshot=FilesystemSnapshotSource(
+                object_id=context.id,
+                ownership_id=ownership_id,
+                sha256=context.sha256,
+                size_bytes=context.size,
+            ),
+        )
+        with pytest.raises(InvalidInputError, match="internally owned snapshot request"):
+            isolated_services.images.build(image, workspace_id=workspace_id)
     build = _pending_image_build(
         isolated_services,
-        ImageSpec(
-            ignore_python=True,
-            context_object_id=context.id,
-            context_digest=context.sha256,
-        ),
+        image,
     )
     assert build.image_id
     service.containers.set_container_state(
@@ -687,6 +708,13 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
     )
     assert "access_key" not in response.model_dump_json()
     assert "secret_key" not in response.model_dump_json()
+    if snapshot:
+        assert build.image.filesystem_snapshot is not None
+        build.image.filesystem_snapshot.sha256 = "0" * 64
+        with isolated_services.context.database.session() as session:
+            ImageBuildRepository(session).upsert(build, workspace_id=workspace_id)
+        with pytest.raises(AuthorizationDeniedError, match="snapshot source ownership is invalid"):
+            service.prepare_image_build_context_download(request, principal=principal)
 
 
 def test_cache_origin_broker_returns_urls_without_storage_credentials(
