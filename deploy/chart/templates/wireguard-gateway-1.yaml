@@ -27,7 +27,7 @@ spec:
   template:
     metadata:
       annotations:
-        lazycloud.dev/secret-revision: {{ $.Values.secretRevisions.wireguard | quote }}
+        lazycloud.dev/secret-revision: "1"
       labels:
         app: {{ $name }}
         app.kubernetes.io/component: tunnel-gateway
@@ -54,7 +54,7 @@ spec:
             defaultMode: 0600
       initContainers:
         - name: enable-ip-forwarding
-          image: {{ include "lazycloud.image" (list $ "tunnel-gateway") }}
+          image: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/tunnel-gateway@sha256:63fa7a6bd7c5df7ea77641a6f5353cd6460e721ade7b648d2e8d8f4547bd226a
           command: ["sysctl", "-w", "net.ipv4.ip_forward=1"]
           securityContext:
             privileged: true
@@ -62,7 +62,7 @@ spec:
             {{- toYaml $.Values.bootstrap.resources | nindent 12 }}
       containers:
         - name: tunnel-gateway
-          image: {{ include "lazycloud.image" (list $ "tunnel-gateway") }}
+          image: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/tunnel-gateway@sha256:63fa7a6bd7c5df7ea77641a6f5353cd6460e721ade7b648d2e8d8f4547bd226a
           securityContext:
             capabilities:
               add: ["NET_ADMIN"]
