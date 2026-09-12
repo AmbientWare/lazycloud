@@ -105,7 +105,7 @@ it("saves preset and custom amounts without changing untouched settings or confu
       <BillingPreferencesForm paymentMethodOnFile />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("button", { name: "Add credit" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Add credits" })).toBeEnabled();
   fireEvent.keyDown(screen.getByLabelText("Monthly usage limit, USD"), { key: "Enter" });
   fireEvent.click(await screen.findByRole("option", { name: "$50.00" }));
   fireEvent.click(screen.getByLabelText("Automatic reload"));
@@ -134,7 +134,7 @@ it("saves preset and custom amounts without changing untouched settings or confu
       <BillingPreferencesForm paymentMethodOnFile={false} />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("button", { name: "Add credit" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add credits" })).toBeDisabled();
   expect(screen.getByLabelText("Amount in USD")).toBeDisabled();
   expect(screen.getByLabelText("Add, USD")).toBeDisabled();
   expect(screen.getByLabelText("Add, USD, custom amount")).toBeDisabled();
