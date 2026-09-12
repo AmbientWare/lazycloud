@@ -21,8 +21,7 @@ from worker.execution import container_veth_names
 from worker.repository_errors import WorkerRepositoryClientError
 from worker.supervision import WorkerEventSink
 
-# These ranges cannot represent customer internet destinations. Routing to the
-# gateway's tunnel is excluded separately by matching the actual internet uplink.
+# These ranges cannot represent customer internet destinations.
 _INTERNAL = (
     "0.0.0.0/8",
     "10.0.0.0/8",
@@ -51,6 +50,10 @@ _COUNTER_COMMENT = "lazycloud-internet-ip-bytes"
 LOGGER = logging.getLogger(__name__)
 _POLICY_REFRESH_SECONDS = 30
 _POLICY_MAX_AGE_SECONDS = 60
+
+
+class NetworkEgressPolicyUnavailableError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +89,9 @@ class _EgressPolicyCache:
         with self._lock:
             snapshot = self._snapshot
         if snapshot is None:
-            raise RuntimeError("worker egress route evidence has not been initialized")
+            raise NetworkEgressPolicyUnavailableError(
+                "worker egress route evidence has not been initialized"
+            )
         self._validate_age(snapshot.policy)
         return snapshot
 
@@ -98,7 +103,7 @@ class _EgressPolicyCache:
     @classmethod
     def _validate_age(cls, policy: WorkerEgressPolicy) -> None:
         if not cls._is_current(policy):
-            raise RuntimeError("worker egress route evidence is not current")
+            raise NetworkEgressPolicyUnavailableError("worker egress route evidence is not current")
 
     def refresh_if_stale(self) -> None:
         with self._refresh_lock:
@@ -181,7 +186,7 @@ class WorkerNetworkEgressCounters:
     def ensure(self, container_id: str, *, ipv4_interface: str, ipv6_interface: str) -> None:
         try:
             self._policy_cache.current()
-        except RuntimeError:
+        except NetworkEgressPolicyUnavailableError:
             self._policy_cache.refresh_if_stale()
         with self._lock:
             policy = self._policy_cache.current().policy

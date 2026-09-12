@@ -14,7 +14,10 @@ from worker.events import (
     GpuMemoryCounters,
     build_container_metrics_payload,
 )
-from worker.network_egress import NetworkEgressCounterSample
+from worker.network_egress import (
+    NetworkEgressCounterSample,
+    NetworkEgressPolicyUnavailableError,
+)
 from worker.runtime_config import absolute_container_accounting_cgroup_path
 from worker.tools import (
     NetworkIoCounters,
@@ -148,6 +151,12 @@ class WorkerContainerMetricsService:
                 prior = previous.network_egress if previous is not None else None
                 if prior is not None and prior.policy_digest == egress.policy_digest:
                     egress_bytes = max(0, egress.total_bytes - prior.total_bytes)
+            except NetworkEgressPolicyUnavailableError:
+                if previous is None or previous.network_egress is not None:
+                    LOGGER.warning(
+                        "internet egress evidence unavailable for %s; interval is unbilled",
+                        request.container_id,
+                    )
             except Exception:
                 LOGGER.warning(
                     "internet egress classification unavailable for %s; interval is unbilled",
