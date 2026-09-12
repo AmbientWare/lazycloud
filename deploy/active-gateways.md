@@ -1,24 +1,14 @@
 # Active gateways
 
-This release applies migration stage three below. Platform peers use the indexed
-registry and fresh gateway presence to choose a working agent path. Their native
-sidecar keeps the tunnel alive while API requests drain. Deploy only after every
-active enrollment uses the new agent runtime and has a working gateway-one path.
-Both gateways keep their unchanged pod templates throughout this API rollout.
+This final migration release replaces gateway zero with an independent indexed
+gateway, then rolls gateway one. Both require fresh encrypted probes from every
+platform peer before becoming ready. It removes the temporary image pins,
+singular registration endpoint and server public-key projection.
 The API allows 120 seconds for request draining inside a 150-second pod grace.
 
-`wireguard-gateway.yaml` preserves gateway zero's two-replica Deployment and
-Service selector. Its pod template keeps secret revision `1` and the deployed
-network image ending in digest `87f0c5be`. Platform sidecars and key initializers
-use the current release image. `wireguard-gateway-1.yaml` pins the preparation image
-ending in digest `47bd226a` and secret revision `1`. Its temporary `minAvailable: 1`
-disruption budget blocks voluntary eviction while clients migrate. Remove that
-budget and all image pins when restoring the final indexed chart.
-
-Compose runs the same migration topology against local dependencies. Gateways
-use their pinned images; the platform peer and key bootstrap use the network
-image built from this source. Pulling the pinned images requires access to
-the platform ECR repository. Do not copy AWS credentials into these containers.
+Publish only after every active enrollment uses the indexed agent runtime and
+every platform peer has a working gateway-one path. The ordered releases below
+preserve service while those consumers migrate.
 
 ## Outcome
 

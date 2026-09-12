@@ -57,14 +57,4 @@ spec:
   maxUnavailable: 1
   selector:
     matchLabels:
-      app: tunnel-gateway
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: tunnel-gateway-1
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: tunnel-gateway-1
+      app.kubernetes.io/component: tunnel-gateway

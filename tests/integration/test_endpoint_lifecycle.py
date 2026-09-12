@@ -326,7 +326,6 @@ def predict():
         )
     )
     stub = _stub_for_deployment(async_services, deployment.id)
-    _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=1)
     containers = _EndpointContainers()
     service = _endpoint_service(async_services, containers, readiness=_readiness(async_services))
     invocation = asyncio.create_task(

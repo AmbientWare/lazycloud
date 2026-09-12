@@ -10,8 +10,6 @@ from gateway.http import (
     LeaveAgentResponse,
     ListAgentRoutesRequest,
     ListAgentRoutesResponse,
-    RegisterAgentPrivateNetworkRequest,
-    RegisterAgentPrivateNetworkResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
@@ -131,18 +129,6 @@ def leave_agent(
     service: GatewayControlService = Depends(gateway_service),
 ) -> LeaveAgentResponse:
     return service.leave_agent(request)
-
-
-@router.post(
-    "/agents/private-network",
-    response_model=RegisterAgentPrivateNetworkResponse,
-    operation_id="register_agent_private_network",
-)
-def register_agent_private_network(
-    request: RegisterAgentPrivateNetworkRequest,
-    service: GatewayControlService = Depends(gateway_service),
-) -> RegisterAgentPrivateNetworkResponse:
-    return service.register_agent_private_network(request)
 
 
 @router.post(

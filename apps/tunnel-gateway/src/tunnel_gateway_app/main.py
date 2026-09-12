@@ -472,7 +472,7 @@ class TunnelGatewayProcess:
                     continue
                 if draining:
                     lease.drain()
-                if not lease.mark_ready(platform_connected=True):
+                if not lease.mark_ready(platform_connected=platform_connected):
                     self._close_lease(lease, lease_key, token, release=False)
                     lease = None
                     continue

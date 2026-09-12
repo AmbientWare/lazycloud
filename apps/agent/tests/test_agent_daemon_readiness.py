@@ -443,7 +443,7 @@ def test_transport_failures_are_recoverable_so_a_machine_keeps_rejoining() -> No
     """
     transport_failure = HttpTransportError(
         "POST",
-        "https://gateway.example.com/gateway/agents/private-network",
+        "https://gateway.example.com/gateway/agents/private-network/register",
         "EOF occurred in violation of protocol (_ssl.c:1010)",
     )
     assert _recoverable_stream_error(transport_failure)
