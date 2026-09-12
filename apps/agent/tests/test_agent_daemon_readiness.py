@@ -30,6 +30,8 @@ from gateway.http import (
     JoinAgentResponse,
     LeaveAgentRequest,
     LeaveAgentResponse,
+    RegisterAgentPrivateNetworkRequest,
+    RegisterAgentPrivateNetworkResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
@@ -47,11 +49,6 @@ from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
     AgentCapacityInterruptionResponse,
-)
-from shared.http.private_network import (
-    PrivateNetworkTopologyRequest,
-    RegisterPrivateNetworkRequest,
-    WireGuardPeerConfiguration,
 )
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
@@ -121,17 +118,10 @@ class _Gateway:
 
     def register_agent_private_network(
         self,
-        request: RegisterPrivateNetworkRequest,
-    ) -> WireGuardPeerConfiguration:
+        request: RegisterAgentPrivateNetworkRequest,
+    ) -> RegisterAgentPrivateNetworkResponse:
         del request
         raise AssertionError("direct transport should not register a private-network site")
-
-    def private_network_topology(
-        self,
-        request: PrivateNetworkTopologyRequest,
-    ) -> WireGuardPeerConfiguration:
-        del request
-        raise AssertionError("direct transport should not request private-network topology")
 
     def stream_agent_telemetry(
         self,

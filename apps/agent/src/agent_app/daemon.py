@@ -75,12 +75,14 @@ from gateway.http import (
     JoinAgentResponse,
     LeaveAgentRequest,
     LeaveAgentResponse,
+    RegisterAgentPrivateNetworkRequest,
+    RegisterAgentPrivateNetworkResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
-from networking.wireguard_client import WireGuardClientRuntime
+from networking.wireguard import WireGuardClientRuntime, WireGuardPeerConfiguration
 from provider_aws import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
@@ -103,11 +105,6 @@ from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
     AgentCapacityInterruptionResponse,
-)
-from shared.http.private_network import (
-    PrivateNetworkTopologyRequest,
-    RegisterPrivateNetworkRequest,
-    WireGuardPeerConfiguration,
 )
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
@@ -150,7 +147,6 @@ JOIN_RETRY_BASE_SECONDS = 2.0
 JOIN_RETRY_MAX_SECONDS = 30.0
 PRIVATE_NETWORK_CONNECT_ATTEMPTS = 30
 PRIVATE_NETWORK_POLL_SECONDS = 2.0
-PRIVATE_NETWORK_TOPOLOGY_SECONDS = 10.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 WORKER_EXIT_LOG_LINES = 200
@@ -331,13 +327,8 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
 
     def register_agent_private_network(
         self,
-        request: RegisterPrivateNetworkRequest,
-    ) -> WireGuardPeerConfiguration: ...
-
-    def private_network_topology(
-        self,
-        request: PrivateNetworkTopologyRequest,
-    ) -> WireGuardPeerConfiguration: ...
+        request: RegisterAgentPrivateNetworkRequest,
+    ) -> RegisterAgentPrivateNetworkResponse: ...
 
     def stream_agent_telemetry(
         self,
@@ -443,18 +434,10 @@ class HttpAgentGatewayClient:
 
     def register_agent_private_network(
         self,
-        request: RegisterPrivateNetworkRequest,
-    ) -> WireGuardPeerConfiguration:
-        return WireGuardPeerConfiguration.model_validate(
-            self.channel.post("/gateway/agents/private-network/register", _payload(request))
-        )
-
-    def private_network_topology(
-        self,
-        request: PrivateNetworkTopologyRequest,
-    ) -> WireGuardPeerConfiguration:
-        return WireGuardPeerConfiguration.model_validate(
-            self.channel.post("/gateway/agents/private-network/topology", _payload(request))
+        request: RegisterAgentPrivateNetworkRequest,
+    ) -> RegisterAgentPrivateNetworkResponse:
+        return RegisterAgentPrivateNetworkResponse.model_validate(
+            self.channel.post("/gateway/agents/private-network", _payload(request))
         )
 
     def stream_agent_telemetry(
@@ -1019,7 +1002,6 @@ class AgentDaemonService:
         private_network_runtime: AgentPrivateNetworkRuntime | None = None
         private_network_address = ""
         private_network_configuration: WireGuardPeerConfiguration | None = None
-        next_private_network_refresh = 0.0
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -1085,24 +1067,6 @@ class AgentDaemonService:
                         private_network_runtime is not None
                         and private_network_configuration is not None
                     ):
-                        if time.monotonic() >= next_private_network_refresh:
-                            next_private_network_refresh = (
-                                time.monotonic() + PRIVATE_NETWORK_TOPOLOGY_SECONDS
-                            )
-                            configuration = self.client.private_network_topology(
-                                PrivateNetworkTopologyRequest(agent_token=state.agent_token)
-                            )
-                            if (
-                                configuration.peer_id != private_network_configuration.peer_id
-                                or configuration.address != private_network_configuration.address
-                                or configuration.generation
-                                != private_network_configuration.generation
-                            ):
-                                raise AgentAuthorityRevokedError(
-                                    "agent WireGuard identity is no longer current"
-                                )
-                            private_network_runtime.configure(configuration)
-                            private_network_configuration = configuration
                         private_network_runtime.reconcile_connection(private_network_configuration)
                     notice = self._poll_capacity_interruption()
                     if notice is not None:
@@ -1668,39 +1632,33 @@ class AgentDaemonService:
             Path(self.options.state_dir) / "wireguard",
         )
         try:
-            configuration = self.client.register_agent_private_network(
-                RegisterPrivateNetworkRequest(
+            binding = self.client.register_agent_private_network(
+                RegisterAgentPrivateNetworkRequest(
                     agent_token=state.agent_token,
                     public_key=runtime.public_key(),
                 )
             )
+            configuration = WireGuardPeerConfiguration.model_validate(
+                binding.model_dump(mode="python")
+            )
             runtime.configure(configuration)
             for attempt in range(1, PRIVATE_NETWORK_CONNECT_ATTEMPTS + 1):
-                handshakes = {
-                    gateway.index: runtime.latest_handshake_at(gateway.public_key)
-                    for gateway in configuration.gateways
-                }
-                healthy = runtime.reconcile_connection(configuration)
+                handshake = runtime.latest_handshake_at(binding.server_public_key)
                 LOGGER.info(
-                    "private-network poll attempt=%s gateways=%s healthy=%s peer_id=%s",
+                    "private-network poll attempt=%s wireguard_handshake=%s peer_id=%s",
                     attempt,
-                    {
-                        index: handshake.isoformat() if handshake is not None else "pending"
-                        for index, handshake in handshakes.items()
-                    },
-                    healthy,
-                    configuration.peer_id,
+                    handshake.isoformat() if handshake is not None else "pending",
+                    binding.peer_id,
                 )
-                if healthy and any(handshake is not None for handshake in handshakes.values()):
+                if handshake is not None:
                     return (
                         runtime,
-                        _private_network_host(configuration.address),
+                        _private_network_host(binding.address),
                         configuration,
                     )
                 time.sleep(PRIVATE_NETWORK_POLL_SECONDS)
             raise RuntimeError(
-                "WireGuard has no reachable gateway after initial connection polls; "
-                "verify outbound UDP and gateway readiness"
+                f"WireGuard did not handshake with {binding.endpoint}; verify outbound UDP"
             )
         except Exception:
             runtime.close()
@@ -2137,8 +2095,6 @@ def _recoverable_stream_error(exc: Exception) -> bool:
 
 
 def agent_authority_was_revoked(exc: Exception) -> bool:
-    if isinstance(exc, AgentAuthorityRevokedError):
-        return True
     if not isinstance(exc, HttpApiError) or not 400 <= exc.status_code < 500:
         return False
     detail = (exc.detail or str(exc)).strip().lower()

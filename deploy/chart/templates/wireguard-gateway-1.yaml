@@ -1,0 +1,148 @@
+{{- $gateway := index .Values.wireguard.gateways 1 }}
+{{- $index := int $gateway.index }}
+{{- if ne $index 1 }}
+{{- fail "gateway preparation requires gateway index one" }}
+{{- end }}
+{{- $name := printf "tunnel-gateway-%d" $index }}
+{{- $serviceName := ternary "tunnel-gateway" $name (eq $index 0) }}
+{{- $directory := ternary "server" (printf "gateway-%d" $index) (eq $index 0) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $index | quote }}
+spec:
+  replicas: 1
+  minReadySeconds: 35
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      annotations:
+        lazycloud.dev/secret-revision: {{ $.Values.secretRevisions.wireguard | quote }}
+      labels:
+        app: {{ $name }}
+        app.kubernetes.io/component: tunnel-gateway
+    spec:
+      terminationGracePeriodSeconds: 150
+      topologySpreadConstraints:
+        {{- range $topology := list "kubernetes.io/hostname" "topology.kubernetes.io/zone" }}
+        - maxSkew: 1
+          minDomains: 2
+          topologyKey: {{ $topology }}
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: tunnel-gateway
+        {{- end }}
+      volumes:
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+        - name: wireguard-keys
+          secret:
+            secretName: {{ $.Values.wireguard.secretName }}
+            defaultMode: 0600
+      initContainers:
+        - name: enable-ip-forwarding
+          image: {{ include "lazycloud.image" (list $ "tunnel-gateway") }}
+          command: ["sysctl", "-w", "net.ipv4.ip_forward=1"]
+          securityContext:
+            privileged: true
+          resources:
+            {{- toYaml $.Values.bootstrap.resources | nindent 12 }}
+      containers:
+        - name: tunnel-gateway
+          image: {{ include "lazycloud.image" (list $ "tunnel-gateway") }}
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          ports:
+            - name: wireguard
+              containerPort: 51820
+              protocol: UDP
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: LAZYCLOUD_WIREGUARD_GATEWAY_INDEX
+              value: {{ $index | quote }}
+            - name: LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_HOST
+              value: control-plane
+            - name: LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_PORT
+              value: "9000"
+            {{- include "lazycloud.databaseEnv" $.Values.wireguard.database | nindent 12 }}
+            - name: LAZYCLOUD_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: LAZYCLOUD_DATABASE_URL
+            - name: LAZYCLOUD_REDIS_URL
+              value: {{ required "runtime.LAZYCLOUD_REDIS_URL is required" $.Values.runtime.LAZYCLOUD_REDIS_URL | quote }}
+            - name: LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT
+              value: {{ required (printf "wireguard.gateways[%d].endpoint requires the provisioned UDP Service endpoint" $index) $gateway.endpoint | quote }}
+            - name: LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE
+              value: /var/lib/lazycloud/wireguard/{{ $directory }}/private-key
+            - name: LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY
+              value: /var/lib/lazycloud/wireguard
+            - name: LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT
+              value: {{ $.Values.controlPlane.replicas | quote }}
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
+            - name: wireguard-keys
+              mountPath: /var/lib/lazycloud/wireguard/{{ $directory }}/private-key
+              subPath: {{ $directory }}-private-key
+              readOnly: true
+            {{- range $peer := until (int $.Values.controlPlane.replicas) }}
+            - name: wireguard-keys
+              mountPath: /var/lib/lazycloud/wireguard/platform-{{ $peer }}/public-key
+              subPath: platform-{{ $peer }}-public-key
+              readOnly: true
+            {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["python", "-m", "tunnel_gateway_app.drain"]
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/lazycloud-tunnel-gateway.ready"]
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 5
+          resources:
+            {{- toYaml $.Values.wireguard.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $serviceName }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=150,deregistration_delay.connection_termination.enabled=false
+spec:
+  type: LoadBalancer
+  loadBalancerClass: eks.amazonaws.com/nlb
+  externalTrafficPolicy: Local
+  publishNotReadyAddresses: true
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: wireguard
+      port: 51820
+      targetPort: wireguard
+      protocol: UDP
