@@ -1,21 +1,3 @@
-/* Instrument Serif (OFL, see fonts/LICENSE), subset to the marketing glyph
- * set so the family ships only inside the marketing route chunk. */
-@font-face {
-  font-family: "Instrument Serif";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("./fonts/instrument-serif-basic-400-normal.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Instrument Serif";
-  font-style: italic;
-  font-weight: 400;
-  font-display: swap;
-  src: url("./fonts/instrument-serif-basic-400-italic.woff2") format("woff2");
-}
-
 .marketing-site,
 .marketing-site * {
   box-sizing: border-box;
@@ -186,7 +168,7 @@
 }
 
 .marketing-site .marketing-action-primary {
-  border-radius: 3px;
+  border-radius: var(--radius);
   border-color: var(--brand);
   background: var(--brand);
   color: #0c141b;
@@ -215,7 +197,7 @@
 
 .marketing-site [data-marketing-card],
 .marketing-site .code-block-paper {
-  border-radius: 6px;
+  border-radius: var(--radius);
   box-shadow: none;
 }
 
@@ -383,7 +365,7 @@
   min-height: 210px;
   margin: 14px 14px 0;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background-color: var(--background);
   padding: 10px 10px 9px;
@@ -531,7 +513,7 @@
 .endpoint-route-summary {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--card);
   padding: 8px 9px 7px;
 }
@@ -602,7 +584,7 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: color-mix(in oklab, var(--card) 84%, var(--background));
 }
 
@@ -652,7 +634,7 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--background);
 }
 
@@ -763,7 +745,7 @@
   top: 0;
   height: 8px;
   min-width: 0;
-  border-radius: 3px;
+  border-radius: var(--radius);
   background: var(--positive);
   transition: width 55ms linear;
 }
@@ -900,7 +882,7 @@
   margin: 10px 11px 11px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--background);
   padding: 9px 10px 6px;
 }

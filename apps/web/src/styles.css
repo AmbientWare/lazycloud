@@ -33,13 +33,14 @@
 @theme inline {
   --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
-  /* Display serif; its @font-face ships with the marketing route chunk. */
-  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
-  --radius-xs: calc(var(--radius) - 6px);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-xs: var(--radius);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
   --color-lazycloud: var(--lazycloud);
   --color-lazycloud-light: var(--lazycloud-light);
   --color-lazycloud-dark: var(--lazycloud-dark);
@@ -89,7 +90,7 @@
 :root,
 .dark {
   color-scheme: dark;
-  --radius: 0.625rem;
+  --radius: 0px;
   --lazycloud: #66cbff;
   --lazycloud-light: #8cd7ff;
   --lazycloud-dark: #4dbce8;
@@ -238,7 +239,7 @@
 
 /* Inline navigation keeps a text-level affordance without inventing route colors. */
 .interactive-link {
-  border-radius: calc(var(--radius) - 4px);
+  border-radius: var(--radius);
   outline: none;
   transition: color 150ms ease;
 }

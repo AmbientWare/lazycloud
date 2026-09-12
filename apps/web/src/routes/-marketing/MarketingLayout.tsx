@@ -162,16 +162,11 @@ function MarketingFrame({
     const scrollport = scrollportRef.current;
     if (!scrollport) return;
 
-    function pauseOnScroll() {
-      if (scrollport && scrollport.scrollTop > 0) {
-        setCloudsPaused(true);
-        scrollport.removeEventListener("scroll", pauseOnScroll);
-      }
-    }
+    const syncCloudMotion = () => setCloudsPaused(scrollport.scrollTop > 0);
 
-    scrollport.addEventListener("scroll", pauseOnScroll, { passive: true });
-    pauseOnScroll();
-    return () => scrollport.removeEventListener("scroll", pauseOnScroll);
+    scrollport.addEventListener("scroll", syncCloudMotion, { passive: true });
+    syncCloudMotion();
+    return () => scrollport.removeEventListener("scroll", syncCloudMotion);
   }, [scrollportRef]);
 
   const contentClassName =

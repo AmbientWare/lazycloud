@@ -275,7 +275,7 @@ function SkeletonBar({ width }: { width: string }) {
   return (
     <span
       aria-hidden="true"
-      className={`block h-[7px] rounded-full bg-muted-foreground/20 ${width}`}
+      className={`block h-[7px] rounded-md bg-muted-foreground/20 ${width}`}
     />
   );
 }
@@ -377,8 +377,8 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
           <span
             className={
               versionReady
-                ? "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-positive/30 bg-positive/10 px-2 py-0.5 text-[10px] text-positive"
-                : "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground"
+                ? "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-positive/30 bg-positive/10 px-2 py-0.5 text-[10px] text-positive"
+                : "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground"
             }
           >
             {versionReady ? <StatusDot /> : null}

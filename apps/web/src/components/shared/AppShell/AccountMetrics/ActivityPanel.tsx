@@ -336,41 +336,17 @@ function ActivityChart({
 
 /** The surface showing between two bands of one column; `barCategoryGap` does the same between columns. */
 const STACK_GAP = 2;
-/** The rounded end of a column, at the only corner that is a reading. */
-const CAP_RADIUS = 3;
-
-/**
- * One band of one interval's column.
- *
- * Drawn by hand for the two pieces of negative space a stack needs. The gap
- * between bands is surface showing through rather than a stroke around the
- * fill, so nothing but data carries ink; it is taken off the top of every band
- * that has another above it, which leaves the column's overall height — the
- * figure the axis is read against — exactly where the scale puts it. Only that
- * top is rounded, because only the top of the column is a reading; every
- * boundary below it is a join. A band too short to give the gap away keeps its
- * full height instead, since a hairline reading rounded to nothing is the one
- * thing this must not draw.
- */
+/* Gaps separate stacked bands without changing the column's total height.
+   Short bands keep their full height so they remain visible. */
 function activitySegment(seriesKey: string, keys: readonly string[]) {
   return ({ x, y, width, height, fill, payload }: BarShapeProps) => {
     if (!(height > 0) || !(width > 0)) return null;
     const row = (payload ?? {}) as ChartRow;
     const topmost = keys.filter((key) => Number(row[key] ?? 0) > 0).at(-1);
-    const capped = topmost === seriesKey;
-    const gap = capped || height <= STACK_GAP + 1 ? 0 : STACK_GAP;
+    const gap = topmost === seriesKey || height <= STACK_GAP + 1 ? 0 : STACK_GAP;
     const top = y + gap;
     const drawn = height - gap;
-    if (!capped) {
-      return <rect x={x} y={top} width={width} height={drawn} fill={fill} />;
-    }
-    const radius = Math.min(CAP_RADIUS, width / 2, drawn);
-    return (
-      <path
-        fill={fill}
-        d={`M${x},${top + drawn}L${x},${top + radius}Q${x},${top} ${x + radius},${top}L${x + width - radius},${top}Q${x + width},${top} ${x + width},${top + radius}L${x + width},${top + drawn}Z`}
-      />
-    );
+    return <rect x={x} y={top} width={width} height={drawn} fill={fill} />;
   };
 }
 
@@ -389,7 +365,7 @@ function TooltipReading({
   return (
     <>
       <span
-        className="size-2.5 shrink-0 rounded-[2px]"
+        className="size-2.5 shrink-0 rounded-xs"
         style={{ background: color }}
         aria-hidden="true"
       />
@@ -478,7 +454,7 @@ function BreakdownRow({
   return (
     <div role="listitem" className="flex items-center gap-3 border-t border-border/60 px-3 py-2">
       <span
-        className="size-2 shrink-0 rounded-[2px]"
+        className="size-2 shrink-0 rounded-xs"
         style={{ background: color }}
         aria-hidden="true"
       />
@@ -513,7 +489,7 @@ function ActivitySkeleton() {
         </div>
         {[0, 1, 2, 3].map((slot) => (
           <div key={slot} className="flex items-center gap-3 border-t border-border/60 px-3 py-2">
-            <Skeleton className="size-2 shrink-0 rounded-[2px]" />
+            <Skeleton className="size-2 shrink-0 rounded-xs" />
             <Skeleton className="h-3.5 flex-1" />
             <Skeleton className="hidden h-1.5 w-32 shrink-0 sm:block" />
             <Skeleton className="h-3.5 w-24 shrink-0" />

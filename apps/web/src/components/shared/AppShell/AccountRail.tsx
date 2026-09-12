@@ -79,11 +79,11 @@ export function AccountRail({
         className="interactive-row flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] text-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring"
       >
         {user.avatar_url ? (
-          <img src={user.avatar_url} alt="" className="size-5 shrink-0 rounded-full" />
+          <img src={user.avatar_url} alt="" className="size-5 shrink-0 rounded-md" />
         ) : (
           <span
             aria-hidden="true"
-            className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground"
+            className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-medium text-muted-foreground"
           >
             {user.display_name.slice(0, 1).toUpperCase()}
           </span>

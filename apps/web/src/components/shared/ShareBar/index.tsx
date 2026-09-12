@@ -51,11 +51,11 @@ export function ShareBar({
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
-      className={cn("block h-1.5 overflow-hidden rounded-full bg-border", className)}
+      className={cn("block h-1.5 overflow-hidden rounded-md bg-border", className)}
     >
       <span
         className={cn(
-          "block h-full rounded-full",
+          "block h-full rounded-md",
           color ? undefined : tone === "capacity" ? capacityFill(bounded) : "bg-brand",
         )}
         style={{ width: `${width}%`, background: color }}

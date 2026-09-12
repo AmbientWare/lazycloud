@@ -132,7 +132,7 @@ function accountTerm(catalog: PricingCatalog): string {
 }
 
 const sectionTitle =
-  "font-serif text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.05] font-normal tracking-[-0.005em] text-balance [&_em]:text-brand [&_em]:italic";
+  "font-sans text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance [&_em]:text-brand [&_em]:not-italic";
 
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
@@ -166,7 +166,7 @@ function MarketingPricing() {
             )}
           >
             <div className="flex min-w-0 flex-col">
-              <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
+              <h1 className="font-sans text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance [&_em]:text-brand [&_em]:not-italic">
                 Compute pricing <em>by the second.</em>
               </h1>
               <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
@@ -187,7 +187,7 @@ function MarketingPricing() {
 
             <MarketingCard className="min-w-0 p-5 sm:p-6">
               <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
-                <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
+                <h2 className="font-sans text-[clamp(1.625rem,3vw,2.125rem)] leading-[1.08] font-[550] tracking-[-0.045em]">
                   Usage rates
                 </h2>
                 <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
@@ -216,7 +216,7 @@ function MarketingPricing() {
                 <MarketingCard asChild key={plan.terms_version}>
                   <article className="flex flex-col p-5 sm:p-6">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                      <h3 className="font-serif text-[24px] leading-none font-normal">
+                      <h3 className="font-sans text-[24px] leading-[1.08] font-[550] tracking-[-0.045em]">
                         {plan.name}
                       </h3>
                       <p className="flex items-baseline gap-2">
@@ -375,7 +375,7 @@ function MeterToggle({
   return (
     <fieldset className="shrink-0">
       <legend className="sr-only">Read every rate per hour or per second</legend>
-      <div className="flex rounded-full border border-border bg-card p-1">
+      <div className="flex rounded-md border border-border bg-card p-1">
         {meters.map((option) => (
           <label className="cursor-pointer" key={option.value}>
             <input
@@ -387,7 +387,7 @@ function MeterToggle({
               type="radio"
               value={option.value}
             />
-            <span className="inline-flex min-h-8 items-center rounded-full px-3.5 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground peer-checked:bg-brand peer-checked:font-semibold peer-checked:text-brand-foreground peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand [@media(pointer:coarse)]:min-h-11">
+            <span className="inline-flex min-h-8 items-center rounded-md px-3.5 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground peer-checked:bg-brand peer-checked:font-semibold peer-checked:text-brand-foreground peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand [@media(pointer:coarse)]:min-h-11">
               {option.label}
             </span>
           </label>
