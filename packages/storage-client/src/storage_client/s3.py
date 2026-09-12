@@ -38,6 +38,8 @@ from shared.contracts import ContractModel
 from shared.deployment_settings import MissingDeploymentSettingError
 from typing_extensions import TypeVar
 
+S3_PRESIGNED_URL_MAX_EXPIRES_SECONDS = 604800
+
 
 class S3Credentials(BaseSettings):
     endpoint_url: str = ""
@@ -1188,13 +1190,14 @@ def _effective_presign_expiration(
 ) -> int:
     if requested_seconds <= 0:
         raise ValueError("presigned URL expiration must be positive")
+    effective_seconds = min(requested_seconds, S3_PRESIGNED_URL_MAX_EXPIRES_SECONDS)
     if settings.credential_expires_at is None:
-        return requested_seconds
+        return effective_seconds
     expiration = settings.credential_expires_at.astimezone(UTC)
     remaining_seconds = int((expiration - datetime.now(UTC)).total_seconds()) - 30
     if remaining_seconds <= 0:
         raise RuntimeError("object-store temporary credentials are too close to expiration")
-    return min(requested_seconds, remaining_seconds)
+    return min(effective_seconds, remaining_seconds)
 
 
 def _validated_presign_metadata(metadata: Mapping[str, str] | None) -> dict[str, str]:
