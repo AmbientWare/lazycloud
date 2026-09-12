@@ -90,10 +90,6 @@ from worker.runtime_config import (
     prepare_oci_spec_for_runtime,
     spec_has_gpu,
 )
-from worker.sandbox_server import (
-    WORKER_CONTAINER_UPLOADS_HOST_PATH,
-    WORKER_CONTAINER_UPLOADS_MOUNT_PATH,
-)
 
 DEFAULT_WORKER_BUNDLE_ROOT = WORKER_BUNDLE_ROOT
 DEFAULT_WORKER_IMAGE_MOUNT_ROOT = "/mnt/images"
@@ -251,8 +247,6 @@ class OciRuntimeSpecBuilder:
     container_cli_path: str = DEFAULT_CONTAINER_CLI_PATH
     sandbox_supervisor_source: Path | None = Path(SANDBOX_SUPERVISOR_WORKER_PATH)
     sandbox_supervisor_path: str = SANDBOX_SUPERVISOR_CONTAINER_PATH
-    sandbox_upload_root: Path = Path(WORKER_CONTAINER_UPLOADS_HOST_PATH)
-    sandbox_upload_mount_path: str = WORKER_CONTAINER_UPLOADS_MOUNT_PATH
     managed_runtime_root: Path | None = None
     storage_mount_hosts: bool = True
     mount_worker_resolv_conf: bool = True
@@ -341,7 +335,6 @@ class OciRuntimeSpecBuilder:
             tmpfs_size_mib=_container_tmpfs_size_mib(context.request.memory_mib),
         )
         supervisor_token_path = self._apply_sandbox_supervisor(context, spec, bundle_path)
-        self._apply_sandbox_upload_mount(context, spec)
         self._apply_managed_runtime(spec, managed_runtime)
         self._apply_resources(context, spec)
         self._apply_network(spec, network_result)
@@ -441,28 +434,6 @@ class OciRuntimeSpecBuilder:
             ],
         )
         return str(token_path)
-
-    def _apply_sandbox_upload_mount(
-        self,
-        context: ContainerExecutionContext,
-        spec: dict[str, JsonValue],
-    ) -> None:
-        if context.request.stub_type != "sandbox" or context.runtime is not OciRuntimeName.Runsc:
-            return
-        source = self.sandbox_upload_root / context.request.container_id
-        source.mkdir(parents=True, exist_ok=True, mode=0o700)
-        source.chmod(0o700)
-        self._extend_mounts(
-            spec,
-            [
-                OciMount(
-                    mount_type=OciMountType.Bind,
-                    source=str(source),
-                    destination=self.sandbox_upload_mount_path,
-                    options=["rw", "rbind", "rprivate", "nosuid", "nodev", "noexec"],
-                )
-            ],
-        )
 
     def _root_path(
         self,

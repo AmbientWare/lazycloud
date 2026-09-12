@@ -14,7 +14,7 @@ from worker.container_service.models import (
     WorkerSandboxProcess,
 )
 from worker.execution import PortBinding
-from worker.sandbox_server import SandboxProcessLogEntry
+from worker.sandbox_server import SandboxFileRequest, SandboxFileResult, SandboxProcessLogEntry
 
 
 class WorkerContainerInstanceStore(Protocol):
@@ -43,6 +43,8 @@ class WorkerContainerRuntimeController(Protocol):
 
 
 class WorkerSandboxProcessManager(Protocol):
+    def file_operation(self, request: SandboxFileRequest, *, cwd: str) -> SandboxFileResult: ...
+
     def ready(self) -> bool: ...
 
     def start_workload(self) -> None: ...

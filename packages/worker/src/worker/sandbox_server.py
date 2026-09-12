@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-import posixpath
-import shlex
 from enum import StrEnum
 
 from pydantic import Field, field_validator
-from shared.app_identity import HOME_DIR
 from shared.container_requests import CONTAINER_INNER_PORT
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute, BackendRouteKind, parse_backend_route_address
 
+from worker.container_client.models import ContainerFileSearchMatch, ContainerSandboxFileInfo
 from worker.execution import PortBinding
 from worker.lifecycle import WORKER_SANDBOX_PROCESS_MANAGER_PORT, WORKER_SHELL_PORT
 from worker.routes import (
     WorkerRouteContext,
     build_agent_backend_route,
 )
-from worker.runtime_config import OciRuntimeName
 
-WORKER_CONTAINER_UPLOADS_HOST_PATH = "/tmp/container-uploads"
-WORKER_CONTAINER_UPLOADS_MOUNT_PATH = f"/tmp/{HOME_DIR}"
 SANDBOX_INTERNAL_PORTS = (
     WORKER_SANDBOX_PROCESS_MANAGER_PORT,
     WORKER_SHELL_PORT,
@@ -50,9 +45,20 @@ class SandboxFileOperation(StrEnum):
     FindInFiles = "find-in-files"
 
 
-class SandboxFileAccessMode(StrEnum):
-    DirectHostPath = "direct-host-path"
-    SandboxedRuntimeStagedUpload = "sandboxed-runtime-staged-upload"
+class SandboxFileRequest(ContractModel):
+    operation: SandboxFileOperation
+    container_path: str
+    mode: int = Field(default=0o644, ge=0, le=0o7777)
+    data: bytes = Field(default=b"", repr=False)
+    pattern: str = ""
+    new_string: str = ""
+
+
+class SandboxFileResult(ContractModel):
+    data: bytes = Field(default=b"", repr=False)
+    file_info: ContainerSandboxFileInfo | None = None
+    files: tuple[ContainerSandboxFileInfo, ...] = ()
+    matches: tuple[ContainerFileSearchMatch, ...] = ()
 
 
 class SandboxStatusPlan(ContractModel):
@@ -107,31 +113,6 @@ class SandboxContainerMount(ContractModel):
             msg = "sandbox mount paths cannot be blank"
             raise ValueError(msg)
         return stripped
-
-
-class SandboxContainerPathResolution(ContractModel):
-    container_path: str
-    host_path: str
-    root_path: str
-    mount_source: str = ""
-    mount_destination: str = ""
-    used_mount: bool = False
-
-
-class SandboxFileOperationPlan(ContractModel):
-    operation: SandboxFileOperation
-    container_id: str
-    container_path: str
-    host_path: str
-    access_mode: SandboxFileAccessMode = SandboxFileAccessMode.DirectHostPath
-    mode: int = 0o644
-    data_size_bytes: int = 0
-    create_parent_directory: bool = False
-    temp_host_path: str = ""
-    temp_container_path: str = ""
-    command: str = ""
-    ok: bool = True
-    error_message: str = ""
 
 
 class SandboxExposePortRequest(ContractModel):
@@ -255,127 +236,6 @@ def plan_sandbox_list_exposed_ports(
     return SandboxExposedPortsPlan(ok=True, exposed_ports=exposed, excluded_ports=excluded)
 
 
-def resolve_sandbox_container_path(
-    container_path: str,
-    *,
-    cwd: str = "/workspace",
-) -> str:
-    path = container_path.strip()
-    if not path:
-        msg = "sandbox container path is required"
-        raise ValueError(msg)
-    if not path.startswith("/"):
-        path = posixpath.join(cwd or "/", path)
-    normalized = posixpath.normpath(path)
-    return normalized if normalized.startswith("/") else f"/{normalized}"
-
-
-def resolve_sandbox_host_path(
-    container_path: str,
-    *,
-    root_path: str,
-    mounts: list[SandboxContainerMount] | None = None,
-    cwd: str = "/workspace",
-) -> SandboxContainerPathResolution:
-    normalized = resolve_sandbox_container_path(container_path, cwd=cwd)
-    for mount in sorted(mounts or [], key=lambda item: len(item.destination), reverse=True):
-        destination = posixpath.normpath(mount.destination)
-        if normalized == destination or normalized.startswith(f"{destination}/"):
-            relative = normalized.removeprefix(destination).lstrip("/")
-            return SandboxContainerPathResolution(
-                container_path=normalized,
-                host_path=posixpath.normpath(posixpath.join(mount.source, relative)),
-                root_path=root_path,
-                mount_source=mount.source,
-                mount_destination=destination,
-                used_mount=True,
-            )
-    return SandboxContainerPathResolution(
-        container_path=normalized,
-        host_path=posixpath.normpath(posixpath.join(root_path, normalized.lstrip("/"))),
-        root_path=root_path,
-    )
-
-
-def plan_sandbox_file_operation(
-    operation: SandboxFileOperation,
-    *,
-    container_id: str,
-    container_path: str,
-    root_path: str,
-    mounts: list[SandboxContainerMount] | None = None,
-    cwd: str = "/workspace",
-    mode: int = 0o644,
-    data_size_bytes: int = 0,
-) -> SandboxFileOperationPlan:
-    if data_size_bytes < 0:
-        msg = "sandbox file data size cannot be negative"
-        raise ValueError(msg)
-    resolution = resolve_sandbox_host_path(
-        container_path,
-        root_path=root_path,
-        mounts=mounts,
-        cwd=cwd,
-    )
-    return SandboxFileOperationPlan(
-        operation=operation,
-        container_id=container_id,
-        container_path=resolution.container_path,
-        host_path=resolution.host_path,
-        mode=mode,
-        data_size_bytes=data_size_bytes,
-        create_parent_directory=operation
-        in {SandboxFileOperation.UploadFile, SandboxFileOperation.CreateDirectory},
-    )
-
-
-def plan_sandbox_upload_file(
-    *,
-    container_id: str,
-    container_path: str,
-    root_path: str,
-    mounts: list[SandboxContainerMount] | None = None,
-    cwd: str = "/workspace",
-    runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
-    mode: int = 0o644,
-    data_size_bytes: int = 0,
-    upload_file_name: str = "upload",
-    uploads_host_root: str = WORKER_CONTAINER_UPLOADS_HOST_PATH,
-    uploads_mount_path: str = WORKER_CONTAINER_UPLOADS_MOUNT_PATH,
-) -> SandboxFileOperationPlan:
-    plan = plan_sandbox_file_operation(
-        SandboxFileOperation.UploadFile,
-        container_id=container_id,
-        container_path=container_path,
-        root_path=root_path,
-        mounts=mounts,
-        cwd=cwd,
-        mode=mode,
-        data_size_bytes=data_size_bytes,
-    )
-    if not _is_sandboxed_oci_runtime(runtime):
-        return plan
-
-    temp_file = posixpath.basename(upload_file_name.strip()) or "upload"
-    temp_host_path = posixpath.join(uploads_host_root, container_id, temp_file)
-    temp_container_path = posixpath.join(uploads_mount_path, temp_file)
-    command = " && ".join(
-        [
-            f"mkdir -p {shlex.quote(posixpath.dirname(plan.container_path))}",
-            f"mv {shlex.quote(temp_container_path)} {shlex.quote(plan.container_path)}",
-            f"chmod {mode:o} {shlex.quote(plan.container_path)}",
-        ]
-    )
-    return plan.model_copy(
-        update={
-            "access_mode": SandboxFileAccessMode.SandboxedRuntimeStagedUpload,
-            "temp_host_path": temp_host_path,
-            "temp_container_path": temp_container_path,
-            "command": command,
-        }
-    )
-
-
 def writable_container_address_map(address_map: dict[int, str] | None) -> dict[int, str]:
     return dict(address_map or {})
 
@@ -447,9 +307,3 @@ def plan_sandbox_expose_port(request: SandboxExposePortRequest) -> SandboxExpose
         record_port=ports.appended,
         existing_target=existing_target,
     )
-
-
-def _is_sandboxed_oci_runtime(value: OciRuntimeName | str) -> bool:
-    if isinstance(value, OciRuntimeName):
-        return value is OciRuntimeName.Runsc
-    return value.strip().lower() in {"runsc", "gvisor"}

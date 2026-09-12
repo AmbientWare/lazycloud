@@ -14,6 +14,11 @@ from typing import BinaryIO, Literal
 from pydantic import Field
 from shared.contracts import ContractModel
 
+from worker.container_client.models import (
+    CONTAINER_CLIENT_MAX_MESSAGE_SIZE_BYTES,
+    ContainerFileSearchMatch,
+    ContainerSandboxFileInfo,
+)
 from worker.container_service.models import (
     SandboxProcessEvent,
     SandboxProcessEventType,
@@ -21,13 +26,21 @@ from worker.container_service.models import (
     WorkerSandboxProcess,
 )
 from worker.container_service.protocols import WorkerSandboxProcessManager
-from worker.sandbox_server import SandboxLogStream
+from worker.sandbox_server import (
+    SandboxFileOperation,
+    SandboxFileRequest,
+    SandboxFileResult,
+    SandboxLogStream,
+)
 
 SANDBOX_SUPERVISOR_PROTOCOL_VERSION = 1
 SANDBOX_SUPERVISOR_PORT = 7111
 DEFAULT_SUPERVISOR_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_SUPERVISOR_RECONNECT_TIMEOUT_SECONDS = 30.0
 DEFAULT_SUPERVISOR_DRAIN_TIMEOUT_SECONDS = 5.0
+MAX_SUPERVISOR_MESSAGE_BYTES = (
+    (CONTAINER_CLIENT_MAX_MESSAGE_SIZE_BYTES + 2) // 3
+) * 4 + 1024 * 1024
 
 
 class SandboxSupervisorError(RuntimeError):
@@ -45,6 +58,12 @@ class SupervisorRequest(ContractModel):
     ack_seq: int = 0
     ok: bool = False
     token: str = Field(default="", repr=False)
+    file_operation: SandboxFileOperation | None = None
+    path: str = ""
+    mode: int = 0o644
+    data: str = Field(default="", repr=False)
+    pattern: str = ""
+    new_string: str = ""
 
 
 class SupervisorProcess(ContractModel):
@@ -68,6 +87,9 @@ class SupervisorResponse(ContractModel):
     processes: list[SupervisorProcess] = Field(default_factory=list)
     stdout: str = ""
     stderr: str = ""
+    file_info: ContainerSandboxFileInfo | None = None
+    files: tuple[ContainerSandboxFileInfo, ...] = ()
+    matches: tuple[ContainerFileSearchMatch, ...] = ()
 
 
 @dataclass(slots=True)
@@ -223,6 +245,30 @@ class SupervisorSandboxProcessManager:
             for process in response.processes
         ]
 
+    def file_operation(self, request: SandboxFileRequest, *, cwd: str) -> SandboxFileResult:
+        if len(request.data) > CONTAINER_CLIENT_MAX_MESSAGE_SIZE_BYTES:
+            raise SandboxSupervisorError("sandbox file exceeds transfer limit")
+        response = self._request(
+            SupervisorRequest(
+                op="file",
+                file_operation=request.operation,
+                path=request.container_path,
+                cwd=cwd,
+                mode=request.mode,
+                data=base64.b64encode(request.data).decode("ascii"),
+                pattern=request.pattern,
+                new_string=request.new_string,
+            )
+        )
+        if response.type != "file":
+            raise SandboxSupervisorError("sandbox supervisor returned an invalid file response")
+        return SandboxFileResult(
+            data=base64.b64decode(response.data, validate=True),
+            file_info=response.file_info,
+            files=response.files,
+            matches=response.matches,
+        )
+
     def cleanup(self) -> None:
         with self._lock:
             if self._transport is not None:
@@ -328,9 +374,11 @@ class _SupervisorTransport:
         self.connection.sendall(json.dumps(payload, separators=(",", ":")).encode() + b"\n")
 
     def receive(self) -> SupervisorResponse | None:
-        line = self.reader.readline()
+        line = self.reader.readline(MAX_SUPERVISOR_MESSAGE_BYTES + 1)
         if not line:
             return None
+        if len(line) > MAX_SUPERVISOR_MESSAGE_BYTES:
+            raise SandboxSupervisorError("sandbox supervisor response exceeds transfer limit")
         return SupervisorResponse.model_validate_json(line)
 
     def close(self) -> None:
