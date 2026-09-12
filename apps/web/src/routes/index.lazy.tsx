@@ -203,7 +203,7 @@ function ParitySection() {
           body="Debug on your laptop, send a one-off cloud run, or deploy the app. The function stays the same."
         />
 
-        <div className="max-w-[820px]">
+        <div className="marketing-cloud-focus max-w-[820px]">
           <MarketingCard asChild>
             <CodeBlock
               tone="paper"
@@ -216,7 +216,7 @@ function ParitySection() {
 
         <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
           {parityModes.map((mode) => (
-            <article key={mode.key}>
+            <article className="marketing-cloud-focus" key={mode.key}>
               <mode.Plate />
               <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
                 {mode.title}
@@ -245,7 +245,7 @@ function MarketingHome() {
               "relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 pt-12 pb-16 sm:gap-12 sm:pt-16 sm:pb-20 lg:min-h-[700px] lg:gap-16 lg:pt-23 lg:pb-13 max-lg:grid-cols-1",
             )}
           >
-            <div className="marketing-rise">
+            <div className="marketing-cloud-focus marketing-rise">
               <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] lg:text-[clamp(52px,5vw,76px)] [&_em]:text-brand [&_em]:italic">
                 Deploy as fast <em className="lg:block">as you develop.</em>
               </h1>
@@ -271,56 +271,58 @@ function MarketingHome() {
               </div>
             </div>
 
-            <MarketingCard className="marketing-rise relative z-[2] min-w-0 [animation-delay:100ms]">
-              <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
-                <TabsList
-                  /* The split hero keeps a stable 3×2 control through compact
+            <div className="marketing-cloud-focus min-w-0">
+              <MarketingCard className="marketing-rise relative z-[2] min-w-0 [animation-delay:100ms]">
+                <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
+                  <TabsList
+                    /* The split hero keeps a stable 3×2 control through compact
                      desktop widths; only the full-width canvas uses one row. */
-                  className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
-                  aria-label="Hero code examples"
-                >
+                    className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
+                    aria-label="Hero code examples"
+                  >
+                    {heroStories.map((story) => (
+                      <TabsTrigger
+                        className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
+                        key={story.key}
+                        value={story.key}
+                      >
+                        {story.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
                   {heroStories.map((story) => (
-                    <TabsTrigger
-                      className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
-                      key={story.key}
-                      value={story.key}
-                    >
-                      {story.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                {heroStories.map((story) => (
-                  <TabsContent key={story.key} value={story.key}>
-                    <CodeBlock
-                      className="rounded-none border-0 bg-transparent"
-                      tone="paper"
-                      /* Fixed body height so switching examples never resizes the
+                    <TabsContent key={story.key} value={story.key}>
+                      <CodeBlock
+                        className="rounded-none border-0 bg-transparent"
+                        tone="paper"
+                        /* Fixed body height so switching examples never resizes the
                          panel; sized to the tallest snippet. On narrow screens the
                          type eases down a notch so wrapped lines still fit without
                          a scroll. */
-                      bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
-                      footer={
-                        <div
-                          className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                          data-marketing-terminal-surface=""
-                        >
-                          <span className="text-brand">$</span>
-                          <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                            {story.command}
-                          </span>
-                          <i className="marketing-cursor" aria-hidden="true" />
-                          <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                            <StatusDot /> {story.status}
-                          </strong>
-                        </div>
-                      }
-                    >
-                      {story.code}
-                    </CodeBlock>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            </MarketingCard>
+                        bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
+                        footer={
+                          <div
+                            className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
+                            data-marketing-terminal-surface=""
+                          >
+                            <span className="text-brand">$</span>
+                            <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+                              {story.command}
+                            </span>
+                            <i className="marketing-cursor" aria-hidden="true" />
+                            <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
+                              <StatusDot /> {story.status}
+                            </strong>
+                          </div>
+                        }
+                      >
+                        {story.code}
+                      </CodeBlock>
+                    </TabsContent>
+                  ))}
+                </Tabs>
+              </MarketingCard>
+            </div>
           </div>
         </section>
 
@@ -349,7 +351,7 @@ function MarketingHome() {
               ) : null}
             </div>
             <div
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
+              className="marketing-cloud-focus grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
               role="region"
               tabIndex={0}
               aria-label="Runnable examples"
@@ -546,7 +548,10 @@ function PlatformStoryRail() {
             }
             body="Cloud functions, HTTP endpoints, full ASGI apps, background jobs, and cron jobs. Define them in Python alongside your code."
           />
-          <nav aria-label="Platform use cases" className="border-t border-border">
+          <nav
+            aria-label="Platform use cases"
+            className="marketing-cloud-focus border-t border-border"
+          >
             <ol className="m-0 list-none p-0">
               {platformStories.map((story, index) => {
                 const active = story.key === activeKey;
@@ -581,7 +586,7 @@ function PlatformStoryRail() {
               key={story.key}
               ref={(node) => registerStory(index, node)}
             >
-              <div className="mb-6 sm:mb-8">
+              <div className="marketing-cloud-focus mb-6 sm:mb-8">
                 <p className="text-sm font-medium text-brand">{story.label}</p>
                 <h3
                   className="mt-3 text-2xl leading-tight font-medium sm:text-3xl"
@@ -595,7 +600,7 @@ function PlatformStoryRail() {
               </div>
               <div
                 aria-label={`${story.label} preview`}
-                className="marketing-story-panel min-w-0"
+                className="marketing-cloud-focus marketing-story-panel min-w-0"
                 role="region"
               >
                 <div className="marketing-story-visual flex h-[390px] sm:h-[430px] lg:h-[clamp(380px,46dvh,430px)] [&>div]:flex-1">
@@ -641,7 +646,7 @@ function ComputeSection() {
           body="Start with managed capacity. Connect AWS or join a Linux machine when you want workloads to run in your infrastructure."
         />
         <div className="grid grid-cols-[0.9fr_1.1fr] gap-7 max-lg:grid-cols-1">
-          <div className="flex flex-col gap-4">
+          <div className="marketing-cloud-focus flex flex-col gap-4">
             {computePaths.map((path) => (
               <MarketingCard asChild key={path.title}>
                 <article className="flex-1 p-5 sm:p-6">
@@ -656,7 +661,7 @@ function ComputeSection() {
               </MarketingCard>
             ))}
           </div>
-          <div className="flex [&>div]:flex-1">
+          <div className="marketing-cloud-focus flex [&>div]:flex-1">
             <ComputePlacementPreview />
           </div>
         </div>

@@ -76,7 +76,7 @@ function StubsStory({ active }: { active: boolean }) {
       </div>
 
       <div className="grid grid-cols-[1.02fr_0.98fr] gap-4 sm:gap-6 lg:gap-7 max-lg:grid-cols-1">
-        <div className="flex min-w-0 flex-col">
+        <div className="marketing-cloud-focus flex min-w-0 flex-col">
           <PhaseHeader active={phase === "define"} caption="your app" title="Define" />
           <MarketingCard asChild>
             <CodeBlock
@@ -106,12 +106,12 @@ function StubsStory({ active }: { active: boolean }) {
         </div>
 
         <div className="flex min-w-0 flex-col gap-4 sm:gap-5 lg:gap-7">
-          <div className="flex min-w-0 flex-col">
+          <div className="marketing-cloud-focus flex min-w-0 flex-col">
             <PhaseHeader active={phase === "generate"} caption="a pinned client" title="Generate" />
             <GeneratedPackagePanel active={phase === "generate"} clock={clock} />
           </div>
 
-          <div className="flex min-w-0 flex-col">
+          <div className="marketing-cloud-focus flex min-w-0 flex-col">
             <PhaseHeader
               active={phase === "import"}
               caption="from another project"

@@ -131,7 +131,7 @@ export function GetStartedButton({
 
 export function SectionHeading({ title, body }: { title: ReactNode; body?: string }) {
   return (
-    <div className="mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
+    <div className="marketing-cloud-focus mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
       <h2 className="max-w-[740px] font-serif text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.02] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
         {title}
       </h2>
@@ -154,10 +154,10 @@ export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
           "marketing-final-inner relative z-[2] flex !min-h-[clamp(32rem,75svh,43.125rem)] flex-col items-center justify-center py-16 text-center sm:py-20 lg:py-30 [@media(max-height:500px)]:!min-h-[27rem] [@media(max-height:500px)]:py-12",
         )}
       >
-        <h2 className="max-w-[950px] font-serif !text-[clamp(2.5rem,10vw,5rem)] leading-[1.01] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
+        <h2 className="marketing-cloud-focus max-w-[950px] font-serif !text-[clamp(2.5rem,10vw,5rem)] leading-[1.01] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
           {title}
         </h2>
-        <p className="mt-5 max-w-[600px] !text-base leading-relaxed text-muted-foreground sm:mt-6 sm:!text-[17px]">
+        <p className="marketing-cloud-focus mt-5 max-w-[600px] !text-base leading-relaxed text-muted-foreground sm:mt-6 sm:!text-[17px]">
           {body}
         </p>
         <div className="mt-8 flex w-full max-w-[22rem] justify-center sm:w-auto sm:max-w-none">

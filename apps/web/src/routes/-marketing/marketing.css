@@ -62,6 +62,32 @@
   z-index: 2;
 }
 
+.marketing-site .marketing-cloud-focus {
+  --marketing-cloud-feather-x: clamp(1rem, 2vw, 2rem);
+  position: relative;
+}
+
+/* Extend the blur beyond each content group and feather its boundary so the
+   foreground stays sharp without a visible frosted panel around it. */
+.marketing-site .marketing-cloud-focus::before {
+  content: "";
+  position: absolute;
+  inset: -2.5rem calc(-1 * var(--marketing-cloud-feather-x));
+  z-index: -1;
+  pointer-events: none;
+  backdrop-filter: blur(16px);
+  mask-image:
+    linear-gradient(
+      to right,
+      transparent,
+      black var(--marketing-cloud-feather-x),
+      black calc(100% - var(--marketing-cloud-feather-x)),
+      transparent
+    ),
+    linear-gradient(to bottom, transparent, black 2.5rem, black calc(100% - 2.5rem), transparent);
+  mask-composite: intersect;
+}
+
 .marketing-home {
   margin-top: calc(-1 * var(--marketing-header-height));
 }
