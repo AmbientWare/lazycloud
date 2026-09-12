@@ -105,6 +105,8 @@ from worker.repository_payloads import (
     SetContainerAddressResponse,
     SetContainerExitCodeRequest,
     SetContainerExitCodeResponse,
+    SetContainerIpRequest,
+    SetContainerIpResponse,
     SetImagePullLockRequest,
     SetImagePullLockResponse,
     SetWorkerAddressRequest,
@@ -856,6 +858,15 @@ def reserve_container_ip(
     principal: WorkerPrincipal,
 ) -> ReserveContainerIpResponse:
     return service.reserve_container_ip(request, principal=principal)
+
+
+@router.post("/worker-repository/set-container-ip", response_model=SetContainerIpResponse)
+def set_container_ip(
+    request: SetContainerIpRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> SetContainerIpResponse:
+    return service.set_container_ip(request, principal=principal)
 
 
 @router.post("/worker-repository/move-container-ip", response_model=MoveContainerIpResponse)
