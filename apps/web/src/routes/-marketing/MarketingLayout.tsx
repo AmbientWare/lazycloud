@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { Link, useLocation } from "@tanstack/react-router";
 import { Menu, X } from "lucide-react";
 
-import { Clouds } from "@/components/canvasui/Clouds";
+import { Clouds, type CloudsOptions } from "@/components/canvasui/Clouds";
 import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -158,6 +158,26 @@ export function MarketingLayout({
   );
 }
 
+const designClouds: Record<LandingDesign, CloudsOptions> = {
+  depth: { color: [0.12, 0.6, 0.8], blur: 1, scale: 0.75, opacity: 0.18, speed: 0.12, wind: 0.12 },
+  horizons: {
+    color: [0.08, 0.7, 0.95],
+    blur: 0.85,
+    scale: 0.9,
+    opacity: 0.2,
+    speed: 0.15,
+    wind: 0.15,
+  },
+  studio: {
+    color: [0.12, 0.62, 0.85],
+    blur: 0.9,
+    scale: 0.65,
+    opacity: 0.24,
+    speed: 0.1,
+    wind: 0.1,
+  },
+};
+
 function MarketingFrame({
   children,
   design,
@@ -173,16 +193,6 @@ function MarketingFrame({
   );
   const contentClassName =
     "marketing-site h-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth motion-reduce:scroll-auto";
-
-  if (design && design !== "cloud") {
-    return (
-      <div className={className}>
-        <div className={contentClassName} ref={scrollportRef}>
-          {children}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <Clouds
@@ -201,6 +211,7 @@ function MarketingFrame({
       speed={0.3}
       wind={0.45}
       windRadius={260}
+      {...(design ? designClouds[design] : {})}
     >
       {children}
     </Clouds>

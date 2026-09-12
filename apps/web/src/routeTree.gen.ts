@@ -14,8 +14,6 @@ import { Route as PricingRouteImport } from "./routes/pricing"
 import { Route as DashboardRouteImport } from "./routes/dashboard"
 import { Route as CallbackRouteImport } from "./routes/callback"
 import { Route as ActivateRouteImport } from "./routes/activate"
-import { Route as R5RouteImport } from "./routes/5"
-import { Route as R4RouteImport } from "./routes/4"
 import { Route as R3RouteImport } from "./routes/3"
 import { Route as R2RouteImport } from "./routes/2"
 import { Route as R1RouteImport } from "./routes/1"
@@ -62,16 +60,6 @@ const ActivateRoute = ActivateRouteImport.update({
   path: "/activate",
   getParentRoute: () => rootRouteImport,
 } as any)
-const R5Route = R5RouteImport.update({
-  id: "/5",
-  path: "/5",
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import("./routes/5.lazy").then((d) => d.Route))
-const R4Route = R4RouteImport.update({
-  id: "/4",
-  path: "/4",
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import("./routes/4.lazy").then((d) => d.Route))
 const R3Route = R3RouteImport.update({
   id: "/3",
   path: "/3",
@@ -183,8 +171,6 @@ export interface FileRoutesByFullPath {
   "/1": typeof R1Route
   "/2": typeof R2Route
   "/3": typeof R3Route
-  "/4": typeof R4Route
-  "/5": typeof R5Route
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
@@ -212,8 +198,6 @@ export interface FileRoutesByTo {
   "/1": typeof R1Route
   "/2": typeof R2Route
   "/3": typeof R3Route
-  "/4": typeof R4Route
-  "/5": typeof R5Route
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
@@ -241,8 +225,6 @@ export interface FileRoutesById {
   "/1": typeof R1Route
   "/2": typeof R2Route
   "/3": typeof R3Route
-  "/4": typeof R4Route
-  "/5": typeof R5Route
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
@@ -272,8 +254,6 @@ export interface FileRouteTypes {
     | "/1"
     | "/2"
     | "/3"
-    | "/4"
-    | "/5"
     | "/activate"
     | "/callback"
     | "/dashboard"
@@ -301,8 +281,6 @@ export interface FileRouteTypes {
     | "/1"
     | "/2"
     | "/3"
-    | "/4"
-    | "/5"
     | "/activate"
     | "/callback"
     | "/dashboard"
@@ -329,8 +307,6 @@ export interface FileRouteTypes {
     | "/1"
     | "/2"
     | "/3"
-    | "/4"
-    | "/5"
     | "/activate"
     | "/callback"
     | "/dashboard"
@@ -359,8 +335,6 @@ export interface RootRouteChildren {
   R1Route: typeof R1Route
   R2Route: typeof R2Route
   R3Route: typeof R3Route
-  R4Route: typeof R4Route
-  R5Route: typeof R5Route
   ActivateRoute: typeof ActivateRoute
   CallbackRoute: typeof CallbackRoute
   DashboardRoute: typeof DashboardRoute
@@ -407,20 +381,6 @@ declare module "@tanstack/react-router" {
       path: "/activate"
       fullPath: "/activate"
       preLoaderRoute: typeof ActivateRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/5": {
-      id: "/5"
-      path: "/5"
-      fullPath: "/5"
-      preLoaderRoute: typeof R5RouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/4": {
-      id: "/4"
-      path: "/4"
-      fullPath: "/4"
-      preLoaderRoute: typeof R4RouteImport
       parentRoute: typeof rootRouteImport
     }
     "/3": {
@@ -639,8 +599,6 @@ const rootRouteChildren: RootRouteChildren = {
   R1Route: R1Route,
   R2Route: R2Route,
   R3Route: R3Route,
-  R4Route: R4Route,
-  R5Route: R5Route,
   ActivateRoute: ActivateRoute,
   CallbackRoute: CallbackRoute,
   DashboardRoute: DashboardRoute,

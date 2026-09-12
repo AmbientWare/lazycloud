@@ -1,20 +1,122 @@
 .landing-design .marketing-grid-field,
-.landing-design .marketing-cta-grid,
-.landing-design .marketing-cloud-focus::before,
-.landing-design .marketing-site main > section::before {
+.landing-design .marketing-cta-grid {
   display: none;
 }
 
-.landing-design .marketing-header > div,
 .landing-design .marketing-site [data-marketing-card],
-.landing-design .code-block-paper,
-.landing-design .stamp,
-.landing-design .stamp-quiet {
-  box-shadow: none;
+.landing-design .code-block-paper {
+  box-shadow: 0 16px 48px -24px #0008;
+}
+
+.landing-design .marketing-site .marketing-cloud-focus::before {
+  inset: -3rem -2.5rem;
+  background: color-mix(in oklab, var(--marketing-section-background) 65%, transparent);
+  backdrop-filter: blur(32px);
+  mask-image:
+    linear-gradient(to right, transparent, black 2.5rem, black calc(100% - 2.5rem), transparent),
+    linear-gradient(to bottom, transparent, black 3rem, black calc(100% - 3rem), transparent);
+}
+
+.landing-design .marketing-site main > section::before {
+  background: color-mix(in oklab, var(--marketing-section-background) 42%, transparent);
 }
 
 .landing-design .marketing-site > footer {
   padding-bottom: 5rem;
+}
+
+.landing-design--depth > canvas {
+  filter: blur(12px);
+}
+
+.landing-design--depth .marketing-site .marketing-cloud-focus::before,
+.landing-design--studio .marketing-site .marketing-cloud-focus::before {
+  background: transparent;
+}
+
+.landing-design--horizons .marketing-site main > section::before {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--marketing-section-background) 24%,
+    var(--marketing-section-background) 78%,
+    transparent
+  );
+}
+
+.landing-design--horizons .marketing-site .marketing-cloud-focus::before {
+  background: var(--marketing-section-background);
+}
+
+.landing-design--studio {
+  --background: #0c141b;
+  --muted: #18232d;
+  --card: #121d26;
+  --border: #354550;
+  --input: #354550;
+  --foreground: #eef3f7;
+  --muted-foreground: #a4b4c2;
+  --brand: #76d6f5;
+}
+
+.landing-design--studio .marketing-header > div {
+  border-radius: 0;
+  border-width: 0 0 1px;
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  box-shadow: none;
+  backdrop-filter: blur(16px);
+}
+
+.landing-design--studio .marketing-hero h1 {
+  font-family: var(--font-sans);
+  font-weight: 550;
+  font-size: clamp(2.75rem, 5.6vw, 5rem);
+  line-height: 1;
+  letter-spacing: -0.055em;
+}
+
+.landing-design--studio .marketing-hero h1 em {
+  display: inline;
+  font-style: normal;
+  color: inherit;
+}
+
+.landing-design--studio .marketing-site main > .marketing-hero::before {
+  background: linear-gradient(
+    100deg,
+    color-mix(in oklab, var(--background) 80%, transparent),
+    color-mix(in oklab, var(--background) 20%, transparent)
+  );
+}
+
+.landing-design--studio .marketing-site [data-marketing-card],
+.landing-design--studio .code-block-paper {
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.landing-design--studio .marketing-action-primary {
+  border-radius: 3px;
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #0c141b;
+  box-shadow: none;
+}
+
+.landing-design--studio .marketing-action-primary:hover {
+  background: #a1e6fb;
+}
+
+.landing-design--studio .marketing-action-primary > span:last-child {
+  align-self: stretch;
+  margin-block: -0.5rem;
+  margin-left: 0.75rem;
+  padding-left: 0.875rem;
+  border-left: 1px solid #0c141b40;
+}
+
+.landing-design--studio .marketing-site .marketing-parity > div > .marketing-cloud-focus::before {
+  background: var(--marketing-section-background);
 }
 
 .landing-design-nav {
@@ -38,7 +140,7 @@
 }
 
 .landing-design-nav > span {
-  min-width: 7.5rem;
+  min-width: 6.5rem;
   padding-left: 0.25rem;
 }
 
@@ -73,256 +175,11 @@
   border-radius: 0;
 }
 
-.landing-design--quiet {
-  --background: #10151b;
-  --muted: #18212b;
-  --card: #1b2530;
-  --card-foreground: #e8eff7;
-  --foreground: #e8eff7;
-  --muted-foreground: #a0afbe;
-  --border: #2c3a48;
-  --input: #2c3a48;
-  --brand: #70cfff;
-}
-
-.landing-design--quiet h1,
-.landing-design--quiet h2 {
-  font-family: var(--font-sans);
-  font-weight: 500;
-  letter-spacing: -0.045em;
-  line-height: 1.08;
-}
-
-.landing-design--quiet h1 em,
-.landing-design--quiet h2 em {
-  font-style: normal;
-  color: inherit;
-}
-
-.landing-design--quiet .marketing-hero h1 {
-  font-size: clamp(2.625rem, 4.75vw, 4.25rem);
-}
-
-.landing-design--quiet .marketing-hero h1 em {
-  display: inline;
-}
-
-.landing-design--quiet .marketing-hero .marketing-action-primary {
-  background: #70cfff;
-  color: #10151b;
-}
-
-.landing-design--cloud .marketing-site main > section:not(.marketing-hero, .marketing-final-cta) {
-  z-index: 2;
-}
-
-.landing-design--cloud .marketing-site > footer {
-  position: relative;
-  z-index: 2;
-}
-
-.landing-design--cloud .marketing-hero > div:last-child {
-  gap: clamp(2.5rem, 5vw, 5rem);
-}
-
-.landing-design--light {
-  background: #f7f9fb;
-}
-
-.landing-design--light main > section,
-.landing-design--chapters main > section:nth-child(even) {
-  --background: #f7f9fb;
-  --muted: #e9eff4;
-  --card: #ffffff;
-  --card-foreground: #172839;
-  --foreground: #172839;
-  --muted-foreground: #536577;
-  --border: #cad5df;
-  --input: #cad5df;
-  --brand: #006e99;
-  --accent: #dce7ef;
-  color: var(--foreground);
-}
-
-.landing-design--light [data-marketing-card],
-.landing-design--light .code-block-paper,
-.landing-design--chapters main > section:nth-child(even) [data-marketing-card],
-.landing-design--chapters main > section:nth-child(even) .code-block-paper {
-  --background: #0e1217;
-  --muted: #1d2530;
-  --card: #151b23;
-  --card-foreground: #e7edf4;
-  --foreground: #e7edf4;
-  --muted-foreground: #96a6ba;
-  --border: #344150;
-  --input: #344150;
-  --brand: #66cbff;
-  --accent: #263747;
-  color: var(--foreground);
-}
-
-.landing-design--light .marketing-hero .marketing-action-primary {
-  background: #006e99;
-  border-color: #006e99;
-  color: white;
-}
-
-.landing-design--light .marketing-header > div {
-  border-color: #253748;
-}
-
-.landing-design--light .marketing-hero h1 {
-  font-size: clamp(2.75rem, 5.25vw, 4.75rem);
-}
-
-.landing-design--light .marketing-hero h1 em {
-  display: block;
-}
-
-.landing-design--gallery {
-  --background: #090e14;
-  --muted: #090e14;
-  --card: #141d27;
-  --card-foreground: #f1f6fa;
-  --foreground: #f1f6fa;
-  --muted-foreground: #9dafbf;
-  --border: #26313d;
-  --input: #26313d;
-}
-
-.landing-design--gallery .marketing-header > div {
-  background: #090e14;
-  border-top: 0;
-  border-inline: 0;
-  border-radius: 0;
-}
-
-.landing-design--gallery h1,
-.landing-design--gallery h2 {
-  font-family: var(--font-sans);
-  font-weight: 550;
-  letter-spacing: -0.05em;
-  line-height: 1.08;
-}
-
-.landing-design--gallery h1 em,
-.landing-design--gallery h2 em {
-  display: inline;
-  color: inherit;
-  font-style: normal;
-}
-
-.landing-design--gallery .marketing-hero {
-  min-height: auto;
-}
-
-.landing-design--gallery .marketing-hero > div:last-child {
-  display: flex;
-  flex-direction: column;
-  gap: 3.5rem;
-  padding-top: 5rem;
-  padding-bottom: 5rem;
-  min-height: auto;
-}
-
-.landing-design--gallery .marketing-hero > div:last-child > .marketing-rise {
-  max-width: 900px;
-  text-align: center;
-}
-
-.landing-design--gallery .marketing-hero h1 {
-  max-width: 900px;
-  font-size: clamp(2.625rem, 6vw, 5rem);
-}
-
-.landing-design--gallery .marketing-hero p {
-  margin-inline: auto;
-  max-width: 620px;
-}
-
-.landing-design--gallery .marketing-hero .marketing-rise > div {
-  justify-content: center;
-}
-
-.landing-design--gallery .marketing-hero > div:last-child > div:last-child {
-  max-width: 940px;
-  width: 100%;
-}
-
-.landing-design--gallery .marketing-hero .marketing-action-primary {
-  background: #f1f6fa;
-  color: #090e14;
-  border-color: #f1f6fa;
-}
-
-.landing-design--gallery .marketing-section-heading {
-  max-width: 900px;
-  margin-inline: auto;
-  text-align: center;
-}
-
-.landing-design--gallery .marketing-section-heading > p {
-  margin-inline: auto;
-}
-
-.landing-design--gallery .marketing-section-heading > h2,
-.landing-design--gallery .marketing-parity > div > .marketing-cloud-focus,
-.landing-design--gallery .marketing-client-heading {
-  margin-inline: auto;
-}
-
-.landing-design--gallery #platform .marketing-section-heading {
-  text-align: left;
-}
-
-.landing-design--gallery .marketing-site main > section {
-  border-color: #202b37;
-}
-
-.landing-design--chapters {
-  --background: #0f2335;
-  --muted: #193247;
-  --card: #122c40;
-  --card-foreground: #eef5fa;
-  --foreground: #eef5fa;
-  --muted-foreground: #afc2d2;
-  --border: #355165;
-  --input: #355165;
-  --brand: #85d7ff;
-}
-
-.landing-design--chapters h1,
-.landing-design--chapters h2 {
-  font-family: var(--font-sans);
-  font-weight: 500;
-  letter-spacing: -0.045em;
-  line-height: 1.1;
-}
-
-.landing-design--chapters h1 em,
-.landing-design--chapters h2 em {
-  color: inherit;
-  font-style: normal;
-}
-
-.landing-design--chapters .marketing-hero h1 {
-  font-size: clamp(2.625rem, 4.75vw, 4.25rem);
-}
-
-.landing-design--chapters .marketing-hero h1 em {
-  display: inline;
-}
-
-.landing-design--chapters .marketing-site main > section {
-  border: 0;
-}
-
-.landing-design--chapters .marketing-header > div {
-  background: #0f2335;
-  border-color: #355165;
-}
-
 @media (max-width: 639px) {
+  .landing-design .marketing-site .marketing-cloud-focus::before {
+    inset: -3rem -1rem;
+  }
+
   .landing-design-nav {
     gap: 0.25rem;
     padding: 0.375rem;
@@ -330,20 +187,5 @@
 
   .landing-design-nav > span {
     display: none;
-  }
-
-  .landing-design--gallery .marketing-hero > div:last-child {
-    padding-top: 3.5rem;
-    gap: 2.5rem;
-  }
-}
-
-@media (max-width: 359px) {
-  .landing-design-nav a {
-    min-width: 2.375rem;
-  }
-
-  .landing-design-nav > div {
-    gap: 0;
   }
 }
