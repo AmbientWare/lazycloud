@@ -200,6 +200,9 @@ class StubTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "stubs"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("external_id", name="uq_stubs_external_id"),
+        UniqueConstraint(
+            "workspace_id", "preparation_fingerprint", name="uq_stubs_preparation_fingerprint"
+        ),
         Index("ix_stubs_workspace", "workspace_id"),
         Index(
             "ix_stubs_reusable_identity",
@@ -242,6 +245,7 @@ class StubTable(IdPayloadTable, DatabaseBase):
     group: Mapped[str | None] = mapped_column(String(240), nullable=True)
     public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    preparation_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class DeploymentTable(IdPayloadTable, DatabaseBase):
