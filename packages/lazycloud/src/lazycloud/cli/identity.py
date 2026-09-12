@@ -14,6 +14,7 @@ from shared.http.device_auth import (
     DeviceCodeCreateResponse,
     DeviceCodeTokenResponse,
 )
+from shared.http.errors import HttpApiError
 from shared.http_transport import HttpChannel
 from shared.identity import DeviceAuthorizationStatus
 
@@ -138,14 +139,22 @@ def device_login(
     deadline = monotonic() + min(timeout_seconds, float(started.expires_in_seconds))
     interval = float(max(started.poll_interval_seconds, 1))
     while monotonic() < deadline:
-        sleep(interval)
-        claim = DeviceCodeTokenResponse.model_validate(
-            _device_request(
-                channel,
-                "/auth/device/token",
-                {"device_code": started.device_code},
+        sleep(min(interval, max(deadline - monotonic(), 0.0)))
+        if monotonic() >= deadline:
+            break
+        try:
+            claim = DeviceCodeTokenResponse.model_validate(
+                _device_request(
+                    channel,
+                    "/auth/device/token",
+                    {"device_code": started.device_code},
+                )
             )
-        )
+        except HttpApiError as exc:
+            if exc.status_code != 429:
+                raise
+            interval = max(float(started.poll_interval_seconds), min(interval * 2, 60.0))
+            continue
         if claim.status is DeviceAuthorizationStatus.Pending:
             continue
         if claim.status is DeviceAuthorizationStatus.Approved:
