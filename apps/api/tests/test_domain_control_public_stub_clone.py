@@ -106,7 +106,7 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
             content=source_bytes,
             metadata={"stub_id": source.id, "workspace_id": owner.id},
         )
-        control.create_stub(
+        source = control.create_stub(
             "shared",
             workspace=owner.id,
             public=True,

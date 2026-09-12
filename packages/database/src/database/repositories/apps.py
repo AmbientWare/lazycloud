@@ -53,7 +53,7 @@ from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
-from sqlalchemy import and_, case, delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
@@ -630,26 +630,34 @@ class StubRepository:
         self,
         *,
         workspace_id: str,
-        name: str,
-        app_id: str | None,
-        app_name: str | None,
-        undeployed_only: bool,
+        preparation_fingerprint: str,
     ) -> StubRecord | None:
-        statement = select(StubTable).where(
-            StubTable.workspace_id == workspace_id,
-            StubTable.name == name,
-            StubTable.app_id.is_(None) if app_id is None else StubTable.app_id == app_id,
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"stub-preparation:{workspace_id}:{preparation_fingerprint}"},
         )
-        if app_id is None and app_name is not None:
-            statement = statement.where(
-                StubTable.payload["metadata"]["app"].as_string() == app_name
-            )
-        if undeployed_only:
-            statement = statement.where(StubTable.payload["deployment_id"].as_string().is_(None))
         row = self.session.scalars(
-            statement.order_by(StubTable.created_at.desc(), StubTable.id.asc()).limit(1)
+            select(StubTable)
+            .where(
+                StubTable.workspace_id == workspace_id,
+                StubTable.preparation_fingerprint == preparation_fingerprint,
+            )
+            .with_for_update()
         ).first()
         return StubRecord.model_validate(row.payload) if row is not None else None
+
+    def set_preparation_fingerprint(
+        self,
+        stub_id: str,
+        *,
+        workspace_id: str,
+        fingerprint: str | None,
+    ) -> None:
+        self.session.execute(
+            update(StubTable)
+            .where(StubTable.id == stub_id, StubTable.workspace_id == workspace_id)
+            .values(preparation_fingerprint=fingerprint)
+        )
 
     def list_autoscaling_across_workspaces(
         self,
@@ -801,12 +809,18 @@ class StubRepository:
         return StubRecord.model_validate(row.payload) if row is not None else None
 
     def get_by_name_for_update(self, name: str, *, workspace_id: str) -> StubRecord | None:
-        row = self.session.scalars(
-            select(StubTable)
-            .where(StubTable.name == name, StubTable.workspace_id == workspace_id)
-            .order_by(StubTable.created_at.asc(), StubTable.id.asc())
-            .with_for_update()
-        ).first()
+        rows = list(
+            self.session.scalars(
+                select(StubTable)
+                .where(StubTable.name == name, StubTable.workspace_id == workspace_id)
+                .order_by(StubTable.created_at.asc(), StubTable.id.asc())
+                .limit(2)
+                .with_for_update()
+            )
+        )
+        if len(rows) > 1:
+            raise ConflictError(f"stub name is ambiguous; use a stub ID: {name}")
+        row = rows[0] if rows else None
         return StubRecord.model_validate(row.payload) if row is not None else None
 
     def registration_is_bound(self, stub_id: str) -> bool:
