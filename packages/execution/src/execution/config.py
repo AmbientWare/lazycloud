@@ -33,9 +33,6 @@ type ManagedPythonExecutable = Literal[
     "python3.12",
     "python3.13",
     "python3.14",
-    "micromamba3.10",
-    "micromamba3.11",
-    "micromamba3.12",
 ]
 
 
@@ -48,6 +45,8 @@ class ExecutionPythonVersion(StringEnum):
     Micromamba310 = "micromamba3.10"
     Micromamba311 = "micromamba3.11"
     Micromamba312 = "micromamba3.12"
+    Micromamba313 = "micromamba3.13"
+    Micromamba314 = "micromamba3.14"
 
 
 def parse_execution_python_version(value: object) -> ExecutionPythonVersion:
@@ -78,22 +77,16 @@ type ExecutionPythonVersionInput = Annotated[
 
 def managed_python_executable(version: ExecutionPythonVersion) -> ManagedPythonExecutable:
     match version:
-        case ExecutionPythonVersion.Python310:
+        case ExecutionPythonVersion.Python310 | ExecutionPythonVersion.Micromamba310:
             return "python3.10"
-        case ExecutionPythonVersion.Python311:
+        case ExecutionPythonVersion.Python311 | ExecutionPythonVersion.Micromamba311:
             return "python3.11"
-        case ExecutionPythonVersion.Python312:
+        case ExecutionPythonVersion.Python312 | ExecutionPythonVersion.Micromamba312:
             return "python3.12"
-        case ExecutionPythonVersion.Python313:
+        case ExecutionPythonVersion.Python313 | ExecutionPythonVersion.Micromamba313:
             return "python3.13"
-        case ExecutionPythonVersion.Python314:
+        case ExecutionPythonVersion.Python314 | ExecutionPythonVersion.Micromamba314:
             return "python3.14"
-        case ExecutionPythonVersion.Micromamba310:
-            return "micromamba3.10"
-        case ExecutionPythonVersion.Micromamba311:
-            return "micromamba3.11"
-        case ExecutionPythonVersion.Micromamba312:
-            return "micromamba3.12"
 
 
 class VolumeProviderConfig(BaseModel):

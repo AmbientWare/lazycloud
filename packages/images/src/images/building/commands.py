@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
 from shared.image_building.requirements import sanitize_python_packages
 
-from images.building.constants import PIP_GROUP_BOUNDARY_FLAGS
+from images.building.constants import MICROMAMBA_ROOT_PREFIX, PIP_GROUP_BOUNDARY_FLAGS
 from images.building.models import ImageBuildCommand, ImageInstallCommandMode
 
 
@@ -64,15 +64,19 @@ def render_uv_project_sync_command(
 
 def render_micromamba_install_command(
     packages: Iterable[str],
-    *,
-    environment: str = "",
 ) -> str:
     tokens = _install_tokens(packages)
     if not tokens:
         return ""
-    command = ["micromamba", "install", "-y"]
-    if environment:
-        command.extend(["-n", shlex.quote(environment)])
+    command = [
+        "micromamba",
+        "install",
+        "-y",
+        "--prefix",
+        MICROMAMBA_ROOT_PREFIX,
+        "-c",
+        "conda-forge",
+    ]
     return " ".join([*command, *tokens])
 
 
