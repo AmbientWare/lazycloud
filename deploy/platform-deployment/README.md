@@ -71,22 +71,24 @@ role's trust admits that environment only.
 
 What a second deployment needs distinct: its own `deployment`, a Stripe test
 account and key, a `fleet_cidr` that overlaps neither the other's nor the
-cluster's, a Helm `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT`, a `deploy/cloudflare` apply of its own
+cluster's, Helm `wireguard.gateways` endpoints, a `deploy/cloudflare` apply of its own
 with `cloudflare_state_key` naming it, and its own `github_environment`. What it
 shares: the cluster, the images, the storage class, the External Secrets
 operator, and Argo.
 
 ## Private network
 
-The chart runs a two-replica WireGuard gateway behind a UDP `LoadBalancer`
-Service, one per deployment. Set Helm `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT` to the stable
-`<host>:<port>` agents can reach. The host can use Route 53, Cloudflare DNS, or
-another DNS provider. It must resolve to a service that carries UDP to the
-gateway; a Cloudflare HTTP tunnel does not carry WireGuard traffic.
+The chart runs independent WireGuard gateways, each behind its own UDP
+`LoadBalancer` Service. Set each `wireguard.gateways` endpoint to the stable
+`<host>:<port>` agents can reach. A Service's assigned NLB hostname works directly;
+a DNS name must resolve to that UDP load balancer. A Cloudflare HTTP tunnel
+does not carry WireGuard traffic.
 
-The gateway replicas share one server keypair. Redis grants one replica the
-active lease while the other is ready to take over. The pair provides failover,
-not twice the packet throughput.
+Each gateway has its own keypair and Redis lease. Agents and platform peers keep
+tunnels to both gateways. Connection marks preserve the return path, and a
+draining gateway stops receiving new connections while established flows finish.
+Gateway zero retains the `tunnel-gateway` Service and its existing key. Follow
+[the staged migration](../active-gateways.md) before replacing its Deployment.
 
 Control-plane replicas run as a StatefulSet with one stable WireGuard keypair
 per ordinal. The chart derives the peer count from `controlPlane.replicas`.
@@ -97,7 +99,7 @@ keys, assigned addresses, revocation state, and handshake observations.
 
 Terraform declares one `<deployment>/wireguard` Secrets Manager entry. It does
 not put key material in Terraform state. The chart's `wireguard-bootstrap` Job
-generates the gateway pair and the configured platform pairs, then writes one
+generates missing gateway pairs and configured platform pairs, then writes one
 JSON document through a narrowly scoped Pod Identity role. Repeated runs reuse
 the complete document.
 
@@ -107,7 +109,7 @@ for enrollment or packet forwarding. One document per deployment is enough;
 there is no secret per agent.
 
 Do not edit or delete that document on a persistent installation. Replacing the
-server key changes the gateway identity and invalidates every enrolled peer
+gateway key changes that gateway's identity and invalidates its enrolled peer
 configuration.
 
 ## Secrets and identity
@@ -140,11 +142,11 @@ values supplied through another path.
 
 ## Scaling
 
-The API replicas and their platform peers scale together. Gateway replicas are
-active and standby because one server identity owns the endpoint. If one gateway
-reaches its measured packet or peer limit, the next scaling boundary is another
-gateway endpoint and peer shard, not more active replicas sharing the same
-endpoint. Sharding is not implemented by this module yet.
+The API replicas and their platform peers scale together. Add a gateway by
+provisioning its UDP Service, recording its endpoint, and extending the ordered
+`wireguard.gateways` list. Key bootstrap adds the corresponding keypair. Clients
+refresh the registry and establish the additional tunnel. Each gateway adds one
+NLB and its running pod; measure packet and peer limits before increasing the count.
 
 ## Application handoff
 

@@ -133,8 +133,8 @@ shred -u operator.json
 ```
 
 `<deployment>/wireguard` belongs to the `wireguard-bootstrap` Job. The Job
-generates one gateway keypair and one platform keypair per control-plane
-ordinal. It writes them as one document through a role that can access only
+generates one keypair per configured gateway and one platform keypair per
+control-plane ordinal. It writes them as one document through a role that can access only
 that entry. External Secrets projects the keys as read-only files. There is no
 operator value to copy and no secret per agent.
 
@@ -248,10 +248,11 @@ Point the tunnel at the cluster once the control plane is Ready. `cloudflared`
 runs in the chart with more than one connector, so the tunnel is served by the
 cluster rather than by a host.
 
-Point the DNS name in Helm `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT` at the deployment's UDP load
-balancer on port 51820. This endpoint is separate from the Cloudflare HTTP
-tunnel. Confirm an enrolled agent and a platform peer report recent WireGuard
-handshakes before calling the private network ready.
+Record each UDP Service's reachable hostname and port in Helm `wireguard.gateways`.
+These endpoints are separate from the Cloudflare HTTP tunnel. Each identity must
+reach its own Service. Confirm an enrolled agent and a platform peer report a
+recent handshake through every gateway. Existing installations must follow the
+[gateway migration](../active-gateways.md) before replacing the singleton Deployment.
 
 ## Adding staging
 

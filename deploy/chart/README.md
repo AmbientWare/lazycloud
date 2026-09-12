@@ -54,8 +54,9 @@ deployment can price usage from the moment it serves any.
 Each database Job is alone in its wave. The chart budgets both API engines,
 scheduler and gateway pools, one bootstrap Job, and bounded workload rollout
 overlap against Terraform's server ceiling. Scheduler readiness covers every loop.
-The gateway standby remains Kubernetes-ready; the active-only TCP listener is
-for the load balancer, not pod readiness.
+Each gateway becomes ready after it owns its identity, configures its peers and
+observes fresh encrypted probes from every platform peer through its public endpoint. Its health
+endpoint tells clients when it is draining.
 
 Database migrations run while previous replicas serve requests. Handoff sources,
 purchase demand IDs and fulfillment timestamps live in dedicated columns, which
@@ -98,21 +99,49 @@ with `docker compose run --rm --no-deps --entrypoint lazycloud-admin log-retenti
 
 ## Private network
 
-Each control-plane pod has a `wireguard-platform` sidecar in the same network
-namespace. The StatefulSet ordinal selects a stable platform keypair. The chart
+Each control-plane pod has a native `wireguard-platform` sidecar in the same
+network namespace. Kubernetes stops the API before stopping this sidecar, keeping
+its tunnels available while API streams drain. The StatefulSet ordinal selects
+a stable platform keypair. The chart
 derives the keypair count from `controlPlane.replicas`. The sidecar
 needs `NET_ADMIN` and `/dev/net/tun`; those are pod requirements, not reasons to
 select an instance type.
 
-The separate `tunnel-gateway` Deployment exposes UDP 51820 through a
-`LoadBalancer` Service. `runtime.LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT` is the
-stable host and port agents receive at enrollment. The host may use any DNS
-provider as long as it reaches that UDP service.
+`wireguard.gateways` lists consecutive indices starting at zero and the public
+UDP endpoint for each identity. Every identity has one Deployment and one
+`LoadBalancer` Service. Gateway zero preserves the Service name `tunnel-gateway`;
+gateway one uses `tunnel-gateway-1`. Each Service selects only its own gateway.
+Argo rolls gateway Deployments in index order. Both gateways share a disruption
+budget and spread across nodes and zones.
 
-The `wireguard-bootstrap` Job initializes one Secrets Manager document with the
-gateway keypair and the small set of platform keypairs. External Secrets mounts
-them as read-only files. Agent private keys remain on their machines; Postgres
-stores public peer records, and Redis stores only the active-gateway lease.
+The `wireguard-bootstrap` Job preserves existing keys and adds missing gateway
+and platform keypairs to one Secrets Manager document. Gateway zero retains its
+`LAZYCLOUD_WIREGUARD_SERVER_PRIVATE_KEY` property. External Secrets mounts private
+keys with mode `0600`. Agent private keys remain on their machines. PostgreSQL
+owns gateway endpoints and public peer records; Redis leases fence each gateway
+identity independently. Gateway presence records only the active peer generations
+with recent encrypted probes and expires after ten seconds. A platform client
+requires this presence and an encrypted health probe to select a peer's route.
+
+Platform sidecars read the gateway registry using the API's database credential
+and keep tunnels to every gateway. Their pod init container enables
+`net.ipv4.conf.all.src_valid_mark=1` inside the pod namespace so reverse-path
+checks follow connection marks. The running sidecar needs only `NET_ADMIN`.
+Its writable key directory is an `emptyDir` shared with the key initializer.
+The route journal survives sidecar restarts and ends with the pod namespace.
+Kubernetes stops the API container before its native tunnel sidecar.
+
+The gateway's preStop hook requests a drain and polls its completion. It allows
+120 seconds for established connections, inside a 150-second pod termination
+grace. NLB deregistration lasts 150 seconds and does not forcibly end those flows.
+Services publish pod addresses before readiness so the NLB can register them.
+The gateway starts its health listener before requiring fresh encrypted probes
+from every platform peer for pod readiness. Argo then requires 35 seconds of
+readiness before the next gateway.
+
+Follow the [gateway migration](../active-gateways.md) before applying this chart
+to the deployed singleton gateway. Gateway one's production endpoint must be
+recorded after provisioning its Service; an empty endpoint fails Helm validation.
 
 ## Secrets
 
@@ -165,14 +194,13 @@ must run in the volume's zone and attach the same disk. Cache service is
 unavailable during that recovery. Do not increase replicas against this claim.
 Its readiness probe checks the listener; acceptance must also read stored data.
 
-`tunnel-gateway` runs two replicas against one gateway key. Redis grants the
-active lease to one replica and the other remains ready to take over. This is
-availability, not packet-capacity scaling; both replicas do not forward traffic
-at the same time.
+Each gateway index runs one replica with its own key, UDP Service and Redis lease.
+Both identities forward traffic. Clients move new connections to another healthy
+gateway when one drains or becomes unavailable.
 
 Cloudflare readiness requires a connection to its edge before a replacement
-counts as available. Gateway readiness remains governed by the existing active
-lease and NLB health checks, not a Kubernetes probe that excludes the standby.
+counts as available. Gateway readiness requires identity ownership and a platform
+handshake through its public endpoint.
 
 `cloudflared` runs several deliberately. Cloudflare balances a tunnel across its
 connectors, and one was a single point of failure that also collided with any
