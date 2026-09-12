@@ -1,0 +1,146 @@
+aws:
+  region: us-east-1
+cloudflared:
+  apex: lazycloud.dev
+  tunnelId: 641c34fa-65dc-48b5-bf42-f77d7fa57cad
+database:
+  maxConnections: 40
+  poolerMaxConnections: 20
+deploymentRecord:
+  infrastructureSha256: d07c1849494c36c87c270dc35ed53600b9e340fb422b0fa1087f8e7d2f86b7af
+environment:
+  controlPlane:
+    runtimeKeys:
+    - LAZYCLOUD_WORKSPACE_STORAGE_ISSUER
+    - LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN
+    - LAZYCLOUD_AWS_STORAGE_ACCESS_BUCKET
+    - LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL
+    - LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL
+    - LAZYCLOUD_OBJECT_STORE_REGION_NAME
+    - LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE
+    - LAZYCLOUD_OBJECT_STORE_BUCKET
+    - LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX
+    - LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY
+    - LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN
+    - LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL
+    - LAZYCLOUD_GITHUB_REDIRECT_URI
+    - LAZYCLOUD_REDIS_URL
+    - LAZYCLOUD_RELEASE_MANIFEST_URL
+    - LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES
+    - LAZYCLOUD_TUNNEL_HOSTNAME
+    secretKeys:
+    - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_DATABASE_DIRECT_URL
+    - LAZYCLOUD_CACHE_SERVICE_TOKEN
+    - LAZYCLOUD_GITHUB_CLIENT_ID
+    - LAZYCLOUD_GITHUB_CLIENT_SECRET
+    - LAZYCLOUD_CLOUDFLARE_API_TOKEN
+    - LAZYCLOUD_STRIPE_API_KEY
+    - LAZYCLOUD_STRIPE_WEBHOOK_SECRET
+    - LAZYCLOUD_RESEND_WEBHOOK_SECRET
+    - LAZYCLOUD_TUNNEL_GATEWAY_BOOTSTRAP_SECRET
+    - LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS
+  scheduler:
+    runtimeKeys:
+    - LAZYCLOUD_WORKSPACE_STORAGE_ISSUER
+    - LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN
+    - LAZYCLOUD_AWS_STORAGE_ACCESS_BUCKET
+    - LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL
+    - LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL
+    - LAZYCLOUD_OBJECT_STORE_REGION_NAME
+    - LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE
+    - LAZYCLOUD_OBJECT_STORE_BUCKET
+    - LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX
+    - LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY
+    - LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN
+    - LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL
+    - LAZYCLOUD_GITHUB_REDIRECT_URI
+    - LAZYCLOUD_REDIS_URL
+    - LAZYCLOUD_RELEASE_MANIFEST_URL
+    - LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES
+    - LAZYCLOUD_TUNNEL_HOSTNAME
+    secretKeys:
+    - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_CACHE_SERVICE_TOKEN
+    - LAZYCLOUD_CLOUDFLARE_API_TOKEN
+    - LAZYCLOUD_STRIPE_API_KEY
+    - LAZYCLOUD_RESEND_API_KEY
+    - LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS
+fleet:
+  account_id: '534742592531'
+  networks:
+    us-east-1:
+      security_group_id: sg-0028c2c1729b5c7ce
+      subnet_ids:
+      - subnet-0fd7781a5ca720b1c
+      - subnet-0de56bbc3ec7be8e3
+      - subnet-04f84223cc6a294b9
+      - subnet-017a3a298fa6e9c66
+      - subnet-023947f9f9bbd3293
+      - subnet-080decec556ec6dc1
+      vpc_id: vpc-007d77af02a63830b
+    us-west-2:
+      security_group_id: sg-02f1493f15bb80474
+      subnet_ids:
+      - subnet-03eb8ac5900d5cca4
+      - subnet-0a6eb19d0cf251743
+      - subnet-0df7b8e067bcb8bf6
+      - subnet-065671ab4b659acb7
+      vpc_id: vpc-03ee0d7df59d1fedb
+  role_arn: arn:aws:iam::534742592531:role/lazycloud-prod-compute-connection
+image:
+  artifacts:
+    api: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/api@sha256:b47ec0c6c6d10788f44aa1c1f82129240e5678044db1b8f28c5eb5f6e198b49f
+    cache-server: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/cache-server@sha256:002e6bcd464c663449cff243036b76d48cc74637c7afd14d3bcda76a1afb19ba
+    cli: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/cli@sha256:9bc0cb8223ac54385ea1b5eec030cc03c43926f2425f48fe0d285fa461985940
+    connection-gateway: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/connection-gateway@sha256:4851c5ece51ac8f1b5c06266fdf442117ac83a022333fb3a59dbee07be163d78
+    database-bootstrap: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/database-bootstrap@sha256:adc4e957185752c69a2ec6911b2b35ed06998c4d16f7719d984235970f6ede1d
+    scheduler: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/scheduler@sha256:39bdead86f062640ccdfbacf53fd1e7a118853d9609910c5b77b7fcea038abd3
+    worker-bootstrap: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/worker-bootstrap@sha256:1c4e531ceb295024f7bd01429e6e58ee0e7bdd8962dc9925b6243c4a9060635d
+  registry: 534742592531.dkr.ecr.us-east-1.amazonaws.com
+  repositoryPrefix: lazycloud
+  tag: c7c1122239e7c084d5ebf67fbe3a70ad8abbd1cf
+release:
+  active:
+    generation: 19
+    manifest_url: https://releases.lazycloud.dev/connected-aws/releases/0.0.87/manifest.json
+    target:
+      agent:
+        sha256: 7dd458d7efa399b47856686ce7c18097836f76d7badc93767420e1f894ed8543
+        size_bytes: 56787672
+        url: https://releases.lazycloud.dev/connected-aws/agents/0.0.86/7dd458d7efa399b47856686ce7c18097836f76d7badc93767420e1f894ed8543/lazycloud-agent-linux-amd64
+      source_revision: c7c1122239e7c084d5ebf67fbe3a70ad8abbd1cf
+      version: 0.0.87
+      worker_image: public.ecr.aws/y7n4m3x7/lazycloud/container-worker@sha256:946832b34b4cf845edf9dd25ad1e2b98d9c37ec8170c3a7b76dc96c3e3964f98
+runtime:
+  LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN: arn:aws:iam::534742592531:role/lazycloud-prod-control-principal
+  LAZYCLOUD_AWS_STORAGE_ACCESS_BUCKET: lazycloud-prod-storage-access-534742592531
+  LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL: https://sqs.us-east-1.amazonaws.com/534742592531/lazycloud-prod-storage-access
+  LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN: arn:aws:iam::534742592531:role/lazycloud-prod-workspace-storage
+  LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: https://lazycloud.dev
+  LAZYCLOUD_GITHUB_REDIRECT_URI: https://lazycloud.dev/auth/github/callback
+  LAZYCLOUD_OBJECT_STORE_BUCKET: lazycloud-prod-objects-534742592531
+  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: https://s3.us-east-1.amazonaws.com
+  LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: 'true'
+  LAZYCLOUD_OBJECT_STORE_REGION_NAME: us-east-1
+  LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: lazycloud-prod-workspace
+  LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES: '{"ash":{"image_id":428329097,"recipe_sha256":"65719741bcff9586aba61dfa354609e687affa950174d9d23d9d31fcdc105c81"}}'
+  LAZYCLOUD_REDIS_URL: rediss://master.lazycloud-prod-redis.b1nxwv.use1.cache.amazonaws.com:6379/0
+  LAZYCLOUD_RELEASE_MANIFEST_URL: https://releases.lazycloud.dev/connected-aws/releases/0.0.87/manifest.json
+  LAZYCLOUD_STRIPE_ACCOUNT_ID: acct_1U3MzaLpRGtVfZdq
+  LAZYCLOUD_TUNNEL_HOSTNAME: tunnels.lazycloud.dev
+  LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/workload-images
+  LAZYCLOUD_WORKSPACE_STORAGE_ISSUER: aws
+secrets:
+  documents:
+    operator: lazycloud-prod/operator
+    platform: lazycloud-prod/platform
+  map:
+    LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS: operator
+  readerRoleArn: arn:aws:iam::534742592531:role/lazycloud-prod-secrets-reader
+serviceAccounts:
+  controlPlane: control-plane
+  scheduler: scheduler
+  secretsReader: secrets-reader
+storage:
+  className: lazycloud-ebs
