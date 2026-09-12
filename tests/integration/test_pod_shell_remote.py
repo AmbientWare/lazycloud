@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
-from collections.abc import Iterable
+from collections.abc import Generator
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -889,7 +889,7 @@ class _RecordingTransport:
         request: ContractModel,
         *,
         timeout_seconds: float | None = None,
-    ) -> Iterable[ContainerServicePayload]:
+    ) -> Generator[ContainerServicePayload, None, None]:
         raise AssertionError(f"unexpected streaming request: {method}")
 
 
