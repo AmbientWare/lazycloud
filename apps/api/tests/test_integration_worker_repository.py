@@ -2622,6 +2622,8 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
         draining = service.workers.get_worker(slot.worker_id)
         assert draining is not None and draining.status is SchedulerWorkerStatus.Draining
         assert draining.request_poll_expires_at is None
+        superseded_generation = following.generation
+        following = select_worker_release("worker:latest")
         current_request = request.model_copy(
             update={
                 "worker": request.worker.model_copy(
@@ -2629,6 +2631,35 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
                 )
             }
         )
+        ready = client.post(
+            "/worker-repository/add-worker",
+            json=current_request.model_dump(mode="json"),
+            headers=headers,
+        )
+        assert ready.status_code == 200
+        blocked = service.workers.get_worker(slot.worker_id)
+        assert blocked is not None and blocked.status is SchedulerWorkerStatus.Draining
+        assert blocked.admitted_release_generation == following.generation
+        resumed = gateway.stream_agent(
+            StreamAgentRequest(
+                agent_token=agent_token,
+                active_worker_images={slot.worker_id: following.target.worker_image},
+                prepared_worker_images=[following.target.worker_image],
+            )
+        )
+        assert resumed.ok
+        recovering = service.workers.get_worker(slot.worker_id)
+        assert recovering is not None and recovering.status is SchedulerWorkerStatus.Pending
+        assert recovering.request_poll_expires_at is None
+        with isolated_services.context.database.session() as session:
+            assert (
+                WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id)
+                == following.generation
+            )
+        assert not service.workers.release_worker_rollout_slot(
+            slot.capacity_owner_id, slot.worker_id, str(superseded_generation)
+        )
+        assert service.workers.has_worker_rollout_slot(slot.capacity_owner_id, slot.worker_id)
         ready = client.post(
             "/worker-repository/add-worker",
             json=current_request.model_dump(mode="json"),
@@ -2665,6 +2696,7 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
             assert (
                 WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id) == 0
             )
+        assert not service.workers.has_worker_rollout_slot(slot.capacity_owner_id, slot.worker_id)
         changed = request.model_copy(
             update={
                 "worker": request.worker.model_copy(update={"runtime_image": "worker:unverified"})
