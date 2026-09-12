@@ -543,7 +543,7 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
   return (
     <MarketingCard className={panelState(active)} data-marketing-terminal-surface="">
       <div className="typed-editor-tabs flex min-h-9 items-center gap-1 border-b border-border px-2.5 text-[10px]">
-        <span className="rounded border border-border bg-background/60 px-2 py-0.5 text-foreground">
+        <span className="rounded-md border border-border bg-background/60 px-2 py-0.5 text-foreground">
           release.py
         </span>
         <span className="px-2 py-0.5 text-muted-foreground">pyproject.toml</span>

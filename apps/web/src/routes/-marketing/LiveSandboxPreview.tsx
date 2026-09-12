@@ -202,7 +202,7 @@ export function LiveSandboxPreview() {
             <span
               className={
                 tab === "Terminal"
-                  ? "rounded border border-border bg-background/60 px-2 py-0.5 text-foreground"
+                  ? "rounded-md border border-border bg-background/60 px-2 py-0.5 text-foreground"
                   : "px-2 py-0.5 text-muted-foreground"
               }
               key={tab}

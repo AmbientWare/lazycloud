@@ -173,13 +173,8 @@ function MarketingPricing() {
                 Compute billing starts with the container and stops with it. You pay by the second.
               </p>
               <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-                <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
-                <MarketingButton
-                  className="marketing-action-secondary stamp-quiet border-input"
-                  endGlyph="↓"
-                  hash="plans"
-                  to="/pricing"
-                >
+                <GetStartedButton />
+                <MarketingButton endGlyph="↓" hash="plans" to="/pricing">
                   Compare plans
                 </MarketingButton>
               </div>
@@ -273,7 +268,7 @@ function MarketingPricing() {
                         <PlanTerm key={term}>{term}</PlanTerm>
                       ))}
                     </ul>
-                    <GetStartedButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input" />
+                    <GetStartedButton variant="secondary" className="mt-auto w-full" />
                   </article>
                 </MarketingCard>
               ))}

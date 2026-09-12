@@ -71,7 +71,7 @@ function CodeEntryForm({ error }: { error?: string }) {
       }}
     >
       {error ? (
-        <div className="rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
           {error}
         </div>
       ) : null}
@@ -175,7 +175,7 @@ function DeviceCodeDecision({
       {failure ? (
         <div
           role="alert"
-          className="rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive"
         >
           {failure instanceof ApiError && failure.status === 403
             ? "Sign in with an account to approve the CLI. Workspace tokens cannot approve it."

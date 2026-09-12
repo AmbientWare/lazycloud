@@ -245,13 +245,13 @@ export function MarketingHome() {
                 the same Python code locally, for a one-off cloud run, or as a deployed app.
               </p>
               <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-                <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
+                <GetStartedButton />
                 {EXAMPLES_URL ? (
                   <Button
                     asChild
                     size="lg"
-                    variant="outline"
-                    className="marketing-button-link marketing-action-secondary stamp-quiet justify-between border-input text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full"
+                    variant="secondary"
+                    className="marketing-button-link justify-between [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full"
                   >
                     <a href={EXAMPLES_URL}>
                       <span>Explore examples</span>

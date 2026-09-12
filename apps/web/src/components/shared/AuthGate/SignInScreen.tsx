@@ -28,7 +28,7 @@ export function SignInScreen({ error }: { error?: string }) {
       </div>
 
       {approvingDevice ? (
-        <div className="mb-3 rounded border border-border bg-muted/40 p-2 text-sm text-muted-foreground">
+        <div className="mb-3 rounded-md border border-border bg-muted/40 p-2 text-sm text-muted-foreground">
           A CLI is waiting. Sign in to approve it.
         </div>
       ) : null}
@@ -36,7 +36,7 @@ export function SignInScreen({ error }: { error?: string }) {
       {error ? (
         <div
           role="alert"
-          className="mb-3 rounded border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive"
+          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive"
         >
           {error}
         </div>

@@ -58,7 +58,7 @@ export function MarketingButton({
     <Button
       asChild
       size="lg"
-      variant="outline"
+      variant="secondary"
       className={cn(
         "marketing-button-link justify-between text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
         endGlyph === null && "justify-center",
@@ -96,9 +96,11 @@ export function MarketingButton({
 export function GetStartedButton({
   className,
   label = "Get started",
+  variant = "default",
 }: {
   className?: string;
   label?: string;
+  variant?: "default" | "secondary";
 }) {
   const token = useAuthToken();
   const content = (
@@ -112,9 +114,10 @@ export function GetStartedButton({
     <Button
       asChild
       size="lg"
-      variant="outline"
+      variant={variant}
       className={cn(
-        "marketing-button-link justify-between text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
+        "marketing-button-link justify-between [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
+        variant === "default" && "marketing-action-primary",
         className,
       )}
     >
@@ -158,7 +161,7 @@ export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
           {body}
         </p>
         <div className="mt-8 flex w-full max-w-[22rem] justify-center sm:w-auto sm:max-w-none">
-          <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
+          <GetStartedButton />
         </div>
       </div>
     </section>

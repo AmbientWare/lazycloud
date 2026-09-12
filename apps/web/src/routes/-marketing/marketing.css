@@ -3,17 +3,6 @@
   box-sizing: border-box;
 }
 
-.marketing-theme {
-  --background: #0c141b;
-  --muted: #18232d;
-  --card: #121d26;
-  --border: #354550;
-  --input: #354550;
-  --foreground: #eef3f7;
-  --muted-foreground: #a4b4c2;
-  --brand: #76d6f5;
-}
-
 .marketing-site {
   --marketing-header-height: calc(4.5rem + env(safe-area-inset-top));
 
@@ -167,32 +156,12 @@
   animation-play-state: paused !important;
 }
 
-.marketing-site .marketing-action-primary {
-  border-radius: var(--radius);
-  border-color: var(--brand);
-  background: var(--brand);
-  color: #0c141b;
-  box-shadow: none;
-}
-
-.marketing-site .marketing-action-primary:hover {
-  background: #a1e6fb;
-}
-
 .marketing-action-primary > span:last-child {
   align-self: stretch;
   margin-block: -0.5rem;
   margin-left: 0.75rem;
   padding-left: 0.875rem;
-  border-left: 1px solid #0c141b40;
-}
-
-.marketing-action-secondary {
-  background: var(--card);
-}
-
-.marketing-action-secondary:hover {
-  background: var(--accent);
+  border-left: 1px solid color-mix(in oklab, var(--primary-foreground) 25%, transparent);
 }
 
 .marketing-site [data-marketing-card],

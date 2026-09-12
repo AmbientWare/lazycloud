@@ -91,10 +91,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
                 ),
               )}
             </nav>
-            <GetStartedButton
-              className="marketing-action-primary stamp border-brand/45 max-[479px]:hidden"
-              label="Sign in"
-            />
+            <GetStartedButton className="max-[479px]:hidden" label="Sign in" />
             <MobileNavigation />
           </div>
         </div>
@@ -174,7 +171,7 @@ function MarketingFrame({
 
   return (
     <Clouds
-      className="dark marketing-theme isolate h-dvh w-full overflow-hidden bg-background text-foreground"
+      className="dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
       contentClassName={contentClassName}
       contentRef={scrollportRef}
       blur={0.9}
@@ -280,10 +277,7 @@ function MobileNavigation() {
                 </a>
               ),
             )}
-            <GetStartedButton
-              className="marketing-action-primary stamp mt-3 border-brand/45"
-              label="Sign in"
-            />
+            <GetStartedButton className="mt-3" label="Sign in" />
           </div>
         </nav>
       ) : null}
