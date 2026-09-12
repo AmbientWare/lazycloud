@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { formatCostNanos } from "@/lib/money";
 import { billingSummaryQueryOptions, creditBalanceQueryOptions } from "@/lib/queries/billing";
 
@@ -19,22 +20,17 @@ export function CreditPrompt({ onOpenSettings }: { onOpenSettings: () => void })
   }
 
   return (
-    <button
+    <Button
       type="button"
       onClick={onOpenSettings}
-      className="mb-3 flex w-full items-center gap-2 rounded-md border border-brand/30 bg-brand/10 px-2.5 py-2.5 text-left text-xs outline-none transition-colors hover:bg-brand/15 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+      className="mb-3 h-10 w-full justify-start gap-2 border-brand bg-brand px-3 text-[13px] text-brand-foreground hover:bg-lazycloud-light focus-visible:border-brand focus-visible:ring-brand/40"
     >
-      <Plus className="size-3.5 shrink-0 text-brand" aria-hidden="true" />
-      <span className="min-w-0 flex-1">
-        <span className="block font-medium">Add credits</span>
-        <span className="mt-0.5 block text-[10px] text-muted-foreground">
-          Or set up automatic reload
-        </span>
-      </span>
-      <span className="mono shrink-0 text-muted-foreground">
+      <Plus className="shrink-0" aria-hidden="true" />
+      <span className="flex-1 whitespace-nowrap text-left">Add credits</span>
+      <span className="shrink-0 border-l border-brand-foreground/20 pl-2.5 tabular-nums">
         {formatCostNanos(balance.data.balance_nanos, summary.data.currency, 2)}
         <span className="sr-only"> available</span>
       </span>
-    </button>
+    </Button>
   );
 }
