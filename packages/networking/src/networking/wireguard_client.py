@@ -7,6 +7,7 @@ import os
 import shlex
 import socket
 import threading
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
@@ -14,7 +15,6 @@ from pathlib import Path
 from time import monotonic
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from shared.http.private_network import WireGuardGatewayConfiguration, WireGuardPeerConfiguration
 
 from networking.wireguard import (
     WIREGUARD_GATEWAY_ADDRESS,
@@ -30,6 +30,7 @@ from networking.wireguard import (
     generate_wireguard_private_key,
     validate_wireguard_public_key,
 )
+from shared.http.private_network import WireGuardGatewayConfiguration, WireGuardPeerConfiguration
 
 LOGGER = logging.getLogger(__name__)
 _MARK_MASK = 0x00FF0000
@@ -41,6 +42,18 @@ _INPUT_CHAIN = "LZY-WG-IN"
 _OUTPUT_CHAIN = "LZY-WG-OUT"
 _SELECT_CHAIN = "LZY-WG-NEW"
 _PROBE_INTERVAL_SECONDS = 2.0
+
+
+def _connection_hooks(networks: Collection[str]) -> tuple[tuple[str, ...], ...]:
+    return (
+        ("PREROUTING", "-i", "lzy-wg-+", "-j", _INPUT_CHAIN),
+        *(("OUTPUT", "-d", network, "-j", _OUTPUT_CHAIN) for network in networks),
+        # Container forwarding needs the mark before its first route lookup.
+        *(
+            ("PREROUTING", "!", "-i", "lzy-wg-+", "-d", network, "-j", _OUTPUT_CHAIN)
+            for network in networks
+        ),
+    )
 
 
 class _KernelOwnership(BaseModel):
@@ -480,9 +493,7 @@ class WireGuardClientRuntime:
     def _attach_hooks(self, networks: tuple[str, ...]) -> None:
         owner = self._claim_ownership()
         comment = ("-m", "comment", "--comment", self._owner_comment())
-        hooks = [("PREROUTING", "-i", "lzy-wg-+", "-j", _INPUT_CHAIN)]
-        hooks.extend(("OUTPUT", "-d", network, "-j", _OUTPUT_CHAIN) for network in networks)
-        for plain in hooks:
+        for plain in _connection_hooks(networks):
             hook = (*plain[:1], *comment, *plain[1:])
             check = self.runner.run(["iptables", "-t", "mangle", "-C", *hook])
             if check.returncode == 0:
@@ -669,11 +680,7 @@ class WireGuardClientRuntime:
                         raise WireGuardError("WireGuard ownership journal contains a foreign route")
                 comment = ("-m", "comment", "--comment", f"lazycloud-wireguard:{public_key}")
                 hooks = {
-                    ("PREROUTING", *comment, "-i", "lzy-wg-+", "-j", _INPUT_CHAIN),
-                    *(
-                        ("OUTPUT", *comment, "-d", network, "-j", _OUTPUT_CHAIN)
-                        for network in owner.routes
-                    ),
+                    (*plain[:1], *comment, *plain[1:]) for plain in _connection_hooks(owner.routes)
                 }
                 if any(hook not in hooks for hook in owner.hooks) or (
                     owner.hooks and not owner.firewall
