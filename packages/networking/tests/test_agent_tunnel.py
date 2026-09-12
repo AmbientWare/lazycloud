@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import socket
 from contextlib import suppress
 from pathlib import Path
@@ -53,6 +54,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
     committed_service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     context = committed_service_context
     redis = real_redis_actors.client()
@@ -213,6 +215,26 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     with pytest.raises(grpc.aio.AioRpcError) as refused:
                         await anext(call.__aiter__())
                     assert refused.value.code() is grpc.StatusCode.PERMISSION_DENIED
+            disconnected = AgentTunnelClient(
+                agent.address,
+                agent_credentials,
+                agent_certificate.expires_at,
+                agent.resolve_route,
+            )
+            try:
+                await disconnected.start()
+                record = directory.get(workspace, enrollment.id)
+                assert record is not None
+                assert record.connection_id == disconnected.connection_id
+            finally:
+                await disconnected.close()
+            for _ in range(10):
+                record = directory.get(workspace, enrollment.id)
+                print(f"disconnected agent lease={record is not None}")
+                if record is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert record is None
             await agent.start()
             request = TunnelRouteRequest(
                 workspace_id=workspace, enrollment_id=enrollment.id, route_id=route.route_id
@@ -353,3 +375,9 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             await backend.wait_closed()
 
     asyncio.run(run())
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR
+        and (record.name.startswith("networking.") or record.name == "grpc._cython.cygrpc")
+    ]
