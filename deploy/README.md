@@ -255,10 +255,10 @@ derived on start, and its volumes hold only caches.
 ### WireGuard endpoint and keys
 
 Compose runs two gateways and publishes host UDP ports 51820 and 51821. The
-agent and its worker share the host network namespace and reach the private
-runtime through WireGuard. The agent and platform sidecar reach both UDP ports
-through `host.docker.internal`, so local function traffic exercises the tunnel
-and forwarding rules. For agents outside Compose, set
+agent and its worker share the agent container's network namespace and reach
+the private runtime through WireGuard. Its bundled agent reaches
+`tunnel-gateway:51820` and `tunnel-gateway-1:51820`, so local function traffic
+exercises the tunnel and forwarding rules. For agents outside Compose, set
 `LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT` and
 `LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT` to the corresponding reachable
 `<host>:<port>` addresses. A Cloudflare HTTP tunnel cannot carry WireGuard traffic.
@@ -270,6 +270,10 @@ container recreation. Agents keep private keys in their own state directories.
 Postgres owns gateway identities, endpoints, public peer keys and assigned addresses.
 Redis owns gateway leases and expiring peer path presence. Platform traffic
 selects only gateways with presence for the destination's current generation.
+
+The Compose agent owns an isolated network namespace. Its workers join that
+namespace through Docker's `container:` network mode, keeping the agent's
+tunnels and container forwarding together without changing workstation routes.
 
 The platform sidecar reads both gateways from PostgreSQL. The `control-plane`
 service creates its shared network namespace with `src_valid_mark=1`; Docker
