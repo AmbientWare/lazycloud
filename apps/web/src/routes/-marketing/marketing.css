@@ -136,7 +136,7 @@
 .marketing-hero h1 em {
   display: inline;
   font-style: normal;
-  color: inherit;
+  color: var(--brand);
 }
 
 .marketing-site main > .marketing-hero::before {
