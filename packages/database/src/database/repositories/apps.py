@@ -813,6 +813,7 @@ class StubRepository:
             self.session.scalars(
                 select(StubTable)
                 .where(StubTable.name == name, StubTable.workspace_id == workspace_id)
+                .order_by(StubTable.created_at.asc(), StubTable.id.asc())
                 .limit(2)
                 .with_for_update()
             )
