@@ -8,32 +8,11 @@ from compute.agent_control import (
     generate_compute_token,
     plan_agent_worker_token,
 )
-from compute.bootstrap import MachineBootstrapConfig
 from compute.state import ComputeAgentWorkerSlotState
 from pydantic import ValidationError
 from shared.compute_policy import MachinePool
 from shared.scheduling import SchedulerWorkerRecord
 from shared.usage import UsageBillingOwner
-
-
-@pytest.mark.parametrize(
-    "gateway_url",
-    [
-        "http://control.example.com",
-        "https://user:secret@control.example.com",
-        "https://control.example.com/path",
-        "https://control.example.com?token=abc",
-    ],
-)
-def test_machine_bootstrap_rejects_credentialed_or_non_https_gateway_urls(
-    gateway_url: str,
-) -> None:
-    with pytest.raises(ValidationError, match="gateway_url"):
-        MachineBootstrapConfig(
-            registration_token="join-token",
-            machine_id="machine-1",
-            gateway_url=gateway_url,
-        )
 
 
 @pytest.mark.parametrize(

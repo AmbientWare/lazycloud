@@ -9,7 +9,6 @@ from shared.image_building.credentials import (
     AWS_OPTIONAL_REGISTRY_CREDENTIAL_NAMES,
     AWS_REQUIRED_REGISTRY_CREDENTIAL_NAMES,
     BASIC_REGISTRY_CREDENTIAL_NAME_PAIRS,
-    GCP_REGISTRY_CREDENTIAL_NAMES,
     TOKEN_REGISTRY_CREDENTIAL_NAMES,
     ImageCredentialEnvVar,
     ImageCredentialLookupError,
@@ -31,41 +30,6 @@ _AZURE_REGISTRY_SUFFIXES = ("azurecr.io",)
 _NGC_REGISTRY_SUFFIXES = ("nvcr.io",)
 _GHCR_REGISTRY_SUFFIXES = ("ghcr.io",)
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
-
-
-def detect_registry_credential_kind(
-    registry: str,
-    credentials: Mapping[str, str],
-) -> ImageRegistryCredentialKind:
-    if not credentials:
-        return ImageRegistryCredentialKind.Public
-    ecr_registry = parse_ecr_registry(registry)
-    if ecr_registry is not None and all(
-        credentials.get(key) for key in AWS_REQUIRED_REGISTRY_CREDENTIAL_NAMES
-    ):
-        return ImageRegistryCredentialKind.Aws
-    if _registry_matches_suffix(registry, _GCP_REGISTRY_SUFFIXES) and any(
-        credentials.get(key) for key in GCP_REGISTRY_CREDENTIAL_NAMES
-    ):
-        return ImageRegistryCredentialKind.Gcp
-    if (
-        _registry_matches_suffix(registry, _AZURE_REGISTRY_SUFFIXES)
-        and credentials.get(ImageCredentialEnvVar.AzureClientId.value)
-        and credentials.get(ImageCredentialEnvVar.AzureClientSecret.value)
-    ):
-        return ImageRegistryCredentialKind.Azure
-    if any(credentials.get(key) for key in TOKEN_REGISTRY_CREDENTIAL_NAMES):
-        return ImageRegistryCredentialKind.Token
-    if _find_complete_basic_pair(credentials) is not None:
-        return ImageRegistryCredentialKind.Basic
-
-    if ecr_registry is not None:
-        return ImageRegistryCredentialKind.Aws
-    if _registry_matches_suffix(registry, _GCP_REGISTRY_SUFFIXES):
-        return ImageRegistryCredentialKind.Gcp
-    if _registry_matches_suffix(registry, _AZURE_REGISTRY_SUFFIXES):
-        return ImageRegistryCredentialKind.Azure
-    return ImageRegistryCredentialKind.Unknown
 
 
 def registry_credentials_for_image(

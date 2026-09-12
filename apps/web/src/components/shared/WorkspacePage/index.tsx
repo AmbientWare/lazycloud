@@ -24,7 +24,6 @@ export function WorkspacePage({
   actions,
   headerDetails,
   children,
-  className,
   contentClassName,
 }: {
   title: ReactNode;
@@ -32,16 +31,12 @@ export function WorkspacePage({
   actions?: ReactNode;
   headerDetails?: ReactNode;
   children: ReactNode;
-  className?: string;
   contentClassName?: string;
 }) {
   return (
     <div
       data-workspace-page=""
-      className={cn(
-        "flex h-full min-h-0 w-full flex-col overflow-hidden px-4 py-4 md:px-6 md:py-5",
-        className,
-      )}
+      className="flex h-full min-h-0 w-full flex-col overflow-hidden px-4 py-4 md:px-6 md:py-5"
     >
       <div className={cn("mx-auto flex min-h-0 w-full flex-1 flex-col gap-3", PAGE_WIDTH)}>
         <header className="panel shrink-0 rounded-md bg-card px-4 py-3">

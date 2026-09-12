@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import glob
-import shutil
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -9,7 +7,6 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Protocol, runtime_checkable
-from uuid import uuid4
 
 from database.client import DatabaseClient
 from database.repositories.identity import WorkspaceRepository
@@ -529,165 +526,6 @@ class WorkspaceVolumeFilesystem:
         )
 
 
-@dataclass(slots=True)
-class LocalVolumeFilesystem:
-    root: Path
-
-    def ensure_volume(self, namespace: VolumeNamespace) -> None:
-        self._volume_root(namespace).mkdir(parents=True, exist_ok=True)
-
-    def delete_volume(self, namespace: VolumeNamespace) -> None:
-        shutil.rmtree(self._volume_root(namespace), ignore_errors=True)
-
-    def write_path(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-        chunks: Iterable[bytes],
-    ) -> None:
-        target = self._path(namespace, relative_path, require_file=True)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
-        try:
-            with temporary.open("wb") as handle:
-                for chunk in chunks:
-                    handle.write(chunk)
-            temporary.replace(target)
-        finally:
-            temporary.unlink(missing_ok=True)
-
-    def list_path(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-    ) -> tuple[VolumeFilesystemEntry, ...]:
-        root = self._volume_root(namespace)
-        target = self._path(namespace, relative_path)
-        if target.exists() and target.is_dir():
-            matches = tuple(sorted(target.iterdir()))
-        else:
-            matches = tuple(Path(path).resolve() for path in glob.glob(str(target)))
-        return tuple(_local_entry(path, root) for path in matches)
-
-    def stat_path(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-    ) -> VolumeFilesystemEntry:
-        root = self._volume_root(namespace)
-        target = self._path(namespace, relative_path)
-        if not target.exists():
-            raise NotFoundError("Path does not exist")
-        return _local_entry(target, root)
-
-    def delete_path(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-    ) -> tuple[str, ...]:
-        root = self._volume_root(namespace)
-        target = self._path(namespace, relative_path, require_file=True)
-        matches = tuple(Path(path).resolve() for path in glob.glob(str(target)))
-        deleted: list[str] = []
-        for selected in matches:
-            if root not in selected.parents:
-                raise InvalidInputError("parent directory cannot be deleted")
-            deleted.append(selected.relative_to(root).as_posix())
-            if selected.is_dir():
-                shutil.rmtree(selected)
-            else:
-                selected.unlink(missing_ok=True)
-        return tuple(deleted)
-
-    def move_path(
-        self,
-        namespace: VolumeNamespace,
-        source_path: str,
-        destination_path: str,
-    ) -> None:
-        source = self._path(namespace, source_path, require_file=True)
-        destination = self._path(namespace, destination_path, require_file=True)
-        if not source.exists():
-            raise NotFoundError(f"error finding original path {source_path}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        source.replace(destination)
-
-    def create_presigned_url(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-        *,
-        method: PresignedUrlMethod,
-        expires_seconds: int,
-        upload_id: str = "",
-        part_number: int = 0,
-    ) -> str:
-        del expires_seconds, upload_id, part_number
-        if method is not PresignedUrlMethod.GetObject:
-            raise UpstreamUnavailableError("signed writes require the configured JuiceFS gateway")
-        target = self._path(namespace, relative_path, require_file=True)
-        if not target.is_file():
-            raise NotFoundError("Path does not exist")
-        return target.as_uri()
-
-    def create_multipart_upload(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-    ) -> str:
-        del namespace, relative_path
-        raise UpstreamUnavailableError("multipart uploads require the configured JuiceFS gateway")
-
-    def complete_multipart_upload(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-        *,
-        upload_id: str,
-        completed_parts: tuple[tuple[int, str], ...],
-    ) -> None:
-        del namespace, relative_path, upload_id, completed_parts
-        raise UpstreamUnavailableError("multipart uploads require the configured JuiceFS gateway")
-
-    def abort_multipart_upload(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-        *,
-        upload_id: str,
-    ) -> None:
-        del namespace, relative_path, upload_id
-        raise UpstreamUnavailableError("multipart uploads require the configured JuiceFS gateway")
-
-    def occupancy_bytes(self, namespace: VolumeNamespace) -> int:
-        root = self._volume_root(namespace)
-        if not root.exists():
-            return 0
-        return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
-
-    def resolve_path(self, namespace: VolumeNamespace, relative_path: str = ".") -> Path:
-        return self._path(namespace, relative_path)
-
-    def _volume_root(self, namespace: VolumeNamespace) -> Path:
-        _validate_namespace(namespace)
-        root = self.root.expanduser().resolve()
-        return (root / namespace.workspace_id / namespace.volume_id).resolve()
-
-    def _path(
-        self,
-        namespace: VolumeNamespace,
-        relative_path: str,
-        *,
-        require_file: bool = False,
-    ) -> Path:
-        root = self._volume_root(namespace)
-        relative = _normalize_relative_path(relative_path, require_file=require_file)
-        target = (root / relative).resolve()
-        if target != root and root not in target.parents:
-            raise InvalidInputError("parent directory does not exist")
-        return target
-
-
 def _validate_namespace(namespace: VolumeNamespace) -> None:
     for field_name, value in (
         ("workspace ID", namespace.workspace_id),
@@ -727,19 +565,8 @@ def _object_entry(info: S3ObjectInfo, root_key: str) -> VolumeFilesystemEntry:
     )
 
 
-def _local_entry(path: Path, root: Path) -> VolumeFilesystemEntry:
-    stat = path.stat()
-    return VolumeFilesystemEntry(
-        path=path.relative_to(root).as_posix(),
-        size=stat.st_size,
-        modified_at=datetime.fromtimestamp(stat.st_mtime, UTC),
-        is_dir=path.is_dir(),
-    )
-
-
 __all__ = [
     "VOLUME_NAMESPACE_PREFIX",
-    "LocalVolumeFilesystem",
     "VolumeFilesystem",
     "VolumeFilesystemEntry",
     "VolumeNamespace",

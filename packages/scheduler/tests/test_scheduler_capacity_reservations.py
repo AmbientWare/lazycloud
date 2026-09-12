@@ -26,7 +26,6 @@ from scheduler.capacity_reservations import (
     CapacityTerminalReason,
     ComputeUnitCapacityController,
     RedisCapacityReservationRepository,
-    reservation_shape_for_request,
 )
 from scheduler.containers import (
     SchedulerContainerDispatchStatus,
@@ -163,15 +162,7 @@ class _Controller:
         return self.default_eligible
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
-        return reservation_shape_for_request(
-            request,
-            worker_cpu_millicores=4_000,
-            worker_memory_mib=8_192,
-            worker_gpu_type="",
-            worker_gpu_count=0,
-            worker_runtimes=("runsc",),
-            worker_preemptible=False,
-        )
+        return _shape()
 
     def ensure_capacity(
         self,

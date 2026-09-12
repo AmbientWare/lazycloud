@@ -14,27 +14,17 @@ type ShellButtonProps = {
   containerId: string;
   /** Gate the button on a running container; disabled otherwise. */
   running: boolean;
-  className?: string;
-  variant?: "default" | "outline" | "ghost";
-  size?: "sm" | "md";
 };
 
 /** Opens the shared centered terminal for any server-authorized container. */
-export function ShellButton({
-  containerId,
-  running,
-  className,
-  variant = "outline",
-  size = "sm",
-}: ShellButtonProps) {
+export function ShellButton({ containerId, running }: ShellButtonProps) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
         <Button
-          variant={variant}
-          size={size}
-          className={className}
+          variant="outline"
+          size="sm"
           disabled={!running}
           title={running ? "Open container shell" : "Container is not running"}
         >

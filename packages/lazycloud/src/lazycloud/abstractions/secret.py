@@ -13,9 +13,12 @@ from shared.http.secrets import (
     UpdateSecretResponse,
 )
 from shared.secrets import SecretRecord
-from typing_extensions import Self
 
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.control import (
+    ControlClientConfig,
+    ResourceControlBinding,
+    resolve_control_client_config,
+)
 
 
 class SecretClient(Protocol):
@@ -35,7 +38,7 @@ class SecretOperationError(RuntimeError):
 
 
 @dataclass(slots=True)
-class Secret:
+class Secret(ResourceControlBinding[SecretClient]):
     name: str
     workspace: str | None = None
     client: SecretClient | None = field(default=None, init=False, repr=False)
@@ -54,26 +57,6 @@ class Secret:
             )
             self.client = _default_secret_client(config)
         return self.client
-
-    def _bind_control(
-        self,
-        client: SecretClient | None = None,
-        *,
-        workspace: str | None = None,
-        endpoint: str | None = None,
-        token: str | None = None,
-        timeout_seconds: float | None = None,
-    ) -> Self:
-        self.client = client
-        if workspace is not None:
-            self.workspace = workspace
-        if endpoint is not None:
-            self.endpoint = endpoint
-        if token is not None:
-            self.token = token
-        if timeout_seconds is not None:
-            self.timeout_seconds = timeout_seconds
-        return self
 
     def create(self, value: str) -> SecretRecord:
         try:

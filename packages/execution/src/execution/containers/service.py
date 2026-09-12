@@ -64,7 +64,10 @@ from execution.containers.planning import (
     resolve_oci_runtime,
     validate_checkpoint_request,
 )
-from execution.containers.runtime_state import ContainerRuntimeStateRepository
+from execution.containers.runtime_state import (
+    ContainerRuntimeStateRepository,
+    release_container_runtime_state,
+)
 from execution.context import ExecutionContext
 from execution.task_claims import TaskClaimReleaseService
 from execution.tasks import TaskService
@@ -409,7 +412,7 @@ class ContainerService:
             record.status = ContainerStatus.Failed
             record.exit_code = 1
             record.finished_at = utc_now()
-            self._release_runtime_state(record)
+            release_container_runtime_state(self.runtime_state, record)
             with self.context.database.session() as session:
                 failed = ContainerRepository(session).records.upsert(
                     record,
@@ -803,7 +806,7 @@ class ContainerService:
         # live — it takes back what it just gave up and then goes away
         # holding it.
         self._settle_claimed_work(updated, reason=settlement_reason)
-        self._release_runtime_state(updated)
+        release_container_runtime_state(self.runtime_state, updated)
         cause = "" if reason is None else reason.describe()
         self.events.emit(
             "container.stopped",
@@ -822,29 +825,6 @@ class ContainerService:
         )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
         return updated
-
-    def _release_runtime_state(self, record: ContainerRecord) -> None:
-        """Give up the Redis state this container held.
-
-        Best effort on purpose: the container is already terminal in the record
-        that matters, and refusing to persist that because a cache write failed
-        would trade a stale key for a container stuck Running forever. Whatever
-        is left behind is reclaimed when the app or workspace is deleted.
-        """
-        if self.runtime_state is None or not record.stub_id:
-            return
-        try:
-            self.runtime_state.release(
-                workspace_id=record.workspace_id,
-                stub_id=record.stub_id,
-                container_id=record.id,
-            )
-        except Exception:
-            LOGGER.warning(
-                "releasing container runtime state failed",
-                exc_info=True,
-                extra={"container_id": record.id},
-            )
 
     def stop_for_workspace_deletion(
         self,

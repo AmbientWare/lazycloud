@@ -57,10 +57,6 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls(
     )
     repo.save_agent_token_state(agent, ttl_seconds=60)
     assert repo.get_agent_token_state("agent-hash") == agent
-    assert repo.get_agent_machine_state_for_workspace("ws-1", "machine-1") == agent
-
-    redis.delete(redis.key("compute:workspaces:ws-1:machines:machine-1:unit"))
-    assert repo.get_agent_machine_state_for_workspace("ws-1", "machine-1") == agent
 
     slot = ComputeAgentWorkerSlotState(
         billing_owner=UsageBillingOwner.SelfHosted,
@@ -96,9 +92,6 @@ def test_compute_state_repository_tracks_pools_agents_slots_and_ttls(
         route_id="route-1",
     )
     assert repo.list_agent_route_states("ws-1", OWNER_ID, "machine-1") == []
-
-    redis.set_add(repo.keys.agent_machine_index("ws-1", OWNER_ID), "machine-stale")
-    assert repo.prune_agent_machine_index("ws-1", OWNER_ID) == 1
 
     repo.save_agent_worker_slot_state(slot, now=now)
     assert repo.delete_agent_machine_state("ws-1", OWNER_ID, "machine-1")

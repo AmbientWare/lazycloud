@@ -12,6 +12,7 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from api.server.worker_repository_service import WorkerRepositoryService
+from apps.api.tests.runtime import services_with_object_storage
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.compute import AwsAccountConnectionRepository
@@ -161,7 +162,7 @@ def test_workspace_deletion_aborts_when_object_removal_is_not_confirmed(
         admin_token, _ = administrator_credential(isolated_services.context, "admin")
         workspace_token, _ = auth.create_token("tenant", workspace_id=workspace.id)
         object_client = _StickyDeleteObjectClient()
-        services = _services_with_object_storage(
+        services = services_with_object_storage(
             isolated_services,
             ObjectStorage(
                 isolated_services.context,
@@ -267,7 +268,7 @@ def test_concurrent_upload_and_workspace_deletion_converges_without_orphan(
 ) -> None:
     with ExitStack() as client_stack:
         object_client = _BlockingPutObjectClient()
-        services = _services_with_object_storage(
+        services = services_with_object_storage(
             isolated_services,
             ObjectStorage(
                 isolated_services.context,
@@ -330,28 +331,6 @@ def test_concurrent_upload_and_workspace_deletion_converges_without_orphan(
         assert workspace_record.status is WorkspaceStatus.Deleted
         assert objects == []
         assert len(audits.records) == 1
-
-
-def _services_with_object_storage(
-    isolated_services: ApiServices,
-    object_storage: ObjectStorage,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
-        object_storage=object_storage,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=isolated_services.redis_client,
-        binary_redis_client=isolated_services.binary_redis_client,
-        async_io=isolated_services.require_async_io(),
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
 
 
 def _auth(token: str) -> dict[str, str]:

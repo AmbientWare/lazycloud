@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import posixpath
+from collections.abc import Mapping
 from enum import StrEnum
 
 from shared.contracts import ContractModel
@@ -60,9 +61,9 @@ class WorkerImagePaths(ContractModel):
 
     @property
     def local_archive_path(self) -> str:
-        return local_archive_path(
+        return image_archive_cache_path(
             self.image_id,
-            cache_path=self.image_cache_path,
+            agent_images_path=self.image_cache_path,
             extension=self.image_archive_extension,
         )
 
@@ -101,19 +102,6 @@ class BuildahStorageConfigPlan(ContractModel):
     text: str
 
 
-class BuildahEnvironmentPlan(ContractModel):
-    env: list[str]
-
-    @property
-    def env_map(self) -> dict[str, str]:
-        result: dict[str, str] = {}
-        for item in self.env:
-            key, separator, value = item.partition("=")
-            if separator:
-                result[key] = value
-        return result
-
-
 def build_worker_image_paths(
     image_id: str,
     *,
@@ -139,17 +127,6 @@ def image_archive_source_key(
     extension: str = DEFAULT_IMAGE_ARCHIVE_EXTENSION,
 ) -> str:
     return f"{image_id}.{extension.lstrip('.')}"
-
-
-def local_archive_path(
-    image_id: str,
-    *,
-    cache_path: str = DEFAULT_IMAGE_CACHE_PATH,
-    extension: str = DEFAULT_IMAGE_ARCHIVE_EXTENSION,
-) -> str:
-    return posixpath.join(
-        cache_path.rstrip("/"), image_archive_source_key(image_id, extension=extension)
-    )
 
 
 def image_archive_cache_path(
@@ -379,23 +356,20 @@ def plan_buildah_storage_config(
     )
 
 
-def plan_buildah_environment(
+def buildah_environment(
     *,
     runroot: str,
     tmpdir: str,
     storage_conf_path: str,
     cpu_count: int,
-    base_env: list[str] | None = None,
-) -> BuildahEnvironmentPlan:
-    env = list(base_env or [])
-    env.extend(
-        [
-            f"TMPDIR={tmpdir}",
-            f"XDG_RUNTIME_DIR={runroot}",
-            f"CONTAINERS_STORAGE_CONF={storage_conf_path}",
-            "BUILDAH_LAYERS=true",
-            "GOMAXPROCS=0",
-            f"PIGZ=-p{max(1, cpu_count)}",
-        ]
-    )
-    return BuildahEnvironmentPlan(env=env)
+    base_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    return {
+        **(base_env or {}),
+        "TMPDIR": tmpdir,
+        "XDG_RUNTIME_DIR": runroot,
+        "CONTAINERS_STORAGE_CONF": storage_conf_path,
+        "BUILDAH_LAYERS": "true",
+        "GOMAXPROCS": "0",
+        "PIGZ": f"-p{max(1, cpu_count)}",
+    }

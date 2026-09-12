@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { App } from "@/lib/api/schemas";
-import { deleteAppMutationOptions } from "@/lib/queries/apps";
+import { deleteAppMutationOptions, invalidateAppLists } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 export function AppCardActions({
@@ -42,15 +42,7 @@ export function AppCardActions({
       queryClient.removeQueries({
         queryKey: workspaceQueryKeys.apps.detail(workspaceId, app.id),
       });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
-        queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.deployments.root(workspaceId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.containers.root(workspaceId),
-        }),
-      ]);
+      await invalidateAppLists(queryClient, workspaceId);
     },
   });
 

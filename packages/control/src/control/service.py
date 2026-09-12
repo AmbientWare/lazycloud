@@ -69,6 +69,7 @@ from sqlalchemy.orm import Session
 
 from control.apps import AppReader, AppRegistry
 from control.context import ControlContext
+from control.events import publish_workload_change
 from control.models import (
     ConcurrencyAcquireResult,
     ConcurrencyAcquireStatus,
@@ -734,7 +735,7 @@ class ControlPlaneService:
                     due_at=now,
                 )
         if existing is None:
-            self._publish_stub_change(record, WorkspaceChangeType.Created)
+            publish_workload_change(self.workspace_changes, record, WorkspaceChangeType.Created)
         return record
 
     def stub_app_ids(
@@ -830,7 +831,7 @@ class ControlPlaneService:
             if not repository.delete(stub.id, workspace_id=workspace_record.id):
                 msg = f"deployment registration stub could not be discarded: {stub.id}"
                 raise ConflictError(msg)
-        self._publish_stub_change(stub, WorkspaceChangeType.Deleted)
+        publish_workload_change(self.workspace_changes, stub, WorkspaceChangeType.Deleted)
 
     def discard_registration_source_stub(
         self,
@@ -863,7 +864,7 @@ class ControlPlaneService:
                 return False
             if not repository.delete(stub.id, workspace_id=workspace_record.id):
                 return False
-        self._publish_stub_change(stub, WorkspaceChangeType.Deleted)
+        publish_workload_change(self.workspace_changes, stub, WorkspaceChangeType.Deleted)
         return True
 
     def get_stub_config(
@@ -909,7 +910,7 @@ class ControlPlaneService:
                     target_kind=target_kind,
                     due_at=updated_stub.updated_at,
                 )
-        self._publish_stub_change(updated_stub, WorkspaceChangeType.Updated)
+        publish_workload_change(self.workspace_changes, updated_stub, WorkspaceChangeType.Updated)
         updated = tuple(sorted(fields))
         return StubConfigUpdateResult(
             stub=updated_stub,
@@ -1476,23 +1477,6 @@ class ControlPlaneService:
                 if item.name == deployment_id and item.active
             ]
         return max(matches, key=lambda item: item.version) if matches else None
-
-    def _publish_stub_change(
-        self,
-        stub: StubRecord,
-        change: WorkspaceChangeType,
-    ) -> None:
-        if self.workspace_changes is None:
-            return
-        self.workspace_changes.emit_change(
-            workspace_id=stub.workspace_id,
-            topic=WorkspaceChangeTopic.Workloads,
-            change=change,
-            resource_id=stub.id,
-            app_id=stub.app_id,
-            deployment_id=stub.deployment_id,
-            stub_id=stub.id,
-        )
 
     def _publish_concurrency_change(
         self,

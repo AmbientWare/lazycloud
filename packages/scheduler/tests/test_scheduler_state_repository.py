@@ -806,7 +806,9 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
         payload=request_payload,
         timestamp=now,
     )
-    scheduled = repo.schedule_container_request("worker-1", request, now=now)
+    repo.enqueue_container_request(request, ready_at=now)
+    [claim] = repo.claim_ready_container_requests(now=now)
+    scheduled = repo.dispatch_claimed_container_request("worker-1", claim, now=now)
     assert scheduled.free_cpu_millicores == 500
     assert scheduled.free_memory_mib == 875
     assert scheduled.free_gpu_count == 0
@@ -2816,15 +2818,19 @@ def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
         for index in (1, 2)
     ]
 
-    def submit_request(request: SchedulerWorkerRequest) -> str:
+    for request in requests:
+        repo.enqueue_container_request(request, ready_at=now)
+    claims = repo.claim_ready_container_requests(now=now, limit=2)
+
+    def submit_request(claim: SchedulerContainerRequestClaim) -> str:
         try:
-            repo.schedule_container_request("worker-1", request, now=now)
+            repo.dispatch_claimed_container_request("worker-1", claim, now=now)
         except SchedulerRepositoryError as exc:
             return str(exc)
         return "scheduled"
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        outcomes = list(executor.map(submit_request, requests))
+        outcomes = list(executor.map(submit_request, claims))
 
     assert outcomes.count("scheduled") == 1
     assert redis.list_length(repo.keys.worker_requests("worker-1")) == 1

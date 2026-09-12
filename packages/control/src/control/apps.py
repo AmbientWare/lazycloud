@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from control.context import ControlContext
 from control.deployment_cleanup import AppDeploymentLifecycleService
+from control.events import publish_workload_change
 
 LOGGER = logging.getLogger(__name__)
 
@@ -183,7 +184,7 @@ class AppService:
                 stub_repository.upsert(stub)
         self._publish_change(record, change)
         if stub is not None:
-            self._publish_workload_change(stub, WorkspaceChangeType.Updated)
+            publish_workload_change(self.workspace_changes, stub, WorkspaceChangeType.Updated)
         return record
 
     def get(self, app_id_or_name: str, *, workspace: str | None = None) -> AppRecord:
@@ -657,23 +658,6 @@ class AppService:
             resource_id=app.id,
             app_id=app.id,
             stub_id=app.stub_id,
-        )
-
-    def _publish_workload_change(
-        self,
-        stub: StubRecord,
-        change: WorkspaceChangeType,
-    ) -> None:
-        if self.workspace_changes is None:
-            return
-        self.workspace_changes.emit_change(
-            workspace_id=stub.workspace_id,
-            topic=WorkspaceChangeTopic.Workloads,
-            change=change,
-            resource_id=stub.id,
-            app_id=stub.app_id,
-            deployment_id=stub.deployment_id,
-            stub_id=stub.id,
         )
 
 

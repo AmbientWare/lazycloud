@@ -58,9 +58,9 @@ def test_redis_signal_service_surfaces_repository_errors() -> None:
     )
 
     with pytest.raises(UpstreamUnavailableError):
-        service.signal_set_plan(SignalSetRequest(workspace_name="workspace", name="reload"))
+        service.signal_set(SignalSetRequest(workspace_name="workspace", name="reload"))
     with pytest.raises(UpstreamUnavailableError):
-        service.signal_clear_plan(SignalClearRequest(workspace_name="workspace", name="reload"))
+        service.signal_clear(SignalClearRequest(workspace_name="workspace", name="reload"))
     with pytest.raises(UpstreamUnavailableError):
         service.signal_monitor_once(SignalMonitorRequest(workspace_name="workspace", name="reload"))
 

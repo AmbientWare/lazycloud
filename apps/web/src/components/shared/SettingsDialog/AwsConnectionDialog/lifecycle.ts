@@ -66,23 +66,14 @@ export function awsConnectionDialogDescription(connection: AwsConnection): strin
   }
 }
 
-function hasAwsConnectionAction(connection: AwsConnection, action: AwsConnectionAction): boolean {
-  return connection.available_actions.includes(action);
-}
-
 export function awsConnectionDialogActionPlan(
   connection: AwsConnection,
 ): AwsConnectionDialogActionPlan {
-  const supports = (action: AwsConnectionAction) => hasAwsConnectionAction(connection, action);
+  const supports = (action: AwsConnectionAction) => connection.available_actions.includes(action);
 
   switch (connection.phase) {
     case "awaiting_authorization":
     case "validating":
-      return {
-        primary: null,
-        secondary: null,
-        destructive: supports("remove") ? "remove" : null,
-      };
     case "ready":
       return {
         primary: null,

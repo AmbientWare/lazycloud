@@ -1,7 +1,6 @@
 from provider_stripe.api import API_BASE_URL, build_client
 from provider_stripe.billing import (
     METER_EVENT_BACKFILL_DAYS,
-    METER_EVENT_DEDUPLICATION_HOURS,
     StripeBilling,
 )
 from provider_stripe.catalog import (
@@ -27,7 +26,6 @@ __all__ = [
     "API_BASE_URL",
     "METERED_PRICE_LOOKUP_KEYS",
     "METER_EVENT_BACKFILL_DAYS",
-    "METER_EVENT_DEDUPLICATION_HOURS",
     "PLAN_LINES",
     "SIGNATURE_HEADER",
     "USAGE_LINES",

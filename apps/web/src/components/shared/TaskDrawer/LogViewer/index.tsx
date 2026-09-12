@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useEventStream } from "@/hooks/useEventStream";
 import { logRecordSchema, type LogRecord } from "@/lib/api/schemas";
 import { withWorkspace } from "@/lib/api/client";
+import { downloadBlob } from "@/lib/files";
 import {
   logHistoryQueryOptions,
   logScopeParams,
@@ -334,12 +335,8 @@ function formatLogRecords(records: LogRecord[]): string {
 }
 
 function downloadLogs(records: LogRecord[]): void {
-  const url = URL.createObjectURL(
+  downloadBlob(
+    "task-logs.txt",
     new Blob([formatLogRecords(records)], { type: "text/plain;charset=utf-8" }),
   );
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = "task-logs.txt";
-  anchor.click();
-  URL.revokeObjectURL(url);
 }

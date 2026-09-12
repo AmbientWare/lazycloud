@@ -297,6 +297,7 @@ def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has
                 utc_now(),
             ),
         )
+    isolated_services.control_plane_service.ensure_workspace_storage(workspace_id)
     existing = volumes.get_or_create_volume(
         GetOrCreateVolumeRequest(name="already-here"),
         workspace_id=workspace_id,

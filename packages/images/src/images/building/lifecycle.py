@@ -14,8 +14,6 @@ from images.building.models import (
     ImageBuildSpinupTimeoutReason,
     ImageBuildStreamEventKind,
     ImageBuildStreamEventPlan,
-    ImageBuildWaitOutcome,
-    ImageBuildWaitPlan,
     ImageBuildWorkReason,
 )
 from images.building.work import image_build_work_plan
@@ -214,37 +212,6 @@ def plan_image_build_failure_event(
     )
 
 
-def plan_image_build_wait_event(
-    wait_plan: ImageBuildWaitPlan,
-    *,
-    image_id: str = "",
-    build_id: str = "",
-    python_version: str = "",
-) -> ImageBuildStreamEventPlan:
-    if wait_plan.status is BuildStatus.Complete:
-        return plan_image_build_complete_event(
-            image_id=image_id,
-            build_id=build_id,
-            python_version=python_version,
-            phase=wait_plan.phase,
-        )
-    if wait_plan.terminal:
-        return plan_image_build_failure_event(
-            wait_plan.message or wait_plan.reason,
-            image_id=image_id,
-            build_id=build_id,
-            python_version=python_version,
-            status=wait_plan.status,
-            phase=wait_plan.phase,
-        )
-    return plan_image_build_log_event(
-        wait_plan.message or wait_plan.reason,
-        image_id=image_id,
-        build_id=build_id,
-        python_version=python_version,
-    )
-
-
 def image_build_log_phase(message: str) -> ImageBuildPhase:
     normalized = message.strip()
     if normalized.startswith("cache key:"):
@@ -326,116 +293,6 @@ def plan_image_build_spinup_timeout(
         reason=ImageBuildSpinupTimeoutReason.Default,
         source_image_size_bytes=source_image_size_bytes or 0,
         archive_nanoseconds_per_byte=archive_nanoseconds_per_byte,
-    )
-
-
-def plan_image_build_wait_probe(
-    *,
-    clip_version: int,
-    context_cancelled: bool = False,
-    timed_out: bool = False,
-    exit_code: int | None = None,
-    container_running: bool = False,
-    failure_reason: str = "",
-) -> ImageBuildWaitPlan:
-    if context_cancelled:
-        return ImageBuildWaitPlan(
-            outcome=ImageBuildWaitOutcome.Aborted,
-            action=ImageBuildLifecycleAction.Fail,
-            terminal=True,
-            status=BuildStatus.Cancelled,
-            phase=ImageBuildPhase.Failed,
-            message="Build was aborted.\n",
-            stop_container=True,
-            reason="context cancelled",
-        )
-
-    if timed_out:
-        message = (
-            "Timeout: build did not complete before deadline.\n"
-            if clip_version >= 2
-            else "Timeout: container not running before deadline.\n"
-        )
-        return ImageBuildWaitPlan(
-            outcome=ImageBuildWaitOutcome.Timeout,
-            action=ImageBuildLifecycleAction.Fail,
-            terminal=True,
-            status=BuildStatus.Timeout,
-            phase=ImageBuildPhase.Failed,
-            message=message,
-            stop_container=True,
-            reason="build container wait deadline exceeded",
-        )
-
-    if clip_version >= 2:
-        return _plan_v2_wait_probe(exit_code, failure_reason=failure_reason)
-    return _plan_v1_wait_probe(
-        exit_code=exit_code,
-        container_running=container_running,
-        failure_reason=failure_reason,
-    )
-
-
-def _plan_v2_wait_probe(
-    exit_code: int | None,
-    *,
-    failure_reason: str,
-) -> ImageBuildWaitPlan:
-    if exit_code is None:
-        return ImageBuildWaitPlan(
-            outcome=ImageBuildWaitOutcome.Continue,
-            action=ImageBuildLifecycleAction.Wait,
-            reason="v2 build container has not exited",
-        )
-    if exit_code == 0:
-        return ImageBuildWaitPlan(
-            outcome=ImageBuildWaitOutcome.Complete,
-            action=ImageBuildLifecycleAction.Complete,
-            terminal=True,
-            status=BuildStatus.Complete,
-            phase=ImageBuildPhase.Complete,
-            reason="v2 build container exited successfully",
-        )
-    detail = failure_reason.strip()
-    return ImageBuildWaitPlan(
-        outcome=ImageBuildWaitOutcome.Failed,
-        action=ImageBuildLifecycleAction.Fail,
-        terminal=True,
-        status=BuildStatus.Failed,
-        phase=ImageBuildPhase.Failed,
-        message=f"Build failed: {detail or f'exit code {exit_code}'}\n",
-        reason=detail or "v2 build container exited with failure",
-    )
-
-
-def _plan_v1_wait_probe(
-    *,
-    exit_code: int | None,
-    container_running: bool,
-    failure_reason: str,
-) -> ImageBuildWaitPlan:
-    if exit_code is not None and exit_code != 0:
-        detail = failure_reason.strip()
-        return ImageBuildWaitPlan(
-            outcome=ImageBuildWaitOutcome.Failed,
-            action=ImageBuildLifecycleAction.Fail,
-            terminal=True,
-            status=BuildStatus.Failed,
-            phase=ImageBuildPhase.Failed,
-            message=f"Container exited with error: {detail or f'exit code {exit_code}'}\n",
-            reason=detail or "v1 build container exited before becoming ready",
-        )
-    if container_running:
-        return ImageBuildWaitPlan(
-            outcome=ImageBuildWaitOutcome.Running,
-            action=ImageBuildLifecycleAction.MarkRunning,
-            terminal=True,
-            reason="v1 build container is ready",
-        )
-    return ImageBuildWaitPlan(
-        outcome=ImageBuildWaitOutcome.Continue,
-        action=ImageBuildLifecycleAction.Wait,
-        reason="v1 build container is not running yet",
     )
 
 

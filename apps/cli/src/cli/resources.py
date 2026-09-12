@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 from lazycloud.cli.components.cards import empty_state, notice_card
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.formatting import bytes_count, duration, timestamp
+from lazycloud.cli.components.formatting import duration, timestamp
 from lazycloud.cli.components.output import (
     command_from_args,
     console,
@@ -24,6 +24,7 @@ from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_comm
 from lazycloud.cli.resources import container_attach, container_checkpoint
 from lazycloud.clients.map.control import MapControlClient
 from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
+from lazycloud.terminal import humanize_bytes
 from pydantic import JsonValue
 from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
@@ -160,7 +161,12 @@ def map_list(ctx: typer.Context) -> None:
             "Maps",
             ["name", "keys", "bytes", "expiring"],
             [
-                [item.name, str(item.count), bytes_count(item.size_bytes), str(item.expiring_keys)]
+                [
+                    item.name,
+                    str(item.count),
+                    humanize_bytes(item.size_bytes),
+                    str(item.expiring_keys),
+                ]
                 for item in records
             ],
         )

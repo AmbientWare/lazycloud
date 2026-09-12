@@ -184,14 +184,6 @@ class AgentServiceOperationResult(ContractModel):
     binary_removed: bool = False
 
 
-def detect_platform() -> ServicePlatform:
-    if sys.platform == "darwin":
-        return ServicePlatform.Launchd
-    if sys.platform.startswith("linux"):
-        return ServicePlatform.Systemd
-    return ServicePlatform.Shell
-
-
 def resolve_service_platform(
     requested: str,
     *,

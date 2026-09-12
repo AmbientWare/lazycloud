@@ -528,22 +528,6 @@ class RedisComputeStateRepository:
             return None
         return load_model_json(ComputeAgentTokenState, raw)
 
-    def get_agent_machine_state_for_workspace(
-        self,
-        workspace_id: str,
-        machine_id: str,
-    ) -> ComputeAgentTokenState | None:
-        capacity_owner_id = self.redis.get(self.keys.agent_machine_owner(workspace_id, machine_id))
-        if capacity_owner_id is not None and redis_text(capacity_owner_id):
-            return self.get_agent_machine_state(
-                workspace_id, redis_text(capacity_owner_id), machine_id
-            )
-        for pool in self.list_pool_states(workspace_id):
-            state = self.get_agent_machine_state(workspace_id, pool.capacity_owner_id, machine_id)
-            if state is not None:
-                return state
-        return None
-
     def list_agent_token_states(
         self, workspace_id: str, capacity_owner_id: str
     ) -> list[ComputeAgentTokenState]:
@@ -622,17 +606,6 @@ class RedisComputeStateRepository:
             self.keys.agent_machine_index(workspace_id, capacity_owner_id), machine_id
         )
         return deleted
-
-    def prune_agent_machine_index(self, workspace_id: str, capacity_owner_id: str) -> int:
-        removed = 0
-        index_key = self.keys.agent_machine_index(workspace_id, capacity_owner_id)
-        for machine_id in redis_strings(self.redis.set_members(index_key)):
-            if self.redis.exists(
-                self.keys.agent_machine(workspace_id, capacity_owner_id, machine_id)
-            ):
-                continue
-            removed += int(self.redis.set_remove(index_key, machine_id))
-        return removed
 
     def save_agent_route_state(self, state: AgentBackendRoute) -> AgentBackendRoute:
         self.redis.set(

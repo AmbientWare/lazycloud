@@ -305,11 +305,6 @@ def path_filesystem_mount(path: Path, *, mountinfo_text: str = "") -> Filesystem
     return best
 
 
-def path_filesystem_type(path: Path, *, mountinfo_text: str = "") -> str:
-    """Filesystem type backing `path`, from the longest matching mountinfo entry."""
-    return path_filesystem_mount(path, mountinfo_text=mountinfo_text).filesystem
-
-
 def _read_device_numbers(device: str) -> str:
     """The `major:minor` sysfs records for a block device, empty when it has none."""
     try:
@@ -864,6 +859,5 @@ __all__ = [
     "RootfsCommandRunner",
     "RootfsMountChecker",
     "RootfsMountInfoReader",
-    "path_filesystem_type",
     "plan_container_rootfs_overlay",
 ]

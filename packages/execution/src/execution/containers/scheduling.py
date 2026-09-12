@@ -13,7 +13,6 @@ from database.repositories.orchestration import (
     MachineRepository,
     WorkerRepository,
 )
-from database.types import DatabaseSession
 from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.billing_quotes import ContainerShape
@@ -25,7 +24,10 @@ from shared.scheduling import SchedulerWorkerRequest
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
 from shared.timestamps import utc_now
 
-from execution.containers.runtime_state import ContainerRuntimeStateRepository
+from execution.containers.runtime_state import (
+    ContainerRuntimeStateRepository,
+    release_container_runtime_state,
+)
 from execution.context import ExecutionContext
 from execution.task_claims import TaskClaimReleaseService
 
@@ -219,49 +221,6 @@ class ContainerSchedulingPersistenceService:
         self._publish_container_change(container)
         return True
 
-    def _release_runtime_state(self, container: ContainerRecord) -> None:
-        """Best effort, for the same reason as the container service: a failed
-        cache write must not stop a container being recorded as failed."""
-        if self.runtime_state is None or not container.stub_id:
-            return
-        try:
-            self.runtime_state.release(
-                workspace_id=container.workspace_id,
-                stub_id=container.stub_id,
-                container_id=container.id,
-            )
-        except Exception:
-            LOGGER.warning(
-                "releasing container runtime state failed",
-                exc_info=True,
-                extra={"container_id": container.id},
-            )
-
-    def _release_pooled_claims(
-        self,
-        session: DatabaseSession,
-        container: ContainerRecord,
-    ) -> None:
-        """Give back the invocations this container had taken, if any.
-
-        A pooled container is started for its stub and never carries a task id,
-        so the branch above — which addresses the task the container was created
-        for — cannot see its work. Read from the task side instead, as the
-        preemption sweep does, because the claim is the only record of what a
-        pooled container is running.
-
-        Released rather than failed. Losing the record here is what strands the
-        caller: the task keeps naming a container that is gone, which no claim
-        query can see and no retry reaches. The work itself is still wanted —
-        this container being unreachable is the platform's problem, not the
-        caller's.
-        """
-
-        TaskClaimReleaseService(session).release_container(
-            container.id,
-            except_task_id=container.task_id,
-        )
-
     def mark_scheduling_failed(
         self,
         request: SchedulerWorkerRequest,
@@ -282,7 +241,7 @@ class ContainerSchedulingPersistenceService:
             container.status = ContainerStatus.Failed
             container.exit_code = 1
             container.finished_at = container.finished_at or current_time
-            self._release_runtime_state(container)
+            release_container_runtime_state(self.runtime_state, container)
             ContainerRepository(session).records.upsert(
                 container,
                 workspace_id=container.workspace_id,
@@ -301,7 +260,9 @@ class ContainerSchedulingPersistenceService:
                         task,
                         workspace_id=container.workspace_id,
                     )
-            self._release_pooled_claims(session, container)
+            TaskClaimReleaseService(session).release_container(
+                container.id, except_task_id=container.task_id
+            )
             self.events.emit_in_session(
                 session,
                 "container.schedule.failed",

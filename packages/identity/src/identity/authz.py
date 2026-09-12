@@ -196,19 +196,6 @@ def worker_requirement(
     )
 
 
-def machine_requirement(
-    *,
-    action: AuthScope = AuthScope.Machine,
-    workspace_id: str | None = None,
-) -> AuthzRequirement:
-    return AuthzRequirement(
-        action=action,
-        resource_kind=AuthzResourceKind.Machine,
-        workspace_id=workspace_id,
-        allowed_token_kinds=[TokenKind.Machine, TokenKind.Worker, TokenKind.WorkerPrivate],
-    )
-
-
 def build_policy_input(
     principal: AuthzPrincipal | AuthTokenRecord | None,
     requirement: AuthzRequirement,

@@ -932,24 +932,6 @@ class CheckpointRepository:
             include_claimed=include_claimed,
         )
 
-    def latest_for_stub(
-        self,
-        stub_id: str,
-        *,
-        include_deleted: bool = False,
-    ) -> CheckpointRecord:
-        """System lookup keyed by an already-authorized stub id."""
-        candidates = [
-            item
-            for item in self.list_across_workspaces(include_deleted=include_deleted)
-            if item.stub_id == stub_id
-        ]
-        if not candidates:
-            msg = f"checkpoint not found for stub: {stub_id}"
-            raise KeyError(msg)
-        candidates.sort(key=lambda item: (item.created_at, item.checkpoint_id), reverse=True)
-        return candidates[0]
-
     def latest_available_for_stub(
         self,
         *,

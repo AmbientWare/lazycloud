@@ -25,7 +25,6 @@ from database.repositories.orchestration import (
 )
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
-from foundation.ids import optional_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue, TypeAdapter
 from shared.capacity import (
@@ -106,7 +105,6 @@ from compute.provider_machines import (
     ProviderMachineReconciler,
     ProviderUnitBootstrapFactory,
     _metadata_time,
-    _provider_instance_metadata,
     _provider_storage_volume_ids,
     _provider_zero_capacity_converged,
     _require_internal_pooled_unit,
@@ -1287,10 +1285,7 @@ class ComputeService:
                 for record in provider_instances.list_for_pool(compute_pool.id):
                     if not _reservation_open(record.status):
                         continue
-                    detail = str(
-                        _provider_instance_metadata(record).get("last_error")
-                        or "provider unavailable"
-                    )
+                    detail = str(record.metadata.get("last_error") or "provider unavailable")
                     termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if not termination_errors:
                     compute_pool_repository.delete(
@@ -1427,10 +1422,7 @@ class ComputeService:
                     )
                 for record in provider_instances.list_for_pool(compute_pool.id):
                     if _reservation_open(record.status):
-                        detail = str(
-                            _provider_instance_metadata(record).get("last_error")
-                            or "provider unavailable"
-                        )
+                        detail = str(record.metadata.get("last_error") or "provider unavailable")
                         termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if (
                     _owns_provider_pool_capacity(compute_pool)
@@ -1478,30 +1470,6 @@ class ComputeService:
             provider
             for provider in self.provider_resolver.list_providers(workspace_id)
             if provider.capacity_mode is ComputeCapacityMode.Pooled
-        )
-
-    def prepare_pooled_capacity(
-        self,
-        *,
-        workspace: str,
-        requirements: ComputeResourceRequirements,
-        region: str,
-        desired_machines: int,
-        root_volume_gib: int,
-        idle_timeout_seconds: int = 300,
-        allowed_instance_types: tuple[str, ...] = (),
-        provider_ref: str = "",
-    ) -> ComputeUnitRecord:
-        return self._prepare_pooled_capacity(
-            workspace=workspace,
-            requirements=requirements,
-            region=region,
-            desired_machines=desired_machines,
-            root_volume_gib=root_volume_gib,
-            idle_timeout_seconds=idle_timeout_seconds,
-            allowed_instance_types=allowed_instance_types,
-            baseline=None,
-            provider_ref=provider_ref,
         )
 
     def workspace_has_ready_customer_connection(self, workspace: str) -> bool:
@@ -1584,7 +1552,7 @@ class ComputeService:
             raise UpstreamUnavailableError("AWS baseline connection is unavailable")
         if connection.platform_fleet:
             raise InvalidInputError("platform warm capacity belongs to the fleet policy")
-        pool = self._prepare_pooled_capacity(
+        pool = self.prepare_pooled_capacity(
             workspace=workspace,
             requirements=ComputeResourceRequirements(),
             region=region,
@@ -1688,7 +1656,7 @@ class ComputeService:
         containers = ContainerRepository(session)
         return sum(containers.count_live_for_machine(machine_id) > 0 for machine_id in machine_ids)
 
-    def _prepare_pooled_capacity(
+    def prepare_pooled_capacity(
         self,
         *,
         workspace: str,
@@ -1696,9 +1664,9 @@ class ComputeService:
         region: str,
         desired_machines: int,
         root_volume_gib: int,
-        idle_timeout_seconds: int,
-        allowed_instance_types: tuple[str, ...],
-        baseline: _PooledCapacityBaseline | None,
+        idle_timeout_seconds: int = 300,
+        allowed_instance_types: tuple[str, ...] = (),
+        baseline: _PooledCapacityBaseline | None = None,
         provider_ref: str = "",
     ) -> ComputeUnitRecord:
         if self.provider_resolver is None or self.pool_bootstrap_factory is None:
@@ -1841,10 +1809,7 @@ class ComputeService:
                     _reservation_open(record.status)
                     or (
                         (record.instance_id is not None or _provider_storage_volume_ids(record))
-                        and _metadata_time(
-                            _provider_instance_metadata(record), "provider_storage_destroyed_at"
-                        )
-                        is None
+                        and _metadata_time(record.metadata, "provider_storage_destroyed_at") is None
                     )
                     for record in records
                 ):
@@ -3456,10 +3421,7 @@ class ComputeService:
                 _reservation_open(record.status)
                 or (
                     (record.instance_id is not None or _provider_storage_volume_ids(record))
-                    and _metadata_time(
-                        _provider_instance_metadata(record), "provider_storage_destroyed_at"
-                    )
-                    is None
+                    and _metadata_time(record.metadata, "provider_storage_destroyed_at") is None
                 )
                 for record in records
             ):
@@ -3867,33 +3829,6 @@ class ComputeService:
             resource_id=machine_id,
         )
 
-    def register_worker(
-        self,
-        *,
-        machine_id: str | None = None,
-        pool: MachinePool = MachinePool("default"),
-        labels: dict[str, str] | None = None,
-    ) -> Worker:
-        with self.context.database.session() as session:
-            workspace_id = self.context.default_workspace_id(session)
-            worker = WorkerRepository(session).records.create(
-                {
-                    "machine_id": optional_uuid(machine_id, field="machine_id"),
-                    "pool": pool,
-                    "labels": labels or {},
-                    "status": ResourceStatus.Running.value,
-                },
-                workspace_id=workspace_id,
-                status=ResourceStatus.Running.value,
-            )
-        self._publish_change(
-            workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.ComputeWorkers,
-            change=WorkspaceChangeType.Created,
-            resource_id=worker.id,
-        )
-        return worker
-
     def list_workers(self) -> list[Worker]:
         with self.context.database.session() as session:
             records = [
@@ -3903,27 +3838,6 @@ class ComputeService:
             ]
         records.sort(key=lambda item: item.created_at, reverse=True)
         return records
-
-    def set_worker_status(self, worker_id: str, status: ResourceStatus) -> Worker:
-        with self.context.database.session() as session:
-            repository = WorkerRepository(session)
-            worker = repository.get_across_workspaces(worker_id)
-            if worker is None:
-                msg = f"worker not found: {worker_id}"
-                raise KeyError(msg)
-            workspace_id = repository.workspace_id(worker_id)
-            changed = worker.status is not status
-            worker.status = status
-            worker.last_seen_at = utc_now()
-            updated = repository.upsert(worker, workspace_id=workspace_id)
-        if changed and workspace_id is not None:
-            self._publish_change(
-                workspace_id=workspace_id,
-                topic=WorkspaceChangeTopic.ComputeWorkers,
-                change=WorkspaceChangeType.Updated,
-                resource_id=worker_id,
-            )
-        return updated
 
     def delete_worker(self, worker_id: str) -> None:
         with self.context.database.session() as session:
@@ -4161,7 +4075,7 @@ class ComputeService:
                 record.machine_id
                 and record.status == ReservationStatus.Deleted.value
                 and _metadata_time(
-                    _provider_instance_metadata(record),
+                    record.metadata,
                     "provider_storage_destroyed_at",
                 )
                 is not None

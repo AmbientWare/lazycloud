@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 from agent.binary import AgentBinarySettings
 from billing.payment_maintenance import BillingPaymentMaintenance
@@ -37,7 +36,7 @@ from execution.containers.service import ContainerService
 from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.task_progress import TaskProgressService
 from execution.tasks import TaskService
-from gateway.pool_bootstrap import pool_bootstrap_provisioner
+from gateway.pool_bootstrap import PoolBootstrapProvisioner
 from gateway.settings import GatewaySettings
 from observability.events import EventService
 from observability.metrics import MetricsService
@@ -177,15 +176,13 @@ class SchedulerAppServices:
         cls,
         database: DatabaseClient,
         *,
-        root: Path | None = None,
-        create_schema: bool = True,
         redis_client: RedisClient,
         gateway_origin: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
         capacity: SchedulerCapacitySettings,
     ) -> SchedulerAppServices:
-        context = ServiceContext.create(database, root=root, create_schema=create_schema)
+        context = ServiceContext.create(database, create_schema=False)
         image_archive_config = storage.image_archive
         object_client = S3ObjectStoreClient.from_settings(storage.object_store)
         redis = redis_client
@@ -233,10 +230,27 @@ class SchedulerAppServices:
             context, object_client=object_client, default_bucket=storage.object_store.bucket
         )
         stripe_settings = StripeSettings()
-        meter_outbox = _meter_outbox(context, events, stripe_settings)
-        email_outbox = _email_outbox(context)
-        plan_changes = _plan_changes(context, events, stripe_settings)
-        billing_reconciliation = _billing_reconciliation(context, events, stripe_settings)
+        # Factories defer credential validation until delivery; missing credentials
+        # must leave billing and email work queued for the next sweep.
+        meter_outbox = BillingMeterOutboxService(
+            database=context.database,
+            payments=stripe_settings.provider_factory(),
+            events=events,
+        )
+        email_outbox = EmailOutboxDrain(
+            database=context.database,
+            sender_factory=ResendSettings().sender_factory(),
+        )
+        plan_changes = BillingPlanChangeService(
+            database=context.database,
+            payments=stripe_settings.provider_factory(),
+            events=events,
+        )
+        billing_reconciliation = BillingReconciliationService(
+            database=context.database,
+            payments=stripe_settings.provider_factory(),
+            events=events,
+        )
         billing_payments = BillingPaymentMaintenance(
             context.database, stripe_settings.provider_factory()
         )
@@ -298,7 +312,7 @@ class SchedulerAppServices:
         )
 
         pool_bootstrap = (
-            pool_bootstrap_provisioner(
+            PoolBootstrapProvisioner(
                 control_plane_url=gateway_origin,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
@@ -373,7 +387,11 @@ class SchedulerAppServices:
         )
         # After the container service, because stopping containers is the whole
         # of what this sweep does.
-        billing_enforcement = _billing_enforcement(context, events, containers)
+        billing_enforcement = BillingEnforcementService(
+            database=context.database,
+            containers=containers,
+            events=events,
+        )
         deployment_lifecycle = AppDeploymentLifecycleService(
             context,
             workspace_changes=workspace_changes,
@@ -474,102 +492,6 @@ def _storage_access(
                 "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER",
                 purpose="the storage access observation source",
             )
-
-
-def _meter_outbox(
-    context: ServiceContext,
-    events: EventService,
-    settings: StripeSettings,
-) -> BillingMeterOutboxService:
-    """The sweep that delivers the priced usage the pricer already queued.
-
-    Composed whether or not a payment credential exists. A deployment without one
-    is misconfigured rather than in a mode: dropping the sweep for it would leave
-    usage metered, priced, owed and never charged, with nothing said about why —
-    and a sweep that is never going to run is exactly what nobody notices. The
-    adapter is built on the first drain instead, which names the missing variable
-    on every tick until it is set.
-    """
-
-    return BillingMeterOutboxService(
-        database=context.database,
-        payments=settings.provider_factory(),
-        events=events,
-    )
-
-
-def _email_outbox(context: ServiceContext) -> EmailOutboxDrain:
-    """The sweep that delivers what the API already committed to sending.
-
-    Composed whether or not an email credential exists, for the same reason the
-    meter outbox is: a deployment without one is misconfigured rather than in a
-    mode, and a drain that is never going to run is exactly what nobody notices.
-    The adapter is built on the first sweep instead, which names the missing
-    variable and leaves the messages queued.
-    """
-
-    return EmailOutboxDrain(
-        database=context.database,
-        sender_factory=ResendSettings().sender_factory(),
-    )
-
-
-def _plan_changes(
-    context: ServiceContext,
-    events: EventService,
-    settings: StripeSettings,
-) -> BillingPlanChangeService:
-    """The sweep that finishes plan changes whose outcome nobody recorded.
-
-    Composed unconditionally for the same reason the outbox is, and the cost of
-    dropping it is larger: an intent with no outcome is a customer who may
-    already have paid for a plan this platform is not billing them on.
-    """
-
-    return BillingPlanChangeService(
-        database=context.database,
-        payments=settings.provider_factory(),
-        events=events,
-    )
-
-
-def _billing_enforcement(
-    context: ServiceContext,
-    events: EventService,
-    containers: ContainerService,
-) -> BillingEnforcementService:
-    """The pass that stops compute nobody can be billed for.
-
-    Composed unconditionally and with no credential of its own: everything it
-    decides is read from local rows, which is what lets it run every few seconds
-    without the payment provider's availability deciding whether unfunded compute
-    keeps running.
-    """
-
-    return BillingEnforcementService(
-        database=context.database,
-        containers=containers,
-        events=events,
-    )
-
-
-def _billing_reconciliation(
-    context: ServiceContext,
-    events: EventService,
-    settings: StripeSettings,
-) -> BillingReconciliationService:
-    """The pass that reports where the provider and this platform disagree.
-
-    Composed unconditionally, again for the reason the outbox is: the whole
-    point of this pass is that somebody is watching, and a deployment that
-    silently had no watcher would be the failure it exists to catch.
-    """
-
-    return BillingReconciliationService(
-        database=context.database,
-        payments=settings.provider_factory(),
-        events=events,
-    )
 
 
 @dataclass(slots=True)

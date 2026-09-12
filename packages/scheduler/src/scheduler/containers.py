@@ -186,15 +186,6 @@ class SchedulerContainerWorkerRepository(Protocol):
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None: ...
 
-    def schedule_container_request(
-        self,
-        worker_id: str,
-        request: SchedulerWorkerRequest,
-        *,
-        reserved_capacity: WorkerReservedCapacity | None = None,
-        now: datetime | None = None,
-    ) -> SchedulerWorkerRecord: ...
-
     def dispatch_claimed_container_request(
         self,
         worker_id: str,

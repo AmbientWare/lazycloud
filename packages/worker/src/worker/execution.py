@@ -28,6 +28,7 @@ from shared.env import (
     STORAGE_AVAILABLE_ENV,
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
+    parse_environment,
 )
 
 from worker.runtime_config import (
@@ -186,7 +187,7 @@ class ContainerEnvironmentPlan(ContractModel):
 
     @property
     def env_map(self) -> dict[str, str]:
-        return env_list_to_map(self.env)
+        return parse_environment(self.env)
 
 
 class OciLinuxCpu(ContractModel):
@@ -366,7 +367,7 @@ class NvidiaEnvironmentPlan(ContractModel):
 
     @property
     def env_map(self) -> dict[str, str]:
-        return env_list_to_map(self.env)
+        return parse_environment(self.env)
 
 
 class RuntimeServerOperationPlan(ContractModel):
@@ -545,15 +546,6 @@ def _without_platform_gateway_env(values: list[str]) -> list[str]:
     ]
 
 
-def env_list_to_map(values: list[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for value in values:
-        key, sep, raw = value.partition("=")
-        if sep:
-            result[key] = raw
-    return result
-
-
 def map_to_env_list(values: dict[str, str]) -> list[str]:
     return [f"{key}={value}" for key, value in values.items()]
 
@@ -725,7 +717,7 @@ def inject_nvidia_environment(
     default_cuda_version: str = DEFAULT_CUDA_VERSION,
 ) -> NvidiaEnvironmentPlan:
     host_env = host_env or {}
-    values = env_list_to_map(image_env)
+    values = parse_environment(image_env)
     cuda_version = _cuda_major_minor(values.get("CUDA_VERSION")) or default_cuda_version
     defaults = {
         "NVIDIA_DRIVER_CAPABILITIES": NVIDIA_DRIVER_CAPABILITIES,

@@ -18,12 +18,6 @@ _FROM_LINE_RE = re.compile(
 )
 
 
-def base_image_source_image(registry: str, name: str, tag: str) -> str:
-    if not registry or not name or not tag:
-        return ""
-    return f"{registry.rstrip('/')}/{name.lstrip('/')}:{tag}"
-
-
 def parse_image_source_reference(image_ref: str) -> ImageSourceReference:
     value = image_ref.strip()
     if not value:

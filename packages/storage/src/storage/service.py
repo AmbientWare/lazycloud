@@ -1086,19 +1086,6 @@ class ObjectStorage:
             reconciled += int(self._delete_claimed_object(owned.record))
         return reconciled
 
-    def delete_workspace_objects(self, workspace_id: str) -> int:
-        records = self.list_for_workspace(workspace_id=workspace_id)
-        return sum(
-            int(
-                self.delete_for_workspace(
-                    workspace_id=workspace_id,
-                    bucket=record.bucket,
-                    key=record.key,
-                )
-            )
-            for record in records
-        )
-
     def delete_workspace_objects_for_deletion(self, workspace_id: str) -> int:
         """Delete every settled object while a workspace is in Deleting state.
 

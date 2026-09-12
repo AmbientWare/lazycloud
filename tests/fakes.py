@@ -160,6 +160,9 @@ class FakeObjectClient:
     file_uploads: list[tuple[str, str, str, str, dict[str, str]]] = field(default_factory=list)
     file_downloads: list[tuple[str, str, str]] = field(default_factory=list)
     downloads: list[tuple[str, str, str]] = field(default_factory=list)
+    settings: S3ObjectStoreSettings = field(default_factory=S3ObjectStoreSettings)
+    uploads: dict[tuple[str, str, str], None] = field(default_factory=dict)
+    _upload_number: int = 0
 
     def put_bytes(
         self,
@@ -265,6 +268,89 @@ class FakeObjectClient:
 
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         self.objects.pop((bucket or "default", key), None)
+
+    def list_prefix(self, prefix: str, *, bucket: str | None = None) -> tuple[S3ObjectInfo, ...]:
+        return tuple(
+            self.head(key, bucket=item_bucket)
+            for item_bucket, key in sorted(self.objects)
+            if item_bucket == (bucket or "default") and key.startswith(prefix)
+        )
+
+    def list_directory(self, prefix: str, *, bucket: str | None = None) -> tuple[S3ObjectInfo, ...]:
+        directory = f"{prefix.rstrip('/')}/"
+        entries: dict[str, S3ObjectInfo] = {}
+        for item in self.list_prefix(directory, bucket=bucket):
+            first, separator, _ = item.key.removeprefix(directory).partition("/")
+            key = f"{directory}{first}/" if separator else item.key
+            entries.setdefault(
+                key,
+                S3ObjectInfo(bucket=item.bucket, key=key, size=0 if separator else item.size),
+            )
+        return tuple(entries[key] for key in sorted(entries))
+
+    def delete_prefix(self, prefix: str, *, bucket: str | None = None) -> tuple[str, ...]:
+        keys = tuple(item.key for item in self.list_prefix(prefix, bucket=bucket))
+        for key in keys:
+            self.delete(key, bucket=bucket)
+        return keys
+
+    def copy(
+        self,
+        source_key: str,
+        destination_key: str,
+        *,
+        bucket: str | None = None,
+        source_bucket: str | None = None,
+    ) -> None:
+        self.objects[(bucket or "default", destination_key)] = self.read_bytes(
+            source_key, bucket=source_bucket or bucket
+        )
+
+    def generate_presigned_head_url(
+        self, key: str, *, bucket: str | None = None, expires_seconds: int = 3600
+    ) -> str:
+        return f"memory://{bucket or 'default'}/{key}?head&expires={expires_seconds}"
+
+    def create_multipart_upload(self, key: str, *, bucket: str | None = None) -> str:
+        self._upload_number += 1
+        upload_id = f"upload-{self._upload_number}"
+        self.uploads[(bucket or "default", key, upload_id)] = None
+        return upload_id
+
+    def generate_presigned_upload_part_url(
+        self,
+        key: str,
+        *,
+        upload_id: str,
+        part_number: int,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+    ) -> str:
+        return (
+            f"memory://{bucket or 'default'}/{key}"
+            f"?upload={upload_id}&part={part_number}&expires={expires_seconds}"
+        )
+
+    def complete_multipart_upload(
+        self,
+        key: str,
+        *,
+        upload_id: str,
+        completed_parts: tuple[tuple[int, str], ...],
+        bucket: str | None = None,
+    ) -> None:
+        del completed_parts
+        self.uploads.pop((bucket or "default", key, upload_id), None)
+
+    def abort_multipart_upload(
+        self, key: str, *, upload_id: str, bucket: str | None = None
+    ) -> None:
+        self.uploads.pop((bucket or "default", key, upload_id), None)
+
+    def abort_multipart_uploads(self, prefix: str, *, bucket: str | None = None) -> None:
+        for target_bucket, key, upload_id in tuple(self.uploads):
+            if target_bucket == (bucket or "default") and key.startswith(prefix):
+                self.abort_multipart_upload(key, bucket=target_bucket, upload_id=upload_id)
 
 
 @dataclass(slots=True)

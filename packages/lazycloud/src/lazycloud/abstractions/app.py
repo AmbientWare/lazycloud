@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ParamSpec, Protocol, TypeVar, overload, runtime_checkable
+from typing import Any, ParamSpec, Protocol, TypeVar, overload
 
 from pydantic import JsonValue
 from shared.app_slug import validate_app_slug
@@ -26,7 +26,7 @@ from shared.deployment_records import (
 from shared.deployments import DeploymentKind
 from shared.gpu import GpuInput
 from shared.serialization import to_json_value
-from shared.tasks import RetryPolicy, TaskPolicy
+from shared.tasks import TaskPolicy
 
 from lazycloud.abstractions.endpoint import (
     ASGI,
@@ -37,7 +37,6 @@ from lazycloud.abstractions.endpoint import (
 )
 from lazycloud.abstractions.endpoint import _asgi as asgi_decorator
 from lazycloud.abstractions.endpoint import _endpoint as endpoint_decorator
-from lazycloud.abstractions.endpoint import _realtime as realtime_decorator
 from lazycloud.abstractions.function import Function, FunctionOptions
 from lazycloud.abstractions.function import _function as function_decorator
 from lazycloud.abstractions.image import Image
@@ -50,6 +49,7 @@ from lazycloud.abstractions.metadata import (
 from lazycloud.abstractions.pod import Pod, PodOptions
 from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
+from lazycloud.json_contracts import resource_payload
 
 
 class AppOperationError(RuntimeError):
@@ -65,11 +65,6 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-@runtime_checkable
-class ModelDumpable(Protocol):
-    def model_dump(self, *, mode: str = "python") -> object: ...
-
-
 @dataclass(frozen=True, slots=True)
 class AppDeployResult:
     app: str
@@ -79,7 +74,7 @@ class AppDeployResult:
         _ = mode
         return {
             "app": self.app,
-            "resources": [to_json_value(_dump_resource(item)) for item in self.resources],
+            "resources": [to_json_value(resource_payload(item)) for item in self.resources],
         }
 
 
@@ -265,7 +260,7 @@ class App:
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
             pool, metadata: Scheduling group and custom metadata.
         """
-        kwargs = _function_options(
+        kwargs = FunctionOptions(
             image=image,
             name=name,
             cpu=cpu,
@@ -462,7 +457,7 @@ class App:
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
             pool, metadata: Scheduling group and custom metadata.
         """
-        kwargs = _endpoint_options(
+        kwargs = EndpointOptions(
             image=image,
             name=name,
             route=route,
@@ -558,7 +553,7 @@ class App:
             autoscaler, task_policy: Scheduling policies.
             pool: Scheduling group name.
         """
-        kwargs = _asgi_options(
+        kwargs = ASGIOptions(
             name=name,
             image=image,
             route=route,
@@ -587,7 +582,7 @@ class App:
             availability_zone=availability_zone,
             pool=pool,
         )
-        factory = asgi_decorator(_app_slug=self.slug, **kwargs)
+        factory = asgi_decorator(resource_type=ASGI, _app_slug=self.slug, **kwargs)
 
         def decorate(
             target: Callable[..., Awaitable[Any]] | Callable[..., Any],
@@ -648,7 +643,7 @@ class App:
             autoscaler, task_policy: Scheduling policies.
             pool: Scheduling group name.
         """
-        kwargs = _asgi_options(
+        kwargs = ASGIOptions(
             name=name,
             image=image,
             route=route,
@@ -677,7 +672,7 @@ class App:
             availability_zone=availability_zone,
             pool=pool,
         )
-        factory = realtime_decorator(_app_slug=self.slug, **kwargs)
+        factory = asgi_decorator(resource_type=RealtimeASGI, _app_slug=self.slug, **kwargs)
 
         def decorate(target: Callable[..., Any]) -> RealtimeASGI:
             return self._register(factory(target))
@@ -743,7 +738,7 @@ class App:
             tcp, block_network, allow_list, docker_enabled: Network and Docker policy.
             pool, metadata: Placement and custom metadata.
         """
-        kwargs = _pod_options(
+        kwargs = PodOptions(
             name=name,
             image=Image() if image is None else image,
             command=[str(item) for item in (command or [])],
@@ -823,7 +818,7 @@ class App:
             pool, metadata: Placement and custom metadata.
             command: Optional initial command run by the sandbox container.
         """
-        kwargs = _sandbox_options(
+        kwargs = SandboxOptions(
             cpu=cpu,
             memory=memory,
             disk=disk,
@@ -1190,18 +1185,6 @@ def _is_serveable(resource: AppResource) -> bool:
     }
 
 
-def _dump_resource(value: object) -> object:
-    if isinstance(value, ModelDumpable):
-        return value.model_dump(mode="json")
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field.name: getattr(value, field.name)
-            for field in fields(value)
-            if not field.name.startswith("_")
-        }
-    return value
-
-
 def _invoke_method(method: Callable[..., Any], kwargs: Mapping[str, object]) -> Any:
     selected = {key: value for key, value in kwargs.items() if value is not None}
     try:
@@ -1215,347 +1198,6 @@ def _invoke_method(method: Callable[..., Any], kwargs: Mapping[str, object]) -> 
         return method(**selected)
     accepted = {key: value for key, value in selected.items() if key in signature.parameters}
     return method(**accepted)
-
-
-def _function_options(
-    *,
-    image: Image | None,
-    name: str | None,
-    cpu: CpuRequest | None,
-    memory: MemoryRequest | None,
-    disk: str | None,
-    gpu: GpuInput,
-    gpu_count: int,
-    timeout_seconds: int | None,
-    concurrency: int,
-    in_process: bool,
-    cron: str | None,
-    keep_warm: int | None,
-    max_pending_tasks: int | None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
-    retries: int,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None,
-    retry_delay_seconds: float,
-    callback_url: str | None,
-    authorized: bool | None,
-    env: dict[str, str] | None,
-    secrets: list[str] | None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None,
-    on_start: LifecycleHookInput,
-    on_running: LifecycleHookInput,
-    on_success: LifecycleHookInput,
-    on_error: LifecycleHookInput,
-    on_retry: LifecycleHookInput,
-    on_failure: LifecycleHookInput,
-    on_finish: LifecycleHookInput,
-    task_policy: TaskPolicy | Mapping[str, Any] | None,
-    inputs: SchemaInput,
-    outputs: SchemaInput,
-    docker_enabled: bool,
-    preemptible: bool,
-    region: str | None,
-    availability_zone: str,
-    pool: PoolInput,
-    metadata: dict[str, Any] | None,
-) -> FunctionOptions:
-    return {
-        "image": image,
-        "name": name,
-        "cpu": cpu,
-        "memory": memory,
-        "disk": disk,
-        "gpu": gpu,
-        "gpu_count": gpu_count,
-        "timeout_seconds": timeout_seconds,
-        "concurrency": concurrency,
-        "in_process": in_process,
-        "cron": cron,
-        "keep_warm": keep_warm,
-        "max_pending_tasks": max_pending_tasks,
-        "autoscaler": autoscaler,
-        "retries": retries,
-        "retry_policy": retry_policy,
-        "retry_delay_seconds": retry_delay_seconds,
-        "callback_url": callback_url,
-        "authorized": authorized,
-        "env": env,
-        "secrets": secrets,
-        "volumes": volumes,
-        "on_start": on_start,
-        "on_running": on_running,
-        "on_success": on_success,
-        "on_error": on_error,
-        "on_retry": on_retry,
-        "on_failure": on_failure,
-        "on_finish": on_finish,
-        "task_policy": task_policy,
-        "inputs": inputs,
-        "outputs": outputs,
-        "docker_enabled": docker_enabled,
-        "preemptible": preemptible,
-        "region": region,
-        "availability_zone": availability_zone,
-        "pool": pool,
-        "metadata": metadata,
-    }
-
-
-def _endpoint_options(
-    *,
-    image: Image | None,
-    name: str | None,
-    route: str,
-    domain: str | None,
-    methods: list[str] | None,
-    cpu: CpuRequest | None,
-    memory: MemoryRequest | None,
-    disk: str | None,
-    gpu: GpuInput,
-    gpu_count: int,
-    timeout_seconds: int | None,
-    retries: int,
-    retry_policy: RetryPolicy | Mapping[str, Any] | None,
-    retry_delay_seconds: float,
-    workers: int,
-    concurrency: int,
-    keep_warm: int,
-    max_pending_tasks: int | None,
-    callback_url: str | None,
-    authorized: bool | None,
-    env: dict[str, str] | None,
-    secrets: list[str] | None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None,
-    on_start: LifecycleHookInput,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None,
-    checkpoint_enabled: bool,
-    inputs: SchemaInput,
-    outputs: SchemaInput,
-    docker_enabled: bool,
-    preemptible: bool,
-    region: str | None,
-    availability_zone: str,
-    pool: PoolInput,
-    metadata: dict[str, Any] | None,
-) -> EndpointOptions:
-    return {
-        "image": image,
-        "name": name,
-        "route": route,
-        "domain": domain,
-        "methods": methods,
-        "cpu": cpu,
-        "memory": memory,
-        "disk": disk,
-        "gpu": gpu,
-        "gpu_count": gpu_count,
-        "timeout_seconds": timeout_seconds,
-        "retries": retries,
-        "retry_policy": retry_policy,
-        "retry_delay_seconds": retry_delay_seconds,
-        "workers": workers,
-        "concurrency": concurrency,
-        "keep_warm": keep_warm,
-        "max_pending_tasks": max_pending_tasks,
-        "callback_url": callback_url,
-        "authorized": authorized,
-        "env": env,
-        "secrets": secrets,
-        "volumes": volumes,
-        "on_start": on_start,
-        "autoscaler": autoscaler,
-        "task_policy": task_policy,
-        "checkpoint_enabled": checkpoint_enabled,
-        "inputs": inputs,
-        "outputs": outputs,
-        "docker_enabled": docker_enabled,
-        "preemptible": preemptible,
-        "region": region,
-        "availability_zone": availability_zone,
-        "pool": pool,
-        "metadata": metadata,
-    }
-
-
-def _asgi_options(
-    *,
-    name: str,
-    image: Image | None,
-    route: str,
-    domain: str | None,
-    cpu: CpuRequest | None,
-    memory: MemoryRequest | None,
-    disk: str | None,
-    gpu: GpuInput,
-    gpu_count: int,
-    timeout_seconds: int | None,
-    workers: int,
-    concurrent_requests: int,
-    keep_warm_seconds: int,
-    max_pending_tasks: int,
-    authorized: bool,
-    callback_url: str | None,
-    env: dict[str, str] | None,
-    secrets: list[str] | None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None,
-    on_start: LifecycleHookInput,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None,
-    checkpoint_enabled: bool,
-    preemptible: bool,
-    region: str | None,
-    availability_zone: str,
-    pool: PoolInput,
-) -> ASGIOptions:
-    return {
-        "name": name,
-        "image": image,
-        "route": route,
-        "domain": domain,
-        "cpu": cpu,
-        "memory": memory,
-        "disk": disk,
-        "gpu": gpu,
-        "gpu_count": gpu_count,
-        "timeout_seconds": timeout_seconds,
-        "workers": workers,
-        "concurrent_requests": concurrent_requests,
-        "keep_warm_seconds": keep_warm_seconds,
-        "max_pending_tasks": max_pending_tasks,
-        "authorized": authorized,
-        "callback_url": callback_url,
-        "env": env,
-        "secrets": secrets,
-        "volumes": volumes,
-        "on_start": on_start,
-        "autoscaler": autoscaler,
-        "task_policy": task_policy,
-        "checkpoint_enabled": checkpoint_enabled,
-        "preemptible": preemptible,
-        "region": region,
-        "availability_zone": availability_zone,
-        "pool": pool,
-    }
-
-
-def _pod_options(
-    *,
-    name: str,
-    image: Image,
-    command: list[str],
-    ports: dict[str, int],
-    env: dict[str, str],
-    cpu: CpuRequest | None,
-    memory: MemoryRequest | None,
-    disk: str | None,
-    gpu: GpuInput,
-    gpu_count: int,
-    keep_warm: int,
-    secrets: list[str],
-    volumes: list[VolumeMount],
-    authorized: bool,
-    checkpoint_enabled: bool,
-    checkpoint_readiness_path: str | None,
-    checkpoint_readiness_port: int | None,
-    checkpoint_readiness_timeout_seconds: int,
-    checkpoint_readiness_interval_seconds: float,
-    health_check_path: str | None,
-    health_check_port: int | None,
-    tcp: bool,
-    block_network: bool,
-    allow_list: list[str] | None,
-    docker_enabled: bool,
-    preemptible: bool,
-    region: str | None,
-    availability_zone: str,
-    pool: PoolInput,
-    metadata: dict[str, Any],
-) -> PodOptions:
-    return {
-        "name": name,
-        "image": image,
-        "command": command,
-        "ports": ports,
-        "env": env,
-        "cpu": cpu,
-        "memory": memory,
-        "disk": disk,
-        "gpu": gpu,
-        "gpu_count": gpu_count,
-        "keep_warm": keep_warm,
-        "secrets": secrets,
-        "volumes": volumes,
-        "authorized": authorized,
-        "checkpoint_enabled": checkpoint_enabled,
-        "checkpoint_readiness_path": checkpoint_readiness_path,
-        "checkpoint_readiness_port": checkpoint_readiness_port,
-        "checkpoint_readiness_timeout_seconds": checkpoint_readiness_timeout_seconds,
-        "checkpoint_readiness_interval_seconds": checkpoint_readiness_interval_seconds,
-        "health_check_path": health_check_path,
-        "health_check_port": health_check_port,
-        "tcp": tcp,
-        "block_network": block_network,
-        "allow_list": allow_list,
-        "docker_enabled": docker_enabled,
-        "preemptible": preemptible,
-        "region": region,
-        "availability_zone": availability_zone,
-        "pool": pool,
-        "metadata": metadata,
-    }
-
-
-def _sandbox_options(
-    *,
-    cpu: CpuRequest | str,
-    memory: MemoryRequest,
-    disk: str | None,
-    gpu: GpuInput,
-    gpu_count: int,
-    image: Image | None,
-    keep_warm_seconds: int,
-    authorized: bool,
-    name: str | None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None,
-    secrets: Iterable[str] | None,
-    env: Mapping[str, str] | None,
-    sync_local_dir: bool,
-    block_network: bool,
-    allow_list: Iterable[str] | None,
-    docker_enabled: bool,
-    preemptible: bool,
-    ports: Iterable[int] | None,
-    region: str | None,
-    availability_zone: str,
-    pool: PoolInput,
-    metadata: Mapping[str, Any] | None,
-    command: Iterable[str] | None,
-) -> SandboxOptions:
-    return {
-        "cpu": cpu,
-        "memory": memory,
-        "disk": disk,
-        "gpu": gpu,
-        "gpu_count": gpu_count,
-        "image": image,
-        "keep_warm_seconds": keep_warm_seconds,
-        "authorized": authorized,
-        "name": name,
-        "volumes": volumes,
-        "secrets": secrets,
-        "env": env,
-        "sync_local_dir": sync_local_dir,
-        "block_network": block_network,
-        "allow_list": allow_list,
-        "docker_enabled": docker_enabled,
-        "preemptible": preemptible,
-        "ports": ports,
-        "region": region,
-        "availability_zone": availability_zone,
-        "pool": pool,
-        "metadata": metadata,
-        "command": command,
-    }
 
 
 __all__ = ["App", "AppDeployResult", "AppOperationError"]

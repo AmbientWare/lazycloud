@@ -21,8 +21,8 @@ from shared.timestamps import utc_now
 from worker.image_lifecycle import (
     BuildahDirectoryPlan,
     BuildahStorageDriver,
+    buildah_environment,
     plan_buildah_directories,
-    plan_buildah_environment,
 )
 
 DEFAULT_IMAGE_BUILD_ROOT = Path("/var/lib/lazycloud/builds")
@@ -398,18 +398,13 @@ def _stored_driver(root: Path) -> BuildahStorageDriver | None:
 
 
 def _cleanup_environment(directories: BuildahDirectoryPlan, storage_conf: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for item in plan_buildah_environment(
+    return buildah_environment(
         runroot=directories.runroot,
         tmpdir=directories.tmpdir,
         storage_conf_path=str(storage_conf),
         cpu_count=os.cpu_count() or 1,
-        base_env=[f"{key}={value}" for key, value in os.environ.items()],
-    ).env:
-        key, separator, value = item.partition("=")
-        if separator:
-            env[key] = value
-    return env
+        base_env=os.environ,
+    )
 
 
 def _buildah_ids(

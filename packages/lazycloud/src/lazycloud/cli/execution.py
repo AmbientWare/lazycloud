@@ -20,7 +20,6 @@ from lazycloud.cli.components.output import (
     json_default,
     json_output_enabled,
     parse_json_argument,
-    payload_data,
     print_payload,
     table,
 )
@@ -41,6 +40,7 @@ from lazycloud.cli.workflow_options import (
 )
 from lazycloud.control import control_workspace_scope, resolve_control_client_config
 from lazycloud.control_clients import gateway_control_client
+from lazycloud.json_contracts import resource_payload
 from lazycloud.session.deployment import DeploymentClient
 
 deployment_app = typer.Typer(help="Manage deployments.")
@@ -178,7 +178,7 @@ def deploy(
                     "source_root": source_root,
                 },
             )
-    payload = payload_data(response)
+    payload = resource_payload(response)
     if isinstance(user_object, (App, Function, Pod)):
         emit(
             ctx,
@@ -283,7 +283,7 @@ def run(
         else:
             _reject_unapplied_overrides(target, overrides)
             response = call_handler(target, args=payload_args)
-    result = payload_data(response)
+    result = resource_payload(response)
     if isinstance(result, str) and not json_output_enabled(ctx):
         console.print()
         console.print(result, markup=False, highlight=False)

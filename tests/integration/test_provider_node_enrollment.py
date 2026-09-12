@@ -301,24 +301,32 @@ def test_provider_enrollment_resume_preserves_existing_agent_authority(
         failure_reason=None,
     )
     joined = service.enroll(request)
-    first = service.gateway.resume_provider_agent(
-        node_agent_token=SecretStr(joined.agent_token),
-        pool=pool,
-        machine_fingerprint=request.machine_fingerprint,
-    )
-    second = service.gateway.resume_provider_agent(
-        node_agent_token=SecretStr(joined.agent_token),
-        pool=pool,
-        machine_fingerprint=request.machine_fingerprint,
-    )
-    assert first is not None and second is not None
+    with isolated_services.context.database.session() as session:
+        first_result = service.gateway.resume_provider_agent_in_transaction(
+            session,
+            node_agent_token=SecretStr(joined.agent_token),
+            pool=pool,
+            machine_fingerprint=request.machine_fingerprint,
+        )
+        second_result = service.gateway.resume_provider_agent_in_transaction(
+            session,
+            node_agent_token=SecretStr(joined.agent_token),
+            pool=pool,
+            machine_fingerprint=request.machine_fingerprint,
+        )
+    assert first_result is not None and second_result is not None
+    first, second = first_result.response, second_result.response
     assert first.machine_id == second.machine_id == joined.machine_id
     assert (
         first.credential_generation == second.credential_generation == joined.credential_generation
     )
     assert first.credential_id == second.credential_id == joined.credential_id
-    with pytest.raises(InvalidInputError):
-        service.gateway.resume_provider_agent(
+    with (
+        pytest.raises(InvalidInputError),
+        isolated_services.context.database.session() as session,
+    ):
+        service.gateway.resume_provider_agent_in_transaction(
+            session,
             node_agent_token=SecretStr(joined.agent_token),
             pool=pool,
             machine_fingerprint="another-host",

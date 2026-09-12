@@ -949,24 +949,6 @@ class AuthService:
         self._invalidate_token_caches()
         return updated
 
-    def create_workspace_token(
-        self,
-        workspace_id_or_name: str,
-        *,
-        kind: TokenKind | str = TokenKind.Workspace,
-        name: str | None = None,
-        scopes: list[str] | None = None,
-        reusable: bool = True,
-    ) -> tuple[str, AuthTokenRecord]:
-        workspace_id = self._workspace_id(workspace_id_or_name)
-        return self.create_token(
-            name or f"{workspace_id}-{TokenKind(kind).value}",
-            kind=kind,
-            workspace_id=workspace_id,
-            scopes=scopes,
-            reusable=reusable,
-        )
-
     def create_account_token(
         self,
         user_id: str,

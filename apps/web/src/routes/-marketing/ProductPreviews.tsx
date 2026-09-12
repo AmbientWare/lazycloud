@@ -12,28 +12,21 @@ export type StoryVisual = "application" | "jobs" | "background" | "sandbox";
 function ProductFrame({
   title,
   detail,
-  status = "live",
   children,
-  className = "",
 }: {
   title: string;
   detail: string;
-  status?: string;
   children: ReactNode;
-  className?: string;
 }) {
   return (
-    <MarketingCard
-      className={`marketing-product-frame ${className}`.trim()}
-      data-product-preview=""
-    >
+    <MarketingCard className="marketing-product-frame" data-product-preview="">
       <div className="marketing-product-bar">
         <div>
           <strong>{title}</strong>
           <span>{detail}</span>
         </div>
         <code>
-          <i /> {status}
+          <i /> live
         </code>
       </div>
       {children}

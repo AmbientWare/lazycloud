@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
@@ -27,6 +27,16 @@ export function appSummariesQueryOptions(workspaceId: string) {
       apiRequest(withWorkspace("/api/v1/apps/summaries", workspaceId), appSummaryListSchema),
     meta: workspaceLiveQueryMeta(true),
   });
+}
+
+export function invalidateAppLists(queryClient: QueryClient, workspaceId: string) {
+  return Promise.all(
+    [
+      workspaceQueryKeys.apps.summaries(workspaceId),
+      workspaceQueryKeys.deployments.root(workspaceId),
+      workspaceQueryKeys.containers.root(workspaceId),
+    ].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+  );
 }
 
 export function pauseAppMutationOptions(workspaceId: string, appId: string) {

@@ -22,14 +22,11 @@ from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr, field_validator
 from shared.app_identity import (
-    AGENT_NAME,
     AGENT_STATE_DIR,
 )
 from shared.contracts import ContractModel
 from shared.provider_config import ProviderKind
 from shared.urls import normalize_http_origin
-
-AGENT_BIN_PATH = f"/usr/local/bin/{AGENT_NAME}"
 
 _PROVIDER_IDENTITY_MARKER = "# __PROVIDER_IDENTITY__"
 _SENTINEL_PATTERN = re.compile(r"__[A-Z0-9_]+__")
@@ -317,7 +314,6 @@ PROVIDER_INSTALL_FLAGS=(
 
 
 __all__ = [
-    "AGENT_BIN_PATH",
     "NodeBootstrapError",
     "NodeBootstrapProfile",
     "NodeBootstrapSettings",

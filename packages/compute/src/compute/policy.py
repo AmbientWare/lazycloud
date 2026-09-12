@@ -19,7 +19,6 @@ from database.repositories.compute import (
 )
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.types import DatabaseSession
-from pydantic import ConfigDict, Field, JsonValue
 from shared.aws_connections import AwsAccountConnection
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
@@ -34,7 +33,6 @@ from shared.compute_policy import (
     MachinePool,
     WorkspaceComputePolicy,
 )
-from shared.contracts import ContractModel
 from shared.deployment_records import Deployment, DeploymentSpec, request_and_limit
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
@@ -53,12 +51,6 @@ from compute.provider_machines import _provider_booted_template_version
 from database import AsyncDatabaseClient
 
 LOGGER = logging.getLogger(__name__)
-
-
-class _DeploymentPoolMetadata(ContractModel):
-    model_config = ConfigDict(extra="ignore")
-
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,45 +292,6 @@ class WorkspaceComputePolicyService:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             return self._policy_in_session(session, workspace_id).default_pool
-
-    def connection_for_machine_pool(
-        self,
-        *,
-        workspace: str,
-        pool: MachinePool,
-    ) -> AwsAccountConnection | None:
-        """The ready connection whose units feed this pool, if one does.
-
-        The pool decides, not the caller. A customer who connected their own
-        account named a pool with it, so naming that pool provisions in their
-        account; naming anything else reaches whatever feeds it. The shared
-        fleet is the platform's own connection, so a workspace that connected
-        nothing still provisions there, which is what the fleet is for.
-
-        Answering with the caller's own connection alone was the bug this
-        replaces. Every account without one then failed the check, so a
-        customer on the shared fleet could use capacity that happened to exist
-        and could never cause any to be created. It surfaced as a workload that
-        deployed, queued, and died on a retry limit reporting that it needed a
-        GPU worker, naming neither the fleet nor the account.
-
-        A pool nobody provisions into is still legal — naming a pool creates it
-        — so None means the pool is fed by joined machines alone.
-        """
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            repository = AwsAccountConnectionRepository(session)
-            own = repository.get_for_workspace_owner(workspace_id)
-            if own is not None and own.hosts_workloads and own.pool == pool:
-                return own
-            fleet = [
-                candidate
-                for candidate in repository.list_all()
-                if candidate.platform_fleet and candidate.hosts_workloads and candidate.pool == pool
-            ]
-        # Sorted rather than first-found: the answer decides where a customer's
-        # machines are bought, and a listing order is not a promise.
-        return min(fleet, key=lambda candidate: candidate.id, default=None)
 
     def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str:
         """Pin the pool a deployment runs in for as long as it exists."""
@@ -634,7 +587,7 @@ def _compute_instance_view(
 
 
 def _deployment_pool_name(spec: DeploymentSpec) -> str:
-    pool = _DeploymentPoolMetadata.model_validate_json(spec.model_dump_json()).metadata.get("pool")
+    pool = spec.metadata.get("pool")
     if isinstance(pool, str):
         return pool.strip()
     if not isinstance(pool, dict):

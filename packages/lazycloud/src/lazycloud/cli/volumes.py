@@ -10,7 +10,7 @@ from shared.http.volumes import DeletePathRequest, ListPathRequest, MovePathRequ
 
 from lazycloud.abstractions.volume import Volume, VolumeOperationError
 from lazycloud.cli.components.cards import notice_card, result_card
-from lazycloud.cli.components.formatting import bytes_count, timestamp
+from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import (
     console,
     emit,
@@ -20,6 +20,7 @@ from lazycloud.cli.components.output import (
 )
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import volume_client
+from lazycloud.terminal import humanize_bytes
 
 VOLUME_SCHEME = "lazycloud://"
 
@@ -39,7 +40,7 @@ def volume_list(
         [
             item.name,
             "deleting" if item.deletion_requested_at is not None else "active",
-            bytes_count(item.size),
+            humanize_bytes(item.size),
             timestamp(item.updated_at),
         ]
         for item in response.volumes
@@ -108,13 +109,13 @@ def volume_ls(
     rows = [
         [
             Path(item.path).name + ("/" if item.is_dir else ""),
-            "" if item.is_dir else bytes_count(item.size),
+            "" if item.is_dir else humanize_bytes(item.size),
             timestamp(item.mod_time),
         ]
         for item in response.path_infos
     ]
     output = table(
-        f"{selected.full_path} ({len(response.path_infos)} items, {bytes_count(total_size)})",
+        f"{selected.full_path} ({len(response.path_infos)} items, {humanize_bytes(total_size)})",
         ["name", "size", "modified"],
         rows,
     )

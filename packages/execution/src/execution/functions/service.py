@@ -29,6 +29,7 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerRecord, ContainerStatus
+from shared.env import parse_environment
 from shared.errors import (
     CapacityLimitReachedError,
     ConflictError,
@@ -69,7 +70,6 @@ from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
-from execution.config import env_sequence_mapping
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
 from execution.functions import planning
@@ -854,7 +854,7 @@ class FunctionControlService:
                         workspace_id=stub_workspace_id,
                         stub_id=stub_id,
                         app_id=stub_app_id,
-                        env=env_sequence_mapping(container_plan.env),
+                        env=parse_environment(container_plan.env),
                         gpu=list(container_plan.gpu),
                         gpu_count=container_plan.gpu_count,
                         region=region,

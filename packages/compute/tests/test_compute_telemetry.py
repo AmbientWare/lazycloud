@@ -6,68 +6,13 @@ from compute.telemetry import (
     AgentDisconnectAction,
     AgentTelemetryDecisionKind,
     AgentTelemetryState,
-    TelemetryCredentialKind,
-    TelemetryCredentialOperation,
-    TelemetryRootStreamConfig,
-    TelemetrySinkStatus,
     agent_machine_connected,
-    build_scoped_telemetry_config,
     node_usage_seconds,
     plan_agent_disconnect,
-    plan_scoped_telemetry_credentials,
     redact_telemetry_line,
     validate_agent_telemetry_token,
 )
 from shared.compute_policy import MachinePool
-
-
-def test_scoped_telemetry_credentials_are_append_only_and_workspace_scoped() -> None:
-    disabled = plan_scoped_telemetry_credentials(
-        TelemetryRootStreamConfig(api_key="", basin="events-basin"),
-        "workspace/one",
-    )
-    assert disabled.status is TelemetrySinkStatus.Disabled
-    assert not disabled.config.enabled
-
-    plan = plan_scoped_telemetry_credentials(
-        TelemetryRootStreamConfig(
-            api_key="root-token",
-            basin="events-basin",
-            stream_prefix="/custom/",
-        ),
-        "workspace/one",
-        suffixes={
-            TelemetryCredentialKind.Logs: b"abcdef",
-            TelemetryCredentialKind.Events: b"ghijkl",
-        },
-    )
-
-    assert plan.status is TelemetrySinkStatus.Planned
-    assert [item.kind for item in plan.issue_plans] == [
-        TelemetryCredentialKind.Logs,
-        TelemetryCredentialKind.Events,
-    ]
-    for item in plan.issue_plans:
-        assert item.scope.basin_exact == "events-basin"
-        assert item.scope.operations == (TelemetryCredentialOperation.Append,)
-
-    logs, events = plan.issue_plans
-    assert logs.scope.stream_prefix == "custom/logs/workspaces/workspace_one"
-    assert events.scope.stream_prefix == "custom/workspaces/workspace_one"
-
-    ready = build_scoped_telemetry_config(
-        plan,
-        {
-            TelemetryCredentialKind.Logs: "log-token",
-            TelemetryCredentialKind.Events: "event-token",
-        },
-    )
-    assert ready.status is TelemetrySinkStatus.Ready
-    assert ready.config.enabled
-    assert ready.config.logs is not None
-    assert ready.config.logs.credential == "log-token"
-    assert ready.config.events is not None
-    assert ready.config.events.stream_prefix == "custom/workspaces/workspace_one"
 
 
 def test_telemetry_redaction_covers_auth_phrases_json_and_credentials() -> None:

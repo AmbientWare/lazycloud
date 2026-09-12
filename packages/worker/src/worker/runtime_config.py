@@ -505,7 +505,7 @@ def prepare_oci_spec_for_runtime(
     added_mounts: list[JsonObject] = []
     added_capabilities: list[str] = []
     if selected is OciRuntimeName.Runsc:
-        linux = _ensure_dict(prepared, "linux")
+        linux = runtime_config_object(prepared, "linux")
         linux.pop("seccomp", None)
         # The nvidia device nodes must survive. Clearing them for a sandbox looks
         # right and is not: gVisor decides a container wants a GPU by finding
@@ -552,8 +552,8 @@ def spec_has_gpu(spec: JsonObject) -> bool:
 
 
 def add_docker_in_docker_capabilities(spec: JsonObject) -> list[str]:
-    process = _ensure_dict(spec, "process")
-    capabilities = _ensure_dict(process, "capabilities")
+    process = runtime_config_object(spec, "process")
+    capabilities = runtime_config_object(process, "capabilities")
     added: list[str] = []
     for field_name in ["bounding", "effective", "permitted", "inheritable"]:
         existing = capabilities.get(field_name)
@@ -993,7 +993,7 @@ def _mount(
     }
 
 
-def _ensure_dict(target: JsonObject, key: str) -> JsonObject:
+def runtime_config_object(target: JsonObject, key: str) -> JsonObject:
     value = target.get(key)
     if isinstance(value, dict):
         return value

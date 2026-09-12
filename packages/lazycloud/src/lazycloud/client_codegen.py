@@ -259,7 +259,6 @@ def _resource_wrapper_lines(
             resource,
             contract=contract,
             context=schema_context,
-            symbol=symbol,
         )
     )
     lines.extend(["", f"{symbol} = {class_name}()", ""])
@@ -471,7 +470,6 @@ def _contract_operation_lines(
     *,
     contract: ClientContract,
     context: _SchemaContext,
-    symbol: str,
 ) -> list[str]:
     operation = contract.operation
     method_name = operation.name.value

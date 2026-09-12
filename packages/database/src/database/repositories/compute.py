@@ -1336,38 +1336,6 @@ class ComputeProviderInstanceRepository:
         self.session.flush()
         return bound
 
-    def unbind_machine(
-        self,
-        pool_id: str,
-        provider_instance_id: str,
-        machine_id: str,
-    ) -> ComputeProviderInstanceRecord | None:
-        """Release a machine binding, so a torn-down machine leaves no reference.
-
-        Bound only if the row still names this machine: a later enrollment may
-        have rebound the instance, and clearing that binding would strand a live
-        machine instead of the dead one.
-        """
-        row = self.session.scalars(
-            select(ComputeProviderInstanceTable)
-            .where(
-                ComputeProviderInstanceTable.pool_id == pool_id,
-                ComputeProviderInstanceTable.instance_id == provider_instance_id,
-            )
-            .with_for_update()
-        ).one_or_none()
-        if row is None:
-            return None
-        current = _provider_instance_record(row)
-        if current.machine_id != machine_id:
-            return current
-        released = current.model_copy(update={"machine_id": None, "updated_at": utc_now()})
-        row.machine_id = None
-        row.payload = _model_json(released)
-        flag_modified(row, "payload")
-        self.session.flush()
-        return released
-
     def get_for_pool_instance(
         self,
         pool_id: str,

@@ -60,26 +60,6 @@ class SourceCacheStorageLifecycleService:
             )
             return self._snapshot(repository, owner=owner, generation=generation)
 
-    def record_machine_storage_destroyed(
-        self,
-        machine_id: str,
-        *,
-        observed_at: datetime,
-    ) -> bool:
-        """Retire the active cache for a provider-proven destroyed machine.
-
-        A machine that never registered a cache has nothing to retire and is
-        therefore complete. The active-storage uniqueness constraint guarantees
-        there is at most one current generation for the machine owner.
-        """
-
-        with self.context.database.session() as session:
-            return self.record_machine_storage_destroyed_in_session(
-                session,
-                machine_id,
-                observed_at=observed_at,
-            )
-
     def record_machine_storage_destroyed_in_session(
         self,
         session: DatabaseSession,

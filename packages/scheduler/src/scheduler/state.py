@@ -1548,63 +1548,6 @@ class RedisSchedulerWorkerRepository:
 
         return self._with_worker_lock(worker_id, write)
 
-    def schedule_container_request(
-        self,
-        worker_id: str,
-        request: SchedulerWorkerRequest,
-        *,
-        reserved_capacity: WorkerReservedCapacity | None = None,
-        now: datetime | None = None,
-    ) -> SchedulerWorkerRecord:
-        if request.backfill:
-            raise SchedulerRepositoryError("backfill requires an atomic claimed dispatch")
-
-        def write() -> SchedulerWorkerRecord:
-            if self.is_container_cancelled(request.container_id):
-                msg = f"container request {request.container_id} was cancelled"
-                raise SchedulerRepositoryError(msg)
-            worker = self.get_worker(worker_id)
-            if worker is None:
-                raise WorkerStateNotFoundError(worker_id)
-            if (
-                worker.request_intake_status(at=now or utc_now())
-                is not SchedulerWorkerStatus.Available
-            ):
-                msg = f"worker {worker_id} is not available"
-                raise ContainerRequestDispatchRejectedError(msg)
-
-            queued_request = request.model_copy(update={"timestamp": now or utc_now()})
-            plan = plan_worker_capacity_change(
-                worker,
-                queued_request,
-                WorkerCapacityChange.Remove,
-                reserved_capacity=reserved_capacity,
-            )
-            if not plan.accepted:
-                raise ContainerRequestDispatchRejectedError(plan.reason)
-
-            state_key = self.keys.worker_state(worker_id)
-            self.redis.hash_set(state_key, mapping=redis_serialization.dump_model_hash(plan.worker))
-            try:
-                queued = self._enqueue_worker_request(worker_id, queued_request)
-                if not queued:
-                    msg = f"container request {request.container_id} was cancelled"
-                    raise SchedulerRepositoryError(msg)
-            except Exception:
-                rollback = plan_worker_capacity_change(
-                    plan.worker,
-                    queued_request,
-                    WorkerCapacityChange.Add,
-                    reserved_capacity=reserved_capacity,
-                )
-                self.redis.hash_set(
-                    state_key, mapping=redis_serialization.dump_model_hash(rollback.worker)
-                )
-                raise
-            return plan.worker
-
-        return self._with_worker_lock(worker_id, write)
-
     def dispatch_claimed_container_request(
         self,
         worker_id: str,
@@ -1809,13 +1752,6 @@ class RedisSchedulerWorkerRepository:
                 request.container_id,
                 request.model_dump_json(),
             )
-
-    def _enqueue_worker_request(
-        self,
-        worker_id: str,
-        request: SchedulerWorkerRequest,
-    ) -> int:
-        return self._place_worker_request(worker_id, request, delivered=False)
 
     def _place_worker_request(
         self,

@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Generic, TypeVar
 from urllib.parse import urlencode
 
 from shared.env import (
@@ -13,6 +14,7 @@ from shared.env import (
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
+from typing_extensions import Self
 
 from lazycloud.config import get_profile
 
@@ -20,6 +22,37 @@ _CONTROL_WORKSPACE: ContextVar[str | None] = ContextVar(
     "lazycloud_control_workspace",
     default=None,
 )
+ClientT = TypeVar("ClientT")
+
+
+class ResourceControlBinding(Generic[ClientT]):
+    __slots__ = ()
+
+    client: ClientT | None
+    workspace: str | None
+    endpoint: str | None
+    token: str | None
+    timeout_seconds: float
+
+    def _bind_control(
+        self,
+        client: ClientT | None = None,
+        *,
+        workspace: str | None = None,
+        endpoint: str | None = None,
+        token: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> Self:
+        self.client = client
+        if workspace is not None:
+            self.workspace = workspace
+        if endpoint is not None:
+            self.endpoint = endpoint
+        if token is not None:
+            self.token = token
+        if timeout_seconds is not None:
+            self.timeout_seconds = timeout_seconds
+        return self
 
 
 @dataclass(frozen=True, slots=True)

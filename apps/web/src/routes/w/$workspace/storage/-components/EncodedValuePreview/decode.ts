@@ -4,8 +4,7 @@ export type DecodedValue =
 export function decodeEncodedValue(valueBase64: string): DecodedValue {
   if (!valueBase64) return { kind: "empty" };
   try {
-    const binary = atob(valueBase64);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bytes = base64ToBytes(valueBase64);
     if (isBinary(bytes)) return { kind: "binary", size: bytes.length };
     const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
     try {
@@ -27,3 +26,4 @@ function isBinary(bytes: Uint8Array): boolean {
   }
   return sample.length > 0 && controlCharacters / sample.length > 0.1;
 }
+import { base64ToBytes } from "@/lib/files";

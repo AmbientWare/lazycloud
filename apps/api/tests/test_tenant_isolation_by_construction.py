@@ -3,7 +3,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
 from database.repositories.apps import DeploymentRepository
 from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
@@ -22,8 +21,9 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
     api_runtime: tuple[ApiServices, TestClient],
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(services.context)
+    control = services.control_plane_service
     owner = owned_workspace(control, "isolation-owner")
+    control.ensure_workspace_storage(owner.id)
     intruder = owned_workspace(control, "isolation-intruder")
     owner_token = _workspace_token(services, owner.id, "owner-token")
     intruder_token = _workspace_token(services, intruder.id, "intruder-token")

@@ -33,6 +33,7 @@ from shared.containers import (
     ContainerRecord,
     ContainerStatus,
 )
+from shared.env import parse_environment
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.http.pods import (
@@ -92,7 +93,6 @@ from shared.workload_keys import pod_keep_warm_lock_key
 
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
-from execution.config import env_sequence_mapping
 from execution.container_clients import (
     ContainerClientHandle,
     ContainerOperationResponse,
@@ -253,7 +253,7 @@ class PodControlService:
                 checkpoint_enabled=bool(request.checkpoint_id or config.runtime.checkpoint_enabled),
             )
         )
-        env = env_sequence_mapping(plan.env)
+        env = parse_environment(plan.env)
         if request.checkpoint_id:
             env["CHECKPOINT_ID"] = request.checkpoint_id
         with self.services.context.database.session() as session:

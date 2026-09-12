@@ -17,7 +17,6 @@ from images.building.constants import (
     PIP_GROUP_BOUNDARY_FLAGS,
 )
 from images.building.credentials import (
-    detect_registry_credential_kind,
     marshal_registry_credentials,
     plan_image_build_registry_credentials,
     registry_auth_file_entry,
@@ -46,8 +45,6 @@ from images.building.lifecycle import (
     plan_image_build_reused_stream,
     plan_image_build_session,
     plan_image_build_spinup_timeout,
-    plan_image_build_wait_event,
-    plan_image_build_wait_probe,
 )
 from images.building.models import (
     BaseImageDigestCacheEntry,
@@ -67,8 +64,6 @@ from images.building.models import (
     ImageBuildSpinupTimeoutReason,
     ImageBuildStreamEventKind,
     ImageBuildStreamEventPlan,
-    ImageBuildWaitOutcome,
-    ImageBuildWaitPlan,
     ImageBuildWorkPlan,
     ImageBuildWorkReason,
     ImageInstallCommandMode,
@@ -80,13 +75,12 @@ from images.building.models import (
 )
 from images.building.python_runtime import plan_python_runtime_setup
 from images.building.references import (
-    base_image_source_image,
     dockerfile_base_image,
     image_build_source_plan,
     parse_image_source_reference,
     pin_dockerfile_base_images,
 )
-from images.building.work import image_build_work_plan, image_has_build_work
+from images.building.work import image_build_work_plan
 
 __all__ = [
     "BASE_IMAGE_DIGEST_CACHE_TTL_SECONDS",
@@ -117,8 +111,6 @@ __all__ = [
     "ImageBuildSpinupTimeoutReason",
     "ImageBuildStreamEventKind",
     "ImageBuildStreamEventPlan",
-    "ImageBuildWaitOutcome",
-    "ImageBuildWaitPlan",
     "ImageBuildWorkPlan",
     "ImageBuildWorkReason",
     "ImageInstallCommandMode",
@@ -127,16 +119,13 @@ __all__ = [
     "ImageSourceReference",
     "PythonRuntimeSetupAction",
     "PythonRuntimeSetupPlan",
-    "base_image_source_image",
     "build_image_plan",
-    "detect_registry_credential_kind",
     "dockerfile_base_image",
     "fingerprint_build_context",
     "image_build_log_phase",
     "image_build_source_plan",
     "image_build_stream_event_key",
     "image_build_work_plan",
-    "image_has_build_work",
     "marshal_registry_credentials",
     "parse_image_source_reference",
     "pin_dockerfile_base_images",
@@ -149,8 +138,6 @@ __all__ = [
     "plan_image_build_reused_stream",
     "plan_image_build_session",
     "plan_image_build_spinup_timeout",
-    "plan_image_build_wait_event",
-    "plan_image_build_wait_probe",
     "plan_python_runtime_setup",
     "registry_auth_file_entry",
     "registry_credentials_for_image",

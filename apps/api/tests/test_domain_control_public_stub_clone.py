@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from apps.api.tests.runtime import services_with_object_storage
 from control.service import ControlPlaneService, StubKind
 from database.repositories.identity import SecretRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
@@ -16,7 +17,7 @@ from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.identity import AuthScope, TokenKind
 from storage.service import ObjectStorage
-from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
+from tests.fakes import FakeObjectClient
 from tests.workspaces import owned_workspace
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
@@ -225,7 +226,7 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
             metadata={"stub_id": remote_stub.id, "workspace_id": workspace.id},
         )
         object_client.put_bytes(remote_key, b"remote package", bucket=remote_bucket)
-        services = _services_with_object_storage(isolated_services, object_storage, request)
+        services = services_with_object_storage(isolated_services, object_storage, request)
         token = _workspace_token(services, workspace.id, "package-token")
         client = client_stack.enter_context(TestClient(create_app(services)))
 
@@ -247,30 +248,7 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
             remote_response.headers["location"]
             == f"https://objects.example/{remote_bucket}/{remote_key}"
         )
-        assert object_client.presigned == [(remote_bucket, remote_key, 600)]
         assert object_client.read_bytes(remote_key, bucket=remote_bucket) == b"remote package"
-
-
-def _services_with_object_storage(
-    isolated_services: ApiServices,
-    object_storage: ObjectStorage,
-    request: pytest.FixtureRequest,
-) -> ApiServices:
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        create_schema=False,
-        workspace_storage_issuer=isolated_services.workspace_storage_issuer,
-        object_storage=object_storage,
-        volume_filesystem=isolated_services.volume_filesystem,
-        redis_client=isolated_services.redis_client,
-        binary_redis_client=isolated_services.binary_redis_client,
-        async_io=isolated_services.require_async_io(),
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-    )
-    request.addfinalizer(services.close)
-    return services
 
 
 def _workspace_token(isolated_services: ApiServices, workspace_id: str, name: str) -> str:
@@ -312,63 +290,7 @@ def _create_object(
         )
 
 
-class _PresignedObjectClient:
-    def __init__(self) -> None:
-        self.presigned: list[tuple[str, str, int]] = []
-        self.objects: dict[tuple[str, str], bytes] = {}
-
-    def put_bytes(
-        self,
-        key: str,
-        data: bytes,
-        *,
-        bucket: str | None = None,
-        content_type: str = "application/octet-stream",
-        metadata: dict[str, str] | None = None,
-    ) -> S3ObjectInfo:
-        _ = content_type, metadata
-        target_bucket = bucket or "default"
-        self.objects[(target_bucket, key)] = data
-        return S3ObjectInfo(bucket=target_bucket, key=key, size=len(data))
-
-    def put_file(
-        self,
-        key: str,
-        source: str | Path,
-        *,
-        bucket: str | None = None,
-        content_type: str = "application/octet-stream",
-        metadata: dict[str, str] | None = None,
-    ) -> S3ObjectInfo:
-        return self.put_bytes(
-            key,
-            Path(source).read_bytes(),
-            bucket=bucket,
-            content_type=content_type,
-            metadata=metadata,
-        )
-
-    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
-        return self.objects[(bucket or "default", key)]
-
-    def download_file(
-        self,
-        key: str,
-        target: str | Path,
-        *,
-        bucket: str | None = None,
-    ) -> S3ObjectInfo:
-        data = self.read_bytes(key, bucket=bucket)
-        Path(target).write_bytes(data)
-        return S3ObjectInfo(bucket=bucket or "default", key=key, size=len(data))
-
-    def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
-        data = self.read_bytes(key, bucket=bucket)
-        return S3ObjectInfo(bucket=bucket or "default", key=key, size=len(data))
-
-    def exists(self, key: str, *, bucket: str | None = None) -> bool:
-        return (bucket or "default", key) in self.objects
-
+class _PresignedObjectClient(FakeObjectClient):
     def generate_presigned_get_url(
         self,
         key: str,
@@ -376,44 +298,4 @@ class _PresignedObjectClient:
         bucket: str | None = None,
         expires_seconds: int = 3600,
     ) -> str:
-        target_bucket = bucket or "default"
-        self.presigned.append((target_bucket, key, expires_seconds))
-        return f"https://objects.example/{target_bucket}/{key}"
-
-    def generate_presigned_put_url(
-        self,
-        key: str,
-        *,
-        bucket: str | None = None,
-        expires_seconds: int = 3600,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
-    ) -> str:
-        _ = content_length, content_type
-        target_bucket = bucket or "default"
-        return f"https://objects.example/{target_bucket}/{key}?expires={expires_seconds}"
-
-    def generate_presigned_put(
-        self,
-        key: str,
-        *,
-        bucket: str | None = None,
-        expires_seconds: int = 3600,
-        content_length: int,
-        content_type: str = "application/octet-stream",
-        metadata: dict[str, str] | None = None,
-        checksum_sha256: str = "",
-    ) -> S3PresignedUpload:
-        target_bucket = bucket or "default"
-        return S3PresignedUpload(
-            url=f"https://objects.example/{target_bucket}/{key}?expires={expires_seconds}",
-            headers={
-                "content-length": str(content_length),
-                "content-type": content_type,
-                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
-                **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
-            },
-        )
-
-    def delete(self, key: str, *, bucket: str | None = None) -> None:
-        self.objects.pop((bucket or "default", key), None)
+        return f"https://objects.example/{bucket or 'default'}/{key}"

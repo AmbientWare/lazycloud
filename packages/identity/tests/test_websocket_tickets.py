@@ -17,7 +17,7 @@ from identity.websocket_tickets import (
     WebSocketTicketService,
     WebSocketTicketStoreError,
 )
-from shared.identity import AuthScope
+from shared.identity import AuthScope, TokenKind
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
 from tests.workspaces import owned_workspace
@@ -232,9 +232,10 @@ def test_ticket_mint_rejects_wrong_workspace_and_insufficient_scope(
     assert not fake.values
 
     other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "other")
-    _other_raw, other = auth.create_workspace_token(
-        other_workspace.id,
-        name="other-shell",
+    _other_raw, other = auth.create_token(
+        "other-shell",
+        workspace_id=other_workspace.id,
+        kind=TokenKind.Workspace,
         scopes=[AuthScope.Read.value],
     )
     with pytest.raises(AuthorizationDeniedError, match="workspace"):

@@ -2,6 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { fileBase64 } from "@/lib/files";
 import {
   secretMaskedListSchema,
   secretMaskedSchema,
@@ -178,21 +179,4 @@ function joinRelativePath(path: string, name: string): string {
 
 function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
-}
-
-function fileBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("Unable to read file"));
-    reader.onload = () => {
-      const encoded = String(reader.result ?? "");
-      const separator = encoded.indexOf(",");
-      if (separator < 0) {
-        reject(new Error("Unable to encode file"));
-        return;
-      }
-      resolve(encoded.slice(separator + 1));
-    };
-    reader.readAsDataURL(file);
-  });
 }

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.orchestration import ContainerTable
-from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.orm import Session
 
@@ -126,15 +126,3 @@ class ContainerRolloutRepository:
                 )
             )
         )
-
-    def serving_containers(self, stub_id: str) -> list[ContainerRecord]:
-        return [
-            ContainerRecord.model_validate(row.payload)
-            for row in self.session.scalars(
-                select(ContainerTable).where(
-                    ContainerTable.stub_id == stub_id,
-                    ContainerTable.status == ContainerStatus.Running.value,
-                    ~exists().where(ContainerRolloutDrainTable.container_id == ContainerTable.id),
-                )
-            )
-        ]

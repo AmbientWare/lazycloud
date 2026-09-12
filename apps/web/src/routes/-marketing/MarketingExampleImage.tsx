@@ -2,11 +2,9 @@ import { cn } from "@/lib/utils";
 
 export function MarketingExampleImage({
   className,
-  eager = false,
   src,
 }: {
   className?: string;
-  eager?: boolean;
   src: `/use-cases/${string}.webp`;
 }) {
   return (
@@ -14,9 +12,9 @@ export function MarketingExampleImage({
       alt=""
       className={cn("marketing-example-image h-full w-full object-cover", className)}
       decoding="async"
-      fetchPriority={eager ? "high" : "auto"}
+      fetchPriority="auto"
       height={1254}
-      loading={eager ? "eager" : "lazy"}
+      loading="lazy"
       src={src}
       width={1254}
     />

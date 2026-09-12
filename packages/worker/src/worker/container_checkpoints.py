@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from cache.protocol import CacheContentStoreResult
 from pydantic import Field, JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord
 from shared.container_requests import WORKER_USER_ARTIFACT_VOLUME
@@ -25,8 +24,6 @@ from worker.checkpoints import (
     CheckpointStatePayload,
     WorkerCheckpointStatus,
     build_checkpoint_plan,
-    checkpoint_archive_hash_and_size,
-    create_checkpoint_archive,
     create_checkpoint_state_payload,
     plan_checkpoint_persistence,
 )
@@ -39,7 +36,7 @@ from worker.execution import (
 )
 from worker.image_lifecycle import DEFAULT_IMAGE_ARCHIVE_EXTENSION, image_archive_source_key
 from worker.oci_runtime import OCI_CONFIG_FILE_NAME
-from worker.runtime_config import build_base_oci_config, runtime_capabilities
+from worker.runtime_config import build_base_oci_config, runtime_capabilities, runtime_config_object
 
 ARCHIVE_INITIAL_CONFIG_FILE_NAME = "initial_config.json"
 type JsonObject = dict[str, JsonValue]
@@ -67,20 +64,6 @@ class RuntimeStateController(Protocol):
 
 class CheckpointStateSink(Protocol):
     def save_checkpoint_state(self, payload: CheckpointStatePayload) -> CheckpointRecord: ...
-
-
-class CheckpointArchiveUploader(Protocol):
-    def upload_file(self, key: str, path: Path) -> None: ...
-
-
-class CheckpointContentCacheStore(Protocol):
-    def store_file(
-        self,
-        path: Path,
-        *,
-        cache_path: str,
-        routing_key: str,
-    ) -> CacheContentStoreResult: ...
 
 
 class WorkerCheckpointPersister(Protocol):
@@ -139,47 +122,6 @@ class ContainerArchivePreparation(ContractModel):
     initial_config_path: str
     runtime_config_path: str
     env: list[str] = Field(default_factory=list)
-
-
-@dataclass(slots=True)
-class FilesystemCheckpointPersister:
-    uploader: CheckpointArchiveUploader
-    cache_store: CheckpointContentCacheStore
-
-    def persist_checkpoint(
-        self,
-        plan: CheckpointPersistencePlan,
-    ) -> WorkerCheckpointPersistenceResult:
-        if plan.error_message:
-            raise RuntimeError(plan.error_message)
-        archive_path = Path(plan.archive_path)
-        checkpoint_path = Path(plan.checkpoint_path)
-        if plan.remove_existing_archive:
-            archive_path.unlink(missing_ok=True)
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        create_checkpoint_archive(checkpoint_path, archive_path, checkpoint_id=plan.checkpoint_id)
-        cache_hash, size_bytes = checkpoint_archive_hash_and_size(archive_path)
-        try:
-            if plan.upload_to_origin_storage:
-                self.uploader.upload_file(plan.origin_key, archive_path)
-            if plan.store_archive_in_cache:
-                self.cache_store.store_file(
-                    archive_path,
-                    cache_path=plan.origin_key,
-                    routing_key=cache_hash,
-                )
-            return WorkerCheckpointPersistenceResult(
-                checkpoint_id=plan.checkpoint_id,
-                archive_path=str(archive_path),
-                origin_key=plan.origin_key,
-                cache_hash=cache_hash,
-                cache_size_bytes=size_bytes,
-                locality=plan.metadata.locality if plan.metadata else "",
-                accelerator=plan.metadata.accelerator if plan.metadata else "",
-            )
-        finally:
-            if plan.cleanup_archive_after_persist:
-                archive_path.unlink(missing_ok=True)
 
 
 @dataclass(slots=True)
@@ -532,17 +474,17 @@ def _archive_runtime_config(config: JsonObject) -> JsonObject:
     hooks = prepared.get("hooks")
     if isinstance(hooks, dict):
         hooks.pop("prestart", None)
-    process = _ensure_object(prepared, "process")
+    process = runtime_config_object(prepared, "process")
     process["terminal"] = False
     process["args"] = ["tail", "-f", "/dev/null"]
-    root = _ensure_object(prepared, "root")
+    root = runtime_config_object(prepared, "root")
     root["readonly"] = False
     return prepared
 
 
 def _merge_request_env(config: JsonObject, env: list[str]) -> JsonObject:
     prepared = _JSON_OBJECT.validate_python(config)
-    process = _ensure_object(prepared, "process")
+    process = runtime_config_object(prepared, "process")
     merged = _env_map(_process_env(prepared))
     merged.update(_env_map(env))
     process["env"] = [f"{key}={value}" for key, value in sorted(merged.items())]
@@ -566,15 +508,6 @@ def _env_map(env: list[str]) -> dict[str, str]:
         if separator and key:
             values[key] = value
     return values
-
-
-def _ensure_object(target: JsonObject, key: str) -> JsonObject:
-    value = target.get(key)
-    if isinstance(value, dict):
-        return value
-    replacement: JsonObject = {}
-    target[key] = replacement
-    return replacement
 
 
 def _iter_archive_members(source_path: Path) -> Iterable[Path]:

@@ -72,11 +72,6 @@ class CheckpointStateOperation(StrEnum):
     MarkRestored = "mark-restored"
 
 
-class CheckpointPersistenceAction(StrEnum):
-    Persist = "persist"
-    Reject = "reject"
-
-
 class CheckpointMaterializationAction(StrEnum):
     ReuseMaterialized = "reuse-materialized"
     RestoreFromCache = "restore-from-cache"
@@ -176,14 +171,10 @@ class CheckpointPersistenceRequest(ContractModel):
 
 
 class CheckpointPersistencePlan(ContractModel):
-    action: CheckpointPersistenceAction
     checkpoint_id: str
     checkpoint_path: str = ""
     archive_path: str = ""
     origin_key: str = ""
-    create_archive: bool = False
-    upload_to_origin_storage: bool = False
-    store_archive_in_cache: bool = False
     remove_existing_archive: bool = False
     cleanup_archive_after_persist: bool = False
     metadata: CheckpointCacheMetadata | None = None
@@ -597,7 +588,6 @@ def plan_checkpoint_persistence(
     origin_key = checkpoint_origin_key(request.checkpoint_id)
     if not request.content_cache_available:
         return CheckpointPersistencePlan(
-            action=CheckpointPersistenceAction.Reject,
             checkpoint_id=request.checkpoint_id,
             checkpoint_path=checkpoint_path,
             archive_path=archive_path,
@@ -617,14 +607,10 @@ def plan_checkpoint_persistence(
             gpu=request.gpu,
         )
     return CheckpointPersistencePlan(
-        action=CheckpointPersistenceAction.Persist,
         checkpoint_id=request.checkpoint_id,
         checkpoint_path=checkpoint_path,
         archive_path=archive_path,
         origin_key=origin_key,
-        create_archive=True,
-        upload_to_origin_storage=True,
-        store_archive_in_cache=True,
         remove_existing_archive=True,
         cleanup_archive_after_persist=True,
         metadata=metadata,

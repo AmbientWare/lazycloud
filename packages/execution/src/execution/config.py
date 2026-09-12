@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -87,15 +86,6 @@ def managed_python_executable(version: ExecutionPythonVersion) -> ManagedPythonE
             return "micromamba3.11"
         case ExecutionPythonVersion.Micromamba312:
             return "micromamba3.12"
-
-
-def env_sequence_mapping(values: Iterable[str]) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for value in values:
-        key, separator, item = value.partition("=")
-        if separator:
-            env[key] = item
-    return env
 
 
 class VolumeProviderConfig(BaseModel):

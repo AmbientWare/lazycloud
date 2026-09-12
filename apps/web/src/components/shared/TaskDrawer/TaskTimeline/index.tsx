@@ -17,6 +17,7 @@ import { isTerminalTaskStatus, type CallGraphNode, type Task } from "@/lib/api/s
 import { formatDuration } from "@/lib/format";
 import { callGraphQueryOptions } from "@/lib/queries/tasks";
 import { cn } from "@/lib/utils";
+import { AxisLabels } from "./AxisLabels";
 
 /** Parent and child tasks aligned on one elapsed-time axis. */
 export function TaskTimeline({
@@ -81,15 +82,7 @@ export function TaskTimeline({
             Task
           </div>
           <div className="relative h-8 border-b border-border/60" aria-label="Elapsed time axis">
-            {ticks.map((tick, index) => (
-              <AxisTickLabel
-                key={tick.timestampMs}
-                label={tick.label}
-                leftPct={tick.leftPct}
-                placement={tickPlacement(index, ticks.length)}
-                title={new Date(tick.timestampMs).toLocaleString()}
-              />
-            ))}
+            <AxisLabels ticks={ticks} className="bottom-1" />
           </div>
 
           {rows.map((row) => (
@@ -255,37 +248,6 @@ function TreeBranch({
       </span>
     </span>
   );
-}
-
-function AxisTickLabel({
-  label,
-  leftPct,
-  placement,
-  title,
-}: {
-  label: string;
-  leftPct: number;
-  placement: "start" | "middle" | "end";
-  title: string;
-}) {
-  return (
-    <span
-      className={cn(
-        "absolute bottom-1 text-[10px] tabular-nums text-muted-foreground",
-        placement === "middle" && "-translate-x-1/2",
-        placement === "end" && "-translate-x-full",
-      )}
-      style={{ left: `${leftPct}%` }}
-      title={title}
-    >
-      {label}
-    </span>
-  );
-}
-
-function tickPlacement(index: number, length: number): "start" | "middle" | "end" {
-  if (index === 0) return "start";
-  return index === length - 1 ? "end" : "middle";
 }
 
 function statusLabel(status: string): string {

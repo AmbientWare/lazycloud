@@ -22,7 +22,3 @@ def image_build_work_plan(image: ImageSpec) -> ImageBuildWorkPlan:
     if image.python_version.strip() and not image.ignore_python:
         reasons.append(ImageBuildWorkReason.PythonRuntime)
     return ImageBuildWorkPlan(has_work=bool(reasons), reasons=tuple(reasons))
-
-
-def image_has_build_work(image: ImageSpec) -> bool:
-    return image_build_work_plan(image).has_work

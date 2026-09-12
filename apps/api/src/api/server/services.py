@@ -71,7 +71,7 @@ from gateway.pod_proxy import (
     AsyncRedisPodProxyConnectionRepository,
     PodProxySocketClient,
 )
-from gateway.pool_bootstrap import pool_bootstrap_provisioner
+from gateway.pool_bootstrap import PoolBootstrapProvisioner
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings, TunnelCertificateSettings
@@ -538,13 +538,10 @@ class ApiServices(ApiServiceCore):
             AgentDisconnectReconciliationSettings | None
         ) = None,
         gateway_settings: GatewaySettings | None = None,
-        stripe_settings: StripeSettings | None = None,
-        resend_settings: ResendSettings | None = None,
         workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
         agent_binary_settings: AgentBinarySettings | None = None,
         aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
         aws_capacity_settings: AwsCapacitySettings | None = None,
-        platform_capacity_settings: PlatformCapacitySettings | None = None,
         aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
         object_store_settings: S3ObjectStoreSettings | None = None,
         workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
@@ -558,7 +555,6 @@ class ApiServices(ApiServiceCore):
         retention_settings: RetentionSettings | None = None,
         volume_metering_settings: VolumeMeteringSettings | None = None,
         volume_metering: PersistentVolumeMeteringService | None = None,
-        volume_filesystem: VolumeFilesystem | None = None,
         root: Path | None = None,
         create_schema: bool = True,
         redis_client: RedisClient,
@@ -566,18 +562,8 @@ class ApiServices(ApiServiceCore):
         async_io: ApiAsyncIo | None = None,
         owns_redis_client: bool = False,
         owns_binary_redis_client: bool = False,
-        signal_service: RedisSignalService | None = None,
         map_service: RedisMapService | None = None,
         simple_queue_service: RedisSimpleQueueService | None = None,
-        artifact_service: ArtifactStorageService | None = None,
-        endpoint_service: EndpointApiService | None = None,
-        function_service: FunctionApiService | None = None,
-        gateway_service: GatewayControlService | None = None,
-        image_service: ImageControlService | None = None,
-        pod_service: PodControlService | None = None,
-        shell_service: ShellControlService | None = None,
-        volume_service: VolumeControlService | None = None,
-        worker_repository_service: WorkerRepositoryService | None = None,
         owned_resources: tuple[ApiOwnedResource, ...] = (),
         client_release_version: str | None = None,
     ) -> ApiServices:
@@ -593,10 +579,10 @@ class ApiServices(ApiServiceCore):
             agent_disconnect_reconciliation_settings or AgentDisconnectReconciliationSettings()
         )
         gateway_config = gateway_settings or GatewaySettings()
-        stripe_config = stripe_settings or StripeSettings()
+        stripe_config = StripeSettings()
         # Read here only so the webhook endpoint can check the signature on a
         # delivery report. Sending belongs to the scheduler.
-        resend_config = resend_settings or ResendSettings()
+        resend_config = ResendSettings()
         workspace_change_stream_config = (
             workspace_change_stream_settings or WorkspaceChangeStreamSettings()
         )
@@ -605,7 +591,7 @@ class ApiServices(ApiServiceCore):
             aws_account_connection_settings or AwsAccountConnectionSettings()
         )
         aws_capacity_config = aws_capacity_settings or AwsCapacitySettings()
-        platform_capacity_config = platform_capacity_settings or PlatformCapacitySettings()
+        platform_capacity_config = PlatformCapacitySettings()
         aws_capacity_reconciliation_config = (
             aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
         )
@@ -731,18 +717,15 @@ class ApiServices(ApiServiceCore):
             provision_default_workspace=control_plane.ensure_default_workspace,
             provision_billing_account=_billing_account_provisioner(context, payment_provider),
         )
-        if volume_filesystem is None:
-            if not isinstance(object_storage_service.object_client, WorkspaceVolumeObjectClient):
-                raise RuntimeError("workspace volumes require the configured object client")
-            resolved_volume_filesystem = WorkspaceVolumeFilesystem(
-                resolve_store=workspace_volume_store_resolver(
-                    context.database,
-                    object_store=object_storage_service.object_client,
-                )
+        if not isinstance(object_storage_service.object_client, WorkspaceVolumeObjectClient):
+            raise RuntimeError("workspace volumes require the configured object client")
+        resolved_volume_filesystem = WorkspaceVolumeFilesystem(
+            resolve_store=workspace_volume_store_resolver(
+                context.database,
+                object_store=object_storage_service.object_client,
             )
-            owned_runtime_resources.append(resolved_volume_filesystem)
-        else:
-            resolved_volume_filesystem = volume_filesystem
+        )
+        owned_runtime_resources.append(resolved_volume_filesystem)
         pool_state_repository = RedisWorkerPoolStateRepository(redis)
         capacity_reservation_repository = RedisCapacityReservationRepository(redis)
         usage = UsageService(
@@ -800,7 +783,7 @@ class ApiServices(ApiServiceCore):
         pool_bootstrap = None
         if provider_resolver is not None:
             agent_version, agent_sha256 = agent_artifact_config.require_amd64()
-            pool_bootstrap = pool_bootstrap_provisioner(
+            pool_bootstrap = PoolBootstrapProvisioner(
                 control_plane_url=gateway_config.public_http_url,
                 agent_version=agent_version,
                 agent_sha256=agent_sha256,
@@ -1048,48 +1031,25 @@ class ApiServices(ApiServiceCore):
         )
         return _compose_api_services(
             core,
-            signal_service=signal_service,
             map_service=map_service,
             simple_queue_service=simple_queue_service,
-            artifact_service=artifact_service,
-            endpoint_service=endpoint_service,
-            function_service=function_service,
-            gateway_service=gateway_service,
-            image_service=image_service,
-            pod_service=pod_service,
-            shell_service=shell_service,
-            volume_service=volume_service,
-            worker_repository_service=worker_repository_service,
         )
 
     def with_route_services(
         self,
         *,
-        signal_service: RedisSignalService | None = None,
-        map_service: RedisMapService | None = None,
-        simple_queue_service: RedisSimpleQueueService | None = None,
-        artifact_service: ArtifactStorageService | None = None,
         endpoint_service: EndpointApiService | None = None,
         function_service: FunctionApiService | None = None,
         gateway_service: GatewayControlService | None = None,
         image_service: ImageControlService | None = None,
         pod_service: PodControlService | None = None,
-        shell_service: ShellControlService | None = None,
-        volume_service: VolumeControlService | None = None,
-        worker_repository_service: WorkerRepositoryService | None = None,
     ) -> ApiServices:
         return _compose_api_services(
             self,
-            signal_service=(signal_service if signal_service is not None else self.signal_service),
-            map_service=map_service if map_service is not None else self.map_service,
-            simple_queue_service=(
-                simple_queue_service
-                if simple_queue_service is not None
-                else self.simple_queue_service
-            ),
-            artifact_service=(
-                artifact_service if artifact_service is not None else self.artifact_service
-            ),
+            signal_service=self.signal_service,
+            map_service=self.map_service,
+            simple_queue_service=self.simple_queue_service,
+            artifact_service=self.artifact_service,
             endpoint_service=(
                 endpoint_service if endpoint_service is not None else self.endpoint_service
             ),
@@ -1101,13 +1061,9 @@ class ApiServices(ApiServiceCore):
             ),
             image_service=image_service if image_service is not None else self.image_service,
             pod_service=pod_service if pod_service is not None else self.pod_service,
-            shell_service=shell_service if shell_service is not None else self.shell_service,
-            volume_service=(volume_service if volume_service is not None else self.volume_service),
-            worker_repository_service=(
-                worker_repository_service
-                if worker_repository_service is not None
-                else self.worker_repository_service
-            ),
+            shell_service=self.shell_service,
+            volume_service=self.volume_service,
+            worker_repository_service=self.worker_repository_service,
         )
 
     def close(self) -> None:
@@ -1133,18 +1089,18 @@ class ApiServices(ApiServiceCore):
 def _compose_api_services(
     core: ApiServiceCore,
     *,
-    signal_service: RedisSignalService | None,
-    map_service: RedisMapService | None,
-    simple_queue_service: RedisSimpleQueueService | None,
-    artifact_service: ArtifactStorageService | None,
-    endpoint_service: EndpointApiService | None,
-    function_service: FunctionApiService | None,
-    gateway_service: GatewayControlService | None,
-    image_service: ImageControlService | None,
-    pod_service: PodControlService | None,
-    shell_service: ShellControlService | None,
-    volume_service: VolumeControlService | None,
-    worker_repository_service: WorkerRepositoryService | None,
+    signal_service: RedisSignalService | None = None,
+    map_service: RedisMapService | None = None,
+    simple_queue_service: RedisSimpleQueueService | None = None,
+    artifact_service: ArtifactStorageService | None = None,
+    endpoint_service: EndpointApiService | None = None,
+    function_service: FunctionApiService | None = None,
+    gateway_service: GatewayControlService | None = None,
+    image_service: ImageControlService | None = None,
+    pod_service: PodControlService | None = None,
+    shell_service: ShellControlService | None = None,
+    volume_service: VolumeControlService | None = None,
+    worker_repository_service: WorkerRepositoryService | None = None,
 ) -> ApiServices:
     redis = core.redis()
     scheduler_workers = core.scheduler_workers

@@ -1671,25 +1671,6 @@ class GatewayControlService:
             with suppress(NotFoundError):
                 admin.delete_worker(worker_id)
 
-    def resume_provider_agent(
-        self,
-        *,
-        node_agent_token: SecretStr,
-        pool: ComputeUnitRecord,
-        machine_fingerprint: str,
-    ) -> JoinAgentResponse | None:
-        with self.services.context.database.session() as session:
-            result = self.resume_provider_agent_in_transaction(
-                session,
-                node_agent_token=node_agent_token,
-                pool=pool,
-                machine_fingerprint=machine_fingerprint,
-            )
-        if result is None:
-            return None
-        self.publish_agent_join(result)
-        return result.response
-
     def resume_provider_agent_in_transaction(
         self,
         session: DatabaseSession,

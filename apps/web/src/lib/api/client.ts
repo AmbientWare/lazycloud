@@ -102,11 +102,7 @@ function newRequestId(): string {
   return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
 }
 
-export async function apiRequest<T>(
-  path: string,
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
-  init: RequestInit = {},
-): Promise<T> {
+async function apiResponse(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   const clientRequestId = headers.get("X-Request-ID") || newRequestId();
   headers.set("X-Request-ID", clientRequestId);
@@ -134,6 +130,15 @@ export async function apiRequest<T>(
     });
   }
 
+  return response;
+}
+
+export async function apiRequest<T>(
+  path: string,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await apiResponse(path, init);
   if (response.status === 204) return schema.parse(null);
   const text = await response.text();
   let json: unknown = null;
@@ -159,20 +164,7 @@ export async function apiRequest<T>(
  * at the object store, so it needs a bearer token like any other API call.
  */
 export async function apiBlob(path: string): Promise<Blob> {
-  const clientRequestId = newRequestId();
-  const headers = new Headers({ "X-Request-ID": clientRequestId });
-  const token = getStoredAuthToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-
-  const response = await fetch(path, { headers, credentials: "include" });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    if (response.status === 401) clearStoredAuthToken();
-    throw new ApiError(response.status, response.statusText, body, {
-      requestId: response.headers.get("X-Request-ID") || clientRequestId,
-      retryAfter: response.headers.get("Retry-After"),
-    });
-  }
+  const response = await apiResponse(path);
   return response.blob();
 }
 

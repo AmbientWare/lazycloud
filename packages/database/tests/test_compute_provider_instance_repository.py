@@ -60,59 +60,6 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
         assert repository.bind_machine(pool.id, "i-0ffffffffffffffff", machine_id) is None
 
 
-def test_unbinding_releases_only_the_machine_it_names(
-    service_context: ServiceContext,
-) -> None:
-    """A machine torn down after binding must leave no reference behind.
-
-    The reference outlives the machine row otherwise, and every later pool sync
-    fails its foreign key — which takes enrollment down for the whole pool.
-    """
-    with service_context.database.session() as session:
-        workspace_id = service_context.default_workspace_id(session)
-        pool = ComputeUnitRecord(
-            id=str(uuid4()),
-            workspace_id=workspace_id,
-            name=UnitName("provider-unbinding"),
-            pool=MachinePool("provider-unbinding"),
-        )
-        ComputeUnitRepository(session).upsert(pool)
-        instance = ComputeProviderInstanceRecord(
-            id=str(uuid4()),
-            provider="aws",
-            offer_id="m7i.xlarge:us-east-1",
-            instance_type="m7i.xlarge",
-            instance_id="i-0abcdef0123456789",
-            status="running",
-            source="pooled",
-            pool_id=pool.id,
-        )
-        repository = ComputeProviderInstanceRepository(session)
-        repository.upsert(instance)
-
-        machines = MachineRepository(session)
-        first = str(uuid4())
-        machines.upsert(
-            Machine(id=first, pool=pool.pool, provider="aws"), workspace_id=workspace_id
-        )
-        assert repository.bind_machine(pool.id, instance.instance_id or "", first) is not None
-
-        # A stale release must not strand the binding a later enrollment made.
-        second = str(uuid4())
-        machines.upsert(
-            Machine(id=second, pool=pool.pool, provider="aws"), workspace_id=workspace_id
-        )
-        kept = repository.unbind_machine(pool.id, instance.instance_id or "", second)
-        assert kept is not None
-        assert kept.machine_id == first
-
-        released = repository.unbind_machine(pool.id, instance.instance_id or "", first)
-        assert released is not None
-        assert released.machine_id is None
-        # Released rows rebind cleanly rather than staying poisoned.
-        assert repository.bind_machine(pool.id, instance.instance_id or "", second) is not None
-
-
 def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
     service_context: ServiceContext,
 ) -> None:

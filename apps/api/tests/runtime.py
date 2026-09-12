@@ -11,7 +11,6 @@ from agent.binary import AgentBinarySettings
 from api.fastapi_app import create_app
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient, RedisSettings
 from execution.collections.redis import (
     RedisMapService,
@@ -23,7 +22,7 @@ from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacityS
 from shared.identity import WorkspaceRecord
 from sqlalchemy import Engine
 from sqlalchemy.engine import URL
-from storage.volume_filesystem import LocalVolumeFilesystem
+from storage.service import ObjectStorage
 from tests.backing_services import redis_url
 from tests.database_fixtures import temporary_database
 from tests.fakes import FakeObjectClient, FakeWorkspaceBuckets
@@ -46,7 +45,6 @@ def service_graph(
 
     maps = RedisMapService(binary_redis_client)
     simple_queues = RedisSimpleQueueService(binary_redis_client)
-    volume_filesystem = LocalVolumeFilesystem(tmp_path / "volumes")
 
     services = ApiServices.create(
         database,
@@ -59,7 +57,6 @@ def service_graph(
         owns_binary_redis_client=False,
         map_service=maps,
         simple_queue_service=simple_queues,
-        volume_filesystem=volume_filesystem,
         object_store_client=FakeObjectClient(),
         workspace_storage_client=FakeWorkspaceBuckets(),
         agent_binary_settings=AgentBinarySettings(
@@ -112,6 +109,27 @@ def composed_services(
             yield services
     finally:
         asyncio.run(async_io.close())
+
+
+def services_with_object_storage(
+    services: ApiServices,
+    object_storage: ObjectStorage,
+    request: pytest.FixtureRequest,
+) -> ApiServices:
+    replacement = ApiServices.create(
+        services.database,
+        root=services.root,
+        create_schema=False,
+        workspace_storage_issuer=services.workspace_storage_issuer,
+        object_storage=object_storage,
+        redis_client=services.redis_client,
+        binary_redis_client=services.binary_redis_client,
+        async_io=services.require_async_io(),
+        owns_redis_client=False,
+        owns_binary_redis_client=False,
+    )
+    request.addfinalizer(replacement.close)
+    return replacement
 
 
 @pytest.fixture
@@ -181,7 +199,7 @@ def api_runtime(
 @pytest.fixture
 def api_workspace(api_runtime: tuple[ApiServices, TestClient]) -> WorkspaceRecord:
     services, _ = api_runtime
-    return owned_workspace(ControlPlaneService(services.context), f"workspace-{uuid4().hex}")
+    return owned_workspace(services.control_plane_service, f"workspace-{uuid4().hex}")
 
 
 @pytest.fixture

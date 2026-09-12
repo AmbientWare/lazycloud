@@ -31,6 +31,7 @@ from worker.container_execution import (
 from worker.container_rootfs import ContainerRootfsReleaser
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import (
+    BridgeSandboxPortPublisher,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
     WorkerSandboxDockerLifecycle,
@@ -348,30 +349,9 @@ class WorkerRouteRecovery:
 
 
 @dataclass(slots=True)
-class SchedulerSandboxPortPublisher:
+class SchedulerSandboxPortPublisher(BridgeSandboxPortPublisher):
     identity: WorkerRouteIdentity
     containers: SchedulerContainerRouteRepository
-
-    def allocate_port(
-        self,
-        instance: WorkerContainerServiceInstance,
-        *,
-        container_port: int,
-    ) -> int:
-        if not instance.container_ip:
-            raise ValueError(f"container {instance.container_id} has no bridge IP")
-        return container_port
-
-    def local_target(
-        self,
-        instance: WorkerContainerServiceInstance,
-        *,
-        host_port: int,
-        container_port: int,
-    ) -> str:
-        if not instance.container_ip:
-            raise ValueError(f"container {instance.container_id} has no bridge IP")
-        return f"{instance.container_ip}:{container_port}"
 
     def publish_exposed_port(
         self,
@@ -384,11 +364,7 @@ class SchedulerSandboxPortPublisher:
         routes: list[AgentBackendRoute] | None = None,
     ) -> str:
         if address_map is not None:
-            scheduler_routes = [
-                scheduler_route
-                for scheduler_route in (route for route in routes or [])
-                if scheduler_route is not None
-            ]
+            scheduler_routes = [route for route in routes or [] if route is not None]
             updated_ports = {route.port for route in scheduler_routes}
             existing_routes = self.containers.get_container_address_map(
                 instance.container_id

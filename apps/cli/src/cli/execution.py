@@ -7,12 +7,11 @@ from lazycloud.cli.components.context import current_workspace
 from lazycloud.cli.components.output import (
     json_output_enabled,
     parse_json_argument,
-    payload_data,
     print_events_table,
     print_payload,
 )
 from lazycloud.cli.handler_workflows import HandlerLoadError
-from lazycloud.json_contracts import validate_json_value
+from lazycloud.json_contracts import resource_payload, validate_json_value
 from shared.http.observability import EventHistoryRequest
 
 from cli.api_client import admin_api_client
@@ -39,7 +38,7 @@ def invoke(
         response = user_object(*parsed_args)
     else:
         raise typer.BadParameter("invoke requires a callable LazyCloud handler")
-    print_payload(ctx, payload_data(response))
+    print_payload(ctx, resource_payload(response))
 
 
 def events(

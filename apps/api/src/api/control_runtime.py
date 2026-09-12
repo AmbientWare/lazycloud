@@ -7,12 +7,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 from coordination.redis_client import RedisClient, RedisSettings
-from execution.artifacts.service import ArtifactStorageService
-from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.pods.service import PodControlService
-from execution.shells.service import ShellControlService
-from execution.signals.redis import RedisSignalService
-from execution.volumes.control import VolumeControlService
 from gateway.service import GatewayControlService
 from gateway.settings import GatewaySettings
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
@@ -44,7 +39,6 @@ from api.server.services import (
     EndpointApiService,
     FunctionApiService,
 )
-from api.server.worker_repository_service import WorkerRepositoryService
 from api.settings import (
     AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
@@ -74,12 +68,8 @@ class ControlPlaneRuntime:
     state: ControlPlaneRuntimeState = field(default=ControlPlaneRuntimeState.New, init=False)
 
     @classmethod
-    def production(
-        cls,
-        *,
-        telemetry_settings: TelemetrySettings | None = None,
-    ) -> ControlPlaneRuntime:
-        telemetry = telemetry_settings or TelemetrySettings()
+    def production(cls) -> ControlPlaneRuntime:
+        telemetry = TelemetrySettings()
         return cls(
             telemetry_config=telemetry.to_config(service_name=CONTROL_PLANE_SERVICE_NAME),
             _factory=_production_api_services,
@@ -91,47 +81,26 @@ class ControlPlaneRuntime:
         cls,
         services: ApiServices,
         *,
-        signal_service: RedisSignalService | None = None,
-        map_service: RedisMapService | None = None,
-        simple_queue_service: RedisSimpleQueueService | None = None,
-        artifact_service: ArtifactStorageService | None = None,
         endpoint_service: EndpointApiService | None = None,
         function_service: FunctionApiService | None = None,
         gateway_service: GatewayControlService | None = None,
         image_service: ImageControlService | None = None,
         pod_service: PodControlService | None = None,
-        shell_service: ShellControlService | None = None,
-        volume_service: VolumeControlService | None = None,
-        worker_repository_service: WorkerRepositoryService | None = None,
     ) -> ControlPlaneRuntime:
         overrides = (
-            signal_service,
-            map_service,
-            simple_queue_service,
-            artifact_service,
             endpoint_service,
             function_service,
             gateway_service,
             image_service,
             pod_service,
-            shell_service,
-            volume_service,
-            worker_repository_service,
         )
         graph = (
             services.with_route_services(
-                signal_service=signal_service,
-                map_service=map_service,
-                simple_queue_service=simple_queue_service,
-                artifact_service=artifact_service,
                 endpoint_service=endpoint_service,
                 function_service=function_service,
                 gateway_service=gateway_service,
                 image_service=image_service,
                 pod_service=pod_service,
-                shell_service=shell_service,
-                volume_service=volume_service,
-                worker_repository_service=worker_repository_service,
             )
             if any(override is not None for override in overrides)
             else services

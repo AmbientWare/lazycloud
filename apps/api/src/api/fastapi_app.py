@@ -16,12 +16,7 @@ from coordination.process_presence import AsyncRedisProcessPresence, presence_re
 from coordination.redis_client import AsyncRedisClient, RedisPoolStatus
 from coordination.stream_tail import RedisStreamTailStatus
 from coordination.token_lock import renew_token_lock_async, try_acquire_token_lock_async
-from execution.artifacts.service import ArtifactStorageService
-from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.pods.service import PodControlService
-from execution.shells.service import ShellControlService
-from execution.signals.redis import RedisSignalService
-from execution.volumes.control import VolumeControlService
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -91,33 +86,19 @@ def _domain_error_status(exc: DomainError) -> int:
 def create_app(
     services: ApiServices,
     *,
-    signal_service: RedisSignalService | None = None,
-    map_service: RedisMapService | None = None,
-    simple_queue_service: RedisSimpleQueueService | None = None,
-    artifact_service: ArtifactStorageService | None = None,
     endpoint_service: EndpointApiService | None = None,
     function_service: FunctionApiService | None = None,
     gateway_service: GatewayControlService | None = None,
     image_service: ImageControlService | None = None,
     pod_service: PodControlService | None = None,
-    shell_service: ShellControlService | None = None,
-    volume_service: VolumeControlService | None = None,
-    worker_repository_service: WorkerRepositoryService | None = None,
 ) -> FastAPI:
     runtime = ControlPlaneRuntime.from_services(
         services,
-        signal_service=signal_service,
-        map_service=map_service,
-        simple_queue_service=simple_queue_service,
-        artifact_service=artifact_service,
         endpoint_service=endpoint_service,
         function_service=function_service,
         gateway_service=gateway_service,
         image_service=image_service,
         pod_service=pod_service,
-        shell_service=shell_service,
-        volume_service=volume_service,
-        worker_repository_service=worker_repository_service,
     )
     return _create_app(runtime)
 
@@ -532,32 +513,32 @@ def _record_runtime_pressure(
         thread_pool.borrowed_tokens / capacity if capacity > 0 else 1,
     )
 
-    _record_database_pool_metrics(
+    _record_pool_metrics(
         services,
         client="sync",
         status=services.context.database.pool_status(),
     )
-    _record_database_pool_metrics(
+    _record_pool_metrics(
         services,
         client="async",
         status=async_io.database.pool_status(),
     )
-    _record_redis_pool_metrics(
+    _record_pool_metrics(
         services,
         client="sync-text",
         status=services.redis().pool_status(),
     )
-    _record_redis_pool_metrics(
+    _record_pool_metrics(
         services,
         client="sync-binary",
         status=services.binary_redis().pool_status(),
     )
-    _record_redis_pool_metrics(
+    _record_pool_metrics(
         services,
         client="async-text",
         status=async_io.redis.pool_status(),
     )
-    _record_redis_pool_metrics(
+    _record_pool_metrics(
         services,
         client="async-binary",
         status=async_io.binary_redis.pool_status(),
@@ -583,51 +564,22 @@ def _record_realtime_metrics(services: ApiServices, status: RedisStreamTailStatu
     services.metrics.set_gauge("api_realtime_stream_healthy", float(status.healthy))
 
 
-def _record_database_pool_metrics(
+def _record_pool_metrics(
     services: ApiServices,
     *,
     client: str,
-    status: DatabasePoolStatus | None,
+    status: DatabasePoolStatus | RedisPoolStatus | None,
 ) -> None:
     if status is None:
         return
-    labels = {"backend": "database", "client": client}
-    for state, value in (
-        ("in_use", status.checked_out),
-        ("available", status.available),
-        ("capacity", status.capacity),
-    ):
-        services.metrics.set_gauge(
-            "api_io_pool_connections",
-            value,
-            labels=labels | {"state": state},
-        )
-    services.metrics.set_gauge(
-        "api_io_pool_exhausted",
-        float(status.exhausted),
-        labels=labels,
-    )
-    services.metrics.set_gauge(
-        "api_io_pool_exhaustions_total",
-        status.exhaustions_total,
-        labels=labels,
-    )
-
-
-def _record_redis_pool_metrics(
-    services: ApiServices,
-    *,
-    client: str,
-    status: RedisPoolStatus | None,
-) -> None:
-    if status is None:
-        return
-    labels = {"backend": "redis", "client": client}
-    for state, value in (
-        ("in_use", status.in_use),
-        ("idle", status.idle),
-        ("capacity", status.capacity),
-    ):
+    if isinstance(status, DatabasePoolStatus):
+        backend = "database"
+        counts = (("in_use", status.checked_out), ("available", status.available))
+    else:
+        backend = "redis"
+        counts = (("in_use", status.in_use), ("idle", status.idle))
+    labels = {"backend": backend, "client": client}
+    for state, value in (*counts, ("capacity", status.capacity)):
         services.metrics.set_gauge(
             "api_io_pool_connections",
             value,

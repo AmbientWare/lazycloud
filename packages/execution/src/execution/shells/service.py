@@ -16,6 +16,7 @@ from database.types import DatabaseSession
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
 from shared.container_requests import WorkerStartupKind
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.env import parse_environment
 from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
 from shared.http.shells import (
@@ -39,7 +40,6 @@ from shared.shell_protocol import (
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
-from execution.config import env_sequence_mapping
 from execution.container_clients import (
     PodContainerControlClient,
     SchedulerContainerClientFactory,
@@ -136,7 +136,7 @@ class ShellControlService:
         container_id = str(uuid4())
         request = self._standalone_request(stub, token_key=token_key, container_id=container_id)
         plan = plan_shell_standalone(request)
-        env = env_sequence_mapping(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
+        env = parse_environment(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
         with self.services.context.database.session() as session:
             record = self.services.containers.reserve_pending(
                 session,
