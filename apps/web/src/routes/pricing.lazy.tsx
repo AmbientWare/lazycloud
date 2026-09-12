@@ -17,6 +17,7 @@ import {
   GetStartedButton,
   MarketingButton,
   MarketingCard,
+  MarketingHero,
   shell,
 } from "./-marketing/MarketingPrimitives";
 
@@ -157,49 +158,42 @@ function MarketingPricing() {
 
   return (
     <MarketingLayout>
-      <main id="marketing-main">
-        <section className="border-b border-border bg-background">
-          <div
-            className={cn(
-              shell,
-              "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
-            )}
-          >
-            <div className="flex min-w-0 flex-col">
-              <h1 className="font-sans text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance [&_em]:text-brand [&_em]:not-italic">
-                Compute pricing <em>by the second.</em>
-              </h1>
-              <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
-                Compute billing starts with the container and stops with it. You pay by the second.
-              </p>
-              <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-                <GetStartedButton />
-                <MarketingButton endGlyph="↓" hash="plans" to="/pricing">
-                  Compare plans
-                </MarketingButton>
-              </div>
+      <main className="marketing-hero-page" id="marketing-main">
+        <MarketingHero>
+          <div className="flex min-w-0 flex-col">
+            <h1 className="max-w-[620px] text-balance">
+              Compute pricing <em>by the second.</em>
+            </h1>
+            <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
+              Compute billing starts with the container and stops with it. You pay by the second.
+            </p>
+            <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
+              <GetStartedButton />
+              <MarketingButton endGlyph="↓" hash="plans" to="/pricing">
+                Compare plans
+              </MarketingButton>
             </div>
-
-            <MarketingCard className="min-w-0 p-5 sm:p-6">
-              <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
-                <h2 className="font-sans text-[clamp(1.625rem,3vw,2.125rem)] leading-[1.08] font-[550] tracking-[-0.045em]">
-                  Usage rates
-                </h2>
-                <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
-              </div>
-              <RateList
-                groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
-                id={fleetRatesId}
-              />
-              <a
-                className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
-                href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
-              >
-                Pricing details
-              </a>
-            </MarketingCard>
           </div>
-        </section>
+
+          <MarketingCard className="min-w-0 p-5 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+              <h2 className="font-sans text-[clamp(1.625rem,3vw,2.125rem)] leading-[1.08] font-[550] tracking-[-0.045em]">
+                Usage rates
+              </h2>
+              <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
+            </div>
+            <RateList
+              groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
+              id={fleetRatesId}
+            />
+            <a
+              className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
+              href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
+            >
+              Pricing details
+            </a>
+          </MarketingCard>
+        </MarketingHero>
 
         <section
           className="border-b border-border bg-background-subtle py-14 sm:py-16 lg:py-20"

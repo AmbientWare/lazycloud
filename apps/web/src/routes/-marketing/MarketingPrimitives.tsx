@@ -13,6 +13,22 @@ export type MarketingRoute = "/" | "/pricing" | "/legal/privacy" | "/legal/terms
 export const shell =
   "ml-[max(1rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] w-auto max-w-[1200px] mr-[max(1rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] sm:ml-[max(1.5rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] sm:mr-[max(1.5rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] lg:ml-[max(2rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] lg:mr-[max(2rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))]";
 
+export function MarketingHero({ children }: { children: ReactNode }) {
+  return (
+    <section className="marketing-hero relative overflow-hidden border-b border-border bg-background">
+      <div className="marketing-grid-field" aria-hidden="true" />
+      <div
+        className={cn(
+          shell,
+          "marketing-hero-content relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 sm:gap-12 lg:gap-16 max-lg:grid-cols-1",
+        )}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
+
 export function MarketingCard({
   asChild = false,
   className,
