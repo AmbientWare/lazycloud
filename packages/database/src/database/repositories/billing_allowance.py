@@ -27,16 +27,6 @@ class SpentAllowancePeriod:
     spent_nanos: int
     funded_terms_version: SubscriptionTermsVersion | None = None
 
-    @property
-    def remaining_nanos(self) -> int:
-        """Signed: negative once the allowance is overspent.
-
-        Overspending is normal — the overage is billed rather than refused — so
-        how far past the line an account is has to survive the read.
-        """
-
-        return self.allowance_nanos - self.spent_nanos
-
 
 @dataclass(frozen=True, slots=True)
 class BillingAllowanceRepository:

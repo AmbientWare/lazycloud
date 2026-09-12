@@ -450,14 +450,6 @@ class RedisClient:
             _connection_pool=pool,
         )
 
-    def with_key_prefix(self, key_prefix: str) -> RedisClient:
-        return RedisClient(
-            self._transport,
-            key_prefix=key_prefix,
-            connection_info=self.connection_info,
-            _connection_pool=self._connection_pool,
-        )
-
     @property
     def transport_identity(self) -> int:
         return id(self._transport)

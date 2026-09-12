@@ -217,23 +217,6 @@ class WorkerSourceCacheService:
                 raise ConflictError("source cache session is no longer current")
             return generation
 
-    def require_available(
-        self,
-        *,
-        principal: WorkerRepositoryPrincipal,
-        worker_id: str,
-        generation_id: str,
-        session_fence: int,
-    ) -> WorkerCacheGenerationRecord:
-        with self.context.database.session() as session:
-            return self.require_available_in_session(
-                session,
-                principal=principal,
-                worker_id=worker_id,
-                generation_id=generation_id,
-                session_fence=session_fence,
-            )
-
     def require_available_in_session(
         self,
         session: DatabaseSession,

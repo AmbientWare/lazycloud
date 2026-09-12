@@ -358,7 +358,6 @@ each pass writes a disconnect that takes those rows out of the next scan, so a
 larger backlog drains over consecutive passes instead of holding one lease for
 the whole fleet."""
 
-PRIVATE_NETWORK_PROBE_TIMEOUT_SECONDS = 2.0
 # Matches the presigned PUT validity the object store hands out.
 OBJECT_UPLOAD_TIMEOUT_SECONDS = 3600.0
 

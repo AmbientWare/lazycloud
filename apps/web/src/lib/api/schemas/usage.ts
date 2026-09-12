@@ -1,51 +1,5 @@
 import { z } from "zod";
 
-import { jsonValueSchema } from "./json";
-
-export const usageMetrics = [
-  "container_requested_count",
-  "container_scheduled_count",
-  "task_count",
-  "persistent_volume_byte_seconds",
-  "artifact_storage_byte_seconds",
-  "container_duration_milliseconds",
-  "container_disk_byte_seconds",
-  "cpu_used_core_seconds",
-  "memory_rss_byte_seconds",
-  "memory_swap_byte_seconds",
-  "gpu_memory_byte_seconds",
-  "network_ingress_bytes",
-  "network_egress_bytes",
-  "network_sent_bytes",
-  "network_ingress_packets",
-  "network_egress_packets",
-  "disk_read_bytes",
-  "disk_write_bytes",
-  "node_usage",
-] as const;
-
-export const usageUnits = ["seconds", "count", "bytes", "milliseconds", "byte_seconds"] as const;
-
-export const usageRecordSchema = z.object({
-  id: z.string(),
-  workspace_id: z.string(),
-  resource_type: z.string(),
-  resource_id: z.string(),
-  metric: z.enum(usageMetrics),
-  quantity: z.number().nonnegative(),
-  unit: z.enum(usageUnits),
-  labels: z.record(z.string(), z.string()).default({}),
-  metadata: z.record(jsonValueSchema).default({}),
-  created_at: z.string(),
-});
-export type UsageRecord = z.infer<typeof usageRecordSchema>;
-
-export const usageRecordListSchema = z.object({
-  data: z.array(usageRecordSchema).default([]),
-  next: z.string().default(""),
-});
-export type UsageRecordList = z.infer<typeof usageRecordListSchema>;
-
 /** What a quote prices, at the granularity one invoice line covers. */
 export const billedDimensions = ["compute_runtime", "network_egress", "volume_storage"] as const;
 export type BilledDimension = (typeof billedDimensions)[number];

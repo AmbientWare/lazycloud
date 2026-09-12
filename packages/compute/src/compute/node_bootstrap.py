@@ -30,7 +30,6 @@ from shared.provider_config import ProviderKind
 from shared.urls import normalize_http_origin
 
 AGENT_BIN_PATH = f"/usr/local/bin/{AGENT_NAME}"
-AGENT_SERVICE_NAME = f"{AGENT_NAME}.service"
 
 _PROVIDER_IDENTITY_MARKER = "# __PROVIDER_IDENTITY__"
 _SENTINEL_PATTERN = re.compile(r"__[A-Z0-9_]+__")

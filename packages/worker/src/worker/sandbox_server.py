@@ -18,7 +18,6 @@ from worker.routes import (
 )
 from worker.runtime_config import OciRuntimeName
 
-SANDBOX_PROCESS_MANAGER_READY_POLL_DELAY_SECONDS = 0.025
 WORKER_CONTAINER_UPLOADS_HOST_PATH = "/tmp/container-uploads"
 WORKER_CONTAINER_UPLOADS_MOUNT_PATH = f"/tmp/{HOME_DIR}"
 SANDBOX_INTERNAL_PORTS = (

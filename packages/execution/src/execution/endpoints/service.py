@@ -4,13 +4,11 @@ import asyncio
 import json
 import socket
 import time
-from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.records.endpoint_dispatch import (
-    EndpointDispatchObservationRecord,
     EndpointDispatchStateRecord,
 )
 from database.repositories.apps import StubRepository
@@ -1155,55 +1153,6 @@ class EndpointDispatchSettings:
     wait_timeout_seconds: float
     max_pending_requests: int
     max_inflight_per_container: int
-
-
-@dataclass(slots=True)
-class EndpointDispatchStateRepository:
-    services: ExecutionServices
-
-    def transition(
-        self,
-        task: Task,
-        status: EndpointDispatchStatus,
-        *,
-        container_id: str | None = None,
-        error: str | None = None,
-    ) -> EndpointDispatchRecord:
-        with self.services.context.database.session() as session:
-            return _transition_dispatch_in_session(
-                session,
-                task,
-                status,
-                container_id=container_id,
-                error=error,
-            )
-
-    def for_task(self, task: Task) -> EndpointDispatchRecord:
-        with self.services.context.database.session() as session:
-            state = EndpointDispatchRepository(session).get(task.id)
-        if state is None:
-            raise NotFoundError(f"endpoint dispatch state is missing for task {task.id}")
-        return _dispatch_record(state)
-
-    def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
-        with self.services.context.database.session() as session:
-            return EndpointDispatchRepository(session).active_counts_by_stub(
-                stub_ids,
-                at=utc_now(),
-            )
-
-    def observations_by_stub(
-        self,
-        stub_ids: Sequence[str],
-        *,
-        finished_since: datetime,
-    ) -> dict[str, list[EndpointDispatchObservationRecord]]:
-        with self.services.context.database.session() as session:
-            return EndpointDispatchRepository(session).observations_by_stub(
-                stub_ids,
-                at=utc_now(),
-                finished_since=finished_since,
-            )
 
 
 @dataclass(slots=True)

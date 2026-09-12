@@ -6,13 +6,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AwsConnection } from "@/lib/api/schemas";
 import {
-  accountComputeQueryKeys,
   createAwsConnection,
   reconnectAwsConnection,
   removeAwsConnection,
   retryAwsConnection,
   validateAwsConnection,
 } from "@/lib/queries/compute";
+import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { useAwsConnectionController } from "./controller";
 
@@ -106,9 +106,9 @@ describe("AWS connection controller", () => {
     const queryClient = testQueryClient();
     const onClose = vi.fn();
     const projections = [
-      accountComputeQueryKeys.awsConnection(),
-      accountComputeQueryKeys.instances(),
-      accountComputeQueryKeys.machines(),
+      accountQueryKeys.compute.awsConnection(),
+      accountQueryKeys.compute.instances(),
+      accountQueryKeys.compute.machines(),
     ];
     for (const queryKey of projections) {
       queryClient.setQueryData(queryKey, { stale: true });

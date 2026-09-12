@@ -4,21 +4,23 @@ from datetime import datetime
 
 from control.service import ControlPlaneService
 from database.records.apps import AutoscalingStubRecord, StubRecord
+from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository
-from execution.endpoints.service import EndpointDispatchStateRepository
-from scheduler.autoscaling import EndpointAutoscalingDispatchObservation
 from shared.containers import ContainerStatus
 from shared.identity import WorkspaceRecord
+from shared.timestamps import utc_now
 
 from database import DatabaseClient
+from scheduler.autoscaling import EndpointAutoscalingDispatchObservation
 
 
 @dataclass(frozen=True, slots=True)
 class EndpointDispatchAutoscalingReader:
-    repository: EndpointDispatchStateRepository
+    database: DatabaseClient
 
     def active_counts_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
-        return self.repository.active_counts_by_stub(stub_ids)
+        with self.database.session() as session:
+            return EndpointDispatchRepository(session).active_counts_by_stub(stub_ids, at=utc_now())
 
     def observations_by_stub(
         self,
@@ -26,6 +28,10 @@ class EndpointDispatchAutoscalingReader:
         *,
         finished_since: datetime,
     ) -> dict[str, list[EndpointAutoscalingDispatchObservation]]:
+        with self.database.session() as session:
+            observations = EndpointDispatchRepository(session).observations_by_stub(
+                stub_ids, at=utc_now(), finished_since=finished_since
+            )
         return {
             stub_id: [
                 EndpointAutoscalingDispatchObservation(
@@ -35,10 +41,7 @@ class EndpointDispatchAutoscalingReader:
                 )
                 for record in records
             ]
-            for stub_id, records in self.repository.observations_by_stub(
-                stub_ids,
-                finished_since=finished_since,
-            ).items()
+            for stub_id, records in observations.items()
         }
 
 

@@ -1531,12 +1531,6 @@ def _endpoint_container_keep_warm_elapsed(
     return (now - latest).total_seconds() >= keep_warm_seconds
 
 
-def _pod_total_connections(redis: RedisClient, workspace_id: str, stub_id: str) -> int:
-    return _redis_non_negative_int(
-        redis.get(redis.key(pod_total_connections_key(workspace_id, stub_id)))
-    )
-
-
 def _pod_container_states(
     redis: RedisClient,
     workspace_id: str,

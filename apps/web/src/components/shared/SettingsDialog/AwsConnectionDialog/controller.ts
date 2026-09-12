@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { AwsConnection } from "@/lib/api/schemas";
 import {
-  accountComputeQueryKeys,
   cancelAwsConnectionReconnect,
   createAwsConnection,
   reconnectAwsConnection,
@@ -11,6 +10,7 @@ import {
   retryAwsConnection,
   validateAwsConnection,
 } from "@/lib/queries/compute";
+import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 import type { AwsConnectionDialogRecoveryAction } from "./lifecycle";
 
@@ -87,13 +87,13 @@ export function useAwsConnectionController({
       }
     },
     onSuccess: (outcome) => {
-      queryClient.setQueryData(accountComputeQueryKeys.awsConnection(), outcome.connection);
+      queryClient.setQueryData(accountQueryKeys.compute.awsConnection(), outcome.connection);
 
       if (outcome.action === "remove") {
         setRemoveOpen(false);
         // The whole account-level compute root: the connection is gone, and so is
         // the capacity, the inventory, and the catalog that were read through it.
-        void queryClient.invalidateQueries({ queryKey: accountComputeQueryKeys.root() });
+        void queryClient.invalidateQueries({ queryKey: accountQueryKeys.compute.root() });
       }
 
       if (outcome.action !== "create" && outcome.action !== "reconnect") onClose();
@@ -113,21 +113,6 @@ export function useAwsConnectionController({
     mutation.mutate(command);
   };
 
-  const runCreate = (accountId: string) => {
-    if (activeActionRef.current !== null) return;
-    run({
-      action: "create",
-      accountId,
-    });
-  };
-
-  const runReconnect = () => {
-    if (activeActionRef.current !== null) return;
-    run({
-      action: "reconnect",
-    });
-  };
-
   return {
     activeAction,
     createError: lastAction === "create" ? mutation.error : null,
@@ -138,9 +123,9 @@ export function useAwsConnectionController({
     removalError: lastAction === "remove" ? mutation.error : null,
     removeOpen,
     setRemoveOpen,
-    create: (accountId) => runCreate(accountId.trim()),
+    create: (accountId) => run({ action: "create", accountId: accountId.trim() }),
     validate: () => run({ action: "validate" }),
-    reconnect: runReconnect,
+    reconnect: () => run({ action: "reconnect" }),
     cancelReconnect: () => run({ action: "cancel_reconnect" }),
     retry: () => run({ action: "retry" }),
     remove: () => run({ action: "remove" }),

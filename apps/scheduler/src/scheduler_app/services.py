@@ -68,6 +68,7 @@ from provider_clients.workspace_compute import configured_platform_compute_provi
 from provider_cloudflare import CloudflareSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
+from scheduler.adapters import SchedulerWorkloadDirectoryAdapter
 from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.capacity_reservations import RedisCapacityReservationRepository
 from scheduler.compute_hooks import SchedulerComputeHooks
@@ -114,7 +115,6 @@ from billing import (
 )
 from database import DatabaseClient
 from notifications import EmailOutboxDrain
-from scheduler_app.execution_adapters import SchedulerWorkloadDirectoryAdapter
 
 
 @dataclass(frozen=True, slots=True)

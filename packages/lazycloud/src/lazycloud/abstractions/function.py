@@ -11,9 +11,9 @@ from typing import (
     ParamSpec,
     Protocol,
     TypedDict,
+    TypeGuard,
     TypeVar,
     overload,
-    runtime_checkable,
 )
 
 from pydantic import ValidationError
@@ -81,6 +81,7 @@ from lazycloud.values import cloudpickle_bytes
 
 P = ParamSpec("P")
 R = TypeVar("R")
+KeyT = TypeVar("KeyT")
 
 
 class _FunctionClient(Protocol):
@@ -98,16 +99,6 @@ class _FunctionClient(Protocol):
 
 class FunctionOperationError(RuntimeError):
     pass
-
-
-@runtime_checkable
-class InvocationMapping(Protocol):
-    def items(self) -> Iterable[tuple[Any, Any]]: ...
-
-
-@runtime_checkable
-class InvocationIterable(Protocol):
-    def __iter__(self) -> Iterator[Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -638,8 +629,8 @@ class Function(Generic[P, R]):
 
 
 def _map_args(input_value: Any) -> tuple[Any, ...]:
-    if isinstance(input_value, InvocationIterable) and _is_invocation_sequence(input_value):
-        return _invocation_tuple(input_value)
+    if _is_invocation_tuple(input_value) or _is_invocation_list(input_value):
+        return tuple(input_value)
     return (input_value,)
 
 
@@ -688,56 +679,39 @@ def _function_call_ref_payload(
                 )
             )
         return {FUNCTION_CALL_REF_MARKER: True, "task_id": value.task_id}
-    if isinstance(value, InvocationMapping) and _is_invocation_mapping(value):
+    if _is_invocation_mapping(value):
         return _function_call_ref_mapping(value, dependencies, seen)
-    if isinstance(value, InvocationIterable):
-        if _is_invocation_list(value):
-            return _function_call_ref_list(value, dependencies, seen)
-        if _is_invocation_tuple(value):
-            return _function_call_ref_tuple(value, dependencies, seen)
+    if _is_invocation_list(value):
+        return [_function_call_ref_payload(item, dependencies, seen) for item in value]
+    if _is_invocation_tuple(value):
+        return _function_call_ref_tuple(value, dependencies, seen)
     return value
 
 
-def _invocation_tuple(values: InvocationIterable) -> tuple[Any, ...]:
-    return tuple(values)
-
-
-def _is_invocation_sequence(value: InvocationIterable) -> bool:
-    return isinstance(value, tuple | list)
-
-
-def _is_invocation_mapping(value: InvocationMapping) -> bool:
+def _is_invocation_mapping(value: object) -> TypeGuard[dict[object, object]]:
     return isinstance(value, dict)
 
 
-def _is_invocation_list(value: InvocationIterable) -> bool:
+def _is_invocation_list(value: object) -> TypeGuard[list[object]]:
     return isinstance(value, list)
 
 
-def _is_invocation_tuple(value: InvocationIterable) -> bool:
+def _is_invocation_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
     return isinstance(value, tuple)
 
 
 def _function_call_ref_mapping(
-    value: InvocationMapping,
+    value: Mapping[KeyT, object],
     dependencies: list[FunctionCallDependency],
     seen: set[str],
-) -> dict[Any, Any]:
+) -> dict[KeyT, Any]:
     return {
         key: _function_call_ref_payload(item, dependencies, seen) for key, item in value.items()
     }
 
 
-def _function_call_ref_list(
-    value: InvocationIterable,
-    dependencies: list[FunctionCallDependency],
-    seen: set[str],
-) -> list[Any]:
-    return [_function_call_ref_payload(item, dependencies, seen) for item in value]
-
-
 def _function_call_ref_tuple(
-    value: InvocationIterable,
+    value: Iterable[object],
     dependencies: list[FunctionCallDependency],
     seen: set[str],
 ) -> tuple[Any, ...]:

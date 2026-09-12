@@ -314,20 +314,12 @@ def _json_schema_from_metadata(value: JsonValue) -> dict[str, JsonValue]:
             },
             "required": [str(name) for name in fields],
         }
-    if field_type == "string":
-        return {"type": "string"}
-    if field_type == "integer":
-        return {"type": "integer"}
-    if field_type == "number":
-        return {"type": "number"}
-    if field_type == "boolean":
-        return {"type": "boolean"}
+    if field_type in {"string", "integer", "number", "boolean", "object"}:
+        return {"type": field_type}
     if field_type == "file":
         return {"type": "string", "format": "binary"}
     if field_type in {"array", "list"}:
         return {"type": "array", "items": {}}
-    if field_type == "object":
-        return {"type": "object"}
     return {}
 
 
@@ -336,16 +328,14 @@ def _metadata_from_json_schema(schema: dict[str, Any]) -> JsonValue:
     schema_type = resolved.get("type") if isinstance(resolved, dict) else None
     if resolved.get("format") == "binary":
         return {"type": "file"}
-    if schema_type == "string":
-        return {"type": "string"}
-    if schema_type == "integer":
-        return {"type": "integer"}
-    if schema_type == "number":
-        return {"type": "number"}
-    if schema_type == "boolean":
-        return {"type": "boolean"}
-    if schema_type == "array":
-        return {"type": "array"}
+    if isinstance(schema_type, str) and schema_type in {
+        "string",
+        "integer",
+        "number",
+        "boolean",
+        "array",
+    }:
+        return {"type": schema_type}
     if schema_type == "object" or "properties" in resolved:
         return {"type": "object"}
     return {"type": "json"}
@@ -372,11 +362,7 @@ def _default_payload(value: object) -> tuple[JsonValue, str]:
         validated = to_json_value(value)
     except (TypeError, ValueError) as exc:
         raise ClientContractError("default value is not JSON serializable") from exc
-    if isinstance(validated, str | int | float | bool) or validated is None:
-        return validated, repr(validated)
-    if isinstance(validated, list | dict):
-        return validated, repr(validated)
-    return None, "None"
+    return validated, repr(validated)
 
 
 __all__ = [

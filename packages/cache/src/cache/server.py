@@ -1263,11 +1263,8 @@ def _normalize_content_hash(content_hash: str) -> str:
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as source:
-        while chunk := source.read(8 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(source, "sha256").hexdigest()
 
 
 def _request_body_reader(

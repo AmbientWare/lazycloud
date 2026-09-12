@@ -11,8 +11,6 @@ import {
 } from "@/lib/api/schemas";
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 
-export const accountComputeQueryKeys = accountQueryKeys.compute;
-
 /**
  * How often capacity is re-read while its panel is open.
  *
@@ -36,7 +34,7 @@ const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
 /** Machines this account connected. They serve every workspace it owns. */
 export function machinesQueryOptions() {
   return queryOptions({
-    queryKey: accountComputeQueryKeys.machines(),
+    queryKey: accountQueryKeys.compute.machines(),
     queryFn: () => apiRequest("/api/v1/machines/self-hosted?limit=250", unitMachineListSchema),
     refetchInterval: CAPACITY_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
@@ -45,7 +43,7 @@ export function machinesQueryOptions() {
 
 export function computeInstancesQueryOptions(enabled = true) {
   return queryOptions({
-    queryKey: accountComputeQueryKeys.instances(),
+    queryKey: accountQueryKeys.compute.instances(),
     enabled,
     queryFn: () => apiRequest("/api/v1/compute/instances", customerComputeInstanceListSchema),
     refetchInterval: CAPACITY_POLL_INTERVAL_MS,
@@ -55,7 +53,7 @@ export function computeInstancesQueryOptions(enabled = true) {
 
 export function awsConnectionQueryOptions(enabled = true) {
   return queryOptions({
-    queryKey: accountComputeQueryKeys.awsConnection(),
+    queryKey: accountQueryKeys.compute.awsConnection(),
     enabled,
     queryFn: getAwsConnection,
     refetchInterval: AWS_CONNECTION_POLL_INTERVAL_MS,
@@ -73,37 +71,19 @@ export type CreateAwsConnectionInput = {
   accountId: string;
 };
 
-export type AwsConnectionAuthorizationResult = {
-  connection: AwsConnection;
-  authorization: import("zod").z.infer<typeof awsConnectionAuthorizationSchema>["authorization"];
-};
-
-export async function createAwsConnection(
-  input: CreateAwsConnectionInput,
-): Promise<AwsConnectionAuthorizationResult> {
-  const response = await postJson("/api/v1/aws-connection", awsConnectionAuthorizationSchema, {
+export function createAwsConnection(input: CreateAwsConnectionInput) {
+  return postJson("/api/v1/aws-connection", awsConnectionAuthorizationSchema, {
     account_id: input.accountId,
     pool: input.pool,
   });
-  return {
-    connection: response.connection,
-    authorization: response.authorization,
-  };
 }
 
 export function validateAwsConnection() {
   return postJson("/api/v1/aws-connection/validate", awsConnectionSchema);
 }
 
-export async function reconnectAwsConnection(): Promise<AwsConnectionAuthorizationResult> {
-  const response = await postJson(
-    "/api/v1/aws-connection/reconnect",
-    awsConnectionAuthorizationSchema,
-  );
-  return {
-    connection: response.connection,
-    authorization: response.authorization,
-  };
+export function reconnectAwsConnection() {
+  return postJson("/api/v1/aws-connection/reconnect", awsConnectionAuthorizationSchema);
 }
 
 export async function removeAwsConnection(): Promise<AwsConnection | null> {

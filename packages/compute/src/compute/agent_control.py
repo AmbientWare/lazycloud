@@ -1152,16 +1152,6 @@ def agent_worker_slot_state(
     )
 
 
-def agent_worker_image(registry: str, name: str, tag: str = "") -> str:
-    image = registry.rstrip("/")
-    if image:
-        image += "/"
-    image += name
-    if tag:
-        image += f":{tag}"
-    return image
-
-
 def _join_token_error(token_state: ComputeJoinTokenState | None, now: datetime) -> str:
     if token_state is None or token_state.revoked or token_state.expires_at is None:
         return "join token is invalid or expired"

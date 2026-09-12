@@ -33,12 +33,6 @@ from images.building import (
     plan_image_build_failure_event,
     plan_image_build_log_event,
 )
-from images.cleanup import (
-    ImageBuildCleanupExecutor,
-    ImageBuildCleanupResult,
-    LocalImageBuildCleanupExecutor,
-    plan_image_build_cleanup,
-)
 from images.context import ImageContext
 from images.execution import (
     ImageBuildExecutionResult,
@@ -91,7 +85,6 @@ class ImageBuildService:
     submission: ImageBuildSubmissionService
     events: EventService | None = None
     publication_publisher: ImageBuildPublicationPublisher | None = None
-    cleanup_executor: ImageBuildCleanupExecutor | None = None
     archive_settings: ImageArchiveSettings | None = None
     archive_store: ImageBuildArchiveObjectStore | None = None
 
@@ -131,9 +124,7 @@ class ImageBuildService:
         for event in result.events:
             if event.done:
                 continue
-            if image_build_stream_event_key(event) in seen or (
-                event.message and not event.done and event.message in seen_messages
-            ):
+            if image_build_stream_event_key(event) in seen or event.message in seen_messages:
                 continue
             emitted.append(
                 self.append_stream_event(
@@ -382,7 +373,6 @@ class ImageBuildService:
                 workspace_id=workspace_id,
                 clip_version=2,
             )
-            completed = self.get(build_id, workspace_id=workspace_id)
         return completed
 
     def cancel(
@@ -552,37 +542,6 @@ class ImageBuildService:
                 image_id,
                 workspace_id=workspace_id,
             )
-
-    def cleanup_build(
-        self,
-        build_id: str,
-        *,
-        workspace_id: str | None = None,
-        keep_artifacts: bool = True,
-        container_id: str = "",
-        executor: ImageBuildCleanupExecutor | None = None,
-    ) -> ImageBuildCleanupResult:
-        resolved_workspace_id = self._resolve_workspace_id(workspace_id)
-        build = self.get(build_id, workspace_id=resolved_workspace_id)
-        cleanup_executor = executor or self.cleanup_executor
-        if cleanup_executor is None:
-            cleanup_executor = LocalImageBuildCleanupExecutor()
-        plan = plan_image_build_cleanup(
-            build,
-            keep_artifacts=keep_artifacts,
-            container_id=container_id,
-        )
-        result = cleanup_executor.cleanup(plan)
-        build.cache_metadata = {
-            **build.cache_metadata,
-            "cleanup_status": result.status.value,
-            "cleanup_actions": ",".join(action.value for action in result.actions),
-        }
-        if result.reason:
-            build.cache_metadata["cleanup_reason"] = result.reason
-        with self.context.database.session() as session:
-            ImageBuildRepository(session).upsert(build, workspace_id=resolved_workspace_id)
-        return result
 
     def append_stream_event(
         self,

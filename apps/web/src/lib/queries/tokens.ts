@@ -8,9 +8,12 @@ import {
   tokenListSchema,
   type AuthToken,
   type TokenCreateResponse,
-  type TokenListResponse,
 } from "@/lib/api/schemas";
-import { selectInfiniteList, type InfiniteListQueryData } from "@/lib/queries/infinite-list";
+import {
+  nextListCursor,
+  selectInfiniteList,
+  type InfiniteListQueryData,
+} from "@/lib/queries/infinite-list";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 const COLLECTION = "/api/v1/tokens";
@@ -44,18 +47,8 @@ export function tokensQueryOptions(includeDevice: boolean) {
       if (pageParam) params.set("cursor", pageParam);
       return apiRequest(`${COLLECTION}?${params.toString()}`, tokenListSchema);
     },
-    getNextPageParam: nextTokenCursor,
+    getNextPageParam: nextListCursor,
   });
-}
-
-/** A repeated cursor would page forever, so a server that returns one ends the list. */
-function nextTokenCursor(
-  lastPage: TokenListResponse,
-  pages: TokenListResponse[],
-): string | undefined {
-  if (!lastPage.next) return undefined;
-  const cursorAlreadySeen = pages.slice(0, -1).some((page) => page.next === lastPage.next);
-  return cursorAlreadySeen ? undefined : lastPage.next;
 }
 
 export function selectTokenList(

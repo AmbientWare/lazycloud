@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -610,18 +610,6 @@ def _bucket_start(value: datetime, window_seconds: int) -> datetime:
     elapsed = int((value - epoch).total_seconds())
     bucket_elapsed = elapsed - (elapsed % window_seconds)
     return epoch + timedelta(seconds=bucket_elapsed)
-
-
-def _runtime_ms(task: Task) -> float | None:
-    if task.started_at is None or task.finished_at is None:
-        return None
-    return (task.finished_at - task.started_at).total_seconds() * 1000
-
-
-def _startup_ms(task: Task) -> float | None:
-    if task.started_at is None:
-        return None
-    return (task.started_at - task.created_at).total_seconds() * 1000
 
 
 def _sample_runtime_ms(sample: TaskDurationSample) -> float:
@@ -1234,9 +1222,9 @@ class ManagementService:
             tallies = TaskRepository(session).status_tallies_by_deployment(
                 workspace_id=workspace_record.id
             )
-        counts: dict[str, Counter[TaskStatus]] = {}
+        counts: dict[str, Counter[TaskStatus]] = defaultdict(Counter)
         for tally in tallies:
-            counts.setdefault(tally.deployment_id or "", Counter())[tally.status] += tally.count
+            counts[tally.deployment_id or ""][tally.status] += tally.count
         return tuple(
             TaskCountByDeployment(
                 deployment_id=deployment_id,
@@ -1277,10 +1265,10 @@ class ManagementService:
                 app_id=app_id,
                 stub_id=stub_id,
             )
-        buckets: dict[datetime, Counter[TaskStatus]] = {}
+        buckets: dict[datetime, Counter[TaskStatus]] = defaultdict(Counter)
         for sample in samples:
             bucket = _bucket_start(sample.created_at, window_seconds)
-            buckets.setdefault(bucket, Counter())[sample.status] += 1
+            buckets[bucket][sample.status] += 1
         return tuple(
             TaskTimeWindowBucket(
                 timestamp=timestamp,
@@ -1385,7 +1373,7 @@ class ManagementService:
             1.0 if counted else max((measured_through - aligned_start).total_seconds(), 1.0)
         )
 
-        amounts: dict[tuple[str, str], list[float]] = {}
+        amounts: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0] * bucket_count)
         with self.services.context.database.session() as session:
             # Two tables answer this, and which one is not a detail of the chart:
             # a start is a row in the orchestration record, and a resource is a
@@ -1419,7 +1407,7 @@ class ManagementService:
             for key, index, amount in readings:
                 if index < 0 or index >= bucket_count:
                     continue
-                amounts.setdefault(key, [0.0] * bucket_count)[index] += amount
+                amounts[key][index] += amount
             app_names = AppRepository(session).names([app_id for _, app_id in amounts if app_id])
         return AccountActivity(
             measure=measure,
@@ -1480,14 +1468,14 @@ class ManagementService:
                 start=resolved_start,
                 end=resolved_end,
             )
-        durations: dict[datetime, list[float]] = {}
-        statuses: dict[datetime, Counter[TaskStatus]] = {}
+        durations: dict[datetime, list[float]] = defaultdict(list)
+        statuses: dict[datetime, Counter[TaskStatus]] = defaultdict(Counter)
         for sample in samples:
             bucket = _bucket_start(sample.created_at, window_seconds)
-            durations.setdefault(bucket, []).append(
+            durations[bucket].append(
                 (sample.finished_at - sample.started_at).total_seconds() * 1000
             )
-            statuses.setdefault(bucket, Counter())[sample.status] += 1
+            statuses[bucket][sample.status] += 1
         cold_starts = Counter(
             _bucket_start(created_at, window_seconds) for created_at in cold_start_times
         )

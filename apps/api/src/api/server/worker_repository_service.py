@@ -1289,25 +1289,6 @@ class WorkerRepositoryService:
         )
         return ResolveSourceCacheCleanupResponse(resolved=True)
 
-    def _require_source_cache_available(
-        self,
-        request: WorkerCacheSessionRequest | GetNextContainerRequestRequest,
-        *,
-        principal: WorkerRepositoryPrincipal | None,
-    ) -> None:
-        if principal is None:
-            raise AuthorizationDeniedError("worker source cache session requires a principal")
-        try:
-            self._source_cache_service().require_available(
-                principal=principal,
-                worker_id=request.worker_id,
-                generation_id=request.cache_generation_id,
-                session_fence=request.cache_session_fence,
-            )
-        except WorkerSourceCacheUnavailableError:
-            self._project_source_cache_unavailable(request.worker_id)
-            raise
-
     async def _require_source_cache_available_async(
         self,
         io: ApiAsyncIo,

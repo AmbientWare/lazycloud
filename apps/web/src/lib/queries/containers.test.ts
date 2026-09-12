@@ -4,26 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ContainerWithAppPage } from "@/lib/api/schemas";
 
-import { containersQueryOptions, nextContainerCursor, selectContainerList } from "./containers";
+import { containersQueryOptions } from "./containers";
 
 describe("container pagination", () => {
-  it("deduplicates overlapping live pages while preserving server order", () => {
-    const first = containerPage(["container-3", "container-2"], "cursor-2");
-    const second = containerPage(["container-2", "container-1"], "");
-
-    expect(
-      selectContainerList({ pages: [first, second] }, false).items.map((item) => item.container.id),
-    ).toEqual(["container-3", "container-2", "container-1"]);
-  });
-
-  it("stops when a server repeats a cursor", () => {
-    const first = containerPage(["container-3"], "cursor-2");
-    const repeated = containerPage(["container-2"], "cursor-2");
-
-    expect(nextContainerCursor(first, [first])).toBe("cursor-2");
-    expect(nextContainerCursor(repeated, [first, repeated])).toBeUndefined();
-  });
-
   it("sends workspace, app, repeated statuses, and cursor to the API", async () => {
     const fetchMock = vi.fn<typeof fetch>();
     fetchMock.mockResolvedValue(

@@ -10,7 +10,6 @@ from shared.tasks import Task
 from api.server.services import ApiServices
 
 ENDPOINT_STUB_KINDS = frozenset({StubKind.Endpoint, StubKind.Asgi})
-POD_STUB_KINDS = frozenset({StubKind.Pod, StubKind.Sandbox})
 
 
 def require_stub_workspace(

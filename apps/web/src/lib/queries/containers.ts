@@ -1,5 +1,4 @@
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
-import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import {
@@ -10,7 +9,12 @@ import {
   type ContainerWithAppPage,
 } from "@/lib/api/schemas";
 
-import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
+import {
+  LIVE_LIST_MAX_PAGES,
+  nextListCursor,
+  selectInfiniteList,
+  type InfiniteListQueryData,
+} from "./infinite-list";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 export type ContainerListOptions = {
@@ -22,8 +26,6 @@ export type ContainerListOptions = {
 
 export type ContainerListStatus = "pending" | "running" | "exited" | "failed" | "stopped";
 
-const INITIAL_CONTAINER_CURSOR: string = "";
-
 export function containersQueryOptions(workspaceId: string, options: ContainerListOptions = {}) {
   return infiniteQueryOptions({
     queryKey: workspaceQueryKeys.containers.list(workspaceId, {
@@ -31,7 +33,7 @@ export function containersQueryOptions(workspaceId: string, options: ContainerLi
       stubIds: options.stubIds?.join(",") ?? null,
       statuses: options.statuses?.join(",") ?? null,
     }),
-    initialPageParam: INITIAL_CONTAINER_CURSOR,
+    initialPageParam: "",
     queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({ limit: "100" });
       if (pageParam) params.set("cursor", pageParam);
@@ -43,24 +45,11 @@ export function containersQueryOptions(workspaceId: string, options: ContainerLi
         containerWithAppPageSchema,
       );
     },
-    getNextPageParam: nextContainerCursor,
-    // A live list is a view of what is happening now, not an archive. Without a
-    // bound, every change event refetches every page the list has ever loaded:
-    // one app view walked twenty pages of a hundred containers and re-walked
-    // them on each event, which is most of what made the dashboard slow.
+    getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
     enabled: options.enabled,
     meta: workspaceLiveQueryMeta(true),
   });
-}
-
-export function nextContainerCursor(
-  lastPage: ContainerWithAppPage,
-  pages: ContainerWithAppPage[],
-): string | undefined {
-  if (!lastPage.next) return undefined;
-  const cursorAlreadySeen = pages.slice(0, -1).some((page) => page.next === lastPage.next);
-  return cursorAlreadySeen ? undefined : lastPage.next;
 }
 
 export function selectContainerList(

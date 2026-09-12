@@ -176,28 +176,17 @@ def _build_telemetry_batches(
     batch_size: int,
 ) -> list[AgentTelemetryRequest]:
     batches: list[AgentTelemetryRequest] = []
-    pending_logs = list(logs)
-    pending_events = list(events)
-    pending_metrics = metrics
-    while pending_logs or pending_events or pending_metrics is not None:
-        request_logs = pending_logs[:batch_size]
-        del pending_logs[: len(request_logs)]
-        remaining = max(batch_size - len(request_logs), 0)
-        request_events = pending_events[:remaining]
-        del pending_events[: len(request_events)]
-        request_metrics = None
-        if pending_metrics is not None and (
-            len(request_logs) + len(request_events) < batch_size
-            or (not request_logs and not request_events)
-        ):
-            request_metrics = pending_metrics
-            pending_metrics = None
+    total_records = _telemetry_record_count(logs, events, metrics)
+    for start in range(0, total_records, batch_size):
+        request_logs = logs[start : start + batch_size]
+        event_start = max(start - len(logs), 0)
+        request_events = events[event_start : event_start + batch_size - len(request_logs)]
         batches.append(
             AgentTelemetryRequest(
                 agent_token=agent_token,
                 logs=request_logs,
                 events=request_events,
-                metrics=request_metrics,
+                metrics=metrics if start + batch_size >= total_records else None,
             )
         )
     return batches

@@ -1,10 +1,14 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
-import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { deploymentListSchema, type Deployment, type DeploymentList } from "@/lib/api/schemas";
+import { deploymentListSchema, type Deployment } from "@/lib/api/schemas";
 
-import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
+import {
+  LIVE_LIST_MAX_PAGES,
+  nextListCursor,
+  selectInfiniteList,
+  type InfiniteListQueryData,
+} from "./infinite-list";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 export type DeploymentListOptions = {
@@ -33,7 +37,7 @@ export function deploymentsInfiniteQueryOptions(
         deploymentListSchema,
       );
     },
-    getNextPageParam: nextDeploymentCursor,
+    getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
     meta: workspaceLiveQueryMeta(true),
   });
@@ -44,15 +48,6 @@ export function selectDeploymentList(
   hasNextPage: boolean | undefined,
 ) {
   return selectInfiniteList(data, hasNextPage, (deployment) => deployment.id);
-}
-
-export function nextDeploymentCursor(
-  lastPage: DeploymentList,
-  pages: DeploymentList[],
-): string | undefined {
-  if (!lastPage.next) return undefined;
-  const cursorAlreadySeen = pages.slice(0, -1).some((page) => page.next === lastPage.next);
-  return cursorAlreadySeen ? undefined : lastPage.next;
 }
 
 function deploymentListParams(options: DeploymentListOptions, cursor: string): URLSearchParams {

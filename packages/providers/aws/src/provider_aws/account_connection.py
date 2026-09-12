@@ -2332,27 +2332,6 @@ def _client_error(exc: ClientError, *, operation: str) -> AwsProviderControlErro
     )
 
 
-def default_connection_session(
-    *,
-    region_name: str,
-    aws_access_key_id: str | None = None,
-    aws_secret_access_key: str | None = None,
-    aws_session_token: str | None = None,
-) -> AwsConnectionSession:
-    """The session every AWS caller in this process starts from."""
-    return _default_session(
-        region_name=region_name,
-        aws_access_key_id=aws_access_key_id,
-        aws_secret_access_key=aws_secret_access_key,
-        aws_session_token=aws_session_token,
-    )
-
-
-def ambient_connection_session(*, region_name: str) -> AwsConnectionSession:
-    """An AWS session using only the workload's ambient credential chain."""
-    return _Boto3ConnectionSession(Session(region_name=region_name))
-
-
 def connection_profile_name() -> str:
     """The AWS profile that reaches a connected account, or none for ambient.
 

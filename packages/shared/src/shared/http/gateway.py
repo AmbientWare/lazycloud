@@ -25,10 +25,6 @@ class GatewayUrlKind(StringEnum):
     Shell = "shell"
 
 
-class StringList(HttpModel):
-    values: list[str] = Field(default_factory=list)
-
-
 class AgentCapacityInterruptionRequest(HttpModel):
     agent_token: str = Field(min_length=1, repr=False)
     machine_id: str = Field(min_length=1)
@@ -329,7 +325,6 @@ __all__ = [
     "Schema",
     "SchemaField",
     "SecretVar",
-    "StringList",
     "StubVolume",
     "SyncContainerWorkspaceBody",
     "SyncContainerWorkspaceResponse",

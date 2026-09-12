@@ -139,22 +139,6 @@ def print_payload(
     )
 
 
-def print_collection(
-    ctx: typer.Context,
-    payload: Any,
-    *,
-    title: str,
-    columns: Sequence[str],
-    rows: Sequence[Sequence[object]],
-    empty: str,
-) -> None:
-    emit(
-        ctx,
-        payload=payload,
-        view=resource_table(title, columns, rows, empty=empty),
-    )
-
-
 def write_stream(value: str, *, error: bool = False) -> None:
     """Write stream content exactly, without Rich markup or highlighting."""
     target = error_console if error else console
@@ -273,7 +257,6 @@ __all__ = [
     "json_output_enabled",
     "parse_json_argument",
     "payload_data",
-    "print_collection",
     "print_events_table",
     "print_json_line",
     "print_payload",

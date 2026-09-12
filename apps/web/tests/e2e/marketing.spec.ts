@@ -8,7 +8,10 @@ test("canonical marketing routes are public, responsive, and accessible", async 
   const consoleErrors: string[] = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
-    if (pathname.startsWith("/api/") || pathname.startsWith("/auth/")) {
+    if (
+      (pathname.startsWith("/api/") && pathname !== "/api/v1/pricing") ||
+      pathname.startsWith("/auth/")
+    ) {
       authenticatedRequests.push(pathname);
     }
   });
