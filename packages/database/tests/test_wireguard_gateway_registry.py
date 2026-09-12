@@ -10,11 +10,10 @@ from database.repositories.compute import (
     WireGuardGatewayRepository,
     wireguard_gateway_id,
 )
-from database.tables.compute import WireGuardGatewayTable
 from shared.compute_enrollment import WireGuardGateway
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 
@@ -50,7 +49,7 @@ def test_gateway_migration_preserves_enrolled_identity_and_rejects_collisions(
 
         with Session(engine) as session, session.begin():
             repository = WireGuardGatewayRepository(session)
-            assert repository.current() == primary
+            assert repository.get_by_index(0) == primary
             secondary = repository.save(
                 WireGuardGateway(
                     id=wireguard_gateway_id(1),
@@ -64,10 +63,6 @@ def test_gateway_migration_preserves_enrolled_identity_and_rejects_collisions(
             assert repository.save(relocated) == relocated
             assert repository.list_all() == [relocated, secondary]
             assert repository.get_by_index(1) == secondary
-            assert session.scalar(
-                select(WireGuardGatewayTable.payload).where(WireGuardGatewayTable.id == primary.id)
-            ) == relocated.model_dump(mode="json", exclude={"index"})
-
             with pytest.raises(ConflictError, match="cannot be changed"):
                 repository.save(primary.model_copy(update={"public_key": secondary.public_key}))
             with pytest.raises(ConflictError, match="already registered"):

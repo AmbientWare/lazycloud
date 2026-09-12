@@ -472,11 +472,17 @@ services:
       - wireguard-keys:/var/lib/lazycloud/wireguard
 
   tunnel-gateway: &wireguard-gateway
-    image: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/tunnel-gateway@sha256:04d2adb643a23d26b41ab3c27c1bd8f6ca1704d71f31e283ee32be9b87f0c5be
+    image: tunnel-gateway:local
     restart: unless-stopped
-    stop_grace_period: 30s
+    stop_grace_period: 150s
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: tunnel-gateway
+      args: *lazycloud-build-args
     environment: &wireguard-gateway-env
       <<: [*process-env, *database-env, *redis-env]
+      LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "0"
       LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/server/private-key
       LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY: /var/lib/lazycloud/wireguard
       LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT: "1"
@@ -506,8 +512,6 @@ services:
 
   tunnel-gateway-1:
     <<: *wireguard-gateway
-    image: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/tunnel-gateway@sha256:63fa7a6bd7c5df7ea77641a6f5353cd6460e721ade7b648d2e8d8f4547bd226a
-    stop_grace_period: 150s
     environment:
       <<: *wireguard-gateway-env
       LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "1"

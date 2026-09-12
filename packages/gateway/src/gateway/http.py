@@ -116,21 +116,6 @@ class AgentRoute(HttpModel):
     proxy_auth_token: str = Field(default="", repr=False)
 
 
-class RegisterAgentPrivateNetworkRequest(HttpModel):
-    agent_token: str
-    public_key: str = Field(min_length=44, max_length=44)
-
-
-class RegisterAgentPrivateNetworkResponse(HttpModel):
-    peer_id: str
-    address: str
-    server_public_key: str = Field(min_length=44, max_length=44)
-    endpoint: str
-    allowed_ips: tuple[str, ...]
-    persistent_keepalive_seconds: int = Field(ge=1, le=120)
-    generation: int = Field(ge=1)
-
-
 class ListAgentRoutesRequest(HttpModel):
     agent_token: str
 
