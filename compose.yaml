@@ -506,13 +506,8 @@ services:
 
   tunnel-gateway-1:
     <<: *wireguard-gateway
-    image: tunnel-gateway:local
+    image: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/tunnel-gateway@sha256:63fa7a6bd7c5df7ea77641a6f5353cd6460e721ade7b648d2e8d8f4547bd226a
     stop_grace_period: 150s
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.control-plane
-      target: tunnel-gateway
-      args: *lazycloud-build-args
     environment:
       <<: *wireguard-gateway-env
       LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "1"

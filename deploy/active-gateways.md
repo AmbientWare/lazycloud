@@ -1,22 +1,22 @@
 # Active gateways
 
-The complete implementation is merged in `5e94e848d`. This preparation release
-applies migration stage one below. It retains the deployed gateway-zero and
-platform tunnel image, publishes the updater bridge and starts gateway one.
-Service-only provisioning is already deployed, and gateway one's assigned NLB
-endpoint is recorded in the production environment.
+This release applies migration stage two below. Agents use the indexed topology
+and maintain a tunnel to each gateway. Deploy it only after every active
+enrollment has the updater cleanup fix from preparation release `0.0.77`.
+Gateway zero and platform tunnels retain their deployed image. Gateway one stays
+on its preparation image and unchanged pod template while agents migrate.
 
 `wireguard-gateway.yaml` preserves gateway zero's two-replica Deployment and
 Service selector. Its pod template keeps secret revision `1` and the deployed
 network image ending in digest `87f0c5be`. The same image remains in the platform
-sidecar and key initializer. `wireguard-gateway-1.yaml` selects the new network
-image and the existing gateway-one Service. Its temporary `minAvailable: 1`
+sidecar and key initializer. `wireguard-gateway-1.yaml` pins the preparation image
+ending in digest `47bd226a` and secret revision `1`. Its temporary `minAvailable: 1`
 disruption budget blocks voluntary eviction while clients migrate. Remove that
 budget and all image pins when restoring the final indexed chart.
 
-Compose runs the same preparation topology against local dependencies. Gateway
-zero and the platform peer use the pinned release image; gateway one and key
-bootstrap build from this source. Pulling the pinned image requires access to
+Compose runs the same migration topology against local dependencies. Gateways
+and the platform peer use their pinned images; key bootstrap builds from this
+source. Pulling the pinned images requires access to
 the platform ECR repository. Do not copy AWS credentials into these containers.
 
 ## Outcome
