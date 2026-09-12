@@ -62,6 +62,7 @@ from worker.image_lifecycle import (
     plan_buildah_environment,
     plan_buildah_storage_config,
 )
+from worker.image_runtime import ImageContentCacheConnection
 from worker.origin_access import (
     CacheOriginCredentialRequest,
     CacheOriginCredentials,
@@ -618,6 +619,7 @@ class BuildahWorkerImageBuilder:
     repository: ImageArchiveUploadCredentialClient
     archive_root: Path
     index_cache_root: Path
+    content_cache: ImageContentCacheConnection
     context_loader: WorkerImageBuildContextLoader | None = None
     architecture_preparer: ImageBuildArchitecturePreparer = field(
         default_factory=ImageBuildArchitectureRuntime
@@ -852,6 +854,7 @@ class BuildahWorkerImageBuilder:
                         "storage_image_ref": registry_ref,
                         "output_path": str(index_path),
                         "architecture": payload.build_options.architecture.value,
+                        "content_cache": self.content_cache.model_dump(),
                     }
                 ),
             )

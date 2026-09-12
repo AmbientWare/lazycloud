@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
@@ -673,12 +674,20 @@ class RemoveNetworkLockResponse(WorkerRepositoryResponse):
     release: WorkerRepositoryLockRelease | None = None
 
 
-class SetContainerIpRequest(ContractModel):
+class ReserveContainerIpRequest(ContractModel):
     container_id: str
-    ip_address: str
+    subnet: str
+
+    @field_validator("subnet")
+    @classmethod
+    def bounded_ipv4_subnet(cls, value: str) -> str:
+        subnet = ipaddress.IPv4Network(value, strict=False)
+        if not 16 <= subnet.prefixlen <= 30:
+            raise ValueError("container subnet prefix length must be between 16 and 30")
+        return str(subnet)
 
 
-class SetContainerIpResponse(WorkerRepositoryResponse):
+class ReserveContainerIpResponse(WorkerRepositoryResponse):
     plan: NetworkIpMutationPlan | None = None
 
 

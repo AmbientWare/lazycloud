@@ -269,7 +269,7 @@ class WorkerImageStartupLoader:
                 archive_sha256=self._materialized_archive_sha256(paths, cache_load, source_load),
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
-                cache_path=str(Path(self.image_content_cache_root) / request.image_id),
+                cache_path=self.image_content_cache_root,
                 preload=request.preload_image,
                 repair_incomplete=True,
             )
@@ -315,7 +315,7 @@ class WorkerImageStartupLoader:
                 archive_sha256=request.archive_sha256,
                 archive_path=paths.local_archive_path,
                 mount_point=paths.mount_point,
-                cache_path=str(Path(self.image_content_cache_root) / request.image_id),
+                cache_path=self.image_content_cache_root,
                 preload=request.preload_image,
             )
         )
