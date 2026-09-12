@@ -130,7 +130,7 @@ class AgentTunnelGateway:
         self._sessions[record.connection_id] = session
         maintenance = asyncio.create_task(self._maintain(session))
         self._maintenance.add(maintenance)
-        maintenance.add_done_callback(self._maintenance.discard)
+        maintenance.add_done_callback(self._maintenance_finished)
 
         async def receive() -> None:
             while session.connected:
@@ -286,6 +286,11 @@ class AgentTunnelGateway:
             task.cancel()
         await asyncio.gather(*self._maintenance, return_exceptions=True)
 
+    def _maintenance_finished(self, task: asyncio.Task[None]) -> None:
+        self._maintenance.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            LOGGER.error("Agent tunnel session cleanup failed", exc_info=error)
+
     async def _maintain(self, session: _AgentSession) -> None:
         status = grpc.StatusCode.UNAVAILABLE
         try:
@@ -306,15 +311,16 @@ class AgentTunnelGateway:
             LOGGER.warning("Agent tunnel authorization closed the session: %s", type(exc).__name__)
         finally:
             session.connected = False
-            for task, context in tuple(session.streams.items()):
-                try:
-                    await context.abort(status, "Agent session is no longer authorized")
-                except grpc.aio.AbortError:
+            streams = tuple(session.streams.items())
+            try:
+                for _, context in streams:
+                    await _end_session_rpc(context, status)
+                await _end_session_rpc(session.context, status)
+            finally:
+                for task, _ in streams:
                     task.cancel()
-            with suppress(grpc.aio.AbortError):
-                await session.context.abort(status, "Agent session is no longer available")
-            self._sessions.pop(session.record.connection_id, None)
-            await self._release(session.record)
+                self._sessions.pop(session.record.connection_id, None)
+                await self._release(session.record)
 
     async def _release(self, record: AgentConnectionRecord) -> None:
         try:
@@ -393,6 +399,15 @@ async def _certificate(context: grpc.aio.ServicerContext[bytes, bytes]) -> str:
     ):
         await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Peer certificate expired")
     return certificate
+
+
+async def _end_session_rpc(
+    context: grpc.aio.ServicerContext[bytes, bytes], status: grpc.StatusCode
+) -> None:
+    if context.done() or context.cancelled():
+        return
+    with suppress(grpc.aio.AbortError):
+        await context.abort(status, "Agent session is no longer available")
 
 
 def _current_task() -> asyncio.Task[None]:

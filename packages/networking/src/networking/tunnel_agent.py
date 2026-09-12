@@ -150,7 +150,7 @@ class AgentTunnelClient:
             return
         try:
             raise error
-        except* (ConnectionError, grpc.RpcError):
+        except* (OSError, grpc.RpcError):
             LOGGER.debug("Agent tunnel stream disconnected")
         except* Exception as unexpected:
             LOGGER.error("Agent tunnel stream failed", exc_info=unexpected)
