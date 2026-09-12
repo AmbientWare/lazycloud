@@ -200,6 +200,8 @@ from worker.repository_payloads import (
     SetContainerAddressResponse,
     SetContainerExitCodeRequest,
     SetContainerExitCodeResponse,
+    SetContainerIpRequest,
+    SetContainerIpResponse,
     SetImagePullLockRequest,
     SetImagePullLockResponse,
     SetWorkerAddressRequest,
@@ -2534,6 +2536,22 @@ class WorkerRepositoryService:
         network_prefix, _ = self._authorized_network_scope(principal)
         return RemoveNetworkLockResponse(
             release=self.network.remove_network_lock(network_prefix, request.token)
+        )
+
+    def set_container_ip(
+        self,
+        request: SetContainerIpRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> SetContainerIpResponse:
+        network_prefix, worker = self._authorized_network_scope(principal)
+        self._authorize_network_container(principal, worker, request.container_id)
+        return SetContainerIpResponse(
+            plan=self.network.set_container_ip(
+                network_prefix,
+                request.container_id,
+                request.ip_address,
+            )
         )
 
     def reserve_container_ip(
