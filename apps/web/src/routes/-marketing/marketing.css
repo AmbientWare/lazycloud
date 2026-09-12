@@ -39,6 +39,36 @@
   height: var(--marketing-header-height);
 }
 
+.marketing-site main > section {
+  --marketing-section-background: var(--background);
+  position: relative;
+}
+
+/* The canvas sits above section backgrounds. This backing sits above the
+   canvas and below the content, leaving clouds visible around the edges. */
+.marketing-site main > section::before {
+  content: "";
+  position: absolute;
+  inset: 0 max(0px, calc((100% - 1360px) / 2));
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in oklab, var(--marketing-section-background) 85%, transparent) clamp(2rem, 6vw, 5rem),
+    color-mix(in oklab, var(--marketing-section-background) 85%, transparent)
+      calc(100% - clamp(2rem, 6vw, 5rem)),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 5rem,
+    black calc(100% - 5rem),
+    transparent
+  );
+}
+
 .marketing-site main > section > :not(.marketing-grid-field),
 .marketing-site > main > :not(section),
 .marketing-site > footer > * {
@@ -66,6 +96,7 @@
 }
 
 .marketing-site main > section.bg-muted {
+  --marketing-section-background: var(--muted);
   background: var(--muted);
 }
 
