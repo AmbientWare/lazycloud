@@ -9,7 +9,6 @@ from datetime import datetime
 from functools import partial
 from uuid import uuid4
 
-import uvicorn
 from anyio.to_thread import current_default_thread_limiter
 from compute.aws_connections import AwsAccountConnectionService
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
@@ -771,13 +770,3 @@ def _publish_api_services(app: FastAPI, services: ApiServices) -> None:
 def _unpublish_api_services(app: FastAPI, services: ApiServices) -> None:
     if getattr(app.state, "api_services", None) is services:
         del app.state.api_services
-
-
-def main() -> None:
-    uvicorn.run(
-        "api.fastapi_app:create_production_app",
-        factory=True,
-        host="127.0.0.1",
-        port=9000,
-        timeout_graceful_shutdown=20,
-    )
