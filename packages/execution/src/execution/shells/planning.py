@@ -11,6 +11,7 @@ from shared.app_identity import CONTAINER_HELPER_PATH
 from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
 from shared.env import STUB_ID_ENV
+from shared.shell_protocol import SHELL_AUTH_PASSWORD_ENV, SHELL_AUTH_USERNAME_ENV
 
 SHELL_ROUTE_PREFIX = "/api/v1/shells"
 SHELL_CONTAINER_PREFIX = "shell"
@@ -91,8 +92,8 @@ def shell_server_probe_command(port: int, *, timeout_seconds: float) -> str:
 class ShellContainerEnvVar(StrEnum):
     Handler = "HANDLER"
     StubId = STUB_ID_ENV
-    Username = "USERNAME"
-    Password = "PASSWORD"
+    Username = SHELL_AUTH_USERNAME_ENV
+    Password = SHELL_AUTH_PASSWORD_ENV
 
 
 class ShellExistingContainerStatus(StrEnum):

@@ -16,6 +16,7 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.orchestration import ContainerRepository
+from database.repositories.storage import VolumeRepository
 from execution.containers.service import ContainerService
 from execution.pods.service import PodControlService
 from execution.shells.planning import SHELL_WORKER_PORT
@@ -38,7 +39,7 @@ from shared.bytes_transport import encode_bytes
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.errors import ConflictError, PaymentRequiredError, UpstreamUnavailableError
 from shared.http.pods import (
     CreatePodResponse,
     PodSandboxDownloadFileResponse,
@@ -51,6 +52,7 @@ from shared.http.pods import (
 from shared.http.pods import (
     PodSandboxUpdateNetworkPermissionsResponse as HttpPodSandboxUpdateNetworkPermissionsResponse,
 )
+from shared.identity import WorkspaceStorageConfig
 from shared.shell_protocol import ShellFrameType, encode_shell_frame
 from shared.workload_keys import pod_keep_warm_lock_key
 from starlette.websockets import WebSocketDisconnect
@@ -58,6 +60,7 @@ from tests.agent_tunnels import enrolled_tunnel_route
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
 from tests.url_constants import TEST_URL
+from tests.workspaces import owned_workspace, unbilled_account
 from worker.container_client import models
 from worker.container_client.control import ContainerServiceTransport
 from worker.container_client.models import (
@@ -545,6 +548,109 @@ def test_standalone_ticket_failure_stops_once_and_terminal_retry_is_idempotent(
     assert first.terminal_status is ContainerStatus.Stopped
     assert second.status is ShellTicketCompensationStatus.Cleaned
     assert isolated_services.containers.get(container.id).status is ContainerStatus.Stopped
+
+
+def test_shell_admission_rejection_does_not_create_configured_volume(
+    isolated_services: ApiServices,
+) -> None:
+    _, workspace_id = unbilled_account(isolated_services.context)
+    control = ControlPlaneService(isolated_services.context)
+    stub = control.create_stub(
+        "unfunded-shell",
+        workspace=workspace_id,
+        kind=StubKind.Pod,
+        config={"volumes": [{"name": "uncreated", "mount_path": "/data", "read_only": True}]},
+    )
+    service = ShellControlService(
+        isolated_services,
+        scheduler_containers=_FakeSchedulerContainers(),
+        backend_connector=isolated_services.shell_service.backend_connector,
+    )
+
+    with pytest.raises(PaymentRequiredError):
+        service.create_standalone_shell(workspace_id=workspace_id, stub_id=stub.id)
+
+    with isolated_services.context.database.session() as session:
+        assert VolumeRepository(session).get("uncreated", workspace_id=workspace_id) is None
+        assert ContainerRepository(session).list(workspace_id=workspace_id) == []
+
+
+def test_shell_readiness_error_cleans_up_reserved_container(
+    isolated_services: ApiServices,
+) -> None:
+    class UnavailableDirectory(_FakeSchedulerContainers):
+        def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+            raise ConnectionError("scheduler directory disconnected")
+
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(
+        control,
+        "shell-readiness-failure",
+        storage=WorkspaceStorageConfig(bucket="shell-readiness-storage"),
+    )
+    stub = control.create_stub("shell-readiness", workspace=workspace.id, kind=StubKind.Pod)
+    service = ShellControlService(
+        isolated_services,
+        scheduler_containers=UnavailableDirectory(),
+        backend_connector=isolated_services.shell_service.backend_connector,
+    )
+
+    with pytest.raises(ConnectionError, match="scheduler directory disconnected"):
+        service.create_standalone_shell(workspace_id=workspace.id, stub_id=stub.id)
+
+    with isolated_services.context.database.session() as session:
+        containers = ContainerRepository(session).list(workspace_id=workspace.id)
+    assert len(containers) == 1
+    assert containers[0].status is ContainerStatus.Stopped
+    assert containers[0].finished_at is not None
+
+
+def test_shell_stale_running_signal_cannot_resurrect_stopped_container(
+    isolated_services: ApiServices,
+) -> None:
+    class StaleRunningDirectory(_FakeSchedulerContainers):
+        def get_container_state(self, container_id: str) -> SchedulerContainerState | None:
+            with isolated_services.context.database.session() as session:
+                repository = ContainerRepository(session)
+                record = repository.get_across_workspaces(container_id)
+                assert record is not None
+                record.runtime_worker_id = "assigned-shell-worker"
+                repository.records.upsert(
+                    record,
+                    key=record.id,
+                    workspace_id=record.workspace_id,
+                    name=record.name,
+                    status=record.status.value,
+                )
+            isolated_services.containers.stop(container_id)
+            return SchedulerContainerState(
+                container_id=container_id,
+                stub_id=record.stub_id or "",
+                workspace_id=record.workspace_id,
+                status=SchedulerContainerStatus.Running,
+            )
+
+    control = ControlPlaneService(isolated_services.context)
+    workspace = owned_workspace(
+        control,
+        "shell-stopped-before-ready",
+        storage=WorkspaceStorageConfig(bucket="shell-stopped-storage"),
+    )
+    stub = control.create_stub("shell-stopped", workspace=workspace.id, kind=StubKind.Pod)
+    service = ShellControlService(
+        isolated_services,
+        scheduler_containers=StaleRunningDirectory(),
+        backend_connector=isolated_services.shell_service.backend_connector,
+    )
+
+    with pytest.raises(UpstreamUnavailableError, match="did not become running"):
+        service.create_standalone_shell(workspace_id=workspace.id, stub_id=stub.id)
+
+    with isolated_services.context.database.session() as session:
+        containers = ContainerRepository(session).list(workspace_id=workspace.id)
+    assert len(containers) == 1
+    assert containers[0].status is ContainerStatus.Stopped
+    assert containers[0].runtime_worker_id == "assigned-shell-worker"
 
 
 def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_event(

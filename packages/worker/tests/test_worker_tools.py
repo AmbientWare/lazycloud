@@ -1,11 +1,31 @@
+import pytest
 from shared.mounts import MountAuthMode
+from shared.shell_protocol import SHELL_AUTH_PASSWORD_ENV, SHELL_AUTH_USERNAME_ENV
 from worker.tools import (
     ContainerCredentialContext,
+    ContainerCredentials,
     ContainerMount,
     ContainerMountKind,
+    apply_container_credentials,
     build_container_credential_request,
     has_container_credential_request,
 )
+
+
+def test_credential_hydration_preserves_shell_auth_and_rejects_reserved_secrets() -> None:
+    existing = [f"{SHELL_AUTH_USERNAME_ENV}=shell-user", f"{SHELL_AUTH_PASSWORD_ENV}=shell-auth"]
+    result = apply_container_credentials(
+        existing_env=existing,
+        mounts=[],
+        credentials=ContainerCredentials(env=["USERNAME=workload-user", "PASSWORD=workload-auth"]),
+    )
+    assert set(result.env) == {*existing, "USERNAME=workload-user", "PASSWORD=workload-auth"}
+    with pytest.raises(ValueError, match="reserved for shell authentication"):
+        apply_container_credentials(
+            existing_env=existing,
+            mounts=[],
+            credentials=ContainerCredentials(env=[f"{SHELL_AUTH_PASSWORD_ENV}=replacement"]),
+        )
 
 
 def test_ambient_bucket_mount_does_not_request_credentials() -> None:
