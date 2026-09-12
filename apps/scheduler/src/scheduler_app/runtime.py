@@ -8,13 +8,17 @@ from control.custom_domains import CustomDomainService
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from execution.containers.preemption import PreemptedContainerService
-from execution.endpoints.service import EndpointControlService, EndpointDispatchStateRepository
+from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
 from execution.services import ExecutionServices
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.settings import ImageBuildContainerSettings
 from images.submission import ImageBuildSubmissionService
+from scheduler.adapters import (
+    DatabaseCapacityAllocationOwners,
+    EndpointDispatchAutoscalingReader,
+)
 from scheduler.agent_pool import SchedulerAgentPoolService
 from scheduler.autoscaling import (
     AutoscalingDriver,
@@ -71,10 +75,6 @@ from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 from scheduler_app.capacity_interruptions import DatabaseCapacityInterruptionSource
-from scheduler_app.execution_adapters import (
-    DatabaseCapacityAllocationOwners,
-    EndpointDispatchAutoscalingReader,
-)
 from scheduler_app.services import (
     SchedulerAppServices,
     SchedulerCapacitySettings,
@@ -190,9 +190,7 @@ class SchedulerRuntime:
         endpoint_control = EndpointControlService(
             execution_services,
         )
-        endpoint_dispatches = EndpointDispatchAutoscalingReader(
-            EndpointDispatchStateRepository(execution_services)
-        )
+        endpoint_dispatches = EndpointDispatchAutoscalingReader(execution_services.context.database)
         pod_control = PodControlService(execution_services, redis=redis_client)
         preemption_recovery = PreemptedContainerService(
             services=execution_services,

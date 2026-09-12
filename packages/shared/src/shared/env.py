@@ -5,8 +5,6 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from shared.enums import StringEnum
-
 TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 IMPORTING_USER_CODE_ENV = "IMPORTING_USER_CODE"
 CONTAINER_ID_ENV = "CONTAINER_ID"
@@ -38,40 +36,6 @@ ROOT_TASK_ID_ENV = "ROOT_TASK_ID"
 TASK_ID_ENV = "TASK_ID"
 WORKSPACE_ID_ENV = "WORKSPACE_ID"
 WORKSPACE_NAME_ENV = "WORKSPACE_NAME"
-WORKER_REPOSITORY_URL_ENV = "WORKER_REPOSITORY_URL"
-
-
-class ExecutionEnvVar(StringEnum):
-    ImportingUserCode = IMPORTING_USER_CODE_ENV
-    ContainerId = CONTAINER_ID_ENV
-    ContainerHostname = CONTAINER_HOSTNAME_ENV
-    CheckpointEnabled = CHECKPOINT_ENABLED_ENV
-    EndpointInstanceLock = ENDPOINT_INSTANCE_LOCK_ENV
-    EndpointServeHost = ENDPOINT_SERVE_HOST_ENV
-    EndpointServeLock = ENDPOINT_SERVE_LOCK_ENV
-    EndpointWorkers = ENDPOINT_WORKERS_ENV
-    GatewayGrpcHost = GATEWAY_GRPC_HOST_ENV
-    GatewayGrpcPort = GATEWAY_GRPC_PORT_ENV
-    GatewayGrpcTls = GATEWAY_GRPC_TLS_ENV
-    GatewayHttpHost = GATEWAY_HTTP_HOST_ENV
-    GatewayHttpPort = GATEWAY_HTTP_PORT_ENV
-    GatewayHttpTls = GATEWAY_HTTP_TLS_ENV
-    GatewayHttpUrl = GATEWAY_HTTP_URL_ENV
-    FunctionConcurrency = FUNCTION_CONCURRENCY_ENV
-    FunctionInProcess = FUNCTION_IN_PROCESS_ENV
-    GatewayToken = GATEWAY_TOKEN_ENV
-    HotReload = HOT_RELOAD_ENV
-    HotReloadDir = HOT_RELOAD_DIR_ENV
-    KeepWarmSeconds = KEEP_WARM_SECONDS_ENV
-    LifecycleHooks = LIFECYCLE_HOOKS_ENV
-    AppId = APP_ID_ENV
-    StorageAvailable = STORAGE_AVAILABLE_ENV
-    StubId = STUB_ID_ENV
-    StubType = STUB_TYPE_ENV
-    RootTaskId = ROOT_TASK_ID_ENV
-    TaskId = TASK_ID_ENV
-    WorkspaceId = WORKSPACE_ID_ENV
-    WorkspaceName = WORKSPACE_NAME_ENV
 
 
 def truthy_env_value(value: str | None) -> bool:
@@ -146,10 +110,8 @@ __all__ = [
     "STUB_TYPE_ENV",
     "TASK_ID_ENV",
     "TRUTHY_ENV_VALUES",
-    "WORKER_REPOSITORY_URL_ENV",
     "WORKSPACE_ID_ENV",
     "WORKSPACE_NAME_ENV",
-    "ExecutionEnvVar",
     "importing_user_code",
     "importing_user_code_now",
     "truthy_env_value",

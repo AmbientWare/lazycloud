@@ -104,18 +104,6 @@ class ContainerRolloutRepository:
             )
         )
 
-    def closed_ids(self, container_ids: Sequence[str]) -> set[str]:
-        if not container_ids:
-            return set()
-        return set(
-            self.session.scalars(
-                select(ContainerRolloutDrainTable.container_id).where(
-                    ContainerRolloutDrainTable.container_id.in_(container_ids),
-                    ContainerRolloutDrainTable.admission_closed_at.is_not(None),
-                )
-            )
-        )
-
     def serving_floor(self, stub_id: str) -> int:
         return int(
             self.session.scalar(

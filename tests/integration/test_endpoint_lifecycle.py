@@ -24,13 +24,12 @@ from database.repositories.execution import TaskRepository
 from execution.endpoints.dispatch import (
     AsyncEndpointInstanceDispatcher,
     AsyncEndpointRequestDispatcher,
-    EndpointDispatchRecord,
     EndpointDispatchStatus,
     EndpointDispatchTarget,
 )
 from execution.endpoints.service import (
+    AsyncEndpointDispatchStateRepository,
     EndpointControlService,
-    EndpointDispatchStateRepository,
     EndpointWebSocketDispatchRejected,
 )
 from fastapi.testclient import TestClient
@@ -286,7 +285,9 @@ async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
     assert after is not None
     assert after >= before
     assert finished.status is TaskStatus.Complete
-    assert _dispatch_record(async_services, finished).status is EndpointDispatchStatus.Complete
+    assert (
+        _dispatch_record(async_services, finished).status == EndpointDispatchStatus.Complete.value
+    )
 
 
 @pytest.mark.anyio
@@ -318,7 +319,7 @@ async def test_endpoint_service_without_running_container_schedules_warmup(
     assert payload.requested_ports == [CONTAINER_INNER_PORT]
     task = async_services.tasks.list()[0]
     dispatch = _dispatch_record(async_services, task)
-    assert dispatch.status is EndpointDispatchStatus.Timeout
+    assert dispatch.status == EndpointDispatchStatus.Timeout.value
 
 
 @pytest.mark.anyio
@@ -378,7 +379,7 @@ def predict():
     assert response.body == b"ready"
     task = async_services.tasks.list()[0]
     dispatch = _dispatch_record(async_services, task)
-    assert dispatch.status is EndpointDispatchStatus.Complete
+    assert dispatch.status == EndpointDispatchStatus.Complete.value
     assert dispatch.container_id == _WARM_CONTAINER_ID
 
 
@@ -436,7 +437,7 @@ async def test_endpoint_retry_requeues_the_relational_dispatch(
     assert response.status_code == 200
     assert response.body == b"complete"
     assert task.status is TaskStatus.Complete
-    assert dispatch.status is EndpointDispatchStatus.Complete
+    assert dispatch.status == EndpointDispatchStatus.Complete.value
     assert dispatch.attempts == 2
 
 
@@ -459,7 +460,7 @@ async def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer
             timeout_seconds=1,
             max_pending=1,
         )
-        existing = _record_active_dispatch(async_services, stub)
+        existing = await _record_active_dispatch(async_services, stub)
         task_ids_before = {task.id for task in async_services.tasks.list()}
 
         response = await _endpoint_service(
@@ -474,7 +475,7 @@ async def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer
         assert {task.id for task in async_services.tasks.list()} == task_ids_before
         assert (
             _dispatch_record(async_services, existing).status
-            is EndpointDispatchStatus.WaitingCapacity
+            == EndpointDispatchStatus.WaitingCapacity.value
         )
         assert (
             metric_value(
@@ -500,7 +501,7 @@ async def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is
     )
     stub = _stub_for_deployment(async_services, deployment.id)
     _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=1, max_pending=1)
-    existing = _record_active_dispatch(async_services, stub)
+    existing = await _record_active_dispatch(async_services, stub)
     task_ids_before = {task.id for task in async_services.tasks.list()}
 
     with pytest.raises(
@@ -516,7 +517,8 @@ async def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is
     assert exc_info.value.task_id == ""
     assert {task.id for task in async_services.tasks.list()} == task_ids_before
     assert (
-        _dispatch_record(async_services, existing).status is EndpointDispatchStatus.WaitingCapacity
+        _dispatch_record(async_services, existing).status
+        == EndpointDispatchStatus.WaitingCapacity.value
     )
     assert (
         metric_value(
@@ -568,7 +570,7 @@ async def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
 
     assert response.status_code == 504
     newest_task = services.tasks.list()[0]
-    assert _dispatch_record(services, newest_task).status is EndpointDispatchStatus.Timeout
+    assert _dispatch_record(services, newest_task).status == EndpointDispatchStatus.Timeout.value
 
 
 @pytest.mark.anyio
@@ -602,7 +604,7 @@ async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
     assert task is not None
     cancelled = services.tasks.get(task.id)
     assert cancelled.status is TaskStatus.Cancelled
-    assert _dispatch_record(services, cancelled).status is EndpointDispatchStatus.Cancelled
+    assert _dispatch_record(services, cancelled).status == EndpointDispatchStatus.Cancelled.value
 
 
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
@@ -615,11 +617,14 @@ def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecor
     return matches[0]
 
 
-def _dispatch_record(services: ApiServices, task: Task) -> EndpointDispatchRecord:
-    return EndpointDispatchStateRepository(services).for_task(task)
+def _dispatch_record(services: ApiServices, task: Task) -> EndpointDispatchStateRecord:
+    with services.context.database.session() as session:
+        record = EndpointDispatchRepository(session).get(task.id)
+    assert record is not None
+    return record
 
 
-def _record_active_dispatch(services: ApiServices, stub: StubRecord) -> Task:
+async def _record_active_dispatch(services: ApiServices, stub: StubRecord) -> Task:
     task = services.tasks.create(
         f"{stub.kind.value}-{stub.name}",
         workspace_id=stub.workspace_id,
@@ -636,7 +641,7 @@ def _record_active_dispatch(services: ApiServices, stub: StubRecord) -> Task:
         max_pending_requests=1,
         max_inflight_per_container=1,
     )
-    EndpointDispatchStateRepository(services).transition(
+    await AsyncEndpointDispatchStateRepository(services.require_async_io().database).transition(
         task,
         EndpointDispatchStatus.WaitingCapacity,
     )

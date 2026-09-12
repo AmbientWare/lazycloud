@@ -59,7 +59,6 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
       color={[0.08, 0.7, 0.95]}
       cover={0.06}
       density={1.45}
-      layer="between"
       opacity={0.12}
       quality={0.4}
       scale={1.1}

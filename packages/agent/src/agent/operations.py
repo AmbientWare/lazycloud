@@ -10,7 +10,6 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
-from compute.telemetry import redact_telemetry_line
 from pydantic import Field, JsonValue, field_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import (
@@ -751,10 +750,6 @@ main "$@"
         .replace("__AGENT_AMD64_SHA256__", amd64_sha256)
         .replace("__AGENT_ARM64_SHA256__", arm64_sha256)
     )
-
-
-def redact_telemetry(text: str) -> str:
-    return redact_telemetry_line(text)
 
 
 def summarize_agent_status(agent_pools: list[str], active_leases: int) -> AgentStatusSummary:

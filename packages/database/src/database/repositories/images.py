@@ -25,13 +25,12 @@ from shared.errors import NotFoundError
 from shared.image_building.records import (
     BuildStatus,
     ImageArchiveRecord,
-    ImageBuildPhase,
     ImageBuildRecord,
     ImageRecord,
 )
 from shared.runtime_paths import archive_path_digest, normalize_runtime_path
 from shared.timestamps import utc_now
-from sqlalchemy import case, delete, exists, func, or_, select, text, tuple_, update
+from sqlalchemy import delete, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -613,32 +612,6 @@ class ImageBuildRepository:
             ImageBuildRecord.model_validate(row.payload) for row in self.session.scalars(statement)
         ]
 
-    def heartbeat_active(
-        self,
-        build_id: str,
-        *,
-        workspace_id: str,
-        now: datetime | None = None,
-    ) -> bool:
-        heartbeat_at = now or utc_now()
-        updated_id = self.session.scalar(
-            update(ImageBuildTable)
-            .where(
-                ImageBuildTable.id == build_id,
-                ImageBuildTable.workspace_id == workspace_id,
-                ImageBuildTable.status.in_([BuildStatus.Pending.value, BuildStatus.Running.value]),
-            )
-            .values(
-                updated_at=heartbeat_at,
-                publication_claimed_at=case(
-                    (ImageBuildTable.publication_claim_id != "", heartbeat_at),
-                    else_=ImageBuildTable.publication_claimed_at,
-                ),
-            )
-            .returning(ImageBuildTable.id)
-        )
-        return updated_id is not None
-
     def claim_publication(
         self,
         build_id: str,
@@ -747,55 +720,6 @@ class ImageBuildRepository:
             )
         ).first()
         return ImageBuildRecord.model_validate(row.payload) if row is not None else None
-
-    def fail_stale_active(
-        self,
-        fingerprint: str,
-        *,
-        workspace_id: str,
-        stale_before: datetime,
-        publication_stale_before: datetime,
-        now: datetime | None = None,
-    ) -> list[ImageBuildRecord]:
-        rows = list(
-            self.session.scalars(
-                select(ImageBuildTable).where(
-                    ImageBuildTable.workspace_id == workspace_id,
-                    ImageBuildTable.fingerprint == fingerprint,
-                    ImageBuildTable.status.in_(
-                        [BuildStatus.Pending.value, BuildStatus.Running.value]
-                    ),
-                    ImageBuildTable.updated_at <= stale_before,
-                    or_(
-                        ImageBuildTable.publication_claim_id == "",
-                        ImageBuildTable.publication_claimed_at <= publication_stale_before,
-                    ),
-                )
-            )
-        )
-        if not rows:
-            return []
-        finished_at = now or utc_now()
-        reason = "image build ownership lease expired before completion"
-        failed: list[ImageBuildRecord] = []
-        for row in rows:
-            record = ImageBuildRecord.model_validate(row.payload)
-            if not record.logs or record.logs[-1] != reason:
-                record.logs.append(reason)
-            record.status = BuildStatus.Failed
-            record.phase = ImageBuildPhase.Failed
-            record.finished_at = finished_at
-            record.error = reason
-            row.status = record.status.value
-            row.phase = record.phase.value
-            row.finished_at = finished_at
-            row.updated_at = finished_at
-            row.payload = record.model_dump(mode="json")
-            row.publication_claim_id = ""
-            row.publication_claimed_at = None
-            failed.append(record)
-        self.session.flush()
-        return failed
 
     def list_for_image_cleanup(
         self,
