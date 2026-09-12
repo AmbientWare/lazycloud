@@ -12,7 +12,7 @@ from execution.containers.preemption import PreemptedContainerService
 from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
-from execution.services import ExecutionServices
+from execution.services import EndpointExecutionServices
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.settings import ImageBuildContainerSettings
 from images.submission import ImageBuildSubmissionService
@@ -159,7 +159,7 @@ class SchedulerRuntime:
         cls,
         *,
         scheduler_services: SchedulerServices,
-        execution_services: ExecutionServices,
+        execution_services: EndpointExecutionServices,
         redis_client: RedisClient,
         container_requests: SchedulerContainerRequestService,
         image_build_container_settings: ImageBuildContainerSettings,

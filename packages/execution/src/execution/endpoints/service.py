@@ -80,7 +80,7 @@ from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
 )
-from execution.services import ExecutionServices
+from execution.services import EndpointExecutionServices
 
 ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS = 0.05
 ENDPOINT_HEALTH_PROBE_TIMEOUT_SECONDS = 10.0
@@ -140,7 +140,7 @@ class _CapacityWait:
 
 @dataclass(slots=True)
 class EndpointControlService:
-    services: ExecutionServices
+    services: EndpointExecutionServices
     async_database: AsyncDatabaseClient | None = None
     async_dispatcher: AsyncEndpointRequestDispatcher | None = None
     control_plane: ControlPlaneService = field(init=False)

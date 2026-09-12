@@ -23,14 +23,14 @@ from shared.http.previews import (
 )
 from shared.timestamps import utc_now
 
-from execution.services import ExecutionServices
+from execution.services import EndpointExecutionServices
 
 LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
 class PreviewSessionService:
-    services: ExecutionServices
+    services: EndpointExecutionServices
 
     def lease_key(self, preview_id: str) -> str:
         return self.services.redis_client.key("preview", preview_id, "lease")

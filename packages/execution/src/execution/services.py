@@ -110,9 +110,6 @@ class ExecutionLookupService(Protocol):
 
 class ExecutionServices(Protocol):
     @property
-    def redis_client(self) -> RedisClient: ...
-
-    @property
     def context(self) -> ExecutionContext: ...
 
     @property
@@ -138,3 +135,8 @@ class ExecutionServices(Protocol):
 
     @property
     def object_storage(self) -> ObjectStorage: ...
+
+
+class EndpointExecutionServices(ExecutionServices, Protocol):
+    @property
+    def redis_client(self) -> RedisClient: ...
