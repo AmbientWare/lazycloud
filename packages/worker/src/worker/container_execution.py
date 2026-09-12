@@ -62,6 +62,7 @@ from worker.finalization import (
     WorkerContainerFinalizationService,
 )
 from worker.gpu import ContainerGpuAssignmentResult
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.lifecycle import (
     ContainerStartupPortRequest,
     PreparedRequestMount,
@@ -169,6 +170,7 @@ class ContainerSpecBuilder(Protocol):
         *,
         bind_ports: list[int],
         port_bindings: list[PortBinding],
+        image_config: ImageRuntimeConfig,
         mount_result: ContainerMountSetupResult,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
@@ -262,6 +264,7 @@ class ContainerLifecyclePublisher(Protocol):
 class ContainerImageLoadResult(ContractModel):
     loaded: bool = True
     reason: str = ""
+    image_config: ImageRuntimeConfig
 
 
 class ContainerMountSetupResult(ContractModel):
@@ -843,10 +846,13 @@ class WorkerContainerExecutionService:
         gpu_result: ContainerGpuAssignmentResult | None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
     ) -> None:
+        if result.image_result is None:
+            raise RuntimeError("container image configuration was not loaded")
         holder["spec"] = self.spec_builder.build_spec(
             context,
             bind_ports=bind_ports,
             port_bindings=result.port_bindings,
+            image_config=result.image_result.image_config,
             mount_result=mount_result,
             network_result=network_result,
             gpu_result=gpu_result,

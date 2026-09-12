@@ -4,6 +4,7 @@ import posixpath
 from collections.abc import Mapping
 from enum import StrEnum
 
+from pydantic import Field
 from shared.contracts import ContractModel
 
 DEFAULT_IMAGE_ARCHIVE_EXTENSION = "rclip"
@@ -12,6 +13,10 @@ DEFAULT_IMAGE_CACHE_PATH = "/cache/images"
 DEFAULT_IMAGE_MOUNT_ROOT = "/mnt/images"
 DEFAULT_BUILDAH_ROOT = "/dev/shm"
 MAX_EXPECTED_V2_IMAGE_ARCHIVE_SIZE_BYTES = 128 * 1024 * 1024
+
+
+class ImageRuntimeConfig(ContractModel):
+    env: list[str] = Field(default_factory=list, repr=False)
 
 
 class ImageArchiveStorageMode(StrEnum):

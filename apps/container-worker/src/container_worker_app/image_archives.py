@@ -22,6 +22,7 @@ from worker.container_startup import (
     WorkerImageSourceLoadResult,
 )
 from worker.image_archive_transfer import download_image_archive
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.image_runtime import ImageRuntimeClient
 from worker.origin_access import CacheOriginCredentialRequest
 from worker.repository_client import WorkerRepositoryHttpClient
@@ -189,7 +190,8 @@ class BrokeredClipImageMounter:
             )
         return WorkerImageMountResult(
             status=WorkerImageMountStatus.Ready,
-            mount_point=str(mounted),
+            mount_point=mounted.mount_point,
+            image_config=mounted.image_config,
             reason=(
                 "image layers prepared and mounted"
                 if request.preload
@@ -268,5 +270,6 @@ class BrokeredClipImageMounter:
         return WorkerImageMountResult(
             status=WorkerImageMountStatus.Failed,
             mount_point=request.mount_point,
+            image_config=ImageRuntimeConfig(),
             reason=reason,
         )

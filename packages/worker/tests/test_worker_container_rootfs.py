@@ -16,6 +16,7 @@ from worker.container_rootfs import (
     plan_container_rootfs_overlay,
 )
 from worker.events import ContainerRequestContext
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.oci_runtime import OciRuntimeSpecBuilder
 from worker.runtime_config import OciRuntimeName
 
@@ -137,7 +138,9 @@ def test_spec_builder_refuses_to_share_the_image_directory_as_a_writable_root(
     )
 
     with pytest.raises(RuntimeError, match="no prepared root filesystem"):
-        builder.build_spec(context, bind_ports=[], port_bindings=[])
+        builder.build_spec(
+            context, bind_ports=[], port_bindings=[], image_config=ImageRuntimeConfig()
+        )
 
 
 def test_release_refuses_to_remove_the_tree_while_the_overlay_is_mounted(

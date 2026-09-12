@@ -43,6 +43,7 @@ from shared.image_building.credentials import (
 )
 from typing_extensions import Self
 
+from lazycloud.source_files import collect_source_files
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 
 _DOCKER_APT_DISTRIBUTION = (
@@ -252,12 +253,7 @@ class Image:
 
         self.context_path = str(project_path)
         self.context_digest = fingerprint_build_context(project_path)
-        patterns = ["pyproject.toml", "uv.lock"]
-        if (project_path / ".python-version").is_file():
-            patterns.append(".python-version")
-        self.include_files_patterns = tuple(
-            dict.fromkeys((*self.include_files_patterns, *patterns))
-        )
+        self.include_files_patterns = tuple(dict.fromkeys((*self.include_files_patterns, "**/*")))
         self.build_steps = (
             *self.build_steps,
             ImageBuildStep(
@@ -469,7 +465,10 @@ class Image:
 
     def _context_archive(self) -> ImageBuildContext:
         context = Path(self.context_path or ".").expanduser().resolve()
-        files = _context_files(context, self.include_files_patterns)
+        if any(step.kind is ImageBuildStepKind.UvProject for step in self.build_steps):
+            files = sorted(path.relative_to(context) for path in collect_source_files(context))
+        else:
+            files = _context_files(context, self.include_files_patterns)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for relative_path in files:
@@ -748,11 +747,15 @@ def _context_files(context: Path, patterns: tuple[str, ...]) -> list[Path]:
     files: set[Path] = set()
     for pattern in selected_patterns:
         for source in _matched_sources(context, pattern):
+            if _ignored_context_path(source):
+                continue
             _assert_safe_context_source(context, source)
             if source.is_dir():
                 for path in source.rglob("*"):
+                    if _ignored_context_path(path):
+                        continue
                     _assert_safe_context_source(context, path)
-                    if path.is_file() and not _ignored_context_path(path):
+                    if path.is_file():
                         files.add(path.relative_to(context))
             elif source.is_file() and not _ignored_context_path(source):
                 files.add(source.relative_to(context))

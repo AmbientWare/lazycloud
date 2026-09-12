@@ -29,6 +29,7 @@ from worker.image_lifecycle import (
     DEFAULT_IMAGE_CACHE_PATH,
     DEFAULT_IMAGE_MOUNT_ROOT,
     ImageArchiveStorageMode,
+    ImageRuntimeConfig,
     RestoredImageArchiveValidation,
     WorkerImagePaths,
     build_worker_image_paths,
@@ -150,6 +151,7 @@ class WorkerImageMountResult(ContractModel):
     status: WorkerImageMountStatus
     mount_point: str
     reason: str = ""
+    image_config: ImageRuntimeConfig
 
     @property
     def mounted(self) -> bool:
@@ -232,7 +234,9 @@ class WorkerImageStartupLoader:
                     reason="container request does not include an image id",
                 )
             )
-            return ContainerImageLoadResult(loaded=True, reason="no image id")
+            return ContainerImageLoadResult(
+                loaded=True, reason="no image id", image_config=ImageRuntimeConfig()
+            )
 
         paths = build_worker_image_paths(
             request.image_id,
@@ -293,7 +297,7 @@ class WorkerImageStartupLoader:
                 reason=reason,
             )
         )
-        return ContainerImageLoadResult(loaded=True, reason=reason)
+        return ContainerImageLoadResult(loaded=True, reason=reason, image_config=mount.image_config)
 
     def _load_mounted_image_hit(
         self,
@@ -336,7 +340,7 @@ class WorkerImageStartupLoader:
                 reason=reason,
             )
         )
-        return ContainerImageLoadResult(loaded=True, reason=reason)
+        return ContainerImageLoadResult(loaded=True, reason=reason, image_config=mount.image_config)
 
     def _materialized_archive_sha256(
         self,

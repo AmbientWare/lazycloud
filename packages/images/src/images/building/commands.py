@@ -42,9 +42,19 @@ def render_uv_project_sync_command(
     args: Iterable[str],
     *,
     mode: ImageInstallCommandMode = ImageInstallCommandMode.Dockerfile,
+    python_executable: str = "python",
 ) -> str:
     project_dir, extras = _uv_project_args(args)
-    command = ["uv", "sync", "--frozen", "--no-dev", "--no-install-project"]
+    command = [
+        "uv",
+        "sync",
+        "--frozen",
+        "--no-dev",
+        "--no-editable",
+        "--no-python-downloads",
+        "--python",
+        shlex.quote(python_executable),
+    ]
     for extra in extras:
         command.extend(["--extra", shlex.quote(extra)])
     if mode is ImageInstallCommandMode.Runtime and project_dir not in {"", "."}:
@@ -122,7 +132,9 @@ def plan_image_build_commands(
             continue
 
         flush()
-        if command := _render_non_install_step(normalized, mode=mode):
+        if command := _render_non_install_step(
+            normalized, mode=mode, python_executable=python_executable
+        ):
             commands.append(
                 ImageBuildCommand(
                     kind=normalized.kind,
@@ -192,6 +204,7 @@ def _render_non_install_step(
     step: ImageBuildStep,
     *,
     mode: ImageInstallCommandMode,
+    python_executable: str,
 ) -> str:
     if step.kind is ImageBuildStepKind.Shell:
         return step.command or ""
@@ -201,7 +214,9 @@ def _render_non_install_step(
             return ""
         return f"apt-get update && apt-get install -y {args} && rm -rf /var/lib/apt/lists/*"
     if step.kind is ImageBuildStepKind.UvProject:
-        return render_uv_project_sync_command(step.args, mode=mode)
+        return render_uv_project_sync_command(
+            step.args, mode=mode, python_executable=python_executable
+        )
     msg = f"unsupported image build step kind: {step.kind}"
     raise ValueError(msg)
 

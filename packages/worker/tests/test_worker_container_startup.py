@@ -21,6 +21,7 @@ from worker.container_startup import (
     WorkerImageStartupLoader,
 )
 from worker.events import ContainerRequestContext
+from worker.image_lifecycle import ImageRuntimeConfig
 
 
 @dataclass(slots=True)
@@ -53,6 +54,7 @@ class _RecordingMounter:
         return WorkerImageMountResult(
             status=WorkerImageMountStatus.Ready,
             mount_point=request.mount_point,
+            image_config=ImageRuntimeConfig(),
             reason="image archive materialized",
         )
 

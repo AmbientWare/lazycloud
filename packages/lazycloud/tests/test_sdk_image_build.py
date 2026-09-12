@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -163,7 +165,7 @@ def test_sdk_rejects_invalid_google_service_account_file(tmp_path: Path) -> None
         image._build_request(env={"GOOGLE_APPLICATION_CREDENTIALS": str(credentials_path)})
 
 
-def test_sdk_image_uv_project_maps_to_build_request_and_context(tmp_path: Path) -> None:
+def test_uv_project_context_includes_source_without_local_environment(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
         """
@@ -176,16 +178,29 @@ worker = ["redis >= 5"]
         encoding="utf-8",
     )
     (tmp_path / "uv.lock").write_text("# lock\n", encoding="utf-8")
-    (tmp_path / "app.py").write_text("print('not copied')\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("print('project source')\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("LOCAL_VALUE=excluded\n", encoding="utf-8")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "python").symlink_to("/usr/bin/python")
 
     image = Image().add_uv_project(tmp_path, extras=["worker"])
 
-    request = image._build_request()
     archive = image._context_archive()
 
-    assert [step.type for step in request.build_steps] == ["uv-project"]
-    assert request.build_steps[0].command == ". worker"
-    assert archive.files == ("pyproject.toml", "uv.lock")
+    assert archive.files == ("app.py", "pyproject.toml", "uv.lock")
+
+    (tmp_path / "credentials.json").write_text("excluded-credential-sentinel", encoding="utf-8")
+    (tmp_path / "private-data").mkdir()
+    (tmp_path / "private-data" / "records.csv").write_text(
+        "excluded-data-sentinel", encoding="utf-8"
+    )
+    (tmp_path / ".lazycloudignore").write_text(
+        ".lazycloudignore\n.env*\n.venv/\ncredentials.json\nprivate-data/\n",
+        encoding="utf-8",
+    )
+    excluded_archive = image._context_archive()
+    with zipfile.ZipFile(io.BytesIO(excluded_archive.data)) as uploaded:
+        assert uploaded.namelist() == ["app.py", "pyproject.toml", "uv.lock"]
 
 
 def test_sdk_image_uv_project_requires_lockfile(tmp_path: Path) -> None:

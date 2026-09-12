@@ -525,7 +525,7 @@ def sync_local_workspace(
 
 
 def _snapshot(local_dir: str) -> dict[str, FileState]:
-    from lazycloud.session.source_sync import collect_source_files
+    from lazycloud.source_files import collect_source_files
 
     root = Path(local_dir).expanduser().resolve()
     files: dict[str, FileState] = {}

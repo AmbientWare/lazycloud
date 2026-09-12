@@ -50,6 +50,7 @@ from worker.execution import (
     plan_oci_linux_resources,
 )
 from worker.gpu import ContainerGpuAssignmentResult
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.lifecycle import (
     HOST_RESOLV_CONF_PATH,
     WORKER_RESOLV_CONF_PATH,
@@ -285,6 +286,7 @@ class OciRuntimeSpecBuilder:
         *,
         bind_ports: list[int],
         port_bindings: list[PortBinding],
+        image_config: ImageRuntimeConfig,
         mount_result: ContainerMountSetupResult | None = None,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
@@ -296,6 +298,7 @@ class OciRuntimeSpecBuilder:
         root_path = self._root_path(context, rootfs_result)
         env = self._runtime_env(
             context,
+            image_config=image_config,
             bind_ports=bind_ports,
             network_result=network_result,
         )
@@ -493,6 +496,7 @@ class OciRuntimeSpecBuilder:
         *,
         bind_ports: list[int],
         network_result: ContainerNetworkSetupResult | None,
+        image_config: ImageRuntimeConfig,
     ) -> dict[str, str]:
         identity = network_result.identity if network_result is not None else None
         env_plan = build_container_environment(
@@ -507,6 +511,7 @@ class OciRuntimeSpecBuilder:
                 workspace_name=context.request.workspace_name,
                 bind_ports=bind_ports or [CONTAINER_INNER_PORT],
                 storage_available=context.request.workspace_storage_available,
+                image_env=image_config.env,
                 request_env=list(context.request.env),
             ),
             self.gateway_settings,
