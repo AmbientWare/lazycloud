@@ -25,7 +25,6 @@ from worker.container_service.models import (
     WorkerContainerServiceInstance,
     WorkerSandboxProcess,
 )
-from worker.container_service.protocols import WorkerSandboxProcessManager
 from worker.sandbox_server import (
     SandboxFileOperation,
     SandboxFileRequest,
@@ -106,7 +105,7 @@ class SupervisorSandboxProcessManagerFactory:
     def create_process_manager(
         self,
         instance: WorkerContainerServiceInstance,
-    ) -> WorkerSandboxProcessManager:
+    ) -> SupervisorSandboxProcessManager:
         if not instance.container_ip:
             raise SandboxSupervisorError("sandbox supervisor address is unavailable")
         token = _read_supervisor_token(instance)

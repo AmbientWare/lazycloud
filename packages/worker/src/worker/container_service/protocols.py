@@ -43,8 +43,6 @@ class WorkerContainerRuntimeController(Protocol):
 
 
 class WorkerSandboxProcessManager(Protocol):
-    def file_operation(self, request: SandboxFileRequest, *, cwd: str) -> SandboxFileResult: ...
-
     def ready(self) -> bool: ...
 
     def start_workload(self) -> None: ...
@@ -81,6 +79,17 @@ class WorkerSandboxProcessManagerFactory(Protocol):
     def suspend_process_streams(self, instance: WorkerContainerServiceInstance) -> None: ...
 
     def resume_process_streams(self, instance: WorkerContainerServiceInstance) -> None: ...
+
+
+class WorkerSandboxControlManager(WorkerSandboxProcessManager, Protocol):
+    def file_operation(self, request: SandboxFileRequest, *, cwd: str) -> SandboxFileResult: ...
+
+
+class WorkerSandboxControlManagerFactory(WorkerSandboxProcessManagerFactory, Protocol):
+    def create_process_manager(
+        self,
+        instance: WorkerContainerServiceInstance,
+    ) -> WorkerSandboxControlManager: ...
 
 
 class WorkerSandboxDockerLifecycle(Protocol):

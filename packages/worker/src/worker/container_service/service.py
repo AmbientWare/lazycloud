@@ -78,12 +78,13 @@ from worker.container_service.protocols import (
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
+    WorkerSandboxControlManager,
+    WorkerSandboxControlManagerFactory,
     WorkerSandboxDockerLifecycle,
     WorkerSandboxLogSink,
     WorkerSandboxNetworkPolicyUpdater,
     WorkerSandboxPortPublisher,
     WorkerSandboxProcessManager,
-    WorkerSandboxProcessManagerFactory,
 )
 from worker.execution import (
     WorkspaceSyncOperation,
@@ -107,7 +108,7 @@ from worker.sandbox_server import (
 @dataclass(slots=True)
 class WorkerContainerService:
     instances: WorkerContainerInstanceStore
-    process_managers: WorkerSandboxProcessManagerFactory | None = None
+    process_managers: WorkerSandboxControlManagerFactory | None = None
     sandbox_docker: WorkerSandboxDockerLifecycle | None = None
     runtime: WorkerContainerRuntimeController | None = None
     logs: WorkerSandboxLogSink | None = None
@@ -805,7 +806,7 @@ class WorkerContainerService:
     def _ready_manager_response(
         self,
         container_id: str,
-    ) -> WorkerSandboxProcessManager | str:
+    ) -> WorkerSandboxControlManager | str:
         instance = self._instance(container_id)
         if instance is None:
             return CONTAINER_NOT_FOUND_MESSAGE
@@ -814,7 +815,7 @@ class WorkerContainerService:
     def _ready_process_manager(
         self,
         instance: WorkerContainerServiceInstance,
-    ) -> WorkerSandboxProcessManager | str:
+    ) -> WorkerSandboxControlManager | str:
         manager = self._process_manager(instance)
         if manager is None:
             return "sandbox process manager is not configured"
@@ -853,7 +854,7 @@ class WorkerContainerService:
     def _process_manager(
         self,
         instance: WorkerContainerServiceInstance,
-    ) -> WorkerSandboxProcessManager | None:
+    ) -> WorkerSandboxControlManager | None:
         if self.process_managers is None:
             return None
         return self.process_managers.create_process_manager(instance)
