@@ -1993,9 +1993,6 @@ def wireguard_gateway_id(index: int) -> str:
 class WireGuardGatewayRepository:
     session: Session
 
-    def current(self) -> WireGuardGateway | None:
-        return self.get_by_index(0)
-
     def list_all(self) -> list[WireGuardGateway]:
         rows = self.session.scalars(
             select(WireGuardGatewayTable).order_by(WireGuardGatewayTable.index)
@@ -2012,8 +2009,7 @@ class WireGuardGatewayRepository:
         gateway = WireGuardGateway.model_validate(dict(gateway))
         if gateway.id != wireguard_gateway_id(gateway.index):
             raise ConflictError("WireGuard gateway identity does not match its index")
-        # The column owns the index. Omitting it from the payload also keeps
-        # gateway zero readable by replicas serving the singleton contract.
+        # The column owns the index; payload readers reconstruct it from that column.
         payload = _model_json(gateway)
         del payload["index"]
         statement = postgresql_insert(WireGuardGatewayTable).values(

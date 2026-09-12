@@ -253,8 +253,6 @@ from gateway.http import (
     LeaveAgentResponse,
     ListAgentRoutesRequest,
     ListAgentRoutesResponse,
-    RegisterAgentPrivateNetworkRequest,
-    RegisterAgentPrivateNetworkResponse,
     SignPayloadRequest,
     SignPayloadResponse,
     StreamAgentRequest,
@@ -2128,29 +2126,6 @@ class GatewayControlService:
         )
         if not destroyed.complete:
             raise ConflictError("machine-owned source cache destruction is incomplete")
-
-    def register_agent_private_network(
-        self,
-        request: RegisterAgentPrivateNetworkRequest,
-    ) -> RegisterAgentPrivateNetworkResponse:
-        configuration = self.register_private_network(
-            RegisterPrivateNetworkRequest(
-                agent_token=request.agent_token,
-                public_key=request.public_key,
-            )
-        )
-        gateway = next((gateway for gateway in configuration.gateways if gateway.index == 0), None)
-        if gateway is None:
-            raise UpstreamUnavailableError("WireGuard gateway 0 is not configured")
-        return RegisterAgentPrivateNetworkResponse(
-            peer_id=configuration.peer_id,
-            address=configuration.address,
-            server_public_key=gateway.public_key,
-            endpoint=gateway.endpoint,
-            allowed_ips=configuration.allowed_ips,
-            persistent_keepalive_seconds=configuration.persistent_keepalive_seconds,
-            generation=configuration.generation,
-        )
 
     def register_private_network(
         self,
