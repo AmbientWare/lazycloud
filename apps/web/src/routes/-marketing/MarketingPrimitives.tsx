@@ -91,9 +91,7 @@ export function MarketingButton({
  *
  * A browser that already holds a credential enters the dashboard without
  * restarting OAuth. The signed-out action remains a real anchor because leaving
- * for GitHub is a document navigation. `outline` has an explicit foreground
- * because `marketing-action-primary` paints a light brand wash whose default
- * light-on-primary text fails contrast.
+ * for GitHub is a document navigation.
  */
 export function GetStartedButton({
   className,
@@ -131,7 +129,7 @@ export function GetStartedButton({
 
 export function SectionHeading({ title, body }: { title: ReactNode; body?: string }) {
   return (
-    <div className="marketing-section-heading marketing-cloud-focus mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
+    <div className="marketing-cloud-focus mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
       <h2 className="max-w-[740px] font-serif text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.02] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
         {title}
       </h2>
@@ -147,7 +145,6 @@ export function SectionHeading({ title, body }: { title: ReactNode; body?: strin
 export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
   return (
     <section className="marketing-final-cta relative !min-h-[clamp(32rem,75svh,43.125rem)] overflow-hidden border-t border-input text-foreground [@media(max-height:500px)]:!min-h-[27rem]">
-      <div className="marketing-cta-grid" aria-hidden="true" />
       <div
         className={cn(
           shell,

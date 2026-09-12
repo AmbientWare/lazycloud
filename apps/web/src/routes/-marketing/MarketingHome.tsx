@@ -7,7 +7,6 @@ import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
-import type { LandingDesign } from "./LandingDesigns";
 import { StubsSection } from "./StubsSection";
 import {
   FinalCta,
@@ -225,21 +224,21 @@ function ParitySection() {
   );
 }
 
-export function MarketingHome({ design }: { design?: LandingDesign }) {
+export function MarketingHome() {
   return (
-    <MarketingLayout design={design}>
+    <MarketingLayout>
       <main className="marketing-home" id="marketing-main">
         <section className="marketing-hero relative overflow-hidden border-b border-border bg-background">
           <div className="marketing-grid-field" aria-hidden="true" />
           <div
             className={cn(
               shell,
-              "relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 pt-12 pb-16 sm:gap-12 sm:pt-16 sm:pb-20 lg:min-h-[700px] lg:gap-16 lg:pt-23 lg:pb-13 max-lg:grid-cols-1",
+              "marketing-hero-content relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 sm:gap-12 lg:gap-16 max-lg:grid-cols-1",
             )}
           >
             <div className="marketing-cloud-focus marketing-rise">
-              <h1 className="max-w-[620px] text-balance font-serif text-[clamp(42px,8vw,88px)] leading-[0.96] font-normal tracking-[-0.005em] lg:text-[clamp(52px,5vw,76px)] [&_em]:text-brand [&_em]:italic">
-                Deploy as fast <em className="lg:block">as you develop.</em>
+              <h1 className="max-w-[620px] text-balance">
+                Deploy as fast <em>as you develop.</em>
               </h1>
               <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
                 Your coding agent helps you build faster. LazyCloud gets your product running. Use

@@ -2,15 +2,13 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { Link, useLocation } from "@tanstack/react-router";
 import { Menu, X } from "lucide-react";
 
-import { Clouds, type CloudsOptions } from "@/components/canvasui/Clouds";
+import { Clouds } from "@/components/canvasui/Clouds";
 import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import { Glyph, GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
-import { LandingDesignNavigation, type LandingDesign } from "./LandingDesigns";
 
 import "./marketing.css";
-import "./landing-designs.css";
 
 /* Only what this build can actually reach. The examples gallery lives outside
    this app and is absent from some deployments, so it is configured or left out;
@@ -31,13 +29,7 @@ const navLinkActive = "data-[status=active]:font-semibold data-[status=active]:t
 const footerLink =
   "inline-flex min-h-9 w-max items-center text-[13px] text-muted-foreground transition-colors hover:text-foreground [@media(pointer:coarse)]:min-h-11";
 
-export function MarketingLayout({
-  children,
-  design,
-}: {
-  children: ReactNode;
-  design?: LandingDesign;
-}) {
+export function MarketingLayout({ children }: { children: ReactNode }) {
   const scrollportRef = useRef<HTMLDivElement>(null);
   const pathname = useLocation({ select: (location) => location.pathname });
   const hash = useLocation({ select: (location) => location.hash });
@@ -58,7 +50,7 @@ export function MarketingLayout({
   }, [hash, pathname]);
 
   return (
-    <MarketingFrame key={design ?? "original"} design={design} scrollportRef={scrollportRef}>
+    <MarketingFrame key={pathname} scrollportRef={scrollportRef}>
       <a
         className="fixed top-[max(0.75rem,env(safe-area-inset-top))] left-[max(0.75rem,env(safe-area-inset-left))] -translate-y-[160%] rounded-lg bg-foreground px-3.5 py-2.5 text-background focus:translate-y-0"
         href="#marketing-main"
@@ -73,7 +65,7 @@ export function MarketingLayout({
         <div
           className={cn(
             shell,
-            "relative flex h-14 items-center justify-between gap-3 rounded-2xl border border-border/80 bg-card px-3 shadow-[0_12px_32px_color-mix(in_oklab,var(--foreground)_10%,transparent)] sm:px-4",
+            "relative flex h-14 items-center justify-between gap-3 border border-border/80 px-3 sm:px-4",
           )}
         >
           <Link
@@ -153,45 +145,22 @@ export function MarketingLayout({
           <p className="shrink-0 font-mono text-xs text-muted-foreground">© 2026 LazyCloud</p>
         </div>
       </footer>
-      {design ? <LandingDesignNavigation current={design} /> : null}
     </MarketingFrame>
   );
 }
 
-const designClouds: Record<LandingDesign, CloudsOptions> = {
-  depth: { color: [0.12, 0.6, 0.8], blur: 1, scale: 0.75, opacity: 0.18, speed: 0.12, wind: 0.12 },
-  horizons: {
-    color: [0.08, 0.7, 0.95],
-    blur: 0.85,
-    scale: 0.9,
-    opacity: 0.2,
-    speed: 0.15,
-    wind: 0.15,
-  },
-  studio: {
-    color: [0.12, 0.62, 0.85],
-    blur: 0.9,
-    scale: 0.65,
-    opacity: 0.24,
-    speed: 0.35,
-    wind: 0.1,
-  },
-};
-
 function MarketingFrame({
   children,
-  design,
   scrollportRef,
 }: {
   children: ReactNode;
-  design?: LandingDesign;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }) {
   const [cloudsPaused, setCloudsPaused] = useState(false);
 
   useEffect(() => {
     const scrollport = scrollportRef.current;
-    if (design !== "studio" || !scrollport) return;
+    if (!scrollport) return;
 
     function pauseOnScroll() {
       if (scrollport && scrollport.scrollTop > 0) {
@@ -203,33 +172,28 @@ function MarketingFrame({
     scrollport.addEventListener("scroll", pauseOnScroll, { passive: true });
     pauseOnScroll();
     return () => scrollport.removeEventListener("scroll", pauseOnScroll);
-  }, [design, scrollportRef]);
+  }, [scrollportRef]);
 
-  const className = cn(
-    "dark isolate h-dvh w-full overflow-hidden bg-background text-foreground",
-    design && `landing-design landing-design--${design}`,
-  );
   const contentClassName =
     "marketing-site h-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth motion-reduce:scroll-auto";
 
   return (
     <Clouds
-      className={className}
+      className="dark marketing-theme isolate h-dvh w-full overflow-hidden bg-background text-foreground"
       contentClassName={contentClassName}
       contentRef={scrollportRef}
-      blur={0.68}
-      color={[0.08, 0.7, 0.95]}
+      blur={0.9}
+      color={[0.12, 0.62, 0.85]}
       cover={0.06}
       density={1.45}
-      opacity={0.12}
+      opacity={0.4}
       quality={0.4}
-      scale={1.1}
+      scale={0.65}
       scrollWithContent={false}
       shading={0.04}
-      speed={0.3}
-      wind={0.45}
+      speed={0.35}
+      wind={0.1}
       windRadius={260}
-      {...(design ? designClouds[design] : {})}
       paused={cloudsPaused}
     >
       {children}

@@ -21,6 +21,17 @@
   box-sizing: border-box;
 }
 
+.marketing-theme {
+  --background: #0c141b;
+  --muted: #18232d;
+  --card: #121d26;
+  --border: #354550;
+  --input: #354550;
+  --foreground: #eef3f7;
+  --muted-foreground: #a4b4c2;
+  --brand: #76d6f5;
+}
+
 .marketing-site {
   --marketing-header-height: calc(4.5rem + env(safe-area-inset-top));
 
@@ -39,6 +50,14 @@
   height: var(--marketing-header-height);
 }
 
+.marketing-header > div {
+  border-radius: 0;
+  border-width: 0 0 1px;
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  box-shadow: none;
+  backdrop-filter: blur(16px);
+}
+
 .marketing-site main > section {
   --marketing-section-background: var(--background);
   position: relative;
@@ -52,7 +71,7 @@
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  background: color-mix(in oklab, var(--marketing-section-background) 25%, transparent);
+  background: color-mix(in oklab, var(--marketing-section-background) 65.2%, transparent);
 }
 
 .marketing-site main > section > :not(.marketing-grid-field),
@@ -63,7 +82,7 @@
 }
 
 .marketing-site .marketing-cloud-focus {
-  --marketing-cloud-feather-x: clamp(1rem, 2vw, 2rem);
+  --marketing-cloud-feather-x: 2.5rem;
   position: relative;
 }
 
@@ -72,10 +91,10 @@
 .marketing-site .marketing-cloud-focus::before {
   content: "";
   position: absolute;
-  inset: -2.5rem calc(-1 * var(--marketing-cloud-feather-x));
+  inset: -3rem calc(-1 * var(--marketing-cloud-feather-x));
   z-index: -1;
   pointer-events: none;
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(32px);
   mask-image:
     linear-gradient(
       to right,
@@ -84,7 +103,7 @@
       black calc(100% - var(--marketing-cloud-feather-x)),
       transparent
     ),
-    linear-gradient(to bottom, transparent, black 2.5rem, black calc(100% - 2.5rem), transparent);
+    linear-gradient(to bottom, transparent, black 3rem, black calc(100% - 3rem), transparent);
   mask-composite: intersect;
 }
 
@@ -97,8 +116,39 @@
 }
 
 .marketing-hero {
-  min-height: calc(680px + var(--marketing-header-height));
-  padding-top: var(--marketing-header-height);
+  min-height: 100svh;
+  padding-block: var(--marketing-header-height);
+}
+
+.marketing-hero-content {
+  min-height: calc(100svh - 2 * var(--marketing-header-height) - 1px);
+  padding-block: clamp(2rem, 4svh, 4rem);
+}
+
+.marketing-hero h1 {
+  font-family: var(--font-sans);
+  font-weight: 550;
+  font-size: clamp(2.75rem, 5.6vw, 5rem);
+  line-height: 1;
+  letter-spacing: -0.055em;
+}
+
+.marketing-hero h1 em {
+  display: inline;
+  font-style: normal;
+  color: inherit;
+}
+
+.marketing-site main > .marketing-hero::before {
+  background: linear-gradient(
+    100deg,
+    color-mix(in oklab, var(--background) 45%, transparent),
+    color-mix(in oklab, var(--background) 10%, transparent)
+  );
+}
+
+.marketing-site .marketing-parity > div > .marketing-cloud-focus::before {
+  background: var(--marketing-section-background);
 }
 
 .marketing-site main > section.bg-background,
@@ -112,15 +162,9 @@
   background: var(--muted);
 }
 
-@media (min-width: 640px) {
-  .marketing-hero {
-    min-height: calc(720px + var(--marketing-header-height));
-  }
-}
-
-@media (min-width: 1024px) {
-  .marketing-hero {
-    min-height: calc(760px + var(--marketing-header-height));
+@media (max-width: 639px) {
+  .marketing-site .marketing-cloud-focus {
+    --marketing-cloud-feather-x: 1rem;
   }
 }
 
@@ -141,12 +185,24 @@
   animation-play-state: paused !important;
 }
 
-.marketing-action-primary {
-  background: color-mix(in oklab, var(--brand) 18%, var(--card));
+.marketing-site .marketing-action-primary {
+  border-radius: 3px;
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #0c141b;
+  box-shadow: none;
 }
 
-.marketing-action-primary:hover {
-  background: color-mix(in oklab, var(--brand) 27%, var(--card));
+.marketing-site .marketing-action-primary:hover {
+  background: #a1e6fb;
+}
+
+.marketing-action-primary > span:last-child {
+  align-self: stretch;
+  margin-block: -0.5rem;
+  margin-left: 0.75rem;
+  padding-left: 0.875rem;
+  border-left: 1px solid #0c141b40;
 }
 
 .marketing-action-secondary {
@@ -157,10 +213,10 @@
   background: var(--accent);
 }
 
-.marketing-site [data-marketing-card] {
-  box-shadow:
-    0 14px 42px -16px color-mix(in oklab, var(--background) 85%, transparent),
-    8px 8px 0 0 color-mix(in oklab, var(--border) 55%, var(--secondary));
+.marketing-site [data-marketing-card],
+.marketing-site .code-block-paper {
+  border-radius: 6px;
+  box-shadow: none;
 }
 
 .marketing-product-bar code i {
@@ -1014,18 +1070,6 @@
 .marketing-story-visual .marketing-sandbox-preview {
   gap: 7px;
   padding: 9px 11px 10px;
-}
-
-.marketing-cta-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border) 1px, transparent 1px);
-  background-size: 72px 72px;
-  mask-image: linear-gradient(to bottom, black, black 64%, transparent 96%);
-  opacity: 0.8;
-  pointer-events: none;
 }
 
 @keyframes marketing-rise {
