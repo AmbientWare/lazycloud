@@ -697,6 +697,7 @@ class ControlPlaneService:
         )
         fingerprint = _stub_preparation_fingerprint(requested)
         with self.context.database.session() as session:
+            WorkspaceRepository(session).lock_active_owner(workspace_record.id)
             repository = StubRepository(session)
             existing = (
                 repository.find_reusable(
@@ -892,13 +893,13 @@ class ControlPlaneService:
         stub.config = StubConfig.model_validate(config)
         stub.updated_at = utc_now()
         with self.context.database.session() as session:
-            StubRepository(session).set_preparation_fingerprint(
-                stub.id, workspace_id=stub.workspace_id, fingerprint=None
-            )
             updated_stub = _stub_records(session).upsert(
                 stub,
                 workspace_id=stub.workspace_id,
                 name=stub.name,
+            )
+            StubRepository(session).set_preparation_fingerprint(
+                stub.id, workspace_id=stub.workspace_id, fingerprint=None
             )
             target_kind = autoscaler_target_kind(updated_stub.kind)
             if target_kind is not None:
