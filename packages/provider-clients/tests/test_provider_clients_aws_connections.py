@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionValidationError
+from compute.capacity_errors import ProviderAuthorizationPendingError
 from compute.offers import ComputeOffer
 from provider_aws import (
     AwsAccountAuthorizationCleanupResult,
@@ -280,13 +281,32 @@ def test_draining_connection_keeps_cleanup_access_but_cannot_purchase() -> None:
     assert ready.policy is not None and ready.policy.accepts(offer)
     assert not ready.policy.accepts(offer.model_copy(update={"region": "us-west-2"}))
 
+    ready_connection = connection
+    validating = generation.model_copy(update={"phase": AwsAccountAuthorizationPhase.Validating})
+    connection = ready_connection.model_copy(
+        update={"phase": AwsAccountConnectionPhase.Validating, "active_authorization": validating}
+    )
+    assert not tuple(resolver.list_platform_providers())
+    with pytest.raises(ProviderAuthorizationPendingError):
+        resolver.resolve(workspace_id, provider_ref)
     connection = connection.model_copy(
+        update={"active_authorization": None, "pending_authorization": validating}
+    )
+    assert not tuple(resolver.list_platform_providers())
+    with pytest.raises(ProviderAuthorizationPendingError):
+        resolver.resolve(workspace_id, provider_ref)
+
+    connection = ready_connection.model_copy(
         update={"phase": AwsAccountConnectionPhase.DisconnectDraining}
     )
     assert not tuple(resolver.list_platform_providers())
     draining = resolver.resolve(workspace_id, provider_ref)
     assert draining.pooled is not None
     assert draining.policy is not None and not draining.policy.accepts(offer)
+    connection = connection.model_copy(update={"phase": AwsAccountConnectionPhase.Revoking})
+    assert not tuple(resolver.list_platform_providers())
+    with pytest.raises(RuntimeError, match="AWS account connection is not available"):
+        resolver.resolve(workspace_id, provider_ref)
 
 
 def _managed_validation() -> AwsAccountAuthorizationValidation:

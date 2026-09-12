@@ -89,6 +89,7 @@ from compute.capacity_errors import (
     CapacityReservationConflictError,
     CapacityReservationLeaseLostError,
     CapacityReservationLockContendedError,
+    ProviderAuthorizationPendingError,
 )
 from compute.context import ComputeContext
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
@@ -3376,6 +3377,9 @@ class ComputeService:
                 provider=pooled,
                 now=now,
             )
+        except ProviderAuthorizationPendingError as exc:
+            LOGGER.info("pooled capacity reconciliation deferred for %s: %s", current.id, exc)
+            return current
         except Exception:
             LOGGER.exception(
                 "pooled provider reconciliation failed for pool %s (%s)",
@@ -3963,6 +3967,8 @@ class ComputeService:
             raise UpstreamUnavailableError("workspace compute provider resolver is not configured")
         try:
             provider = self.provider_resolver.resolve(pool.workspace_id, pool.provider_ref)
+        except ProviderAuthorizationPendingError:
+            raise
         except Exception as exc:
             raise UpstreamUnavailableError(
                 f"compute pool {pool.name!r} provider is unavailable"

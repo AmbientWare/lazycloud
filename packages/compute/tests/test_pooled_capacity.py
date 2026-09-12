@@ -1027,6 +1027,93 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     assert {unit.id: unit.desired_machines for unit in units} == desired_before_disable
 
 
+def test_authorization_revalidation_preserves_pool_floor_and_owned_acquisition(
+    service_context: ServiceContext,
+) -> None:
+    _seed_connection(service_context, platform_fleet=True)
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(_PooledProvider(), service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        fleet_policy=FleetCapacityPolicy(
+            warm_cpu_preemptible_min=0, warm_cpu_non_preemptible_min=1
+        ),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=0,
+        root_volume_gib=200,
+    )
+    acquisition = CapacityAcquisitionRequest(
+        capacity_owner_id=pool.id,
+        reservation_id=str(uuid4()),
+        operation_id=str(uuid4()),
+        shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
+    )
+    assert compute.ensure_capacity(acquisition).owns_capacity
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session)
+        current = units.get(pool.id)
+        assert current is not None
+        before = units.upsert(current.model_copy(update={"min_machines": 1, "initial_machines": 1}))
+        operation = ComputeCapacityOperationRepository(session).get(
+            pool.id, acquisition.operation_id
+        )
+        assert operation is not None
+        connections = AwsAccountConnectionRepository(session)
+        connection = connections.get(_CONNECTION_ID)
+        assert connection is not None and connection.active_authorization is not None
+        connections.save(
+            connection.model_copy(
+                update={
+                    "phase": AwsAccountConnectionPhase.Validating,
+                    "active_authorization": connection.active_authorization.model_copy(
+                        update={"phase": AwsAccountAuthorizationPhase.Validating}
+                    ),
+                }
+            )
+        )
+
+    def load_connections() -> tuple[AwsAccountConnection, ...]:
+        with service_context.database.session() as session:
+            current = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
+        assert current is not None
+        return (current,)
+
+    compute.provider_resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: load_connections(),
+        platform_connections=load_connections,
+        capacity_workspace=lambda _connection: pool.workspace_id,
+        binaries_by_region={
+            "us-east-1": AwsManagedPoolBinaries(
+                agent_version="0.1.0",
+                agent_sha256="a" * 64,
+                cpu_ami_id="ami-0123456789abcdef0",
+            )
+        },
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+    )
+    observed = compute.reconcile_unit_capacity(pool.id)
+    assert observed is not None and observed.phase is before.phase
+    compute.reconcile_platform_warm_capacity(now=datetime.now(UTC))
+    blocked = compute.ensure_capacity(
+        acquisition.model_copy(
+            update={"reservation_id": str(uuid4()), "operation_id": str(uuid4())}
+        )
+    )
+    assert blocked.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert not blocked.owns_capacity
+    with service_context.database.session() as session:
+        assert ComputeUnitRepository(session).get(pool.id) == before
+        assert (
+            ComputeCapacityOperationRepository(session).get(pool.id, acquisition.operation_id)
+            == operation
+        )
+
+
 @pytest.mark.parametrize(
     ("floor_transferred", "serving_baseline"), [(False, 0), (True, 0), (False, 2)]
 )

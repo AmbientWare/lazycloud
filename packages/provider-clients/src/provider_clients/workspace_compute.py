@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from agent.binary import AgentBinarySettings
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
+from compute.capacity_errors import ProviderAuthorizationPendingError
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.provider_launches import ProviderNodeLaunchCredentials
 from compute.providers import (
@@ -34,6 +35,7 @@ from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
     AwsAccountConnection,
+    AwsAccountConnectionPhase,
 )
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeCapacityMode, MachinePool
 
@@ -189,6 +191,15 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
             if _provider_ref(connection.id) != provider_ref:
                 continue
             if not _connection_resolvable(connection):
+                authorization = connection.pending_authorization or connection.active_authorization
+                if (
+                    connection.phase is AwsAccountConnectionPhase.Validating
+                    and authorization is not None
+                    and authorization.phase is AwsAccountAuthorizationPhase.Validating
+                ):
+                    raise ProviderAuthorizationPendingError(
+                        "AWS account connection validation is in progress"
+                    )
                 raise RuntimeError("AWS account connection is not available")
             return self._resolved(connection)
         raise KeyError(f"workspace compute provider not found: {provider_ref}")
