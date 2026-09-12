@@ -47,7 +47,10 @@ def collect_source_files(
     include_patterns: Sequence[str] | None = None,
 ) -> tuple[Path, ...]:
     root = root.expanduser().resolve()
-    selected_ignore_patterns = tuple(ignore_patterns or _ignore_patterns_from_file(root))
+    selected_ignore_patterns = (
+        *DEFAULT_IGNORE_PATTERNS,
+        *(ignore_patterns if ignore_patterns is not None else _ignore_patterns_from_file(root)),
+    )
     selected_include_patterns = tuple(include_patterns or ())
     return tuple(
         _collect_source_files(
@@ -61,7 +64,8 @@ def collect_source_files(
 def _ignore_patterns_from_file(root: Path) -> tuple[str, ...]:
     ignore_file = root / SOURCE_IGNORE_FILE
     if not ignore_file.is_file():
-        return DEFAULT_IGNORE_PATTERNS
+        return ()
+    _assert_source_confined(root, ignore_file)
     return tuple(
         line
         for line in (raw.strip() for raw in ignore_file.read_text(encoding="utf-8").splitlines())
@@ -88,6 +92,8 @@ def _collect_source_files(
                 directory=True,
             )
         ]
+        for dirname in dirs:
+            _assert_source_confined(root, current / dirname)
         for filename in sorted(files):
             path = current / filename
             relative = _relative_posix(root, path)
@@ -99,7 +105,13 @@ def _collect_source_files(
                 directory=False,
             ):
                 continue
+            _assert_source_confined(root, path)
             yield path
+
+
+def _assert_source_confined(root: Path, path: Path) -> None:
+    if not path.resolve().is_relative_to(root):
+        raise ValueError(f"source path escapes its root: {path.relative_to(root)}")
 
 
 def _matches_all(patterns: Sequence[str]) -> bool:

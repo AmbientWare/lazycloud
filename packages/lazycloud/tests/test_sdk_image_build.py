@@ -195,7 +195,7 @@ worker = ["redis >= 5"]
         "excluded-data-sentinel", encoding="utf-8"
     )
     (tmp_path / ".lazycloudignore").write_text(
-        ".lazycloudignore\n.env*\n.venv/\ncredentials.json\nprivate-data/\n",
+        "credentials.json\nprivate-data/\n",
         encoding="utf-8",
     )
     excluded_archive = image._context_archive()

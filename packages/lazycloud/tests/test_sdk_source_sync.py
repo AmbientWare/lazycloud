@@ -23,6 +23,23 @@ from tests.fakes import FakeDeploymentClient, FakeUploadClient
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 
+def test_source_archive_rejects_symlinks_outside_the_project(tmp_path: Path) -> None:
+    source = tmp_path / "project"
+    source.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    credential = external / "credentials.json"
+    credential.write_text("must-not-be-uploaded", encoding="utf-8")
+    linked = source / "linked"
+    linked.symlink_to(credential)
+    with pytest.raises(ValueError, match="source path escapes its root"):
+        build_source_package_archive(source)
+    linked.unlink()
+    linked.symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError, match="source path escapes its root"):
+        build_source_package_archive(source)
+
+
 def test_source_package_sync_excludes_ignored_files(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("print('hello')\n", encoding="utf-8")
     (tmp_path / ".env.local").write_text("SECRET=hidden\n", encoding="utf-8")
