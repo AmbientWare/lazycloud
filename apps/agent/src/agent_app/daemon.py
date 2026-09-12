@@ -885,13 +885,36 @@ class DockerAgentWorkerController:
             )
             if owner.returncode != 0 or not owner.stdout.strip():
                 raise RuntimeError("Agent worker network namespace owner is unavailable")
-            expected_namespace = f"container:{owner.stdout.strip()}"
+            owner_id = owner.stdout.strip()
+            expected_namespace = f"container:{owner_id}"
+            if namespace == expected_namespace and (
+                self._container_network_namespace(name)
+                != self._container_network_namespace(owner_id)
+            ):
+                LOGGER.info(
+                    "Worker %s is attached to a previous agent network namespace", slot.worker_id
+                )
+                return None
         if namespace != expected_namespace:
             LOGGER.info("Worker %s requires the current agent network namespace", slot.worker_id)
             return None
         observed = slot.model_copy()
         observed.agent_binary_sha256 = digest
         return observed
+
+    def _container_network_namespace(self, container: str) -> str:
+        result = self.runner.run(
+            [self.docker_binary, "exec", container, "readlink", "/proc/self/ns/net"]
+        )
+        namespace = result.stdout.strip()
+        if (
+            result.returncode != 0
+            or not namespace.startswith("net:[")
+            or not namespace.endswith("]")
+            or not namespace[5:-1].isdigit()
+        ):
+            raise RuntimeError(f"Cannot verify network namespace for container {container}")
+        return namespace
 
     def _save_active_slots(self, slots: list[AgentWorkerSlot]) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
