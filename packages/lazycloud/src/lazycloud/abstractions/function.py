@@ -74,6 +74,7 @@ from lazycloud.control_clients import gateway_control_client
 from lazycloud.env import called_on_import, is_local
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
+from lazycloud.schema import prepare_input_arguments
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
 from lazycloud.terminal import Terminal, TerminalStep
@@ -615,6 +616,8 @@ class Function(Generic[P, R]):
             msg = "stub_id is required to invoke a remote function"
             raise FunctionOperationError(msg)
         last_response: FunctionInvokeResponse | None = None
+        if self.inputs is not None:
+            args, kwargs = prepare_input_arguments(self.func, self.inputs, args, kwargs)
         serialized = _serialize_invocation(args, kwargs)
         parent_task_id, root_task_id = _current_task_context()
         reported_task_id = ""

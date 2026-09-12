@@ -80,6 +80,7 @@ from runner.runtime import (
     required_env,
     routed_output,
 )
+from runner.schema_outputs import ArtifactOutputPublisher
 from runner.worker_processes import stop_worker_processes
 
 # How often an idle container asks for work. Short enough that a call arriving
@@ -338,8 +339,13 @@ class FunctionRunner:
             try:
                 return invoke_handler(
                     self.handler(),
-                    *task.invocation.args,
-                    **task.invocation.kwargs,
+                    task.invocation.args,
+                    task.invocation.kwargs,
+                    publish=ArtifactOutputPublisher(
+                        self.control,
+                        self.config.workspace_name or self.config.workspace_id,
+                        task.task_id,
+                    ),
                 )
             finally:
                 stdout.close()

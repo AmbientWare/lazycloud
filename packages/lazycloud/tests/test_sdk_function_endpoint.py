@@ -788,7 +788,7 @@ def test_explicit_schema_overrides_inferred_client_contract_inputs() -> None:
         name="explicit",
         inputs=Schema({"value": Integer()}),
     )
-    def explicit(value: str) -> str:
+    def explicit(*, value: float = 7) -> float:
         return value
 
     contract = explicit.spec().client_contract
@@ -797,21 +797,28 @@ def test_explicit_schema_overrides_inferred_client_contract_inputs() -> None:
     assert contract.operation.name is ClientOperationName.Remote
     assert contract.operation.parameters[0].name == "value"
     assert contract.operation.parameters[0].json_schema["type"] == "integer"
+    assert contract.operation.parameters[0].default == 7
+    assert not contract.operation.parameters[0].required
+    assert contract.operation.parameters[0].parameter_kind == "keyword_only"
 
 
-def test_explicit_output_metadata_does_not_override_annotated_client_return() -> None:
+def test_explicit_output_schema_controls_generated_return_contract() -> None:
     @App("analytics").function(
         name="square",
         inputs=Schema({"value": Integer()}),
         outputs=Schema({"result": Integer()}),
     )
-    def square(value: int) -> int:
-        return value * value
+    def square(value: int) -> object:
+        return {"result": value * value}
 
     spec = square.spec()
 
     assert spec.client_contract is not None
-    assert spec.client_contract.operation.return_schema["type"] == "integer"
+    assert spec.client_contract.operation.return_schema == {
+        "type": "object",
+        "properties": {"result": {"type": "integer"}},
+        "required": ["result"],
+    }
     outputs = _json_object(spec.metadata["outputs"], "metadata.outputs")
     fields = _json_object(outputs["fields"], "metadata.outputs.fields")
     result = _json_object(fields["result"], "metadata.outputs.fields.result")

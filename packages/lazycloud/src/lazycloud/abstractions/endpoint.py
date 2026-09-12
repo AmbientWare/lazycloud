@@ -84,6 +84,7 @@ from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.env import is_local
 from lazycloud.json_contracts import parse_json_value
 from lazycloud.references import dotted_reference
+from lazycloud.schema import prepare_json_input_arguments
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 from lazycloud.terminal import Terminal
 
@@ -1020,6 +1021,8 @@ def _request_function_endpoint(
     kwargs: Mapping[str, Any],
     options: InvocationOptions,
 ) -> EndpointResponse:
+    if isinstance(owner, Endpoint) and owner.inputs is not None:
+        args, kwargs = prepare_json_input_arguments(owner.func, owner.inputs, args, kwargs)
     payload = _endpoint_request_payload(args=args, kwargs=kwargs)
     return _request_http_endpoint(
         owner,

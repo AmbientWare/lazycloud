@@ -14,7 +14,7 @@ Every workload decorator on `App` accepts these options:
 | `authorized` | `bool` | Whether calls need a bearer token for the workspace. |
 | `callback_url` | `str` | Webhook called with execution events. |
 | `task_policy` | `TaskPolicy` | Scheduling policy for invocations. |
-| `inputs` / `outputs` | schema | Optional schema metadata for clients and validation. |
+| `inputs` / `outputs` | schema | Explicit argument and return schemas for functions and function endpoints. Output schemas require a returned mapping. File and Image output fields become artifact URLs. |
 | `docker_enabled` | `bool` | Give the container its own Docker daemon. |
 | `preemptible` | `bool` | Defaults to `True`, allowing capacity that can be reclaimed. Set `False` to require non-preemptible capacity, including for GPU workloads. |
 | `pool` | `str` | Compute pool to run in. See [Compute](/platform/compute). |
