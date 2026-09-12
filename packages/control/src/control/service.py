@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -219,6 +221,12 @@ def _stub_config_payload(config: StubConfig) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(
         config.model_dump_json(exclude_unset=True, by_alias=True)
     )
+
+
+def _stub_preparation_fingerprint(stub: StubRecord) -> str:
+    payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at"})
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _masked_config(value: JsonValue) -> JsonValue:
@@ -668,73 +676,54 @@ class ControlPlaneService:
     ) -> StubRecord:
         workspace_record = self.get_workspace(workspace)
         metadata_payload = dict(metadata) if metadata is not None else {}
+        now = utc_now()
+        requested = StubRecord(
+            id=str(uuid4()),
+            workspace_id=workspace_record.id,
+            name=name,
+            kind=kind,
+            handler=handler,
+            deployment_id=deployment_id,
+            app_id=app_id,
+            public=public,
+            config=(
+                config.model_copy(deep=True)
+                if isinstance(config, StubConfig)
+                else StubConfig.model_validate(dict(config) if config is not None else {})
+            ),
+            metadata=metadata_payload,
+            created_at=now,
+            updated_at=now,
+        )
+        fingerprint = _stub_preparation_fingerprint(requested)
         with self.context.database.session() as session:
-            repository = _stub_records(session)
-            logical_app = metadata_payload.get("app")
-            app_name = logical_app if isinstance(logical_app, str) and logical_app else None
+            repository = StubRepository(session)
             existing = (
-                StubRepository(session).find_reusable(
+                repository.find_reusable(
                     workspace_id=workspace_record.id,
-                    name=name,
-                    app_id=app_id,
-                    app_name=app_name,
-                    undeployed_only=deployment_id is None,
+                    preparation_fingerprint=fingerprint,
                 )
                 if reuse_existing
                 else None
             )
-            now = utc_now()
-            config_payload = (
-                config
-                if isinstance(config, StubConfig)
-                else StubConfig.model_validate(dict(config) if config is not None else {})
+            if existing is not None and _stub_preparation_fingerprint(existing) != fingerprint:
+                repository.set_preparation_fingerprint(
+                    existing.id, workspace_id=workspace_record.id, fingerprint=None
+                )
+                existing = None
+            CleanupRepository(session).assert_stub_config_available(
+                requested.config,
+                workspace_id=workspace_record.id,
+                metadata=requested.metadata,
             )
             if existing is None:
-                CleanupRepository(session).assert_stub_config_available(
-                    config_payload,
-                    workspace_id=workspace_record.id,
-                    metadata=metadata_payload,
-                )
-                record = repository.create(
-                    {
-                        "workspace_id": workspace_record.id,
-                        "name": name,
-                        "kind": kind.value,
-                        "handler": handler,
-                        "deployment_id": deployment_id,
-                        "app_id": app_id,
-                        "public": public,
-                        "config": config_payload,
-                        "metadata": metadata_payload,
-                        "created_at": now,
-                        "updated_at": now,
-                    },
-                    workspace_id=workspace_record.id,
-                    name=name,
-                )
-                change = WorkspaceChangeType.Created
+                record = repository.upsert(requested)
+                if reuse_existing:
+                    repository.set_preparation_fingerprint(
+                        record.id, workspace_id=workspace_record.id, fingerprint=fingerprint
+                    )
             else:
-                existing.kind = kind
-                existing.handler = handler or existing.handler
-                existing.deployment_id = deployment_id or existing.deployment_id
-                existing.app_id = app_id or existing.app_id
-                existing.public = public
-                existing_config = _stub_config_payload(existing.config)
-                existing_config.update(_stub_config_payload(config_payload))
-                existing.config = StubConfig.model_validate(existing_config)
-                CleanupRepository(session).assert_stub_config_available(
-                    existing.config,
-                    workspace_id=workspace_record.id,
-                    metadata=existing.metadata,
-                )
-                existing.metadata.update(metadata_payload)
-                existing.updated_at = now
-                record = repository.upsert(
-                    existing,
-                    workspace_id=workspace_record.id,
-                    name=name,
-                )
-                change = WorkspaceChangeType.Updated
+                record = existing
             target_kind = autoscaler_target_kind(record.kind)
             if target_kind is not None:
                 AutoscalingTargetRepository(session).activate(
@@ -743,7 +732,8 @@ class ControlPlaneService:
                     target_kind=target_kind,
                     due_at=now,
                 )
-        self._publish_stub_change(record, change)
+        if existing is None:
+            self._publish_stub_change(record, WorkspaceChangeType.Created)
         return record
 
     def stub_app_ids(
@@ -902,6 +892,9 @@ class ControlPlaneService:
         stub.config = StubConfig.model_validate(config)
         stub.updated_at = utc_now()
         with self.context.database.session() as session:
+            StubRepository(session).set_preparation_fingerprint(
+                stub.id, workspace_id=stub.workspace_id, fingerprint=None
+            )
             updated_stub = _stub_records(session).upsert(
                 stub,
                 workspace_id=stub.workspace_id,
@@ -1601,7 +1594,10 @@ def _workspace_storage_available(storage: WorkspaceStorageConfig) -> bool:
 
 
 def _stub_by_name(records: list[StubRecord], name: str) -> StubRecord | None:
-    return next((item for item in records if item.name == name), None)
+    matching = [item for item in records if item.name == name]
+    if len(matching) > 1:
+        raise ConflictError(f"stub name is ambiguous; use a stub ID: {name}")
+    return matching[0] if matching else None
 
 
 def _limit_by_name(
