@@ -192,7 +192,7 @@ const parityModes = [
 
 function ParitySection() {
   return (
-    <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
+    <section className="border-t border-input bg-muted py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <SectionHeading
           title={
@@ -527,7 +527,7 @@ function PlatformStoryRail() {
   return (
     <section
       id="platform"
-      className="relative border-t border-input bg-muted"
+      className="relative border-t border-input bg-background"
       data-scroll-driven={scrollDriven ? "true" : "false"}
       ref={sectionRef}
     >
