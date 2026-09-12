@@ -36,7 +36,7 @@ root `AGENTS.md`. This file covers where tests live and what they may assert.
 - Live acceptance can use complimentary billing for a designated test account.
   With an administrator profile, run `uv run --group workspace lazycloud-admin
   user set-complimentary <user-id> --grant`. This permits usage without a card,
-  subscription, or credit balance; usage remains metered and Team-plan limits
+  subscription, or credit balance; usage remains metered and Business-plan limits
   still apply. Select a workspace owned by that user when running the scenario.
   Do not treat missing billing setup as a blocker before checking this supported
   path. Preserve existing grants; revoke with `--revoke` only when removing a

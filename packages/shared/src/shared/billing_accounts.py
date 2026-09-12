@@ -74,7 +74,7 @@ class BillingAccount(ContractModel):
     complimentary_since: datetime | None = None
     """When an administrator waived usage charges; `None` without a waiver.
 
-    Complimentary accounts receive Team entitlements. Usage retains its ledger
+    Complimentary accounts receive Business entitlements. Usage retains its ledger
     price and a waived settlement. The held subscription remains unchanged.
     Platform authorization roles never grant or revoke this billing status.
     """

@@ -34,7 +34,7 @@ metering, and `database` owns rates, ledger entries and durable payment records.
   allow the refund to create debt. Later funds pay that debt before new work.
 - An account's complimentary flag waives usage without consuming credit or
   creating debt. Preserve the waiver in each settlement, or in its legacy outbox
-  row, after the flag changes. Complimentary accounts use Team entitlements;
+  row, after the flag changes. Complimentary accounts use Business entitlements;
   platform authorization roles do not determine billing status.
 
 - Subscription terms are immutable versions. Read existing subscriptions and paid

@@ -34,7 +34,7 @@ from database import DatabaseClient
         (BillingPlanId.Free, False, 1),
         (BillingPlanId.Team, False, 30),
         (BillingPlanId.Business, False, 90),
-        (BillingPlanId.Free, True, 30),
+        (BillingPlanId.Free, True, 90),
     ],
 )
 def test_plan_artifacts_expire_and_cleanup_preserves_later_uploads(

@@ -10,7 +10,11 @@ from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
-from database.repositories.identity import WorkspaceRepository
+from database.repositories.identity import (
+    UserRepository,
+    WorkspaceMemberRepository,
+    WorkspaceRepository,
+)
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
@@ -537,10 +541,10 @@ def _hold_gpu_cards(
         session.commit()
 
 
-def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscription(
+def test_a_complimentary_account_is_admitted_on_business_terms_without_a_subscription(
     service_context: ServiceContext,
 ) -> None:
-    """A waiver grants Team access, and withdrawing it restores billing checks."""
+    """A waiver grants Business access, and withdrawing it restores billing checks."""
 
     user_id, workspace_id = unbilled_account(service_context)
     admission = DatabaseBillingAdmission()
@@ -561,12 +565,21 @@ def test_a_complimentary_account_is_admitted_on_team_terms_without_a_subscriptio
             == []
         )
         assert admission.admit_container_start(
-            session, workspace_id=workspace_id, gpu=["H100"], gpu_count=1
+            session, workspace_id=workspace_id, gpu=["H100"], gpu_count=100
         ) == ["H100"]
+        with pytest.raises(CapacityLimitReachedError):
+            admission.admit_container_start(
+                session, workspace_id=workspace_id, gpu=["H100"], gpu_count=101
+            )
         admission.assert_may_take_on_billed_work(session, workspace_id=workspace_id)
         admission.assert_may_use_custom_domains(session, user_id=user_id)
-        with pytest.raises(PaymentRequiredError, match="Business plan"):
-            admission.assert_may_use_connected_cloud(session, user_id=user_id)
+        admission.assert_may_use_connected_cloud(session, user_id=user_id)
+        for _ in range(3):
+            member = UserRepository(session).create()
+            admission.assert_may_add_workspace_member(
+                session, workspace_id=workspace_id, member_user_id=member.id
+            )
+            WorkspaceMemberRepository(session).add(workspace_id=workspace_id, user_id=member.id)
     with (
         service_context.database.session() as session,
         pytest.raises(ConflictError, match="complimentary"),

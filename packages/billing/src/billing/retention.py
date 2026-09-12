@@ -4,7 +4,7 @@ from database.repositories.billing import BillingAccountRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.types import DatabaseSession
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import published_plan
+from shared.billing_rate_card import complimentary_terms, published_plan
 
 
 def workspace_retention_days(session: DatabaseSession, workspace_id: str) -> int:
@@ -13,7 +13,7 @@ def workspace_retention_days(session: DatabaseSession, workspace_id: str) -> int
     plan = BillingPlanId.Free
     if account is not None:
         if account.complimentary_since is not None:
-            plan = BillingPlanId.Team
+            return complimentary_terms().entitlements.retention_days
         elif account.plan is not None:
             plan = account.plan
     return published_plan(plan).entitlements.retention_days
