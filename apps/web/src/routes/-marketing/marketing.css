@@ -161,7 +161,8 @@
 }
 
 .marketing-product-frame {
-  --product-inset: color-mix(in oklab, var(--card) 75%, var(--background));
+  --product-inset: color-mix(in oklab, var(--brand) 6%, var(--card));
+  --product-header: color-mix(in oklab, var(--brand) 16%, var(--card));
   container-name: product-preview;
   container-type: inline-size;
   display: flex;
@@ -180,7 +181,7 @@
   min-height: 52px;
   padding: 0 15px;
   border-bottom: 1px solid var(--border);
-  background: var(--muted);
+  background: var(--product-header);
 }
 
 .marketing-product-bar > div {
@@ -228,6 +229,7 @@
 
 .marketing-product-stat span,
 .marketing-product-stat strong {
+  color: var(--foreground);
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -400,7 +402,7 @@
 }
 
 .is-review .endpoint-area {
-  fill: color-mix(in oklab, var(--brand) 35%, var(--background));
+  fill: color-mix(in oklab, var(--brand) 22%, var(--product-inset));
 }
 
 .is-generate .endpoint-line {
@@ -408,7 +410,7 @@
 }
 
 .is-generate .endpoint-area {
-  fill: color-mix(in oklab, var(--warning) 31%, var(--background));
+  fill: color-mix(in oklab, var(--warning) 18%, var(--product-inset));
 }
 
 .is-status .endpoint-line {
@@ -416,7 +418,7 @@
 }
 
 .is-status .endpoint-area {
-  fill: color-mix(in oklab, var(--positive) 31%, var(--background));
+  fill: color-mix(in oklab, var(--positive) 18%, var(--product-inset));
 }
 
 .is-review .endpoint-series-label {
@@ -523,7 +525,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--product-inset);
+  background: var(--card);
 }
 
 .pipeline-run-metric {
@@ -580,7 +582,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -745,9 +749,20 @@
 }
 
 .queue-metric {
+  --series-color: var(--brand);
   min-width: 0;
   padding: 10px 8px 9px;
   border-right: 1px solid var(--border);
+  border-top: 2px solid var(--series-color);
+  background: color-mix(in oklab, var(--series-color) 6%, var(--card));
+}
+
+.queue-metric.is-positive {
+  --series-color: var(--positive);
+}
+
+.queue-metric.is-warning {
+  --series-color: var(--warning);
 }
 
 .queue-metric:last-child {
@@ -772,15 +787,7 @@
   width: 8px;
   height: 2px;
   flex: none;
-  background: var(--brand);
-}
-
-.queue-metric.is-positive .queue-metric-label i {
-  background: var(--positive);
-}
-
-.queue-metric.is-warning .queue-metric-label i {
-  background: var(--warning);
+  background: var(--series-color);
 }
 
 .queue-metric > strong,
@@ -794,7 +801,7 @@
 
 .queue-metric > strong {
   margin-top: 7px;
-  color: var(--foreground);
+  color: var(--series-color);
   font-size: 16px;
   line-height: 1;
   font-weight: 700;
@@ -816,7 +823,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--muted);
+  background: var(--product-inset);
   padding: 9px 10px 6px;
 }
 
