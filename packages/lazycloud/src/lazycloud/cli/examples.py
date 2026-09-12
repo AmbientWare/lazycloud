@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from shared.app_slug import validate_app_slug
 
 from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.output import console, emit, json_output_enabled, print_payload, table
@@ -12,23 +13,27 @@ from lazycloud.cli.components.output import console, emit, json_output_enabled, 
 example_app = typer.Typer(help="Manage example apps.")
 
 
-QUICKSTART_TEMPLATE = """from __future__ import annotations
+def _starter_source(name: str) -> str:
+    return f"""from __future__ import annotations
 
 from lazycloud import App, Image
 
-app = App("quickstart")
+app = App({name!r})
 image = Image(python_version="3.12")
 
 
 @app.function(name="hello", image=image, cpu=1.0, memory="256Mi")
 def hello(name: str = "world") -> str:
-    print(f"quickstart greeting for {name}", flush=True)
-    return f"hello {name}"
+    print(f"quickstart greeting for {{name}}", flush=True)
+    return f"hello {{name}}"
 
 
 if __name__ == "__main__":
     print(hello.local("lazycloud"))
 """
+
+
+QUICKSTART_TEMPLATE = _starter_source("quickstart")
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +82,16 @@ def create_app(
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
 ) -> None:
-    target = output or Path(name)
-    written = _write_template(name, target, force=force)
+    try:
+        slug = validate_app_slug(name)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="NAME") from exc
+    target = output or Path(slug)
+    files = {
+        "quickstart.py": _starter_source(slug),
+        "README.md": f"# {slug}\n\nRun locally with `python quickstart.py`.\n",
+    }
+    written = _write_files(files, target, force=force)
     emit(
         ctx,
         payload={"name": name, "path": str(target), "files": written},
@@ -156,8 +169,16 @@ def _write_template(name: str, target: Path, *, force: bool) -> list[str]:
     template = TEMPLATES.get(name)
     if template is None:
         raise typer.BadParameter(f"unknown example: {name}")
+    return _write_files(template.files, target, force=force)
+
+
+def _write_files(files: dict[str, str], target: Path, *, force: bool) -> list[str]:
+    for relative_path in files:
+        destination = (target / relative_path).expanduser()
+        if destination.exists() and not force:
+            raise typer.BadParameter(f"file already exists: {destination}")
     written: list[str] = []
-    for relative_path, content in template.files.items():
+    for relative_path, content in files.items():
         destination = target / relative_path
         _write_file(destination, content, force=force)
         written.append(str(destination))
