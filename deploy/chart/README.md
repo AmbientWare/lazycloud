@@ -78,8 +78,9 @@ Write it before the first install.
 
 ## Log retention
 
-Task log history lives in PostgreSQL. Free accounts retain 1 day; Team and
-complimentary accounts retain 30 days, according to the workspace owner's plan.
+Task log history lives in PostgreSQL. Free accounts retain 1 day, Team accounts
+retain 30 days, and Business and complimentary accounts retain 90 days, according
+to the workspace owner's entitlements.
 Reads enforce the cutoff immediately. Downgrading applies the shorter window;
 deleted logs cannot be recovered by upgrading later.
 

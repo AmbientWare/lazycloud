@@ -8,7 +8,7 @@ from billing.retention import workspace_retention_days
 from database.repositories.execution import LogRepository
 from database.types import DatabaseSession
 from shared.billing_plans import BillingPlanId
-from shared.billing_rate_card import PUBLISHED_PLANS
+from shared.billing_rate_card import PUBLISHED_PLANS, complimentary_terms
 from shared.timestamps import utc_now
 
 from observability.context import ObservabilityContext
@@ -45,7 +45,8 @@ class LogRetentionService:
             return LogRepository(session).prune(
                 cutoffs=cutoffs,
                 default_cutoff=cutoffs[BillingPlanId.Free.value],
-                complimentary_cutoff=cutoffs[BillingPlanId.Team.value],
+                complimentary_cutoff=current
+                - timedelta(days=complimentary_terms().entitlements.retention_days),
                 limit=limit,
             )
 
