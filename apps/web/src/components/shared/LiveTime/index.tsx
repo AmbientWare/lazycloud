@@ -21,17 +21,13 @@ export function LiveDuration({
   startedAt,
   finishedAt,
   fallback = "—",
-  className,
 }: {
   startedAt: string | null | undefined;
   finishedAt: string | null | undefined;
   fallback?: string;
-  className?: string;
 }) {
   const now = useLiveNow(Boolean(startedAt && !finishedAt));
   return (
-    <span className={className} suppressHydrationWarning>
-      {durationBetween(startedAt, finishedAt, now) ?? fallback}
-    </span>
+    <span suppressHydrationWarning>{durationBetween(startedAt, finishedAt, now) ?? fallback}</span>
   );
 }

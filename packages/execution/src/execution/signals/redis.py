@@ -73,14 +73,8 @@ class RedisSignalService:
     def signal_set(self, request: SignalSetRequest) -> SignalSetResponse:
         return signal_response_from_set_plan(self.repository.set(request))
 
-    def signal_set_plan(self, request: SignalSetRequest) -> SignalSetPlan:
-        return self.repository.set(request)
-
     def signal_clear(self, request: SignalClearRequest) -> SignalClearResponse:
         return signal_response_from_clear_plan(self.repository.clear(request))
-
-    def signal_clear_plan(self, request: SignalClearRequest) -> SignalClearPlan:
-        return self.repository.clear(request)
 
     def signal_monitor_once(
         self,

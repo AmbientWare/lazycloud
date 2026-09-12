@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import socket
 from collections.abc import Mapping
@@ -13,7 +15,6 @@ from execution.callbacks import (
     HttpTaskCallbackSender,
     TaskCallbackService,
 )
-from identity.signatures import PayloadSignature, verify_payload_signature
 from pydantic import ValidationError
 from shared.http.callbacks import TaskCallbackBody
 from shared.tasks import RetryPolicy, TaskStatus
@@ -86,16 +87,12 @@ def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
     assert call.headers["X-Task-Status"] == TaskStatus.Complete.value
     assert call.headers["X-Task-Timestamp"] == "1720000000"
     assert len(call.headers["Idempotency-Key"]) == 64
-    signature = PayloadSignature(
-        key=call.headers["X-Task-Signature"],
-        timestamp=int(call.headers["X-Task-Timestamp"]),
-    )
-    assert verify_payload_signature(
-        call.body,
-        control_plane.workspace_signing_key(stub.workspace_id),
-        signature,
-    )
-    events = isolated_services.events.list_for_resource(
+    signed_data = base64.b64encode(call.body) + b":1720000000"
+    expected_signature = hmac.digest(
+        control_plane.workspace_signing_key(stub.workspace_id).encode(), signed_data, "sha256"
+    ).hex()
+    assert call.headers["X-Task-Signature"] == expected_signature
+    events = isolated_services.events.list(
         resource_type="task",
         resource_id=task.id,
     )
@@ -176,7 +173,7 @@ def test_permanent_callback_failure_is_observable_without_exposing_target_query(
 
     assert completed.status is TaskStatus.Complete
     assert len(sender.calls) == 1
-    events = isolated_services.events.list_for_resource(
+    events = isolated_services.events.list(
         resource_type="task",
         resource_id=task.id,
     )

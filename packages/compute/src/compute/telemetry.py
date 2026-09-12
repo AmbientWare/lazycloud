@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import hashlib
-import os
 import re
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field, JsonValue
-from shared.app_identity import PRIVATE_RESOURCE_PREFIX
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.timestamps import utc_now
 
 from compute.state import ComputeAgentTokenState
 
-TELEMETRY_CREDENTIAL_TIMEOUT_SECONDS = 10.0
 AGENT_HEARTBEAT_TIMEOUT_SECONDS = 60.0
 AGENT_HEARTBEAT_FUTURE_TOLERANCE_SECONDS = 5.0
 AGENT_INTAKE_PRESENCE_ROLE = "agent-intake"
@@ -25,23 +21,7 @@ Read by the reclaim, which acts on a machine's silence and needs to know whether
 anything was there to hear it. Written by whichever process serves the agent
 stream, so the two never have to agree on a hostname or a replica count.
 """
-DEFAULT_TELEMETRY_STREAM_PREFIX = "events"
 TELEMETRY_REDACTED_VALUE = "redacted"
-
-
-class TelemetryCredentialKind(StrEnum):
-    Logs = "logs"
-    Events = "events"
-
-
-class TelemetryCredentialOperation(StrEnum):
-    Append = "append"
-
-
-class TelemetrySinkStatus(StrEnum):
-    Disabled = "disabled"
-    Planned = "planned"
-    Ready = "ready"
 
 
 class AgentTelemetryDecisionKind(StrEnum):
@@ -75,56 +55,6 @@ class CapacitySource(StrEnum):
 class PoolMode(StrEnum):
     Private = "private"
     Shared = "shared"
-
-
-class TelemetryRootStreamConfig(ContractModel):
-    api_key: str = ""
-    basin: str = ""
-    stream_prefix: str = DEFAULT_TELEMETRY_STREAM_PREFIX
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.api_key.strip() and self.basin.strip())
-
-    @property
-    def normalized_stream_prefix(self) -> str:
-        return normalize_stream_prefix(self.stream_prefix)
-
-
-class TelemetryCredentialScope(ContractModel):
-    basin_exact: str
-    stream_prefix: str
-    operations: tuple[TelemetryCredentialOperation, ...] = (TelemetryCredentialOperation.Append,)
-
-
-class TelemetryCredentialIssuePlan(ContractModel):
-    credential_id: str
-    workspace_id: str
-    kind: TelemetryCredentialKind
-    scope: TelemetryCredentialScope
-    request_timeout_seconds: float = TELEMETRY_CREDENTIAL_TIMEOUT_SECONDS
-
-
-class AgentTelemetrySinkConfig(ContractModel):
-    destination: str
-    credential: str
-    stream_prefix: str
-
-
-class AgentScopedTelemetryConfig(ContractModel):
-    enabled: bool = False
-    stream_prefix: str = DEFAULT_TELEMETRY_STREAM_PREFIX
-    logs: AgentTelemetrySinkConfig | None = None
-    events: AgentTelemetrySinkConfig | None = None
-
-
-class AgentScopedTelemetryPlan(ContractModel):
-    status: TelemetrySinkStatus
-    workspace_id: str
-    stream_prefix: str = DEFAULT_TELEMETRY_STREAM_PREFIX
-    issue_plans: tuple[TelemetryCredentialIssuePlan, ...] = ()
-    config: AgentScopedTelemetryConfig = Field(default_factory=AgentScopedTelemetryConfig)
-    reason: str = ""
 
 
 class AgentMetricSnapshot(Protocol):
@@ -247,99 +177,6 @@ class AgentDisconnectPlan(ContractModel):
     action: AgentDisconnectAction
     disconnected_at: datetime | None = None
     reason: str = ""
-
-
-def normalize_stream_prefix(value: str) -> str:
-    prefix = value.strip().strip("/")
-    return prefix or DEFAULT_TELEMETRY_STREAM_PREFIX
-
-
-def telemetry_stream_part(value: str) -> str:
-    return value.strip().strip("/").replace("/", "_")
-
-
-def telemetry_credential_id(
-    workspace_id: str,
-    kind: TelemetryCredentialKind | str,
-    *,
-    suffix: bytes | None = None,
-) -> str:
-    kind_value = kind.value if isinstance(kind, TelemetryCredentialKind) else str(kind)
-    digest = hashlib.sha256(workspace_id.encode()).digest()
-    random_suffix = suffix if suffix is not None else _credential_suffix(digest)
-    return f"{PRIVATE_RESOURCE_PREFIX}-{kind_value}-{digest[:6].hex()}-{random_suffix[:6].hex()}"
-
-
-def plan_scoped_telemetry_credentials(
-    config: TelemetryRootStreamConfig,
-    workspace_id: str,
-    *,
-    suffixes: dict[TelemetryCredentialKind, bytes] | None = None,
-) -> AgentScopedTelemetryPlan:
-    stream_prefix = config.normalized_stream_prefix
-    if not config.enabled:
-        return AgentScopedTelemetryPlan(
-            status=TelemetrySinkStatus.Disabled,
-            workspace_id=workspace_id,
-            stream_prefix=stream_prefix,
-            reason="root telemetry stream credentials are not configured",
-        )
-
-    workspace_part = telemetry_stream_part(workspace_id)
-    prefixes = {
-        TelemetryCredentialKind.Logs: f"{stream_prefix}/logs/workspaces/{workspace_part}",
-        TelemetryCredentialKind.Events: f"{stream_prefix}/workspaces/{workspace_part}",
-    }
-    plans = tuple(
-        TelemetryCredentialIssuePlan(
-            credential_id=telemetry_credential_id(
-                workspace_id,
-                kind,
-                suffix=(suffixes or {}).get(kind),
-            ),
-            workspace_id=workspace_id,
-            kind=kind,
-            scope=TelemetryCredentialScope(
-                basin_exact=config.basin,
-                stream_prefix=prefixes[kind],
-            ),
-        )
-        for kind in (TelemetryCredentialKind.Logs, TelemetryCredentialKind.Events)
-    )
-    return AgentScopedTelemetryPlan(
-        status=TelemetrySinkStatus.Planned,
-        workspace_id=workspace_id,
-        stream_prefix=stream_prefix,
-        issue_plans=plans,
-    )
-
-
-def build_scoped_telemetry_config(
-    plan: AgentScopedTelemetryPlan,
-    issued_credentials: dict[TelemetryCredentialKind, str],
-) -> AgentScopedTelemetryPlan:
-    if plan.status is TelemetrySinkStatus.Disabled:
-        return plan
-    by_kind = {item.kind: item for item in plan.issue_plans}
-    if any(kind not in issued_credentials for kind in by_kind):
-        return plan.model_copy(update={"reason": "not all scoped telemetry credentials issued"})
-    config = AgentScopedTelemetryConfig(
-        enabled=True,
-        stream_prefix=plan.stream_prefix,
-        logs=AgentTelemetrySinkConfig(
-            destination=by_kind[TelemetryCredentialKind.Logs].scope.basin_exact,
-            credential=issued_credentials[TelemetryCredentialKind.Logs],
-            stream_prefix=by_kind[TelemetryCredentialKind.Logs].scope.stream_prefix,
-        ),
-        events=AgentTelemetrySinkConfig(
-            destination=by_kind[TelemetryCredentialKind.Events].scope.basin_exact,
-            credential=issued_credentials[TelemetryCredentialKind.Events],
-            stream_prefix=by_kind[TelemetryCredentialKind.Events].scope.stream_prefix,
-        ),
-    )
-    return plan.model_copy(
-        update={"status": TelemetrySinkStatus.Ready, "config": config, "reason": ""}
-    )
 
 
 def validate_agent_telemetry_token(
@@ -628,13 +465,6 @@ def plan_agent_disconnect(
         disconnected_at=current,
         reason="heartbeat-stale",
     )
-
-
-def _credential_suffix(digest: bytes) -> bytes:
-    try:
-        return os.urandom(6)
-    except OSError:
-        return digest[-6:]
 
 
 def _format_float(value: float) -> str:

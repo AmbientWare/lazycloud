@@ -5,7 +5,6 @@ DISPLAY_NAME = NAME.replace("-", " ").title()
 ENV_PREFIX = NAME.upper().replace("-", "_")
 HOME_DIR = f".{NAME}"
 STATE_DIR = f"/var/lib/{NAME}"
-CACHE_DIR = f"{STATE_DIR}/cache"
 WORKER_BUNDLE_ROOT = f"/tmp/{NAME}-containers"
 WORKER_CHECKPOINT_ROOT = f"/tmp/{NAME}-checkpoints"
 CHECKPOINT_SIGNAL_ROOT = f"/tmp/{NAME}-checkpoint-signals"
@@ -44,7 +43,6 @@ WORKER_BOOTSTRAP_PROCESS_NAME = f"{NAME}-worker-bootstrap"
 CACHE_SERVER_PROCESS_NAME = f"{NAME}-cache-server"
 SANDBOX_COMPOSE_OVERRIDE_PATH = f"/tmp/{NAME}-docker-compose.override.yml"
 METRICS_SOURCE = NAME
-PRIVATE_RESOURCE_PREFIX = f"{NAME}-private"
 SOURCE_CACHE_DIR = f"{NAME}-source-cache"
 SOURCE_PACKAGE_BUCKET = f"{NAME}-source-packages"
 WORKSPACE_UPLOAD_BUCKETS = frozenset(
@@ -60,7 +58,6 @@ __all__ = [
     "AGENT_NAME",
     "AGENT_SERVICE_DESCRIPTION",
     "AGENT_STATE_DIR",
-    "CACHE_DIR",
     "CACHE_SERVER_PROCESS_NAME",
     "CHECKPOINT_SIGNAL_ROOT",
     "CLI_NAME",
@@ -79,7 +76,6 @@ __all__ = [
     "NAME",
     "OBJECT_STORE_BUCKET",
     "POD_IMAGE",
-    "PRIVATE_RESOURCE_PREFIX",
     "REDIS_KEY_PREFIX",
     "SANDBOX_COMPOSE_OVERRIDE_PATH",
     "SCHEDULER_PROCESS_NAME",

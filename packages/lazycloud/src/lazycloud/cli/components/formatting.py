@@ -62,16 +62,6 @@ def cell(item: object, *, key: str = "") -> RenderableType:
     return value(to_json_value(source), key=key)
 
 
-def bytes_count(value: int) -> str:
-    size = float(max(value, 0))
-    units = ("B", "KB", "MB", "GB", "TB")
-    for unit in units:
-        if size < 1000 or unit == units[-1]:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1000
-    return f"{int(size)} B"
-
-
 def timestamp(value: datetime) -> str:
     localized = value.astimezone()
     return localized.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -122,7 +112,6 @@ def _flatten_fields(
 
 
 __all__ = [
-    "bytes_count",
     "cell",
     "duration",
     "fields",

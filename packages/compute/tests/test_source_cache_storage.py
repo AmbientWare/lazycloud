@@ -54,10 +54,12 @@ def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
     assert not before.complete
 
     destroyed_at = started_at + timedelta(days=30)
-    assert lifecycle.record_machine_storage_destroyed(
-        owner.owner_id,
-        observed_at=destroyed_at,
-    )
+    with service_context.database.session() as session:
+        assert lifecycle.record_machine_storage_destroyed_in_session(
+            session,
+            owner.owner_id,
+            observed_at=destroyed_at,
+        )
 
     after = lifecycle.get(owner, generation_id=generation_id)
     assert after.state is WorkerCacheGenerationState.Retired
@@ -128,7 +130,10 @@ def test_storage_destruction_evidence_is_fenced_to_exact_owner_generation_and_ti
 def test_machine_without_registered_cache_has_no_cleanup_to_retire(
     service_context: ServiceContext,
 ) -> None:
-    assert SourceCacheStorageLifecycleService(service_context).record_machine_storage_destroyed(
-        "machine-without-cache",
-        observed_at=datetime(2026, 7, 21, 12, tzinfo=UTC),
-    )
+    lifecycle = SourceCacheStorageLifecycleService(service_context)
+    with service_context.database.session() as session:
+        assert lifecycle.record_machine_storage_destroyed_in_session(
+            session,
+            "machine-without-cache",
+            observed_at=datetime(2026, 7, 21, 12, tzinfo=UTC),
+        )

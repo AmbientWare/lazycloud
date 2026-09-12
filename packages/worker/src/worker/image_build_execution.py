@@ -58,8 +58,8 @@ from worker.image_build_scratch import (
 from worker.image_lifecycle import (
     BuildahDirectoryPlan,
     BuildahStorageDriver,
+    buildah_environment,
     plan_buildah_directories,
-    plan_buildah_environment,
     plan_buildah_storage_config,
 )
 from worker.image_runtime import ImageContentCacheConnection
@@ -719,14 +719,12 @@ class BuildahWorkerImageBuilder:
             storage = plan_buildah_storage_config(directories, driver=driver)
             storage_conf = root / "storage.conf"
             storage_conf.write_text(storage.text, encoding="utf-8")
-            env = _buildah_env(
-                plan_buildah_environment(
-                    runroot=directories.runroot,
-                    tmpdir=directories.tmpdir,
-                    storage_conf_path=str(storage_conf),
-                    cpu_count=os.cpu_count() or 1,
-                    base_env=_base_env(),
-                ).env,
+            env = buildah_environment(
+                runroot=directories.runroot,
+                tmpdir=directories.tmpdir,
+                storage_conf_path=str(storage_conf),
+                cpu_count=os.cpu_count() or 1,
+                base_env=_base_env(),
             )
             registry_auth_file = _write_registry_auth_file(root, registry_auth)
             if registry_auth_file is not None:
@@ -1245,12 +1243,12 @@ def _safe_zip_member_path(filename: str) -> Path:
     return Path(*parts)
 
 
-def _base_env() -> list[str]:
+def _base_env() -> dict[str, str]:
     values = dict(os.environ)
     registry_auth_file = values.get("REGISTRY_AUTH_FILE")
     if registry_auth_file and not Path(registry_auth_file).exists():
         values.pop("REGISTRY_AUTH_FILE", None)
-    return [f"{key}={value}" for key, value in values.items()]
+    return values
 
 
 def _oci_layout_manifest_digest(layout_path: Path) -> str:
@@ -1404,15 +1402,6 @@ def _redact_image_build_text(value: str, *, sensitive_values: tuple[str, ...]) -
         if secret:
             result = result.replace(secret, "<redacted>")
     return result
-
-
-def _buildah_env(values: list[str]) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for item in values:
-        key, separator, value = item.partition("=")
-        if separator and key:
-            env[key] = value
-    return env
 
 
 def _run_logged_process(

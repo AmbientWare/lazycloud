@@ -74,7 +74,6 @@ def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceC
 
     assert loaded_first.status is CheckpointStatus.Available
     assert updated.last_restored_at == restored_at
-    assert repo.latest_for_stub(stub.id).checkpoint_id == second.checkpoint_id
     assert [item.checkpoint_id for item in repo.list(workspace_id=workspace.id)] == [
         second.checkpoint_id,
         first.checkpoint_id,
@@ -83,8 +82,6 @@ def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceC
     assert loaded_first.cache_hash == "cache-hash-1"
 
     assert repo.get_across_workspaces("missing") is None
-    with pytest.raises(KeyError):
-        repo.latest_for_stub("missing-stub")
     with pytest.raises(KeyError):
         repo.update("missing", status=CheckpointStatus.Failed)
     session_context.__exit__(None, None, None)

@@ -29,6 +29,8 @@ def test_workspace_object_cleanup_preserves_external_bucket_data(
         bucket="external",
     )
 
-    assert storage.delete_workspace_objects(workspace.id) == 1
+    assert storage.delete_for_workspace(
+        workspace_id=workspace.id, bucket="owned", key="artifacts/task/result.txt"
+    )
     assert ("owned", "artifacts/task/result.txt") not in object_client.objects
     assert object_client.objects[("external", "customer/preserved.txt")] == b"external-data"

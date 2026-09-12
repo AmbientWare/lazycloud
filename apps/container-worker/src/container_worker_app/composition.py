@@ -20,6 +20,7 @@ from worker.cache_assets import (
 )
 from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoint_restore import RuntimeCheckpointRestorer
+from worker.checkpoint_transfer import RemoteCheckpointPersister, RemoteCheckpointRestoreSource
 from worker.container_checkpoints import (
     ContainerFilesystemArchiveCreator,
     RuntimeCheckpointCreator,
@@ -118,7 +119,6 @@ from worker.worker_lifecycle import WorkerCleanupAction
 from worker.workspace_credential_refresh import WorkspaceCredentialRefresher
 from worker.workspace_storage import WorkerWorkspaceStorageManager
 
-from .checkpoint_transfer import RemoteCheckpointPersister, RemoteCheckpointRestoreSource
 from .container_instances import (
     ContainerInstanceRuntimeResolver,
     OciContainerServiceInstanceRecorder,

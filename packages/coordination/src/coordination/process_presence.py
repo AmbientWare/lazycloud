@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -90,21 +90,6 @@ def presence_refresh_interval(ttl_seconds: int) -> float:
     return max(min(DEFAULT_PRESENCE_REFRESH_SECONDS, ttl_seconds / 3), 1.0)
 
 
-def observed_for(
-    presence: ProcessPresenceReader,
-    window: timedelta,
-    *,
-    now: datetime | None = None,
-) -> bool:
-    """Whether the role has been alive for the whole of `window`."""
-
-    current_time = now or utc_now()
-    since = presence.observing_since(now=current_time)
-    if since is None:
-        return False
-    return current_time - since >= window
-
-
 def _index_key(redis: RedisClient | AsyncRedisClient, role: str) -> str:
     return redis.key(PROCESS_PRESENCE_NAMESPACE, _role_name(role), "index")
 
@@ -133,6 +118,5 @@ __all__ = [
     "AsyncRedisProcessPresence",
     "ProcessPresenceReader",
     "RedisProcessPresence",
-    "observed_for",
     "presence_refresh_interval",
 ]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -40,6 +40,15 @@ WORKSPACE_NAME_ENV = "WORKSPACE_NAME"
 
 def truthy_env_value(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY_ENV_VALUES
+
+
+def parse_environment(values: Iterable[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values:
+        key, separator, item = value.partition("=")
+        if separator:
+            result[key] = item
+    return result
 
 
 _IMPORTING_USER_CODE: ContextVar[bool] = ContextVar(
@@ -114,5 +123,6 @@ __all__ = [
     "WORKSPACE_NAME_ENV",
     "importing_user_code",
     "importing_user_code_now",
+    "parse_environment",
     "truthy_env_value",
 ]

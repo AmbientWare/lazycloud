@@ -10,9 +10,12 @@ from shared.http.collections import (
     SimpleQueuePutResponse,
     SimpleQueueSizeResponse,
 )
-from typing_extensions import Self
 
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.control import (
+    ControlClientConfig,
+    ResourceControlBinding,
+    resolve_control_client_config,
+)
 from lazycloud.values import decode_value, encode_value
 
 
@@ -31,7 +34,7 @@ class QueueClient(Protocol):
 
 
 @dataclass(slots=True)
-class Queue:
+class Queue(ResourceControlBinding[QueueClient]):
     name: str
     workspace: str | None = None
     client: QueueClient | None = field(default=None, init=False, repr=False)
@@ -50,26 +53,6 @@ class Queue:
             )
             self.client = _default_queue_client(config)
         return self.client
-
-    def _bind_control(
-        self,
-        client: QueueClient | None = None,
-        *,
-        workspace: str | None = None,
-        endpoint: str | None = None,
-        token: str | None = None,
-        timeout_seconds: float | None = None,
-    ) -> Self:
-        self.client = client
-        if workspace is not None:
-            self.workspace = workspace
-        if endpoint is not None:
-            self.endpoint = endpoint
-        if token is not None:
-            self.token = token
-        if timeout_seconds is not None:
-            self.timeout_seconds = timeout_seconds
-        return self
 
     def __len__(self) -> int:
         return self.control_client.size(self.name).size

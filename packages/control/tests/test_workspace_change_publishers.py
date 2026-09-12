@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Protocol
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from coordination.redis_client import redis_text
-from pydantic import JsonValue, TypeAdapter
 from scheduler.service import Scheduler
-from shared.compute_fleet import ResourceStatus
 from shared.deployment_records import DeploymentSpec
 from shared.http.workspace_changes import (
     WorkspaceChangeEvent,
@@ -18,13 +15,6 @@ from shared.http.workspace_changes import (
 from shared.timestamps import utc_now
 from shared.usage import UsageMetric, UsageUnit
 
-_JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
-
-
-class _HttpResponse(Protocol):
-    @property
-    def content(self) -> bytes: ...
-
 
 def test_hot_updates_do_not_publish_workspace_change_noise(
     isolated_services: ApiServices,
@@ -32,14 +22,12 @@ def test_hot_updates_do_not_publish_workspace_change_noise(
     workspace = ControlPlaneService(isolated_services.context).get_workspace("default")
 
     task = isolated_services.tasks.create("noisy-save", workspace_id=workspace.id)
-    worker = isolated_services.compute.register_worker()
     volume = isolated_services.volumes.get_or_create(
         "metered-volume", workspace=workspace.id, admit=None
     )
     cursor = _current_cursor(isolated_services, workspace.id)
 
     isolated_services.tasks.save(task)
-    isolated_services.compute.set_worker_status(worker.id, ResourceStatus.Running)
     isolated_services.usage.record(
         workspace_id=workspace.id,
         resource_type="container",
@@ -148,19 +136,3 @@ def _changes_after(
         for _key, entries in services.redis().stream_read({key: cursor}, count=100)
         for _entry_id, fields in entries
     ]
-
-
-def _response_json(response: _HttpResponse) -> JsonValue:
-    return _JSON_VALUE_ADAPTER.validate_json(response.content)
-
-
-def _json_path(value: JsonValue, *path: str | int) -> JsonValue:
-    current = value
-    for segment in path:
-        if isinstance(segment, str):
-            assert isinstance(current, dict)
-            current = current[segment]
-        else:
-            assert isinstance(current, list)
-            current = current[segment]
-    return current

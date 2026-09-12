@@ -13,8 +13,8 @@ import json
 import sys
 from collections.abc import Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass, fields, is_dataclass
-from typing import IO, Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import IO, Any
 
 import typer
 from pydantic import JsonValue
@@ -78,11 +78,6 @@ console = CliConsole()
 error_console = CliConsole(stderr=True)
 
 
-@runtime_checkable
-class ModelDumpable(Protocol):
-    def model_dump(self, *, mode: str) -> object: ...
-
-
 def json_default(value: object) -> JsonValue:
     return to_json_value(value)
 
@@ -144,18 +139,6 @@ def write_stream(value: str, *, error: bool = False) -> None:
     target = error_console if error else console
     target.file.write(value)
     target.file.flush()
-
-
-def payload_data(value: object) -> object:
-    if isinstance(value, ModelDumpable):
-        return value.model_dump(mode="json")
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field.name: getattr(value, field.name)
-            for field in fields(value)
-            if not field.name.startswith("_")
-        }
-    return value
 
 
 def table(
@@ -256,7 +239,6 @@ __all__ = [
     "json_output_active",
     "json_output_enabled",
     "parse_json_argument",
-    "payload_data",
     "print_events_table",
     "print_json_line",
     "print_payload",

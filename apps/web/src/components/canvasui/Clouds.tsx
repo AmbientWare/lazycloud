@@ -20,12 +20,8 @@ export interface CloudsOptions {
   density?: number;
   blur?: number;
   shading?: number;
-  color?: [number, number, number] | "auto";
+  color: [number, number, number];
   opacity?: number;
-  shadow?: number;
-  shadowOffsetX?: number;
-  shadowOffsetY?: number;
-  shadowSoftness?: number;
   wind?: number;
   windRadius?: number;
   quality?: number;
@@ -41,7 +37,7 @@ export interface CloudsInstance {
   destroy: () => void;
 }
 
-const DEFAULTS: Required<CloudsOptions> = {
+const DEFAULTS: Required<Omit<CloudsOptions, "color">> = {
   scale: 1,
   speed: 0.6,
   scrollWithContent: true,
@@ -49,12 +45,7 @@ const DEFAULTS: Required<CloudsOptions> = {
   density: 2.5,
   blur: 0,
   shading: 0.1,
-  color: "auto",
   opacity: 0.64,
-  shadow: 0.06,
-  shadowOffsetX: 200,
-  shadowOffsetY: -10,
-  shadowSoftness: 1,
   wind: 0.6,
   windRadius: 350,
   quality: 1,
@@ -198,9 +189,6 @@ uniform vec3 uBase;
 uniform float uBlur;
 uniform float uShading;
 uniform float uOpacity;
-uniform float uShadow;
-uniform vec2 uShadowShift;
-uniform float uShadowLod;
 uniform float uWindAmt;
 
 void main () {
@@ -220,20 +208,10 @@ void main () {
     : uBase + vec3(sh * k);
   cloudRGB = clamp(cloudRGB, 0.0, 1.0);
 
-  vec2 sUv = uv + uShadowShift;
-  float s = textureLod(uField, sUv, max(uShadowLod, blurLod)).r
-    - texture(uWind, sUv).r * uWindAmt;
-  float shadowA = smoothstep(0.35, 1.0, s) * uShadow * (1.0 - mist);
-
-  float a = cloudA + shadowA * (1.0 - cloudA);
-  vec3 rgb = cloudRGB * cloudA;
-  outColor = vec4(rgb, a);
+  outColor = vec4(cloudRGB * cloudA, cloudA);
 }`;
 
-function createClouds(
-  elements: CloudsElements,
-  options: CloudsOptions = {},
-): CloudsInstance | null {
+function createClouds(elements: CloudsElements, options: CloudsOptions): CloudsInstance | null {
   const config = { ...DEFAULTS, ...options };
   const { content, output } = elements;
 
@@ -306,35 +284,6 @@ function createClouds(
   let fieldW = 0;
   let fieldH = 0;
 
-  let baseColor: [number, number, number] = [1, 1, 1];
-  const probe = document.createElement("canvas");
-  probe.width = probe.height = 1;
-  const probeCtx = probe.getContext("2d", { willReadFrequently: true });
-
-  function syncBaseColor() {
-    if (config.color !== "auto") {
-      baseColor = config.color;
-      return;
-    }
-    if (!probeCtx) return;
-    let el: Element | null = content;
-    while (el) {
-      const bg = getComputedStyle(el).backgroundColor;
-      if (bg && bg !== "transparent") {
-        probeCtx.clearRect(0, 0, 1, 1);
-        probeCtx.fillStyle = bg;
-        probeCtx.fillRect(0, 0, 1, 1);
-        const [r, g, b, a] = probeCtx.getImageData(0, 0, 1, 1).data;
-        if (a > 0) {
-          baseColor = [r / 255, g / 255, b / 255];
-          return;
-        }
-      }
-      el = el.parentElement;
-    }
-    baseColor = [1, 1, 1];
-  }
-
   function syncCanvasSize() {
     const cw = content.clientWidth;
     const ch = content.clientHeight;
@@ -390,7 +339,6 @@ function createClouds(
   }
 
   syncCanvasSize();
-  syncBaseColor();
 
   let pointerX = 0.5;
   let pointerY = 0.5;
@@ -460,20 +408,10 @@ function createClouds(
     gl!.bindTexture(gl!.TEXTURE_2D, nextWind);
     gl!.uniform1i(composite.uniforms.uWind, 1);
     gl!.uniform2f(composite.uniforms.uResolution, output.width, output.height);
-    gl!.uniform3f(composite.uniforms.uBase, baseColor[0], baseColor[1], baseColor[2]);
+    gl!.uniform3f(composite.uniforms.uBase, ...config.color);
     gl!.uniform1f(composite.uniforms.uBlur, Math.min(Math.max(config.blur, 0), 1));
     gl!.uniform1f(composite.uniforms.uOpacity, Math.min(Math.max(config.opacity, 0), 1));
     gl!.uniform1f(composite.uniforms.uShading, Math.max(config.shading, 0));
-    gl!.uniform1f(composite.uniforms.uShadow, Math.min(Math.max(config.shadow, 0), 1));
-    gl!.uniform2f(
-      composite.uniforms.uShadowShift,
-      -config.shadowOffsetX / Math.max(output.clientWidth, 1),
-      config.shadowOffsetY / Math.max(output.clientHeight, 1),
-    );
-    gl!.uniform1f(
-      composite.uniforms.uShadowLod,
-      Math.min(Math.max(config.shadowSoftness, 0), 1) * 4,
-    );
     gl!.uniform1f(composite.uniforms.uWindAmt, Math.min(Math.max(config.wind, 0), 1));
     gl!.drawArrays(gl!.TRIANGLE_STRIP, 0, 4);
   }
@@ -559,25 +497,6 @@ function createClouds(
   content.addEventListener("pointerleave", onPointerLeave, { passive: true });
   content.addEventListener("scroll", start, { passive: true });
 
-  let themeTimer = 0;
-  function onThemeShift() {
-    syncBaseColor();
-    start();
-    window.clearTimeout(themeTimer);
-    themeTimer = window.setTimeout(() => {
-      syncBaseColor();
-      start();
-    }, 300);
-  }
-
-  const themeObserver = new MutationObserver(onThemeShift);
-  themeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["class", "style", "data-theme"],
-  });
-  const schemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
-  schemeQuery.addEventListener("change", onThemeShift);
-
   return {
     setOptions(next) {
       if (
@@ -586,7 +505,6 @@ function createClouds(
         return;
       Object.assign(config, next);
       syncCanvasSize();
-      syncBaseColor();
       start();
     },
     destroy() {
@@ -595,9 +513,6 @@ function createClouds(
       cancelAnimationFrame(raf);
       observer.disconnect();
       intersection.disconnect();
-      themeObserver.disconnect();
-      schemeQuery.removeEventListener("change", onThemeShift);
-      window.clearTimeout(themeTimer);
       motionQuery.removeEventListener("change", onMotionChange);
       content.removeEventListener("pointermove", onPointerMove);
       content.removeEventListener("pointerleave", onPointerLeave);
@@ -625,7 +540,6 @@ export interface CloudsProps extends CloudsOptions {
   className?: string;
   contentClassName?: string;
   contentRef?: Ref<HTMLDivElement>;
-  style?: CSSProperties;
 }
 
 function setRefValue<T>(ref: Ref<T> | undefined, value: T | null) {
@@ -641,7 +555,6 @@ export function Clouds({
   className,
   contentClassName,
   contentRef: forwardedContentRef,
-  style,
   ...options
 }: CloudsProps) {
   const contentRef = useRef<HTMLDivElement>(null);
@@ -679,7 +592,7 @@ export function Clouds({
   };
 
   return (
-    <div className={className} style={{ position: "relative", ...style }}>
+    <div className={className} style={{ position: "relative" }}>
       <div ref={setContentRef} className={contentClassName} style={contentStyle}>
         {children}
       </div>

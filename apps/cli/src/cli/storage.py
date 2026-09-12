@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.formatting import bytes_count
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from lazycloud.cli.components.results import emit_notice, emit_result
+from lazycloud.terminal import humanize_bytes
 from pydantic import JsonValue
 from shared.bytes_transport import encode_bytes
 from shared.http.storage import CacheCreateRequest, ObjectCreateRequest
@@ -37,7 +37,7 @@ def object_put(
         title="Object uploaded",
         fields={
             "object": f"{record.bucket}/{record.key}",
-            "size": bytes_count(record.size),
+            "size": humanize_bytes(record.size),
         },
         tone="success",
     )
@@ -53,7 +53,7 @@ def object_list(
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
-        rows = [[item.bucket, item.key, bytes_count(item.size)] for item in records]
+        rows = [[item.bucket, item.key, humanize_bytes(item.size)] for item in records]
         console.print(table("Objects", ["bucket", "key", "size"], rows))
 
 
@@ -110,7 +110,7 @@ def cache_put(
         ctx,
         payload=record.model_dump(mode="json"),
         title="Cache entry uploaded",
-        fields={"entry": f"{namespace}/{key}", "size": bytes_count(record.size)},
+        fields={"entry": f"{namespace}/{key}", "size": humanize_bytes(record.size)},
         tone="success",
     )
 
@@ -127,7 +127,7 @@ def cache_list(ctx: typer.Context) -> None:
             title="Cache",
             fields={
                 "entries": len(records),
-                "size": bytes_count(sum(item.size for item in records)),
+                "size": humanize_bytes(sum(item.size for item in records)),
                 "hits": sum(item.hits for item in records),
             },
         )

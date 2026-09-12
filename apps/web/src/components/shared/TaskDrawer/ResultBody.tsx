@@ -4,6 +4,7 @@ import { Download } from "lucide-react";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
+import { downloadBlob } from "@/lib/files";
 
 export function ResultBody({
   error,
@@ -34,7 +35,12 @@ export function ResultBody({
             size="icon"
             aria-label={`Download ${error ? "error" : "result"}`}
             title={`Download ${error ? "error" : "result"}`}
-            onClick={() => downloadText(`task-${error ? "error" : "result"}.${extension}`, content)}
+            onClick={() =>
+              downloadBlob(
+                `task-${error ? "error" : "result"}.${extension}`,
+                new Blob([content], { type: "text/plain;charset=utf-8" }),
+              )
+            }
           >
             <Download className="size-3.5" />
           </Button>
@@ -51,13 +57,4 @@ export function ResultBody({
       </pre>
     </div>
   );
-}
-
-function downloadText(filename: string, content: string): void {
-  const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }

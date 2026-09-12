@@ -37,17 +37,7 @@ export function appRunActivity(
     }
   }
 
-  return {
-    tasks,
-    bands,
-    totals: {
-      failed: sum(bands.failed),
-      inFlight: sum(bands.inFlight),
-      other: sum(bands.other),
-      succeeded: sum(bands.succeeded),
-    },
-    total: sum(tasks),
-  };
+  return summarizeActivity(tasks, bands);
 }
 
 /** The same 24 hours from the app list, which sends one series per band.
@@ -63,22 +53,21 @@ export function appRunActivityFromSeries(series: {
   succeeded: number[];
 }): AppRunActivity {
   const tasks = alignToWindow(series.activity);
-  const bands = emptyBands();
-  const failures = alignToWindow(series.failures);
-  const pending = alignToWindow(series.pending);
-  const succeeded = alignToWindow(series.succeeded);
+  const bands = {
+    failed: alignToWindow(series.failures),
+    inFlight: alignToWindow(series.pending),
+    succeeded: alignToWindow(series.succeeded),
+    other: Array.from({ length: HOUR_COUNT }, () => 0),
+  };
+  const priority = ["failed", "inFlight", "succeeded"] as const;
 
   for (let index = 0; index < HOUR_COUNT; index += 1) {
     const total = Math.max(tasks[index], 0);
     // Clamped against the hour's own total so a series that disagrees with it
     // cannot draw a bar taller than the work it describes.
     let claimed = 0;
-    for (const [band, values] of [
-      ["failed", failures],
-      ["inFlight", pending],
-      ["succeeded", succeeded],
-    ] as const) {
-      const amount = Math.min(Math.max(values[index], 0), Math.max(total - claimed, 0));
+    for (const band of priority) {
+      const amount = Math.min(Math.max(bands[band][index], 0), Math.max(total - claimed, 0));
       bands[band][index] = amount;
       claimed += amount;
     }
@@ -86,6 +75,10 @@ export function appRunActivityFromSeries(series: {
     tasks[index] = total;
   }
 
+  return summarizeActivity(tasks, bands);
+}
+
+function summarizeActivity(tasks: number[], bands: AppRunActivity["bands"]): AppRunActivity {
   return {
     tasks,
     bands,

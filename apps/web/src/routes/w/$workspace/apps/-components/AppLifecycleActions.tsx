@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import type { App } from "@/lib/api/schemas";
 import {
   deleteAppMutationOptions,
+  invalidateAppLists,
   pauseAppMutationOptions,
   resumeAppMutationOptions,
 } from "@/lib/queries/apps";
@@ -30,9 +31,7 @@ export function AppLifecycleActions({
       queryClient.invalidateQueries({
         queryKey: workspaceQueryKeys.apps.detail(workspaceId, app.id),
       }),
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.containers.root(workspaceId) }),
+      invalidateAppLists(queryClient, workspaceId),
     ]);
   };
   const pause = useMutation({
@@ -47,15 +46,7 @@ export function AppLifecycleActions({
     ...deleteAppMutationOptions(workspaceId, app.id),
     onSuccess: async () => {
       queryClient.removeQueries({ queryKey: workspaceQueryKeys.apps.detail(workspaceId, app.id) });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
-        queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.deployments.root(workspaceId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.containers.root(workspaceId),
-        }),
-      ]);
+      await invalidateAppLists(queryClient, workspaceId);
       await navigate({ to: "/w/$workspace/apps", params: { workspace: workspaceName } });
     },
   });

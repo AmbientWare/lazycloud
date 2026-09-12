@@ -30,7 +30,7 @@ from database.repositories.orchestration import (
 )
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
-from pydantic import ConfigDict, Field, JsonValue
+from pydantic import JsonValue
 from shared.capacity import CapacityOwnerKind
 from shared.compute_enrollment import (
     ComputeCredentialStatus,
@@ -47,7 +47,6 @@ from shared.compute_policy import (
     ComputeUnitRecord,
     ComputeUnitVisibility,
 )
-from shared.contracts import ContractModel
 from shared.errors import (
     ConflictError,
     InvalidInputError,
@@ -116,21 +115,15 @@ def _reservation_status_from_provider(status: str) -> ReservationStatus:
     return ReservationStatus.Pending
 
 
-def _provider_instance_metadata(
-    record: ComputeProviderInstanceRecord,
-) -> dict[str, JsonValue]:
-    return _ProviderInstanceMetadataEnvelope.model_validate_json(record.model_dump_json()).metadata
-
-
 def _provider_storage_volume_ids(record: ComputeProviderInstanceRecord) -> tuple[str, ...]:
-    value = _provider_instance_metadata(record).get("storage_volume_ids")
+    value = record.metadata.get("storage_volume_ids")
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, str) and item)
 
 
 def _provider_booted_template_version(record: ComputeProviderInstanceRecord) -> str:
-    value = _provider_instance_metadata(record).get("booted_template_version")
+    value = record.metadata.get("booted_template_version")
     return value if isinstance(value, str) else ""
 
 
@@ -250,12 +243,6 @@ def publish_workspace_change(
     )
 
 
-class _ProviderInstanceMetadataEnvelope(ContractModel):
-    model_config = ConfigDict(extra="ignore")
-
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
 class ProviderUnitBootstrapFactory(Protocol):
     """What a booting node needs to reach the control plane and enrol."""
 
@@ -310,9 +297,7 @@ class ProviderMachineReconciler:
             # instance identity, so the closed row restarts as a fresh launch
             # attempt instead of resurrecting the reclaimed record's state.
             relaunched = existing is not None and not _reservation_open(existing.status)
-            metadata: dict[str, JsonValue] = (
-                _provider_instance_metadata(existing) if existing is not None else {}
-            )
+            metadata: dict[str, JsonValue] = dict(existing.metadata) if existing is not None else {}
             metadata.pop("missing_since", None)
             if relaunched:
                 for stale_key in (
@@ -462,7 +447,7 @@ class ProviderMachineReconciler:
         for existing in current:
             if existing.instance_id is not None and existing.instance_id in observed:
                 continue
-            existing_metadata = _provider_instance_metadata(existing)
+            existing_metadata = dict(existing.metadata)
             missing_since = _metadata_time(existing_metadata, "missing_since")
             if missing_since is None:
                 existing_metadata["missing_since"] = now.isoformat()
@@ -583,7 +568,7 @@ class ProviderMachineReconciler:
         for instance in prior_instances:
             if instance.instance_id is not None and instance.instance_id in observed_instance_ids:
                 continue
-            metadata = _provider_instance_metadata(instance)
+            metadata = instance.metadata
             destroyed_at = _metadata_time(metadata, "provider_storage_destroyed_at")
             if destroyed_at is not None:
                 destruction_observations[instance.id] = destroyed_at
@@ -729,7 +714,7 @@ class ProviderMachineReconciler:
             except Exception as exc:
                 last_error = str(exc)
         metadata: dict[str, JsonValue] = {
-            **_provider_instance_metadata(record),
+            **record.metadata,
             "terminating_reason": reason,
             "status_message": message,
             "last_error": last_error,
@@ -1100,7 +1085,7 @@ class ProviderMachineReconciler:
         *,
         deleting_workspace_id: str | None = None,
     ) -> None:
-        token_hash = str(_provider_instance_metadata(record).get("registration_token_hash") or "")
+        token_hash = str(record.metadata.get("registration_token_hash") or "")
         if token_hash == "":
             return
         credentials = ComputeJoinCredentialRepository(session)

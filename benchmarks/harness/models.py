@@ -69,47 +69,10 @@ class BenchmarkProbe(StrEnum):
     EmbeddedCachePageProof = "embedded_cache_page_proof"
 
 
-class BenchmarkMeasurementStatus(StrEnum):
-    Ok = "ok"
-    Error = "error"
-
-
-class BenchmarkMeasurementName(StrEnum):
-    ProcessStartup = "process_startup"
-    LocalCacheRoundtrip = "local_cache_roundtrip"
-    SandboxFilesystem = "sandbox_filesystem"
-    PythonFileRead = "python_file_read"
-    WorkerFileRead = "worker_file_read"
-    RemoteCacheSocketRead = "remote_cache_socket_read"
-    CachePathProof = "cache_path_proof"
-    ImageLayerRead = "image_layer_read"
-    Generic = "generic"
-
-
 class BenchmarkThresholds(BenchmarkModel):
     python_file_read_min_mbps: float | None = None
     remote_cache_socket_read_min_mbps: float | None = None
     min_mbps: float | None = None
-
-
-class BenchmarkValidationPolicy(BenchmarkModel):
-    requires_sha: bool = False
-    requires_cache_hit: bool = False
-    requires_remote_read: bool = False
-    reject_cloud_read: bool = False
-    min_mbps: float | None = None
-
-
-class BenchmarkEvidence(BenchmarkModel):
-    sha_ok: bool | None = None
-    cache_hit: bool | None = None
-    remote_worker: bool | None = None
-    remote_node: bool | None = None
-    cloud_read: bool | None = None
-    cache_source: str | None = None
-    artifact_output: str | None = None
-    network_ceiling_mbps: float | None = None
-    extra: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class BenchmarkCase(BenchmarkModel):
@@ -134,37 +97,6 @@ class BenchmarkReport(BenchmarkModel):
     @property
     def passed(self) -> bool:
         return all(result.status == BenchmarkStatus.Passed for result in self.results)
-
-
-class BenchmarkMeasurement(BenchmarkModel):
-    suite: str
-    scenario: str
-    measurement: BenchmarkMeasurementName = BenchmarkMeasurementName.Generic
-    status: BenchmarkMeasurementStatus = BenchmarkMeasurementStatus.Ok
-    duration_ms: float = 0
-    bytes_read: int = 0
-    mbps: float = 0
-    validation: BenchmarkValidationPolicy = Field(default_factory=BenchmarkValidationPolicy)
-    evidence: BenchmarkEvidence = Field(default_factory=BenchmarkEvidence)
-    tags: dict[str, JsonValue] = Field(default_factory=dict)
-    error: str | None = None
-    timestamp: datetime = Field(default_factory=utc_now)
-
-    @field_validator("duration_ms", "mbps")
-    @classmethod
-    def _non_negative_float(cls, value: float) -> float:
-        if value < 0:
-            msg = "benchmark metric values must be non-negative"
-            raise ValueError(msg)
-        return value
-
-    @field_validator("bytes_read")
-    @classmethod
-    def _non_negative_int(cls, value: int) -> int:
-        if value < 0:
-            msg = "benchmark byte counts must be non-negative"
-            raise ValueError(msg)
-        return value
 
 
 class ScenarioSpec(BenchmarkModel):

@@ -24,6 +24,7 @@ from foundation.process import (
 from pydantic import JsonValue
 from shared.app_identity import CONTAINER_HELPER_PATH, WORKER_BUNDLE_ROOT
 from shared.container_requests import StopContainerReason
+from shared.env import parse_environment
 from shared.image_building.authoring import LinuxArchitecture
 
 import worker.oci_spec
@@ -46,7 +47,6 @@ from worker.execution import (
     OciMountType,
     PortBinding,
     build_container_environment,
-    env_list_to_map,
     plan_oci_linux_resources,
 )
 from worker.gpu import ContainerGpuAssignmentResult
@@ -315,7 +315,7 @@ class OciRuntimeSpecBuilder:
             user_code_path=context.cwd or self.cwd,
         )
         if gpu_result is not None and gpu_result.env:
-            env.update(env_list_to_map(gpu_result.env))
+            env.update(parse_environment(gpu_result.env))
         if managed_runtime.enabled:
             env["PYTHONPATH"] = managed_runtime.python_path(env.get("PYTHONPATH", ""))
             env["PYTHONSAFEPATH"] = "1"

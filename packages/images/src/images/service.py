@@ -674,19 +674,6 @@ class ImageBuildService:
             None,
         )
 
-    def find_active_by_fingerprint(
-        self,
-        fingerprint: str,
-        *,
-        workspace_id: str | None = None,
-    ) -> ImageBuildRecord | None:
-        resolved_workspace_id = self._resolve_workspace_id(workspace_id)
-        with self.context.database.session() as session:
-            return ImageBuildRepository(session).get_active_by_fingerprint(
-                fingerprint,
-                workspace_id=resolved_workspace_id,
-            )
-
     def find_by_image_id(
         self,
         image_id: str,

@@ -8,6 +8,7 @@ import { isTerminalTaskStatus, type Task } from "@/lib/api/schemas";
 import { formatDuration } from "@/lib/format";
 import { containerEventSummaryQueryOptions } from "@/lib/queries/events";
 import { cn } from "@/lib/utils";
+import { AxisLabels } from "./AxisLabels";
 
 /** Single-strip task lifecycle with proportional phases and stable detail text. */
 export function PhaseBar({ workspaceId, task }: { workspaceId: string; task: Task }) {
@@ -84,15 +85,7 @@ export function PhaseBar({ workspaceId, task }: { workspaceId: string; task: Tas
         </div>
 
         <div className="relative h-5 border-b border-border/50" aria-label="Elapsed time axis">
-          {ticks.map((tick, index) => (
-            <AxisTickLabel
-              key={tick.timestampMs}
-              label={tick.label}
-              leftPct={tick.leftPct}
-              placement={tickPlacement(index, ticks.length)}
-              title={new Date(tick.timestampMs).toLocaleString()}
-            />
-          ))}
+          <AxisLabels ticks={ticks} className="top-1" />
         </div>
 
         <div className="flex gap-3 overflow-x-auto pt-2 pb-0.5 text-[10px] text-muted-foreground">
@@ -116,37 +109,6 @@ export function PhaseBar({ workspaceId, task }: { workspaceId: string; task: Tas
       </div>
     </div>
   );
-}
-
-function AxisTickLabel({
-  label,
-  leftPct,
-  placement,
-  title,
-}: {
-  label: string;
-  leftPct: number;
-  placement: "start" | "middle" | "end";
-  title: string;
-}) {
-  return (
-    <span
-      className={cn(
-        "absolute top-1 text-[10px] tabular-nums text-muted-foreground",
-        placement === "middle" && "-translate-x-1/2",
-        placement === "end" && "-translate-x-full",
-      )}
-      style={{ left: `${leftPct}%` }}
-      title={title}
-    >
-      {label}
-    </span>
-  );
-}
-
-function tickPlacement(index: number, length: number): "start" | "middle" | "end" {
-  if (index === 0) return "start";
-  return index === length - 1 ? "end" : "middle";
 }
 
 function phaseKey(phase: ExecutionPhase): string {

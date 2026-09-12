@@ -38,7 +38,7 @@ from shared.http.concurrency import (
     ConcurrencyLimitResponse,
     ConcurrencyLimitSetRequest,
 )
-from shared.http.deployments import DeploymentListResponse, DeploymentResponse
+from shared.http.deployments import DeploymentListResponse
 from shared.http.observability import (
     EventHistoryRequest,
     EventQueryResponse,
@@ -83,7 +83,6 @@ from shared.http.system import (
 from shared.http.usage import UsageRecordListResponse, UsageSummaryResponse
 from shared.http.users import (
     UserCreateRequest,
-    UserListResponse,
     UserResponse,
     UserRoleRequest,
     UserStatusRequest,
@@ -214,9 +213,6 @@ class AdminApiClient:
                 payload=request.model_dump(mode="json"),
             )
         )
-
-    def list_users(self) -> UserListResponse:
-        return UserListResponse.model_validate(self.channel.get("/api/v1/users"))
 
     def list_billing_accounts(self, *, cursor: str = "") -> BillingAccountAdminListResponse:
         path = "/api/v1/billing/accounts"
@@ -394,13 +390,6 @@ class AdminApiClient:
         return DeploymentListResponse.model_validate(
             self.channel.get(
                 self._workspace_path("/api/v1/deployments", app_id=app_id, limit=limit)
-            )
-        )
-
-    def get_deployment(self, deployment_id: str) -> DeploymentResponse:
-        return DeploymentResponse.model_validate(
-            self.channel.get(
-                self._workspace_path(f"/api/v1/deployments/{url_path_segment(deployment_id)}")
             )
         )
 

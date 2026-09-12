@@ -186,29 +186,6 @@ class EventService:
                 until=until,
             )
 
-    def list_for_resource(
-        self,
-        *,
-        resource_type: str,
-        resource_id: str,
-        workspace_id: str | None = None,
-        limit: int | None = None,
-    ) -> list[Event]:
-        with self.context.database.session() as session:
-            repository = EventRepository(session)
-            if workspace_id is None:
-                return repository.list_across_workspaces(
-                    resource_type=resource_type,
-                    resource_id=resource_id,
-                    limit=limit,
-                )
-            return repository.list(
-                resource_type=resource_type,
-                resource_id=resource_id,
-                workspace_id=workspace_id,
-                limit=limit,
-            )
-
     def prune(
         self,
         *,
