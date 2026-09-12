@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from enum import IntEnum, StrEnum
+from enum import IntEnum
 from uuid import UUID
 
 from pydantic import Field, field_validator
 
+from shared.enums import StringEnum
 from shared.http.base import HttpModel
 
 TUNNEL_CHUNK_BYTES = 64 * 1024
@@ -13,7 +14,7 @@ TUNNEL_OPEN_TIMEOUT_SECONDS = 5.0
 TUNNEL_MAX_STREAMS = 128
 
 
-class TunnelCommandKind(StrEnum):
+class TunnelCommandKind(StringEnum):
     Connected = "connected"
     Heartbeat = "heartbeat"
     Open = "open"

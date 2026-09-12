@@ -1,9 +1,9 @@
 # Outbound agent tunnel
 
-Status: proposed implementation plan. The owner confirms that the app has no active
-users and authorizes retirement of obsolete agents and gateways when needed. Plan a
-clean cutover with a brief service interruption. Implementation and acceptance have
-not run; this document records their scope.
+Status: implemented on `feat/outbound-agent-tunnel`, with release acceptance in
+progress. The owner confirms that the app has no active users and authorizes
+retirement of obsolete agents and gateways when needed. The cutover permits a brief
+service interruption. Production cutover and retirement remain pending.
 
 ## Outcome
 
@@ -45,12 +45,12 @@ permitted control-plane service. Existing worker and runtime tokens still author
 the inner request. User containers never receive the machine private key or gain
 the agent's authority by calling the connector.
 
-The proposed transport library is asynchronous gRPC over HTTP/2 with mutual TLS.
+The transport uses `grpcio` asynchronous gRPC over HTTP/2 with mutual TLS.
 It supplies TLS, stream framing, flow control, cancellation, and connection reuse.
 LazyCloud still owns enrollment, session routing, authorization, and lifecycle.
 This is not a claim that a transport library is a complete reverse-tunnel product.
-The first implementation slice must prove that the integration stays small and
-performs well before this choice is finalized.
+Release acceptance covers stream behavior, authorization, reconnects, and workload
+latency through this implementation.
 
 Keep control messages separate from bulk stream queues. Bound queued bytes and
 concurrent streams per agent and workspace. Reuse established channels on warm
@@ -66,10 +66,10 @@ Gateway replicas have their own deployment and readiness, independent of API pod
 
 | Owner | Responsibility |
 | --- | --- |
-| `packages/identity` | Authenticate enrollment, issue and rotate machine credentials, authorize certificate identities, and enforce revocation. |
-| `packages/compute` | Own machine enrollment, workload placement, worker admission, and authorized workload routes. A connection does not allocate a machine or recreate a worker. |
-| PostgreSQL | Preserve machine/workspace identity, credential generation, revocation, workload routes, and existing durable task state. |
-| Redis | Track live session ownership and leases. Store connection metadata, not stream payloads or a second task database. |
+| `packages/identity` | Issue and validate certificates using the deployment issuer. |
+| `packages/compute` | Own machine enrollment, credential binding, revocation, worker admission, and workload route authorization. A connection does not allocate a machine or recreate a worker. |
+| PostgreSQL | Preserve machine/workspace identity, credential generation, revocation, workload assignments, and durable task state. |
+| Redis | Track live sessions, leases, and registered workload routes. Store connection metadata, not stream payloads or a second task database. |
 | Connection gateway | Hold sockets and bounded stream buffers. Validate operations and route requests to the gateway currently connected to the agent. |
 | Agent | Protect its private key, establish the tunnel, and connect only to locally registered workload destinations. |
 

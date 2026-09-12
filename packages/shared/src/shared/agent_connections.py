@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from ipaddress import IPv6Address
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -61,7 +61,7 @@ class AgentConnectionRecord(ContractModel):
     @field_validator("expires_at")
     @classmethod
     def normalize_expiry(cls, value: datetime) -> datetime:
-        return value.astimezone(UTC)
+        return value.astimezone(timezone.utc)
 
 
 __all__ = ["AGENT_TUNNEL_CONTROL_PORT", "AGENT_TUNNEL_CONTROL_URL", "AgentConnectionRecord"]

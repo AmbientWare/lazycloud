@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from uuid import UUID
 
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 
+from shared.enums import StringEnum
 from shared.http.base import HttpModel
 
 TUNNEL_CERTIFICATE_RENEWAL_MARGIN_SECONDS = 1200
@@ -40,7 +40,7 @@ class AgentTunnelIdentity(HttpModel):
         return identity
 
 
-class TunnelServiceRole(StrEnum):
+class TunnelServiceRole(StringEnum):
     Gateway = "gateway"
     ControlPlane = "control-plane"
 
