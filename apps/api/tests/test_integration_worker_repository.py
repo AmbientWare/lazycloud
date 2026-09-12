@@ -2541,8 +2541,11 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     assert stored.region is None
 
 
+@pytest.mark.parametrize("supersede_release", [False, True])
 def test_worker_admission_survives_activation_and_registration_after_redis_loss(
-    isolated_services: ApiServices, monkeypatch: pytest.MonkeyPatch
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+    supersede_release: bool,
 ) -> None:
     gateway = isolated_services.gateway_service
     service = isolated_services.worker_repository_service
@@ -2664,7 +2667,8 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
         assert draining is not None and draining.status is SchedulerWorkerStatus.Draining
         assert draining.request_poll_expires_at is None
         superseded_generation = following.generation
-        following = select_worker_release("worker:latest")
+        if supersede_release:
+            following = select_worker_release("worker:latest")
         current_request = request.model_copy(
             update={
                 "worker": request.worker.model_copy(
@@ -2679,8 +2683,34 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
         )
         assert ready.status_code == 200
         blocked = service.workers.get_worker(slot.worker_id)
-        assert blocked is not None and blocked.status is SchedulerWorkerStatus.Draining
+        assert blocked is not None
         assert blocked.admitted_release_generation == following.generation
+        if not supersede_release:
+            assert blocked.status is SchedulerWorkerStatus.Pending
+            current_session = WorkerRecordResponse.model_validate_json(ready.content).cache_session
+            assert current_session is not None
+            assert (
+                client.post(
+                    "/worker-repository/toggle-worker-available",
+                    headers=headers,
+                    json=WorkerCacheSessionRequest(
+                        worker_id=slot.worker_id,
+                        cache_generation_id=current_session.generation_id,
+                        cache_session_fence=current_session.session_fence,
+                    ).model_dump(mode="json"),
+                ).status_code
+                == 200
+            )
+            stale_observation = gateway.stream_agent(
+                StreamAgentRequest(
+                    agent_token=agent_token,
+                    active_worker_images={slot.worker_id: release.target.worker_image},
+                    prepared_worker_images=[following.target.worker_image],
+                )
+            )
+            assert stale_observation.ok
+            blocked = service.workers.get_worker(slot.worker_id)
+        assert blocked is not None and blocked.status is SchedulerWorkerStatus.Draining
         resumed = gateway.stream_agent(
             StreamAgentRequest(
                 agent_token=agent_token,
@@ -2697,9 +2727,10 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
                 WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id)
                 == following.generation
             )
-        assert not service.workers.release_worker_rollout_slot(
-            slot.capacity_owner_id, slot.worker_id, str(superseded_generation)
-        )
+        if supersede_release:
+            assert not service.workers.release_worker_rollout_slot(
+                slot.capacity_owner_id, slot.worker_id, str(superseded_generation)
+            )
         assert service.workers.has_worker_rollout_slot(slot.capacity_owner_id, slot.worker_id)
         ready = client.post(
             "/worker-repository/add-worker",

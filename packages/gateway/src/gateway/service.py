@@ -2428,6 +2428,11 @@ class GatewayControlService:
             # An unfinished release owns intake even when the installed image is current.
             or 0 < update_generation < release.generation
             or (
+                continuing_rollout
+                and worker is not None
+                and worker.status is SchedulerWorkerStatus.Draining
+            )
+            or (
                 worker is not None
                 and bool(worker.runtime_image)
                 and (
