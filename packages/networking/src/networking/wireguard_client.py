@@ -15,6 +15,7 @@ from pathlib import Path
 from time import monotonic
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from shared.http.private_network import WireGuardGatewayConfiguration, WireGuardPeerConfiguration
 
 from networking.wireguard import (
     WIREGUARD_GATEWAY_ADDRESS,
@@ -30,7 +31,6 @@ from networking.wireguard import (
     generate_wireguard_private_key,
     validate_wireguard_public_key,
 )
-from shared.http.private_network import WireGuardGatewayConfiguration, WireGuardPeerConfiguration
 
 LOGGER = logging.getLogger(__name__)
 _MARK_MASK = 0x00FF0000
