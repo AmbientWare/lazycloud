@@ -175,7 +175,7 @@ function MarketingFrame({
       contentClassName={contentClassName}
       contentRef={scrollportRef}
       blur={0.9}
-      color={[0.12, 0.62, 0.85]}
+      color={[0.48, 0.48, 0.48]}
       cover={0.06}
       density={1.45}
       opacity={0.4}
