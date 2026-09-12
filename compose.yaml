@@ -519,6 +519,7 @@ services:
   control-plane:
     image: api:local
     restart: unless-stopped
+    stop_grace_period: 150s
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane

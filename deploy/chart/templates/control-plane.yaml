@@ -18,6 +18,7 @@ spec:
       labels:
         app: control-plane
     spec:
+      terminationGracePeriodSeconds: 150
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
       topologySpreadConstraints:
         {{- include "lazycloud.spreadAcrossNodes" "control-plane" | nindent 8 }}

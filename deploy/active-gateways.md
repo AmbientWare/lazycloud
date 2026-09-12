@@ -5,6 +5,7 @@ registry and fresh gateway presence to choose a working agent path. Their native
 sidecar keeps the tunnel alive while API requests drain. Deploy only after every
 active enrollment uses the new agent runtime and has a working gateway-one path.
 Both gateways keep their unchanged pod templates throughout this API rollout.
+The API allows 120 seconds for request draining inside a 150-second pod grace.
 
 `wireguard-gateway.yaml` preserves gateway zero's two-replica Deployment and
 Service selector. Its pod template keeps secret revision `1` and the deployed
