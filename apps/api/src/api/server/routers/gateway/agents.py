@@ -23,6 +23,11 @@ from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
     AgentCapacityInterruptionResponse,
 )
+from shared.http.private_network import (
+    PrivateNetworkTopologyRequest,
+    RegisterPrivateNetworkRequest,
+    WireGuardPeerConfiguration,
+)
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
     ProviderNodeBootstrapFailureResponse,
@@ -138,6 +143,30 @@ def register_agent_private_network(
     service: GatewayControlService = Depends(gateway_service),
 ) -> RegisterAgentPrivateNetworkResponse:
     return service.register_agent_private_network(request)
+
+
+@router.post(
+    "/agents/private-network/register",
+    response_model=WireGuardPeerConfiguration,
+    operation_id="register_private_network",
+)
+def register_private_network(
+    request: RegisterPrivateNetworkRequest,
+    service: GatewayControlService = Depends(gateway_service),
+) -> WireGuardPeerConfiguration:
+    return service.register_private_network(request)
+
+
+@router.post(
+    "/agents/private-network/topology",
+    response_model=WireGuardPeerConfiguration,
+    operation_id="get_private_network_topology",
+)
+def get_private_network_topology(
+    request: PrivateNetworkTopologyRequest,
+    service: GatewayControlService = Depends(gateway_service),
+) -> WireGuardPeerConfiguration:
+    return service.private_network_topology(request)
 
 
 @router.post("/agents/routes", response_model=ListAgentRoutesResponse)

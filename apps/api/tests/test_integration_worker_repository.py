@@ -55,7 +55,6 @@ from fastapi.testclient import TestClient
 from foundation.network import worker_network_prefix
 from gateway.http import (
     JoinAgentRequest,
-    RegisterAgentPrivateNetworkRequest,
     StreamAgentRequest,
     UpdateAgentRouteStatusRequest,
 )
@@ -92,6 +91,9 @@ from shared.container_requests import ContainerShutdownTarget, StopContainerReas
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.errors import ErrorResponse
+from shared.http.private_network import (
+    RegisterPrivateNetworkRequest,
+)
 from shared.http.releases import AgentReleaseRequest
 from shared.http.worker_usage import WorkerUsageWindowResponse
 from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
@@ -2725,8 +2727,8 @@ def _join_gateway_agent(
                 updated_at=utc_now(),
             )
         )
-    gateway.register_agent_private_network(
-        RegisterAgentPrivateNetworkRequest(
+    gateway.register_private_network(
+        RegisterPrivateNetworkRequest(
             agent_token=joined.agent_token,
             public_key=_wireguard_public_key(joined.machine_id),
         )

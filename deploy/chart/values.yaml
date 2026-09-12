@@ -98,7 +98,11 @@ secretRevisions:
   wireguard: "1"
 
 wireguard:
-  replicas: 2
+  gateways:
+    - index: 0
+      endpoint: ""
+    - index: 1
+      endpoint: ""
   database:
     poolSize: 1
     maxOverflow: 0

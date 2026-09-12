@@ -100,10 +100,8 @@ from networking.dialer import BackendConnector, SocketBackendConnector
 from networking.routing import BackendRouteAuthenticator
 from networking.wireguard import (
     WIREGUARD_AGENT_ROUTE_PROXY_PORT,
-    WIREGUARD_INTERFACE,
     WIREGUARD_KEEPALIVE_SECONDS,
     WIREGUARD_PLATFORM_NETWORK,
-    WireGuardPeerConfiguration,
     allocate_wireguard_agent_address,
     validate_wireguard_public_key,
 )
@@ -203,6 +201,13 @@ from shared.http.objects import (
     ObjectMetadata,
     PutObjectRequest,
     PutObjectResponse,
+)
+from shared.http.private_network import (
+    PrivateNetworkTopologyRequest,
+    RegisterPrivateNetworkRequest,
+    WireGuardGatewayConfiguration,
+    WireGuardPeerConfiguration,
+    WireGuardRouteConfiguration,
 )
 from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
@@ -2128,34 +2133,49 @@ class GatewayControlService:
         self,
         request: RegisterAgentPrivateNetworkRequest,
     ) -> RegisterAgentPrivateNetworkResponse:
+        configuration = self.register_private_network(
+            RegisterPrivateNetworkRequest(
+                agent_token=request.agent_token,
+                public_key=request.public_key,
+            )
+        )
+        gateway = next((gateway for gateway in configuration.gateways if gateway.index == 0), None)
+        if gateway is None:
+            raise UpstreamUnavailableError("WireGuard gateway 0 is not configured")
+        return RegisterAgentPrivateNetworkResponse(
+            peer_id=configuration.peer_id,
+            address=configuration.address,
+            server_public_key=gateway.public_key,
+            endpoint=gateway.endpoint,
+            allowed_ips=configuration.allowed_ips,
+            persistent_keepalive_seconds=configuration.persistent_keepalive_seconds,
+            generation=configuration.generation,
+        )
+
+    def register_private_network(
+        self,
+        request: RegisterPrivateNetworkRequest,
+    ) -> WireGuardPeerConfiguration:
         try:
             public_key = validate_wireguard_public_key(request.public_key)
+            state = self._require_agent_state(request.agent_token)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
-        state = self._require_agent_state(request.agent_token)
         now = utc_now()
         with self.services.context.database.session() as session:
-            gateway = WireGuardGatewayRepository(session).current()
-            if gateway is None:
-                raise UpstreamUnavailableError("WireGuard gateway is not ready")
             enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if (
-                enrollment is None
-                or enrollment.status is not ComputeMachineEnrollmentStatus.Active
-                or enrollment.credential_hash != state.token_hash
-            ):
-                raise InvalidInputError("agent credential is no longer current")
+            enrollment = self._current_private_network_enrollment(session, state, for_update=True)
             peers = WireGuardPeerRepository(session)
             peer = peers.by_enrollment(enrollment.id, for_update=True)
             if peer is None:
                 peers.lock_allocator()
                 peer = peers.by_enrollment(enrollment.id, for_update=True)
+            if (
+                peer is not None
+                and peer.public_key == public_key
+                and _wireguard_peer_matches_enrollment(peer, enrollment)
+            ):
+                return self._private_network_configuration(session, peer)
             if peer is None:
                 generation = enrollment.network_generation + 1
                 peer = WireGuardPeer(
@@ -2174,20 +2194,16 @@ class GatewayControlService:
                 )
             else:
                 generation = max(peer.generation, enrollment.network_generation) + 1
-                updates: dict[str, object] = {
-                    "generation": generation,
-                    "last_handshake_at": None,
-                    "updated_at": now,
-                }
-                if peer.public_key != public_key or peer.status is WireGuardPeerStatus.Revoked:
-                    updates.update(
-                        {
-                            "public_key": public_key,
-                            "status": WireGuardPeerStatus.Active,
-                            "revoked_at": None,
-                        }
-                    )
-                peer = peer.model_copy(update=updates)
+                peer = peer.model_copy(
+                    update={
+                        "generation": generation,
+                        "last_handshake_at": None,
+                        "updated_at": now,
+                        "public_key": public_key,
+                        "status": WireGuardPeerStatus.Active,
+                        "revoked_at": None,
+                    }
+                )
             saved_peer = peers.save(peer)
             enrollments.save(
                 enrollment.model_copy(
@@ -2206,19 +2222,77 @@ class GatewayControlService:
                     }
                 )
             )
+            configuration = self._private_network_configuration(session, saved_peer)
         self.compute_states.save_agent_token_state(
             state.model_copy(update={"heartbeat_confirmed": False, "schedulable": False})
         )
-        configuration = WireGuardPeerConfiguration(
-            peer_id=saved_peer.id,
-            address=saved_peer.address,
-            server_public_key=gateway.public_key,
-            endpoint=gateway.endpoint,
+        return configuration
+
+    def private_network_topology(
+        self,
+        request: PrivateNetworkTopologyRequest,
+    ) -> WireGuardPeerConfiguration:
+        try:
+            state = self._require_agent_state(request.agent_token)
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        with self.services.context.database.session() as session:
+            enrollment = self._current_private_network_enrollment(session, state, for_update=False)
+            peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
+            if peer is None or not _wireguard_peer_matches_enrollment(peer, enrollment):
+                raise InvalidInputError("agent WireGuard peer does not match its enrollment")
+            return self._private_network_configuration(session, peer)
+
+    def _current_private_network_enrollment(
+        self,
+        session: DatabaseSession,
+        state: ComputeAgentTokenState,
+        *,
+        for_update: bool,
+    ) -> ComputeMachineEnrollmentRecord:
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            state.workspace_id,
+            state.machine_id,
+            pool=state.pool,
+            for_update=for_update,
+        )
+        if (
+            enrollment is None
+            or enrollment.status is not ComputeMachineEnrollmentStatus.Active
+            or enrollment.credential_hash != state.token_hash
+        ):
+            raise InvalidInputError("agent credential is no longer current")
+        return enrollment
+
+    def _private_network_configuration(
+        self,
+        session: DatabaseSession,
+        peer: WireGuardPeer,
+    ) -> WireGuardPeerConfiguration:
+        gateways = WireGuardGatewayRepository(session).list_all()
+        if not gateways:
+            raise UpstreamUnavailableError("WireGuard gateways are not configured")
+        return WireGuardPeerConfiguration(
+            peer_id=peer.id,
+            address=peer.address,
             allowed_ips=(str(WIREGUARD_PLATFORM_NETWORK),),
             persistent_keepalive_seconds=WIREGUARD_KEEPALIVE_SECONDS,
-            generation=saved_peer.generation,
+            generation=peer.generation,
+            gateways=tuple(
+                WireGuardGatewayConfiguration(
+                    index=gateway.index,
+                    public_key=gateway.public_key,
+                    endpoint=gateway.endpoint,
+                )
+                for gateway in gateways
+            ),
+            routes=(
+                WireGuardRouteConfiguration(
+                    network=str(WIREGUARD_PLATFORM_NETWORK),
+                    gateway_indices=tuple(gateway.index for gateway in gateways),
+                ),
+            ),
         )
-        return RegisterAgentPrivateNetworkResponse(**configuration.model_dump())
 
     def list_agent_routes(
         self,
@@ -3389,7 +3463,7 @@ class GatewayControlService:
         except OSError as exc:
             detail = (
                 "WireGuard connected, but LazyCloud could not reach TCP "
-                f"{WIREGUARD_AGENT_ROUTE_PROXY_PORT} on {WIREGUARD_INTERFACE}; allow traffic "
+                f"{WIREGUARD_AGENT_ROUTE_PROXY_PORT} through the private network; allow traffic "
                 f"from {WIREGUARD_PLATFORM_NETWORK}"
             )
             self._record_private_network_failure(

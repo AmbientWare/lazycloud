@@ -1,4 +1,9 @@
-# Operator account and public endpoint for this deployment.
+# Operator account and gateway endpoints for this deployment.
 runtime:
   LAZYCLOUD_STRIPE_ACCOUNT_ID: acct_1U3MzaLpRGtVfZdq
-  LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: wg.lazycloud.dev:51820
+wireguard:
+  gateways:
+    - index: 0
+      endpoint: wg.lazycloud.dev:51820
+    - index: 1
+      endpoint: k8s-lazyclou-tunnelga-4c9947d566-bfe20948efde6abe.elb.us-east-1.amazonaws.com:51820

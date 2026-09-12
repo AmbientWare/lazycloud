@@ -24,5 +24,7 @@ spec:
             - {{ required "aws.region is required" .Values.aws.region | quote }}
             - --platform-peers
             - {{ .Values.controlPlane.replicas | quote }}
+            - --gateways
+            - {{ len .Values.wireguard.gateways | quote }}
           resources:
             {{- toYaml .Values.bootstrap.resources | nindent 12 }}

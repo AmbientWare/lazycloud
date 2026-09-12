@@ -7,8 +7,27 @@ from networking.wireguard import (
     generate_wireguard_private_key,
 )
 
-SERVER_PRIVATE_KEY = "LAZYCLOUD_WIREGUARD_SERVER_PRIVATE_KEY"
-SERVER_PUBLIC_KEY = "LAZYCLOUD_WIREGUARD_SERVER_PUBLIC_KEY"
+
+def gateway_private_key_name(index: int) -> str:
+    if not 0 <= index < 32:
+        raise ValueError("gateway index must be between 0 and 31")
+    if index == 0:
+        return "LAZYCLOUD_WIREGUARD_SERVER_PRIVATE_KEY"
+    return f"LAZYCLOUD_WIREGUARD_GATEWAY_{index}_PRIVATE_KEY"
+
+
+def gateway_public_key_name(index: int) -> str:
+    if not 0 <= index < 32:
+        raise ValueError("gateway index must be between 0 and 31")
+    if index == 0:
+        return "LAZYCLOUD_WIREGUARD_SERVER_PUBLIC_KEY"
+    return f"LAZYCLOUD_WIREGUARD_GATEWAY_{index}_PUBLIC_KEY"
+
+
+def gateway_key_directory_name(index: int) -> str:
+    if not 0 <= index < 32:
+        raise ValueError("gateway index must be between 0 and 31")
+    return "server" if index == 0 else f"gateway-{index}"
 
 
 def platform_private_key(index: int) -> str:
@@ -23,11 +42,15 @@ def ensure_wireguard_key_document(
     existing: Mapping[str, object],
     *,
     platform_peers: int,
+    gateways: int = 2,
 ) -> dict[str, str]:
     if platform_peers < 1 or platform_peers > 32:
         raise ValueError("platform_peers must be between 1 and 32")
+    if not 1 <= gateways <= 32:
+        raise ValueError("gateways must be between 1 and 32")
     values = {key: str(value) for key, value in existing.items()}
-    _ensure_key_pair(values, SERVER_PRIVATE_KEY, SERVER_PUBLIC_KEY)
+    for index in range(gateways):
+        _ensure_key_pair(values, gateway_private_key_name(index), gateway_public_key_name(index))
     for index in range(platform_peers):
         _ensure_key_pair(
             values,

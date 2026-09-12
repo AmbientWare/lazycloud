@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -58,6 +59,10 @@ exit "$result"
 """
 
 
+class AgentUpdateRestartError(RuntimeError):
+    pass
+
+
 @lru_cache(maxsize=1)
 def running_binary_sha256(binary: Path) -> str:
     if not binary.is_file():
@@ -89,7 +94,7 @@ class AgentUpdater:
         if pending.exists() and pending.read_text().strip() == self.binary_sha256():
             pending.unlink()
 
-    def install(self, artifact: AgentArtifact) -> None:
+    def install(self, artifact: AgentArtifact, *, before_exec: Callable[[], None]) -> None:
         if not (self.state_dir / SUPERVISOR).is_file():
             raise RuntimeError(
                 "agent automatic updates require reinstalling its supervised service"
@@ -127,9 +132,15 @@ class AgentUpdater:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(staged, self.binary)
-            os.execv(str(self.binary), [str(self.binary), *sys.argv[1:]])
+            try:
+                before_exec()
+                os.execv(str(self.binary), [str(self.binary), *sys.argv[1:]])
+            except Exception as exc:
+                raise AgentUpdateRestartError(
+                    "agent update could not restart after installation"
+                ) from exc
         finally:
             staged.unlink(missing_ok=True)
 
 
-__all__ = ["SUPERVISOR", "SUPERVISOR_SCRIPT", "AgentUpdater"]
+__all__ = ["SUPERVISOR", "SUPERVISOR_SCRIPT", "AgentUpdateRestartError", "AgentUpdater"]

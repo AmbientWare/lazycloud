@@ -4,7 +4,7 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.common import (
     GlobalTableRepository,
@@ -81,6 +81,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -1980,29 +1981,77 @@ class WireGuardPeerRepository:
 PRIMARY_WIREGUARD_GATEWAY_ID = "3acde72c-e3ae-43d2-a119-cfeb8c0309be"
 
 
+def wireguard_gateway_id(index: int) -> str:
+    if not 0 <= index < 32:
+        raise ValueError("WireGuard gateway index must be between 0 and 31")
+    if index == 0:
+        return PRIMARY_WIREGUARD_GATEWAY_ID
+    return str(uuid5(NAMESPACE_URL, f"lazycloud:wireguard:gateway:{index}"))
+
+
 @dataclass(slots=True)
 class WireGuardGatewayRepository:
     session: Session
 
-    @property
-    def records(self) -> GlobalTableRepository[WireGuardGateway]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(WireGuardGatewayTable, WireGuardGateway),
-        )
-
     def current(self) -> WireGuardGateway | None:
-        return self.records.get(PRIMARY_WIREGUARD_GATEWAY_ID)
+        return self.get_by_index(0)
+
+    def list_all(self) -> list[WireGuardGateway]:
+        rows = self.session.scalars(
+            select(WireGuardGatewayTable).order_by(WireGuardGatewayTable.index)
+        )
+        return [self._model(row) for row in rows]
+
+    def get_by_index(self, index: int) -> WireGuardGateway | None:
+        row = self.session.scalars(
+            select(WireGuardGatewayTable).where(WireGuardGatewayTable.index == index)
+        ).one_or_none()
+        return self._model(row) if row is not None else None
 
     def save(self, gateway: WireGuardGateway) -> WireGuardGateway:
-        saved = self.records.upsert(gateway)
-        row = self.session.scalars(
-            select(WireGuardGatewayTable).where(WireGuardGatewayTable.id == gateway.id)
-        ).one()
-        row.public_key = saved.public_key
-        row.endpoint = saved.endpoint
-        self.session.flush()
-        return saved
+        gateway = WireGuardGateway.model_validate(dict(gateway))
+        if gateway.id != wireguard_gateway_id(gateway.index):
+            raise ConflictError("WireGuard gateway identity does not match its index")
+        # The column owns the index. Omitting it from the payload also keeps
+        # gateway zero readable by replicas serving the singleton contract.
+        payload = _model_json(gateway)
+        del payload["index"]
+        statement = postgresql_insert(WireGuardGatewayTable).values(
+            id=gateway.id,
+            index=gateway.index,
+            public_key=gateway.public_key,
+            endpoint=gateway.endpoint,
+            payload=payload,
+            updated_at=gateway.updated_at,
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[WireGuardGatewayTable.id],
+            set_={
+                "endpoint": statement.excluded.endpoint,
+                "payload": statement.excluded.payload,
+                "updated_at": statement.excluded.updated_at,
+            },
+            where=and_(
+                WireGuardGatewayTable.index == statement.excluded.index,
+                WireGuardGatewayTable.public_key == statement.excluded.public_key,
+            ),
+        ).returning(WireGuardGatewayTable)
+        try:
+            with self.session.begin_nested():
+                row = self.session.scalars(
+                    statement, execution_options={"populate_existing": True}
+                ).one_or_none()
+        except IntegrityError as exc:
+            raise ConflictError(
+                "WireGuard gateway index or public key is already registered"
+            ) from exc
+        if row is None:
+            raise ConflictError("WireGuard gateway index and public key cannot be changed")
+        return self._model(row)
+
+    @staticmethod
+    def _model(row: WireGuardGatewayTable) -> WireGuardGateway:
+        return WireGuardGateway.model_validate({**row.payload, "index": row.index})
 
 
 @dataclass(slots=True)

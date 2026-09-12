@@ -476,7 +476,13 @@ class WireGuardPeerTable(IdPayloadTable, DatabaseBase):
 
 class WireGuardGatewayTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "wireguard_gateway"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("index", name="uq_wireguard_gateway_index"),
+        UniqueConstraint("public_key", name="uq_wireguard_gateway_public_key"),
+        CheckConstraint('"index" >= 0 AND "index" < 32', name="ck_wireguard_gateway_index"),
+    )
 
+    index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     public_key: Mapped[str] = mapped_column(String(44), nullable=False)
     endpoint: Mapped[str] = mapped_column(String(512), nullable=False)
 

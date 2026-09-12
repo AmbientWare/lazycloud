@@ -99,7 +99,7 @@ class WireGuardGatewayRuntime:
             raise WireGuardError("WireGuard gateway private key is unavailable")
         if self.private_key_path.stat().st_mode & 0o077:
             raise WireGuardError("WireGuard gateway private key permissions must be 0600")
-        _validate_no_overlay_route_conflict(self.runner, self.interface)
+        _validate_no_overlay_route_conflict(self.runner, (self.interface,))
         self._check_active()
         _ensure_interface(self.runner, self.interface)
         self._active_run(
@@ -201,6 +201,26 @@ class WireGuardGatewayRuntime:
             if timestamp > 0:
                 observed[public_key] = datetime.fromtimestamp(timestamp, UTC)
         return observed
+
+    def active_connections(self) -> int:
+        result = _run(
+            self.runner,
+            ["conntrack", "-L", "--family", "ipv4", "--proto", "tcp", "--state", "ESTABLISHED"],
+            "inspect WireGuard connections during drain",
+        )
+        active = 0
+        for line in result.splitlines():
+            origin: dict[str, str] = {}
+            for token in line.split():
+                key, separator, value = token.partition("=")
+                if separator and key not in origin:
+                    origin[key] = value
+            source, target = origin.get("src"), origin.get("dst")
+            if source is None or target is None or origin.get("dport") == "8080":
+                continue
+            if IPv4Address(source) in WIREGUARD_OVERLAY or IPv4Address(target) in WIREGUARD_OVERLAY:
+                active += 1
+        return active
 
     def reconcile_runtime_service(self, target: WireGuardRuntimeService) -> None:
         with self._lifecycle_lock:

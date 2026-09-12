@@ -4,8 +4,9 @@ import logging
 import signal
 import socket
 import threading
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv4Interface
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
@@ -18,13 +19,15 @@ from coordination.token_lock import (
 )
 from database.client import DatabaseClient
 from database.repositories.compute import (
-    PRIMARY_WIREGUARD_GATEWAY_ID,
     WireGuardGatewayRepository,
     WireGuardPeerRepository,
+    wireguard_gateway_id,
 )
 from database.settings import DatabaseApplicationName, DatabaseSettings
 from networking.wireguard import (
+    WIREGUARD_GATEWAY_ADDRESS,
     WIREGUARD_GATEWAY_HEALTH_PORT,
+    WIREGUARD_OVERLAY,
     WireGuardError,
     wireguard_platform_address,
 )
@@ -32,6 +35,12 @@ from networking.wireguard_gateway import (
     WireGuardGatewayPeer,
     WireGuardGatewayRuntime,
     WireGuardRuntimeService,
+)
+from networking.wireguard_state import (
+    WIREGUARD_PRESENCE_TTL_SECONDS,
+    WireGuardGatewayPresence,
+    WireGuardGatewayPresenceRepository,
+    WireGuardPeerPresence,
 )
 from observability.process_logs import configure_process_logging
 from pydantic import Field, field_validator
@@ -45,6 +54,7 @@ RUNTIME_SERVICE_DNS_REFRESH_SECONDS = 10.0
 
 
 class TunnelGatewaySettings(BaseSettings):
+    gateway_index: int = Field(default=-1, ge=0, le=31)
     runtime_service_host: str = Field(default="", min_length=1, max_length=253)
     runtime_service_port: int = Field(default=0, ge=1, le=65535)
     private_key_file: Path = Path()
@@ -52,6 +62,7 @@ class TunnelGatewaySettings(BaseSettings):
     platform_key_directory: Path = Path()
     platform_peer_count: int = Field(default=2, ge=1, le=32)
     ready_file: Path = Path("/tmp/lazycloud-tunnel-gateway.ready")
+    drain_file: Path = Path("/tmp/lazycloud-tunnel-gateway.drain")
     lease_ttl_seconds: int = Field(default=10, ge=4, le=120)
     reconcile_interval_seconds: float = Field(default=2.0, ge=0.25, le=30)
 
@@ -106,10 +117,10 @@ class RuntimeServiceResolver:
             if self._target is None:
                 raise WireGuardError(f"could not resolve runtime Service host {self.host}") from exc
             LOGGER.warning(
-                "Runtime Service DNS refresh failed host=%s; retaining validated address=%s",
+                "Runtime Service DNS refresh failed host=%s address=%s reason=%s",
                 self.host,
                 self._target.address,
-                exc_info=True,
+                exc,
             )
             return self._target
         if len(addresses) != 1:
@@ -133,12 +144,21 @@ class StaticWireGuardPeer:
     generation: int = 1
 
 
+@dataclass(slots=True)
+class _PeerProbe:
+    public_key: str
+    generation: int
+    observed_at: float | None = None
+
+
 class _TcpHealthListener:
     def __init__(self, port: int) -> None:
         self._port = port
         self._lock = threading.Lock()
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
+        self._draining = threading.Event()
+        self._peers: dict[IPv4Address, _PeerProbe] = {}
 
     def start(self) -> None:
         with self._lock:
@@ -169,21 +189,67 @@ class _TcpHealthListener:
             thread = self._thread
             self._listener = None
             self._thread = None
+            self._peers.clear()
         if listener is not None:
             listener.close()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1)
 
-    @staticmethod
-    def _serve(listener: socket.socket) -> None:
+    def drain(self) -> None:
+        self._draining.set()
+
+    def connected_peers(
+        self,
+        peers: Sequence[WireGuardGatewayPeer],
+        handshake_keys: Collection[str],
+    ) -> set[tuple[str, int]]:
+        with self._lock:
+            current: dict[IPv4Address, _PeerProbe] = {}
+            for peer in peers:
+                address = IPv4Interface(peer.address)
+                if address.network.prefixlen != 32 or address.ip not in WIREGUARD_OVERLAY:
+                    raise WireGuardError("WireGuard health peer requires an overlay /32 address")
+                previous = self._peers.get(address.ip)
+                if (
+                    previous is not None
+                    and previous.public_key == peer.public_key
+                    and previous.generation == peer.generation
+                ):
+                    current[address.ip] = previous
+                else:
+                    current[address.ip] = _PeerProbe(peer.public_key, peer.generation)
+            self._peers = current
+            cutoff = monotonic() - WIREGUARD_PRESENCE_TTL_SECONDS
+            return {
+                (peer.public_key, peer.generation)
+                for peer in current.values()
+                if peer.observed_at is not None
+                and peer.observed_at >= cutoff
+                and peer.public_key in handshake_keys
+            }
+
+    def _serve(self, listener: socket.socket) -> None:
         while True:
             try:
-                connection, _address = listener.accept()
+                connection, remote = listener.accept()
             except TimeoutError:
                 continue
             except OSError:
                 return
-            connection.close()
+            with connection:
+                source = IPv4Address(remote[0])
+                encrypted = IPv4Address(connection.getsockname()[0]) == WIREGUARD_GATEWAY_ADDRESS
+                with self._lock:
+                    peer = self._peers.get(source) if encrypted else None
+                try:
+                    connection.settimeout(0.25)
+                    connection.sendall(b"draining\n" if self._draining.is_set() else b"ready\n")
+                except OSError:
+                    pass
+                else:
+                    with self._lock:
+                        if peer is not None and self._peers.get(source) is peer:
+                            peer.observed_at = monotonic()
 
 
 class _GatewayLease:
@@ -239,14 +305,27 @@ class _GatewayLease:
         self._renewal_thread.start()
         self._watchdog_thread.start()
 
-    def mark_ready(self) -> bool:
+    def mark_ready(self, *, platform_connected: bool) -> bool:
         with self._state_lock:
             if not self._lost.is_set() and monotonic() < self._confirmed_until:
                 self._health.start()
-                self._ready_file.touch(mode=0o600, exist_ok=True)
+                if platform_connected:
+                    self._ready_file.touch(mode=0o600, exist_ok=True)
+                else:
+                    self._ready_file.unlink(missing_ok=True)
                 return True
         self._lose("WireGuard gateway lease expired before readiness")
         return False
+
+    def drain(self) -> None:
+        self._health.drain()
+
+    def connected_peers(
+        self,
+        peers: Sequence[WireGuardGatewayPeer],
+        handshake_keys: Collection[str],
+    ) -> set[tuple[str, int]]:
+        return self._health.connected_peers(peers, handshake_keys)
 
     def close(self) -> None:
         self._stop.set()
@@ -266,8 +345,8 @@ class _GatewayLease:
                     self._token,
                     ttl_seconds=self._ttl_seconds,
                 )
-            except REDIS_UNAVAILABLE_ERRORS:
-                LOGGER.exception("WireGuard gateway lease renewal failed")
+            except REDIS_UNAVAILABLE_ERRORS as exc:
+                LOGGER.warning("WireGuard gateway lease renewal failed: %s", type(exc).__name__)
                 self._lose("WireGuard gateway lease freshness could not be confirmed")
                 return
             if not renewed:
@@ -324,11 +403,16 @@ class TunnelGatewayProcess:
 
     def run(self) -> None:
         token = uuid4().hex
-        lease_key = self.redis.key("wireguard", "gateway", "active")
+        presence = WireGuardGatewayPresenceRepository(self.redis)
+        lease_key = presence.lease_key(self.settings.gateway_index)
         lease: _GatewayLease | None = None
+        drain_started: float | None = None
         self.settings.ready_file.unlink(missing_ok=True)
+        self.settings.drain_file.unlink(missing_ok=True)
         try:
             while not self.stop.is_set():
+                if self.settings.drain_file.exists() and lease is None:
+                    break
                 if lease is None:
                     attempted_at = monotonic()
                     acquired = try_acquire_token_lock(
@@ -354,13 +438,15 @@ class TunnelGatewayProcess:
                             self._close_lease(lease, lease_key, token, release=False)
                             lease = None
                             continue
-                        LOGGER.info("WireGuard gateway lease acquired")
+                        LOGGER.info(
+                            "WireGuard gateway lease acquired index=%s", self.settings.gateway_index
+                        )
                     else:
                         LOGGER.info("WireGuard gateway poll active=false")
                         self.stop.wait(self.settings.reconcile_interval_seconds)
                         continue
                 try:
-                    peers, observed = self._reconcile()
+                    peers, observed, paths, platform_connected = self._reconcile(lease)
                 except WireGuardError:
                     if lease.fresh:
                         raise
@@ -372,14 +458,48 @@ class TunnelGatewayProcess:
                     lease = None
                     continue
                 self._publish_gateway(self.settings.public_endpoint)
-                if not lease.mark_ready():
+                draining = self.settings.drain_file.exists()
+                if not presence.publish(
+                    WireGuardGatewayPresence(
+                        index=self.settings.gateway_index,
+                        owner_token=token,
+                        draining=draining,
+                        peers=paths,
+                    )
+                ):
                     self._close_lease(lease, lease_key, token, release=False)
                     lease = None
                     continue
+                if draining:
+                    lease.drain()
+                if not lease.mark_ready(platform_connected=platform_connected):
+                    self._close_lease(lease, lease_key, token, release=False)
+                    lease = None
+                    continue
+                if draining:
+                    if drain_started is None:
+                        drain_started = monotonic()
+                    elapsed = monotonic() - drain_started
+                    connections = self.runtime.active_connections()
+                    LOGGER.info(
+                        "WireGuard gateway drain index=%s connections=%s elapsed=%.1fs",
+                        self.settings.gateway_index,
+                        connections,
+                        elapsed,
+                    )
+                    if elapsed >= 120 or (elapsed >= 10 and connections == 0):
+                        if connections:
+                            LOGGER.warning(
+                                "WireGuard drain deadline reached with %s connections", connections
+                            )
+                        break
                 LOGGER.info(
-                    "WireGuard gateway poll active=true peers=%s handshakes=%s",
+                    "WireGuard gateway poll index=%s active=true peers=%s handshakes=%s "
+                    "platform_connected=%s",
+                    self.settings.gateway_index,
                     peers,
                     observed,
+                    platform_connected,
                 )
                 self.stop.wait(self.settings.reconcile_interval_seconds)
         finally:
@@ -397,15 +517,29 @@ class TunnelGatewayProcess:
         release: bool,
     ) -> None:
         lease.close()
-        if release:
-            release_token_lock(self.redis, lease_key, token)
+        try:
+            WireGuardGatewayPresenceRepository(self.redis).remove(
+                self.settings.gateway_index, token
+            )
+            if release:
+                release_token_lock(self.redis, lease_key, token)
+        except REDIS_UNAVAILABLE_ERRORS:
+            LOGGER.warning(
+                "WireGuard gateway cleanup could not reach Redis; ownership will expire index=%s",
+                self.settings.gateway_index,
+            )
 
-    def _reconcile(self) -> tuple[int, int]:
+    def _reconcile(
+        self,
+        lease: _GatewayLease,
+    ) -> tuple[int, int, tuple[WireGuardPeerPresence, ...], bool]:
         self.runtime.reconcile_runtime_service(self.runtime_service_resolver.resolve())
         with self.database.session() as session:
             peers = WireGuardPeerRepository(session).active()
-        self.runtime.reconcile((*self.platform_peers, *peers))
+        configured = (*self.platform_peers, *peers)
+        self.runtime.reconcile(configured)
         handshakes = self.runtime.handshakes()
+        connected = lease.connected_peers(configured, handshakes.keys())
         changed = 0
         with self.database.session() as session:
             peer_repository = WireGuardPeerRepository(session)
@@ -431,20 +565,29 @@ class TunnelGatewayProcess:
                     )
                 )
                 changed += 1
-        return len(peers), changed
+        paths = tuple(
+            WireGuardPeerPresence(peer_id=peer.id, generation=peer.generation)
+            for peer in peers
+            if (peer.public_key, peer.generation) in connected
+        )
+        platform_connected = all(
+            (peer.public_key, peer.generation) in connected for peer in self.platform_peers
+        )
+        return len(peers), changed, paths, platform_connected
 
     def _publish_gateway(self, endpoint: str) -> None:
         public_key = self.runtime.public_key()
         with self.database.session() as session:
             repository = WireGuardGatewayRepository(session)
-            current = repository.current()
+            current = repository.get_by_index(self.settings.gateway_index)
             if current is not None and (
                 current.public_key == public_key and current.endpoint == endpoint
             ):
                 return
             repository.save(
                 WireGuardGateway(
-                    id=PRIMARY_WIREGUARD_GATEWAY_ID,
+                    id=wireguard_gateway_id(self.settings.gateway_index),
+                    index=self.settings.gateway_index,
                     public_key=public_key,
                     endpoint=endpoint,
                     updated_at=utc_now(),
@@ -480,7 +623,7 @@ def main() -> None:
     stop = threading.Event()
 
     def request_stop(_signum: int, _frame: object) -> None:
-        stop.set()
+        settings.drain_file.touch(mode=0o600, exist_ok=True)
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)

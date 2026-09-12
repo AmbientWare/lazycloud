@@ -19,6 +19,7 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRepository,
     WireGuardGatewayRepository,
     WireGuardPeerRepository,
+    wireguard_gateway_id,
 )
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
@@ -27,7 +28,6 @@ from gateway.http import (
     AgentTelemetryRequest,
     JoinAgentRequest,
     LeaveAgentRequest,
-    RegisterAgentPrivateNetworkRequest,
     StreamAgentRequest,
 )
 from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
@@ -59,6 +59,7 @@ from shared.compute_policy import (
 from shared.errors import ConflictError, InvalidInputError
 from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
+from shared.http.private_network import PrivateNetworkTopologyRequest, RegisterPrivateNetworkRequest
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
@@ -142,8 +143,8 @@ def _bind_private_network(
     agent_token: str,
     machine_id: str,
 ) -> str:
-    binding = gateway.register_agent_private_network(
-        RegisterAgentPrivateNetworkRequest(
+    binding = gateway.register_private_network(
+        RegisterPrivateNetworkRequest(
             agent_token=agent_token,
             public_key=_wireguard_public_key(machine_id),
         )
@@ -359,7 +360,7 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     assert switch.slots[0].machine_id == joined.machine_id
 
 
-def test_private_network_registration_requires_a_fresh_handshake(
+def test_private_network_registration_preserves_readiness_until_its_key_changes(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
@@ -374,8 +375,8 @@ def test_private_network_registration_requires_a_fresh_handshake(
     joined = gateway.join_agent(_join_request(bootstrap.token))
     public_key = _wireguard_public_key(joined.machine_id)
 
-    first = gateway.register_agent_private_network(
-        RegisterAgentPrivateNetworkRequest(
+    first = gateway.register_private_network(
+        RegisterPrivateNetworkRequest(
             agent_token=joined.agent_token,
             public_key=public_key,
         )
@@ -393,14 +394,48 @@ def test_private_network_registration_requires_a_fresh_handshake(
         peers.save(peer.model_copy(update={"last_handshake_at": utc_now()}))
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
 
-    second = gateway.register_agent_private_network(
-        RegisterAgentPrivateNetworkRequest(
+    with isolated_services.context.database.session() as session:
+        enrolled = ComputeMachineEnrollmentRepository(session).by_machine(
+            workspace_id, joined.machine_id
+        )
+        connected_peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
+        WireGuardGatewayRepository(session).save(
+            WireGuardGateway(
+                id=wireguard_gateway_id(1),
+                index=1,
+                public_key=_wireguard_public_key("second-gateway"),
+                endpoint="second-gateway.test:51820",
+                updated_at=utc_now(),
+            )
+        )
+    retry = gateway.register_private_network(
+        RegisterPrivateNetworkRequest(
             agent_token=joined.agent_token,
             public_key=public_key,
         )
     )
+    assert retry.generation == first.generation
+    topology = gateway.private_network_topology(
+        PrivateNetworkTopologyRequest(agent_token=joined.agent_token)
+    )
+    assert topology == retry
+    assert [item.index for item in topology.gateways] == [0, 1]
+    with isolated_services.context.database.session() as session:
+        assert (
+            ComputeMachineEnrollmentRepository(session).by_machine(workspace_id, joined.machine_id)
+            == enrolled
+        )
+        assert WireGuardPeerRepository(session).by_enrollment(enrollment.id) == connected_peer
+
+    second = gateway.register_private_network(
+        RegisterPrivateNetworkRequest(
+            agent_token=joined.agent_token,
+            public_key=_wireguard_public_key("rotated-agent-key"),
+        )
+    )
 
     assert second.generation == first.generation + 1
+    assert second.address == first.address
     with isolated_services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
