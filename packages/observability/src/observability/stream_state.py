@@ -18,7 +18,7 @@ from coordination.redis_client import (
 )
 from coordination.stream_tail import RedisStreamTailBroker, RedisStreamTailSubscription
 from pydantic import JsonValue, TypeAdapter, ValidationError
-from shared.errors import ExpiredCursorError, InvalidInputError
+from shared.errors import ConflictError, ExpiredCursorError, InvalidInputError
 from shared.http.observability import LogRecord
 from shared.http.workspace_changes import WorkspaceChangeTopic
 from shared.logs import ContainerLogEntryKind
@@ -135,7 +135,20 @@ local entry_count = tonumber(ARGV[2])
 local cursor_ttl = tonumber(ARGV[3])
 local stream_ttl = tonumber(ARGV[4])
 local max_entries = tonumber(ARGV[5])
-local next_sequence = tonumber(redis.call('GET', KEYS[1]) or '0')
+local recovered_sequence = tonumber(ARGV[6])
+local recovered_tail = ARGV[7]
+local next_sequence = tonumber(redis.call('GET', KEYS[1]))
+local history_missing = false
+
+if next_sequence == nil then
+    local tail = redis.call('XREVRANGE', KEYS[2], '+', '-', 'COUNT', 1)
+    local tail_id = #tail > 0 and tail[1][1] or ''
+    if recovered_sequence < 0 or tail_id ~= recovered_tail then
+        return {1, 0, 0}
+    end
+    next_sequence = recovered_sequence
+    history_missing = ARGV[8] == '1'
+end
 
 if first_sequence > next_sequence then
     return {-1, next_sequence, 0}
@@ -143,14 +156,23 @@ end
 
 local batch_end = first_sequence + entry_count
 if batch_end <= next_sequence then
-    redis.call('EXPIRE', KEYS[1], cursor_ttl)
+    redis.call('SET', KEYS[1], next_sequence, 'EX', cursor_ttl)
     return {0, next_sequence, 0}
+end
+
+if history_missing and first_sequence > 0 then
+    for stream_index = 2, #KEYS do
+        redis.call(
+            'XADD', KEYS[stream_index], 'MAXLEN', '~', max_entries, '*',
+            'body', ARGV[9], 'headers', ARGV[10]
+        )
+    end
 end
 
 local first_unwritten = next_sequence - first_sequence
 local appended = 0
 for entry_index = first_unwritten, entry_count - 1 do
-    local body_index = 6 + (entry_index * 2)
+    local body_index = 11 + (entry_index * 2)
     for stream_index = 2, #KEYS do
         redis.call(
             'XADD',
@@ -235,6 +257,14 @@ class RedisEventStreamRepository:
         if not events:
             raise ValueError("container log batch must not be empty")
 
+        for index, event in enumerate(events):
+            if (
+                not isinstance(event.data, dict)
+                or event.data.get("container_id") != container_id
+                or event.data.get("capture_id") != capture_id
+                or event.data.get("source_sequence") != first_sequence + index
+            ):
+                raise ValueError("container log event does not match its capture sequence")
         plans = tuple(self.planner.append_record_for_event(event) for event in events)
         streams = plans[0].streams
         if not streams:
@@ -252,28 +282,65 @@ class RedisEventStreamRepository:
             self._ingest_cursor_key(workspace_id, cursor_digest),
             *(self._stream_key(stream) for stream in streams),
         ]
+        diagnostic = self.planner.append_record_for_event(
+            _container_log_history_unavailable(events[0], first_sequence=first_sequence)
+        )
         arguments: list[str | int] = [
             first_sequence,
             len(events),
             self.retention.ttl_seconds,
             self.retention.ttl_seconds,
             self.retention.max_entries,
+            -1,
+            "",
+            0,
+            _json(diagnostic.body),
+            _json(diagnostic.headers),
         ]
         for plan in plans:
             arguments.extend((_json(plan.body), _json(plan.headers)))
 
-        raw_result = self.redis.eval_scalars(
-            _APPEND_CONTAINER_LOG_BATCH_SCRIPT,
-            len(keys),
-            *keys,
-            *arguments,
-        )
-        status_code, next_sequence, appended_count = _container_log_script_result(raw_result)
-        return RedisContainerLogBatchAppendResult(
-            accepted_through=next_sequence - 1,
-            appended_count=appended_count,
-            sequence_gap=status_code < 0,
-        )
+        for recovery_attempt in range(4):
+            raw_result = self.redis.eval_scalars(
+                _APPEND_CONTAINER_LOG_BATCH_SCRIPT,
+                len(keys),
+                *keys,
+                *arguments,
+            )
+            status_code, next_sequence, appended_count = _container_log_script_result(raw_result)
+            if status_code != 1:
+                return RedisContainerLogBatchAppendResult(
+                    accepted_through=next_sequence - 1,
+                    appended_count=appended_count,
+                    sequence_gap=status_code < 0,
+                )
+            if recovery_attempt == 3:
+                break
+            tail_id, retained_sequence = self._retained_capture_sequence(streams[0], capture_id)
+            arguments[5:8] = [
+                retained_sequence + 1 if retained_sequence is not None else first_sequence,
+                tail_id,
+                int(retained_sequence is None),
+            ]
+        raise ConflictError("container log history changed concurrently during cursor recovery")
+
+    def _retained_capture_sequence(self, stream: str, capture_id: str) -> tuple[str, int | None]:
+        before: str | None = None
+        tail_id = ""
+        while entries := self.redis.stream_reverse_range(
+            self._stream_key(stream), count=128, before=before
+        ):
+            if before is None:
+                tail_id = redis_text(entries[0][0])
+            for entry in entries:
+                record = _record_from_entry(stream, entry)
+                data = record.body.get("data") if record is not None else None
+                if isinstance(data, dict) and data.get("capture_id") == capture_id:
+                    sequence = data.get("source_sequence")
+                    if isinstance(sequence, int) and not isinstance(sequence, bool):
+                        return tail_id, sequence
+            before = redis_text(entries[-1][0])
+        return tail_id, None
 
     def append_event(
         self,
@@ -701,6 +768,27 @@ def _filter_event_records(
         if not event_record_headers_skip(_sequenced(record), query)
         and (cursor is None or _entry_id_parts(record.entry_id) > _entry_id_parts(cursor))
     )[:limit]
+
+
+def _container_log_history_unavailable(
+    first_event: CloudEventRecord, *, first_sequence: int
+) -> CloudEventRecord:
+    data = _JSON_OBJECT_ADAPTER.validate_python(first_event.data)
+    data.pop("source_sequence", None)
+    data.update(
+        message=(
+            "Earlier log history for this capture is unavailable. "
+            f"Output resumes at source sequence {first_sequence}."
+        ),
+        stream="system",
+        entry_kind=str(ContainerLogEntryKind.Diagnostic),
+        dropped_count=0,
+    )
+    return create_cloud_event_record(
+        EventRecordType.ContainerLog,
+        data,
+        event_id=f"container-log-history-{first_event.id}",
+    )
 
 
 def _event_append_data(

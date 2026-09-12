@@ -11,6 +11,7 @@ from observability.stream_state import (
     RealtimeStreamRetention,
     RedisEventStreamRepository,
     RedisStreamRecord,
+    log_record_from_redis,
 )
 from pydantic import JsonValue
 from shared.errors import ExpiredCursorError
@@ -43,7 +44,11 @@ def test_real_redis_single_and_batch_appends_bound_every_stream_and_cleanup(
     events = tuple(
         create_cloud_event_record(
             EventRecordType.ContainerLog,
-            _log_data("batch-workspace", "batch-container", index),
+            {
+                **_log_data("batch-workspace", "batch-container", index),
+                "capture_id": "capture-1",
+                "source_sequence": index,
+            },
             event_id=f"batch-{index}",
         )
         for index in range(225)
@@ -84,6 +89,101 @@ def test_real_redis_single_and_batch_appends_bound_every_stream_and_cleanup(
     assert repository.delete_workspace("batch-workspace") == len(all_batch_keys)
     assert redis.scan(f"{redis.key_prefix}:*batch-workspace*") == []
     assert all(redis.exists(key) for key in single_streams)
+
+
+def test_capture_cursor_recovers_retained_sequences_and_starts_a_new_retention_window(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    repository = RedisEventStreamRepository(redis)
+    workspace_id = "capture-recovery-workspace"
+    container_id = "capture-recovery-container"
+    capture_id = "capture-recovery"
+    events = tuple(
+        create_cloud_event_record(
+            EventRecordType.ContainerLog,
+            {
+                **_log_data(workspace_id, container_id, sequence),
+                "capture_id": capture_id,
+                "source_sequence": sequence,
+            },
+            event_id=f"capture-recovery-{sequence}",
+        )
+        for sequence in range(5)
+    )
+    repository.append_container_log_batch(
+        container_id=container_id, capture_id=capture_id, first_sequence=0, events=events[:2]
+    )
+    (cursor_key,) = redis.scan(
+        f"{redis.key_prefix}:*event-log-ingest-cursors/workspaces/{workspace_id}/*"
+    )
+    repository.append_container_log_batch(
+        container_id=container_id,
+        capture_id="other-capture",
+        first_sequence=0,
+        events=tuple(
+            create_cloud_event_record(
+                EventRecordType.ContainerLog,
+                {
+                    **_log_data(workspace_id, container_id, sequence),
+                    "capture_id": "other-capture",
+                    "source_sequence": sequence,
+                },
+                event_id=f"other-capture-{sequence}",
+            )
+            for sequence in range(129)
+        ),
+    )
+    assert redis.delete(cursor_key) == 1
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = tuple(
+            executor.submit(
+                repository.append_container_log_batch,
+                container_id=container_id,
+                capture_id=capture_id,
+                first_sequence=1,
+                events=events[1:3],
+            )
+            for _ in range(2)
+        )
+        outcomes = tuple(future.result() for future in futures)
+    assert sorted(outcome.appended_count for outcome in outcomes) == [0, 1]
+    assert all(outcome.accepted_through == 2 and not outcome.sequence_gap for outcome in outcomes)
+    records = repository.read_logs(LogStreamQuery(workspace_id=workspace_id, limit=200))
+    assert [
+        record.body["id"] for record in records if record.body["id"] in {e.id for e in events}
+    ] == [event.id for event in events[:3]]
+
+    assert redis.delete(cursor_key) == 1
+    gap = repository.append_container_log_batch(
+        container_id=container_id, capture_id=capture_id, first_sequence=4, events=events[4:]
+    )
+    assert gap.sequence_gap and gap.accepted_through == 2 and gap.appended_count == 0
+
+    repository.delete_workspace(workspace_id)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = tuple(
+            executor.submit(
+                repository.append_container_log_batch,
+                container_id=container_id,
+                capture_id=capture_id,
+                first_sequence=3,
+                events=events[3:],
+            )
+            for _ in range(2)
+        )
+        outcomes = tuple(future.result() for future in futures)
+    assert sorted(outcome.appended_count for outcome in outcomes) == [0, 2]
+    assert all(outcome.accepted_through == 4 and not outcome.sequence_gap for outcome in outcomes)
+    records = repository.read_logs(LogStreamQuery(workspace_id=workspace_id))
+    assert len(records) == 3
+    diagnostic = records[0].body["data"]
+    assert isinstance(diagnostic, dict)
+    assert diagnostic["entry_kind"] == "diagnostic"
+    assert diagnostic["stream"] == "system"
+    assert "source_sequence" not in diagnostic
+    assert [log_record_from_redis(record).message for record in records[1:]] == ["line-3", "line-4"]
+    assert [record.body["id"] for record in records[1:]] == [event.id for event in events[3:]]
 
 
 @pytest.mark.anyio
