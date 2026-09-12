@@ -99,13 +99,12 @@ held against a workload that cannot use it. At `max_containers = 1` that is not
 a degradation but a stop: desired equals current on every tick, and a scheduled
 function grows its backlog by one task per fire with nothing able to start.
 
-Which rows count is not a per-kind question, so the driver answers it and no
-workload can. It was a per-kind question once, and two of the three kinds
-answered it with "all of them". The pod autoscaler dropped running records the
-scheduler had lost, and functions and endpoints classified nothing at all.
+The shared driver counts running containers during Redis recovery. Missing
+cache state does not authorize a stop. The orphan reconciler confirms loss of
+the container and worker intake before stopping it; authenticated worker
+admission restores live assignments from PostgreSQL.
 
-A `running` row with no scheduler state has started, so nothing is coming back
-for it. A pending request in the global backlog belongs to the dispatcher,
+A pending request in the global backlog belongs to the dispatcher,
 which bounds capacity acquisition. Once assigned, the worker must acknowledge
 delivery within `CONTAINER_DELIVERY_DEADLINE_SECONDS`. Its queued and in-flight
 payloads retain the dispatch timestamp until acknowledgement. A healthy

@@ -77,7 +77,7 @@ class ContainerStateHeartbeatRepository(ContainerStatusUpdater, Protocol):
 
     The write is `ContainerStatusUpdater`, which every finalization path already
     speaks; the read is what makes this a heartbeat rather than a report, since
-    a state the platform has dropped must not be recreated.
+    durable recovery must restore a missing state before the worker refreshes it.
     """
 
     def get_container_state(self, container_id: str) -> WorkerContainerState | None: ...
@@ -335,25 +335,10 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 )
 
     def _heartbeat_container_state(self, *, recorded_at: float) -> None:
-        """Re-arm the scheduler's record of this container while it is running.
+        """Refresh live state on its lease interval, preserving durable recovery.
 
-        The state carries a TTL that is re-armed only by a write, and the worker
-        writes `Running` exactly once at start. Without this tick the record
-        simply expires under a container that is working perfectly well, and the
-        orphan sweep then marks it failed — after which nothing counts it toward
-        its stub's ceiling, the failure threshold starts counting it against the
-        stub, and no stop is ever sent, so it keeps claiming. A container is
-        allowed to outlive fifteen minutes; an invocation may take an hour.
-
-        Paced against that TTL rather than against the sample loop it rides on.
-        The two intervals answer different questions — how often this container
-        is measured, and how long the platform waits before calling it gone — and
-        tying the write to the first put a request pair on the control plane per
-        container every few seconds to hold a window measured in minutes.
-
-        A missing state is deliberately not rewritten. Recreating it would hide
-        a container the platform has already decided it does not know about,
-        which is the one case where letting the sweep reap it is correct.
+        Missing cache state is retried until worker admission restores it.
+        Stopping or terminal state ends the heartbeat while metering continues.
         """
 
         if self.container_states is None or self._heartbeat_stopped:
@@ -369,18 +354,13 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 state_status=(
                     normalize_worker_container_status(state.status) if state is not None else None
                 ),
-                state_missing=state is None,
                 runtime_started=True,
                 runtime_pid=self.started_pid,
             )
+            if plan.action is WorkerStatusHeartbeatAction.Error:
+                return
             next_status = _heartbeat_next_status(plan)
             if next_status is None:
-                # A state this thread is not the authority on: missing, or a stop
-                # already in progress, or a record something has finished. Give
-                # up the heartbeat rather than assert a liveness that is not this
-                # thread's to assert — but only the heartbeat. Metrics and the
-                # usage drain run off the same loop, and this container is still
-                # consuming what they meter.
                 self._heartbeat_stopped = True
                 LOGGER.info(
                     "container state heartbeat stopping",
