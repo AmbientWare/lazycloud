@@ -22,7 +22,6 @@ from images.settings import (
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
-from networking.settings import BackendRouteSettings
 from observability.settings import (
     TelemetrySettings,
     VolumeMeteringSettings,
@@ -220,7 +219,6 @@ def _production_api_services() -> ApiServices:
     container_service_settings = ContainerServiceSettings()
     retention_settings = RetentionSettings()
     volume_metering_settings = VolumeMeteringSettings()
-    backend_route_settings = BackendRouteSettings()
     with ExitStack() as rollback:
         owned_resources: list[ApiOwnedResource] = []
         database_settings = DatabaseSettings(application_name=DatabaseApplicationName.Api)
@@ -249,7 +247,6 @@ def _production_api_services() -> ApiServices:
             aws_account_connection_settings=aws_account_connection_settings,
             aws_capacity_settings=aws_capacity_settings,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_settings,
-            backend_route_settings=backend_route_settings,
             object_store_settings=object_store_settings,
             object_store_client=object_store_client,
             image_build_execution_settings=image_build_execution_settings,

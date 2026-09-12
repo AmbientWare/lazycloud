@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
-from urllib.parse import urlparse
-
 from pydantic import Field, field_validator
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
@@ -11,7 +8,6 @@ from shared.routing import (
     BackendRouteKind,
     BackendRouteProtocol,
     BackendRouteState,
-    BackendRouteTransport,
 )
 
 
@@ -31,8 +27,6 @@ class WorkerRouteContext(ContractModel):
     machine_id: str
     worker_id: str
     container_id: str
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
-    local_target_host: str = ""
 
 
 class WorkerPortBinding(ContractModel):
@@ -58,33 +52,13 @@ def backend_route_id(
     return ":".join([machine_id, worker_id, container_id, str(kind), str(port)])
 
 
-def route_local_target(local_target: str, override_host: str = "") -> str:
-    if not override_host:
-        return local_target
-    parsed = urlparse(f"//{local_target}")
-    if parsed.hostname is None or parsed.port is None:
-        return local_target
-    try:
-        host_ip = ipaddress.ip_address(parsed.hostname)
-    except ValueError:
-        return local_target
-    if not host_ip.is_loopback:
-        return local_target
-    return f"{override_host}:{parsed.port}"
-
-
 def build_agent_backend_route(
     context: WorkerRouteContext,
     *,
     kind: BackendRouteKind = BackendRouteKind.Container,
     port: int,
     local_target: str,
-    agent_worker: bool = True,
-) -> AgentBackendRoute | None:
-    if not agent_worker:
-        return None
-    normalized_target = route_local_target(local_target, context.local_target_host)
-    direct = context.transport is BackendRouteTransport.Direct
+) -> AgentBackendRoute:
     return AgentBackendRoute(
         route_id=backend_route_id(
             machine_id=context.machine_id,
@@ -101,10 +75,8 @@ def build_agent_backend_route(
         kind=kind,
         port=port,
         protocol=BackendRouteProtocol.Tcp,
-        transport=context.transport,
-        local_target=normalized_target,
-        proxy_target=normalized_target if direct else "",
-        state=BackendRouteState.Ready if direct else BackendRouteState.Opening,
+        local_target=local_target,
+        state=BackendRouteState.Opening,
     )
 
 
@@ -113,7 +85,6 @@ def plan_container_route_registration(
     *,
     bindings: list[WorkerPortBinding],
     address_map: dict[int, str],
-    agent_worker: bool = True,
 ) -> WorkerRouteRegistrationPlan:
     if not bindings:
         return WorkerRouteRegistrationPlan(
@@ -139,10 +110,8 @@ def plan_container_route_registration(
             context,
             port=binding.container_port,
             local_target=local_target,
-            agent_worker=agent_worker,
         )
-        if route is not None:
-            routes.append(route)
+        routes.append(route)
     return WorkerRouteRegistrationPlan(
         container_id=context.container_id,
         ok=True,

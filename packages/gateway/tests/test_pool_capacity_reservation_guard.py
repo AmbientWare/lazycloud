@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from api.server.routers.gateway.agents import router as agent_router
 from api.server.service_dependencies import gateway_service
 from api.server.services import ApiServices
-from compute.agent_control import agent_machine_worker_id
+from compute.agent_control import agent_machine_worker_id, hash_compute_token
 from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
@@ -32,6 +33,7 @@ from scheduler.state import (
     WorkerPoolStateNotFoundError,
     WorkerRequestDrain,
 )
+from shared.agent_connections import AgentConnectionRecord
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_enrollment import (
     AgentWorkerSlotStatus,
@@ -58,6 +60,7 @@ from shared.scheduling import (
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
 )
+from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
@@ -791,6 +794,21 @@ def test_agent_release_generation_fences_commands_without_changing_stream_body(
         unit, workspace_id=workspace_id, owner_token_id="gateway-test-owner"
     )
     enrolled = gateway.join_agent(_join_request(join.token))
+    identity = gateway.tunnel_authority.bind_key(
+        enrolled.credential_id,
+        workspace_id,
+        hash_compute_token(enrolled.agent_token),
+        hashlib.sha256(enrolled.machine_id.encode()).hexdigest(),
+    )
+    assert gateway.connections.claim(
+        AgentConnectionRecord(
+            identity=identity,
+            gateway_id=str(uuid4()),
+            connection_id=str(uuid4()),
+            gateway_address="gateway.test:443",
+            expires_at=utc_now() + timedelta(hours=1),
+        )
+    )
     app = FastAPI()
     app.include_router(agent_router)
     app.dependency_overrides[gateway_service] = lambda: gateway
@@ -799,7 +817,8 @@ def test_agent_release_generation_fences_commands_without_changing_stream_body(
         assert current.status_code == 200
         assert current.headers[AGENT_RELEASE_GENERATION_HEADER] == str(release.generation)
         assert "generation" not in current.json()
-        assert StreamAgentResponse.model_validate(current.json()).retryable
+        admitted = StreamAgentResponse.model_validate(current.json())
+        assert admitted.ok and not admitted.retryable and admitted.slots
         stale = client.post(
             "/gateway/agents/stream",
             json={"agent_token": enrolled.agent_token},

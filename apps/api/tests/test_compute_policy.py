@@ -43,7 +43,6 @@ from shared.compute_enrollment import (
     MachineBootstrapPhase,
     MachineReadinessPhase,
     MachineServiceState,
-    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -240,8 +239,8 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         enrollments.save(
             enrollment.model_copy(
                 update={
-                    "network_phase": PrivateNetworkEnrollmentPhase.Failed,
-                    "network_failure_detail": "allow TCP 29443 from 100.96.0.0/24",
+                    "readiness_phase": MachineReadinessPhase.Offline,
+                    "schedulable": False,
                     "updated_at": datetime.now(UTC),
                 }
             )
@@ -252,8 +251,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     )
     failed = next(item for item in failed_inventory.data if item.machine_id == ready_machine_id)
     assert failed.service_state is MachineServiceState.Failed
-    assert failed.bootstrap_failure_reason is MachineBootstrapFailureReason.NetworkJoinFailed
-    assert failed.bootstrap_failure_detail == "allow TCP 29443 from 100.96.0.0/24"
+    assert failed.bootstrap_failure_reason is MachineBootstrapFailureReason.WorkerReadinessFailed
 
     with isolated_services.context.database.session() as session:
         instances = ComputeProviderInstanceRepository(session)

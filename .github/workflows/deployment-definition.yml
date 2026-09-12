@@ -13,6 +13,7 @@ on:
     paths:
       - "deploy/platform-core/**"
       - "deploy/platform-deployment/**"
+      - "deploy/cloudflare/**"
       - "deploy/chart/**"
       - "deploy/chart_values.py"
       - "deploy/infrastructure.example.json"
@@ -26,6 +27,7 @@ on:
     paths:
       - "deploy/platform-core/**"
       - "deploy/platform-deployment/**"
+      - "deploy/cloudflare/**"
       - "deploy/chart/**"
       - "deploy/chart_values.py"
       - "deploy/infrastructure.example.json"
@@ -57,7 +59,7 @@ jobs:
       - name: Terraform is formatted and valid
         run: |
           set -euo pipefail
-          for module in deploy/platform-core deploy/platform-deployment; do
+          for module in deploy/platform-core deploy/platform-deployment deploy/cloudflare; do
             terraform -chdir="$module" fmt -check -recursive
             terraform -chdir="$module" init -backend=false -input=false
             terraform -chdir="$module" validate

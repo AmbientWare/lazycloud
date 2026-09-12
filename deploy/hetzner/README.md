@@ -68,7 +68,7 @@ verify their absence. The catalog check does not replace the IP and SSH-key
 cleanup audit. A failed build is not cleanup evidence. Never remove unrelated
 project resources or a shared image still used by a deployment.
 
-The image contains Docker, gVisor dependencies, WireGuard, FUSE, and compressed
+The image contains Docker, gVisor dependencies, FUSE, and compressed
 swap. It contains no tenant data or reusable enrollment credential. Application
 releases supply the common agent and worker image separately. Rebuild the host
 image when its recipe changes, not on every application release.

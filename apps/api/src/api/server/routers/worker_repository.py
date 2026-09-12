@@ -514,8 +514,7 @@ def set_container_address(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> SetContainerAddressResponse:
-    _ = principal
-    return service.set_container_address(request)
+    return service.set_container_address(request, principal=principal)
 
 
 @router.post(
@@ -527,8 +526,7 @@ def set_container_address_map(
     service: WorkerRepo,
     principal: WorkerPrincipal,
 ) -> SetContainerAddressMapResponse:
-    _ = principal
-    return service.set_container_address_map(request)
+    return service.set_container_address_map(request, principal=principal)
 
 
 @router.post(

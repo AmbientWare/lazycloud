@@ -1,1 +1,0 @@
-"""WireGuard tunnel gateway process."""

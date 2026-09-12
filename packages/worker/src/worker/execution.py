@@ -29,7 +29,6 @@ from shared.env import (
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
-from shared.routing import BackendRouteTransport
 
 from worker.runtime_config import (
     OciRuntimeName,
@@ -112,17 +111,6 @@ PLATFORM_GATEWAY_ENV_KEYS = {
 class GatewayProtocol(StrEnum):
     Grpc = "grpc"
     Http = "http"
-
-
-class NetworkAddressMode(StrEnum):
-    LocalPod = "local-pod"
-    AgentBridge = "agent-bridge"
-
-
-class ContainerNetworkSelectionReason(StrEnum):
-    LocalDefault = "local-default"
-    AgentBridgePersistentMachine = "agent-bridge-persistent-machine"
-    DirectTransport = "direct-transport"
 
 
 class ContainerRuntimeOperation(StrEnum):
@@ -309,17 +297,7 @@ class PortBinding(ContractModel):
 
 class ContainerNetworkIdentity(ContractModel):
     container_id: str
-    pod_address: str = ""
     container_ip: str = ""
-    mode: NetworkAddressMode = NetworkAddressMode.LocalPod
-
-
-class ContainerNetworkSelection(ContractModel):
-    identity: ContainerNetworkIdentity
-    persistent: bool = False
-    machine_id: str = ""
-    transport: str = ""
-    reason: ContainerNetworkSelectionReason = ContainerNetworkSelectionReason.LocalDefault
 
 
 class ContainerNetworkAddressMap(ContractModel):
@@ -525,12 +503,9 @@ def build_container_environment(
     env: dict[str, str] | None = None,
 ) -> ContainerEnvironmentPlan:
     gateway = resolve_gateway_environment(settings, env=env)
-    request_env = env_list_to_map(request.request_env)
-    gateway_http_url = (
-        _gateway_http_url(gateway, tls=settings.http.tls)
-        if gateway.http_host
-        else request_env.get(GATEWAY_HTTP_URL_ENV, "")
-    )
+    if not gateway.http_host:
+        raise ValueError("worker bridge callback address is required")
+    gateway_http_url = _gateway_http_url(gateway, tls=settings.http.tls)
     bind_port = request.bind_ports[0]
     hostname = f"{request.pod_address}:{bind_port}"
     container_env = [
@@ -727,59 +702,16 @@ def container_ipv6_address(
     return str(ipaddress.ip_address(int(network.network_address) + offset))
 
 
-def select_container_network(
-    container_id: str,
-    *,
-    pod_address: str,
-    persistent: bool = False,
-    machine_id: str = "",
-    transport: str = "",
-    container_ip: str = "",
-) -> ContainerNetworkSelection:
-    normalized_transport = BackendRouteTransport(transport.strip()) if transport.strip() else None
-    direct_transport = normalized_transport is BackendRouteTransport.Direct
-    agent_bridge = (
-        persistent
-        and bool(machine_id)
-        and normalized_transport is not None
-        and not direct_transport
-    )
-    mode = NetworkAddressMode.AgentBridge if agent_bridge else NetworkAddressMode.LocalPod
-    reason = ContainerNetworkSelectionReason.LocalDefault
-    if direct_transport:
-        reason = ContainerNetworkSelectionReason.DirectTransport
-    if agent_bridge:
-        reason = ContainerNetworkSelectionReason.AgentBridgePersistentMachine
-    return ContainerNetworkSelection(
-        identity=ContainerNetworkIdentity(
-            container_id=container_id,
-            pod_address=pod_address,
-            container_ip=container_ip,
-            mode=mode,
-        ),
-        persistent=persistent,
-        machine_id=machine_id,
-        transport=transport,
-        reason=reason,
-    )
-
-
 def container_port_address_map(
     identity: ContainerNetworkIdentity,
     bindings: list[PortBinding],
 ) -> ContainerNetworkAddressMap:
     addresses: dict[int, str] = {}
     for binding in bindings:
-        if identity.mode is NetworkAddressMode.AgentBridge:
-            if not identity.container_ip:
-                msg = f"container {identity.container_id} has no bridge IP"
-                raise ValueError(msg)
-            addresses[binding.container_port] = f"{identity.container_ip}:{binding.container_port}"
-        else:
-            if not identity.pod_address:
-                msg = "pod address is empty"
-                raise ValueError(msg)
-            addresses[binding.container_port] = f"{identity.pod_address}:{binding.host_port}"
+        if not identity.container_ip:
+            msg = f"container {identity.container_id} has no bridge IP"
+            raise ValueError(msg)
+        addresses[binding.container_port] = f"{identity.container_ip}:{binding.container_port}"
     return ContainerNetworkAddressMap(identity=identity, addresses=addresses)
 
 

@@ -4,7 +4,7 @@ import asyncio
 import socket
 import sys
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
@@ -17,12 +17,6 @@ from networking.async_http import (
     AsyncBackendConnectError,
     AsyncBackendHttpClient,
 )
-from networking.dialer import (
-    BackendRouteDialer,
-    BackendRouteDialerConfig,
-    BackendRouteResolver,
-)
-from networking.routing import build_backend_route_dial_plan
 from pydantic import Field
 from shared.container_requests import CONTAINER_HEALTH_PATH, CONTAINER_INNER_PORT
 from shared.contracts import ContractModel
@@ -250,8 +244,6 @@ class AsyncEndpointInstanceDispatcher:
     containers: AsyncEndpointContainerRepository
     http_client: AsyncBackendHttpClient
     readiness_probe: AsyncContainerReadiness
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
     endpoint_port: int = CONTAINER_INNER_PORT
 
     async def ready_container_ids(self, stub_id: str, container_ids: list[str]) -> set[str]:
@@ -303,17 +295,9 @@ class AsyncEndpointInstanceDispatcher:
         route = target.route
         if route is None or not route.route_id:
             return None
-        connection = await asyncio.to_thread(
-            BackendRouteDialer(
-                resolver=self.route_resolver,
-                config=self.route_dialer_config,
-            ).dial_plan,
-            build_backend_route_dial_plan(route.route_id),
+        return await self.http_client.open_route_socket(
+            route.route_id, self.http_client.route_dialer.config.timeout_seconds
         )
-        if not isinstance(connection, socket.socket):
-            connection.close()
-            raise TypeError("endpoint backend dialer returned a non-socket connection")
-        return connection
 
     async def open_http_stream(
         self,

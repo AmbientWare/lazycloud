@@ -582,28 +582,36 @@ def test_container_monitor_heartbeats_only_after_the_runtime_starts() -> None:
     assert ttl == CONTAINER_STATE_TTL_SECONDS
 
 
-def test_container_monitor_stops_heartbeating_a_state_the_platform_dropped() -> None:
-    """A vanished state is not recreated.
-
-    Rewriting it would resurrect a container the platform has already decided it
-    does not know about, which is the one case where letting the orphan sweep
-    reap it is the correct outcome.
-    """
-
+def test_container_monitor_resumes_heartbeat_after_authoritative_state_recovery() -> None:
     states = _RecordingContainerStates(state=None)
+    usage = UsageRecorder()
     monitor = WorkerContainerRuntimeMonitor(
         container_states=states,
+        usage_recorder=usage,
         settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
     )
 
     handle = monitor.start_monitoring(_monitored_request())
     handle.runtime_started(4321)
-    deadline = monotonic() + 5.0
-    while not states.reads and monotonic() < deadline:
-        sleep(0.01)
-    handle.stop()
-
-    # Read before asserted, so the empty list is the guard refusing to write
-    # rather than a thread that had not reached the decision yet.
-    assert states.reads, "the heartbeat never looked at the container state"
-    assert states.refreshes == []
+    try:
+        for _ in range(100):
+            print("state missing", states.reads, states.refreshes, len(usage.windows))
+            if states.reads and len(usage.windows) >= 2:
+                break
+            sleep(0.01)
+        assert states.reads and len(usage.windows) >= 2
+        assert states.refreshes == []
+        states.state = SchedulerContainerState(
+            container_id="ctr-heartbeat",
+            stub_id="stub-1",
+            workspace_id="workspace-1",
+            status=SchedulerContainerStatus.Running,
+        )
+        for _ in range(100):
+            print("state recovered", states.reads, states.refreshes)
+            if states.refreshes:
+                break
+            sleep(0.01)
+        assert states.refreshes == [(SchedulerContainerStatus.Running, CONTAINER_STATE_TTL_SECONDS)]
+    finally:
+        handle.stop()

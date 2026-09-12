@@ -17,7 +17,6 @@ from shared.routing import (
     BackendRouteKind,
     BackendRouteProtocol,
     BackendRouteState,
-    BackendRouteTransport,
 )
 from shared.usage import UsageBillingOwner
 
@@ -107,13 +106,10 @@ class AgentRoute(HttpModel):
     kind: BackendRouteKind = BackendRouteKind.Container
     port: int = 0
     protocol: BackendRouteProtocol = BackendRouteProtocol.Tcp
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     local_target: str = ""
-    proxy_target: str = ""
     state: BackendRouteState = BackendRouteState.Opening
     error: str = ""
     updated_at: int = 0
-    proxy_auth_token: str = Field(default="", repr=False)
 
 
 class ListAgentRoutesRequest(HttpModel):
@@ -128,7 +124,6 @@ class UpdateAgentRouteStatusRequest(HttpModel):
     agent_token: str
     route_id: str
     state: BackendRouteState | None = None
-    proxy_target: str = ""
     error: str = ""
     attrs: dict[str, str] = Field(default_factory=dict)
 

@@ -41,8 +41,6 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    WireGuardGatewayTable,
-    WireGuardPeerTable,
     WorkspaceComputePolicyTable,
 )
 from database.tables.container_rollouts import ContainerRolloutDrainTable
@@ -178,8 +176,6 @@ __all__ = [
     "UserIdentityTable",
     "UserTable",
     "VolumeTable",
-    "WireGuardGatewayTable",
-    "WireGuardPeerTable",
     "WorkerCacheGenerationTable",
     "WorkerEventTable",
     "WorkerTable",

@@ -879,8 +879,8 @@ class WorkerContainerExecutionService:
     ) -> str:
         identity = result.network_result.identity if result.network_result is not None else None
         pod_address = (
-            identity.pod_address
-            if identity is not None and identity.pod_address
+            identity.container_ip
+            if identity is not None and identity.container_ip
             else context.request.container_id
         )
         bind_port = result.bind_ports[0] if result.bind_ports else CONTAINER_INNER_PORT

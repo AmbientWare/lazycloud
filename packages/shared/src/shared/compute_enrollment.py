@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-from pydantic import Field
-
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -31,14 +27,6 @@ class AgentWorkerSlotStatus(StringEnum):
     Active = "active"
     Draining = "draining"
     Deleted = "deleted"
-
-
-class PrivateNetworkEnrollmentPhase(StringEnum):
-    Unconfigured = "unconfigured"
-    AwaitingHandshake = "awaiting_handshake"
-    Connected = "connected"
-    Failed = "failed"
-    Revoked = "revoked"
 
 
 class MachineReadinessPhase(StringEnum):
@@ -104,34 +92,6 @@ class MachineBootstrapFailureReason(StringEnum):
     Unknown = "unknown"
 
 
-class WireGuardPeerStatus(StringEnum):
-    Active = "active"
-    Revoked = "revoked"
-
-
-class WireGuardGateway(ContractModel):
-    id: str
-    index: int = Field(default=0, ge=0, le=31)
-    public_key: str = Field(min_length=44, max_length=44)
-    endpoint: str = Field(min_length=3, max_length=512)
-    updated_at: datetime
-
-
-class WireGuardPeer(ContractModel):
-    id: str
-    enrollment_id: str
-    workspace_id: str
-    machine_id: str
-    public_key: str = Field(min_length=44, max_length=44)
-    address: str = Field(min_length=9, max_length=18)
-    generation: int = Field(ge=1)
-    status: WireGuardPeerStatus = WireGuardPeerStatus.Active
-    last_handshake_at: datetime | None = None
-    revoked_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
 class PreflightSeverity(StringEnum):
     Info = "info"
     Warning = "warning"
@@ -160,8 +120,4 @@ __all__ = [
     "MachineBootstrapPhase",
     "MachineReadinessPhase",
     "PreflightSeverity",
-    "PrivateNetworkEnrollmentPhase",
-    "WireGuardGateway",
-    "WireGuardPeer",
-    "WireGuardPeerStatus",
 ]

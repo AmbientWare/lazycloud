@@ -2,21 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import ssl
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import h11
 from foundation.http import grouped_response_headers
-from shared.urls import parse_http_address
 
-from networking.dialer import (
-    BackendRouteDialer,
-    BackendRouteDialerConfig,
-    BackendRouteResolver,
-)
-from networking.routing import build_backend_route_dial_plan
+from networking.dialer import BackendRouteDialer
 
 
 class AsyncBackendHttpError(ConnectionError):
@@ -79,10 +72,7 @@ class AsyncBackendHttpResponse:
 
 @dataclass(slots=True)
 class AsyncBackendHttpClient:
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
-    tls_context: ssl.SSLContext | None = None
-    _tls_context_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    route_dialer: BackendRouteDialer
 
     async def open_stream(
         self,
@@ -98,7 +88,7 @@ class AsyncBackendHttpClient:
         content_length: int | None = None,
         resource: str,
     ) -> AsyncBackendHttpResponse:
-        timeout = timeout_seconds or self.route_dialer_config.timeout_seconds
+        timeout = timeout_seconds or self.route_dialer.config.timeout_seconds
         connect_timeout = connect_timeout_seconds or timeout
         body_length = len(body) if isinstance(body, bytes) else content_length
         if body_length is None or body_length < 0:
@@ -193,22 +183,7 @@ class AsyncBackendHttpClient:
         return backend_socket
 
     def _route_socket(self, route_id: str, timeout_seconds: float) -> socket.socket:
-        config = self.route_dialer_config.model_copy(
-            update={
-                "timeout_seconds": min(
-                    timeout_seconds,
-                    self.route_dialer_config.timeout_seconds,
-                )
-            }
-        )
-        connection = BackendRouteDialer(
-            resolver=self.route_resolver,
-            config=config,
-        ).dial_plan(build_backend_route_dial_plan(route_id))
-        if not isinstance(connection, socket.socket):
-            connection.close()
-            raise TypeError("backend route dialer returned a non-socket connection")
-        return connection
+        return self.route_dialer.dial_backend_route(route_id, timeout_seconds=timeout_seconds)
 
     async def _open_connection(
         self,
@@ -220,37 +195,18 @@ class AsyncBackendHttpClient:
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
         backend_socket: socket.socket | None = None
         try:
-            if route_id:
-                backend_socket = await self.open_route_socket(route_id, timeout_seconds)
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(sock=backend_socket),
-                    timeout=timeout_seconds,
-                )
-                return reader, writer, "backend.route"
-            parsed = parse_http_address(address, resource=resource)
-            tls = await self._https_context() if parsed.scheme == "https" else None
+            if not route_id:
+                raise AsyncBackendConnectError("Backend request must name an authorized route")
+            backend_socket = await self.open_route_socket(route_id, timeout_seconds)
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(
-                    parsed.hostname or "",
-                    parsed.port or (443 if tls is not None else 80),
-                    ssl=tls,
-                    server_hostname=parsed.hostname if tls is not None else None,
-                ),
+                asyncio.open_connection(sock=backend_socket),
                 timeout=timeout_seconds,
             )
-            return reader, writer, parsed.netloc
+            return reader, writer, "backend.route"
         except (OSError, RuntimeError, TimeoutError) as exc:
             if backend_socket is not None:
                 backend_socket.close()
             raise AsyncBackendConnectError(str(exc)) from exc
-
-    async def _https_context(self) -> ssl.SSLContext:
-        if self.tls_context is not None:
-            return self.tls_context
-        async with self._tls_context_lock:
-            if self.tls_context is None:
-                self.tls_context = await asyncio.to_thread(ssl.create_default_context)
-            return self.tls_context
 
     @staticmethod
     async def _response_head(

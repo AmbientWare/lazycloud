@@ -1,4 +1,4 @@
-# Operator Runbook
+| Tunnel issuer and gateway bootstrap credential | Local CA volume/private environment or production operator secret document | Bootstrap once with `deploy.tunnel_identity`; plan CA trust rotation separately. Leaf certificates renew automatically. |nbook
 
 Commands for starting, inspecting, and recovering a deployment.
 
@@ -147,17 +147,13 @@ control-plane 9000` prints the mapping if it changes.
 ### Recreating the control plane
 
 ```bash
-docker compose up -d --build control-plane wireguard-platform
-docker compose ps control-plane wireguard-platform tunnel-gateway
+docker compose up -d --build control-plane
+docker compose ps control-plane connection-gateway connection-gateway-1 agent
 ```
 
-`wireguard-platform` shares the control plane's network namespace. Recreate both
-services together or the sidecar remains attached to the namespace of the old
-container. `tunnel-gateway` is separate and should remain healthy throughout.
-
-If an agent is unreachable, read the handshake state at both ends before
-restarting either one. A healthy process without a recent handshake has not
-proved the private route.
+Gateway sessions belong to the separate connection gateway processes. Inspect
+the agent's session identity, the Redis connection owner, and both ends' logs if a
+request stalls. See [connection gateway deployment](connection-gateway.md).
 
 ## Reading a failed node
 
@@ -518,7 +514,7 @@ for additions without replacing existing subnets.
 
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
-| WireGuard gateway and platform keys | Local `wireguard-keys` volume or production `<deployment>/wireguard` Secrets Manager document | Do not hand-rotate. Replacing the gateway identity invalidates enrolled peer configurations; perform a scoped deployment reset or a planned re-enrollment instead. |
+| Tunnel issuer and gateway bootstrap credential | Local CA volume/private environment or production operator secret document | Bootstrap once with `deploy.tunnel_identity`; plan CA trust rotation separately. Leaf certificates renew automatically. |
 | Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
 | Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. **Not a deployment value** — nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
 | Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
@@ -536,9 +532,8 @@ Prefect) should be rotated and the directory deleted.
 
 Confirm the target belongs to the task before each of these. None can be undone.
 
-- **Deleting the WireGuard key document or local key volume.** This changes the
-  gateway identity and invalidates existing peer configurations. Reset all
-  related local state together, or use a planned production re-enrollment.
+- **Deleting the tunnel issuer key.** Existing certificates stop renewing.
+  Preserve the issuer until a planned trust rotation reaches every agent.
 - **Deleting a customer connection stack.** Removes the roles the control plane
   assumes; the connection must be re-established from scratch.
 - **Deleting launch-template versions.** The pool cannot roll back to a template

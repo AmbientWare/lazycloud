@@ -21,8 +21,9 @@ output "tunnel_credentials" {
 output "records" {
   description = "The records this module owns, so a reviewer can compare them against the zone."
   value = {
-    apex     = cloudflare_dns_record.apex.name
-    wildcard = cloudflare_dns_record.wildcard.name
+    apex          = cloudflare_dns_record.apex.name
+    wildcard      = cloudflare_dns_record.wildcard.name
+    agent_tunnels = cloudflare_dns_record.agent_tunnels.name
   }
 }
 output "zone_id" {

@@ -13,6 +13,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Protocol, runtime_checkable
 
+from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
 from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
@@ -67,7 +68,6 @@ class ContainerWorkerArguments(argparse.Namespace):
     machine_id: str | None = None
     pod_address: str | None = None
     container_service_port: int | None = None
-    worker_repository_url: str | None = None
     worker_token: str | None = None
     worker_repository_timeout_seconds: float | None = None
     interval_seconds: float = 0.1
@@ -78,7 +78,6 @@ class ContainerWorkerArguments(argparse.Namespace):
     nvidia_cdi_enabled: bool | None = None
     once: bool = False
     network_prefix: str | None = None
-    route_local_target_host: str | None = None
     image_archive_extension: str | None = None
     workspace_storage_base_mount_path: str | None = None
     workspace_storage_mountpoint_binary: str | None = None
@@ -171,7 +170,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--machine-id")
     parser.add_argument("--pod-address")
     parser.add_argument("--container-service-port", type=int)
-    parser.add_argument("--worker-repository-url")
     parser.add_argument("--worker-token")
     parser.add_argument("--worker-repository-timeout-seconds", type=float)
     parser.add_argument("--interval-seconds", type=float, default=0.1)
@@ -200,7 +198,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-nvidia-cdi", action="store_false", dest="nvidia_cdi_enabled")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--network-prefix")
-    parser.add_argument("--route-target", dest="route_local_target_host")
     parser.add_argument("--image-archive-extension")
     parser.add_argument("--workspace-storage-base-mount-path")
     parser.add_argument("--workspace-storage-mountpoint-binary")
@@ -252,7 +249,7 @@ def run_container_worker(
             ):
                 print(
                     f"container worker {resolved_settings.worker_id} registering with "
-                    f"{resolved_settings.worker_repository_endpoint} "
+                    f"{AGENT_TUNNEL_CONTROL_URL} "
                     f"(timeout {resolved_settings.worker_repository_timeout_seconds:g}s)",
                     file=sys.stderr,
                 )
@@ -670,10 +667,6 @@ def _settings_from_args(args: ContainerWorkerArguments) -> WorkerSettings:
             args.container_service_port,
             loaded.container_service_port,
         ),
-        worker_repository_url=_override(
-            args.worker_repository_url,
-            loaded.worker_repository_url,
-        ),
         worker_token=_override(args.worker_token, loaded.worker_token),
         worker_repository_timeout_seconds=_override(
             args.worker_repository_timeout_seconds,
@@ -686,10 +679,6 @@ def _settings_from_args(args: ContainerWorkerArguments) -> WorkerSettings:
         gpu_devices=_override(args.gpu_devices, loaded.gpu_devices),
         nvidia_cdi_enabled=_override(args.nvidia_cdi_enabled, loaded.nvidia_cdi_enabled),
         network_prefix=_override(args.network_prefix, loaded.network_prefix),
-        route_local_target_host=_override(
-            args.route_local_target_host,
-            loaded.route_local_target_host,
-        ),
         image_archive_extension=_override(
             args.image_archive_extension,
             loaded.image_archive_extension,

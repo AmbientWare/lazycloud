@@ -17,14 +17,16 @@ from gateway.http import (
 )
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from gateway.service import GatewayControlService
+from gateway.tunnel_certificates import TunnelCertificateService
+from shared.http.agent_identity import (
+    AgentCertificateRequest,
+    AgentCertificateResponse,
+    GatewayCertificateRequest,
+    ServiceCertificateResponse,
+)
 from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
     AgentCapacityInterruptionResponse,
-)
-from shared.http.private_network import (
-    PrivateNetworkTopologyRequest,
-    RegisterPrivateNetworkRequest,
-    WireGuardPeerConfiguration,
 )
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
@@ -39,9 +41,38 @@ from shared.http.releases import (
 )
 
 from api.server.client_address import client_address
-from api.server.service_dependencies import gateway_service, provider_node_enrollment_service
+from api.server.service_dependencies import (
+    gateway_service,
+    provider_node_enrollment_service,
+    tunnel_certificate_service,
+)
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
+
+
+@router.post(
+    "/agents/certificate",
+    response_model=AgentCertificateResponse,
+    operation_id="issue_agent_certificate",
+)
+def issue_agent_certificate(
+    request: AgentCertificateRequest,
+    service: TunnelCertificateService = Depends(tunnel_certificate_service),
+) -> AgentCertificateResponse:
+    return service.issue_agent(request)
+
+
+@router.post(
+    "/connections/certificate",
+    response_model=ServiceCertificateResponse,
+    operation_id="issue_gateway_certificate",
+)
+def issue_gateway_certificate(
+    request: GatewayCertificateRequest,
+    authorization: str = Header(default=""),
+    service: TunnelCertificateService = Depends(tunnel_certificate_service),
+) -> ServiceCertificateResponse:
+    return service.issue_gateway(request, authorization=authorization)
 
 
 @router.post(
@@ -129,30 +160,6 @@ def leave_agent(
     service: GatewayControlService = Depends(gateway_service),
 ) -> LeaveAgentResponse:
     return service.leave_agent(request)
-
-
-@router.post(
-    "/agents/private-network/register",
-    response_model=WireGuardPeerConfiguration,
-    operation_id="register_private_network",
-)
-def register_private_network(
-    request: RegisterPrivateNetworkRequest,
-    service: GatewayControlService = Depends(gateway_service),
-) -> WireGuardPeerConfiguration:
-    return service.register_private_network(request)
-
-
-@router.post(
-    "/agents/private-network/topology",
-    response_model=WireGuardPeerConfiguration,
-    operation_id="get_private_network_topology",
-)
-def get_private_network_topology(
-    request: PrivateNetworkTopologyRequest,
-    service: GatewayControlService = Depends(gateway_service),
-) -> WireGuardPeerConfiguration:
-    return service.private_network_topology(request)
 
 
 @router.post("/agents/routes", response_model=ListAgentRoutesResponse)

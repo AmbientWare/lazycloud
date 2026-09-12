@@ -20,7 +20,7 @@ from container_worker_app.settings import WorkerSettings
 from shared.container_requests import StopContainerReason
 from shared.scheduling import WorkerUnavailableReason
 from worker.configuration import WorkerConfiguration, WorkerExecutionConfiguration
-from worker.repository_client import WorkerRepositoryClientError
+from worker.repository_errors import WorkerRepositoryClientError
 from worker.scheduler_requests import (
     WorkerSchedulerRequestAction,
     WorkerSchedulerRequestResult,

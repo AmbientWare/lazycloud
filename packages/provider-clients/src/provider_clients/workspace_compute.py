@@ -15,7 +15,6 @@ from compute.providers import (
 from coordination.redis_client import RedisClient
 from coordination.request_cooldown import RedisRequestCooldown
 from networking.settings import (
-    BackendRouteSettings,
     validate_remote_provider_network_configuration,
 )
 from provider_aws import (
@@ -252,13 +251,11 @@ def workspace_compute_provider_resolver(
     capacity_workspace: Callable[[AwsAccountConnection], str],
     gateway_origin: str,
     presigned_origin: str = "",
-    backend_route: BackendRouteSettings,
     platform_providers: PlatformProviderLoader = tuple,
 ) -> WorkspaceComputeProviderResolver:
     validate_remote_provider_network_configuration(
         gateway_origin=gateway_origin,
         presigned_origin=presigned_origin,
-        backend_route=backend_route,
     )
     artifacts = (
         capacity_settings.binaries_by_region(agent_binary_settings)

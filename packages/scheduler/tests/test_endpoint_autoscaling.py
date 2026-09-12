@@ -77,7 +77,6 @@ def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
         assert request.stub_id == stub.id
         assert payload.startup_kind is WorkerStartupKind.Endpoint
         assert payload.entrypoint == ["python3.12", "-m", "runner.serve"]
-        assert "GATEWAY_HTTP_URL=http://gateway.internal:9000" in payload.env
         assert payload.gateway_token_required is True
         assert f"{STUB_ID_ENV}={stub.id}" in payload.env
         assert f"{STUB_TYPE_ENV}={DeploymentKind.Endpoint.value}" in payload.env
@@ -315,7 +314,6 @@ def _endpoint_autoscaler(
             services,
             endpoints=EndpointControlService(
                 services,
-                gateway_http_url=lambda: "http://gateway.internal:9000",
             ),
             dispatches=_EndpointDispatchReader(EndpointDispatchStateRepository(services)),
         ),

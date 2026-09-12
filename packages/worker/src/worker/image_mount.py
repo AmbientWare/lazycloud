@@ -111,11 +111,9 @@ class ImageArchiveContentCacheRestorePlan(ContractModel):
     content_hash: str = ""
     size_bytes: int = 0
     routing_key: str = ""
-    temp_path: str = ""
     chunk_size_bytes: int = IMAGE_ARCHIVE_CONTENT_CACHE_RESTORE_CHUNK_BYTES
     chunks: list[ImageArchiveContentCacheReadChunk] = Field(default_factory=list)
     fsync: bool = True
-    cleanup_temp: bool = True
     reason: str = ""
 
     @property
@@ -126,9 +124,7 @@ class ImageArchiveContentCacheRestorePlan(ContractModel):
 class ImageArchiveContentCacheRestoreFinishPlan(ContractModel):
     status: ImageArchiveContentCacheRestoreFinishStatus
     archive_path: str
-    temp_path: str
     rename_temp_to_archive: bool = False
-    cleanup_temp: bool = True
     validation: RestoredImageArchiveValidation | None = None
     reason: str = ""
 
@@ -307,13 +303,11 @@ def plan_image_archive_content_cache_restore(
     routing_key: str = "",
     chunk_size_bytes: int = IMAGE_ARCHIVE_CONTENT_CACHE_RESTORE_CHUNK_BYTES,
 ) -> ImageArchiveContentCacheRestorePlan:
-    temp_path = f"{archive_path}.tmp" if archive_path else ""
     if not archive_path:
         return ImageArchiveContentCacheRestorePlan(
             status=ImageArchiveContentCacheRestoreStatus.Reject,
             archive_path=archive_path,
             image_id=image_id,
-            temp_path=temp_path,
             reason="archive path is required",
         )
     if not image_id:
@@ -321,7 +315,6 @@ def plan_image_archive_content_cache_restore(
             status=ImageArchiveContentCacheRestoreStatus.Reject,
             archive_path=archive_path,
             image_id=image_id,
-            temp_path=temp_path,
             reason="image id is required",
         )
     if not content_hash:
@@ -329,7 +322,6 @@ def plan_image_archive_content_cache_restore(
             status=ImageArchiveContentCacheRestoreStatus.Reject,
             archive_path=archive_path,
             image_id=image_id,
-            temp_path=temp_path,
             reason="content hash is required",
         )
     if size_bytes <= 0:
@@ -340,7 +332,6 @@ def plan_image_archive_content_cache_restore(
             content_hash=content_hash,
             size_bytes=size_bytes,
             routing_key=routing_key or content_hash,
-            temp_path=temp_path,
             reason="image archive size must be positive",
         )
     if chunk_size_bytes <= 0:
@@ -351,7 +342,6 @@ def plan_image_archive_content_cache_restore(
             content_hash=content_hash,
             size_bytes=size_bytes,
             routing_key=routing_key or content_hash,
-            temp_path=temp_path,
             reason="content cache restore chunk size must be positive",
         )
 
@@ -369,7 +359,6 @@ def plan_image_archive_content_cache_restore(
         content_hash=content_hash,
         size_bytes=size_bytes,
         routing_key=routing_key or content_hash,
-        temp_path=temp_path,
         chunk_size_bytes=chunk_size_bytes,
         chunks=chunks,
         reason="image archive can be restored from content cache chunks",
@@ -388,51 +377,43 @@ def finish_image_archive_content_cache_restore(
         return ImageArchiveContentCacheRestoreFinishPlan(
             status=ImageArchiveContentCacheRestoreFinishStatus.Error,
             archive_path=plan.archive_path,
-            temp_path=plan.temp_path,
             reason=plan.reason,
         )
     if read_error:
         return ImageArchiveContentCacheRestoreFinishPlan(
             status=ImageArchiveContentCacheRestoreFinishStatus.Error,
             archive_path=plan.archive_path,
-            temp_path=plan.temp_path,
             reason=f"image archive cache read failed: {read_error}",
         )
     if short_read:
         return ImageArchiveContentCacheRestoreFinishPlan(
             status=ImageArchiveContentCacheRestoreFinishStatus.Error,
             archive_path=plan.archive_path,
-            temp_path=plan.temp_path,
             reason="short embedded image archive cache read",
         )
     if actual_hash != plan.content_hash:
         return ImageArchiveContentCacheRestoreFinishPlan(
             status=ImageArchiveContentCacheRestoreFinishStatus.Error,
             archive_path=plan.archive_path,
-            temp_path=plan.temp_path,
             reason=f"image archive cache hash mismatch: expected {plan.content_hash}",
         )
     if validation is None:
         return ImageArchiveContentCacheRestoreFinishPlan(
             status=ImageArchiveContentCacheRestoreFinishStatus.Error,
             archive_path=plan.archive_path,
-            temp_path=plan.temp_path,
             reason="restored image archive validation is required",
         )
     if not validation.valid:
         return ImageArchiveContentCacheRestoreFinishPlan(
             status=ImageArchiveContentCacheRestoreFinishStatus.Error,
             archive_path=plan.archive_path,
-            temp_path=plan.temp_path,
             validation=validation,
             reason=validation.reason,
         )
     return ImageArchiveContentCacheRestoreFinishPlan(
         status=ImageArchiveContentCacheRestoreFinishStatus.Complete,
         archive_path=plan.archive_path,
-        temp_path=plan.temp_path,
         rename_temp_to_archive=True,
-        cleanup_temp=True,
         validation=validation,
         reason="image archive restored from content cache",
     )

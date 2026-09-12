@@ -7,7 +7,6 @@ from pydantic import Field
 from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.contracts import ContractModel
-from shared.routing import BackendRouteTransport
 
 from worker.routes import WorkerRouteContext
 from worker.runtime_config import OciRuntimeName
@@ -93,9 +92,6 @@ class WorkerContainerServiceInstance(ContractModel):
     worker_id: str = ""
     machine_id: str = ""
     pool: MachinePool = MachinePool("")
-    route_local_target_host: str = ""
-    route_transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
-    agent_worker: bool = True
     image_id: str = ""
     build_archive_object_key: str = ""
     build_archive_size_bytes: int = 0
@@ -123,6 +119,4 @@ class WorkerContainerServiceInstance(ContractModel):
             machine_id=self.machine_id,
             worker_id=self.worker_id,
             container_id=self.container_id,
-            transport=self.route_transport,
-            local_target_host=self.route_local_target_host,
         )

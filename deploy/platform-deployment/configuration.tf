@@ -1,17 +1,16 @@
 output "infrastructure_configuration" {
   description = "Publish this non-secret descriptor with deploy/object_storage.py."
   value = {
-    schema_version    = 6
+    schema_version    = 7
     deployment        = var.deployment
     region            = var.region
     registry          = local.ecr_registry
     repository_prefix = data.terraform_remote_state.core.outputs.ecr_repository_prefix
     storage_class     = data.terraform_remote_state.core.outputs.storage_class_name
     service_accounts = {
-      controlPlane       = var.control_plane_service_accounts.controlPlane
-      scheduler          = var.control_plane_service_accounts.scheduler
-      secretsReader      = var.secrets_reader_service_account
-      wireguardBootstrap = var.wireguard_bootstrap_service_account
+      controlPlane  = var.control_plane_service_accounts.controlPlane
+      scheduler     = var.control_plane_service_accounts.scheduler
+      secretsReader = var.secrets_reader_service_account
     }
     object_store = {
       endpoint_url            = "https://s3.${var.region}.${data.aws_partition.current.dns_suffix}"
@@ -45,9 +44,8 @@ output "infrastructure_configuration" {
       }
     }
     secret_documents = {
-      platform  = aws_secretsmanager_secret.platform.name
-      operator  = aws_secretsmanager_secret.operator.name
-      wireguard = aws_secretsmanager_secret.wireguard.name
+      platform = aws_secretsmanager_secret.platform.name
+      operator = aws_secretsmanager_secret.operator.name
     }
     secrets_reader_role_arn         = aws_iam_role.secrets_reader.arn
     cloudflare_tunnel_id            = data.terraform_remote_state.cloudflare.outputs.tunnel_id

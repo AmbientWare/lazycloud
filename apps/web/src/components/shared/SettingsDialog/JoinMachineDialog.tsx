@@ -108,19 +108,8 @@ function GenerateCommandStep({
         <p className="font-medium">Host requirements</p>
         <ul className="mt-2 list-disc space-y-1.5 pl-4 text-muted-foreground">
           <li>Linux amd64 or arm64 with systemd and root or sudo access</li>
-          <li>
-            A rootful Docker daemon and WireGuard tools. WireGuard auto-install requires a supported
-            apt-get or dnf host.
-          </li>
-          <li>Outbound DNS, HTTPS, and UDP port 51820 with stateful return traffic</li>
-          <li>
-            No route overlapping <code className="mono text-foreground">100.96.0.0/11</code>
-          </li>
-          <li>
-            Host firewall access on <code className="mono text-foreground">wg-lazycloud</code> from{" "}
-            <code className="mono text-foreground">100.96.0.0/24</code> to TCP port{" "}
-            <code className="mono text-foreground">29443</code>
-          </li>
+          <li>A rootful Docker daemon</li>
+          <li>Outbound DNS and TCP port 443 for HTTPS and authenticated TLS connections</li>
         </ul>
         <p className="mt-2 text-muted-foreground">
           You do not need a public inbound port, port forwarding, or a static IP.

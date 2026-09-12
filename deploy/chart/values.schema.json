@@ -16,16 +16,36 @@
     "release": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["active"],
+      "required": [
+        "active"
+      ],
       "properties": {
         "active": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["generation", "manifest_url", "target"],
+          "required": [
+            "generation",
+            "manifest_url",
+            "target"
+          ],
           "properties": {
-            "generation": {"type": "integer", "minimum": 1},
-            "manifest_url": {"type": "string", "pattern": "^https://[^\\s]+/manifest\\.json$"},
-            "target": {"type": "object", "required": ["version", "source_revision", "worker_image", "agent"]}
+            "generation": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "manifest_url": {
+              "type": "string",
+              "pattern": "^https://[^\\s]+/manifest\\.json$"
+            },
+            "target": {
+              "type": "object",
+              "required": [
+                "version",
+                "source_revision",
+                "worker_image",
+                "agent"
+              ]
+            }
           }
         }
       }
@@ -129,44 +149,6 @@
         }
       }
     },
-    "wireguard": {
-      "type": "object",
-      "required": ["gateways"],
-      "properties": {
-        "gateways": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 32,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["index", "endpoint"],
-            "properties": {
-              "index": {"type": "integer", "minimum": 0, "maximum": 31},
-              "endpoint": {"type": "string", "minLength": 3, "maxLength": 512, "pattern": "^[^:\\s]+:[0-9]{1,5}$"}
-            }
-          }
-        },
-        "database": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "poolSize",
-            "maxOverflow"
-          ],
-          "properties": {
-            "poolSize": {
-              "type": "integer",
-              "minimum": 1
-            },
-            "maxOverflow": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
-        }
-      }
-    },
     "cloudflared": {
       "type": "object",
       "properties": {
@@ -211,7 +193,10 @@
         "artifacts": {
           "type": "object",
           "minProperties": 1,
-          "additionalProperties": {"type": "string", "pattern": "@sha256:[a-f0-9]{64}$"}
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "@sha256:[a-f0-9]{64}$"
+          }
         }
       }
     },
@@ -319,8 +304,7 @@
       "required": [
         "controlPlane",
         "scheduler",
-        "secretsReader",
-        "wireguardBootstrap"
+        "secretsReader"
       ],
       "properties": {
         "controlPlane": {
@@ -332,10 +316,6 @@
           "minLength": 1
         },
         "secretsReader": {
-          "type": "string",
-          "minLength": 1
-        },
-        "wireguardBootstrap": {
           "type": "string",
           "minLength": 1
         }
@@ -370,8 +350,7 @@
           "additionalProperties": false,
           "required": [
             "platform",
-            "operator",
-            "wireguard"
+            "operator"
           ],
           "properties": {
             "platform": {
@@ -379,10 +358,6 @@
               "minLength": 1
             },
             "operator": {
-              "type": "string",
-              "minLength": 1
-            },
-            "wireguard": {
               "type": "string",
               "minLength": 1
             }
@@ -473,6 +448,36 @@
         "infrastructureSha256": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "connectionGateway": {
+      "type": "object",
+      "required": [
+        "replicas"
+      ],
+      "properties": {
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
         }
       }
     }

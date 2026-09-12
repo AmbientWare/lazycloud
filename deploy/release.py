@@ -80,7 +80,9 @@ def inspect_containers(ids: list[str]) -> list[Container]:
 
 
 def main() -> None:
-    compose = Compose.model_validate_json(output("docker", "compose", "config", "--format", "json"))
+    compose = Compose.model_validate_json(
+        output("docker", "compose", "--profile", "*", "config", "--format", "json")
+    )
     services = {name: service for name, service in compose.services.items() if not service.profiles}
     workers = {
         name
@@ -90,7 +92,7 @@ def main() -> None:
     }
     worker_images = {
         service.image
-        for service in services.values()
+        for service in compose.services.values()
         if service.build is not None and service.build.target == "container-worker"
     }
     if len(worker_images) != 1:
@@ -100,7 +102,7 @@ def main() -> None:
     ):
         raise RuntimeError("Local source publication requires an unpinned Compose environment")
 
-    run("build")
+    run("build", *(name for name, service in compose.services.items() if service.build is not None))
     built_images = {service.image for service in services.values() if service.build is not None}
     images = {
         name: output("docker", "image", "inspect", "--format", "{{.Id}}", service.image)

@@ -95,8 +95,6 @@ def test_install_script_forwards_provider_identity_without_join_token(tmp_path: 
             "0",
             "--install-docker",
             "auto",
-            "--install-wireguard",
-            "auto",
             "--background",
             "--agent-bin",
             str(agent_binary),

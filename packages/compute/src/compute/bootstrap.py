@@ -59,7 +59,6 @@ def machine_bootstrap_user_data(config: MachineBootstrapConfig) -> str:
             f"  --hostname {shell_quote(config.machine_id)} \\",
             "  --executor container \\",
             "  --install-docker auto \\",
-            "  --install-wireguard auto \\",
             "  --background",
         ]
     )

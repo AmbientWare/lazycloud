@@ -134,7 +134,7 @@ project token, snapshots, and labeled server groups. AWS can verify signed
 instance identity; Hetzner uses launch-scoped single-use
 enrollment credentials verified against provider inventory and durable launches.
 These differences stay in adapters and composition. All enrolled nodes use the
-same agent, runtime, WireGuard control path, worker protocol, and metering.
+same agent, runtime, authenticated outbound tunnel, worker protocol, and metering.
 
 Details: [AWS infrastructure](platform-deployment/README.md),
 [AWS images](ami/README.md), [Hetzner images and credentials](hetzner/README.md).

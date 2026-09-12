@@ -143,7 +143,6 @@ class SandboxExposePortRequest(ContractModel):
     host_port: int = 0
     local_target: str = ""
     route_context: WorkerRouteContext | None = None
-    agent_worker: bool = True
 
     @field_validator("port")
     @classmethod
@@ -398,7 +397,6 @@ def backend_route_for_sandbox_port(
     *,
     port: int,
     local_target: str,
-    agent_worker: bool = True,
 ) -> AgentBackendRoute | None:
     if context is None or not local_target:
         return None
@@ -410,7 +408,6 @@ def backend_route_for_sandbox_port(
         kind=BackendRouteKind.Container,
         port=port,
         local_target=local_target,
-        agent_worker=agent_worker,
     )
 
 
@@ -438,7 +435,6 @@ def plan_sandbox_expose_port(request: SandboxExposePortRequest) -> SandboxExpose
         request.route_context,
         port=request.port,
         local_target=target,
-        agent_worker=request.agent_worker,
     )
     ports = record_sandbox_exposed_port(request.existing_ports, request.port)
     return SandboxExposePortPlan(

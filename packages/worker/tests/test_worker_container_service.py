@@ -525,7 +525,6 @@ def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Pa
             machine_id="machine-1",
             worker_id="worker-1",
             pool=MachinePool("pool-1"),
-            route_local_target_host="agent.internal",
         )
     )
     network_policy = NetworkPolicyUpdater()
@@ -551,8 +550,8 @@ def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Pa
     assert exposed.ok
     assert exposed.ports == ()
     assert response.ok
-    assert response.url == "http://127.0.0.1:9090"
-    assert store.instances["ctr-1"].address_map[9090] == "127.0.0.1:9090"
+    assert response.url == "http://10.32.0.2:9090"
+    assert store.instances["ctr-1"].address_map[9090] == "10.32.0.2:9090"
     assert store.instances["ctr-1"].exposed_ports == [9090]
     assert listed_after_exposure.ok
     assert listed_after_exposure.ports == (9090,)
@@ -655,7 +654,6 @@ def _instance(
     worker_id: str = "worker-1",
     machine_id: str = "",
     pool: MachinePool = MachinePool(""),
-    route_local_target_host: str = "",
 ) -> WorkerContainerServiceInstance:
     (root / "workspace").mkdir(parents=True, exist_ok=True)
     return WorkerContainerServiceInstance(
@@ -672,5 +670,5 @@ def _instance(
         worker_id=worker_id,
         machine_id=machine_id,
         pool=pool,
-        route_local_target_host=route_local_target_host,
+        container_ip="10.32.0.2",
     )

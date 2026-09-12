@@ -5,10 +5,13 @@ import logging
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from threading import current_thread, main_thread
+from types import FrameType
 
 from agent.operations import (
     AGENT_SOURCE_CACHE_RELATIVE_PATH,
@@ -61,14 +64,12 @@ from agent_app.daemon import (
     AgentDaemonRunResult,
     AgentGatewayClient,
     AgentLeaveClient,
-    AgentPrivateNetworkRuntime,
     AgentProcessLock,
     DockerAgentWorkerController,
     HttpAgentGatewayClient,
     ProviderInstanceIdentityMode,
     build_agent_daemon_service,
 )
-from agent_app.route_proxy import AgentRouteProxyConfig
 
 
 class AgentCommandArgs(argparse.Namespace):
@@ -86,8 +87,6 @@ class AgentCommandArgs(argparse.Namespace):
     arch: str
     executor: str
     worker_image: str
-    worker_route_target: str
-    worker_runtime_http_url: str
     worker_network: str
     worker_host_alias: list[str]
     max_cpu: str
@@ -180,7 +179,6 @@ def run_agent_daemon(
     client: AgentGatewayClient | None = None,
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: Callable[[], AgentResourceDetection] | None = None,
-    private_network_runtime: AgentPrivateNetworkRuntime | None = None,
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
 ) -> AgentDaemonRunResult:
     _configure_daemon_logging()
@@ -189,11 +187,22 @@ def run_agent_daemon(
         client=client,
         worker_controller=worker_controller,
         resource_detector=resource_detector,
-        private_network_runtime=private_network_runtime,
         provider_identity=provider_identity,
     )
-    with AgentProcessLock.acquire(Path(options.state_dir)):
-        return service.run()
+    previous = None
+    if current_thread() is main_thread():
+        previous = signal.signal(signal.SIGTERM, _terminate_daemon)
+    try:
+        with AgentProcessLock.acquire(Path(options.state_dir)):
+            return service.run()
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+
+
+def _terminate_daemon(signum: int, frame: FrameType | None) -> None:
+    del signum, frame
+    raise SystemExit(0)
 
 
 def _configure_daemon_logging() -> None:
@@ -241,8 +250,6 @@ def _add_daemon_options(
         default="container",
     )
     parser.add_argument("--worker-image", default="")
-    parser.add_argument("--worker-route-target", default="127.0.0.1")
-    parser.add_argument("--worker-runtime-http-url", default="")
     parser.add_argument("--worker-network", type=_agent_worker_network_name, default="host")
     # A second agent on the same host must build its containers on its own bridge:
     # each allocates addresses inside its own control-plane scope, so one shared
@@ -289,8 +296,6 @@ def _daemon_options(args: AgentCommandArgs) -> AgentDaemonOptions:
         arch=args.arch,
         executor=WorkerExecutor(args.executor),
         worker_image=args.worker_image,
-        worker_route_target=args.worker_route_target,
-        worker_runtime_http_url=args.worker_runtime_http_url,
         worker_network=AgentWorkerNetwork(
             name=args.worker_network,
             bridge_name=args.worker_bridge_name,
@@ -302,7 +307,6 @@ def _daemon_options(args: AgentCommandArgs) -> AgentDaemonOptions:
         stream_interval_seconds=args.stream_interval_seconds,
         http_timeout_seconds=args.http_timeout_seconds,
         once=args.once,
-        route_proxy=AgentRouteProxyConfig(),
         capacity=AgentCapacityOptions(
             max_cpu=args.max_cpu,
             max_memory=args.max_memory,
@@ -393,10 +397,6 @@ def _install_service_command(
         command.extend(["--machine-fingerprint", args.machine_fingerprint])
     if args.worker_image:
         command.extend(["--worker-image", args.worker_image])
-    if args.worker_route_target != "127.0.0.1":
-        command.extend(["--worker-route-target", args.worker_route_target])
-    if args.worker_runtime_http_url:
-        command.extend(["--worker-runtime-http-url", args.worker_runtime_http_url])
     if args.worker_network != "host":
         command.extend(["--worker-network", args.worker_network])
     # Re-emitted rather than left to the default: the installed unit is what runs from

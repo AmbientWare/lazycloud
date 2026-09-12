@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -76,7 +77,6 @@ class ImageArchiveContentCacheRestoreExecutionResult(ContractModel):
     actual_hash: str = ""
     bytes_written: int = 0
     archive_path: str = ""
-    temp_path: str = ""
     reason: str = ""
 
     @property
@@ -249,66 +249,66 @@ def restore_image_archive_from_content_cache(
         )
 
     archive_path = Path(plan.archive_path)
-    temp_path = Path(plan.temp_path)
-    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     bytes_written = 0
     read_error = ""
     short_read = False
 
-    try:
-        with temp_path.open("wb") as output:
-            for chunk in plan.chunks:
-                read = cache.read_content(
-                    CacheContentReadRequest(
-                        content_hash=plan.content_hash,
-                        offset=chunk.offset,
-                        length=chunk.length,
-                        routing_key=plan.routing_key,
+    with tempfile.TemporaryDirectory(
+        dir=archive_path.parent, prefix=f".{archive_path.name}."
+    ) as directory:
+        temp_path = Path(directory) / archive_path.name
+        try:
+            with temp_path.open("wb") as output:
+                for chunk in plan.chunks:
+                    read = cache.read_content(
+                        CacheContentReadRequest(
+                            content_hash=plan.content_hash,
+                            offset=chunk.offset,
+                            length=chunk.length,
+                            routing_key=plan.routing_key,
+                        )
                     )
-                )
-                if read.status is not CacheContentReadStatus.Hit:
-                    short_read = read.status is CacheContentReadStatus.ShortRead
-                    read_error = "" if short_read else read.reason
-                    break
-                output.write(read.data)
-                digest.update(read.data)
-                bytes_written += len(read.data)
-            if plan.fsync:
-                output.flush()
-                os.fsync(output.fileno())
-    except OSError as exc:
-        read_error = str(exc)
+                    if read.status is not CacheContentReadStatus.Hit:
+                        short_read = read.status is CacheContentReadStatus.ShortRead
+                        read_error = "" if short_read else read.reason
+                        break
+                    output.write(read.data)
+                    digest.update(read.data)
+                    bytes_written += len(read.data)
+                if plan.fsync:
+                    output.flush()
+                    os.fsync(output.fileno())
+        except OSError as exc:
+            read_error = str(exc)
 
-    actual_hash = digest.hexdigest() if bytes_written else ""
-    validation: RestoredImageArchiveValidation | None = None
-    if not read_error and not short_read and actual_hash == plan.content_hash:
-        validation = validator(temp_path, plan)
-    finish = finish_image_archive_content_cache_restore(
-        plan,
-        actual_hash=actual_hash,
-        read_error=read_error,
-        short_read=short_read,
-        validation=validation,
-    )
-    status = (
-        ImageArchiveContentCacheRestoreExecutionStatus.Complete
-        if finish.complete
-        else ImageArchiveContentCacheRestoreExecutionStatus.Error
-    )
-    if finish.rename_temp_to_archive:
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.replace(archive_path)
-    if finish.cleanup_temp and temp_path.exists():
-        temp_path.unlink()
-    return _restore_result(
-        plan=plan,
-        finish=finish,
-        status=status,
-        actual_hash=actual_hash,
-        bytes_written=bytes_written,
-        reason=finish.reason,
-    )
+        actual_hash = digest.hexdigest() if bytes_written else ""
+        validation: RestoredImageArchiveValidation | None = None
+        if not read_error and not short_read and actual_hash == plan.content_hash:
+            validation = validator(temp_path, plan)
+        finish = finish_image_archive_content_cache_restore(
+            plan,
+            actual_hash=actual_hash,
+            read_error=read_error,
+            short_read=short_read,
+            validation=validation,
+        )
+        status = (
+            ImageArchiveContentCacheRestoreExecutionStatus.Complete
+            if finish.complete
+            else ImageArchiveContentCacheRestoreExecutionStatus.Error
+        )
+        if finish.rename_temp_to_archive:
+            temp_path.replace(archive_path)
+        return _restore_result(
+            plan=plan,
+            finish=finish,
+            status=status,
+            actual_hash=actual_hash,
+            bytes_written=bytes_written,
+            reason=finish.reason,
+        )
 
 
 def publish_image_archive_to_content_cache(
@@ -358,6 +358,5 @@ def _restore_result(
         actual_hash=actual_hash,
         bytes_written=bytes_written,
         archive_path=plan.archive_path,
-        temp_path=plan.temp_path,
         reason=reason,
     )

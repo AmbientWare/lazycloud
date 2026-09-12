@@ -31,15 +31,9 @@ output "ecr_registry" {
 output "secret_arns" {
   description = "The documents this deployment's credentials live in."
   value = {
-    platform  = aws_secretsmanager_secret.platform.arn
-    operator  = aws_secretsmanager_secret.operator.arn
-    wireguard = aws_secretsmanager_secret.wireguard.arn
+    platform = aws_secretsmanager_secret.platform.arn
+    operator = aws_secretsmanager_secret.operator.arn
   }
-}
-
-output "wireguard_secret" {
-  description = "Entry initialized with the gateway and stable platform WireGuard keys."
-  value       = aws_secretsmanager_secret.wireguard.name
 }
 
 output "operator_secret" {

@@ -7,7 +7,6 @@ import yaml
 from pydantic import Field, field_validator, model_validator
 from shared.app_identity import ENV_PREFIX, NAME, WORKER_CHECKPOINT_ROOT
 from shared.contracts import ContractModel
-from shared.routing import BackendRouteTransport
 from shared.usage import UsageBillingOwner
 
 from worker.container_rootfs import DEFAULT_CONTAINER_ROOTFS_ROOT
@@ -70,7 +69,6 @@ class WorkerExecutionConfiguration(ContractModel):
 
     preemptible: bool = False
     persistent: bool = False
-    agent_worker: bool = True
 
     @model_validator(mode="after")
     def default_runtime_must_be_a_candidate(self) -> Self:
@@ -82,8 +80,6 @@ class WorkerExecutionConfiguration(ContractModel):
 
 
 class WorkerNetworkConfiguration(ContractModel):
-    route_transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
-    agent_bridge_network: bool = False
     bridge_name: str = DEFAULT_CONTAINER_BRIDGE_NAME
     bridge_subnet: str = DEFAULT_CONTAINER_SUBNET
     bridge_ipv6_subnet: str = DEFAULT_CONTAINER_IPV6_SUBNET

@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import NoReturn
 
 import pytest
 from coordination.redis_client import AsyncRedisClient, RedisSettings
-from execution.pods.proxy import PodProxyBackendError, PodProxyHttpRequest, PodProxyTarget
 from gateway.pod_proxy import (
-    AsyncPodProxyHttpClient,
     AsyncRedisPodProxyConnectionRepository,
 )
-from networking.async_http import AsyncBackendHttpClient
 from shared.workload_keys import (
     pod_container_connections_key,
     pod_keep_warm_lock_key,
@@ -92,27 +88,6 @@ async def test_connection_open_only_persists_an_existing_keep_warm_lock(
         assert 0 < await redis.ttl(lock_key) <= 30
     finally:
         await redis.close()
-
-
-@pytest.mark.anyio
-async def test_pinned_direct_http_connect_uses_its_separate_dial_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def block_connect(*args: object, **kwargs: object) -> NoReturn:
-        del args, kwargs
-        await asyncio.Future[None]()
-        raise AssertionError("unreachable")
-
-    monkeypatch.setattr("networking.async_http.asyncio.open_connection", block_connect)
-
-    with pytest.raises(PodProxyBackendError, match="pod proxy backend request failed"):
-        async with asyncio.timeout(0.25):
-            await AsyncPodProxyHttpClient(AsyncBackendHttpClient()).open_stream(
-                PodProxyTarget(container_id="sandbox", address="127.0.0.1:8080"),
-                PodProxyHttpRequest(stub_id="stub", port=8080, method="GET"),
-                timeout_seconds=175.0,
-                connect_timeout_seconds=0.01,
-            )
 
 
 async def _increment_both(

@@ -64,7 +64,7 @@ COPY apps/cache-server/pyproject.toml ./apps/cache-server/pyproject.toml
 COPY apps/cli/pyproject.toml ./apps/cli/pyproject.toml
 COPY apps/container-worker/pyproject.toml ./apps/container-worker/pyproject.toml
 COPY apps/scheduler/pyproject.toml ./apps/scheduler/pyproject.toml
-COPY apps/tunnel-gateway/pyproject.toml ./apps/tunnel-gateway/pyproject.toml
+COPY apps/connection-gateway/pyproject.toml ./apps/connection-gateway/pyproject.toml
 COPY apps/worker-bootstrap/pyproject.toml ./apps/worker-bootstrap/pyproject.toml
 
 FROM scratch AS workspace-source
@@ -75,7 +75,7 @@ COPY apps/cache-server /apps/cache-server
 COPY apps/cli /apps/cli
 COPY apps/container-worker /apps/container-worker
 COPY apps/scheduler /apps/scheduler
-COPY apps/tunnel-gateway /apps/tunnel-gateway
+COPY apps/connection-gateway /apps/connection-gateway
 COPY apps/worker-bootstrap /apps/worker-bootstrap
 
 FROM scratch AS managed-package-source
@@ -108,23 +108,16 @@ COPY --from=workspace-source /apps ./apps
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package scheduler-app --no-editable
 
-FROM python-manifests AS tunnel-gateway-dependencies
+FROM python-manifests AS connection-gateway-dependencies
 ARG SOURCE_DATE_EPOCH=0
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package tunnel-gateway-app --no-install-workspace
+    uv sync --frozen --no-dev --package connection-gateway-app --no-install-workspace
 
-FROM tunnel-gateway-dependencies AS tunnel-gateway-install
-COPY packages/billing/src ./packages/billing/src
-COPY apps/tunnel-gateway/src ./apps/tunnel-gateway/src
-COPY packages/compute/src ./packages/compute/src
-COPY packages/coordination/src ./packages/coordination/src
-COPY packages/database/src ./packages/database/src
-COPY packages/foundation/src ./packages/foundation/src
-COPY packages/networking/src ./packages/networking/src
-COPY packages/observability/src ./packages/observability/src
-COPY packages/shared/src ./packages/shared/src
+FROM connection-gateway-dependencies AS connection-gateway-install
+COPY --from=workspace-source /packages ./packages
+COPY --from=workspace-source /apps/connection-gateway ./apps/connection-gateway
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package tunnel-gateway-app --no-editable
+    uv sync --frozen --no-dev --package connection-gateway-app --no-editable
 
 FROM python-manifests AS cache-server-dependencies
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
@@ -191,15 +184,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD python -m scheduler_app.health --max-age-seconds 300
 CMD ["lazycloud-scheduler", "--container-limit", "100"]
 
-FROM python-runtime AS tunnel-gateway
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends conntrack iproute2 iptables iputils-ping procps wireguard-tools \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=tunnel-gateway-install /app/.venv /app/.venv
+FROM python-runtime AS connection-gateway
+COPY --from=connection-gateway-install /app/.venv /app/.venv
 VOLUME ["/var/lib/lazycloud"]
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-    CMD test -f /tmp/lazycloud-tunnel-gateway.ready
-CMD ["lazycloud-tunnel-gateway"]
+    CMD python -m shared.process_liveness --max-age-seconds 15 /tmp/lazycloud-connection-gateway.ready
+CMD ["lazycloud-connection-gateway"]
 
 FROM python-runtime AS cache-server
 COPY --from=cache-server-install /app/.venv /app/.venv
@@ -215,10 +205,8 @@ VOLUME ["/var/lib/lazycloud"]
 CMD ["lazycloud-worker-bootstrap", "--help"]
 
 FROM python-runtime AS cli
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends wireguard-tools \
-    && rm -rf /var/lib/apt/lists/*
 COPY --from=cli-install /app/.venv /app/.venv
+COPY deploy/tunnel_identity.py /app/deploy/
 VOLUME ["/var/lib/lazycloud"]
 CMD ["lazycloud-admin", "--help"]
 

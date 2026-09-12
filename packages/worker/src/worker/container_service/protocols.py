@@ -159,17 +159,15 @@ class WorkerContainerArchiveCreator(Protocol):
 
 
 @dataclass(slots=True)
-class LocalSandboxPortPublisher:
-    host: str = "127.0.0.1"
-    scheme: str = "http"
-
+class BridgeSandboxPortPublisher:
     def allocate_port(
         self,
         instance: WorkerContainerServiceInstance,
         *,
         container_port: int,
     ) -> int:
-        _ = instance
+        if not instance.container_ip:
+            raise ValueError(f"container {instance.container_id} has no bridge IP")
         return container_port
 
     def local_target(
@@ -179,8 +177,9 @@ class LocalSandboxPortPublisher:
         host_port: int,
         container_port: int,
     ) -> str:
-        _ = instance, container_port
-        return f"{self.host}:{host_port}"
+        if not instance.container_ip:
+            raise ValueError(f"container {instance.container_id} has no bridge IP")
+        return f"{instance.container_ip}:{container_port}"
 
     def publish_exposed_port(
         self,
@@ -193,7 +192,7 @@ class LocalSandboxPortPublisher:
         routes: list[AgentBackendRoute] | None = None,
     ) -> str:
         _ = instance, port, binding, address_map, routes
-        return f"{self.scheme}://{local_target}"
+        return f"http://{local_target}"
 
     def unpublish_exposed_port(
         self,

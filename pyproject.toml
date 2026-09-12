@@ -37,7 +37,7 @@ workspace = [
     "billing",
     "container-worker-app",
     "scheduler-app",
-    "tunnel-gateway-app",
+    "connection-gateway-app",
     "worker-bootstrap-app",
     "provider-aws",
     "provider-hetzner",
@@ -52,6 +52,7 @@ dev = [
     { include-group = "lint" },
     "aiosqlite>=0.21,<1",
     "basedpyright>=1.39.9",
+    "types-grpcio>=1.83,<2",
     "boto3-stubs[autoscaling,cloudformation,ec2,s3,sts]>=1.40,<2",
     "httpx2>=2.4.0",
     "lupa>=2.8",
@@ -97,7 +98,7 @@ members = [
     "apps/cli",
     "apps/container-worker",
     "apps/scheduler",
-    "apps/tunnel-gateway",
+    "apps/connection-gateway",
     "apps/worker-bootstrap",
     "packages/billing",
     "packages/providers/aws",
@@ -139,7 +140,7 @@ provider-github = { workspace = true }
 provider-resend = { workspace = true }
 provider-stripe = { workspace = true }
 scheduler-app = { workspace = true }
-tunnel-gateway-app = { workspace = true }
+connection-gateway-app = { workspace = true }
 scheduler = { workspace = true }
 runner = { workspace = true }
 lazycloud-client = { workspace = true }

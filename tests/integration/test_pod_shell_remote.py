@@ -6,9 +6,12 @@ from collections.abc import Iterable
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
 
 import execution.shells.service as shell_service_module
 import pytest
+from anyio.from_thread import start_blocking_portal
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
@@ -16,7 +19,6 @@ from database.repositories.orchestration import ContainerRepository
 from execution.containers.service import ContainerService
 from execution.pods.service import PodControlService
 from execution.shells.planning import SHELL_WORKER_PORT
-from execution.shells.proxy import ShellBackendTarget
 from execution.shells.service import (
     ShellControlService,
     ShellTicketCompensationStatus,
@@ -52,6 +54,7 @@ from shared.http.pods import (
 from shared.shell_protocol import ShellFrameType, encode_shell_frame
 from shared.workload_keys import pod_keep_warm_lock_key
 from starlette.websockets import WebSocketDisconnect
+from tests.agent_tunnels import enrolled_tunnel_route
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
 from tests.url_constants import TEST_URL
@@ -324,113 +327,149 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
 
 def test_existing_container_shell_reuses_credentials_through_worker_client(
     isolated_services: ApiServices,
+    tmp_path: Path,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.create_stub("shell-target", kind=StubKind.Pod)
-    container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
-    scheduler_containers = _FakeSchedulerContainers(
-        state=SchedulerContainerState(
-            container_id=container.id,
-            stub_id=stub.id,
-            workspace_id=stub.workspace_id,
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        ),
-        worker_address=SchedulerContainerAddress(
-            container_id=container.id,
-            address="worker.internal:9001",
-        ),
-        address_map=SchedulerContainerAddressMap(
-            container_id=container.id,
-            address_map={SHELL_WORKER_PORT: "shell.example:2222"},
-        ),
-    )
-    transport = _RecordingTransport(
-        responses={
-            ContainerServiceMethod.ContainerSandboxExposePort: ContainerSandboxExposePortResponse(
-                url="http://shell.example"
+    with ExitStack() as resources:
+        control = ControlPlaneService(isolated_services.context)
+        stub = control.create_stub("shell-target", kind=StubKind.Pod)
+        container_id = str(uuid4())
+        listener = _EchoServer(response=encode_shell_frame(ShellFrameType.Ready.value))
+        listener.start()
+        resources.callback(listener.close)
+        portal = resources.enter_context(start_blocking_portal())
+        resources.enter_context(
+            portal.wrap_async_context_manager(
+                enrolled_tunnel_route(
+                    isolated_services,
+                    stub,
+                    container_id,
+                    listener.address,
+                    tmp_path / "tunnel",
+                    port=SHELL_WORKER_PORT,
+                )
+            )
+        )
+        container = isolated_services.containers.get(container_id)
+        scheduler_containers = _FakeSchedulerContainers(
+            state=SchedulerContainerState(
+                container_id=container.id,
+                stub_id=stub.id,
+                workspace_id=stub.workspace_id,
+                worker_id="worker-1",
+                status=SchedulerContainerStatus.Running,
             ),
-            ContainerServiceMethod.ContainerExec: ContainerExecResponse(pid=7),
-        }
-    )
-    service = ShellControlService(
-        isolated_services,
-        scheduler_containers=scheduler_containers,
-        container_clients=SchedulerContainerClientFactory(
+            worker_address=SchedulerContainerAddress(
+                container_id=container.id,
+                address="worker.internal:9001",
+            ),
+            address_map=isolated_services.scheduler_containers.get_container_address_map(
+                container.id
+            ),
+        )
+        transport = _RecordingTransport(
+            responses={
+                ContainerServiceMethod.ContainerSandboxExposePort: (
+                    ContainerSandboxExposePortResponse(url="http://shell.example")
+                ),
+                ContainerServiceMethod.ContainerExec: ContainerExecResponse(pid=7),
+            }
+        )
+        service = ShellControlService(
+            isolated_services,
             scheduler_containers=scheduler_containers,
-            transport_factory=_RecordingTransportFactory(transport),
-        ),
-        backend_connector=_ready_shell_connector,
-    )
+            container_clients=SchedulerContainerClientFactory(
+                scheduler_containers=scheduler_containers,
+                transport_factory=_RecordingTransportFactory(transport),
+            ),
+            backend_connector=isolated_services.shell_service.backend_connector,
+        )
 
-    first = service.create_shell_in_existing_container(
-        workspace_id=stub.workspace_id,
-        container_id=container.id,
-    )
-    second = service.create_shell_in_existing_container(
-        workspace_id=stub.workspace_id,
-        container_id=container.id,
-    )
-
-    assert first.stub_id == stub.id
-    assert first.username
-    assert first.password
-    assert second == first
-
-
-def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port(
-    isolated_services: ApiServices,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    stub = control.create_stub("shell-target", kind=StubKind.Pod)
-    container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
-    scheduler_containers = _FakeSchedulerContainers(
-        state=SchedulerContainerState(
-            container_id=container.id,
-            stub_id=stub.id,
+        first = service.create_shell_in_existing_container(
             workspace_id=stub.workspace_id,
-            worker_id="worker-1",
-            status=SchedulerContainerStatus.Running,
-        ),
-        worker_address=SchedulerContainerAddress(
             container_id=container.id,
-            address="worker.internal:9001",
-        ),
-        address_map=SchedulerContainerAddressMap(
-            container_id=container.id,
-            address_map={SHELL_WORKER_PORT: "unrelated.internal:2222"},
-        ),
-    )
-    transport = _RecordingTransport(
-        responses={
-            ContainerServiceMethod.ContainerExec: ContainerExecResponse(pid=7),
-            ContainerServiceMethod.ContainerSandboxExposePort: ContainerSandboxExposePortResponse(
-                url="http://unrelated.internal:2222"
-            ),
-            ContainerServiceMethod.ContainerSandboxUnexposePort: (
-                ContainerSandboxUnexposePortResponse()
-            ),
-        }
-    )
-    monkeypatch.setattr(shell_service_module, "SHELL_SERVER_READY_TIMEOUT_SECONDS", 0.01)
-    service = ShellControlService(
-        isolated_services,
-        scheduler_containers=scheduler_containers,
-        container_clients=SchedulerContainerClientFactory(
-            scheduler_containers=scheduler_containers,
-            transport_factory=_RecordingTransportFactory(transport),
-        ),
-        backend_connector=_unrelated_shell_connector,
-    )
-
-    with pytest.raises(UpstreamUnavailableError, match="shell frame payload exceeds"):
-        service.create_shell_in_existing_container(
+        )
+        second = service.create_shell_in_existing_container(
             workspace_id=stub.workspace_id,
             container_id=container.id,
         )
 
-    assert (container.id, SHELL_WORKER_PORT) not in transport.exposed_ports
+        assert first.stub_id == stub.id
+        assert first.username
+        assert first.password
+        assert second == first
+
+
+def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with ExitStack() as resources:
+        control = ControlPlaneService(isolated_services.context)
+        stub = control.create_stub("shell-target", kind=StubKind.Pod)
+        container_id = str(uuid4())
+        listener = _EchoServer(response=b"HTTP/1.1 200 OK\r\n\r\n")
+        listener.start()
+        resources.callback(listener.close)
+        portal = resources.enter_context(start_blocking_portal())
+        resources.enter_context(
+            portal.wrap_async_context_manager(
+                enrolled_tunnel_route(
+                    isolated_services,
+                    stub,
+                    container_id,
+                    listener.address,
+                    tmp_path / "tunnel",
+                    port=SHELL_WORKER_PORT,
+                )
+            )
+        )
+        container = isolated_services.containers.get(container_id)
+        scheduler_containers = _FakeSchedulerContainers(
+            state=SchedulerContainerState(
+                container_id=container.id,
+                stub_id=stub.id,
+                workspace_id=stub.workspace_id,
+                worker_id="worker-1",
+                status=SchedulerContainerStatus.Running,
+            ),
+            worker_address=SchedulerContainerAddress(
+                container_id=container.id,
+                address="worker.internal:9001",
+            ),
+            address_map=isolated_services.scheduler_containers.get_container_address_map(
+                container.id
+            ),
+        )
+        transport = _RecordingTransport(
+            responses={
+                ContainerServiceMethod.ContainerExec: ContainerExecResponse(pid=7),
+                ContainerServiceMethod.ContainerSandboxExposePort: (
+                    ContainerSandboxExposePortResponse(url="http://unrelated.internal:2222")
+                ),
+                ContainerServiceMethod.ContainerSandboxUnexposePort: (
+                    ContainerSandboxUnexposePortResponse()
+                ),
+            }
+        )
+        monkeypatch.setattr(shell_service_module, "SHELL_SERVER_READY_TIMEOUT_SECONDS", 0.01)
+        service = ShellControlService(
+            isolated_services,
+            scheduler_containers=scheduler_containers,
+            container_clients=SchedulerContainerClientFactory(
+                scheduler_containers=scheduler_containers,
+                transport_factory=_RecordingTransportFactory(transport),
+            ),
+            backend_connector=isolated_services.shell_service.backend_connector,
+        )
+
+        with pytest.raises(UpstreamUnavailableError, match="shell frame payload exceeds"):
+            service.create_shell_in_existing_container(
+                workspace_id=stub.workspace_id,
+                container_id=container.id,
+            )
+
+        assert (container.id, SHELL_WORKER_PORT) not in transport.exposed_ports
 
 
 def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
@@ -461,6 +500,7 @@ def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
     )
     service = ShellControlService(
         isolated_services,
+        backend_connector=isolated_services.shell_service.backend_connector,
         scheduler_containers=scheduler_containers,
         container_clients=SchedulerContainerClientFactory(
             scheduler_containers=scheduler_containers,
@@ -490,7 +530,7 @@ def test_standalone_ticket_failure_stops_once_and_terminal_retry_is_idempotent(
     control = ControlPlaneService(isolated_services.context)
     stub = control.create_stub("standalone-cleanup", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
-    service = ShellControlService(isolated_services)
+    service = isolated_services.shell_service
 
     first = service.compensate_standalone_ticket_failure(
         workspace_id=stub.workspace_id,
@@ -519,7 +559,7 @@ def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_even
         raise RuntimeError("private scheduler endpoint")
 
     monkeypatch.setattr(type(isolated_services.containers), "stop", fail_stop)
-    service = ShellControlService(isolated_services)
+    service = isolated_services.shell_service
 
     result = service.compensate_standalone_ticket_failure(
         workspace_id=stub.workspace_id,
@@ -623,41 +663,29 @@ def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
 
 def test_shell_websocket_proxies_bidirectional_terminal_bytes(
     isolated_services: ApiServices,
+    tmp_path: Path,
 ) -> None:
     with ExitStack() as client_stack:
         control = ControlPlaneService(isolated_services.context)
         stub = control.create_stub("interactive-shell", kind=StubKind.Pod)
-        container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
+        container_id = str(uuid4())
         echo_server = _EchoServer()
         echo_server.start()
-        scheduler_containers = _FakeSchedulerContainers(
-            state=SchedulerContainerState(
-                container_id=container.id,
-                stub_id=stub.id,
-                workspace_id=stub.workspace_id,
-                worker_id="worker-1",
-                status=SchedulerContainerStatus.Running,
-            ),
-            address_map=SchedulerContainerAddressMap(
-                container_id=container.id,
-                address_map={2222: echo_server.address},
-            ),
+        client_stack.callback(echo_server.close)
+        portal = client_stack.enter_context(start_blocking_portal())
+        client_stack.enter_context(
+            portal.wrap_async_context_manager(
+                enrolled_tunnel_route(
+                    isolated_services,
+                    stub,
+                    container_id,
+                    echo_server.address,
+                    tmp_path / "tunnel",
+                    port=SHELL_WORKER_PORT,
+                )
+            )
         )
-        shell_service = ShellControlService(
-            isolated_services,
-            scheduler_containers=scheduler_containers,
-            container_clients=SchedulerContainerClientFactory(
-                scheduler_containers=scheduler_containers,
-                transport_factory=_RecordingTransportFactory(_RecordingTransport()),
-            ),
-            # The websocket route resolves its backend on the event loop, so a
-            # service without these reaches it with no way to route.
-            async_database=isolated_services.require_async_io().database,
-            async_scheduler_containers=_FakeAsyncShellContainers(scheduler_containers),
-        )
-        client = client_stack.enter_context(
-            TestClient(create_app(isolated_services, shell_service=shell_service))
-        )
+        client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         headers = _auth_headers(isolated_services)
         token = AuthService(isolated_services.context).authenticate_header(
             headers["Authorization"],
@@ -672,34 +700,31 @@ def test_shell_websocket_proxies_bidirectional_terminal_bytes(
             audience=ShellWebSocketAudience(
                 workspace_id=stub.workspace_id,
                 stub_id=stub.id,
-                container_id=container.id,
+                container_id=container_id,
             ),
         )
 
-        try:
-            with client.websocket_connect(
-                f"/api/v1/shells/id/{stub.id}/{container.id}/ws",
-                headers=headers,
-            ) as websocket:
-                assert websocket.receive_text() == "OK"
-                websocket.send_bytes(b"ping")
-                assert websocket.receive_bytes() == b"ping"
-            with client.websocket_connect(
-                f"/api/v1/shells/id/{stub.id}/{container.id}/ws?ticket={ticket}",
-            ) as websocket:
-                assert websocket.receive_text() == "OK"
-                websocket.send_bytes(b"ticket")
-                assert websocket.receive_bytes() == b"ticket"
-            with (
-                pytest.raises(WebSocketDisconnect) as replayed,
-                client.websocket_connect(
-                    f"/api/v1/shells/id/{stub.id}/{container.id}/ws?ticket={ticket}",
-                ),
-            ):
-                pass
-            assert replayed.value.code == 1008
-        finally:
-            echo_server.close()
+        with client.websocket_connect(
+            f"/api/v1/shells/id/{stub.id}/{container_id}/ws",
+            headers=headers,
+        ) as websocket:
+            assert websocket.receive_text() == "OK"
+            websocket.send_bytes(b"ping")
+            assert websocket.receive_bytes() == b"ping"
+        with client.websocket_connect(
+            f"/api/v1/shells/id/{stub.id}/{container_id}/ws?ticket={ticket}",
+        ) as websocket:
+            assert websocket.receive_text() == "OK"
+            websocket.send_bytes(b"ticket")
+            assert websocket.receive_bytes() == b"ticket"
+        with (
+            pytest.raises(WebSocketDisconnect) as replayed,
+            client.websocket_connect(
+                f"/api/v1/shells/id/{stub.id}/{container_id}/ws?ticket={ticket}",
+            ),
+        ):
+            pass
+        assert replayed.value.code == 1008
 
 
 def test_shell_websocket_rejects_long_lived_query_credentials_before_backend(
@@ -805,22 +830,6 @@ class _FakeSchedulerContainers:
 
 
 @dataclass(slots=True)
-class _FakeAsyncShellContainers:
-    """The same answers as the synchronous fake, on the event loop.
-
-    The websocket shell route resolves its backend asynchronously, so a service
-    built without this reaches the route with nothing to route through and the
-    connection closes on "asynchronous shell routing is not configured". Reading
-    from the synchronous fake keeps one source of truth for both paths.
-    """
-
-    containers: _FakeSchedulerContainers
-
-    async def get_container_address_map(self, container_id: str) -> SchedulerContainerAddressMap:
-        return self.containers.get_container_address_map(container_id)
-
-
-@dataclass(slots=True)
 class _RecordingScheduler:
     requests: list[SchedulerWorkerRequest] = field(default_factory=list)
 
@@ -840,7 +849,8 @@ class _RecordingScheduler:
 
 
 class _EchoServer:
-    def __init__(self) -> None:
+    def __init__(self, *, response: bytes | None = None) -> None:
+        self.response = response
         self.socket = socket.create_server(("127.0.0.1", 0))
         self.tcp_address = self.socket.getsockname()
         self.address = f"127.0.0.1:{self.tcp_address[1]}"
@@ -869,31 +879,7 @@ class _EchoServer:
                     data = connection.recv(4096)
                     if not data:
                         break
-                    connection.sendall(data)
-
-
-def _ready_shell_connector(_target: ShellBackendTarget) -> socket.socket:
-    client, server = socket.socketpair()
-
-    def respond() -> None:
-        with server:
-            server.recv(4096)
-            server.sendall(encode_shell_frame(ShellFrameType.Ready.value))
-
-    threading.Thread(target=respond, daemon=True).start()
-    return client
-
-
-def _unrelated_shell_connector(_target: ShellBackendTarget) -> socket.socket:
-    client, server = socket.socketpair()
-
-    def respond() -> None:
-        with server:
-            server.recv(4096)
-            server.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
-
-    threading.Thread(target=respond, daemon=True).start()
-    return client
+                    connection.sendall(self.response if self.response is not None else data)
 
 
 def _create_running_container(

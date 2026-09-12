@@ -93,7 +93,11 @@ async def test_log_follow_caps_replay_and_continues_with_new_output(
         events=tuple(
             create_cloud_event_record(
                 EventRecordType.ContainerLog,
-                _container_log_data(message=f"line-{index}"),
+                {
+                    **_container_log_data(message=f"line-{index}"),
+                    "capture_id": "large-output",
+                    "source_sequence": index,
+                },
                 event_id=f"large-{index}",
             )
             for index in range(2_000)
@@ -177,10 +181,14 @@ def test_redis_log_batch_reads_back_in_capture_order(
         events=tuple(
             create_cloud_event_record(
                 EventRecordType.ContainerLog,
-                _container_log_data(message=message),
+                {
+                    **_container_log_data(message=message),
+                    "capture_id": "capture-1",
+                    "source_sequence": index,
+                },
                 event_id=f"batch-{message}",
             )
-            for message in messages
+            for index, message in enumerate(messages)
         ),
     )
 
@@ -206,17 +214,29 @@ def test_capture_barriers_never_reach_a_reader(
         events=(
             create_cloud_event_record(
                 EventRecordType.ContainerLog,
-                _container_log_data(message="printed"),
+                {
+                    **_container_log_data(message="printed"),
+                    "capture_id": "capture-barrier",
+                    "source_sequence": 0,
+                },
                 event_id="barrier-output",
             ),
             create_cloud_event_record(
                 EventRecordType.ContainerLog,
-                _container_log_data(message="", entry_kind="flush"),
+                {
+                    **_container_log_data(message="", entry_kind="flush"),
+                    "capture_id": "capture-barrier",
+                    "source_sequence": 1,
+                },
                 event_id="barrier-flush",
             ),
             create_cloud_event_record(
                 EventRecordType.ContainerLog,
-                _container_log_data(message="output dropped", entry_kind="dropped"),
+                {
+                    **_container_log_data(message="output dropped", entry_kind="dropped"),
+                    "capture_id": "capture-barrier",
+                    "source_sequence": 2,
+                },
                 event_id="barrier-dropped",
             ),
         ),

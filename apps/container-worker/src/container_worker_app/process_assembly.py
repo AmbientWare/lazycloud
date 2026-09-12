@@ -20,10 +20,10 @@ from worker.adapters import (
     WorkerContainerEventPublisher,
     WorkerFinalizationCleanup,
     WorkerGpuReleaser,
-    WorkerNetworkPortExposer,
     WorkerNetworkTeardown,
     WorkerOomWatcherStopper,
     WorkerRouteIdentity,
+    WorkerRouteRecovery,
     WorkerRuntimeContainerStopper,
 )
 from worker.container_client.control import ContainerServiceClient
@@ -160,7 +160,6 @@ class WorkerProcessContainerServiceDependencies:
     archives: WorkerContainerArchiveCreator | None = None
     network_policy: WorkerSandboxNetworkPolicyUpdater | None = None
     ports: WorkerSandboxPortPublisher | None = None
-    port_exposer: WorkerNetworkPortExposer | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,8 +321,6 @@ def assemble_worker_process_services(
         or SchedulerSandboxPortPublisher(
             identity,
             container_repository,
-            port_allocator=dependencies.port_allocator,
-            network=container_service_dependencies.port_exposer,
         ),
     )
     transport = WorkerContainerServiceTransport(container_service)
@@ -341,6 +338,12 @@ def assemble_worker_process_services(
         stopper=runtime_stopper,
         registration=registration,
         readiness_validator=validate_readiness,
+        route_restorer=WorkerRouteRecovery(
+            identity=identity,
+            containers=container_repository,
+            instances=instance_store,
+            runtime=dependencies.runtime_controller,
+        ).restore,
         cleanup_actions=[
             *(cleanup_actions or []),
             *(

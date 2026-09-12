@@ -100,6 +100,7 @@ async def put_object_stream(
         request.stream(),
         workspace_id=workspace_id,
         database=services.require_async_io().database,
+        http=services.require_async_io().object_upload_http,
     )
 
 

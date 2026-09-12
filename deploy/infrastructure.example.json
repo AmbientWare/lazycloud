@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "deployment": "lazycloud-prod",
   "region": "us-east-1",
   "registry": "000000000000.dkr.ecr.us-east-1.amazonaws.com",
@@ -8,8 +8,7 @@
   "service_accounts": {
     "controlPlane": "control-plane",
     "scheduler": "scheduler",
-    "secretsReader": "secrets-reader",
-    "wireguardBootstrap": "wireguard-bootstrap"
+    "secretsReader": "secrets-reader"
   },
   "object_store": {
     "endpoint_url": "https://s3.us-east-1.amazonaws.com",
@@ -55,8 +54,7 @@
   },
   "secret_documents": {
     "platform": "lazycloud-prod/platform",
-    "operator": "lazycloud-prod/operator",
-    "wireguard": "lazycloud-prod/wireguard"
+    "operator": "lazycloud-prod/operator"
   },
   "secrets_reader_role_arn": "arn:aws:iam::000000000000:role/reader",
   "cloudflare_tunnel_id": "00000000-0000-0000-0000-000000000000",

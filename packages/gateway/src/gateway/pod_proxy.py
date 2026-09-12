@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from coordination.redis_client import AsyncRedisClient, RedisWireScalar
 from execution.pods.proxy import (
@@ -15,12 +15,8 @@ from foundation.http import forwarded_request_headers, forwarded_request_path
 from networking.async_http import AsyncBackendHttpClient, AsyncBackendHttpError
 from networking.dialer import (
     BackendRouteDialer,
-    BackendRouteDialerConfig,
-    BackendRouteResolver,
 )
-from networking.routing import build_backend_route_dial_plan
 from shared.routing import parse_backend_route_address
-from shared.urls import parse_container_address
 from shared.workload_keys import (
     pod_container_connections_key,
     pod_keep_warm_lock_key,
@@ -177,8 +173,7 @@ class AsyncPodProxyHttpClient:
 
 @dataclass(slots=True)
 class PodProxySocketClient:
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
+    route_dialer: BackendRouteDialer
 
     def open_socket(
         self,
@@ -186,32 +181,12 @@ class PodProxySocketClient:
         *,
         timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
     ) -> socket.socket:
-        timeout = timeout_seconds or self.route_dialer_config.timeout_seconds
         route_id = target.route_id or parse_backend_route_address(target.address)[0]
-        if route_id:
-            dialer_config = self.route_dialer_config.model_copy(
-                update={
-                    "timeout_seconds": min(
-                        timeout,
-                        self.route_dialer_config.timeout_seconds,
-                    )
-                }
-            )
-            connection = BackendRouteDialer(
-                resolver=self.route_resolver,
-                config=dialer_config,
-            ).dial_plan(build_backend_route_dial_plan(route_id))
-            if not isinstance(connection, socket.socket):
-                msg = "pod proxy requires a socket backend connection"
-                raise TypeError(msg)
-            connection.settimeout(timeout)
-            return connection
-
-        parsed = parse_container_address(target.address, resource="pod")
-        return socket.create_connection(
-            (parsed.hostname or "", parsed.port or 80),
-            timeout=timeout,
-        )
+        if not route_id:
+            raise ConnectionError("Pod request requires an authorized backend route")
+        connection = self.route_dialer.dial_backend_route(route_id, timeout_seconds=timeout_seconds)
+        connection.settimeout(timeout_seconds)
+        return connection
 
 
 def _non_negative_int(value: RedisWireScalar | None) -> int:

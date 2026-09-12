@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from compute.telemetry import redact_telemetry_line
 from pydantic import Field, JsonValue, field_validator
+from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import (
     ADMIN_CLI_NAME,
     AGENT_CONTAINER_DATA_PATH,
@@ -38,10 +39,8 @@ from shared.env import (
     GATEWAY_HTTP_PORT_ENV,
     GATEWAY_HTTP_TLS_ENV,
     GATEWAY_HTTP_URL_ENV,
-    WORKER_REPOSITORY_URL_ENV,
 )
 from shared.gpu import normalize_gpu_type
-from shared.routing import BackendRouteTransport
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from worker.configuration import (
@@ -81,7 +80,7 @@ AGENT_WORKER_CONTAINER_SERVICE_PORT_SPAN = 20000
 AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
 AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
-DOCKER_NETWORK_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"
+DOCKER_NETWORK_NAME_PATTERN = r"^(?:host|container:[A-Za-z0-9][A-Za-z0-9_.-]{0,254})$"
 
 
 class AgentInstallOS(StrEnum):
@@ -203,7 +202,6 @@ SERVICE_MANAGER="${LAZYCLOUD_AGENT_SERVICE_MANAGER:-auto}"
 SERVICE_NAME="${LAZYCLOUD_AGENT_SERVICE_NAME:-__AGENT_NAME__}"
 STATE_DIR="${LAZYCLOUD_AGENT_STATE_DIR:-}"
 INSTALL_DOCKER="${LAZYCLOUD_AGENT_INSTALL_DOCKER:-auto}"
-INSTALL_WIREGUARD="${LAZYCLOUD_AGENT_INSTALL_WIREGUARD:-auto}"
 READY_TIMEOUT_SECONDS="${LAZYCLOUD_AGENT_READY_TIMEOUT_SECONDS:-__READY_TIMEOUT_SECONDS__}"
 DOCKER_BINARY="${LAZYCLOUD_AGENT_DOCKER_BINARY:-docker}"
 EXECUTOR=""
@@ -232,7 +230,6 @@ main() {
     require_systemd
   fi
   ensure_docker
-  ensure_wireguard
   if [ "$RUNTIME_ONLY" = "1" ]; then
     say "Installed __AGENT_NAME__ host runtime"
     return
@@ -291,8 +288,6 @@ parse_args() {
       --state-dir) require_value "$1" "${2:-}"; STATE_DIR="$2"; shift 2 ;;
       --install-docker) require_value "$1" "${2:-}"; INSTALL_DOCKER="$2"; shift 2 ;;
       --no-install-docker) INSTALL_DOCKER="never"; shift ;;
-      --install-wireguard) require_value "$1" "${2:-}"; INSTALL_WIREGUARD="$2"; shift 2 ;;
-      --no-install-wireguard) INSTALL_WIREGUARD="never"; shift ;;
       --docker-binary) require_value "$1" "${2:-}"; DOCKER_BINARY="$2"; shift 2 ;;
       --executor) require_value "$1" "${2:-}"; EXECUTOR="$2"; shift 2 ;;
       --worker-image) require_value "$1" "${2:-}"; WORKER_IMAGE="$2"; shift 2 ;;
@@ -428,10 +423,6 @@ validate_input() {
     auto|1|true|yes|0|false|no|never) ;;
     *) fail "--install-docker must be auto, true, or never" 2 ;;
   esac
-  case "$INSTALL_WIREGUARD" in
-    auto|1|true|yes|0|false|no|never) ;;
-    *) fail "--install-wireguard must be auto, true, or never" 2 ;;
-  esac
   case "$READY_TIMEOUT_SECONDS" in
     ""|*[!0-9]*) fail "LAZYCLOUD_AGENT_READY_TIMEOUT_SECONDS must be a positive integer" 2 ;;
   esac
@@ -566,46 +557,6 @@ install_docker() {
     fail "Docker installation failed" 1
   fi
   rm -f "$docker_installer"
-}
-
-wireguard_ready() {
-  command -v wg >/dev/null 2>&1 && \
-    command -v ip >/dev/null 2>&1 && \
-    command -v iptables >/dev/null 2>&1
-}
-
-wireguard_install_allowed() {
-  case "$INSTALL_WIREGUARD" in
-    auto|1|true|yes) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-ensure_wireguard() {
-  if wireguard_ready; then
-    return
-  fi
-  if ! wireguard_install_allowed; then
-    fail "WireGuard tools are required; use --install-wireguard auto" 1
-  fi
-  if [ "$(id -u)" -ne 0 ]; then
-    fail "automatic WireGuard installation requires root; rerun with sudo" 1
-  fi
-
-  say "Installing WireGuard tools"
-  if command -v dnf >/dev/null 2>&1; then
-    dnf install -y wireguard-tools iproute iptables || \
-      fail "WireGuard package installation failed" 1
-  elif command -v apt-get >/dev/null 2>&1; then
-    apt-get update && apt-get install -y --no-install-recommends \
-      wireguard-tools iproute2 iptables || \
-      fail "WireGuard package installation failed" 1
-  else
-    fail "automatic WireGuard installation requires dnf or apt-get" 1
-  fi
-  if ! wireguard_ready; then
-    fail "WireGuard tools were installed but are not available" 1
-  fi
 }
 
 install_agent() {
@@ -902,11 +853,9 @@ class AgentCapacityPlan(ContractModel):
 
 class AgentBootstrap(ContractModel):
     gateway_public_http_url: str
-    gateway_runtime_http_url: str = ""
     gateway_grpc_host: str = ""
     gateway_grpc_port: int = 443
     gateway_grpc_tls: bool = True
-    transport: BackendRouteTransport = BackendRouteTransport.Direct
     image_local_cache_enabled: bool = True
     image_registry_store: str = "local"
     image_clip_version: int = 2
@@ -1305,10 +1254,6 @@ def agent_state_payload(
         "capacity_notice_at": (
             state.capacity_notice_at.isoformat() if state.capacity_notice_at is not None else None
         ),
-        # Dumped whole rather than field by field. The hand-written list omitted
-        # `gateway_runtime_http_url`, so the origin survived in memory and was
-        # lost on the next restart: the worker then fell back to the public
-        # origin, which refuses worker RPC at the edge, and never left pending.
         "bootstrap": bootstrap.model_dump(mode="json"),
         "updated_at": state.updated_at.isoformat(),
     }
@@ -1349,7 +1294,7 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
 
 
 def agent_gateway_env(bootstrap: AgentBootstrap) -> dict[str, str]:
-    runtime_http_url = bootstrap.gateway_runtime_http_url or bootstrap.gateway_public_http_url
+    runtime_http_url = AGENT_TUNNEL_CONTROL_URL
     http_host, http_port, http_tls = agent_gateway_http_parts(runtime_http_url)
     grpc_port = bootstrap.gateway_grpc_port or 443
     return {
@@ -1374,7 +1319,6 @@ def agent_gateway_http_parts(gateway_public_http_url: str) -> tuple[str, int, bo
 
 
 def build_agent_worker_config(
-    bootstrap: AgentBootstrap,
     slot: AgentWorkerSlot,
     *,
     network: AgentWorkerNetwork | None = None,
@@ -1392,11 +1336,8 @@ def build_agent_worker_config(
             pool_mode=WorkerPoolMode.Private,
             billing_owner=slot.billing_owner,
             persistent=True,
-            agent_worker=True,
         ),
         network=WorkerNetworkConfiguration(
-            route_transport=bootstrap.transport,
-            agent_bridge_network=bool(slot.network_prefix),
             bridge_name=selected_network.bridge_name,
             bridge_subnet=selected_network.bridge_subnet,
             bridge_ipv6_subnet=selected_network.bridge_ipv6_subnet,
@@ -1424,7 +1365,6 @@ def plan_worker_container(
     image: str,
     image_id: str = "",
     agent_binary_sha256: str = "",
-    target_host: str = "127.0.0.1",
     platform: str = "",
     host_aliases: list[str] | None = None,
     network: AgentWorkerNetwork | None = None,
@@ -1452,19 +1392,17 @@ def plan_worker_container(
         "WORKER_POOL": str(slot.pool),
         "WORKER_CAPACITY_OWNER_ID": slot.capacity_owner_id,
         "WORKER_MACHINE": slot.machine_id,
-        "WORKER_POD_ADDRESS": target_host,
+        "WORKER_POD_ADDRESS": "127.0.0.1",
         "WORKER_CONTAINER_SERVICE_PORT": str(container_service_port),
         "CACHE_LOCALITY": str(slot.pool),
         "CACHE_NODE": slot.machine_id,
         "WORKER_SOURCE_CACHE_STORAGE_ID": f"machine:{slot.machine_id}",
         "WORKER_NETWORK_PREFIX": slot.network_prefix,
-        "WORKER_ROUTE_TARGET": target_host,
         # The same origin the worker's gateway client uses. Computing it a second
         # time here is what let the two disagree: one honoured the agent's
         # runtime-URL override and the other did not, so the worker held a
         # reachable gateway and an unreachable repository and never reported
         # itself available.
-        WORKER_REPOSITORY_URL_ENV: gateway_env[GATEWAY_HTTP_URL_ENV],
     }
     if slot.gpu_count > 0:
         assignment = slot.gpu_assignment or "all"
@@ -1504,7 +1442,7 @@ def plan_worker_container(
         env=env,
         volumes=volumes,
         docker_args=docker_args,
-        config=build_agent_worker_config(bootstrap, slot, network=selected_network),
+        config=build_agent_worker_config(slot, network=selected_network),
     )
 
 
@@ -1679,8 +1617,9 @@ def _worker_docker_args(
         args.extend(["--label", f"{key}={value}"])
     if platform:
         args.extend(["--platform", platform])
-    for alias in host_aliases:
-        args.extend(["--add-host", alias])
+    if not network.name.startswith("container:"):
+        for alias in host_aliases:
+            args.extend(["--add-host", alias])
     if slot.cpu_millicores > 0:
         args.extend(["--cpus", f"{slot.cpu_millicores / 1000:.3f}"])
     if slot.memory_mb > 0:

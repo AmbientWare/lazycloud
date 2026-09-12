@@ -77,7 +77,6 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
     assert join.agent_state.preflight_passed
     assert not join.agent_state.heartbeat_confirmed
     assert not join.agent_state.schedulable
-    assert join.agent_state.metadata["pool_transport"] == "private_network"
     assert join.agent_state.metadata["pool_mode"] == "private"
     assert join.pool_config_update is not None
     assert join.pool_config_update.gpu == ["A4000"]

@@ -48,14 +48,12 @@ class FleetInfrastructure(Contract):
 class SecretDocuments(Contract):
     platform: Name
     operator: Name
-    wireguard: Name
 
 
 class ServiceAccounts(Contract):
     controlPlane: Name
     scheduler: Name
     secretsReader: Name
-    wireguardBootstrap: Name
 
 
 class ObjectStoreInfrastructure(Contract):
@@ -67,7 +65,7 @@ class ObjectStoreInfrastructure(Contract):
 
 
 class Infrastructure(Contract):
-    schema_version: Literal[6]
+    schema_version: Literal[7]
     deployment: Name
     region: Name
     registry: Name
@@ -148,22 +146,10 @@ def check_transition_budget(
     }
     database = {**_mapping(defaults, "database"), **_mapping(proposed, "database")}
     pooler = positive_integer.validate_python(database.get("poolerMaxConnections"), strict=True)
-    previous_pooler = previous_database.get("poolerMaxConnections")
-    old_direct = 0
-    if previous_pooler is None:
-        # The recorded pre-pooler deployment still has direct application pools.
-        for name, engines in (("controlPlane", 2), ("scheduler", 1), ("wireguard", 1)):
-            base = _mapping(previous_defaults, name)
-            selected = _mapping(previous, name)
-            pool_values = {**_mapping(base, "database"), **_mapping(selected, "database")}
-            if not pool_values:
-                raise ValueError(f"Existing {name} database pool is undeclared")
-            replicas = positive_integer.validate_python(
-                selected.get("replicas", base.get("replicas")), strict=True
-            )
-            old_direct += replicas * engines * DatabasePool.model_validate(pool_values).maximum
-    else:
-        pooler = max(pooler, positive_integer.validate_python(previous_pooler, strict=True))
+    previous_pooler = positive_integer.validate_python(
+        previous_database.get("poolerMaxConnections"), strict=True
+    )
+    pooler = max(pooler, previous_pooler)
     api_replicas = max(
         positive_integer.validate_python(
             _mapping(override, "controlPlane").get(
@@ -183,13 +169,12 @@ def check_transition_budget(
         positive_integer.validate_python(values.get("reserved"), strict=True)
         for values in (previous_database, database)
     )
-    total = old_direct + pooler + direct + jobs + reserved
+    total = pooler + direct + jobs + reserved
     if total > ceiling:
         raise ValueError(
             f"Database transition requires {total} backend connections, exceeding server "
-            f"ceiling {ceiling}: old direct {old_direct}, pooler {pooler}, session locks "
-            f"{direct}, jobs {jobs}, reserve {reserved}. Stage the owned PgBouncer bound "
-            "before migrating direct application connections."
+            f"ceiling {ceiling}: pooler {pooler}, session locks "
+            f"{direct}, jobs {jobs}, reserve {reserved}."
         )
 
 
@@ -221,7 +206,6 @@ def render(
         "database": {"maxConnections", "poolerMaxConnections"},
         "secrets": {"documents", "readerRoleArn"},
         "cloudflared": {"apex", "tunnelId"},
-        "wireguard": {"secretId"},
         "fleet": set(FleetInfrastructure.model_fields),
         "deploymentRecord": None,
     }
@@ -245,6 +229,7 @@ def render(
         "LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY": infrastructure.workload_image_repository,
         "LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN": infrastructure.control_principal_arn,
         "LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL": infrastructure.public_origin,
+        "LAZYCLOUD_TUNNEL_HOSTNAME": f"tunnels.{infrastructure.public_origin.removeprefix('https://')}",
         "LAZYCLOUD_GITHUB_REDIRECT_URI": f"{infrastructure.public_origin}/auth/github/callback",
         "LAZYCLOUD_REDIS_URL": f"rediss://{infrastructure.redis_host}:6379/0",
         "LAZYCLOUD_RELEASE_MANIFEST_URL": release_manifest_url,
@@ -314,7 +299,6 @@ def render(
             "apex": infrastructure.public_origin.removeprefix("https://"),
             "tunnelId": infrastructure.cloudflare_tunnel_id,
         },
-        "wireguard": {"secretId": infrastructure.secret_documents.wireguard},
         "fleet": infrastructure.fleet.model_dump(mode="json"),
     }
     for key, facts in generated.items():

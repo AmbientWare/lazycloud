@@ -10,7 +10,7 @@ from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind, MachinePoo
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
-from shared.routing import BackendRouteTransport, PrivateUnitFallback
+from shared.routing import PrivateUnitFallback
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import utc_now
 
@@ -202,7 +202,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     scale_down_cooldown_seconds: int = Field(default=60, ge=0, le=86_400)
     registration_timeout_seconds: int = Field(default=600, ge=30, le=3_600)
     root_volume_gib: int = Field(default=200, ge=50, le=2048)
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     created_at: datetime = Field(default_factory=utc_now)
 

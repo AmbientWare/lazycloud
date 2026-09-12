@@ -68,7 +68,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates docker-cli iproute2 iptables wireguard-tools \
+    && apt-get install -y --no-install-recommends ca-certificates docker-cli iproute2 iptables \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=agent-install /app/.venv /app/.venv
 VOLUME ["/var/lib/lazycloud"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import httpx
 from coordination.redis_client import AsyncRedisClient, RedisSettings
 from coordination.stream_tail import RedisStreamTailBroker
 from identity.token_invalidation import AsyncAuthTokenInvalidation
@@ -18,6 +19,7 @@ class ApiAsyncIo:
     auth_invalidation: AsyncAuthTokenInvalidation
     worker_events: WorkerEventBroker
     realtime: RedisStreamTailBroker
+    object_upload_http: httpx.AsyncClient
 
     @classmethod
     def from_settings(
@@ -35,6 +37,7 @@ class ApiAsyncIo:
             auth_invalidation=AsyncAuthTokenInvalidation.from_redis(redis),
             worker_events=WorkerEventBroker(redis),
             realtime=RedisStreamTailBroker(redis),
+            object_upload_http=httpx.AsyncClient(trust_env=False, follow_redirects=False),
         )
 
     async def start(self) -> None:
@@ -44,6 +47,7 @@ class ApiAsyncIo:
     async def close(self) -> None:
         failures: list[BaseException] = []
         for close in (
+            self.object_upload_http.aclose,
             self.realtime.close,
             self.worker_events.close,
             self.binary_redis.close,

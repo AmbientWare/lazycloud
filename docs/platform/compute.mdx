@@ -91,13 +91,9 @@ your own machines are not charged compute; volumes and egress still are.
 The host needs:
 
 - Linux on amd64 or arm64, with systemd and root or sudo access.
-- A rootful Docker daemon and WireGuard tools. The installer can add the
-  WireGuard tools on hosts with `apt-get` or `dnf`.
-- Outbound DNS, HTTPS, and UDP port 51820 with stateful return traffic. No
-  inbound port, port forwarding, or static IP is needed.
-- No existing route that overlaps `100.96.0.0/11`.
-- Host firewall rules that allow traffic arriving on `wg-lazycloud` from
-  `100.96.0.0/24` to TCP port 29443.
+- A rootful Docker daemon.
+- Outbound DNS and TCP port 443 for HTTPS and authenticated TLS connections.
+  No inbound port, port forwarding, or static IP is needed.
 
 Run the join on the machine itself:
 

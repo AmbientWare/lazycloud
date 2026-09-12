@@ -78,7 +78,6 @@ from scheduler_app.execution_adapters import (
 from scheduler_app.services import (
     SchedulerAppServices,
     SchedulerCapacitySettings,
-    SchedulerNetworkSettings,
     SchedulerObservabilitySettings,
     SchedulerStorageSettings,
 )
@@ -95,10 +94,8 @@ class SchedulerRuntime:
         cls,
         *,
         public_gateway_http_url: str,
-        runtime_callback_http_url: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
-        network: SchedulerNetworkSettings,
         capacity: SchedulerCapacitySettings,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
@@ -120,13 +117,11 @@ class SchedulerRuntime:
                 gateway_origin=public_gateway_http_url,
                 observability=observability,
                 storage=storage,
-                network=network,
                 capacity=capacity,
             )
             runtime = cls.from_services(
                 scheduler_services=app_services,
                 execution_services=app_services,
-                runtime_callback_http_url=runtime_callback_http_url,
                 redis_client=app_services.redis_client,
                 container_requests=_container_requests(app_services),
                 image_build_container_settings=image_build_container_settings,
@@ -166,7 +161,6 @@ class SchedulerRuntime:
         *,
         scheduler_services: SchedulerServices,
         execution_services: ExecutionServices,
-        runtime_callback_http_url: str,
         redis_client: RedisClient,
         container_requests: SchedulerContainerRequestService,
         image_build_container_settings: ImageBuildContainerSettings,
@@ -186,20 +180,15 @@ class SchedulerRuntime:
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
     ) -> SchedulerRuntime:
-        def runtime_origin() -> str:
-            return runtime_callback_http_url
-
         compute_states = RedisComputeStateRepository(redis_client)
         pool_states = RedisWorkerPoolStateRepository(redis_client)
         worker_states = RedisSchedulerWorkerRepository(redis_client)
         container_states = RedisSchedulerContainerRepository(redis_client)
         function_control = FunctionControlService(
             execution_services,
-            gateway_http_url=runtime_origin,
         )
         endpoint_control = EndpointControlService(
             execution_services,
-            gateway_http_url=runtime_origin,
         )
         endpoint_dispatches = EndpointDispatchAutoscalingReader(
             EndpointDispatchStateRepository(execution_services)

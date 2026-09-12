@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: connection-gateway
+spec:
+  replicas: {{ .Values.connectionGateway.replicas }}
+  minReadySeconds: 35
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: connection-gateway
+  template:
+    metadata:
+      annotations:
+        lazycloud.dev/secret-revision: {{ .Values.secretRevisions.connectionGateway | quote }}
+      labels:
+        app: connection-gateway
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      topologySpreadConstraints:
+        {{- include "lazycloud.spreadAcrossNodes" "connection-gateway" | nindent 8 }}
+      volumes:
+        - name: identity
+          emptyDir: {}
+      containers:
+        - name: connection-gateway
+          image: {{ include "lazycloud.image" (list . "connection-gateway") }}
+          ports:
+            - name: tunnel
+              containerPort: 8443
+          env:
+            {{- include "lazycloud.env" (list . "connectionGateway") | nindent 12 }}
+            {{- include "lazycloud.databaseEnv" .Values.connectionGateway.database | nindent 12 }}
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: LAZYCLOUD_CONNECTION_GATEWAY_ADVERTISED_ADDRESS
+              value: "$(POD_IP):8443"
+            - name: LAZYCLOUD_CONNECTION_GATEWAY_LISTEN_ADDRESS
+              value: "0.0.0.0:8443"
+            - name: LAZYCLOUD_CONNECTION_GATEWAY_CONTROL_ADDRESS
+              value: "control-plane:9000"
+          volumeMounts:
+            - name: identity
+              mountPath: /var/lib/lazycloud/connection-gateway
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "shared.process_liveness", "--max-age-seconds", "15", "/tmp/lazycloud-connection-gateway.ready"]
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 1
+          resources:
+            {{- toYaml .Values.connectionGateway.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: connection-gateway
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: traffic-port
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=75,deregistration_delay.connection_termination.enabled=false
+spec:
+  type: LoadBalancer
+  loadBalancerClass: eks.amazonaws.com/nlb
+  selector:
+    app: connection-gateway
+  ports:
+    - name: tunnel
+      port: 443
+      targetPort: tunnel
+      protocol: TCP

@@ -19,7 +19,6 @@ from compute.bucket_access import (
     ConnectedBucketAccessGrant,
 )
 from networking.settings import (
-    BackendRouteSettings,
     validate_remote_provider_network_configuration,
 )
 from provider_aws import (
@@ -573,12 +572,10 @@ def configured_aws_account_connection_components(
     capacity: AwsCapacitySettings,
     gateway_origin: str,
     presigned_origin: str = "",
-    backend_route: BackendRouteSettings,
 ) -> AwsAccountConnectionComponents:
     validate_remote_provider_network_configuration(
         gateway_origin=gateway_origin,
         presigned_origin=presigned_origin,
-        backend_route=backend_route,
     )
     template_identity = aws_account_connection_template_identity()
     template_url = settings.template_url

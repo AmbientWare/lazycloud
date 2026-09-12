@@ -19,7 +19,6 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
     MachineReadinessPhase,
-    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_fleet import Machine, ResourceStatus
 from shared.compute_policy import ComputeUnitRecord
@@ -48,7 +47,6 @@ def pool_config_from_unit(pool: ComputeUnitRecord) -> PoolConfig:
         nodes=pool.max_machines,
         selector=pool.selector or pool.name,
         mode=ComputeUnitMode.Private,
-        transport=pool.transport,
         fallback=pool.fallback,
         priority=pool.priority,
         offer_id=pool.offer_id,
@@ -79,18 +77,15 @@ def machine_view(
     machine: Machine,
     agent_state: ComputeAgentTokenState | None = None,
     *,
-    network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured,
-    network_failure_detail: str = "",
+    tunnel_connected: bool,
 ) -> UnitMachineResponse:
     memory = _memory_mb(machine.memory)
     gpu = machine.gpu or machine.labels.get("gpu", "")
     gpu_count = int(machine.labels.get("gpu_count", "1") or 1) if gpu else 0
     telemetry = agent_telemetry_state(agent_state) if agent_state is not None else None
-    readiness_phase = (
-        MachineReadinessPhase.Blocked
-        if network_phase is PrivateNetworkEnrollmentPhase.Failed
-        else _machine_readiness_phase(machine, agent_state, telemetry)
-    )
+    readiness_phase = _machine_readiness_phase(machine, agent_state, telemetry)
+    if readiness_phase is MachineReadinessPhase.Ready and not tunnel_connected:
+        readiness_phase = MachineReadinessPhase.Joining
     preflight_checks = [
         ComputePreflightCheck(
             name=check.name,
@@ -104,11 +99,11 @@ def machine_view(
         for check in (agent_state.preflight if agent_state is not None else [])
     ]
     remediation = [check.remediation for check in preflight_checks if check.remediation]
-    if network_failure_detail:
-        remediation.append(network_failure_detail)
-    readiness_message = network_failure_detail
-    if not readiness_message and network_phase is PrivateNetworkEnrollmentPhase.AwaitingHandshake:
-        readiness_message = "Waiting for the private network to connect"
+    readiness_message = (
+        "Waiting for the agent tunnel to connect"
+        if not tunnel_connected and readiness_phase is MachineReadinessPhase.Joining
+        else ""
+    )
     if not readiness_message and agent_state is not None and agent_state.capacity_reason:
         readiness_message = agent_state.capacity_reason
     if not readiness_message:
@@ -214,8 +209,6 @@ def _machine_readiness_message(
 
 def agent_route_view(
     route: AgentBackendRoute,
-    *,
-    proxy_auth_token: str = "",
 ) -> AgentRoute:
     """Project a backend route onto the agent wire contract.
 
@@ -233,13 +226,10 @@ def agent_route_view(
         kind=route.kind,
         port=route.port,
         protocol=route.protocol,
-        transport=route.transport,
         local_target=route.local_target,
-        proxy_target=route.proxy_target,
         state=route.state,
         error=route.error,
         updated_at=route.updated_at,
-        proxy_auth_token=proxy_auth_token,
     )
 
 
@@ -261,11 +251,6 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
         worker_image=slot.worker_image,
         status=slot.status,
     )
-
-
-def agent_pool_transport(state: ComputeAgentTokenState) -> str:
-    value = state.metadata.get("pool_transport")
-    return str(value) if value is not None else ""
 
 
 def stub_for_task(control_plane: ControlPlaneService, task: Task) -> StubRecord | None:

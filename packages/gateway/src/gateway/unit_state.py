@@ -30,7 +30,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.errors import InvalidInputError, NotFoundError
-from shared.routing import BackendRouteTransport, PrivateUnitFallback
+from shared.routing import PrivateUnitFallback
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 
@@ -78,7 +78,6 @@ class GatewayComputeService(Protocol):
         worker_gpu_type: str = "",
         worker_gpu_count: int = 0,
         priority: int = 0,
-        transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork,
         fallback: PrivateUnitFallback = PrivateUnitFallback.Internal,
         workspace: str = "default",
     ) -> ComputeUnitRecord: ...
@@ -138,7 +137,6 @@ class GatewayUnitStateCoordinator:
             worker_gpu_type=gpu_type,
             worker_gpu_count=1 if gpu_type else 0,
             priority=normalized.priority,
-            transport=normalized.transport,
             fallback=normalized.fallback,
             workspace=workspace_id,
         )

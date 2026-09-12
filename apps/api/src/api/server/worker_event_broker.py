@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass, field
 
 from coordination.event_bus import EventBusEvent, EventBusEventType, event_channel_key, event_key
-from coordination.redis_client import AsyncRedisClient, AsyncRedisSubscription, redis_text
+from coordination.redis_client import (
+    REDIS_UNAVAILABLE_ERRORS,
+    AsyncRedisClient,
+    AsyncRedisSubscription,
+    redis_text,
+)
 from worker.events import WORKER_EVENT_HEARTBEAT_ID
+
+LOGGER = logging.getLogger(__name__)
 
 _SUBSCRIBED_EVENT_TYPES = (
     EventBusEventType.StopContainer,
@@ -47,7 +55,7 @@ class WorkerEventBroker:
     Pub/sub carries only event ids; the event itself is read back from Redis
     so a subscriber never sees an id it cannot resolve. A subscriber whose
     queue overflows has its stream ended rather than resynced: the pending
-    set the worker reads on reconnect is the durable record, not the channel.
+    set lets the worker replay queued events when it reconnects.
     """
 
     redis: AsyncRedisClient
@@ -106,6 +114,8 @@ class WorkerEventBroker:
         subscriber = _WorkerEventSubscriber(asyncio.Queue(maxsize=self.queue_size))
         async with self._lock:
             if self._reader_failure is not None:
+                if isinstance(self._reader_failure, REDIS_UNAVAILABLE_ERRORS):
+                    return
                 raise WorkerEventBrokerUnavailable("worker event broker reader failed") from (
                     self._reader_failure
                 )
@@ -124,6 +134,10 @@ class WorkerEventBroker:
                 except TimeoutError:
                     event_id = WORKER_EVENT_HEARTBEAT_ID
                 if event_id is None:
+                    if self._reader_failure is None or isinstance(
+                        self._reader_failure, REDIS_UNAVAILABLE_ERRORS
+                    ):
+                        return
                     raise WorkerEventBrokerUnavailable("worker event broker reader failed") from (
                         self._reader_failure
                     )
@@ -149,13 +163,23 @@ class WorkerEventBroker:
     async def _read_messages(self, subscription: AsyncRedisSubscription) -> None:
         try:
             while True:
-                message = await subscription.get_message(timeout=1.0)
-                if message is None or redis_text(message.type) != "message":
+                try:
+                    message = await subscription.get_message(timeout=1.0)
+                    if message is not None and redis_text(message.type) == "message":
+                        event_id = redis_text(message.data)
+                        event = await self.event(event_id)
+                        if event is not None:
+                            await self._dispatch(event_id, event)
+                except REDIS_UNAVAILABLE_ERRORS as exc:
+                    if self._reader_failure is None:
+                        LOGGER.warning("Worker event subscription lost Redis; reconnecting")
+                    self._reader_failure = exc
+                    await self._terminate_subscribers()
+                    await asyncio.sleep(1)
                     continue
-                event_id = redis_text(message.data)
-                event = await self.event(event_id)
-                if event is not None:
-                    await self._dispatch(event_id, event)
+                if self._reader_failure is not None:
+                    self._reader_failure = None
+                    LOGGER.info("Worker event subscription reconnected")
         except asyncio.CancelledError:
             raise
         except BaseException as exc:

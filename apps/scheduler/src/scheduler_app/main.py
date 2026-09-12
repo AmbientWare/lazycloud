@@ -11,7 +11,6 @@ from pathlib import Path
 from compute.reclaim import ComputeReclaimSettings
 from gateway.settings import GatewaySettings
 from images.settings import ImageBuildContainerSettings
-from networking.settings import BackendRouteSettings
 from observability.process_logs import configure_process_logging
 from observability.settings import (
     TelemetrySettings,
@@ -38,7 +37,6 @@ from scheduler_app.loops import (
 from scheduler_app.runtime import SchedulerRuntime
 from scheduler_app.services import (
     SchedulerCapacitySettings,
-    SchedulerNetworkSettings,
     SchedulerObservabilitySettings,
     SchedulerStorageSettings,
 )
@@ -301,7 +299,6 @@ def _loop_heartbeats(heartbeat_file: Path | None) -> dict[str, Callable[[], None
 def build_scheduler_runtime(
     *,
     public_gateway_http_url: str,
-    runtime_callback_http_url: str,
 ) -> SchedulerRuntime:
     scheduler_settings = SchedulerProcessSettings()
     # The API launches nodes from the same release facts; a scheduler resolving a
@@ -311,7 +308,6 @@ def build_scheduler_runtime(
     object_store_settings = S3ObjectStoreSettings()
     return SchedulerRuntime.create(
         public_gateway_http_url=public_gateway_http_url,
-        runtime_callback_http_url=runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=WorkspaceChangeStreamSettings(),
         ),
@@ -323,9 +319,6 @@ def build_scheduler_runtime(
             workload_image_registry_repository=(
                 scheduler_settings.workload_image_registry_repository
             ),
-        ),
-        network=SchedulerNetworkSettings(
-            backend_routes=BackendRouteSettings(),
         ),
         capacity=SchedulerCapacitySettings(
             aws_connections=release.aws_connections,
@@ -354,7 +347,6 @@ def main(argv: list[str] | None = None) -> None:
         result = run_scheduler(
             runtime=build_scheduler_runtime(
                 public_gateway_http_url=gateway_settings.public_http_url,
-                runtime_callback_http_url=gateway_settings.runtime_callback_http_url,
             ),
             capacity_interval_seconds=args.capacity_interval_seconds,
             container_limit=args.container_limit,

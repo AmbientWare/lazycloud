@@ -780,7 +780,7 @@ trap bake_announce EXIT
 RECIPE_SHA256=__RECIPE_SHA256__
 
 # The agent package owns host runtime installation. Runtime-only mode installs
-# Docker and WireGuard without putting a release agent into the image.
+# Docker and its host dependencies without putting a release agent into the image.
 cat > /tmp/lazycloud-agent-install.sh <<'INSTALLER_EOF'
 __INSTALL_SCRIPT__
 INSTALLER_EOF
@@ -797,7 +797,7 @@ systemctl enable --now amazon-ssm-agent
 systemctl is-enabled amazon-ssm-agent
 
 cat > /etc/lazycloud-node-image.json <<MARKER
-{"recipe_sha256":"${RECIPE_SHA256}","wireguard_tools":true,"ssm_agent":true,"variant":"__VARIANT__"}
+{"recipe_sha256":"${RECIPE_SHA256}","ssm_agent":true,"variant":"__VARIANT__"}
 MARKER
 
 # Last, and the baker will not image an instance that never said it. A stop is

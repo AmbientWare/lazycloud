@@ -13,7 +13,7 @@
   "platform_images": {
     "api": "registry.example.com/api@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "scheduler": "registry.example.com/scheduler@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "tunnel-gateway": "registry.example.com/tunnel-gateway@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "connection-gateway": "registry.example.com/connection-gateway@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "cache-server": "registry.example.com/cache-server@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "worker-bootstrap": "registry.example.com/worker-bootstrap@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "cli": "registry.example.com/cli@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",

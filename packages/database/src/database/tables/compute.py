@@ -144,7 +144,6 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     scale_down_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     registration_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     root_volume_gib: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
-    transport: Mapped[str] = mapped_column(String(32), nullable=False, default="private_network")
     fallback: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
 
 
@@ -436,55 +435,6 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
         DateTime(timezone=True), nullable=True
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class WireGuardPeerTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "wireguard_peers"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("enrollment_id", name="uq_wireguard_peers_enrollment"),
-        UniqueConstraint("public_key", name="uq_wireguard_peers_public_key"),
-        UniqueConstraint("address", name="uq_wireguard_peers_address"),
-        CheckConstraint("generation > 0", name="ck_wireguard_peers_generation"),
-        CheckConstraint("status IN ('active', 'revoked')", name="ck_wireguard_peers_status"),
-        Index("ix_wireguard_peers_status", "status"),
-    )
-
-    enrollment_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("compute_machine_enrollments.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    workspace_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    machine_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("machines.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    public_key: Mapped[str] = mapped_column(String(44), nullable=False)
-    address: Mapped[str] = mapped_column(String(18), nullable=False)
-    generation: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
-    last_handshake_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class WireGuardGatewayTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "wireguard_gateway"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("index", name="uq_wireguard_gateway_index"),
-        UniqueConstraint("public_key", name="uq_wireguard_gateway_public_key"),
-        CheckConstraint('"index" >= 0 AND "index" < 32', name="ck_wireguard_gateway_index"),
-    )
-
-    index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    public_key: Mapped[str] = mapped_column(String(44), nullable=False)
-    endpoint: Mapped[str] = mapped_column(String(512), nullable=False)
 
 
 class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):

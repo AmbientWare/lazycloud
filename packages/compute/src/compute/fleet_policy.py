@@ -59,7 +59,9 @@ def plan_warm_capacity(
 ) -> WarmCapacityPlan:
     target = next((unit for unit in units if unit.unit_id == target_unit_id), None)
     other_eligible = sum(
-        unit.ready for unit in units if unit.unit_id != target_unit_id and unit.eligible
+        min(unit.ready, unit.desired)
+        for unit in units
+        if unit.unit_id != target_unit_id and unit.eligible
     )
     required = max(minimum - other_eligible, 0)
     current_desired = target.desired if target is not None else 0
@@ -76,7 +78,7 @@ def plan_warm_capacity(
         (unit for unit in units if unit.unit_id != target_unit_id),
         key=lambda unit: (not unit.eligible, -unit.floor, unit.unit_id),
     ):
-        retained = min(unit.ready, remaining)
+        retained = min(unit.ready, unit.desired, remaining)
         floors[unit.unit_id] = retained
         remaining -= retained
     sources = set(target.handoff_from if target else ())

@@ -10,7 +10,6 @@ import pytest
 from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionValidationError
 from compute.offers import ComputeOffer
-from networking.settings import BackendRouteSettings
 from provider_aws import (
     AwsAccountAuthorizationCleanupResult,
     AwsAccountAuthorizationCleanupStatus,
@@ -64,7 +63,6 @@ class _AwsOwnerSettings:
     connection: AwsAccountConnectionSettings
     capacity: AwsCapacitySettings
     artifact: AgentBinarySettings
-    backend_route: BackendRouteSettings
     gateway_origin: str = "https://control.example.com"
 
 
@@ -90,7 +88,6 @@ def _enabled_settings() -> _AwsOwnerSettings:
             binary_version="0.1.0",
             binary_sha256_by_arch={"amd64": "b" * 64},
         ),
-        backend_route=BackendRouteSettings(auth_key=SecretStr("0123456789abcdef0123456789abcdef")),
     )
 
 
@@ -101,7 +98,6 @@ def _connection_components(
         settings.connection,
         capacity=settings.capacity,
         gateway_origin=settings.gateway_origin,
-        backend_route=settings.backend_route,
     )
 
 

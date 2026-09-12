@@ -7,7 +7,7 @@ image.
 The `Connected AWS Node Images` workflow runs only by explicit dispatch from
 `main`. Its CPU and GPU jobs run in parallel. Each job resolves the latest Amazon
 Linux 2023 x86_64 image, launches a temporary bake instance, installs Docker,
-WireGuard tools, zram, and SSM, then registers an immutable AMI. The GPU variant
+host networking tools, zram, and SSM, then registers an immutable AMI. The GPU variant
 also installs and verifies the pinned NVIDIA driver and container toolkit.
 
 Both images use the same host recipe digest. The digest covers the bake program,

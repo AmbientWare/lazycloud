@@ -111,7 +111,7 @@ def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
     assert state.last_actions == []
 
 
-def test_pod_autoscaler_replaces_running_records_without_live_scheduler_state(
+def test_pod_autoscaler_preserves_running_records_until_orphan_confirmation(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
 ) -> None:
@@ -153,15 +153,14 @@ def test_pod_autoscaler_replaces_running_records_without_live_scheduler_state(
 
     result = _pod_autoscaler(isolated_services, redis).reconcile(now=current_time)[0]
 
-    assert result.current_containers == 0
+    assert result.current_containers == 1
     assert result.desired_containers == 1
     assert {
         action.container_id for action in result.actions if action.action == "recover-stale"
-    } == {missing.id, terminal.id}
-    assert result.actions[-1].action == "start"
-    assert isolated_services.containers.get(missing.id).status is ContainerStatus.Stopped
+    } == {terminal.id}
+    assert isolated_services.containers.get(missing.id).status is ContainerStatus.Running
     assert isolated_services.containers.get(terminal.id).status is ContainerStatus.Stopped
-    assert len(scheduler.requests) == 1
+    assert scheduler.requests == []
 
 
 def test_pod_keep_warm_minus_one_is_durable_never_scale_to_zero(

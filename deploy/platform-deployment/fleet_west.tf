@@ -65,7 +65,7 @@ resource "aws_security_group" "fleet_west_node" {
 resource "aws_vpc_security_group_egress_rule" "fleet_west_node" {
   provider          = aws.west
   security_group_id = aws_security_group.fleet_west_node.id
-  description       = "Image pulls, WireGuard, and the control plane."
+  description       = "Image pulls, outbound agent TLS, and the control plane."
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }

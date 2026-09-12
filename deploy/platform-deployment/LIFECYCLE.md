@@ -96,7 +96,7 @@ terraform -chdir=deploy/platform-deployment apply \
 ```
 
 Helm `environments/<environment>.yaml` carries the instance prices, Stripe
-account and WireGuard endpoint. The chart owns fleet ceilings and secret bindings.
+account. The chart owns fleet ceilings and secret bindings.
 Use the existing prod environment as the shape, with the new environment's values.
 
 The module reads the cluster from `platform-core/lazycloud.tfstate` and refuses
@@ -104,7 +104,7 @@ a deployment whose region differs from the cluster's.
 
 ### 4. Secret values
 
-A deployment's credentials live in three Secrets Manager entries. Each entry is
+A deployment's credentials live in two Secrets Manager entries. Each entry is
 a JSON document grouped by its writer, not one entry per key.
 
 `<deployment>/platform` is Terraform's. It holds the database URL, generated
@@ -132,11 +132,9 @@ aws secretsmanager put-secret-value \
 shred -u operator.json
 ```
 
-`<deployment>/wireguard` belongs to the `wireguard-bootstrap` Job. The Job
-generates one keypair per configured gateway and one platform keypair per
-control-plane ordinal. It writes them as one document through a role that can access only
-that entry. External Secrets projects the keys as read-only files. There is no
-operator value to copy and no secret per agent.
+Initialize the tunnel issuer and dedicated gateway bootstrap credential in the
+existing operator document using [connection gateway bootstrap](../connection-gateway.md).
+The API alone mounts the issuer key. This is a one-time operator step.
 
 Every key is named in the chart, so one you leave out is caught when the values
 render rather than by a pod that will not start.
@@ -202,8 +200,8 @@ price map that says managed capacity is wanted, finds no worker image, agent
 binary or AMI catalog to serve it with, and refuses. That is a half-configured
 deployment being rejected rather than a fault, and the way out is Ship.
 
-Argo takes it from there, in wave order: the service accounts, the WireGuard
-key bootstrap, External Secrets, the schema and billing catalog, the
+Argo takes it from there, in wave order: the service accounts, External Secrets,
+the schema and billing catalog, the
 administrator, the rate card, and the workloads. The Jobs that open a
 database are each alone in their wave because the chart's connection budget
 counts one Job's pool and refuses to render if the pools can exceed what the
@@ -248,11 +246,10 @@ Point the tunnel at the cluster once the control plane is Ready. `cloudflared`
 runs in the chart with more than one connector, so the tunnel is served by the
 cluster rather than by a host.
 
-Record each UDP Service's reachable hostname and port in Helm `wireguard.gateways`.
-These endpoints are separate from the Cloudflare HTTP tunnel. Each identity must
-reach its own Service. Confirm an enrolled agent and a platform peer report a
-recent handshake through every gateway. Existing installations must follow the
-[gateway migration](../active-gateways.md) before replacing the singleton Deployment.
+Read the connection-gateway Service's TCP NLB hostname, then configure the
+DNS-only agent tunnel record through `deploy/cloudflare`. Follow
+[connection gateway deployment](../connection-gateway.md) for the cutover and
+prove a real agent/workload route through port443 before resuming admission.
 
 ## Adding staging
 

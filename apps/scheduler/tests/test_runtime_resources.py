@@ -9,7 +9,6 @@ from agent.binary import AgentBinarySettings
 from compute.reclaim import ComputeReclaimPolicy
 from gateway.settings import GatewaySettings
 from images.settings import ImageBuildContainerSettings
-from networking.settings import BackendRouteSettings
 from observability.settings import (
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
@@ -21,7 +20,6 @@ from scheduler_app import main as scheduler
 from scheduler_app.runtime import SchedulerRuntime
 from scheduler_app.services import (
     SchedulerCapacitySettings,
-    SchedulerNetworkSettings,
     SchedulerObservabilitySettings,
     SchedulerStorageSettings,
 )
@@ -49,7 +47,6 @@ def scheduler_runtime(
     objects = S3ObjectStoreSettings()
     runtime = SchedulerRuntime.create(
         public_gateway_http_url=gateway.public_http_url,
-        runtime_callback_http_url=gateway.runtime_callback_http_url,
         observability=SchedulerObservabilitySettings(
             workspace_changes=WorkspaceChangeStreamSettings()
         ),
@@ -59,7 +56,6 @@ def scheduler_runtime(
             retention=RetentionSettings(),
             volume_metering=VolumeMeteringSettings(),
         ),
-        network=SchedulerNetworkSettings(backend_routes=BackendRouteSettings()),
         capacity=SchedulerCapacitySettings(
             aws_connections=AwsAccountConnectionSettings(),
             aws_capacity=AwsCapacitySettings(),

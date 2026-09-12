@@ -15,8 +15,8 @@ def main() -> None:
     content = path.read_text()
     original = content
     values = {
-        "LAZYCLOUD_TOKEN": secrets.token_urlsafe(48),
-        "LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY": secrets.token_urlsafe(48),
+        "LAZYCLOUD_TOKEN": f"rt_{secrets.token_urlsafe(32)}",
+        "LAZYCLOUD_TUNNEL_GATEWAY_BOOTSTRAP_SECRET": secrets.token_urlsafe(48),
         "LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID": f"GK{secrets.token_hex(12)}",
         "LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": secrets.token_hex(32),
         "LAZYCLOUD_GARAGE_ADMIN_TOKEN": secrets.token_urlsafe(48),

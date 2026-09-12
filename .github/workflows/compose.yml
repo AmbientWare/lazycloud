@@ -9,6 +9,8 @@ on:
       - ".githooks/post-checkout"
       - "deploy/garage/**"
       - "deploy/local_credentials.py"
+      - "deploy/tunnel_identity.py"
+      - "deploy/connection-ingress/**"
       - "deploy/setup-local-env.sh"
       - "docker/**"
       - "compose.yaml"
@@ -22,6 +24,8 @@ on:
       - ".githooks/post-checkout"
       - "deploy/garage/**"
       - "deploy/local_credentials.py"
+      - "deploy/tunnel_identity.py"
+      - "deploy/connection-ingress/**"
       - "deploy/setup-local-env.sh"
       - "docker/**"
       - "compose.yaml"
@@ -51,7 +55,7 @@ jobs:
           docker compose build --check
           database-bootstrap
           control-plane
-          tunnel-gateway
+          connection-gateway
           scheduler
           container-worker
           cache-server
