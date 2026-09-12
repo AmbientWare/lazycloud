@@ -1,4 +1,4 @@
-| Tunnel issuer and gateway bootstrap credential | Local CA volume/private environment or production operator secret document | Bootstrap once with `deploy.tunnel_identity`; plan CA trust rotation separately. Leaf certificates renew automatically. |nbook
+# Deployment runbook
 
 Commands for starting, inspecting, and recovering a deployment.
 
