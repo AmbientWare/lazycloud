@@ -13,7 +13,7 @@ export function SpendTotals({
 }) {
   return (
     <>
-      <dl className="col-span-2 col-start-1 row-start-1 min-w-0 sm:col-span-1">
+      <dl className="min-w-0">
         <dt className="text-xs text-muted-foreground">Total spend</dt>
         <dd className="mt-4 sm:mt-2">
           {error ? (
@@ -31,7 +31,7 @@ export function SpendTotals({
       </dl>
       <dl
         aria-label="Spend by category"
-        className="col-span-2 flex flex-wrap gap-x-8 gap-y-3 sm:gap-x-10 lg:col-span-1 lg:col-start-2 lg:row-start-1 lg:self-end lg:pl-4"
+        className="flex flex-wrap gap-x-8 gap-y-3 sm:gap-x-10 lg:self-end lg:pl-4"
       >
         {billedDimensions.map((dimension) => {
           const totals = series?.data.flatMap((interval) =>

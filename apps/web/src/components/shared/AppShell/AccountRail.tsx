@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react";
 import { ChevronUp, LogOut, Settings } from "lucide-react";
 
 import { useSession } from "@/components/shared/AuthGate/session";
+import { CreditPrompt } from "@/components/shared/AppShell/CreditPrompt";
 import { cn } from "@/lib/utils";
 
 /**
@@ -13,12 +14,10 @@ import { cn } from "@/lib/utils";
  * the bottom of the screen.
  */
 export function AccountRail({
-  children,
   settingsOpen,
   onOpenSettings,
   onLogout,
 }: {
-  children: React.ReactNode;
   settingsOpen: boolean;
   onOpenSettings: () => void;
   onLogout: () => void;
@@ -38,10 +37,10 @@ export function AccountRail({
         container.current?.querySelector<HTMLButtonElement>("[data-account-trigger]")?.focus();
       }}
     >
+      <CreditPrompt onOpenSettings={onOpenSettings} />
       {open ? (
         <div id={panelId} className="mb-1 space-y-0.5">
           <nav aria-label="Account navigation" className="space-y-0.5">
-            {children}
             <button
               type="button"
               onClick={() => {

@@ -3,7 +3,7 @@ import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
-import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
+import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { billedDimensions, type BilledDimension, type UsageCostBucket } from "@/lib/api/schemas";
 import { formatCostNanos } from "@/lib/money";
@@ -11,11 +11,6 @@ import { accountCostSeriesQueryOptions, type UsageCostWindow } from "@/lib/queri
 
 import { intervalLabel } from "./ranges";
 import { COST_DIMENSIONS } from "./cost-colors";
-
-const CHART_CONFIG: ChartConfig = {
-  cost: { label: "Cost", color: "var(--brand)" },
-  ...COST_DIMENSIONS,
-};
 
 type Interval = Record<BilledDimension, number> & {
   started_at: string;
@@ -27,12 +22,10 @@ export function SpendChart({
   window,
   bucket,
   caption,
-  byCategory,
 }: {
   window: UsageCostWindow;
   bucket: UsageCostBucket;
   caption: string;
-  byCategory: boolean;
 }) {
   const series = useQuery(accountCostSeriesQueryOptions(window, bucket));
 
@@ -68,9 +61,9 @@ export function SpendChart({
 
   return (
     <ChartContainer
-      config={CHART_CONFIG}
+      config={COST_DIMENSIONS}
       className="aspect-auto h-full w-full"
-      aria-label={byCategory ? "Spend over time by category" : "Total spend over time"}
+      aria-label="Spend over time by category"
     >
       <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid stroke="var(--border)" vertical={false} />
@@ -111,28 +104,17 @@ export function SpendChart({
             );
           }}
         />
-        {byCategory ? (
-          billedDimensions.map((dimension) => (
-            <Bar
-              key={dimension}
-              dataKey={dimension}
-              name={COST_DIMENSIONS[dimension].label}
-              stackId="spend"
-              fill={`var(--color-${dimension})`}
-              maxBarSize={26}
-              isAnimationActive={false}
-            />
-          ))
-        ) : (
+        {billedDimensions.map((dimension) => (
           <Bar
-            dataKey="cost"
-            name="Cost"
-            fill="var(--color-cost)"
-            radius={[3, 3, 0, 0]}
+            key={dimension}
+            dataKey={dimension}
+            name={COST_DIMENSIONS[dimension].label}
+            stackId="spend"
+            fill={`var(--color-${dimension})`}
             maxBarSize={26}
             isAnimationActive={false}
           />
-        )}
+        ))}
       </BarChart>
     </ChartContainer>
   );

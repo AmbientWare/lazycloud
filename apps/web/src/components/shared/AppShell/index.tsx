@@ -16,6 +16,7 @@ import { WorkspaceSwitcher } from "@/components/shared/AppShell/WorkspaceSwitche
 import { useSession } from "@/components/shared/AuthGate/session";
 import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { AccountRail } from "@/components/shared/AppShell/AccountRail";
+import { CreditPrompt } from "@/components/shared/AppShell/CreditPrompt";
 import { SettingsDialog } from "@/components/shared/SettingsDialog";
 import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
 
@@ -38,14 +39,6 @@ const primaryNav: NavItem[] = [
   { label: "Apps", segment: "apps", to: "/w/$workspace/apps", icon: LayoutGrid },
   { label: "Tasks", segment: "tasks", to: "/w/$workspace/tasks", icon: Activity },
   { label: "Storage", segment: "storage", to: "/w/$workspace/storage", icon: Database },
-];
-
-/**
- * Usage sits with Settings rather than above, because it answers about the
- * account and not the workspace the rail is scoped to: the provider invoices an
- * account, so the figure is the same wherever the workspace switcher is left.
- */
-const accountNav: NavItem[] = [
   { label: "Usage", segment: "usage", to: "/w/$workspace/usage", icon: ChartNoAxesCombined },
 ];
 
@@ -236,16 +229,11 @@ function DesktopRail({
         ))}
       </nav>
 
-      <AccountRail settingsOpen={settingsOpen} onOpenSettings={onOpenSettings} onLogout={onLogout}>
-        {accountNav.map((item) => (
-          <RailLink
-            key={item.segment}
-            item={item}
-            active={navItemActive(path, basePath, item.segment)}
-            workspaceName={workspace.name}
-          />
-        ))}
-      </AccountRail>
+      <AccountRail
+        settingsOpen={settingsOpen}
+        onOpenSettings={onOpenSettings}
+        onLogout={onLogout}
+      />
     </aside>
   );
 }
@@ -352,23 +340,14 @@ function MobileMenu({
             <Settings className="size-4" aria-hidden="true" />
             Settings
           </button>
-          {accountNav.map((item) => {
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.segment}
-                to={item.to}
-                params={{ workspace: workspace.name }}
-                onClick={() => setOpen(false)}
-                className="interactive-row mt-0.5 flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground"
-              >
-                <Icon className="size-4" aria-hidden="true" />
-                {item.label}
-              </Link>
-            );
-          })}
         </nav>
         <div className="mt-auto border-t border-border p-3">
+          <CreditPrompt
+            onOpenSettings={() => {
+              setOpen(false);
+              onOpenSettings();
+            }}
+          />
           <button
             type="button"
             onClick={() => {
@@ -391,7 +370,7 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
   return (
     <nav
       aria-label="Mobile navigation"
-      className="grid h-14 shrink-0 grid-cols-3 border-t border-sidebar-border bg-sidebar/90 shadow-[0_-6px_24px_oklch(0_0_0/0.14)] lg:hidden"
+      className="grid h-14 shrink-0 grid-cols-4 border-t border-sidebar-border bg-sidebar/90 shadow-[0_-6px_24px_oklch(0_0_0/0.14)] lg:hidden"
     >
       {primaryNav.map((item) => {
         const Icon = item.icon;
