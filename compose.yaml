@@ -486,7 +486,7 @@ services:
       LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/server/private-key
       LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY: /var/lib/lazycloud/wireguard
       LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT: "1"
-      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT:-tunnel-gateway:51820}"
+      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT:-host.docker.internal:${LAZYCLOUD_COMPOSE_WIREGUARD_PORT:-51820}}"
       LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_HOST: control-plane
       LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_PORT: "9000"
     cap_add:
@@ -516,7 +516,7 @@ services:
       <<: *wireguard-gateway-env
       LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "1"
       LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/gateway-1/private-key
-      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT:-tunnel-gateway-1:51820}"
+      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT:-host.docker.internal:${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_PORT:-51821}}"
     ports:
       - "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_PORT:-51821}:51820/udp"
 
@@ -566,6 +566,8 @@ services:
       replicas: 1
     sysctls:
       net.ipv4.conf.all.src_valid_mark: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ulimits:
       nofile:
         soft: 1048576
@@ -758,6 +760,7 @@ services:
   agent:
     image: agent:local
     restart: unless-stopped
+    network_mode: host
     init: true
     privileged: true
     build:
@@ -767,21 +770,13 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
-        if [ -z "$$compose_gateway" ]; then
-          echo "Docker gateway is required for the agent-managed worker" >&2
-          exit 2
-        fi
-        gateway_url="http://$${compose_gateway}:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
         exec lazycloud-agent join \
-          --gateway "$$gateway_url" \
+          --gateway "http://127.0.0.1:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}" \
           --join-token-file "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}/join-token" \
           --state-dir "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}" \
           --hostname "${LAZYCLOUD_COMPOSE_AGENT_HOSTNAME:-compose-agent}" \
           --machine-fingerprint "${LAZYCLOUD_COMPOSE_AGENT_MACHINE_FINGERPRINT:-compose-agent}" \
           --worker-image "container-worker:local" \
-          --worker-route-target "$$compose_gateway" \
-          --worker-runtime-http-url "$$gateway_url" \
           --worker-network "host" \
           --worker-bridge-name "${LAZYCLOUD_COMPOSE_AGENT_WORKER_BRIDGE:-rt_br0}" \
           --worker-bridge-subnet "${LAZYCLOUD_COMPOSE_AGENT_WORKER_SUBNET:-192.168.0.0/20}" \

@@ -30,6 +30,10 @@ substitutes, and gives every service an explicit owner and health check.
 - Sidecars that share another service's network namespace are destroyed when
   that service is recreated, and the stack will not say so. Treat the lifetime
   relationship as part of the change, not as something to rediscover.
+- The Compose agent and its worker share the host network namespace. User
+  containers reach the runtime through its private WireGuard address. Keep this
+  path in local acceptance: host HTTP overrides bypass tunnel forwarding and can
+  report success while production function calls cannot reach the runtime.
 - Two workers share this host and nothing coordinates them: the `container-worker`
   service is the shared platform fleet, and the `agent` service runs one machine a
   customer account joined. Each allocates container addresses inside its own

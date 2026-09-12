@@ -254,9 +254,12 @@ derived on start, and its volumes hold only caches.
 
 ### WireGuard endpoint and keys
 
-Compose runs two gateways and publishes host UDP ports 51820 and 51821. Its
-bundled agent reaches `tunnel-gateway:51820` and `tunnel-gateway-1:51820`. For
-agents outside Compose, set `LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT` and
+Compose runs two gateways and publishes host UDP ports 51820 and 51821. The
+agent and its worker share the host network namespace and reach the private
+runtime through WireGuard. The agent and platform sidecar reach both UDP ports
+through `host.docker.internal`, so local function traffic exercises the tunnel
+and forwarding rules. For agents outside Compose, set
+`LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT` and
 `LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT` to the corresponding reachable
 `<host>:<port>` addresses. A Cloudflare HTTP tunnel cannot carry WireGuard traffic.
 
