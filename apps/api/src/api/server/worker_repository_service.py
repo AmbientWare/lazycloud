@@ -48,6 +48,7 @@ from observability.stream_state import AsyncRedisEventStreamRepository, RedisEve
 from observability.usage import UsageService, WorkerEventService
 from observability.workspace_changes import WorkspaceChangeService
 from pydantic import JsonValue
+from scheduler.network_allocation import reserve_container_ip
 from scheduler.state import (
     AsyncRedisSchedulerContainerReader,
     ContainerStateNotFoundError,
@@ -187,6 +188,8 @@ from worker.repository_payloads import (
     ReportImageBuildProgressResponse,
     ReportImageBuildResultRequest,
     ReportImageBuildResultResponse,
+    ReserveContainerIpRequest,
+    ReserveContainerIpResponse,
     ResolveSourceCacheCleanupRequest,
     ResolveSourceCacheCleanupResponse,
     SaveCheckpointStateRequest,
@@ -197,8 +200,6 @@ from worker.repository_payloads import (
     SetContainerAddressResponse,
     SetContainerExitCodeRequest,
     SetContainerExitCodeResponse,
-    SetContainerIpRequest,
-    SetContainerIpResponse,
     SetImagePullLockRequest,
     SetImagePullLockResponse,
     SetWorkerAddressRequest,
@@ -2535,19 +2536,20 @@ class WorkerRepositoryService:
             release=self.network.remove_network_lock(network_prefix, request.token)
         )
 
-    def set_container_ip(
+    def reserve_container_ip(
         self,
-        request: SetContainerIpRequest,
+        request: ReserveContainerIpRequest,
         *,
         principal: WorkerRepositoryPrincipal,
-    ) -> SetContainerIpResponse:
+    ) -> ReserveContainerIpResponse:
         network_prefix, worker = self._authorized_network_scope(principal)
         self._authorize_network_container(principal, worker, request.container_id)
-        return SetContainerIpResponse(
-            plan=self.network.set_container_ip(
-                network_prefix,
-                request.container_id,
-                request.ip_address,
+        return ReserveContainerIpResponse(
+            plan=reserve_container_ip(
+                self.network,
+                network_prefix=network_prefix,
+                container_id=request.container_id,
+                subnet=request.subnet,
             )
         )
 

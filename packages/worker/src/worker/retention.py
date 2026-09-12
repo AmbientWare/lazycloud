@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import fcntl
+import re
 import shutil
-from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -168,6 +170,9 @@ class WorkerRetentionService:
                 recent_guard_seconds=self.config.recent_guard_seconds,
                 retention_seconds=self.config.materialization_retention_seconds,
                 protected_names=active_image_ids,
+                removal_guard=lambda name: _image_layer_removal_guard(
+                    self.config.image_layer_cache_root, name
+                ),
                 now=current,
             )
             materializations = _prune_bounded_root(
@@ -241,6 +246,28 @@ class _PruneResult(ContractModel):
     scanned: int = 0
     removed: int = 0
     freed_bytes: int = 0
+
+
+@contextmanager
+def _image_layer_removal_guard(root: Path, name: str) -> Iterator[bool]:
+    # Download locks must keep the same inode while writers may hold them.
+    if name.endswith(".lock"):
+        yield False
+        return
+    digest = name.partition(".")[0]
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        yield True
+        return
+    with (root / f".{digest}.pin").open("a+b") as pin:
+        try:
+            fcntl.flock(pin, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(pin, fcntl.LOCK_UN)
 
 
 def _prune_bounded_root(

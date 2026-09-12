@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from worker.image_runtime import ImageRuntimeClient
+from worker.image_runtime import ImageContentCacheConnection, ImageRuntimeClient
 
 
 @dataclass(slots=True)
@@ -17,6 +17,7 @@ class ImageRuntimeProcess:
     mount_root: Path
     cache_root: Path
     build_root: Path
+    content_cache: ImageContentCacheConnection
     binary: Path = Path("/usr/local/bin/lazycloud-image-runtime")
     socket_path: Path = Path("/run/lazycloud/image-runtime.sock")
     process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
@@ -53,6 +54,11 @@ class ImageRuntimeProcess:
                 time.sleep(0.01)
                 continue
             if response.ok:
+                try:
+                    client.configure_cache(self.content_cache)
+                except Exception:
+                    self.stop()
+                    raise
                 threading.Thread(
                     target=self._terminate_worker_if_runtime_stops,
                     daemon=True,

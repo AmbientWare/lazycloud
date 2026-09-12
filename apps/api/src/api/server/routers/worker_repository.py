@@ -93,6 +93,8 @@ from worker.repository_payloads import (
     ReportImageBuildProgressResponse,
     ReportImageBuildResultRequest,
     ReportImageBuildResultResponse,
+    ReserveContainerIpRequest,
+    ReserveContainerIpResponse,
     ResolveSourceCacheCleanupRequest,
     ResolveSourceCacheCleanupResponse,
     SaveCheckpointStateRequest,
@@ -103,8 +105,6 @@ from worker.repository_payloads import (
     SetContainerAddressResponse,
     SetContainerExitCodeRequest,
     SetContainerExitCodeResponse,
-    SetContainerIpRequest,
-    SetContainerIpResponse,
     SetImagePullLockRequest,
     SetImagePullLockResponse,
     SetWorkerAddressRequest,
@@ -849,13 +849,13 @@ def remove_network_lock(
     return service.remove_network_lock(request, principal=principal)
 
 
-@router.post("/worker-repository/set-container-ip", response_model=SetContainerIpResponse)
-def set_container_ip(
-    request: SetContainerIpRequest,
+@router.post("/worker-repository/reserve-container-ip", response_model=ReserveContainerIpResponse)
+def reserve_container_ip(
+    request: ReserveContainerIpRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
-) -> SetContainerIpResponse:
-    return service.set_container_ip(request, principal=principal)
+) -> ReserveContainerIpResponse:
+    return service.reserve_container_ip(request, principal=principal)
 
 
 @router.post("/worker-repository/move-container-ip", response_model=MoveContainerIpResponse)

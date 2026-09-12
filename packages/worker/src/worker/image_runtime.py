@@ -12,6 +12,11 @@ from shared.contracts import ContractModel
 from worker.origin_access import ImageRegistryCredentials
 
 
+class ImageContentCacheConnection(ContractModel):
+    endpoint: str
+    token: str = Field(repr=False)
+
+
 class ImageRuntimeResponse(ContractModel):
     id: str
     ok: bool
@@ -27,6 +32,11 @@ class ImageRuntimeClient:
 
     def health(self) -> ImageRuntimeResponse:
         return self._call("health")
+
+    def configure_cache(self, connection: ImageContentCacheConnection) -> None:
+        response = self._call("configure-cache", content_cache=connection.model_dump())
+        if not response.ok:
+            raise RuntimeError(response.error or "image content cache configuration failed")
 
     def mount(
         self,

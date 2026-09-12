@@ -1097,13 +1097,13 @@ def test_worker_network_mutations_are_bound_to_authenticated_worker_assignment(
         )
 
         assigned = client.post(
-            "/worker-repository/set-container-ip",
-            json={"container_id": "container-owned", "ip_address": "10.41.0.2"},
+            "/worker-repository/reserve-container-ip",
+            json={"container_id": "container-owned", "subnet": "10.41.0.0/24"},
             headers=headers,
         )
         cross_worker = client.post(
-            "/worker-repository/set-container-ip",
-            json={"container_id": "container-other-worker", "ip_address": "10.41.0.3"},
+            "/worker-repository/reserve-container-ip",
+            json={"container_id": "container-other-worker", "subnet": "10.41.0.0/24"},
             headers=headers,
         )
         caller_scoped = client.post(

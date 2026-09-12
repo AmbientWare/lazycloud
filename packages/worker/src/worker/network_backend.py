@@ -15,7 +15,6 @@ from pydantic import Field
 from shared.container_requests import WorkerStartupKind
 from shared.contracts import ContractModel
 from shared.scheduling import (
-    ContainerIpAssignment,
     NetworkIpMutationPlan,
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
@@ -215,10 +214,8 @@ class SchedulerNetworkIpRepository(Protocol):
         token: str,
     ) -> WorkerRepositoryLockRelease: ...
 
-    def list_assignments(self, network_prefix: str) -> list[ContainerIpAssignment]: ...
-
-    def set_container_ip(
-        self, network_prefix: str, container_id: str, ip_address: str
+    def reserve_container_ip(
+        self, network_prefix: str, container_id: str, subnet: str
     ) -> NetworkIpMutationPlan: ...
 
     def remove_container_ip(
@@ -236,7 +233,6 @@ class SchedulerNetworkIpAllocator:
     lock_ttl_seconds: int = DEFAULT_NETWORK_LOCK_TTL_SECONDS
     lock_retries: int = DEFAULT_NETWORK_LOCK_RETRIES
     worker_id: str = ""
-    _next_offset: int = 0
 
     @property
     def gateway(self) -> str:
@@ -260,35 +256,11 @@ class SchedulerNetworkIpAllocator:
             detail = f": {release.reason}" if release.reason else ""
             raise RuntimeError(f"network {self.network_prefix!r} lock was not released{detail}")
 
-    def _next_available_ip(self) -> str:
-        assigned = self._assigned_ips()
-        network = ipaddress.ip_network(self.subnet, strict=False)
-        addresses = list(network.hosts())
-        if not addresses:
-            msg = f"network {self.subnet} has no usable container addresses"
-            raise RuntimeError(msg)
-        for _ in range(len(addresses)):
-            index = self._next_offset % len(addresses)
-            candidate = str(addresses[index])
-            self._next_offset += 1
-            if candidate == self.gateway or candidate in assigned:
-                continue
-            return candidate
-        msg = f"network {self.subnet} has no available container addresses"
-        raise RuntimeError(msg)
-
     def reserve_container_ip(self, container_id: str) -> str:
-        token = self.acquire_network_lock()
-        try:
-            candidate = self._next_available_ip()
-            self.repository.set_container_ip(
-                self.network_prefix,
-                container_id,
-                candidate,
-            )
-            return candidate
-        finally:
-            self.release_network_lock(token)
+        plan = self.repository.reserve_container_ip(self.network_prefix, container_id, self.subnet)
+        if not plan.ip_address:
+            raise RuntimeError("network repository returned no reserved address")
+        return plan.ip_address
 
     def release_container_ip(self, container_id: str) -> None:
         token = self.acquire_network_lock()
@@ -326,14 +298,6 @@ class SchedulerNetworkIpAllocator:
 
     def release_probe_ip(self, reservation: ProbeNetworkReservation) -> None:
         self.release_container_ip(reservation.reservation_id)
-
-    def _assigned_ips(self) -> set[str]:
-        result: set[str] = set()
-        for assignment in self.repository.list_assignments(self.network_prefix):
-            value = getattr(assignment, "ip_address", "")
-            if value:
-                result.add(str(value))
-        return result
 
 
 @dataclass(slots=True)

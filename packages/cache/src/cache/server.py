@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import os
 import shutil
+import socket
 import threading
 import urllib.parse
 from dataclasses import dataclass, field
@@ -682,6 +684,9 @@ class WorkerCacheHttpService:
     host: str = "127.0.0.1"
     port: int = 8090
     _server: ThreadingHTTPServer | None = None
+    _connections: set[socket.socket] = field(default_factory=set, init=False, repr=False)
+    _connection_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _stopping: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.service_token:
@@ -723,7 +728,16 @@ class WorkerCacheHttpService:
 
     def shutdown(self) -> None:
         if self._server is not None:
+            self._stopping.set()
             self._server.shutdown()
+            with self._connection_lock:
+                for connection in self._connections:
+                    try:
+                        connection.shutdown(socket.SHUT_RDWR)
+                    except OSError as exc:
+                        if exc.errno not in {errno.ENOTCONN, errno.EBADF}:
+                            raise
+                    connection.close()
             self._server.server_close()
             self._server = None
 
@@ -736,6 +750,7 @@ class WorkerCacheHttpService:
             cache_service = service
 
         self.cache.prepare()
+        self._stopping.clear()
         server = ThreadingHTTPServer((self.host, self.port), Handler)
         self._server = server
         actual_host, actual_port = server.server_address[:2]
@@ -747,6 +762,24 @@ class WorkerCacheHttpService:
 class WorkerCacheHttpHandler(BaseHTTPRequestHandler):
     cache_service: WorkerCacheHttpService
     server_version = "LazyCloudCache/1.0"
+    protocol_version = "HTTP/1.1"
+    disable_nagle_algorithm = True
+
+    def setup(self) -> None:
+        super().setup()
+        with self.cache_service._connection_lock:
+            self.cache_service._connections.add(self.connection)
+
+    def finish(self) -> None:
+        try:
+            super().finish()
+        finally:
+            with self.cache_service._connection_lock:
+                self.cache_service._connections.discard(self.connection)
+
+    def handle(self) -> None:
+        if not self.cache_service._stopping.is_set():
+            super().handle()
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -878,13 +911,16 @@ class WorkerCacheHttpHandler(BaseHTTPRequestHandler):
     def _authorize(self) -> bool:
         if self.cache_service.authorized(self.headers.get("Authorization")):
             return True
+        self.close_connection = True
         self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("Connection", "close")
         self.send_header("WWW-Authenticate", "Bearer")
         self.send_header("Content-Length", "0")
         self.end_headers()
         return False
 
     def _write_store_error(self, status: HTTPStatus, reason: str) -> None:
+        self.close_connection = True
         self._write_json(
             status,
             CacheContentStoreResult(status=CacheContentStoreStatus.Error, reason=reason),
@@ -895,6 +931,8 @@ class WorkerCacheHttpHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
