@@ -183,7 +183,7 @@ const parityModes = [
 
 function ParitySection() {
   return (
-    <section className="marketing-parity border-t border-input bg-muted py-18 sm:py-22 lg:py-28">
+    <section className="marketing-parity border-t border-input bg-background-subtle py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <SectionHeading
           title={
@@ -325,7 +325,7 @@ export function MarketingHome() {
 
         <ComputeSection />
 
-        <section className="border-t border-input bg-muted py-18 sm:py-22 lg:py-28">
+        <section className="border-t border-input bg-background-subtle py-18 sm:py-22 lg:py-28">
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
               <SectionHeading title="Example projects" />

@@ -201,7 +201,10 @@ function MarketingPricing() {
           </div>
         </section>
 
-        <section className="border-b border-border bg-muted py-14 sm:py-16 lg:py-20" id="plans">
+        <section
+          className="border-b border-border bg-background-subtle py-14 sm:py-16 lg:py-20"
+          id="plans"
+        >
           <div className={shell}>
             <div className="mb-6 max-w-[44rem]">
               <h2 className={sectionTitle}>Pricing plans</h2>

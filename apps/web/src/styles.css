@@ -45,6 +45,7 @@
   --color-lazycloud-light: var(--lazycloud-light);
   --color-lazycloud-dark: var(--lazycloud-dark);
   --color-background: var(--background);
+  --color-background-subtle: var(--background-subtle);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -94,7 +95,8 @@
   --lazycloud: #76d6f5;
   --lazycloud-light: #a1e6fb;
   --lazycloud-dark: #4dbce8;
-  --background: #0c141b;
+  --background: #080808;
+  --background-subtle: #111113;
   --foreground: #eef3f7;
   --card: #121d26;
   --card-foreground: var(--foreground);

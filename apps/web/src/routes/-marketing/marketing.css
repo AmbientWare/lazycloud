@@ -24,7 +24,7 @@
 .marketing-header > div {
   border-radius: 0;
   border-width: 0 0 1px;
-  background: color-mix(in oklab, var(--background) 94%, transparent);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
   box-shadow: none;
   backdrop-filter: blur(16px);
 }
@@ -128,9 +128,9 @@
   background: var(--background);
 }
 
-.marketing-site main > section.bg-muted {
-  --marketing-section-background: var(--muted);
-  background: var(--muted);
+.marketing-site main > section.bg-background-subtle {
+  --marketing-section-background: var(--background-subtle);
+  background: var(--background-subtle);
 }
 
 @media (max-width: 639px) {
