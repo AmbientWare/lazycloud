@@ -194,7 +194,7 @@ function ParitySection() {
           body="Debug on your laptop, send a one-off cloud run, or deploy the app. The function stays the same."
         />
 
-        <div className="marketing-cloud-focus max-w-[820px]">
+        <div className="relative max-w-[820px]">
           <MarketingCard asChild>
             <CodeBlock
               tone="paper"
@@ -207,7 +207,7 @@ function ParitySection() {
 
         <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
           {parityModes.map((mode) => (
-            <article className="marketing-cloud-focus" key={mode.key}>
+            <article className="relative" key={mode.key}>
               <mode.Plate />
               <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
                 {mode.title}
@@ -236,7 +236,7 @@ export function MarketingHome() {
               "marketing-hero-content relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 sm:gap-12 lg:gap-16 max-lg:grid-cols-1",
             )}
           >
-            <div className="marketing-cloud-focus marketing-rise">
+            <div className="relative marketing-rise">
               <h1 className="max-w-[620px] text-balance">
                 Deploy as fast <em>as you develop.</em>
               </h1>
@@ -262,7 +262,7 @@ export function MarketingHome() {
               </div>
             </div>
 
-            <div className="marketing-cloud-focus min-w-0">
+            <div className="relative min-w-0">
               <MarketingCard className="marketing-rise relative z-[2] min-w-0 [animation-delay:100ms]">
                 <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
                   <TabsList
@@ -342,7 +342,7 @@ export function MarketingHome() {
               ) : null}
             </div>
             <div
-              className="marketing-cloud-focus grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
+              className="relative grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
               role="region"
               tabIndex={0}
               aria-label="Runnable examples"
@@ -539,10 +539,7 @@ function PlatformStoryRail() {
             }
             body="Cloud functions, HTTP endpoints, full ASGI apps, background jobs, and cron jobs. Define them in Python alongside your code."
           />
-          <nav
-            aria-label="Platform use cases"
-            className="marketing-cloud-focus border-t border-border"
-          >
+          <nav aria-label="Platform use cases" className="relative border-t border-border">
             <ol className="m-0 list-none p-0">
               {platformStories.map((story, index) => {
                 const active = story.key === activeKey;
@@ -577,7 +574,7 @@ function PlatformStoryRail() {
               key={story.key}
               ref={(node) => registerStory(index, node)}
             >
-              <div className="marketing-cloud-focus mb-6 sm:mb-8">
+              <div className="relative mb-6 sm:mb-8">
                 <p className="text-sm font-medium text-brand">{story.label}</p>
                 <h3
                   className="mt-3 text-2xl leading-tight font-medium sm:text-3xl"
@@ -591,7 +588,7 @@ function PlatformStoryRail() {
               </div>
               <div
                 aria-label={`${story.label} preview`}
-                className="marketing-cloud-focus marketing-story-panel min-w-0"
+                className="relative marketing-story-panel min-w-0"
                 role="region"
               >
                 <div className="marketing-story-visual flex h-[390px] sm:h-[430px] lg:h-[clamp(380px,46dvh,430px)] [&>div]:flex-1">
@@ -637,7 +634,7 @@ function ComputeSection() {
           body="Start with managed capacity. Connect AWS or join a Linux machine when you want workloads to run in your infrastructure."
         />
         <div className="grid grid-cols-[0.9fr_1.1fr] gap-7 max-lg:grid-cols-1">
-          <div className="marketing-cloud-focus flex flex-col gap-4">
+          <div className="relative flex flex-col gap-4">
             {computePaths.map((path) => (
               <MarketingCard asChild key={path.title}>
                 <article className="flex-1 p-5 sm:p-6">
@@ -652,7 +649,7 @@ function ComputeSection() {
               </MarketingCard>
             ))}
           </div>
-          <div className="marketing-cloud-focus flex [&>div]:flex-1">
+          <div className="relative flex [&>div]:flex-1">
             <ComputePlacementPreview />
           </div>
         </div>

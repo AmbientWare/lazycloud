@@ -153,7 +153,7 @@ function StateCell({
   dotClass: string;
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-background/40 px-2.5 py-2">
+    <div className="min-w-0 rounded-md border border-border bg-[var(--product-inset)] px-2.5 py-2">
       <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
         <i aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
         {label}
@@ -202,7 +202,7 @@ export function LiveSandboxPreview() {
             <span
               className={
                 tab === "Terminal"
-                  ? "rounded-md border border-border bg-background/60 px-2 py-0.5 text-foreground"
+                  ? "rounded-md border border-brand/40 bg-muted px-2 py-0.5 text-brand"
                   : "px-2 py-0.5 text-muted-foreground"
               }
               key={tab}
@@ -214,7 +214,7 @@ export function LiveSandboxPreview() {
         <span className="text-muted-foreground">coding-agent · /workspace</span>
       </div>
       <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-md border border-border bg-background/60 px-3 py-2.5 text-[11px] leading-[1.55] [overflow-wrap:anywhere]"
+        className="flex min-h-0 min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-md border border-border bg-[var(--product-inset)] px-3 py-2.5 text-[11px] leading-[1.55] [overflow-wrap:anywhere]"
         data-marketing-terminal-surface=""
       >
         {visible.map((line) => (
