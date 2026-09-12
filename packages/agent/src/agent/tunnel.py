@@ -165,6 +165,7 @@ class AgentTunnelService:
         await self._reconcile_listeners(callback_hosts)
         await self._reconcile_routes(routes)
         retry_delay = 1.0
+        session: AgentTunnelClient | None = None
         try:
             while True:
                 session = AgentTunnelClient(
@@ -217,6 +218,8 @@ class AgentTunnelService:
                 if certificate.expires_at <= utc_now():
                     certificate = await self._certificate(credentials)
         finally:
+            if session is not None:
+                await session.close()
             await self._close_sessions()
 
     def _retire(self, session: AgentTunnelClient) -> None:
@@ -297,9 +300,9 @@ class AgentTunnelService:
     async def _close(self) -> None:
         for server in self._servers.values():
             server.close()
-        await asyncio.gather(*(server.wait_closed() for server in self._servers.values()))
-        self._servers.clear()
         if self._runner is not None:
             self._runner.cancel()
             await asyncio.gather(self._runner, return_exceptions=True)
         await self._close_sessions()
+        await asyncio.gather(*(server.wait_closed() for server in self._servers.values()))
+        self._servers.clear()
