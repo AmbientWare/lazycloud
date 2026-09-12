@@ -674,15 +674,6 @@ class RemoveNetworkLockResponse(WorkerRepositoryResponse):
     release: WorkerRepositoryLockRelease | None = None
 
 
-class SetContainerIpRequest(ContractModel):
-    container_id: str
-    ip_address: str
-
-
-class SetContainerIpResponse(WorkerRepositoryResponse):
-    plan: NetworkIpMutationPlan | None = None
-
-
 class ReserveContainerIpRequest(ContractModel):
     container_id: str
     subnet: str
