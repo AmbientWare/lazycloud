@@ -397,13 +397,6 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     assert not gateway.stream_agent(StreamAgentRequest(agent_token=first.agent_token)).ok
     with isolated_services.context.database.session() as session:
         assert gateway.connections.get(workspace_id, first_enrollment_id) is None
-        assert MachineRepository(session).get_across_workspaces(first.machine_id) is None
-        assert (
-            WorkerRepository(session).get_across_workspaces(
-                agent_machine_worker_id(first.machine_id)
-            )
-            is None
-        )
         assert (
             ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id,

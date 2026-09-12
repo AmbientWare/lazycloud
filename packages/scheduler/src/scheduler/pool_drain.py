@@ -487,12 +487,15 @@ class ManagedComputeWorkerPoolDrainController:
             for instance in snapshot.instances
             if (machine_id := machines_by_instance.get(instance.provider_instance_id))
         }
+        replaceable_machine_ids = self.compute.internal_unit_replaceable_machines(
+            self.state.workspace_id, self.capacity_owner_id
+        )
         interrupted = {
             machine_id: deadline
             for machine_id, deadline in self.compute.internal_unit_interrupted_machines(
                 self.state.workspace_id, self.capacity_owner_id
             ).items()
-            if machine_id in snapshot_machine_ids
+            if machine_id in snapshot_machine_ids and machine_id in replaceable_machine_ids
         }
         superseded = sorted(interrupted, key=interrupted.__getitem__) + [
             machine_id
@@ -501,6 +504,7 @@ class ManagedComputeWorkerPoolDrainController:
             and instance.booted_template_version
             and instance.booted_template_version != current_version
             and (machine_id := machines_by_instance.get(instance.provider_instance_id))
+            and machine_id in replaceable_machine_ids
             and machine_id not in interrupted
         ]
         replacement_machine_id = unit.replacement_machine_id
@@ -764,7 +768,7 @@ class ManagedComputeWorkerPoolDrainController:
             desired_replicas=pooled.desired_machines,
             observed_replicas=pooled.observed_machines,
             drained_worker_ids=[worker.worker_id for worker in workers],
-            reason="released a machine on a superseded template",
+            reason="released a retiring provider machine",
         )
 
 

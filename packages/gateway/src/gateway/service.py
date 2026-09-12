@@ -1499,16 +1499,25 @@ class GatewayControlService:
             )
             if current is None:
                 raise KeyError(f"machine not found: {enrollment.machine_id}")
-            WorkerRepository(session).records.delete(
-                worker_id,
-                workspace_id=enrollment.workspace_id,
-            )
-            deleted = MachineRepository(session).records.delete(
-                current.machine_id,
-                workspace_id=enrollment.workspace_id,
-            )
-            if not deleted:
+            # Linked terminal records are the proof used by container storage cleanup.
+            workers = WorkerRepository(session)
+            durable_worker = workers.get(worker_id, workspace_id=enrollment.workspace_id)
+            if durable_worker is not None:
+                workers.upsert(
+                    durable_worker.model_copy(update={"status": ResourceStatus.Deleted}),
+                    workspace_id=enrollment.workspace_id,
+                )
+            machines = MachineRepository(session)
+            machine = machines.get(current.machine_id, workspace_id=enrollment.workspace_id)
+            if machine is None:
                 raise KeyError(f"machine not found: {current.machine_id}")
+            machines.upsert(
+                machine.model_copy(
+                    update={"status": ResourceStatus.Deleted, "updated_at": utc_now()}
+                ),
+                workspace_id=enrollment.workspace_id,
+            )
+            enrollments.records.delete(current.id, workspace_id=enrollment.workspace_id)
         self.compute_states.delete_agent_machine_state_for_machine(
             enrollment.workspace_id,
             enrollment.machine_id,
@@ -1555,17 +1564,20 @@ class GatewayControlService:
             self.compute_states.revoke_join_token_state(credential.token_hash)
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
-            machines = MachineRepository(session)
             credentials = ComputeJoinCredentialRepository(session)
             enrollments.delete_for_unit(workspace_id, unit.capacity_owner_id)
             if not deleting_workspace:
                 workers = WorkerRepository(session)
                 for enrollment in enrollment_records:
-                    workers.records.delete(
-                        agent_machine_worker_id(enrollment.machine_id),
+                    worker = workers.get(
+                        agent_machine_worker_id(enrollment.machine_id), workspace_id=workspace_id
+                    )
+                    if worker is None:
+                        continue
+                    workers.upsert(
+                        worker.model_copy(update={"status": ResourceStatus.Deleted}),
                         workspace_id=workspace_id,
                     )
-                    machines.records.delete(enrollment.machine_id, workspace_id=workspace_id)
             credentials.delete_for_unit(workspace_id, unit.capacity_owner_id)
 
     def _revoke_enrollment_authority(
