@@ -50,11 +50,11 @@ from worker.container_service.protocols import (
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
+    WorkerSandboxControlManagerFactory,
     WorkerSandboxDockerLifecycle,
     WorkerSandboxLogSink,
     WorkerSandboxNetworkPolicyUpdater,
     WorkerSandboxPortPublisher,
-    WorkerSandboxProcessManagerFactory,
 )
 from worker.container_service.service import WorkerContainerService
 from worker.container_service.transport import WorkerContainerServiceTransport
@@ -153,7 +153,7 @@ class WorkerProcessExecutionDependencies:
 
 @dataclass(frozen=True, slots=True)
 class WorkerProcessContainerServiceDependencies:
-    process_managers: WorkerSandboxProcessManagerFactory | None = None
+    process_managers: WorkerSandboxControlManagerFactory | None = None
     sandbox_docker: WorkerSandboxDockerLifecycle | None = None
     logs: WorkerSandboxLogSink | None = None
     checkpoints: WorkerContainerCheckpointCreator | None = None

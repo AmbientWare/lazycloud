@@ -10,7 +10,13 @@ from shared.image_building.authoring import (
 )
 
 from images.building.commands import _normalize_step
-from images.building.constants import MANAGED_PYTHON_PREFIX, UV_COPY_INSTRUCTION
+from images.building.constants import (
+    MANAGED_PYTHON_PREFIX,
+    MICROMAMBA_BOOTSTRAP_CA,
+    MICROMAMBA_IMAGE_REFERENCE,
+    MICROMAMBA_ROOT_PREFIX,
+    UV_COPY_INSTRUCTION,
+)
 from images.building.models import (
     PythonRuntimeSetupAction,
     PythonRuntimeSetupPlan,
@@ -41,16 +47,30 @@ def plan_python_runtime_setup(image: ImageSpec) -> PythonRuntimeSetupPlan:
         )
 
     if _is_micromamba_python_version(python_version):
+        minor = PythonVersion(python_version.removeprefix("micromamba")).value
+        runtime_python = f"{MICROMAMBA_ROOT_PREFIX}/bin/python{minor}"
         return PythonRuntimeSetupPlan(
             action=PythonRuntimeSetupAction.ConfigureMicromamba,
             requires_python=True,
             python_version=python_version,
-            dockerfile_instructions=[UV_COPY_INSTRUCTION] if requires_uv else [],
-            commands=[
-                "micromamba config set use_lockfiles False",
-                _bytecode_compile_command("python"),
+            python_executable=f"python{minor}",
+            dockerfile_instructions=[
+                f"COPY --from={MICROMAMBA_IMAGE_REFERENCE} "
+                "/bin/micromamba /usr/local/bin/micromamba",
+                f"COPY --from={MICROMAMBA_IMAGE_REFERENCE} "
+                f"/etc/ssl/certs/ca-certificates.crt {MICROMAMBA_BOOTSTRAP_CA}",
+                f"ENV MAMBA_ROOT_PREFIX={MICROMAMBA_ROOT_PREFIX}",
+                f"ENV CONDA_PREFIX={MICROMAMBA_ROOT_PREFIX}",
+                f'ENV PATH="{MICROMAMBA_ROOT_PREFIX}/bin:${{PATH}}"',
+                *([UV_COPY_INSTRUCTION] if requires_uv else []),
             ],
-            reason="micromamba base handles Python environment management",
+            commands=[
+                f"micromamba create -y --prefix {MICROMAMBA_ROOT_PREFIX} "
+                f"--ssl-verify {MICROMAMBA_BOOTSTRAP_CA} "
+                f"--override-channels -c conda-forge python={minor} pip",
+                _bytecode_compile_command(runtime_python),
+            ],
+            reason="micromamba installs the requested Python environment into the image",
         )
 
     if _image_base_provides_python(image):
@@ -153,7 +173,7 @@ def _managed_python_link_command(python_version: str) -> str:
 
 
 def _is_micromamba_python_version(python_version: str) -> bool:
-    return "micromamba" in python_version.lower()
+    return python_version.startswith("micromamba")
 
 
 def _image_requires_python_runtime(image: ImageSpec) -> bool:

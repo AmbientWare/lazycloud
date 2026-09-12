@@ -80,6 +80,7 @@ from runner.runtime import (
     required_env,
     routed_output,
 )
+from runner.schema_outputs import ArtifactOutputPublisher
 from runner.worker_processes import stop_worker_processes
 
 # How often an idle container asks for work. Short enough that a call arriving
@@ -294,7 +295,9 @@ class FunctionRunner:
         try:
             self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
             result = self.execute_with_log_capture(task)
-            self.set_result(task, _serialize_function_result(result, task.invocation))
+            response = self.set_result(task, _serialize_function_result(result, task.invocation))
+            if not response.stored or response.status is not TaskStatus.Complete:
+                return
             duration = time.perf_counter() - started
             self.run_task_hooks(
                 task,
@@ -336,16 +339,23 @@ class FunctionRunner:
             try:
                 return invoke_handler(
                     self.handler(),
-                    *task.invocation.args,
-                    **task.invocation.kwargs,
+                    task.invocation.args,
+                    task.invocation.kwargs,
+                    publish=ArtifactOutputPublisher(
+                        self.control,
+                        self.config.workspace_name or self.config.workspace_id,
+                        task.task_id,
+                    ),
                 )
             finally:
                 stdout.close()
                 stderr.close()
                 logs.close()
 
-    def set_result(self, task: ClaimedTask, result: FunctionResultPayload) -> None:
-        FunctionSetResultResponse.model_validate(
+    def set_result(
+        self, task: ClaimedTask, result: FunctionResultPayload
+    ) -> FunctionSetResultResponse:
+        return FunctionSetResultResponse.model_validate(
             self.control.post(
                 "/api/v1/functions/set-result",
                 FunctionSetResultBody(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Generator
 from dataclasses import dataclass
 
 from shared.contracts import ContractModel
@@ -139,13 +139,15 @@ class WorkerContainerServiceTransport:
         request: ContainerServicePayload,
         *,
         timeout_seconds: float | None = None,
-    ) -> Iterable[ContainerServicePayload]:
+    ) -> Generator[ContainerServicePayload, None, None]:
         _ = timeout_seconds
         match method:
             case ContainerServiceMethod.ContainerStreamLogs:
-                return self.service.stream_logs(_request(request, ContainerStreamLogsRequest))
+                yield from self.service.stream_logs(_request(request, ContainerStreamLogsRequest))
             case ContainerServiceMethod.ContainerArchive:
-                return self.service.container_archive(_request(request, ContainerArchiveRequest))
+                yield from self.service.container_archive(
+                    _request(request, ContainerArchiveRequest)
+                )
             case _:
                 msg = f"{method.value} is a unary container service method"
                 raise ValueError(msg)

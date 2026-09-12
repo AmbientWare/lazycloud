@@ -28,31 +28,41 @@ const (
 )
 
 type request struct {
-	Version int      `json:"version"`
-	Op      string   `json:"op"`
-	Argv    []string `json:"argv,omitempty"`
-	Cwd     string   `json:"cwd,omitempty"`
-	Env     []string `json:"env,omitempty"`
-	PID     int      `json:"pid,omitempty"`
-	Signal  int      `json:"signal,omitempty"`
-	AckSeq  uint64   `json:"ack_seq,omitempty"`
-	OK      bool     `json:"ok,omitempty"`
-	Token   string   `json:"token,omitempty"`
+	Version       int      `json:"version"`
+	Op            string   `json:"op"`
+	Argv          []string `json:"argv,omitempty"`
+	Cwd           string   `json:"cwd,omitempty"`
+	Env           []string `json:"env,omitempty"`
+	PID           int      `json:"pid,omitempty"`
+	Signal        int      `json:"signal,omitempty"`
+	AckSeq        uint64   `json:"ack_seq,omitempty"`
+	OK            bool     `json:"ok,omitempty"`
+	Token         string   `json:"token,omitempty"`
+	FileOperation string   `json:"file_operation,omitempty"`
+	Path          string   `json:"path,omitempty"`
+	Mode          uint32   `json:"mode,omitempty"`
+	Data          []byte   `json:"data,omitempty"`
+	Pattern       string   `json:"pattern,omitempty"`
+	NewString     string   `json:"new_string,omitempty"`
+	ExcludePaths  []string `json:"exclude_paths,omitempty"`
 }
 
 type response struct {
-	Version   int           `json:"version"`
-	Type      string        `json:"type"`
-	Error     string        `json:"error,omitempty"`
-	PID       int           `json:"pid,omitempty"`
-	Seq       uint64        `json:"seq,omitempty"`
-	Stream    string        `json:"stream,omitempty"`
-	Data      []byte        `json:"data,omitempty"`
-	ExitCode  int           `json:"exit_code,omitempty"`
-	Running   bool          `json:"running,omitempty"`
-	Processes []processView `json:"processes,omitempty"`
-	Stdout    string        `json:"stdout,omitempty"`
-	Stderr    string        `json:"stderr,omitempty"`
+	Version   int               `json:"version"`
+	Type      string            `json:"type"`
+	Error     string            `json:"error,omitempty"`
+	PID       int               `json:"pid,omitempty"`
+	Seq       uint64            `json:"seq,omitempty"`
+	Stream    string            `json:"stream,omitempty"`
+	Data      []byte            `json:"data,omitempty"`
+	ExitCode  int               `json:"exit_code,omitempty"`
+	Running   bool              `json:"running,omitempty"`
+	Processes []processView     `json:"processes,omitempty"`
+	Stdout    string            `json:"stdout,omitempty"`
+	Stderr    string            `json:"stderr,omitempty"`
+	FileInfo  *fileInfo         `json:"file_info,omitempty"`
+	Files     []fileInfo        `json:"files,omitempty"`
+	Matches   []fileSearchMatch `json:"matches,omitempty"`
 }
 
 type processView struct {
@@ -190,7 +200,8 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 		s.untrackConnection(connection)
 		_ = connection.Close()
 	}()
-	decoder := json.NewDecoder(bufio.NewReader(connection))
+	input := &io.LimitedReader{R: connection, N: maxControlMessageBytes}
+	decoder := json.NewDecoder(bufio.NewReader(input))
 	encoder := json.NewEncoder(connection)
 	var command request
 	if err := decoder.Decode(&command); err != nil {
@@ -203,6 +214,9 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 	if !s.authenticated(command.Token) {
 		_ = encoder.Encode(response{Version: protocolVersion, Type: "error", Error: "unauthorized"})
 		return
+	}
+	if command.Op != "file" {
+		input.N = 1<<63 - 1
 	}
 	switch command.Op {
 	case "ready":
@@ -223,6 +237,10 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 		s.handleList(encoder)
 	case "kill":
 		s.handleKill(encoder, command.PID, command.Signal)
+	case "file":
+		s.handleFile(encoder, command)
+	case "snapshot-filesystem":
+		s.handleFilesystemSnapshot(connection, encoder, command.ExcludePaths)
 	default:
 		_ = encoder.Encode(response{Version: protocolVersion, Type: "error", Error: "unknown operation"})
 	}

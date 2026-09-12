@@ -5,9 +5,8 @@ from pydantic import Field, field_validator
 from shared.http.base import HttpModel
 
 
-class StartEndpointServeRequest(HttpModel):
+class EndpointWarmupRequest(HttpModel):
     stub_id: str
-    timeout: int = Field(default=0, ge=0)
 
     @field_validator("stub_id")
     @classmethod
@@ -19,12 +18,13 @@ class StartEndpointServeRequest(HttpModel):
         return normalized
 
 
-class StartEndpointServeResponse(HttpModel):
+class EndpointWarmupResponse(HttpModel):
     container_id: str = ""
 
 
 class EndpointForwardRequest(HttpModel):
     stub_id: str
+    preview_session_id: str | None = None
     method: str = "GET"
     path: str = "/"
     query_params: dict[str, list[str]] = Field(default_factory=dict)
@@ -63,6 +63,6 @@ class EndpointForwardResponse(HttpModel):
 __all__ = [
     "EndpointForwardRequest",
     "EndpointForwardResponse",
-    "StartEndpointServeRequest",
-    "StartEndpointServeResponse",
+    "EndpointWarmupRequest",
+    "EndpointWarmupResponse",
 ]

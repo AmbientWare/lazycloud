@@ -93,6 +93,7 @@ from database.tables.orchestration import (
     RouteTable,
     WorkerTable,
 )
+from database.tables.previews import PreviewSessionTable
 from database.tables.provider_launches import ProviderNodeLaunchTable
 from database.tables.source_cache import (
     SourceCacheCleanupTargetTable,
@@ -101,6 +102,7 @@ from database.tables.source_cache import (
 from database.tables.storage import CacheEntryTable, ObjectTable, VolumeTable
 from database.tables.storage_access import StorageAccessTable
 from database.tables.storage_retention import StorageRetentionPeriodTable
+from database.tables.task_callbacks import TaskCallbackTable
 
 __all__ = [
     "AgentLeaseTable",
@@ -159,6 +161,7 @@ __all__ = [
     "PlatformRateTable",
     "PodProcessTable",
     "PodUrlTable",
+    "PreviewSessionTable",
     "ProviderNodeLaunchTable",
     "QueueMessageTable",
     "RouteTable",
@@ -168,6 +171,7 @@ __all__ = [
     "StorageRetentionPeriodTable",
     "StubTable",
     "TaskAttemptTable",
+    "TaskCallbackTable",
     "TaskDependencyTable",
     "TaskTable",
     "TimestampMixin",

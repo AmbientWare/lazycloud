@@ -1,35 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlsplit
 
-from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings, _PresignParams
-
-
-class _ClosingClient:
-    def __init__(self, *, close_error: RuntimeError | None = None) -> None:
-        self.close_error = close_error
-        self.close_calls = 0
-
-    def close(self) -> None:
-        self.close_calls += 1
-        if self.close_error is not None:
-            raise self.close_error
-
-
-class _ClosingPresignClient(_ClosingClient):
-    def __init__(self, *, close_error: RuntimeError | None = None) -> None:
-        super().__init__(close_error=close_error)
-        self.requests: list[tuple[str, _PresignParams, int]] = []
-
-    def generate_presigned_url(
-        self,
-        ClientMethod: str,
-        *,
-        Params: _PresignParams,
-        ExpiresIn: int,
-    ) -> str:
-        self.requests.append((ClientMethod, Params, ExpiresIn))
-        return "https://objects.example/presigned"
+from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 
 def _settings() -> S3ObjectStoreSettings:
@@ -41,42 +15,48 @@ def _settings() -> S3ObjectStoreSettings:
 
 
 def test_presigned_upload_binds_exact_headers_and_temporary_session_lifetime() -> None:
-    presign = _ClosingPresignClient()
     settings = _settings().model_copy(
         update={
             "session_token": "temporary-session-token",
             "credential_expires_at": datetime.now(UTC) + timedelta(minutes=5),
         }
     )
-    client = S3ObjectStoreClient[_ClosingPresignClient](
-        settings=settings,
-        client=presign,
-    )
+    client = S3ObjectStoreClient.from_settings(settings)
+    try:
+        upload = client.generate_presigned_put(
+            "workspaces/workspace/images/image/archive.clip",
+            content_length=1234,
+            content_type="application/octet-stream",
+            metadata={"artifact-sha256": "a" * 64},
+            expires_seconds=900,
+        )
+    finally:
+        client.close()
 
-    upload = client.generate_presigned_put(
-        "workspaces/workspace/images/image/archive.clip",
-        content_length=1234,
-        content_type="application/octet-stream",
-        metadata={"artifact-sha256": "a" * 64},
-        expires_seconds=900,
-    )
-
-    assert upload.url == "https://objects.example/presigned"
     assert upload.headers == {
         "content-length": "1234",
         "content-type": "application/octet-stream",
         "x-amz-meta-artifact-sha256": "a" * 64,
     }
-    method, params, expires_seconds = presign.requests[0]
-    assert method == "put_object"
-    assert params == {
-        "Bucket": settings.bucket,
-        "Key": "workspaces/workspace/images/image/archive.clip",
-        "ContentLength": 1234,
-        "ContentType": "application/octet-stream",
-        "Metadata": {"artifact-sha256": "a" * 64},
+    query = parse_qs(urlsplit(upload.url).query)
+    assert query["X-Amz-Security-Token"] == ["temporary-session-token"]
+    assert set(query["X-Amz-SignedHeaders"][0].split(";")) == {
+        "host",
+        *upload.headers,
     }
-    assert 1 <= expires_seconds < 300
+    assert 1 <= int(query["X-Amz-Expires"][0]) < 300
+
+
+def test_presigned_download_lifetime_respects_signature_limit() -> None:
+    client = S3ObjectStoreClient.from_settings(_settings())
+    try:
+        long_url = client.generate_presigned_get_url("artifact.bin", expires_seconds=2592000)
+        short_url = client.generate_presigned_get_url("artifact.bin", expires_seconds=60)
+    finally:
+        client.close()
+
+    assert parse_qs(urlsplit(long_url).query)["X-Amz-Expires"] == ["604800"]
+    assert parse_qs(urlsplit(short_url).query)["X-Amz-Expires"] == ["60"]
 
 
 def test_object_store_settings_repr_never_contains_credentials() -> None:

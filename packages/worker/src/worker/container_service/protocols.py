@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -14,7 +14,7 @@ from worker.container_service.models import (
     WorkerSandboxProcess,
 )
 from worker.execution import PortBinding
-from worker.sandbox_server import SandboxProcessLogEntry
+from worker.sandbox_server import SandboxFileRequest, SandboxFileResult, SandboxProcessLogEntry
 
 
 class WorkerContainerInstanceStore(Protocol):
@@ -79,6 +79,19 @@ class WorkerSandboxProcessManagerFactory(Protocol):
     def suspend_process_streams(self, instance: WorkerContainerServiceInstance) -> None: ...
 
     def resume_process_streams(self, instance: WorkerContainerServiceInstance) -> None: ...
+
+
+class WorkerSandboxControlManager(WorkerSandboxProcessManager, Protocol):
+    def snapshot_filesystem(self, *, exclude_paths: list[str]) -> Generator[bytes, None, None]: ...
+
+    def file_operation(self, request: SandboxFileRequest, *, cwd: str) -> SandboxFileResult: ...
+
+
+class WorkerSandboxControlManagerFactory(WorkerSandboxProcessManagerFactory, Protocol):
+    def create_process_manager(
+        self,
+        instance: WorkerContainerServiceInstance,
+    ) -> WorkerSandboxControlManager: ...
 
 
 class WorkerSandboxDockerLifecycle(Protocol):
@@ -153,8 +166,6 @@ class WorkerContainerArchiveCreator(Protocol):
     def archive_container(
         self,
         instance: WorkerContainerServiceInstance,
-        *,
-        image_id: str,
     ) -> Iterable[ContainerArchiveResponse]: ...
 
 

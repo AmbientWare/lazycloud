@@ -30,7 +30,8 @@ from scheduler.state import SchedulerContainerAddressMap, SchedulerContainerStat
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
-from shared.routing import AgentBackendRoute, BackendRouteState
+from shared.http.gateway import GetUrlResponse
+from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from starlette.websockets import WebSocketDisconnect
 from tests.url_constants import TEST_DOMAIN, TEST_URL
 from tests.workspaces import owned_workspace
@@ -40,12 +41,24 @@ from websockets.typing import Subprotocol
 BASE_URL = TEST_URL
 
 
-def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
+def test_generated_pod_url_preserves_request_and_selects_port_ready_container(
     isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with ExitStack() as client_stack:
+        monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
         control = ControlPlaneService(isolated_services.context)
-        stub = control.create_stub("web", kind=StubKind.Pod)
+        deployment = isolated_services.deployments.deploy(
+            DeploymentSpec(
+                name="web",
+                kind=DeploymentKind.Pod,
+                metadata={"app": "pod_url"},
+                command=["python", "-m", "http.server", "8080"],
+                ports={"http": 8080, "health": 9090},
+            )
+        )
+        assert deployment.stub_id is not None
+        stub = control.get_stub(deployment.stub_id)
         missing_port = _create_container(isolated_services, stub, "missing-port")
         busy = _create_container(isolated_services, stub, "busy")
         selected = _create_container(isolated_services, stub, "selected")
@@ -72,8 +85,21 @@ def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
             TestClient(create_app(isolated_services, pod_service=service))
         )
 
+        generated = client.post(
+            "/gateway/stubs/url",
+            headers=_auth_headers(isolated_services),
+            json={
+                "stub_id": stub.id,
+                "deployment_id": deployment.id,
+                "url_type": "deployment",
+                "external_url": BASE_URL,
+                "port": 8080,
+            },
+        )
+        assert generated.status_code == 200, generated.text
+        url = GetUrlResponse.model_validate_json(generated.content).url
         response = client.patch(
-            f"/pod/id/{stub.id}/8080/api/users",
+            f"{url}/api/users",
             params=[("tag", "a"), ("tag", "b")],
             headers=_auth_headers(isolated_services) | {"x-client-header": "kept"},
             content=b"payload",
@@ -410,16 +436,28 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
         stub = ControlPlaneService(isolated_services.context).create_stub(
             "pinned-route-ownership",
             kind=StubKind.Sandbox,
+            public=True,
         )
         container = _create_container(isolated_services, stub, "route-owner")
-        _store_sandbox_exposure(isolated_services, container, port=8080, public=False)
+        container = container.model_copy(
+            update={
+                "runtime_machine_id": str(uuid5(NAMESPACE_DNS, "sandbox-route-machine")),
+                "runtime_worker_id": str(uuid5(NAMESPACE_DNS, "sandbox-route-worker")),
+            }
+        )
+        with isolated_services.context.database.session() as session:
+            ContainerRepository(session).upsert(container)
+        _store_sandbox_exposure(isolated_services, container, port=8080, public=True)
         scheduler = _FakeSchedulerContainers.running(
             container,
             address_maps={container.id: {8080: "route://owned-route"}},
         )
         route = AgentBackendRoute(
             route_id="owned-route",
-            workspace_id=container.workspace_id,
+            workspace_id=str(uuid5(NAMESPACE_DNS, "sandbox-agent-owner-workspace")),
+            enrollment_id=str(uuid5(NAMESPACE_DNS, "sandbox-agent-enrollment")),
+            worker_id=container.runtime_worker_id,
+            machine_id=container.runtime_machine_id,
             container_id=container.id,
             port=8080,
             state=BackendRouteState.Ready,
@@ -440,8 +478,8 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
         )
         headers = _auth_headers(isolated_services)
 
-        ready = client.get(f"/sandbox/id/{container.id}/8080", headers=headers)
-        assert ready.status_code == 209
+        ready = client.get(f"/sandbox/public/{container.id}/8080")
+        assert ready.status_code == 209, ready.text
         assert proxy_client.calls[-1][0].route_id == "owned-route"
 
         invalid_cases = [
@@ -451,6 +489,15 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
             ),
             scheduler.address_maps[container.id].model_copy(
                 update={"routes": [route.model_copy(update={"state": BackendRouteState.Opening})]}
+            ),
+            scheduler.address_maps[container.id].model_copy(
+                update={"routes": [route.model_copy(update={"worker_id": "another-worker"})]}
+            ),
+            scheduler.address_maps[container.id].model_copy(
+                update={"routes": [route.model_copy(update={"machine_id": "another-machine"})]}
+            ),
+            scheduler.address_maps[container.id].model_copy(
+                update={"routes": [route.model_copy(update={"kind": BackendRouteKind.Worker})]}
             ),
             scheduler.address_maps[container.id].model_copy(
                 update={
@@ -473,6 +520,21 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
             response = client.get(f"/sandbox/id/{container.id}/8080", headers=headers)
             assert response.status_code == 503
             assert time.monotonic() - started < 0.5
+        unassigned = _create_container(isolated_services, stub, "unassigned-route")
+        _store_sandbox_exposure(isolated_services, unassigned, port=8080, public=False)
+        scheduler.states.update(
+            _FakeSchedulerContainers.running(unassigned, address_maps={}).states
+        )
+        scheduler.address_maps[unassigned.id] = SchedulerContainerAddressMap(
+            container_id=unassigned.id,
+            address_map={8080: "route://owned-route"},
+            routes=[
+                route.model_copy(
+                    update={"container_id": unassigned.id, "worker_id": "", "machine_id": ""}
+                )
+            ],
+        )
+        assert client.get(f"/sandbox/id/{unassigned.id}/8080", headers=headers).status_code == 503
         assert len(proxy_client.calls) == successful_calls
 
 

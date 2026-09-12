@@ -88,6 +88,23 @@ def test_deployment_manifest_route_serves_invoke_schema(
             "return_schema",
         ) == {"type": "integer"}
 
+        app_manifest = client.post(
+            "/gateway/client-manifests",
+            headers=headers,
+            params={"workspace": "default"},
+            json={"app": "demo", "workspace": "default", "external_url": "https://ui.example"},
+        )
+        assert app_manifest.status_code == 200
+        resources = _json_path(_response_json(app_manifest), "resources")
+        assert isinstance(resources, list)
+        assert [_json_path(resource, "deployment_id") for resource in resources] == [deployment.id]
+        assert _json_path(resources[0], "invoke_url") == (
+            f"https://{deployment.subdomain}-v{deployment.version}.ui.example"
+        )
+        assert _json_path(resources[0], "invoke_path") == (
+            f"/api/v1/functions/square/v{deployment.version}"
+        )
+
         not_invokable = client.get(
             f"/api/v1/deployments/{pod.id}/manifest",
             headers=headers,

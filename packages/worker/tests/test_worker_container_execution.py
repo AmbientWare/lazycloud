@@ -51,6 +51,7 @@ from worker.finalization import (
     WorkerContainerFinalizationService,
 )
 from worker.gpu import ContainerGpuAssignmentResult
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.monitoring import (
     ContainerRuntimeMonitor,
     ContainerRuntimeMonitorSettings,
@@ -82,7 +83,9 @@ class AddressPublisher:
 @dataclass(slots=True)
 class ImageLoader:
     log: CallLog
-    result: ContainerImageLoadResult = field(default_factory=ContainerImageLoadResult)
+    result: ContainerImageLoadResult = field(
+        default_factory=lambda: ContainerImageLoadResult(image_config=ImageRuntimeConfig())
+    )
     env_seen: list[str] = field(default_factory=list)
 
     def load_image(self, request: ContainerRequestContext) -> ContainerImageLoadResult:
@@ -261,6 +264,7 @@ class SpecBuilder:
         *,
         bind_ports: list[int],
         port_bindings: list[PortBinding],
+        image_config: ImageRuntimeConfig,
         mount_result: ContainerMountSetupResult,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
@@ -281,6 +285,7 @@ class SpecBuilder:
         }
         return OciRuntimeContainerSpec(
             container_id=container_id,
+            image_config=image_config,
             runtime=RuntimeBinaryConfig(runtime=context.runtime),
             bundle_path=bundle_path,
             config_path=f"{bundle_path}/config.json",
@@ -980,7 +985,10 @@ def _service(
     return WorkerContainerExecutionService(
         runtime_resources=Stopper(),
         address_publisher=AddressPublisher(log),
-        image_loader=image_loader or ImageLoader(log, image_result or ContainerImageLoadResult()),
+        image_loader=image_loader
+        or ImageLoader(
+            log, image_result or ContainerImageLoadResult(image_config=ImageRuntimeConfig())
+        ),
         port_allocator=PortAllocator(log),
         mount_preparer=mount_preparer or MountPreparer(log),
         rootfs_preparer=rootfs_preparer or RootfsPreparer(log),

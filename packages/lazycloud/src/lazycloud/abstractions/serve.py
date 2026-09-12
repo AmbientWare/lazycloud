@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import threading
 import time
 from collections.abc import Iterator, Mapping
@@ -11,17 +10,18 @@ from pathlib import Path
 from typing import Protocol
 
 from shared.bytes_transport import encode_bytes
-from shared.containers import ContainerStatus
 from shared.deployments import DeploymentKind
-from shared.http.compute import ContainerResponse, ContainerWithAppPageResponse
+from shared.http.errors import HttpApiError
 from shared.http.gateway import (
     AttachToContainerResponse,
     ContainerWorkspaceSyncOperation,
-    GatewayUrlKind,
-    GetUrlRequest,
-    GetUrlResponse,
     SyncContainerWorkspaceBody,
     SyncContainerWorkspaceResponse,
+)
+from shared.http.previews import (
+    PREVIEW_HEARTBEAT_SECONDS,
+    PreviewSessionResponse,
+    PreviewSessionStatus,
 )
 from shared.paths import state_home
 from shared.transport_retry import (
@@ -31,19 +31,24 @@ from shared.transport_retry import (
 )
 
 from lazycloud.json_contracts import parse_json_object
+from lazycloud.session.source_sync import SourcePackageSyncResult
 from lazycloud.terminal import Terminal
-
-LOGGER = logging.getLogger(__name__)
 
 DEFAULT_ATTACH_POLL_SECONDS = 0.5
 DEFAULT_SYNC_POLL_SECONDS = 0.5
 DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS = 30.0
-DEFAULT_PREVIEW_RECORD_TTL_SECONDS = 24 * 60 * 60
-ACTIVE_PREVIEW_CONTAINER_STATUSES = {ContainerStatus.Pending, ContainerStatus.Running}
 
 
-class ServeUrlClient(Protocol):
-    def get_url(self, request: GetUrlRequest) -> GetUrlResponse: ...
+class PreviewSessionReader(Protocol):
+    def get_preview(self, preview_id: str) -> PreviewSessionResponse: ...
+
+
+class PreviewLifecycleClient(PreviewSessionReader, Protocol):
+    def create(self, stub_id: str, *, timeout: int = 0) -> PreviewSessionResponse: ...
+
+    def renew(self, preview_id: str) -> PreviewSessionResponse: ...
+
+    def stop(self, preview_id: str) -> None: ...
 
 
 class WorkspaceSyncClient(Protocol):
@@ -51,23 +56,6 @@ class WorkspaceSyncClient(Protocol):
         self,
         body: SyncContainerWorkspaceBody,
     ) -> SyncContainerWorkspaceResponse: ...
-
-
-class PreviewContainerClient(Protocol):
-    def list_containers(
-        self,
-        *,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> ContainerWithAppPageResponse: ...
-
-
-class ContainerLifecycleClient(Protocol):
-    def stop_container(self, container_id: str) -> ContainerResponse: ...
-
-
-class ServeResourceClient(PreviewContainerClient, ContainerLifecycleClient, Protocol):
-    pass
 
 
 class ServeSessionClient(WorkspaceSyncClient, Protocol):
@@ -79,14 +67,8 @@ class ServeSessionClient(WorkspaceSyncClient, Protocol):
     ) -> Iterator[AttachToContainerResponse]: ...
 
 
-class ServeGatewayClient(ServeUrlClient, ServeSessionClient, Protocol):
+class ServeGatewayClient(ServeSessionClient, Protocol):
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class ServePreviewUrl:
-    stub_id: str
-    url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,11 +78,12 @@ class ServePreviewRecord:
     app: str
     workspace: str
     endpoint: str
+    preview_id: str
     stub_id: str
     container_id: str
     url: str
     created_at: float
-    expires_at: float
+    expires_at: float | None
 
     def payload(self) -> dict[str, object]:
         return {
@@ -109,6 +92,7 @@ class ServePreviewRecord:
             "app": self.app,
             "workspace": self.workspace,
             "endpoint": self.endpoint,
+            "preview_id": self.preview_id,
             "stub_id": self.stub_id,
             "container_id": self.container_id,
             "url": self.url,
@@ -124,11 +108,14 @@ class ServePreviewRecord:
             app=str(payload["app"]),
             workspace=str(payload["workspace"]),
             endpoint=str(payload["endpoint"]),
+            preview_id=str(payload["preview_id"]),
             stub_id=str(payload["stub_id"]),
             container_id=str(payload["container_id"]),
             url=str(payload["url"]),
             created_at=_payload_float(payload, "created_at"),
-            expires_at=_payload_float(payload, "expires_at"),
+            expires_at=_payload_float(payload, "expires_at")
+            if payload["expires_at"] is not None
+            else None,
         )
 
 
@@ -142,13 +129,14 @@ def _payload_float(payload: Mapping[str, object], key: str) -> float:
 
 @dataclass(slots=True)
 class ServePreviewSession:
+    preview_id: str
     stub_id: str
     container_id: str
     url: str
     gateway_client: ServeSessionClient
-    resource_client: ContainerLifecycleClient
+    preview_client: PreviewLifecycleClient
     terminal: Terminal | None = None
-    sync_dir: str | None = None
+    source: SourcePackageSyncResult | None = None
     token: str | None = None
     authorized: bool = True
     attach_poll_seconds: float = DEFAULT_ATTACH_POLL_SECONDS
@@ -156,49 +144,61 @@ class ServePreviewSession:
     initial_sync_timeout_seconds: float = DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS
     preview_record: ServePreviewRecord | None = None
     _syncer: ContainerWorkspaceSyncer | None = field(default=None, init=False, repr=False)
+    _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
 
     def run(self) -> None:
         terminal = self.terminal or Terminal()
-        print_invocation_details(
-            terminal,
-            url=self.url,
-            authorized=self.authorized,
-            token_configured=bool(self.token),
+        heartbeat = threading.Thread(
+            target=self._renew_lease, args=(terminal,), name="preview-heartbeat", daemon=True
         )
-        if self.sync_dir:
-            self._syncer = ContainerWorkspaceSyncer(
-                container_id=self.container_id,
-                local_dir=self.sync_dir,
-                gateway_client=self.gateway_client,
-                terminal=terminal,
-                poll_seconds=self.sync_poll_seconds,
-                initial_sync_timeout_seconds=self.initial_sync_timeout_seconds,
-                full_initial_sync=False,
-            )
-            self._syncer.start()
         try:
+            heartbeat.start()
+            print_invocation_details(
+                terminal,
+                url=self.url,
+                authorized=self.authorized,
+                token_configured=bool(self.token),
+            )
+            if self.source is not None:
+                self._syncer = ContainerWorkspaceSyncer(
+                    container_id=self.container_id,
+                    local_dir=str(self.source.root),
+                    archive_prefix=self.source.archive_prefix,
+                    seed_files=self.source.files,
+                    gateway_client=self.gateway_client,
+                    terminal=terminal,
+                    poll_seconds=self.sync_poll_seconds,
+                    initial_sync_timeout_seconds=self.initial_sync_timeout_seconds,
+                )
+                self._syncer.start()
             self._attach_foreground(terminal)
         except KeyboardInterrupt:
-            terminal.header("Stopping serve container")
-            self._stop_with_warning(terminal)
-        except Exception:
-            terminal.header("Stopping serve container")
-            self._stop_with_warning(terminal)
-            raise
+            terminal.header("Stopping preview")
         finally:
+            self._stop_event.set()
             if self._syncer is not None:
                 self._syncer.stop()
+            if heartbeat.ident is not None:
+                heartbeat.join()
+            self._stop_with_warning(terminal)
             if self.preview_record is not None:
                 remove_serve_preview(self.preview_record)
 
     def stop(self) -> None:
-        self.resource_client.stop_container(self.container_id)
+        self.preview_client.stop(self.preview_id)
+
+    def _renew_lease(self, terminal: Terminal) -> None:
+        while not self._stop_event.wait(PREVIEW_HEARTBEAT_SECONDS):
+            try:
+                self.preview_client.renew(self.preview_id)
+            except Exception as exc:
+                terminal.warn(f"preview heartbeat failed: {exc}")
 
     def _stop_with_warning(self, terminal: Terminal) -> None:
         try:
             self.stop()
         except Exception as exc:
-            terminal.warn(f"failed to stop serve container: {exc}")
+            terminal.warn(f"failed to stop preview: {exc}")
 
     def _attach_foreground(self, terminal: Terminal) -> None:
         self._attach_stream(terminal)
@@ -254,28 +254,28 @@ class ContainerWorkspaceSyncer:
     terminal: Terminal | None = None
     poll_seconds: float = DEFAULT_SYNC_POLL_SECONDS
     initial_sync_timeout_seconds: float = DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS
-    full_initial_sync: bool = True
+    archive_prefix: tuple[str, ...] = ()
+    seed_files: tuple[str, ...] = ()
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _thread: threading.Thread | None = field(default=None, init=False, repr=False)
     _snapshot: dict[str, FileState] = field(default_factory=dict, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        self.local_dir = str(Path(self.local_dir).expanduser().resolve())
+
     def start(self) -> None:
         if self._thread is not None:
             return
+        self._sync_initial_with_retries()
         self._thread = threading.Thread(target=self._run, name="serve-sync", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2)
+        if self._thread is not None and self._thread.ident is not None:
+            self._thread.join()
 
     def _run(self) -> None:
-        try:
-            self._sync_initial_with_retries()
-        except Exception as exc:
-            self._warn(f"serve sync disabled: {exc}")
-            return
         while not self._stop_event.wait(self.poll_seconds):
             try:
                 next_snapshot = _snapshot(self.local_dir)
@@ -285,9 +285,6 @@ class ContainerWorkspaceSyncer:
                 self._warn(f"serve sync failed: {exc}")
 
     def _sync_initial_with_retries(self) -> None:
-        if not self.full_initial_sync:
-            self.record_seed_snapshot()
-            return
         deadline = time.monotonic() + max(self.initial_sync_timeout_seconds, 0.0)
         announced_wait = False
         while True:
@@ -312,11 +309,10 @@ class ContainerWorkspaceSyncer:
         self._sync_initial(self._snapshot)
         self._detail(f"Synced {len(self._snapshot)} files")
 
-    def record_seed_snapshot(self) -> None:
-        self._snapshot = _snapshot(self.local_dir)
-        self._detail(f"Watching {len(self._snapshot)} files")
-
     def _sync_initial(self, snapshot: dict[str, FileState]) -> None:
+        removed = set(self.seed_files) - {self._remote_path(relative) for relative in snapshot}
+        for path in sorted(removed):
+            self._sync(operation=ContainerWorkspaceSyncOperation.Delete, path=path)
         for relative in sorted(snapshot):
             self._write_file(relative)
 
@@ -330,7 +326,7 @@ class ContainerWorkspaceSyncer:
         for relative in removed:
             self._sync(
                 operation=ContainerWorkspaceSyncOperation.Delete,
-                path=relative,
+                path=self._remote_path(relative),
             )
         for relative in changed:
             self._write_file(relative)
@@ -338,12 +334,17 @@ class ContainerWorkspaceSyncer:
             self._detail(f"Synced {len(changed)} changed, {len(removed)} removed")
 
     def _write_file(self, relative: str) -> None:
+        if self._stop_event.is_set():
+            return
         self._sync(
             operation=ContainerWorkspaceSyncOperation.Write,
-            path=relative,
+            path=self._remote_path(relative),
             data=(Path(self.local_dir) / relative).read_bytes(),
             mode=(Path(self.local_dir) / relative).stat().st_mode & 0o777,
         )
+
+    def _remote_path(self, relative: str) -> str:
+        return "/".join((*self.archive_prefix, relative))
 
     def _sync(
         self,
@@ -354,6 +355,8 @@ class ContainerWorkspaceSyncer:
         mode: int = 0o644,
         new_path: str = "",
     ) -> None:
+        if self._stop_event.is_set():
+            return
         self.gateway_client.sync_container_workspace(
             SyncContainerWorkspaceBody(
                 container_id=self.container_id,
@@ -380,26 +383,6 @@ class FileState:
     mtime_ns: int
 
 
-def resolve_serve_url(
-    client: ServeUrlClient,
-    *,
-    stub_id: str,
-    workspace: str | None = None,
-    external_url: str,
-) -> ServePreviewUrl:
-    response = client.get_url(
-        GetUrlRequest(
-            stub_id=stub_id,
-            url_type=GatewayUrlKind.Stub,
-            workspace=workspace,
-            external_url=external_url,
-        )
-    )
-    if not response.url:
-        raise RuntimeError("serve URL lookup failed")
-    return ServePreviewUrl(stub_id=stub_id, url=response.url)
-
-
 def write_serve_preview(
     *,
     kind: DeploymentKind,
@@ -407,35 +390,36 @@ def write_serve_preview(
     app: str,
     workspace: str,
     endpoint: str,
+    preview_id: str,
     stub_id: str,
     container_id: str,
     url: str,
-    ttl_seconds: float = DEFAULT_PREVIEW_RECORD_TTL_SECONDS,
+    expires_at: float | None = None,
 ) -> ServePreviewRecord:
-    now = time.time()
     record = ServePreviewRecord(
         kind=kind,
         name=name,
         app=app,
         workspace=workspace,
         endpoint=endpoint,
+        preview_id=preview_id,
         stub_id=stub_id,
         container_id=container_id,
         url=url,
-        created_at=now,
-        expires_at=now + ttl_seconds,
+        created_at=time.time(),
+        expires_at=expires_at,
     )
-    path = _preview_record_path(
-        kind=kind,
-        name=name,
-        app=app,
-        workspace=workspace,
-        endpoint=endpoint,
+    directory = _preview_record_path(
+        kind=kind, name=name, app=app, workspace=workspace, endpoint=endpoint
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{preview_id}.json"
     temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(record.payload(), sort_keys=True), encoding="utf-8")
-    temp_path.replace(path)
+    try:
+        temp_path.write_text(json.dumps(record.payload(), sort_keys=True), encoding="utf-8")
+        temp_path.replace(path)
+    finally:
+        _remove_preview_path(temp_path)
     return record
 
 
@@ -446,47 +430,59 @@ def read_serve_preview(
     app: str,
     workspace: str,
     endpoint: str,
-    client: PreviewContainerClient | None = None,
+    client: PreviewSessionReader,
 ) -> ServePreviewRecord | None:
-    path = _preview_record_path(
-        kind=kind,
-        name=name,
-        app=app,
-        workspace=workspace,
-        endpoint=endpoint,
+    directory = _preview_record_path(
+        kind=kind, name=name, app=app, workspace=workspace, endpoint=endpoint
     )
-    try:
-        payload = parse_json_object(path.read_text(encoding="utf-8"))
-        record = ServePreviewRecord.from_payload(payload)
-    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-        _remove_preview_path(path)
-        return None
-    if (
-        record.kind is not kind
-        or record.name != name
-        or record.app != app
-        or record.workspace != workspace
-        or record.endpoint != endpoint
-        or record.expires_at <= time.time()
-    ):
-        _remove_preview_path(path)
-        return None
-    if client is not None and not _preview_container_active(record, client):
-        _remove_preview_path(path)
-        return None
-    return record
+    records: list[ServePreviewRecord] = []
+    for path in directory.glob("*.json"):
+        try:
+            record = ServePreviewRecord.from_payload(
+                parse_json_object(path.read_text(encoding="utf-8"))
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            _remove_preview_path(path)
+            continue
+        if (
+            record.kind is not kind
+            or record.name != name
+            or record.app != app
+            or record.workspace != workspace
+            or record.endpoint != endpoint
+            or path.name != f"{record.preview_id}.json"
+        ):
+            _remove_preview_path(path)
+            continue
+        records.append(record)
+    for record in sorted(records, key=lambda item: item.created_at, reverse=True):
+        try:
+            session = client.get_preview(record.preview_id)
+        except HttpApiError as exc:
+            if exc.status_code != 404:
+                raise
+            remove_serve_preview(record)
+            continue
+        if (
+            session.status is not PreviewSessionStatus.Active
+            or session.container_id != record.container_id
+            or session.execution_stub_id != record.stub_id
+        ):
+            remove_serve_preview(record)
+            continue
+        return record
+    return None
 
 
 def remove_serve_preview(record: ServePreviewRecord) -> None:
-    _remove_preview_path(
-        _preview_record_path(
-            kind=record.kind,
-            name=record.name,
-            app=record.app,
-            workspace=record.workspace,
-            endpoint=record.endpoint,
-        )
+    directory = _preview_record_path(
+        kind=record.kind,
+        name=record.name,
+        app=record.app,
+        workspace=record.workspace,
+        endpoint=record.endpoint,
     )
+    _remove_preview_path(directory / f"{record.preview_id}.json")
 
 
 def print_invocation_details(
@@ -525,7 +521,7 @@ def sync_local_workspace(
 
 
 def _snapshot(local_dir: str) -> dict[str, FileState]:
-    from lazycloud.session.source_sync import collect_source_files
+    from lazycloud.source_files import collect_source_files
 
     root = Path(local_dir).expanduser().resolve()
     files: dict[str, FileState] = {}
@@ -567,30 +563,7 @@ def _preview_record_path(
         sort_keys=True,
     )
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    return state_home() / "serve-previews" / f"{digest}.json"
-
-
-def _preview_container_active(
-    record: ServePreviewRecord,
-    client: PreviewContainerClient,
-) -> bool:
-    cursor = ""
-    seen_cursors: set[str] = set()
-    while True:
-        try:
-            response = client.list_containers(cursor=cursor or None)
-        except Exception:
-            # Treated as active so a listing outage never ends a live preview.
-            LOGGER.debug("preview container listing failed", exc_info=True)
-            return True
-        for item in response.data:
-            container = item.container
-            if container.id == record.container_id:
-                return container.status in ACTIVE_PREVIEW_CONTAINER_STATUSES
-        if not response.next or response.next in seen_cursors:
-            return False
-        seen_cursors.add(response.next)
-        cursor = response.next
+    return state_home() / "serve-previews" / digest
 
 
 def _remove_preview_path(path: Path) -> None:
@@ -602,18 +575,15 @@ def _remove_preview_path(path: Path) -> None:
 
 __all__ = [
     "ContainerWorkspaceSyncer",
-    "PreviewContainerClient",
+    "PreviewLifecycleClient",
+    "PreviewSessionReader",
     "ServeGatewayClient",
     "ServePreviewRecord",
     "ServePreviewSession",
-    "ServePreviewUrl",
-    "ServeResourceClient",
-    "ServeUrlClient",
     "WorkspaceSyncClient",
     "print_invocation_details",
     "read_serve_preview",
     "remove_serve_preview",
-    "resolve_serve_url",
     "sync_local_workspace",
     "write_serve_preview",
 ]

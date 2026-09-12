@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable
-from pathlib import Path
 
 from pydantic import JsonValue
 from shared.image_building.authoring import ImageBuildStepKind, ImageSpec
@@ -14,15 +13,17 @@ from shared.image_building.planning import ImageBuildPlan
 from shared.image_building.requirements import sanitize_python_packages
 
 from images.building.commands import _normalize_step, plan_image_build_commands
-from images.building.constants import DEFAULT_IMAGE_BASE
+from images.building.constants import DEFAULT_IMAGE_BASE, UV_PROJECT_ENVIRONMENT
 from images.building.models import ImageInstallCommandMode, PythonRuntimeSetupAction
 from images.building.python_runtime import plan_python_runtime_setup
 
-IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 2
+IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 3
 
 
 def build_image_plan(image: ImageSpec) -> ImageBuildPlan:
-    context_digest = image.context_digest
+    context_digest = (
+        image.filesystem_snapshot.sha256 if image.filesystem_snapshot else image.context_digest
+    )
     if image.context_path and not context_digest:
         context_digest = fingerprint_build_context(image.context_path)
 
@@ -70,7 +71,14 @@ def render_image_dockerfile(image: ImageSpec) -> str:
         python_executable=python_setup.python_executable,
     ):
         if build_command.kind is ImageBuildStepKind.UvProject:
-            lines.extend(_uv_project_copy_lines(image, build_command.args))
+            lines.extend(_uv_project_copy_lines(build_command.args))
+            lines.extend(
+                [
+                    f"ENV UV_PROJECT_ENVIRONMENT={UV_PROJECT_ENVIRONMENT}",
+                    f"ENV VIRTUAL_ENV={UV_PROJECT_ENVIRONMENT}",
+                    f'ENV PATH="{UV_PROJECT_ENVIRONMENT}/bin:${{PATH}}"',
+                ]
+            )
         lines.append(f"RUN {build_command.command}")
 
     return "\n".join(lines).rstrip() + "\n"
@@ -92,6 +100,10 @@ def _normalize_image_spec(image: ImageSpec, *, context_digest: str | None) -> Im
 
 
 def _validate_image_spec(image: ImageSpec) -> None:
+    if image.filesystem_snapshot and (
+        image.dockerfile or image.commands or image.build_steps or image.packages or image.secrets
+    ):
+        raise ValueError("filesystem snapshots cannot include additional build instructions")
     if image.dockerfile and image.base not in {"", DEFAULT_IMAGE_BASE}:
         msg = "dockerfile builds cannot also set a custom base image"
         raise ValueError(msg)
@@ -105,6 +117,11 @@ def _validate_image_spec(image: ImageSpec) -> None:
 
 
 def _initial_dockerfile_lines(image: ImageSpec) -> list[str]:
+    if image.filesystem_snapshot:
+        lines = ["FROM scratch", "ADD snapshot.tar /"]
+        if image.workdir:
+            lines.append(f"WORKDIR {_docker_value(image.workdir)}")
+        return lines
     if image.dockerfile:
         return image.dockerfile.rstrip().splitlines()
 
@@ -125,16 +142,9 @@ def _append_env_and_build_args(lines: list[str], image: ImageSpec) -> None:
         lines.append(f"ARG {secret}")
 
 
-def _uv_project_copy_lines(image: ImageSpec, args: Iterable[str]) -> list[str]:
+def _uv_project_copy_lines(args: Iterable[str]) -> list[str]:
     project_dir = next((value for value in args if value.strip()), ".")
-    source_prefix = "" if project_dir in {"", "."} else project_dir.rstrip("/") + "/"
-    metadata_files = ["pyproject.toml", "uv.lock"]
-    context_path = Path(image.context_path) if image.context_path else None
-    if context_path is not None:
-        source_dir = context_path / ("" if project_dir in {"", "."} else project_dir)
-        if (source_dir / ".python-version").is_file():
-            metadata_files.append(".python-version")
-    return [f"COPY {source_prefix}{name} ./{name}" for name in metadata_files]
+    return [f"COPY {json.dumps([project_dir, '.'])}"]
 
 
 def _docker_value(value: str) -> str:

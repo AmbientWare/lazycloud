@@ -602,7 +602,6 @@ def _execution_redis_keys(
                 {
                     root,
                     f"{root}:keep_warm_lock:container",
-                    redis.key("scheduler", "serve", "lock", workspace_id, stub_id),
                     redis.key(
                         "autoscaling",
                         "endpoints",

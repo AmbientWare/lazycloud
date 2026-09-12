@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -36,7 +36,7 @@ class ContainerServiceRequestHandler(Protocol):
         request: ContainerServicePayload,
         *,
         timeout_seconds: float | None = None,
-    ) -> Iterable[ContainerServicePayload]: ...
+    ) -> Generator[ContainerServicePayload, None, None]: ...
 
 
 @dataclass(slots=True)
@@ -129,10 +129,13 @@ def _method(method_name: str) -> ContainerServiceMethod:
         raise HTTPException(status_code=404, detail=detail) from exc
 
 
-def _stream_body(items: Iterable[ContainerServicePayload]) -> Iterable[bytes]:
-    for item in items:
-        payload = encode_container_service_wire_value(item)
-        yield (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+def _stream_body(items: Generator[ContainerServicePayload, None, None]) -> Iterable[bytes]:
+    try:
+        for item in items:
+            payload = encode_container_service_wire_value(item)
+            yield (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+    finally:
+        items.close()
 
 
 def _wait_for_startup(

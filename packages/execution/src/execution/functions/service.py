@@ -689,6 +689,10 @@ class FunctionControlService:
             error=error,
             exit_code=exit_code,
         )
+        if outcome.expired_container_id:
+            self.services.containers.stop(
+                outcome.expired_container_id, reason=StopContainerReason.Scheduler
+            )
         # A retry due immediately is not scheduled from here. Making it runnable
         # means releasing its claim, and that is `schedule_due_retries`, which
         # owns the decision for delayed retries too — one path rather than two
@@ -732,6 +736,27 @@ class FunctionControlService:
             )
         self.release_dependents(updated)
         return updated
+
+    def expire_function_attempts(
+        self, *, now: datetime | None = None, limit: int = 100
+    ) -> list[Task]:
+        current = now or utc_now()
+        with self.services.context.database.session() as session:
+            attempts = TaskAttemptRepository(session).expired_function_attempts(
+                now=current, limit=limit
+            )
+        expired: list[Task] = []
+        for attempt in attempts:
+            outcome = self.services.tasks.expire_function_attempt(attempt, now=current)
+            if outcome.expired_container_id:
+                self.services.containers.stop(
+                    outcome.expired_container_id, reason=StopContainerReason.Scheduler
+                )
+            if outcome.state_changed:
+                expired.append(outcome.task)
+                if is_terminal_task_status(outcome.task.status):
+                    self.release_dependents(outcome.task)
+        return expired
 
     def schedule_due_retries(
         self,
@@ -1198,7 +1223,13 @@ class FunctionControlService:
             function_result=request.result,
             exit_code=0,
         )
-        if not outcome.state_changed:
+        if outcome.expired_container_id:
+            self.services.containers.stop(
+                outcome.expired_container_id, reason=StopContainerReason.Scheduler
+            )
+        if outcome.state_changed and is_terminal_task_status(outcome.task.status):
+            self.release_dependents(outcome.task)
+        if not outcome.state_changed or outcome.attempt_status is not TaskStatus.Complete:
             return FunctionSetResultResponse(stored=False, status=outcome.task.status)
         self.services.events.emit(
             "function.result.set",
@@ -1211,8 +1242,6 @@ class FunctionControlService:
             },
             workspace_id=outcome.task.workspace_id,
         )
-        if is_terminal_task_status(outcome.task.status):
-            self.release_dependents(outcome.task)
         return FunctionSetResultResponse(status=outcome.task.status)
 
     def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse:

@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from networking.internal_http import InternalHttpClient
 from pydantic import AwareDatetime, Field
 from shared.contracts import ContractModel
+from shared.image_building.authoring import FilesystemSnapshotSource
 from shared.image_building.credentials import registry_host_for_image
 from shared.scheduling import WorkerExecutionRequest
 from shared.timestamps import utc_now
@@ -176,6 +177,17 @@ class WorkerImageBuilder(Protocol):
 
 
 class WorkerImageBuildContextLoader(Protocol):
+    def download_snapshot(
+        self,
+        source: FilesystemSnapshotSource,
+        target_dir: Path,
+        *,
+        workspace_id: str,
+        build_id: str,
+        container_id: str,
+        resources: ImageBuildResources,
+    ) -> None: ...
+
     def extract_build_context(
         self,
         object_id: str,
@@ -184,6 +196,7 @@ class WorkerImageBuildContextLoader(Protocol):
         workspace_id: str,
         build_id: str,
         container_id: str,
+        resources: ImageBuildResources,
     ) -> WorkerImageBuildContextLoadResult: ...
 
 
@@ -495,6 +508,42 @@ class RepositoryImageBuildContextLoader:
     http: InternalHttpClient = field(default_factory=InternalHttpClient)
     timeout_seconds: float = 60.0
 
+    def download_snapshot(
+        self,
+        source: FilesystemSnapshotSource,
+        target_dir: Path,
+        *,
+        workspace_id: str,
+        build_id: str,
+        container_id: str,
+        resources: ImageBuildResources,
+    ) -> None:
+        resources.require_valid()
+        plan = self.repository.prepare_image_build_context_download(
+            PrepareImageBuildContextDownloadRequest(
+                workspace_id=workspace_id,
+                build_id=build_id,
+                container_id=container_id,
+                object_id=source.object_id,
+            )
+        )
+        if (
+            plan.object_id != source.object_id
+            or plan.sha256 != source.sha256
+            or plan.content_length != source.size_bytes
+            or plan.expires_at is None
+            or plan.expires_at <= utc_now()
+        ):
+            raise ValueError("filesystem snapshot download does not match its owned source")
+        _download_image_build_context(
+            self.http,
+            plan,
+            target_dir / "snapshot.tar",
+            timeout_seconds=self.timeout_seconds,
+            maximum_size_bytes=source.size_bytes,
+            resources=resources,
+        )
+
     def extract_build_context(
         self,
         object_id: str,
@@ -503,8 +552,10 @@ class RepositoryImageBuildContextLoader:
         workspace_id: str,
         build_id: str,
         container_id: str,
+        resources: ImageBuildResources,
     ) -> WorkerImageBuildContextLoadResult:
         try:
+            resources.require_valid()
             plan = self.repository.prepare_image_build_context_download(
                 PrepareImageBuildContextDownloadRequest(
                     workspace_id=workspace_id,
@@ -531,6 +582,8 @@ class RepositoryImageBuildContextLoader:
                     plan,
                     archive_path,
                     timeout_seconds=self.timeout_seconds,
+                    maximum_size_bytes=MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES,
+                    resources=resources,
                 )
                 files = _extract_zip_context(archive_path, target_dir)
         except Exception as exc:
@@ -552,6 +605,8 @@ def _download_image_build_context(
     target: Path,
     *,
     timeout_seconds: float,
+    maximum_size_bytes: int,
+    resources: ImageBuildResources,
 ) -> None:
     parsed = urlparse(plan.download_url)
     if parsed.scheme not in {"http", "https"}:
@@ -586,12 +641,13 @@ def _download_image_build_context(
                 digest = hashlib.sha256()
                 bytes_written = 0
                 for chunk in response.iter_bytes(1024 * 1024):
+                    resources.require_valid()
                     bytes_written += len(chunk)
                     if bytes_written > plan.content_length:
                         raise ImageBuildContextDownloadError(
                             "build context response exceeds object metadata size"
                         )
-                    if bytes_written > MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES:
+                    if bytes_written > maximum_size_bytes:
                         raise ImageBuildContextDownloadError(
                             "build context response exceeds maximum archive size"
                         )
@@ -735,6 +791,7 @@ class BuildahWorkerImageBuilder:
                 context_dir,
                 container_id=container_id,
                 log=log,
+                resources=resources,
             )
             if payload.build_options.dockerfile:
                 dockerfile_path = context_dir / "Dockerfile"
@@ -958,7 +1015,22 @@ class BuildahWorkerImageBuilder:
         *,
         container_id: str,
         log: ImageBuildLog,
+        resources: ImageBuildResources,
     ) -> None:
+        snapshot = payload.build_options.filesystem_snapshot
+        if snapshot is not None:
+            if self.context_loader is None:
+                raise RuntimeError("filesystem snapshot context loader is not configured")
+            self.context_loader.download_snapshot(
+                snapshot,
+                context_dir,
+                workspace_id=payload.workspace_id,
+                build_id=payload.build_id,
+                container_id=container_id,
+                resources=resources,
+            )
+            log("filesystem snapshot source verified")
+            return
         object_id = payload.build_options.build_context_object
         if object_id:
             if self.context_loader is None:
@@ -970,6 +1042,7 @@ class BuildahWorkerImageBuilder:
                 workspace_id=payload.workspace_id,
                 build_id=payload.build_id,
                 container_id=container_id,
+                resources=resources,
             )
             if not loaded.ok:
                 msg = (

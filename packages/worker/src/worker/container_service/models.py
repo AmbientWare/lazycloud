@@ -7,7 +7,9 @@ from pydantic import Field
 from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.contracts import ContractModel
+from shared.image_building.authoring import LinuxArchitecture
 
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.routes import WorkerRouteContext
 from worker.runtime_config import OciRuntimeName
 from worker.sandbox_server import SandboxContainerMount, SandboxLogStream
@@ -50,6 +52,12 @@ class WorkerSandboxProcess(ContractModel):
     running: bool = True
 
 
+class ContainerFilesystemSnapshotContext(ContractModel):
+    image_config: ImageRuntimeConfig
+    architecture: LinuxArchitecture
+    excluded_paths: list[str]
+
+
 class WorkerContainerServiceInstance(ContractModel):
     container_id: str
     root_path: str
@@ -57,6 +65,7 @@ class WorkerContainerServiceInstance(ContractModel):
     config_path: str = ""
     top_layer_path: str = ""
     upper_path: str = ""
+    filesystem_snapshot: ContainerFilesystemSnapshotContext | None = None
     workspace_path: str = ""
     cwd: str = "/workspace"
     runtime: OciRuntimeName = OciRuntimeName.Runsc

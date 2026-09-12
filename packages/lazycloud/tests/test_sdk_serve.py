@@ -5,33 +5,51 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from lazycloud.abstractions.serve import (
     ContainerWorkspaceSyncer,
     ServePreviewSession,
-    resolve_serve_url,
+    write_serve_preview,
 )
+from lazycloud.session.source_sync import SourcePackageSyncer
 from lazycloud.terminal import Terminal
-from shared.http.compute import ContainerResponse
+from shared.deployments import DeploymentKind
 from shared.http.gateway import (
     AttachToContainerResponse,
     ContainerWorkspaceSyncOperation,
-    GetUrlRequest,
-    GetUrlResponse,
     SyncContainerWorkspaceBody,
     SyncContainerWorkspaceResponse,
 )
-from tests.fakes import http_api_error
+from shared.http.previews import PreviewSessionResponse, PreviewSessionStatus
+from shared.paths import HOME_ENV
+from tests.fakes import FakeUploadClient, http_api_error
 
 
 @dataclass
 class InterruptingGatewayClient:
-    urls: list[GetUrlRequest] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
     sync_requests: list[SyncContainerWorkspaceBody] = field(default_factory=list)
 
-    def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
-        self.urls.append(request)
-        return GetUrlResponse(url=f"{request.external_url}/endpoint/id/{request.stub_id}")
+    def create(self, stub_id: str, *, timeout: int = 0) -> PreviewSessionResponse:
+        return self.get_preview("preview-1")
+
+    def get_preview(self, preview_id: str) -> PreviewSessionResponse:
+        return PreviewSessionResponse(
+            id=preview_id,
+            workspace_id="default",
+            source_stub_id="stub-source",
+            execution_stub_id="stub-endpoint",
+            container_id="ctr-serve",
+            status=PreviewSessionStatus.Stopped
+            if preview_id in self.stopped
+            else PreviewSessionStatus.Active,
+            public=False,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            expires_at=None,
+        )
+
+    def renew(self, preview_id: str) -> PreviewSessionResponse:
+        return self.get_preview(preview_id)
 
     def attach_to_container_events(
         self,
@@ -43,16 +61,8 @@ class InterruptingGatewayClient:
         _ = poll_interval_seconds
         raise KeyboardInterrupt
 
-    def stop_container(self, container_id: str) -> ContainerResponse:
-        self.stopped.append(container_id)
-        return ContainerResponse(
-            id=container_id,
-            name="preview",
-            image="python:3.12",
-            command=[],
-            workspace_id="default",
-            created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
+    def stop(self, preview_id: str) -> None:
+        self.stopped.append(preview_id)
 
     def sync_container_workspace(
         self,
@@ -126,59 +136,53 @@ class FailingAttachGatewayClient(InterruptingGatewayClient):
         raise RuntimeError("attach failed")
 
 
-def test_serve_preview_resolves_stub_url_and_stops_container_on_interrupt() -> None:
+def test_serve_preview_stops_session_on_interrupt() -> None:
     gateway = InterruptingGatewayClient()
 
-    url = resolve_serve_url(
-        gateway,
-        stub_id="stub-endpoint",
-        external_url="https://example.test",
-    )
     session = ServePreviewSession(
+        preview_id="preview-1",
         stub_id="stub-endpoint",
         container_id="ctr-serve",
-        url=url.url,
+        url="https://example.test/api/v1/previews/preview-1/invoke",
         gateway_client=gateway,
-        resource_client=gateway,
+        preview_client=gateway,
         terminal=Terminal(quiet=True),
-        sync_dir=None,
     )
 
     session.run()
 
-    assert url.url == "https://example.test/endpoint/id/stub-endpoint"
-    assert gateway.stopped == ["ctr-serve"]
+    assert gateway.stopped == ["preview-1"]
 
 
 def test_serve_preview_retries_attach_timeout() -> None:
     gateway = TimingOutAttachGatewayClient()
     session = ServePreviewSession(
+        preview_id="preview-1",
         stub_id="stub-endpoint",
         container_id="ctr-serve",
         url="https://example.test/endpoint/id/stub-endpoint",
         gateway_client=gateway,
-        resource_client=gateway,
+        preview_client=gateway,
         terminal=Terminal(quiet=True),
-        sync_dir=None,
         attach_poll_seconds=0,
     )
 
     session.run()
 
-    assert gateway.stopped == []
+    assert gateway.stopped == ["preview-1"]
     assert gateway.timeouts_remaining == 0
 
 
 def test_serve_preview_stops_container_when_attach_fails() -> None:
     gateway = FailingAttachGatewayClient()
     session = ServePreviewSession(
+        preview_id="preview-1",
         stub_id="stub-endpoint",
         container_id="ctr-serve",
         url="https://example.test/endpoint/id/stub-endpoint",
         gateway_client=gateway,
-        resource_client=gateway,
+        preview_client=gateway,
         terminal=Terminal(quiet=True),
-        sync_dir=None,
     )
 
     try:
@@ -188,7 +192,7 @@ def test_serve_preview_stops_container_when_attach_fails() -> None:
     else:
         raise AssertionError("expected attach failure")
 
-    assert gateway.stopped == ["ctr-serve"]
+    assert gateway.stopped == ["preview-1"]
 
 
 def test_serve_workspace_syncer_writes_filtered_tree_through_gateway(tmp_path: Path) -> None:
@@ -220,7 +224,62 @@ def test_serve_workspace_syncer_writes_filtered_tree_through_gateway(tmp_path: P
     assert "__pycache__/skip.py" not in writes
 
 
-def test_serve_workspace_syncer_can_seed_from_source_package_before_deltas(
+def test_initial_sync_failure_stops_only_its_preview_and_removes_its_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv(HOME_ENV, str(state))
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "app.py").write_text("VALUE = 1\n")
+    source = SourcePackageSyncer(
+        FakeUploadClient(object_id="obj-source"), root_dir=source_root
+    ).sync()
+    baseline = write_serve_preview(
+        kind=DeploymentKind.Endpoint,
+        name="app",
+        app="test",
+        workspace="default",
+        endpoint="https://example.test",
+        preview_id="baseline",
+        stub_id="stub-baseline",
+        container_id="ctr-baseline",
+        url="https://example.test/baseline",
+    )
+    record = write_serve_preview(
+        kind=DeploymentKind.Endpoint,
+        name="app",
+        app="test",
+        workspace="default",
+        endpoint="https://example.test",
+        preview_id="preview-1",
+        stub_id="stub-endpoint",
+        container_id="ctr-serve",
+        url="https://example.test/preview-1",
+    )
+    gateway = InitiallyUnpublishedGatewayClient()
+    session = ServePreviewSession(
+        preview_id=record.preview_id,
+        stub_id=record.stub_id,
+        container_id=record.container_id,
+        url=record.url,
+        gateway_client=gateway,
+        preview_client=gateway,
+        source=source,
+        terminal=Terminal(quiet=True),
+        preview_record=record,
+        initial_sync_timeout_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="worker address not published"):
+        session.run()
+
+    assert gateway.stopped == [record.preview_id]
+    assert {path.name for path in state.rglob("*.json")} == {f"{baseline.preview_id}.json"}
+
+
+def test_serve_workspace_syncer_reconciles_uploaded_archive_with_original_prefix(
     tmp_path: Path,
 ) -> None:
     gateway = InterruptingGatewayClient()
@@ -233,16 +292,17 @@ def test_serve_workspace_syncer_can_seed_from_source_package_before_deltas(
         local_dir=str(source),
         gateway_client=gateway,
         terminal=Terminal(quiet=True),
-        full_initial_sync=False,
+        archive_prefix=("pkg",),
+        seed_files=("pkg/app.py", "pkg/deleted.py"),
     )
 
-    syncer._sync_initial_with_retries()
     app.write_text("print('two')\n", encoding="utf-8")
-    syncer._sync_delta(syncer._snapshot | {"app.py": type(syncer._snapshot["app.py"])(13, 0)})
+    syncer.sync_once()
 
-    assert len(gateway.sync_requests) == 1
-    assert gateway.sync_requests[0].path == "app.py"
-    assert gateway.sync_requests[0].operation is ContainerWorkspaceSyncOperation.Write
+    operations = {request.path: request for request in gateway.sync_requests}
+    assert operations["pkg/deleted.py"].operation is ContainerWorkspaceSyncOperation.Delete
+    assert operations["pkg/app.py"].data == b"print('two')\n"
+    assert operations["pkg/app.py"].operation is ContainerWorkspaceSyncOperation.Write
 
 
 def test_serve_workspace_syncer_retries_until_worker_address_is_published(

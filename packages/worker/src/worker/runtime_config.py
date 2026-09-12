@@ -255,7 +255,6 @@ def build_base_oci_config(
         "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         "TERM": "xterm",
         "TASK_ROOT": "/workspace",
-        "MAMBA_ROOT_PREFIX": "/micromamba",
         **(env or {}),
     }
     process_args: JsonArray = (

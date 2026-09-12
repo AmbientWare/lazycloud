@@ -5,7 +5,7 @@ from typing import Literal, TypeAlias
 
 from shared.deployments import DeploymentKind
 
-from lazycloud.abstractions.serve import PreviewContainerClient, read_serve_preview
+from lazycloud.abstractions.serve import PreviewSessionReader, read_serve_preview
 from lazycloud.control import ControlClientConfig
 from lazycloud.env import is_local
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
@@ -52,7 +52,7 @@ def resolve_invocation_target(
     app: str,
     config: ControlClientConfig,
     deployment_client: DeploymentControlClient | None,
-    preview_client: PreviewContainerClient | None,
+    preview_client: PreviewSessionReader,
     target: str = INVOCATION_TARGET_AUTO,
     deployment_name: str | None = None,
     deployment_version: int | None = None,

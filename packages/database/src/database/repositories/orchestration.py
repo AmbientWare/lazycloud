@@ -535,8 +535,11 @@ class ContainerRepository:
         return self.records.get_across_workspaces(container_id)
 
     def lock_across_workspaces(self, container_id: str) -> ContainerRecord | None:
+        parsed_id = try_uuid(container_id)
+        if parsed_id is None:
+            return None
         row = self.session.scalar(
-            select(ContainerTable).where(ContainerTable.id == container_id).with_for_update()
+            select(ContainerTable).where(ContainerTable.id == str(parsed_id)).with_for_update()
         )
         return ContainerRecord.model_validate(row.payload) if row is not None else None
 

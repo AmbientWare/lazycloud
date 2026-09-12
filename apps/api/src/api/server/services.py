@@ -95,6 +95,7 @@ from images.settings import (
     ImageBuildExecutionSettings,
     ImageBuildRegistrySettings,
 )
+from images.snapshots import ImageFilesystemSnapshotService
 from images.submission import ImageBuildSubmissionService
 from networking.async_http import AsyncBackendHttpClient
 from networking.dialer import (
@@ -183,8 +184,8 @@ from shared.container_requests import StopContainerReason
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
-    StartEndpointServeRequest,
-    StartEndpointServeResponse,
+    EndpointWarmupRequest,
+    EndpointWarmupResponse,
 )
 from shared.http.functions import (
     FunctionClaimRequest,
@@ -198,6 +199,7 @@ from shared.http.functions import (
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
+from shared.http.previews import CreatePreviewRequest, PreviewSessionResponse
 from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
 from shared.scheduling import SchedulerWorkerRequest
@@ -344,10 +346,22 @@ class FunctionApiService(Protocol):
 
 
 class EndpointApiService(Protocol):
-    def start_endpoint_serve(
+    def create_preview(
+        self, request: CreatePreviewRequest, *, workspace_id: str
+    ) -> PreviewSessionResponse: ...
+
+    def get_preview(
+        self, preview_id: str, *, workspace_id: str | None = None, public: bool = False
+    ) -> PreviewSessionResponse: ...
+
+    def renew_preview(self, preview_id: str, *, workspace_id: str) -> PreviewSessionResponse: ...
+
+    def stop_preview(self, preview_id: str, *, workspace_id: str) -> None: ...
+
+    def warm_endpoint(
         self,
-        request: StartEndpointServeRequest,
-    ) -> StartEndpointServeResponse: ...
+        request: EndpointWarmupRequest,
+    ) -> EndpointWarmupResponse: ...
 
     async def forward_endpoint_request(
         self,
@@ -917,6 +931,7 @@ class ApiServices(ApiServiceCore):
                 DurableImageBuildDispatch(
                     context.database, container_scheduler, containers, image_build_container_config
                 ),
+                object_storage_service,
             ),
             events,
             publication_publisher,
@@ -1419,6 +1434,7 @@ def _pod_control_service(
     async_io = core.async_io
     return PodControlService(
         core,
+        image_snapshots=ImageFilesystemSnapshotService(core.images, core.object_storage),
         gateway_http_url=core.gateway_settings.public_http_url,
         scheduler_containers=scheduler_containers,
         container_clients=container_clients,

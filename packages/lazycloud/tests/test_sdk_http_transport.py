@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.cli.main import build_public_cli
 from lazycloud.http_transport import request_raw
 from lazycloud.session import Client
@@ -19,9 +20,13 @@ from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
 from shared.deployment_records import DeploymentSpec
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
+from shared.http.functions import FunctionInvokeBody
+from shared.http.gateway import GetOrCreateStubRequest
 from shared.http_transport import HttpChannel
 from tests.http_server import running_http_server
 from typer.testing import CliRunner
+
+from lazycloud import App
 
 
 class _TransportHandler(BaseHTTPRequestHandler):
@@ -334,3 +339,67 @@ def test_preparation_checks_source_existence_in_each_workspace(tmp_path: Path) -
             response = deployment.prepare(DeploymentSpec(name="hello"))
             assert response.stub_id == "stub-prepared"
     assert uploads == ["tenant-a", "tenant-b", "tenant-a"]
+
+
+def test_configured_function_reprepares_in_its_bound_workspace_and_source_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stubs: dict[str, GetOrCreateStubRequest] = {}
+    sources: dict[str, bytes] = {}
+    dispatched: list[tuple[str, FunctionInvokeBody]] = []
+
+    class Handler(_TransportHandler):
+        def do_POST(self) -> None:
+            parsed = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(parsed.query)
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            response: dict[str, str | bool]
+            if parsed.path == "/api/v1/images/verify-build":
+                response = {"image_id": "image-cached", "valid": True, "exists": True}
+            elif parsed.path == "/gateway/objects/head":
+                response = {"exists": False}
+            elif parsed.path == "/gateway/objects/stream":
+                object_id = hashlib.sha256(body).hexdigest()
+                sources[object_id] = body
+                response = {"object_id": object_id}
+            elif parsed.path == "/gateway/stubs/get-or-create":
+                request = GetOrCreateStubRequest.model_validate_json(body)
+                stub_id = hashlib.sha256(body).hexdigest()
+                stubs[stub_id] = request
+                response = {"stub_id": stub_id}
+            elif parsed.path == "/api/v1/functions/invoke/stream":
+                dispatched.append(
+                    (query["workspace"][0], FunctionInvokeBody.model_validate_json(body))
+                )
+                self._respond(
+                    403,
+                    b'{"detail":"dispatch denied"}',
+                    content_type="application/json",
+                )
+                return
+            else:
+                raise AssertionError(parsed.path)
+            self._respond(200, json.dumps(response).encode(), content_type="application/json")
+
+    @App("configured_binding").function(env={"MARKER": "v1", "KEEP": "keep"})
+    def configured() -> str:
+        return "unused"
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    with running_http_server(server):
+        configured.endpoint = f"http://127.0.0.1:{server.server_port}"
+        configured.token = "test-token"
+        original = configured.prepare(workspace="tenant-a", source_root=Path(__file__).parent)
+        monkeypatch.setenv("LAZYCLOUD_WORKSPACE", "tenant-b")
+        monkeypatch.chdir(tmp_path)
+        configured.configure(env={"MARKER": "v2"})
+        with pytest.raises(FunctionOperationError, match="dispatch denied"):
+            configured.spawn()
+
+    workspace, invocation = dispatched[0]
+    prepared = stubs[invocation.stub_id]
+    assert workspace == prepared.workspace == "tenant-a"
+    assert set(prepared.env) == {"MARKER=v2", "KEEP=keep"}
+    assert sources[prepared.object_id] == sources[stubs[original].object_id]

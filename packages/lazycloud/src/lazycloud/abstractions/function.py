@@ -74,6 +74,7 @@ from lazycloud.control_clients import gateway_control_client
 from lazycloud.env import called_on_import, is_local
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
+from lazycloud.schema import prepare_input_arguments
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
 from lazycloud.terminal import Terminal, TerminalStep
@@ -192,11 +193,16 @@ class Function(Generic[P, R]):
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
     client: _FunctionClient | None = field(default=None, init=False, repr=False)
+    _default_client: tuple[ControlClientConfig, _FunctionClient] | None = field(
+        default=None, init=False, repr=False
+    )
     deployment_client: DeploymentControlClient | None = field(
         default=None,
         init=False,
         repr=False,
     )
+    workspace: str | None = field(default=None, init=False)
+    _source_root: Path | None = field(default=None, init=False, repr=False)
     endpoint: str | None = field(default=None, init=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout: float = field(default=10.0, init=False)
@@ -213,12 +219,16 @@ class Function(Generic[P, R]):
 
     @property
     def control_client(self) -> _FunctionClient:
-        if self.client is None:
-            self.client = _default_function_client(self._config())
-        return self.client
+        if self.client is not None:
+            return self.client
+        config = self._config()
+        if self._default_client is None or self._default_client[0] != config:
+            self._default_client = (config, _default_function_client(config))
+        return self._default_client[1]
 
     def _config(self) -> ControlClientConfig:
         return resolve_control_client_config(
+            workspace=self.workspace,
             endpoint=self.endpoint,
             token=self.token,
             timeout_seconds=self.timeout,
@@ -253,6 +263,8 @@ class Function(Generic[P, R]):
             self.cpu = cpu
         if memory is not None:
             self.memory = memory
+        if disk is not None:
+            self.disk = disk
         if gpu is not None:
             self.gpu = gpu
         if gpu_count is not None:
@@ -269,6 +281,24 @@ class Function(Generic[P, R]):
             self.availability_zone = availability_zone
         if preemptible is not None:
             self.preemptible = preemptible
+        if any(
+            value is not None
+            for value in (
+                image,
+                cpu,
+                memory,
+                disk,
+                gpu,
+                gpu_count,
+                env,
+                secrets,
+                region,
+                availability_zone,
+                pool,
+                preemptible,
+            )
+        ):
+            self.stub_id = ""
         return self
 
     def spec(self) -> DeploymentSpec:
@@ -346,10 +376,16 @@ class Function(Generic[P, R]):
         workspace: str | None = None,
         source_root: str | Path | None = None,
     ) -> str:
+        selected_workspace = workspace or self._config().workspace
+        selected_root = (
+            Path(source_root).expanduser().resolve()
+            if source_root is not None
+            else self._source_root
+        )
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
-                workspace=workspace,
+                workspace=selected_workspace,
                 endpoint=self.endpoint,
                 token=self.token,
                 timeout_seconds=self.timeout,
@@ -357,9 +393,9 @@ class Function(Generic[P, R]):
                 terminal=self.terminal,
             ).prepare(
                 self.spec(),
-                workspace=workspace,
+                workspace=selected_workspace,
                 image=self.image,
-                source_root=source_root,
+                source_root=selected_root,
             )
         except RuntimeError as exc:
             raise FunctionOperationError(str(exc)) from exc
@@ -367,6 +403,8 @@ class Function(Generic[P, R]):
             msg = "deployment prepare did not return a function stub_id"
             raise FunctionOperationError(msg)
         self.stub_id = response.stub_id
+        self.workspace = selected_workspace
+        self._source_root = selected_root
         return self.stub_id
 
     def deploy(
@@ -376,10 +414,16 @@ class Function(Generic[P, R]):
         workspace: str | None = None,
         source_root: str | Path | None = None,
     ) -> DeployStubResponse:
+        selected_workspace = workspace or self._config().workspace
+        selected_root = (
+            Path(source_root).expanduser().resolve()
+            if source_root is not None
+            else self._source_root
+        )
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
-                workspace=workspace,
+                workspace=selected_workspace,
                 endpoint=self.endpoint,
                 token=self.token,
                 timeout_seconds=self.timeout,
@@ -388,13 +432,15 @@ class Function(Generic[P, R]):
             ).create(
                 self.spec(),
                 name=name,
-                workspace=workspace,
+                workspace=selected_workspace,
                 image=self.image,
-                source_root=source_root,
+                source_root=selected_root,
             )
         except RuntimeError as exc:
             raise FunctionOperationError(str(exc)) from exc
         self.stub_id = response.stub_id or self.stub_id
+        self.workspace = selected_workspace
+        self._source_root = selected_root
         return response
 
     def shell(
@@ -405,7 +451,7 @@ class Function(Generic[P, R]):
         sync_dir: str | None = None,
     ) -> ShellSession:
         shell = Shell(
-            workspace=workspace,
+            workspace=workspace or self.workspace,
             endpoint=self.endpoint,
             token=self.token,
             timeout_seconds=self.timeout,
@@ -570,6 +616,8 @@ class Function(Generic[P, R]):
             msg = "stub_id is required to invoke a remote function"
             raise FunctionOperationError(msg)
         last_response: FunctionInvokeResponse | None = None
+        if self.inputs is not None:
+            args, kwargs = prepare_input_arguments(self.func, self.inputs, args, kwargs)
         serialized = _serialize_invocation(args, kwargs)
         parent_task_id, root_task_id = _current_task_context()
         reported_task_id = ""

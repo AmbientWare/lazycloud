@@ -35,6 +35,7 @@ class ClientContract(HttpModel):
 
 CLIENT_MANIFEST_DEPLOYMENT_KINDS = frozenset(
     {
+        DeploymentKind.Function,
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
     }

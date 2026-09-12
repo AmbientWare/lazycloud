@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
+from shared.image_building.authoring import FilesystemSnapshotMetadata
 
 CONTAINER_CLIENT_SANDBOX_EXEC_TIMEOUT_SECONDS = 15.0
 CONTAINER_CLIENT_SANDBOX_STATUS_TIMEOUT_SECONDS = 5.0
@@ -376,7 +377,6 @@ class ContainerCheckpointResponse(ContractModel):
 
 class ContainerArchiveRequest(ContractModel):
     container_id: str
-    image_id: str
 
 
 class ContainerArchiveResponse(ContractModel):
@@ -384,6 +384,8 @@ class ContainerArchiveResponse(ContractModel):
     done: bool = False
     success: bool = False
     error_msg: str = ""
+    data: bytes = Field(default=b"", max_length=64 * 1024, repr=False)
+    metadata: FilesystemSnapshotMetadata | None = None
 
 
 class SyncContainerWorkspaceRequest(ContractModel):

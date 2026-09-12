@@ -24,7 +24,6 @@ from worker.checkpoint_transfer import RemoteCheckpointPersister, RemoteCheckpoi
 from worker.container_checkpoints import (
     ContainerFilesystemArchiveCreator,
     RuntimeCheckpointCreator,
-    TarContainerImageArchiver,
 )
 from worker.container_logs import WorkerContainerLogCaptureService
 from worker.container_metrics import (
@@ -325,10 +324,6 @@ def build_worker_process_services(
             ),
         ),
     )
-    image_archiver = TarContainerImageArchiver(
-        target_root=Path(paths.image_cache_path),
-        extension=config.image_archive_extension,
-    )
     image_archive_publisher = RepositoryWorkerImageArchivePublisher(repository, internal_http)
     request_mounts = mountpoint_backend or WorkerRequestMountManager(
         mountpoint_binary=config.workspace_storage_mountpoint_binary
@@ -397,8 +392,7 @@ def build_worker_process_services(
         checkpoints=checkpoints,
         archives=ContainerFilesystemArchiveCreator(
             runtime=runtime,
-            archiver=image_archiver,
-            publisher=image_archive_publisher,
+            process_managers=sandbox_process_managers,
         ),
         network_policy=network_backend,
     )

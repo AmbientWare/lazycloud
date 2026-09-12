@@ -25,8 +25,15 @@ from worker.container_rootfs import (
     ContainerRootfsStatus,
 )
 from worker.events import ContainerRequestContext
-from worker.execution import GatewayEndpointSettings, GatewayServiceSettings, OciDevice
+from worker.execution import (
+    ContainerEnvironmentRequest,
+    GatewayEndpointSettings,
+    GatewayServiceSettings,
+    OciDevice,
+    build_container_environment,
+)
 from worker.gpu import ContainerGpuAssignmentResult
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.network_backend import AgentBridgeNetworkConfig
 from worker.oci_runtime import (
     OciRuntimeCommandController,
@@ -42,6 +49,45 @@ from worker.runtime_config import (
 )
 
 _STRING_LIST: TypeAdapter[list[str]] = TypeAdapter(list[str])
+
+
+def test_image_environment_cannot_override_workload_or_platform_identity() -> None:
+    environment = build_container_environment(
+        ContainerEnvironmentRequest(
+            container_id="container",
+            pod_address="127.0.0.1",
+            workspace_id="owner-workspace",
+            image_env=[
+                "IMAGE_VALUE=present",
+                "SHARED_VALUE=image",
+                "PATH=/opt/lazycloud/venv/bin:/usr/bin",
+                "WORKSPACE_ID=image-workspace",
+                "GATEWAY_HTTP_URL=http://image-gateway",
+                "GATEWAY_TOKEN=image-token",
+            ],
+            request_env=[
+                "SHARED_VALUE=workload",
+                "GATEWAY_TOKEN=container-token",
+            ],
+        ),
+        GatewayServiceSettings(http=GatewayEndpointSettings(host="127.0.0.1", port=9000)),
+    ).env_map
+
+    assert environment["IMAGE_VALUE"] == "present"
+    assert environment["SHARED_VALUE"] == "workload"
+    assert environment["PATH"] == "/opt/lazycloud/venv/bin:/usr/bin"
+    assert environment["WORKSPACE_ID"] == "owner-workspace"
+    assert environment["GATEWAY_HTTP_URL"] == "http://127.0.0.1:9000"
+    assert environment["GATEWAY_TOKEN"] == "container-token"
+    unauthenticated = build_container_environment(
+        ContainerEnvironmentRequest(
+            container_id="container",
+            pod_address="127.0.0.1",
+            image_env=["GATEWAY_TOKEN=image-token"],
+        ),
+        GatewayServiceSettings(http=GatewayEndpointSettings(host="127.0.0.1", port=9000)),
+    ).env_map
+    assert "GATEWAY_TOKEN" not in unauthenticated
 
 
 def test_oci_runtime_reaches_a_container_persisted_before_the_move_to_gvisor() -> None:
@@ -293,6 +339,7 @@ def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
     )
     spec = builder.build_spec(
         _context(tmp_path).model_copy(update={"runtime": OciRuntimeName.Runc}),
+        image_config=ImageRuntimeConfig(),
         bind_ports=[],
         port_bindings=[],
         mount_result=ContainerMountSetupResult(),
@@ -372,6 +419,7 @@ def test_oci_runtime_bounds_hung_runsc_delete_during_start_abort(tmp_path: Path)
     )
     spec = builder.build_spec(
         _context(tmp_path),
+        image_config=ImageRuntimeConfig(),
         bind_ports=[],
         port_bindings=[],
         mount_result=ContainerMountSetupResult(),

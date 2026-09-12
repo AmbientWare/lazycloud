@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import Field
 from shared.contracts import ContractModel
 
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.origin_access import ImageRegistryCredentials
 
 
@@ -21,8 +22,14 @@ class ImageRuntimeResponse(ContractModel):
     id: str
     ok: bool
     mount_point: str = ""
+    image_config: ImageRuntimeConfig | None = None
     mounts: int = Field(default=0, ge=0)
     error: str = ""
+
+
+class MountedImage(ContractModel):
+    mount_point: str
+    image_config: ImageRuntimeConfig
 
 
 @dataclass(slots=True)
@@ -49,7 +56,7 @@ class ImageRuntimeClient:
         storage_image_ref: str,
         credentials: ImageRegistryCredentials,
         preload: bool,
-    ) -> Path:
+    ) -> MountedImage:
         response = self._call(
             "mount",
             image_id=image_id,
@@ -63,7 +70,9 @@ class ImageRuntimeClient:
         )
         if not response.ok:
             raise RuntimeError(response.error or "image runtime could not mount the image")
-        return Path(response.mount_point)
+        if response.image_config is None or not response.mount_point:
+            raise RuntimeError("image mount did not return verified image configuration")
+        return MountedImage(mount_point=response.mount_point, image_config=response.image_config)
 
     def unmount(self, image_id: str) -> None:
         response = self._call("unmount", image_id=image_id)

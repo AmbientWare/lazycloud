@@ -50,6 +50,7 @@ from worker.execution import (
     plan_oci_linux_resources,
 )
 from worker.gpu import ContainerGpuAssignmentResult
+from worker.image_lifecycle import ImageRuntimeConfig
 from worker.lifecycle import (
     HOST_RESOLV_CONF_PATH,
     WORKER_RESOLV_CONF_PATH,
@@ -88,10 +89,6 @@ from worker.runtime_config import (
     plan_runtime_command,
     prepare_oci_spec_for_runtime,
     spec_has_gpu,
-)
-from worker.sandbox_server import (
-    WORKER_CONTAINER_UPLOADS_HOST_PATH,
-    WORKER_CONTAINER_UPLOADS_MOUNT_PATH,
 )
 
 DEFAULT_WORKER_BUNDLE_ROOT = WORKER_BUNDLE_ROOT
@@ -250,8 +247,6 @@ class OciRuntimeSpecBuilder:
     container_cli_path: str = DEFAULT_CONTAINER_CLI_PATH
     sandbox_supervisor_source: Path | None = Path(SANDBOX_SUPERVISOR_WORKER_PATH)
     sandbox_supervisor_path: str = SANDBOX_SUPERVISOR_CONTAINER_PATH
-    sandbox_upload_root: Path = Path(WORKER_CONTAINER_UPLOADS_HOST_PATH)
-    sandbox_upload_mount_path: str = WORKER_CONTAINER_UPLOADS_MOUNT_PATH
     managed_runtime_root: Path | None = None
     storage_mount_hosts: bool = True
     mount_worker_resolv_conf: bool = True
@@ -285,6 +280,7 @@ class OciRuntimeSpecBuilder:
         *,
         bind_ports: list[int],
         port_bindings: list[PortBinding],
+        image_config: ImageRuntimeConfig,
         mount_result: ContainerMountSetupResult | None = None,
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
@@ -296,6 +292,7 @@ class OciRuntimeSpecBuilder:
         root_path = self._root_path(context, rootfs_result)
         env = self._runtime_env(
             context,
+            image_config=image_config,
             bind_ports=bind_ports,
             network_result=network_result,
         )
@@ -338,7 +335,6 @@ class OciRuntimeSpecBuilder:
             tmpfs_size_mib=_container_tmpfs_size_mib(context.request.memory_mib),
         )
         supervisor_token_path = self._apply_sandbox_supervisor(context, spec, bundle_path)
-        self._apply_sandbox_upload_mount(context, spec)
         self._apply_managed_runtime(spec, managed_runtime)
         self._apply_resources(context, spec)
         self._apply_network(spec, network_result)
@@ -355,6 +351,7 @@ class OciRuntimeSpecBuilder:
             sandbox_supervisor_token_path=supervisor_token_path,
             spec=spec,
             docker_enabled=context.docker_enabled or self.docker_enabled,
+            image_config=image_config,
         )
 
     def _managed_runtime_catalog(
@@ -439,28 +436,6 @@ class OciRuntimeSpecBuilder:
         )
         return str(token_path)
 
-    def _apply_sandbox_upload_mount(
-        self,
-        context: ContainerExecutionContext,
-        spec: dict[str, JsonValue],
-    ) -> None:
-        if context.request.stub_type != "sandbox" or context.runtime is not OciRuntimeName.Runsc:
-            return
-        source = self.sandbox_upload_root / context.request.container_id
-        source.mkdir(parents=True, exist_ok=True, mode=0o700)
-        source.chmod(0o700)
-        self._extend_mounts(
-            spec,
-            [
-                OciMount(
-                    mount_type=OciMountType.Bind,
-                    source=str(source),
-                    destination=self.sandbox_upload_mount_path,
-                    options=["rw", "rbind", "rprivate", "nosuid", "nodev", "noexec"],
-                )
-            ],
-        )
-
     def _root_path(
         self,
         context: ContainerExecutionContext,
@@ -493,6 +468,7 @@ class OciRuntimeSpecBuilder:
         *,
         bind_ports: list[int],
         network_result: ContainerNetworkSetupResult | None,
+        image_config: ImageRuntimeConfig,
     ) -> dict[str, str]:
         identity = network_result.identity if network_result is not None else None
         env_plan = build_container_environment(
@@ -507,6 +483,7 @@ class OciRuntimeSpecBuilder:
                 workspace_name=context.request.workspace_name,
                 bind_ports=bind_ports or [CONTAINER_INNER_PORT],
                 storage_available=context.request.workspace_storage_available,
+                image_env=image_config.env,
                 request_env=list(context.request.env),
             ),
             self.gateway_settings,

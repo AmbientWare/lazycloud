@@ -35,6 +35,18 @@ def test_sdk_rejects_zero_concurrency_before_transport() -> None:
             return "no"
 
 
+def test_configured_function_disk_reaches_gateway_contract() -> None:
+    @App("configured_disk").function(disk="1Gi")
+    def function() -> str:
+        return "ok"
+
+    function.configure(disk="24Gi")
+    request = _stub_request_from_spec(function.spec(), workspace="workspace-1")
+    round_trip = GetOrCreateStubRequest.model_validate_json(request.model_dump_json())
+
+    assert round_trip.disk == "24Gi"
+
+
 def test_every_workload_preserves_region_intent_through_the_gateway_contract() -> None:
     app = App("regional_workloads")
 

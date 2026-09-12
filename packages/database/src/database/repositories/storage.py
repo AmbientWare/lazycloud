@@ -21,6 +21,7 @@ from database.tables.execution import TaskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.images import ImageBuildTable, ImageTable
 from database.tables.orchestration import ContainerTable
+from database.tables.previews import PreviewSessionTable
 from database.tables.storage import CacheEntryTable, ObjectTable, VolumeCleanupTable, VolumeTable
 from pydantic import JsonValue
 from shared.cache_records import CacheEntry
@@ -769,8 +770,14 @@ class ObjectReferenceRepository:
                 select(
                     exists().where(
                         ImageBuildTable.workspace_id == workspace_id,
-                        _image_build_json_text(self.session, "image", "context_object_id")
-                        == object_id,
+                        or_(
+                            _image_build_json_text(self.session, "image", "context_object_id")
+                            == object_id,
+                            _image_build_json_text(
+                                self.session, "image", "filesystem_snapshot", "object_id"
+                            )
+                            == object_id,
+                        ),
                         or_(
                             ImageBuildTable.status.in_(
                                 [BuildStatus.Pending.value, BuildStatus.Running.value]
@@ -1271,6 +1278,10 @@ def _live_stub_ids() -> CompoundSelect[tuple[str | None]]:
         select(AppTable.stub_id)
         .where(AppTable.deleted_at.is_(None), AppTable.stub_id.is_not(None))
         .union(
+            select(PreviewSessionTable.execution_stub_id).where(
+                PreviewSessionTable.status == "active",
+                PreviewSessionTable.execution_stub_id.is_not(None),
+            ),
             select(DeploymentTable.stub_id).where(
                 DeploymentTable.deleted_at.is_(None),
                 DeploymentTable.stub_id.is_not(None),
@@ -1338,10 +1349,16 @@ def _source_object_reference_exists(
         exists()
         .where(
             ImageBuildTable.workspace_id == ObjectTable.workspace_id,
-            _uuid_text_without_hyphens(
-                _image_build_json_text(session, "image", "context_object_id")
-            )
-            == object_id,
+            or_(
+                _uuid_text_without_hyphens(
+                    _image_build_json_text(session, "image", "context_object_id")
+                )
+                == object_id,
+                _uuid_text_without_hyphens(
+                    _image_build_json_text(session, "image", "filesystem_snapshot", "object_id")
+                )
+                == object_id,
+            ),
             or_(
                 _build_active_or_recent(recent_build_after),
                 _direct_image_reference_clause(

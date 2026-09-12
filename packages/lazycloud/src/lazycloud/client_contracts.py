@@ -13,6 +13,7 @@ from shared.http.client_manifests import (
     ClientOperationName,
     ClientParameter,
 )
+from shared.schema import ValueSchema
 from shared.serialization import to_json_value
 
 from lazycloud.abstractions.metadata import SchemaInput, schema_metadata
@@ -39,7 +40,7 @@ def build_client_contract(
     hints = _type_hints(func)
     signature = inspect.signature(func)
     parameters = (
-        _parameters_from_schema(schema_metadata(inputs))
+        _parameters_from_schema(schema_metadata(inputs), signature=signature)
         if inputs is not None
         else [
             _parameter_from_signature(name, parameter, hints)
@@ -215,19 +216,23 @@ def _parameter_kind(parameter: inspect.Parameter) -> str:
     return "keyword"
 
 
-def _parameters_from_schema(schema: dict[str, JsonValue]) -> list[ClientParameter]:
-    fields = schema.get("fields") if isinstance(schema, dict) else {}
-    if not isinstance(fields, dict):
-        fields = schema
+def _parameters_from_schema(
+    schema: dict[str, JsonValue], *, signature: inspect.Signature
+) -> list[ClientParameter]:
+    fields = ValueSchema.from_definition(schema).fields
     parameters: list[ClientParameter] = []
     for name, field in fields.items():
-        if not isinstance(name, str):
-            continue
+        parameter = signature.parameters.get(name)
+        default = inspect.Signature.empty if parameter is None else parameter.default
+        default_value, default_repr = _default_payload(default)
         parameters.append(
             _client_parameter(
                 name,
-                _json_schema_from_metadata(field),
-                required=True,
+                field.input_json_schema(),
+                required=default is inspect.Signature.empty,
+                default=default_value,
+                default_repr=default_repr,
+                parameter_kind="keyword" if parameter is None else _parameter_kind(parameter),
             )
         )
     return parameters
@@ -239,10 +244,10 @@ def _return_schema(
     hints: Mapping[str, Any],
     outputs: SchemaInput,
 ) -> dict[str, JsonValue]:
-    if "return" in hints:
-        return _json_schema_for_annotation(hints["return"])
     if outputs is not None:
         return _return_schema_from_explicit_schema(schema_metadata(outputs))
+    if "return" in hints:
+        return _json_schema_for_annotation(hints["return"])
     signature = inspect.signature(func)
     if signature.return_annotation is not inspect.Signature.empty:
         return _json_schema_for_annotation(signature.return_annotation)
@@ -252,12 +257,7 @@ def _return_schema(
 def _return_schema_from_explicit_schema(
     schema: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
-    fields = schema.get("fields") if isinstance(schema, dict) else {}
-    if not isinstance(fields, dict):
-        fields = schema
-    if not fields:
-        return {}
-    return _json_schema_from_metadata({"type": "object", "fields": fields})
+    return ValueSchema.from_definition(schema).output_json_schema()
 
 
 def _client_parameter(
@@ -293,34 +293,6 @@ def _json_schema_for_annotation(annotation: Any) -> dict[str, JsonValue]:
             f"could not export annotation {annotation!r} as JSON Schema"
         ) from exc
     return validate_json_object(schema)
-
-
-def _json_schema_from_metadata(value: JsonValue) -> dict[str, JsonValue]:
-    if isinstance(value, str):
-        field_type = value
-        fields: dict[str, JsonValue] = {}
-    elif isinstance(value, dict):
-        field_type = str(value.get("type", ""))
-        raw_fields = value.get("fields")
-        fields = raw_fields if isinstance(raw_fields, dict) else {}
-    else:
-        return {}
-
-    if fields:
-        return {
-            "type": "object",
-            "properties": {
-                str(name): _json_schema_from_metadata(field) for name, field in fields.items()
-            },
-            "required": [str(name) for name in fields],
-        }
-    if field_type in {"string", "integer", "number", "boolean", "object"}:
-        return {"type": field_type}
-    if field_type == "file":
-        return {"type": "string", "format": "binary"}
-    if field_type in {"array", "list"}:
-        return {"type": "array", "items": {}}
-    return {}
 
 
 def _metadata_from_json_schema(schema: dict[str, Any]) -> JsonValue:

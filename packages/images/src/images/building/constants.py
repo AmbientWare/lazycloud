@@ -3,6 +3,13 @@ from __future__ import annotations
 DEFAULT_IMAGE_BASE = "python:3.12-slim"
 DOCKER_HUB_REGISTRY = "docker.io"
 MANAGED_PYTHON_PREFIX = "/opt/runtime-python"
+MICROMAMBA_ROOT_PREFIX = "/opt/lazycloud/micromamba"
+MICROMAMBA_BOOTSTRAP_CA = "/opt/lazycloud/micromamba-bootstrap-ca.crt"
+MICROMAMBA_IMAGE_REFERENCE = (
+    "mambaorg/micromamba:2.8.1@sha256:"
+    "fb18405d6004af757a38ec498a078240b4fd5549146990a484c28bb7e78aace4"
+)
+UV_PROJECT_ENVIRONMENT = "/opt/lazycloud/venv"
 UV_IMAGE_REFERENCE = (
     "ghcr.io/astral-sh/uv:0.11.29@sha256:"
     "eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"

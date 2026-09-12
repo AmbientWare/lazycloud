@@ -29,6 +29,8 @@ const (
 	shellDefaultTerm          = "xterm-256color"
 	shellDefaultColumns       = 80
 	shellDefaultRows          = 24
+	shellAuthUsernameEnv      = "LAZYCLOUD_SHELL_AUTH_USERNAME"
+	shellAuthPasswordEnv      = "LAZYCLOUD_SHELL_AUTH_PASSWORD"
 )
 
 const (
@@ -220,10 +222,10 @@ func runShell(args []string) error {
 	if *idleTimeout <= 0 {
 		return errors.New("shell idle timeout must be greater than zero")
 	}
-	username := os.Getenv("USERNAME")
-	password := os.Getenv("PASSWORD")
+	username := os.Getenv(shellAuthUsernameEnv)
+	password := os.Getenv(shellAuthPasswordEnv)
 	if username == "" || password == "" {
-		return errors.New("shell server requires USERNAME and PASSWORD")
+		return errors.New("shell server requires shell authentication credentials")
 	}
 	if *probe {
 		return probeShellListener(*port, *probeTimeout, username, password)
@@ -527,7 +529,7 @@ func shellChildEnvironment(term string) []string {
 	environment := make([]string, 0, len(os.Environ())+1)
 	for _, item := range os.Environ() {
 		key, _, _ := strings.Cut(item, "=")
-		if key == "USERNAME" || key == "PASSWORD" || key == "TERM" {
+		if key == shellAuthUsernameEnv || key == shellAuthPasswordEnv || key == "TERM" {
 			continue
 		}
 		environment = append(environment, item)

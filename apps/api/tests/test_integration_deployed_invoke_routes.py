@@ -21,8 +21,8 @@ from shared.deployments import DeploymentKind
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
-    StartEndpointServeRequest,
-    StartEndpointServeResponse,
+    EndpointWarmupRequest,
+    EndpointWarmupResponse,
 )
 from shared.http.functions import (
     FunctionClaimRequest,
@@ -36,6 +36,7 @@ from shared.http.functions import (
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
+from shared.http.previews import CreatePreviewRequest, PreviewSessionResponse
 from tests.url_constants import TEST_URL
 from tests.workspaces import owned_workspace
 
@@ -109,7 +110,25 @@ class RecordingFunctionService:
 class RecordingEndpointService:
     def __init__(self) -> None:
         self.forward_requests: list[EndpointForwardRequest] = []
-        self.serve_requests: list[StartEndpointServeRequest] = []
+        self.serve_requests: list[EndpointWarmupRequest] = []
+
+    def create_preview(
+        self, request: CreatePreviewRequest, *, workspace_id: str
+    ) -> PreviewSessionResponse:
+        raise AssertionError(f"unexpected create_preview: {request.stub_id} in {workspace_id}")
+
+    def get_preview(
+        self, preview_id: str, *, workspace_id: str | None = None, public: bool = False
+    ) -> PreviewSessionResponse:
+        raise AssertionError(
+            f"unexpected get_preview: {preview_id} in {workspace_id}, public={public}"
+        )
+
+    def renew_preview(self, preview_id: str, *, workspace_id: str) -> PreviewSessionResponse:
+        raise AssertionError(f"unexpected renew_preview: {preview_id} in {workspace_id}")
+
+    def stop_preview(self, preview_id: str, *, workspace_id: str) -> None:
+        raise AssertionError(f"unexpected stop_preview: {preview_id} in {workspace_id}")
 
     async def forward_endpoint_request(
         self,
@@ -144,12 +163,12 @@ class RecordingEndpointService:
         # let a route that started asking for readiness pass without saying so.
         raise AssertionError(f"unexpected forward_endpoint_health call: {request}")
 
-    def start_endpoint_serve(
+    def warm_endpoint(
         self,
-        request: StartEndpointServeRequest,
-    ) -> StartEndpointServeResponse:
+        request: EndpointWarmupRequest,
+    ) -> EndpointWarmupResponse:
         self.serve_requests.append(request)
-        return StartEndpointServeResponse(
+        return EndpointWarmupResponse(
             container_id=f"endpoint-{len(self.serve_requests)}",
         )
 

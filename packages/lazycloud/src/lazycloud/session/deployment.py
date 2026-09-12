@@ -57,6 +57,7 @@ from lazycloud.control_clients import (
 from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.references import HandlerReferenceError, source_root_handler_reference
+from lazycloud.session.source_sync import SourcePackageSyncer, SourcePackageSyncResult
 from lazycloud.session.task import Task, TaskClient, TaskSubscription
 from lazycloud.session.uploads import (
     object_upload_timeout_seconds,
@@ -225,6 +226,7 @@ class DeploymentClient(ControlClientConfigMixin):
     source_include_patterns: tuple[str, ...] = ()
     terminal: Terminal | None = None
     _channel: HttpChannel | None = field(default=None, init=False, repr=False)
+    prepared_source: SourcePackageSyncResult | None = field(default=None, init=False)
 
     @property
     def control_client(self) -> DeploymentControlClient:
@@ -318,7 +320,7 @@ class DeploymentClient(ControlClientConfigMixin):
                     if image_operation is not None
                     else None
                 )
-                source_object_id = self._source_object_id(
+                source = self._sync_source_package(
                     spec,
                     sync_source=sync_source,
                     source_root=selected_root,
@@ -332,10 +334,13 @@ class DeploymentClient(ControlClientConfigMixin):
                 _stub_request_from_spec(
                     prepared_spec,
                     workspace=selected_workspace,
-                    object_id=source_object_id,
+                    object_id=source.object_id
+                    if source
+                    else _metadata_str(spec.metadata, "object_id"),
                 )
             )
             step.done(f"{prepared_spec.name} · {response.stub_id[:8]}")
+        self.prepared_source = source
         return response
 
     def list(
@@ -625,24 +630,21 @@ class DeploymentClient(ControlClientConfigMixin):
             )
         return self.image_client
 
-    def _source_object_id(
+    def _sync_source_package(
         self,
         spec: DeploymentSpec,
         *,
         sync_source: bool | None,
         source_root: str | Path | None,
         archive_prefix: tuple[str, ...],
-    ) -> str:
+    ) -> SourcePackageSyncResult | None:
         selected_sync = self.sync_source if sync_source is None else sync_source
-        metadata_object_id = _metadata_str(spec.metadata, "object_id")
         if not selected_sync:
-            return metadata_object_id
+            return None
 
         selected_root = source_root or self.source_root
         if self.client is not None and self.object_client is None and selected_root is None:
-            return metadata_object_id
-
-        from lazycloud.session.source_sync import SourcePackageSyncer
+            return None
 
         result = SourcePackageSyncer(
             self._object_client(),
@@ -653,7 +655,7 @@ class DeploymentClient(ControlClientConfigMixin):
             ignore_patterns=self.source_ignore_patterns or None,
             include_patterns=self.source_include_patterns or None,
         )
-        return result.object_id
+        return result
 
     def _object_client(self) -> ObjectUploadClient:
         if self.object_client is None:

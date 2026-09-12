@@ -34,7 +34,11 @@ from lazycloud.abstractions.metadata import PoolInput, build_resource_metadata
 from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import volume_mounts
-from lazycloud.control import ControlClientConfigMixin, resolve_control_client_config
+from lazycloud.control import (
+    ControlClientConfig,
+    ControlClientConfigMixin,
+    resolve_control_client_config,
+)
 from lazycloud.control_clients import (
     gateway_control_client,
     pod_control_client,
@@ -221,7 +225,13 @@ class Pod(ControlClientConfigMixin):
     image_id: str | None = field(default=None, init=False)
     checkpoint_id: str | None = field(default=None, init=False)
     client: PodClient | None = field(default=None, init=False, repr=False)
+    _default_client: tuple[ControlClientConfig, PodClient] | None = field(
+        default=None, init=False, repr=False
+    )
     container_client: PodContainerClient | None = field(default=None, init=False, repr=False)
+    _default_container_client: tuple[ControlClientConfig, PodContainerClient] | None = field(
+        default=None, init=False, repr=False
+    )
     deployment_client: DeploymentControlClient | None = field(
         default=None,
         init=False,
@@ -233,6 +243,7 @@ class Pod(ControlClientConfigMixin):
         repr=False,
     )
     workspace: str | None = field(default=None, init=False)
+    _source_root: Path | None = field(default=None, init=False, repr=False)
     endpoint: str | None = field(default=None, init=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout_seconds: float = field(default=10.0, init=False)
@@ -256,20 +267,21 @@ class Pod(ControlClientConfigMixin):
 
     @property
     def control_client(self) -> PodClient:
-        if self.client is None:
-            config = resolve_control_client_config(
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-            )
-            self.client = pod_control_client(config)
-        return self.client
+        if self.client is not None:
+            return self.client
+        config = self._config()
+        if self._default_client is None or self._default_client[0] != config:
+            self._default_client = (config, pod_control_client(config))
+        return self._default_client[1]
 
     @property
     def lifecycle_client(self) -> PodContainerClient:
-        if self.container_client is None:
-            self.container_client = resource_control_client(self._config())
-        return self.container_client
+        if self.container_client is not None:
+            return self.container_client
+        config = self._config()
+        if self._default_container_client is None or self._default_container_client[0] != config:
+            self._default_container_client = (config, resource_control_client(config))
+        return self._default_container_client[1]
 
     def spec(self) -> DeploymentSpec:
         return DeploymentSpec(
@@ -370,26 +382,55 @@ class Pod(ControlClientConfigMixin):
             self.availability_zone = availability_zone
         if preemptible is not None:
             self.preemptible = preemptible
+        if any(
+            value is not None
+            for value in (
+                image,
+                command,
+                ports,
+                env,
+                cpu,
+                memory,
+                disk,
+                gpu,
+                gpu_count,
+                keep_warm,
+                secrets,
+                tcp,
+                region,
+                availability_zone,
+                pool,
+                preemptible,
+            )
+        ):
+            self.stub_id = ""
         return self
 
     def prepare(self, *, workspace: str | None = None) -> str:
+        selected_workspace = workspace or self._config().workspace
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
                 resource_client=self.deployment_resource_client,
-                workspace=workspace or self.workspace,
+                workspace=selected_workspace,
                 endpoint=self.endpoint,
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
                 sync_source=True,
                 terminal=self.terminal,
-            ).prepare(self.spec(), workspace=workspace or self.workspace, image=self.image)
+            ).prepare(
+                self.spec(),
+                workspace=selected_workspace,
+                image=self.image,
+                source_root=self._source_root,
+            )
         except RuntimeError as exc:
             raise PodOperationError(str(exc)) from exc
         if not response.stub_id:
             msg = "deployment prepare did not return a pod stub_id"
             raise PodOperationError(msg)
         self.stub_id = response.stub_id
+        self.workspace = selected_workspace
         return self.stub_id
 
     def create(
@@ -459,10 +500,16 @@ class Pod(ControlClientConfigMixin):
     ) -> DeployStubResponse:
         if name is not None:
             self.name = name
+        selected_workspace = workspace or self._config().workspace
+        selected_root = (
+            Path(source_root).expanduser().resolve()
+            if source_root is not None
+            else self._source_root
+        )
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
-                workspace=workspace or self.workspace,
+                workspace=selected_workspace,
                 endpoint=self.endpoint,
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
@@ -470,15 +517,17 @@ class Pod(ControlClientConfigMixin):
                 terminal=self.terminal,
             ).create(
                 self.spec(),
-                workspace=workspace or self.workspace,
+                workspace=selected_workspace,
                 external_url=external_url,
                 image=self.image,
-                source_root=source_root,
+                source_root=selected_root,
             )
         except RuntimeError as exc:
             raise PodOperationError(str(exc)) from exc
         self.stub_id = response.stub_id or self.stub_id
         self.deployment_id = response.deployment_id or self.deployment_id
+        self.workspace = selected_workspace
+        self._source_root = selected_root
         return response
 
     def pause(

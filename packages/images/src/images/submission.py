@@ -8,14 +8,16 @@ from uuid import uuid4
 
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.images import ImageBuildRepository
-from shared.errors import PaymentRequiredError
+from shared.errors import InvalidInputError, PaymentRequiredError
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildPhase, ImageBuildRecord
 from shared.timestamps import utc_now
+from storage.service import ObjectStorage
 
 from database import DatabaseClient
 from images.building import ImageBuildCredentialPlan, build_image_plan, plan_image_build_session
 from images.execution import ImageBuildExecutionRequest
+from images.snapshots import delete_snapshot_source, validate_snapshot_source
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ class ImageBuildDispatchExecutor(Protocol):
 class ImageBuildSubmissionService:
     database: DatabaseClient
     executor: ImageBuildDispatchExecutor
+    snapshot_objects: ObjectStorage
 
     def submit(
         self,
@@ -44,6 +47,18 @@ class ImageBuildSubmissionService:
         build_args: dict[str, str] | None = None,
         request_id: str | None = None,
     ) -> ImageBuildRecord:
+        snapshot = image.filesystem_snapshot
+        if snapshot is not None:
+            if request_id != snapshot.ownership_id:
+                raise InvalidInputError(
+                    "filesystem snapshot input requires an internally owned snapshot request"
+                )
+            validate_snapshot_source(
+                self.snapshot_objects.get_by_id_for_workspace(
+                    snapshot.object_id, workspace_id=workspace_id
+                ),
+                snapshot,
+            )
         plan = build_image_plan(image)
         build_id = str(uuid4())
         lifecycle = plan_image_build_session(
@@ -221,6 +236,23 @@ class ImageBuildSubmissionService:
             retry_at = None
             try:
                 self.executor.abort(build_id, workspace_id)
+                with self.database.session() as session:
+                    record = ImageBuildRepository(session).get(build_id, workspace_id=workspace_id)
+                if record is None or record.status in {BuildStatus.Pending, BuildStatus.Running}:
+                    raise RuntimeError("image build cleanup requires a terminal owned build")
+                if record.image.filesystem_snapshot is not None:
+                    with self.database.session() as session:
+                        owner = ImageBuildDispatchRepository(session).request_build_id(
+                            record.image.filesystem_snapshot.ownership_id,
+                            workspace_id=workspace_id,
+                        )
+                    if owner != build_id:
+                        raise RuntimeError("filesystem snapshot source is not owned by this build")
+                    delete_snapshot_source(
+                        self.snapshot_objects,
+                        record.image.filesystem_snapshot,
+                        workspace_id=workspace_id,
+                    )
             except Exception as exc:
                 retry_at = utc_now() + timedelta(seconds=5)
                 LOGGER.warning(

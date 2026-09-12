@@ -65,11 +65,16 @@ type request struct {
 }
 
 type response struct {
-	ID         string `json:"id"`
-	OK         bool   `json:"ok"`
-	MountPoint string `json:"mount_point,omitempty"`
-	Mounts     int    `json:"mounts,omitempty"`
-	Error      string `json:"error,omitempty"`
+	ID          string              `json:"id"`
+	OK          bool                `json:"ok"`
+	MountPoint  string              `json:"mount_point,omitempty"`
+	ImageConfig *imageRuntimeConfig `json:"image_config,omitempty"`
+	Mounts      int                 `json:"mounts,omitempty"`
+	Error       string              `json:"error,omitempty"`
+}
+
+type imageRuntimeConfig struct {
+	Env []string `json:"env"`
 }
 
 type mountedImage struct {
@@ -77,6 +82,7 @@ type mountedImage struct {
 	archiveSHA256 string
 	mountPoint    string
 	pins          *imageLayerPins
+	imageConfig   imageRuntimeConfig
 }
 
 type imageRuntime struct {
@@ -247,6 +253,16 @@ func (r *imageRuntime) dispatch(req request) (result response) {
 		r.mu.Unlock()
 	case "mount":
 		result.MountPoint, err = r.mount(req)
+		if err == nil {
+			r.mu.Lock()
+			mounted, exists := r.mounts[req.ImageID]
+			r.mu.Unlock()
+			if !exists || mounted.archiveSHA256 != req.ArchiveSHA256 || mounted.mountPoint != result.MountPoint {
+				err = errors.New("image mount changed before its configuration was returned")
+			} else {
+				result.ImageConfig = &mounted.imageConfig
+			}
+		}
 	case "credentials":
 		err = r.credentials.update(req.Credentials)
 	case "unmount":
@@ -378,6 +394,14 @@ func (r *imageRuntime) mount(req request) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	info, err := ociStorageInfo(metadata)
+	if err != nil {
+		return "", err
+	}
+	if info.ImageMetadata == nil {
+		return "", errors.New("image index has no runtime configuration")
+	}
+	imageConfig := imageRuntimeConfig{Env: append([]string{}, info.ImageMetadata.Env...)}
 	pins, err := pinImageLayers(cachePath, metadata)
 	if err != nil {
 		return "", err
@@ -426,6 +450,7 @@ func (r *imageRuntime) mount(req request) (string, error) {
 		archiveSHA256: req.ArchiveSHA256,
 		mountPoint:    mountPoint,
 		pins:          pins,
+		imageConfig:   imageConfig,
 	}
 	keepPins = true
 	r.mu.Unlock()

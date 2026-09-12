@@ -27,14 +27,14 @@ from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.checkpoints import CheckpointRecord, CheckpointStatus, checkpoint_recent_stub_key
 from shared.errors import ConflictError, NotFoundError
 from shared.identity import WorkspaceStatus
-from shared.image_building.authoring import ImageSpec
+from shared.image_building.authoring import FilesystemSnapshotSource, ImageSpec
 from shared.image_building.records import (
     BuildStatus,
     ImageBuildPhase,
     ImageBuildRecord,
     ImageRecord,
 )
-from shared.objects import ObjectWriteCommand
+from shared.objects import ObjectRecord, ObjectWriteCommand
 from shared.source_cache_cleanup import SourceCacheCleanupStatus
 from shared.timestamps import utc_now
 from shared.workload_config import StubConfig, StubImageConfig
@@ -57,6 +57,70 @@ from worker.checkpoints import (
     update_checkpoint_status_payload,
 )
 from worker_repository.checkpoint_records import CheckpointService
+
+
+def test_snapshot_source_retention_protects_active_build_and_fences_cleanup(
+    isolated_services: ApiServices,
+) -> None:
+    context = isolated_services.context
+    workspace = owned_workspace(ControlPlaneService(context), "snapshot-retention")
+    now = utc_now()
+    cutoff = now + timedelta(days=1)
+    ownership_id = uuid4().hex
+    source = ObjectRecord(
+        id=str(uuid4()),
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key=f"sources/image-snapshots/{ownership_id}/snapshot.tar",
+        path="s3://snapshot-retention/source",
+        size=1024,
+        sha256="a" * 64,
+        created_at=now - timedelta(days=2),
+        metadata={"filesystem_snapshot_owner": ownership_id},
+    )
+    build = ImageBuildRecord(
+        id=str(uuid4()),
+        fingerprint=uuid4().hex,
+        image=ImageSpec(
+            filesystem_snapshot=FilesystemSnapshotSource(
+                object_id=source.id,
+                ownership_id=ownership_id,
+                sha256=source.sha256,
+                size_bytes=source.size,
+            )
+        ),
+        status=BuildStatus.Pending,
+    )
+    with context.database.session() as session:
+        ObjectRepository(session).upsert(source, workspace_id=workspace.id)
+        references = ObjectReferenceRepository(session)
+        candidates = references.list_source_cleanup_candidates(
+            source_bucket=SOURCE_PACKAGE_BUCKET,
+            created_before=cutoff,
+            recent_build_after=now,
+            excluded_object_ids=frozenset(),
+            limit=1000,
+        )
+        assert source.id in {item.record.id for item in candidates}
+        ImageBuildRepository(session).upsert(build, workspace_id=workspace.id)
+        assert references.object_is_referenced(
+            source.id, workspace_id=workspace.id, recent_build_after=now
+        )
+        candidates = references.list_source_cleanup_candidates(
+            source_bucket=SOURCE_PACKAGE_BUCKET,
+            created_before=cutoff,
+            recent_build_after=now,
+            excluded_object_ids=frozenset(),
+            limit=1000,
+        )
+        assert source.id not in {item.record.id for item in candidates}
+        CleanupRepository(session).mark_object_claimed(
+            source.id, cleanup_kind="source-retention", claimed_at=now
+        )
+    with (
+        context.database.session() as session,
+        pytest.raises(ConflictError, match="cleanup is in progress"),
+    ):
+        CleanupRepository(session).assert_build_available(build, workspace_id=workspace.id)
 
 
 def _archive_settings() -> ImageArchiveSettings:

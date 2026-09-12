@@ -15,7 +15,7 @@ from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import WorkerContainerRequestPayload
 from shared.containers import ContainerStatus
 from shared.env import CHECKPOINT_ENABLED_ENV
-from shared.http.endpoints import EndpointForwardRequest, StartEndpointServeRequest
+from shared.http.endpoints import EndpointForwardRequest, EndpointWarmupRequest
 
 
 class _Scheduler:
@@ -98,9 +98,7 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
             )
         )
 
-    EndpointControlService(isolated_services).start_endpoint_serve(
-        StartEndpointServeRequest(stub_id=stub.id)
-    )
+    EndpointControlService(isolated_services).warm_endpoint(EndpointWarmupRequest(stub_id=stub.id))
 
     payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
     assert payload.checkpoint_enabled is True

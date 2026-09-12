@@ -47,3 +47,5 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )
+
+replace github.com/beam-cloud/clip => ./third_party/clip

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Generator
 from dataclasses import dataclass, field
 
 from container_worker_app.container_service_http import create_container_service_app
@@ -40,12 +40,13 @@ class _RecordingHandler:
         request: ContainerServicePayload,
         *,
         timeout_seconds: float | None = None,
-    ) -> Iterable[ContainerServicePayload]:
+    ) -> Generator[ContainerServicePayload, None, None]:
         assert timeout_seconds is None
         assert method is ContainerServiceMethod.ContainerStreamLogs
         parsed = ContainerStreamLogsRequest.model_validate(request)
         self.stream_requests.append(parsed)
-        return [ContainerLogEntry(msg="first"), ContainerLogEntry(msg="second")]
+        yield ContainerLogEntry(msg="first")
+        yield ContainerLogEntry(msg="second")
 
 
 def test_container_service_http_validates_auth_and_decodes_binary_requests() -> None:

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.tables.orchestration import ContainerTable
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
@@ -21,6 +22,11 @@ class ContainerSchedulingRepository:
         )
         if row is None or row.workspace_id != request.workspace_id:
             raise ConflictError("scheduling request does not own the container")
+        if (
+            ContainerRolloutRepository(self.session).admission_closed_at(request.container_id)
+            is not None
+        ):
+            raise ConflictError("container admission is closed")
         if row.scheduling_request is not None:
             persisted = SchedulerWorkerRequest.model_validate(row.scheduling_request)
             transient = {"retry_count", "capacity_retry_at", "backfill", "timestamp"}

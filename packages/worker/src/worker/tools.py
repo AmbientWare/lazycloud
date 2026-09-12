@@ -6,6 +6,7 @@ from enum import StrEnum
 from pydantic import Field, model_validator
 from shared.contracts import ContractModel
 from shared.mounts import MountAuthMode, validate_mount_auth
+from shared.shell_protocol import SHELL_AUTH_PASSWORD_ENV, SHELL_AUTH_USERNAME_ENV
 
 
 class ContainerMountKind(StrEnum):
@@ -183,6 +184,11 @@ def merge_credential_env(existing: list[str], vended: list[str]) -> list[str]:
     if not vended:
         return list(existing)
     vended_keys = {key for item in vended if (key := env_key(item))}
+    reserved = vended_keys & {SHELL_AUTH_USERNAME_ENV, SHELL_AUTH_PASSWORD_ENV}
+    if reserved:
+        raise ValueError(
+            f"secret names reserved for shell authentication: {', '.join(sorted(reserved))}"
+        )
     merged = [item for item in existing if env_key(item) not in vended_keys]
     return [*merged, *vended]
 

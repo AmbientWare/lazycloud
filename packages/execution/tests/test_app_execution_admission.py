@@ -9,7 +9,7 @@ from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
 from shared.errors import ConflictError
 from shared.function_payloads import FunctionJsonInvocation
-from shared.http.endpoints import StartEndpointServeRequest
+from shared.http.endpoints import EndpointWarmupRequest
 from shared.http.functions import FunctionInvokeBody
 from shared.tasks import TaskStatus
 
@@ -43,8 +43,8 @@ def test_paused_app_rejects_every_execution_producer_without_container_orphans(
         assert task.error == "owning app is not active"
     else:
         with pytest.raises(ConflictError, match="is not active"):
-            EndpointControlService(isolated_services).start_endpoint_serve(
-                StartEndpointServeRequest(stub_id=stub.id)
+            EndpointControlService(isolated_services).warm_endpoint(
+                EndpointWarmupRequest(stub_id=stub.id)
             )
 
     assert isolated_services.containers.list(app_id=app.id) == []

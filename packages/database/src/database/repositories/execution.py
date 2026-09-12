@@ -30,7 +30,7 @@ from database.tables.execution import (
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import ContainerTable
 from pydantic import BaseModel, JsonValue, field_validator
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
 from shared.deployments import StubKind
 from shared.events import Event
@@ -847,6 +847,25 @@ def _is_uuid_text(value: str) -> bool:
 @dataclass(slots=True)
 class TaskAttemptRepository:
     session: Session
+
+    def expired_function_attempts(self, *, now: datetime, limit: int) -> list[TaskAttempt]:
+        if limit <= 0:
+            return []
+        rows = self.session.scalars(
+            select(TaskAttemptTable)
+            .join(ContainerTable, ContainerTable.id == TaskAttemptTable.container_id)
+            .where(
+                TaskAttemptTable.deadline_at <= now,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                or_(
+                    TaskAttemptTable.finished_at.is_(None),
+                    TaskAttemptTable.finished_at >= TaskAttemptTable.deadline_at,
+                ),
+            )
+            .order_by(TaskAttemptTable.deadline_at, TaskAttemptTable.id)
+            .limit(limit)
+        )
+        return [TaskAttempt.model_validate(row.payload) for row in rows]
 
     def latest_finished_at_for_container(self, container_id: str) -> datetime | None:
         return self.session.scalar(

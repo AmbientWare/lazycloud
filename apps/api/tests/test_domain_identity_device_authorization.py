@@ -15,6 +15,7 @@ from identity.device_auth import (
     DeviceAuthorizationService,
 )
 from identity.users import UserService
+from shared.http.device_auth import DeviceCodeCreateResponse
 from shared.http.system import TokenListResponse
 from shared.identity import (
     DeviceAuthorizationStatus,
@@ -173,6 +174,42 @@ def test_device_code_approval_requires_a_user_credential(
 
         claim = client.post("/auth/device/token", json={"device_code": start["device_code"]})
         assert claim.json()["status"] == "pending"
+
+
+def test_device_polling_has_an_independent_bounded_budget(
+    isolated_services: ApiServices,
+) -> None:
+    with TestClient(create_app(isolated_services)) as client:
+        devices: list[DeviceCodeCreateResponse] = []
+        for name in ("first-cli", "second-cli"):
+            response = client.post("/auth/device", json={"client_name": name})
+            assert response.status_code == 201
+            devices.append(DeviceCodeCreateResponse.model_validate(response.json()))
+
+        normal_polls = sum(60 // device.poll_interval_seconds + 1 for device in devices)
+        for index in range(normal_polls):
+            response = client.post(
+                "/auth/device/token",
+                json={"device_code": devices[index % 2].device_code},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"status": "pending", "token": ""}
+
+        for _ in range(8):
+            assert (
+                client.post("/auth/device", json={"client_name": "another-cli"}).status_code == 201
+            )
+        assert client.post("/auth/device", json={"client_name": "excess-cli"}).status_code == 429
+
+        for index in range(normal_polls, 120):
+            response = client.post(
+                "/auth/device/token",
+                json={"device_code": devices[index % 2].device_code},
+            )
+            assert response.status_code == 200
+        refused = client.post("/auth/device/token", json={"device_code": devices[0].device_code})
+        assert refused.status_code == 429
+        assert int(refused.headers["retry-after"]) > 0
 
 
 def test_device_codes_expire_and_are_pruned(

@@ -10,26 +10,6 @@ import (
 	"time"
 )
 
-func TestShellChildEnvironmentScrubsCredentials(t *testing.T) {
-	t.Setenv("USERNAME", "private-user")
-	t.Setenv("PASSWORD", "private-password")
-	t.Setenv("TERM", "old-term")
-	t.Setenv("VISIBLE", "yes")
-
-	environment := shellChildEnvironment("xterm-test")
-	joined := strings.Join(environment, "\n")
-
-	if strings.Contains(joined, "USERNAME=") || strings.Contains(joined, "PASSWORD=") {
-		t.Fatal("shell credentials leaked into child environment")
-	}
-	if strings.Contains(joined, "TERM=old-term") {
-		t.Fatal("inherited terminal value was not replaced")
-	}
-	if !strings.Contains(joined, "TERM=xterm-test") || !strings.Contains(joined, "VISIBLE=yes") {
-		t.Fatalf("expected terminal and visible environment values, got %q", joined)
-	}
-}
-
 func TestProbeShellListenerRequiresAuthenticatedProtocol(t *testing.T) {
 	listener := listenForShellTest(t)
 	done := make(chan struct{})
@@ -57,6 +37,10 @@ func TestProbeShellListenerRequiresAuthenticatedProtocol(t *testing.T) {
 
 func TestShellProtocolSupportsAuthDataResizeAndExit(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv(shellAuthUsernameEnv, "shell-user")
+	t.Setenv(shellAuthPasswordEnv, "shell-password")
+	t.Setenv("USERNAME", "workload-user")
+	t.Setenv("PASSWORD", "workload-password")
 	listener := startShellTestServer(t, "shell-user", "shell-password")
 	port := listener.Addr().(*net.TCPAddr).Port
 
@@ -99,7 +83,7 @@ func TestShellProtocolSupportsAuthDataResizeAndExit(t *testing.T) {
 	if err := writeShellFrame(connection, shellFrameResize, resizePayload); err != nil {
 		t.Fatalf("write resize: %v", err)
 	}
-	command := "if env | grep -Eq '^(USERNAME|PASSWORD)='; then printf '\\ncredential-leak\\n'; else printf '\\ncredentials-scrubbed\\n'; fi; printf 'shell-ok\\n'; exit 7\n"
+	command := "if env | grep -Eq '^LAZYCLOUD_SHELL_AUTH_(USERNAME|PASSWORD)='; then printf '\\ncredential-leak\\n'; else printf '\\ncredentials-scrubbed\\n'; fi; if [ \"$USERNAME\" = workload-user ] && [ \"$PASSWORD\" = workload-password ]; then printf '\\nworkload-preserved\\n'; fi; printf 'shell-ok\\n'; exit 7\n"
 	if err := writeShellFrame(connection, shellFrameData, []byte(command)); err != nil {
 		t.Fatalf("write data: %v", err)
 	}
@@ -126,6 +110,9 @@ func TestShellProtocolSupportsAuthDataResizeAndExit(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "shell-ok") {
 		t.Fatalf("missing command output: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "\r\nworkload-preserved\r\n") {
+		t.Fatal("workload credentials were not preserved")
 	}
 	if !strings.Contains(output.String(), "\r\ncredentials-scrubbed\r\n") || strings.Contains(output.String(), "\r\ncredential-leak\r\n") {
 		t.Fatalf("credential environment was not scrubbed: %q", output.String())

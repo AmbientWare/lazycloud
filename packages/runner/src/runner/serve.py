@@ -44,6 +44,7 @@ from shared.lifecycle import (
     LifecycleHooks,
     LifecycleStartupContext,
 )
+from shared.schema import ValidationError as InputValidationError
 
 from runner.checkpoints import wait_for_checkpoint
 from runner.endpoint_forwarding import (
@@ -56,6 +57,7 @@ from runner.hooks import lifecycle_hooks_from_env, run_lifecycle_hooks
 from runner.invocation import invoke_handler
 from runner.reload import SourceChangeWatcher, hot_reload_enabled, hot_reload_root
 from runner.runtime import DEFAULT_GATEWAY_ENDPOINT, DEFAULT_RUNNER_TIMEOUT_SECONDS, post_task_logs
+from runner.schema_outputs import ArtifactOutputPublisher
 from runner.worker_processes import stop_worker_processes
 
 ENDPOINT_SERVE_PORT_ENV = "BIND_PORT"
@@ -183,7 +185,17 @@ class EndpointServeRunner:
             )
         except ValueError as exc:
             return error_response(400, str(exc))
-        result = invoke_handler(self.handler(), *(payload.args or []), **payload.kwargs)
+        try:
+            result = invoke_handler(
+                self.handler(),
+                tuple(payload.args or []),
+                payload.kwargs,
+                publish=ArtifactOutputPublisher(
+                    self.control, self.workspace_name or self.workspace_id, _task_id(request)
+                ),
+            )
+        except InputValidationError as exc:
+            return error_response(400, str(exc))
         return response_from_endpoint_result(resolve_endpoint_result(result))
 
     def append_task_log(self, task_id: str, stream: str, message: str) -> None:

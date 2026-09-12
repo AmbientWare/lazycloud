@@ -35,7 +35,7 @@ from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.errors import DomainError, InvalidInputError
-from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
+from shared.http.endpoints import EndpointWarmupRequest, EndpointWarmupResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.scheduling import (
     SchedulerContainerState,
@@ -75,7 +75,6 @@ CONTAINER_START_DEADLINE_SECONDS = 600
 Both begin at assignment. The global backlog owns the separate wait for capacity.
 """
 FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
-ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
 ENDPOINT_AUTOSCALER_SOURCE = "endpoint.autoscaler"
 POD_AUTOSCALER_SOURCE = "pod.autoscaler"
 _LIVE_CONTAINER_STATUSES = frozenset({ContainerStatus.Pending, ContainerStatus.Running})
@@ -126,10 +125,10 @@ class FunctionAutoscaleControl(Protocol):
 
 
 class EndpointAutoscaleControl(Protocol):
-    def start_endpoint_serve(
+    def warm_endpoint(
         self,
-        request: StartEndpointServeRequest,
-    ) -> StartEndpointServeResponse: ...
+        request: EndpointWarmupRequest,
+    ) -> EndpointWarmupResponse: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -875,10 +874,9 @@ class EndpointAutoscaler:
         )
 
     def start_one(self, stub: AutoscalingStub) -> str | None:
-        response = self.endpoints.start_endpoint_serve(
-            StartEndpointServeRequest(
+        response = self.endpoints.warm_endpoint(
+            EndpointWarmupRequest(
                 stub_id=stub.id,
-                timeout=_endpoint_timeout_seconds(stub.config),
             )
         )
         return response.container_id
@@ -1621,15 +1619,6 @@ def _failed_container_window_seconds(config: AutoscalingConfig) -> int:
         config.autoscaler.failed_container_window_seconds,
         config.autoscaler.failure_window_seconds,
         default=AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
-    )
-
-
-def _endpoint_timeout_seconds(config: AutoscalingConfig) -> int:
-    return (
-        int(config.task_policy.timeout_seconds)
-        or int(config.task_policy.timeout)
-        or int(config.runtime.timeout_seconds or 0)
-        or ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS
     )
 
 

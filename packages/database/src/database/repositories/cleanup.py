@@ -197,14 +197,18 @@ class CleanupRepository:
     def assert_build_available(self, build: ImageBuildRecord, *, workspace_id: str) -> None:
         resource_keys = {f"build:{build.id}"}
         resource_keys.update(_build_resource_keys(build))
-        if build.image.context_object_id:
-            resource_keys.add(f"object:{build.image.context_object_id}")
+        object_ids: set[str] = (
+            {build.image.context_object_id} if build.image.context_object_id else set()
+        )
+        if build.image.filesystem_snapshot is not None:
+            object_ids.add(build.image.filesystem_snapshot.object_id)
+        resource_keys.update(f"object:{object_id}" for object_id in object_ids)
         if build.image_id:
             resource_keys.add(f"image:{workspace_id}:{build.image_id}")
         self.lock_keys(resource_keys)
         self.assert_references_available(
             workspace_id=workspace_id,
-            object_ids={build.image.context_object_id} if build.image.context_object_id else set(),
+            object_ids=object_ids,
             image_ids={build.image_id} if build.image_id else set(),
         )
         existing = self.session.get(ImageBuildTable, build.id)

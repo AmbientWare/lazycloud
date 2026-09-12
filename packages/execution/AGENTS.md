@@ -105,6 +105,40 @@ Per-invocation cancellation is what would make it cheap, and it is reachable:
 outside `in_process`, every invocation already has its own process. It needs a
 control-plane-to-container signal that does not exist yet.
 
+Function execution deadlines belong to durable task attempts. Each claim starts
+a fresh budget; zero disables it. Completion checks the deadline under the task
+fence, so a late result cannot beat reconciliation. Expiry closes container
+admission in the same transaction as the timeout, and the attempt keeps the stop
+discoverable if the process exits before delivering it. The scheduler's
+one-second placement sweep delivers the container stop; physical termination
+also depends on pass duration and worker delivery. Like cancellation, timeout
+restarts concurrent sibling invocations from the beginning without charging an
+attempt. Do not interrupt Python threads to implement per-call cancellation.
+
+Task settlement enqueues callback payloads in the same PostgreSQL transaction.
+Housekeeping drains at most five deliveries per pass outside placement using the
+signing and target validation rules. A task/attempt/status identity deduplicates enqueue and names
+every delivery attempt; a crashed sender can resend with that identity. Delivery
+spends at most three attempts, including claims lost to a process crash. Final
+delivery clears the target and payload; the identity and status remain until
+task retention removes them through the task foreign key.
+
+## Preview lifetime
+
+A serve preview owns a separate execution stub and one container, with durable
+ownership in PostgreSQL and a renewable 60-second liveness lease in Redis. Its
+source configuration and artifacts remain shared immutable inputs. Session
+ingress checks ownership, status, absolute timeout, and lease while admitting
+work; ordinary endpoint warmup cannot create preview capacity. Zero timeout
+keeps the foreground lease, with no absolute deadline.
+
+Stop locks the container before the session, rechecking a concurrent startup
+binding before closing admission and recording the terminal session together.
+Container stop delivery follows commit. Placement reconciliation revisits ended
+sessions with live containers, so a failed delivery retains its exact target.
+Claiming takes the same container and session fences. Source or stub deletion
+must not cascade away the session's outstanding container stop.
+
 ## A schedule is a property, not a kind
 
 `@app.function(cron=...)` is the only way to declare one, and a scheduled

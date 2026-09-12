@@ -93,6 +93,7 @@ class TaskAttemptTable(IdPayloadTable, DatabaseBase):
         Index("ix_task_attempts_workspace_created", "workspace_id", "created_at"),
         Index("ix_task_attempts_status_created", "status", "created_at"),
         Index("ix_task_attempts_container", "container_id"),
+        Index("ix_task_attempts_deadline", "deadline_at", "id"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -113,6 +114,7 @@ class TaskAttemptTable(IdPayloadTable, DatabaseBase):
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

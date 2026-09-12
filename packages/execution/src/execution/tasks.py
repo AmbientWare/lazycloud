@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
+from database.repositories.apps import StubRepository
 from database.repositories.cleanup import CleanupRepository
+from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import (
     LogPage,
     LogPageCursor,
@@ -22,6 +23,7 @@ from observability.stream_state import RedisEventStreamRepository
 from observability.workspace_changes import AsyncWorkspaceChangeService, WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.containers import TERMINAL_CONTAINER_STATUSES
+from shared.deployments import StubKind
 from shared.errors import ConflictError, NotFoundError
 from shared.events import EventLevel
 from shared.function_payloads import FunctionInvocationPayload, FunctionResultPayload
@@ -42,8 +44,9 @@ from shared.tasks import (
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
-from execution.callbacks import TaskCallbackDispatcher, TaskCallbackService
+from execution.callbacks import enqueue_task_callback
 from execution.context import ExecutionContext
+from execution.functions.config import FunctionStubConfig
 from execution.task_progress import TaskProgressService
 
 
@@ -52,6 +55,8 @@ class TaskFinishOutcome:
     task: Task
     retry_decision: RetryDecision
     state_changed: bool
+    attempt_status: TaskStatus
+    expired_container_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +73,6 @@ class TaskService:
     log_streams: RedisEventStreamRepository
     progress: TaskProgressService
     workspace_changes: WorkspaceChangePublisher | None = None
-    callback_dispatcher: TaskCallbackDispatcher | None = None
     async_database: AsyncDatabaseClient | None = None
     async_workspace_changes: AsyncWorkspaceChangeService | None = None
 
@@ -262,15 +266,14 @@ class TaskService:
                 exit_code=exit_code,
             )
         self.events.emit(
-            f"task.{status.value}",
+            f"task.{updated.status.value}",
             resource_type="task",
             resource_id=task.id,
-            message=f"task {task.name} {status.value}",
-            level=_task_event_level(status),
+            message=f"task {task.name} {updated.status.value}",
+            level=_task_event_level(updated.status),
             workspace_id=task.workspace_id,
         )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
-        self._deliver_callback(updated)
         return updated
 
     async def transition_async(
@@ -303,15 +306,14 @@ class TaskService:
             )
         )
         await self.events.emit_async(
-            f"task.{status.value}",
+            f"task.{updated.status.value}",
             resource_type="task",
             resource_id=task.id,
-            message=f"task {task.name} {status.value}",
-            level=_task_event_level(status),
+            message=f"task {task.name} {updated.status.value}",
+            level=_task_event_level(updated.status),
             workspace_id=task.workspace_id,
         )
         await self.publish_lifecycle_change_async(updated, WorkspaceChangeType.Updated)
-        await asyncio.to_thread(self._deliver_callback, updated)
         return updated
 
     @staticmethod
@@ -329,6 +331,8 @@ class TaskService:
         current = task_repository.get_for_update_across_workspaces(task.id)
         if current is None:
             raise NotFoundError(f"task not found: {task.id}")
+        if is_terminal_task_status(current.status):
+            return current
         current.status = status
         if is_terminal_task_status(status):
             current.finished_at = utc_now()
@@ -357,6 +361,7 @@ class TaskService:
                     latest.error = error
                     latest.exit_code = exit_code
                 attempts.upsert(latest)
+        enqueue_task_callback(session, updated)
         return updated
 
     def claim_and_start(self, stub_id: str, *, container_id: str) -> Task | None:
@@ -437,6 +442,7 @@ class TaskService:
                 attempt_container_id=current.container_id,
             )
         now = utc_now()
+        deadline_at = _function_execution_deadline(session, current, now=now)
         if not active_attempt:
             current.attempt_number = max(current.attempt_number, 0) + 1
         current.next_retry_at = None
@@ -459,6 +465,7 @@ class TaskService:
         if active_attempt and latest is not None:
             latest.status = TaskStatus.Running
             latest.started_at = latest.started_at or now
+            latest.deadline_at = deadline_at
             if attempt_container_id:
                 latest.container_id = attempt_container_id
             attempt_repository.upsert(latest)
@@ -471,6 +478,7 @@ class TaskService:
                     "attempt_number": saved.attempt_number,
                     "status": TaskStatus.Running.value,
                     "started_at": now,
+                    "deadline_at": deadline_at,
                 },
                 workspace_id=saved.workspace_id,
                 status=TaskStatus.Running.value,
@@ -574,8 +582,47 @@ class TaskService:
                 exit_code=exit_code,
                 retry_allowed=retry_allowed,
             )
+        self._publish_task_finished(outcome)
+        return outcome
+
+    def expire_function_attempt(self, attempt: TaskAttempt, *, now: datetime) -> TaskFinishOutcome:
+        with self.context.database.session() as session:
+            if attempt.container_id:
+                ContainerRepository(session).lock_across_workspaces(attempt.container_id)
+            recorded = TaskAttemptRepository(session).records.get_across_workspaces(attempt.id)
+            if (
+                recorded is not None
+                and recorded.deadline_at == attempt.deadline_at
+                and recorded.deadline_at is not None
+                and recorded.finished_at is not None
+                and recorded.finished_at >= recorded.deadline_at
+            ):
+                current = TaskRepository(session).get_for_update_across_workspaces(attempt.task_id)
+                if current is None:
+                    raise NotFoundError(f"task not found: {attempt.task_id}")
+                return replace(
+                    _unchanged_finish_outcome(current, "function deadline is already settled"),
+                    expired_container_id=recorded.container_id,
+                )
+            outcome = self._finish_with_retry_in_session(
+                session,
+                attempt.task_id,
+                TaskStatus.Timeout,
+                container_id=attempt.container_id,
+                result=None,
+                function_result=None,
+                error=None,
+                exit_code=124,
+                retry_allowed=True,
+                expired_attempt=attempt,
+                now=now,
+            )
+        self._publish_task_finished(outcome)
+        return outcome
+
+    def _publish_task_finished(self, outcome: TaskFinishOutcome) -> None:
         if not outcome.state_changed:
-            return outcome
+            return
         updated = outcome.task
         decision = outcome.retry_decision
         self.events.emit(
@@ -601,13 +648,11 @@ class TaskService:
                     "next_retry_at": (
                         updated.next_retry_at.isoformat() if updated.next_retry_at else ""
                     ),
-                    "failed_status": status.value,
+                    "failed_status": outcome.attempt_status.value,
                 },
                 workspace_id=updated.workspace_id,
             )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
-        self._deliver_callback(updated)
-        return outcome
 
     async def finish_with_retry_async(
         self,
@@ -661,12 +706,11 @@ class TaskService:
                     "next_retry_at": (
                         updated.next_retry_at.isoformat() if updated.next_retry_at else ""
                     ),
-                    "failed_status": status.value,
+                    "failed_status": outcome.attempt_status.value,
                 },
                 workspace_id=updated.workspace_id,
             )
         await self.publish_lifecycle_change_async(updated, WorkspaceChangeType.Updated)
-        await asyncio.to_thread(self._deliver_callback, updated)
         return outcome
 
     @staticmethod
@@ -681,7 +725,14 @@ class TaskService:
         error: str | None,
         exit_code: int | None,
         retry_allowed: bool,
+        expired_attempt: TaskAttempt | None = None,
+        now: datetime | None = None,
     ) -> TaskFinishOutcome:
+        container = (
+            ContainerRepository(session).lock_across_workspaces(container_id)
+            if container_id
+            else None
+        )
         task_repository = TaskRepository(session)
         current = task_repository.get_for_update_across_workspaces(task_id)
         if current is None:
@@ -697,6 +748,31 @@ class TaskService:
                 current,
                 "completion does not own the active task container",
             )
+        now = now or utc_now()
+        attempts = TaskAttemptRepository(session)
+        latest = attempts.latest_for_task(current.id)
+        deadline_expired = (
+            latest is not None and latest.deadline_at is not None and now >= latest.deadline_at
+        )
+        if expired_attempt is not None and (
+            not deadline_expired
+            or latest is None
+            or latest.id != expired_attempt.id
+            or latest.deadline_at != expired_attempt.deadline_at
+        ):
+            return _unchanged_finish_outcome(current, "function attempt deadline is no longer due")
+        expired_container_id = None
+        if deadline_expired:
+            status = TaskStatus.Timeout
+            result = None
+            function_result = None
+            error = "function execution deadline exceeded"
+            exit_code = 124
+            expired_container_id = current.container_id
+            if container is not None:
+                drains = ContainerRolloutRepository(session)
+                drains.prepare(container, serving_floor=0, now=now)
+                drains.close_admission(container.id, now=now)
         policy = current.retry_policy or RetryPolicy(max_attempts=current.max_attempts)
         decision = (
             plan_retry(
@@ -711,7 +787,6 @@ class TaskService:
                 reason="retry is disabled for this workload outcome",
             )
         )
-        now = utc_now()
         next_status = TaskStatus.Retry if decision.should_retry else status
         current.status = next_status
         current.result = result
@@ -729,8 +804,6 @@ class TaskService:
             name=current.name,
             status=next_status.value,
         )
-        attempts = TaskAttemptRepository(session)
-        latest = attempts.latest_for_task(updated.id)
         if latest is not None:
             latest.status = next_status
             if attempt_container_id:
@@ -740,10 +813,13 @@ class TaskService:
             latest.error = current.error
             latest.exit_code = exit_code
             attempts.upsert(latest)
+        enqueue_task_callback(session, updated)
         return TaskFinishOutcome(
             task=updated,
             retry_decision=decision,
             state_changed=True,
+            attempt_status=status,
+            expired_container_id=expired_container_id,
         )
 
     def due_retry_tasks(
@@ -795,7 +871,6 @@ class TaskService:
                 workspace_id=task.workspace_id,
             )
             self.publish_lifecycle_change(task, WorkspaceChangeType.Updated)
-            self._deliver_callback(task)
         return failed
 
     def list(
@@ -963,32 +1038,25 @@ class TaskService:
             raise RuntimeError("asynchronous task database is not configured")
         return self.async_database
 
-    def _deliver_callback(self, task: Task) -> None:
-        dispatcher = self.callback_dispatcher
-        if dispatcher is None:
-            dispatcher = TaskCallbackService(self.context, self.events)
-            self.callback_dispatcher = dispatcher
-        try:
-            dispatcher.deliver(task)
-        except Exception as exc:
-            self.events.emit(
-                "task.callback.failed",
-                resource_type="task",
-                resource_id=task.id,
-                message="task callback delivery failed before dispatch",
-                level=EventLevel.Warning,
-                data={
-                    "error_type": type(exc).__name__,
-                    "task_status": task.status.value,
-                },
-                workspace_id=task.workspace_id,
-            )
-
 
 def _task_event_level(status: TaskStatus) -> EventLevel:
     if status in {TaskStatus.Failed, TaskStatus.Timeout}:
         return EventLevel.Error
     return EventLevel.Info
+
+
+def _function_execution_deadline(
+    session: DatabaseSession, task: Task, *, now: datetime
+) -> datetime | None:
+    if not task.stub_id:
+        return None
+    stub = StubRepository(session).records.get_across_workspaces(task.stub_id)
+    if stub is None or stub.kind is not StubKind.Function:
+        return None
+    timeout = FunctionStubConfig.model_validate(
+        stub.config, from_attributes=True
+    ).runtime.execution_timeout_seconds
+    return now + timedelta(seconds=timeout) if timeout > 0 else None
 
 
 def _container_exists(session: DatabaseSession, container_id: str | None) -> bool:
@@ -1017,4 +1085,5 @@ def _unchanged_finish_outcome(task: Task, reason: str) -> TaskFinishOutcome:
             reason=reason,
         ),
         state_changed=False,
+        attempt_status=task.status,
     )

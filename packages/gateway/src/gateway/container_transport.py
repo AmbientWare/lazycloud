@@ -3,7 +3,7 @@ from __future__ import annotations
 import http.client
 import json
 import socket
-from collections.abc import Iterable
+from collections.abc import Generator
 from dataclasses import dataclass
 
 from networking.dialer import (
@@ -67,7 +67,7 @@ class HttpContainerServiceTransport:
         request: ContractModel,
         *,
         timeout_seconds: float | None = None,
-    ) -> Iterable[ContainerServiceWireValue]:
+    ) -> Generator[ContainerServiceWireValue, None, None]:
         return self._stream(method, request, timeout_seconds=timeout_seconds)
 
     def _post(
@@ -112,7 +112,7 @@ class HttpContainerServiceTransport:
         request: ContractModel,
         *,
         timeout_seconds: float | None,
-    ) -> Iterable[ContainerServiceWireValue]:
+    ) -> Generator[ContainerServiceWireValue, None, None]:
         path = f"{_CONTAINER_SERVICE_HTTP_PREFIX}/{method.value}/stream"
         payload = json.dumps(
             _encode_container_service_wire_value(request.model_dump(mode="python")),

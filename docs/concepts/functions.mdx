@@ -222,9 +222,12 @@ models and warm caches there. The other hooks run at each stage of a task:
 string, and each option also takes a list. `on_finish` runs after a reported
 success or error.
 
+Every hook receives one context argument. Startup context identifies the container;
+task context also includes `task_id`, `status`, `attempt_number`, and `error_message`.
+
 ```python
-def notify_failure() -> None:
-    print("report build failed", flush=True)
+def notify_failure(context) -> None:
+    print(f"report build failed: {context.task_id}: {context.error_message}", flush=True)
 
 
 @app.function(retries=1, on_failure=notify_failure)

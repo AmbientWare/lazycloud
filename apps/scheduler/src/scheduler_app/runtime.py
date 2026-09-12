@@ -7,11 +7,12 @@ from compute.state import RedisComputeStateRepository
 from control.custom_domains import CustomDomainService
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
+from execution.callbacks import TaskCallbackService
 from execution.containers.preemption import PreemptedContainerService
 from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
-from execution.services import ExecutionServices
+from execution.services import EndpointExecutionServices
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.settings import ImageBuildContainerSettings
 from images.submission import ImageBuildSubmissionService
@@ -71,6 +72,7 @@ from scheduler.state import (
 )
 from scheduler.worker_rollout import WorkerWorkloadDrainService
 from storage.retention_settings import RetentionSettings
+from storage.service import ObjectStorage
 from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -123,6 +125,7 @@ class SchedulerRuntime:
                 redis_client=app_services.redis_client,
                 container_requests=_container_requests(app_services),
                 image_build_container_settings=image_build_container_settings,
+                snapshot_objects=app_services.object_storage,
                 retention_settings=storage.retention,
                 volume_metering=app_services.volume_metering,
                 storage_access=app_services.storage_access,
@@ -158,11 +161,12 @@ class SchedulerRuntime:
         cls,
         *,
         scheduler_services: SchedulerServices,
-        execution_services: ExecutionServices,
+        execution_services: EndpointExecutionServices,
         redis_client: RedisClient,
         container_requests: SchedulerContainerRequestService,
         image_build_container_settings: ImageBuildContainerSettings,
         retention_settings: RetentionSettings,
+        snapshot_objects: ObjectStorage,
         volume_metering: SchedulerVolumeMeteringService,
         storage_access: SchedulerStorageAccessService | None,
         volume_deletion: SchedulerVolumeDeletionService,
@@ -214,6 +218,7 @@ class SchedulerRuntime:
             services=scheduler_services,
             managed_compute_reconcile_interval_seconds=(managed_compute_reconcile_interval_seconds),
             workloads=SchedulerWorkloadControls(
+                previews=endpoint_control,
                 image_builds=ImageBuildSubmissionService(
                     scheduler_services.context.database,
                     DurableImageBuildDispatch(
@@ -222,6 +227,7 @@ class SchedulerRuntime:
                         execution_services.containers,
                         image_build_container_settings,
                     ),
+                    snapshot_objects,
                 ),
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
@@ -298,6 +304,9 @@ class SchedulerRuntime:
                 ),
             ),
             maintenance=SchedulerMaintenanceControls(
+                task_callbacks=TaskCallbackService(
+                    execution_services.context, execution_services.events
+                ),
                 storage_access=storage_access,
                 volume_metering=volume_metering,
                 volume_deletion=volume_deletion,
