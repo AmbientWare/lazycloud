@@ -10,6 +10,11 @@ Linux 2023 x86_64 image, launches a temporary bake instance, installs Docker,
 host networking tools, zram, and SSM, then registers an immutable AMI. The GPU variant
 also installs and verifies the pinned NVIDIA driver and container toolkit.
 
+The instance syncs its filesystem and prints the completion marker, then stays
+running. The controller reads that marker from EC2 console output, stops the
+instance, and verifies it is stopped before capturing the image. A stopped
+instance without a verified marker fails the bake.
+
 Both images use the same host recipe digest. The digest covers the bake program,
 the generated runtime-only agent installer, and `gvisor-version`. AMI names and
 tags carry that digest, so rerunning an unchanged recipe reuses the same images.
