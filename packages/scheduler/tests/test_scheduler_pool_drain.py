@@ -174,6 +174,15 @@ class _Compute:
         _ = workspace_id, capacity_owner_id
         return {instance_id: f"machine-{instance_id}" for instance_id, _ in self.instances}
 
+    def internal_unit_replaceable_machines(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+    ) -> set[str]:
+        return set(
+            self.internal_unit_machine_by_instance(workspace_id, capacity_owner_id).values()
+        ) - {machine_id for _owner_id, machine_id in self.released}
+
     def scale_internal_unit(
         self,
         workspace_id: str,
@@ -595,6 +604,8 @@ def test_interrupted_warm_machine_is_replaced_before_retirement(
         compute.instances = [("i-new", "")]
     else:
         assert compute.released == [(PROVIDER_OWNER_ID, "machine-i-old")]
+        compute.instances.insert(0, ("i-old", ""))
+        workers.remove_worker("worker-old")
     _seed_pool_state(
         compute_states, capacity_owner_id=PROVIDER_OWNER_ID, active_machines=1, min_machines=1
     )
@@ -603,6 +614,12 @@ def test_interrupted_warm_machine_is_replaced_before_retirement(
     assert compute.replacement_machine_id == ""
     assert compute.desired_machines == 1
     assert compute.replacement_started == [("machine-i-old", "")]
+
+    compute.instances = [("i-new", "")]
+    compute.interrupted_deadlines["machine-i-new"] = NOW + timedelta(seconds=125)
+    workers.update_worker_status("worker-new", SchedulerWorkerStatus.Draining, now=NOW)
+    drain.reconcile(now=NOW + timedelta(seconds=5))
+    assert compute.replacement_started == [("machine-i-old", ""), ("machine-i-new", "")]
 
 
 def test_replacement_drains_after_its_surge_registers_even_if_template_advances(

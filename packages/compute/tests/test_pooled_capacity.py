@@ -88,6 +88,7 @@ from shared.capacity import (
     CapacityReleaseRequest,
 )
 from shared.compute_enrollment import (
+    AgentCapacityState,
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
@@ -2402,6 +2403,83 @@ def test_named_retirement_ignores_absent_machines_and_preserves_retry_intent(
             absent = ComputeProviderInstanceRepository(session).records.get(absent_id)
         assert absent is not None
         assert absent.status == "active"
+
+
+def test_retiring_interrupted_machine_cannot_acquire_another_replacement(
+    service_context: ServiceContext,
+) -> None:
+    class LingeringRetirement(_PooledProvider):
+        def release_machine(
+            self, request: ProviderUnitRequest, provider_instance_id: str
+        ) -> ProviderUnitSnapshot:
+            return self._snapshot(request)
+
+    _seed_connection(service_context)
+    provider = LingeringRetirement()
+    hooks = _SchedulerHooks()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=hooks,
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=2,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    now = datetime.now(UTC)
+    machine_ids = [str(uuid4()), str(uuid4())]
+    for index, machine_id in enumerate(machine_ids):
+        _seed_serving_machine(
+            service_context,
+            pool,
+            hooks,
+            machine_id=machine_id,
+            instance_id=f"i-{index:017x}",
+            now=now,
+        )
+        with service_context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            enrollment = enrollments.by_machine(pool.workspace_id, machine_id)
+            assert enrollment is not None
+            enrollments.save(
+                enrollment.model_copy(
+                    update={
+                        "capacity_state": AgentCapacityState.Cordoned,
+                        "capacity_notice_at": now + timedelta(seconds=120),
+                    }
+                )
+            )
+    old_machine, other_machine = machine_ids
+    compute.begin_internal_unit_replacement(
+        pool.workspace_id, pool.id, old_machine, template_version=""
+    )
+    compute.scale_internal_unit(pool.workspace_id, pool.id, 2, before_mutation=_allow_scale)
+    retired = compute.release_internal_unit_machine(pool.workspace_id, pool.id, old_machine)
+    assert retired.desired_machines == 2
+    assert retired.replacement_machine_id == ""
+    with service_context.database.session() as session:
+        record = ComputeProviderInstanceRepository(session).get_by_machine(old_machine)
+    assert record is not None and record.status == "terminating"
+    _durable, snapshot = compute.describe_internal_unit(pool.workspace_id, pool.id)
+    assert record.instance_id in {item.provider_instance_id for item in snapshot.instances}
+    assert compute.internal_unit_replaceable_machines(pool.workspace_id, pool.id) == {other_machine}
+
+    with pytest.raises(ConflictError):
+        compute.begin_internal_unit_replacement(
+            pool.workspace_id, pool.id, old_machine, template_version=""
+        )
+    assert compute.get_internal_unit(pool.workspace_id, pool.id) == retired
+    replacement = compute.begin_internal_unit_replacement(
+        pool.workspace_id, pool.id, other_machine, template_version=""
+    )
+    assert replacement.replacement_machine_id == other_machine
+    assert replacement.desired_machines == 2
 
 
 def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
