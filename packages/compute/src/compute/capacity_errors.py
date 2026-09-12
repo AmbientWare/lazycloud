@@ -1,4 +1,8 @@
-from shared.errors import ConflictError
+from shared.errors import ConflictError, UpstreamUnavailableError
+
+
+class ProviderAuthorizationPendingError(UpstreamUnavailableError):
+    """Provider authorization validation has not finished."""
 
 
 class CapacityReservationConflictError(ConflictError):
