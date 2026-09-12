@@ -78,7 +78,12 @@ from shared.http.pods import (
 )
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.paths import DEFAULT_SANDBOX_WORKDIR
-from shared.routing import AgentBackendRoute, BackendRouteState, parse_backend_route_address
+from shared.routing import (
+    AgentBackendRoute,
+    BackendRouteKind,
+    BackendRouteState,
+    parse_backend_route_address,
+)
 from shared.scheduling import (
     ContainerSchedulingDirectory,
     SchedulerContainerAddressMap,
@@ -1208,8 +1213,7 @@ class PodControlService:
             address_map.routes,
             address=address,
             port=request.port,
-            container_id=container.id,
-            workspace_id=container.workspace_id,
+            container=container,
         )
         return PodProxyTarget(
             container_id=container.id,
@@ -1500,8 +1504,7 @@ def _owned_route_id_for_port(
     *,
     address: str,
     port: int,
-    container_id: str,
-    workspace_id: str,
+    container: ContainerRecord,
 ) -> str:
     address_route_id, address_is_route = parse_backend_route_address(address)
     matching = [route for route in routes if route.port == port]
@@ -1512,7 +1515,16 @@ def _owned_route_id_for_port(
     if len(matching) != 1:
         raise PodProxyUnavailable("sandbox address ownership is ambiguous")
     route = matching[0]
-    if route.container_id != container_id or route.workspace_id != workspace_id:
+    # The route workspace owns the machine enrollment. Tenant ownership comes
+    # from the container and its durable runtime assignment.
+    if (
+        route.container_id != container.id
+        or route.kind is not BackendRouteKind.Container
+        or not container.runtime_worker_id
+        or not container.runtime_machine_id
+        or route.worker_id != container.runtime_worker_id
+        or route.machine_id != container.runtime_machine_id
+    ):
         raise PodProxyUnavailable("sandbox address ownership is invalid")
     if not route.route_id or route.state != BackendRouteState.Ready.value or bool(route.error):
         raise PodProxyUnavailable("sandbox backend route is unavailable")
