@@ -215,6 +215,7 @@ class SchedulerRuntime:
             services=scheduler_services,
             managed_compute_reconcile_interval_seconds=(managed_compute_reconcile_interval_seconds),
             workloads=SchedulerWorkloadControls(
+                previews=endpoint_control,
                 image_builds=ImageBuildSubmissionService(
                     scheduler_services.context.database,
                     DurableImageBuildDispatch(

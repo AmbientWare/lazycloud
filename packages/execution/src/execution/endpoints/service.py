@@ -5,7 +5,7 @@ import json
 import socket
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.records.endpoint_dispatch import (
@@ -15,7 +15,9 @@ from database.repositories.apps import StubRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository
+from database.repositories.previews import PreviewSessionRepository
 from database.types import DatabaseSession
+from foundation.ids import try_uuid
 from pydantic import JsonValue
 from shared.app_identity import ENDPOINT_IMAGE
 from shared.container_requests import (
@@ -27,8 +29,6 @@ from shared.containers import ContainerStatus
 from shared.env import (
     APP_ID_ENV,
     CHECKPOINT_ENABLED_ENV,
-    ENDPOINT_INSTANCE_LOCK_ENV,
-    ENDPOINT_SERVE_LOCK_ENV,
     ENDPOINT_WORKERS_ENV,
     HOT_RELOAD_DIR_ENV,
     HOT_RELOAD_ENV,
@@ -49,9 +49,10 @@ from shared.http.endpoint_forwarding import HeaderMap, error_response
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
-    StartEndpointServeRequest,
-    StartEndpointServeResponse,
+    EndpointWarmupRequest,
+    EndpointWarmupResponse,
 )
+from shared.http.previews import CreatePreviewRequest, PreviewSessionResponse, PreviewSessionStatus
 from shared.http.task_payload import serialize_http_task_payload
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskStatus
@@ -74,8 +75,7 @@ from execution.endpoints.dispatch import (
     EndpointDispatchTarget,
     EndpointDispatchUnavailable,
 )
-from execution.endpoints.keys import DEFAULT_ENDPOINT_SERVE_TIMEOUT_SECONDS
-from execution.endpoints.serve import EndpointServeRequest, plan_endpoint_serve
+from execution.endpoints.previews import PreviewSessionService
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
@@ -148,27 +148,57 @@ class EndpointControlService:
     def __post_init__(self) -> None:
         self.control_plane = ControlPlaneService(self.services.context)
 
-    def start_endpoint_serve(
+    def warm_endpoint(
         self,
-        request: StartEndpointServeRequest,
-    ) -> StartEndpointServeResponse:
+        request: EndpointWarmupRequest,
+    ) -> EndpointWarmupResponse:
         stub = self.control_plane.get_stub(request.stub_id)
+        if PreviewSessionService(self.services).for_stub(stub.id) is not None:
+            raise NotFoundError("preview capacity belongs to its session")
+        return self._start_endpoint_container(stub)
+
+    def create_preview(
+        self, request: CreatePreviewRequest, *, workspace_id: str
+    ) -> PreviewSessionResponse:
+        previews = PreviewSessionService(self.services)
+        record = previews.create(request, workspace_id=workspace_id)
+        try:
+            stub = previews.execution_stub(record.id)
+            self._start_endpoint_container(stub, preview_id=record.id)
+        except Exception:
+            previews.stop(record.id, workspace_id=workspace_id)
+            raise
+        return previews.get(record.id, workspace_id=workspace_id)
+
+    def get_preview(
+        self, preview_id: str, *, workspace_id: str | None = None, public: bool = False
+    ) -> PreviewSessionResponse:
+        previews = PreviewSessionService(self.services)
+        record = previews.get(preview_id, workspace_id=workspace_id, public=public)
+        if record.status is PreviewSessionStatus.Active:
+            try:
+                previews.require_active(record)
+            except NotFoundError:
+                return previews.get(preview_id, workspace_id=workspace_id, public=public)
+        return record
+
+    def renew_preview(self, preview_id: str, *, workspace_id: str) -> PreviewSessionResponse:
+        return PreviewSessionService(self.services).renew(preview_id, workspace_id=workspace_id)
+
+    def stop_preview(self, preview_id: str, *, workspace_id: str) -> None:
+        PreviewSessionService(self.services).stop(preview_id, workspace_id=workspace_id)
+
+    def expire_previews(self, *, now: datetime | None = None, limit: int = 100) -> int:
+        return PreviewSessionService(self.services).reconcile(now=now, limit=limit)
+
+    def _start_endpoint_container(
+        self, stub: StubRecord, *, preview_id: str | None = None
+    ) -> EndpointWarmupResponse:
         if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
             raise InvalidInputError(f"stub is not an endpoint: {stub.id}")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
-        timeout_seconds = request.timeout or DEFAULT_ENDPOINT_SERVE_TIMEOUT_SECONDS
-        plan = plan_endpoint_serve(
-            EndpointServeRequest(
-                stub_id=stub.id,
-                workspace_name=workspace.name,
-                workspace_id=workspace.id,
-                timeout_seconds=timeout_seconds,
-                python_executable=config.image.python_executable,
-            )
-        )
-        if not plan.authorized:
-            raise InvalidInputError("Unauthorized")
+        entrypoint = [config.image.python_executable, "-m", "runner.serve"]
         image_id = config.effective_image_id or ENDPOINT_IMAGE
         startup_kind = (
             WorkerStartupKind.Asgi if stub.kind is StubKind.Asgi else WorkerStartupKind.Endpoint
@@ -180,20 +210,34 @@ class EndpointControlService:
             STUB_ID_ENV: stub.id,
             STUB_TYPE_ENV: stub.kind.value,
             "HANDLER": stub.handler or "",
-            ENDPOINT_SERVE_LOCK_ENV: plan.serve_lock_key,
-            ENDPOINT_INSTANCE_LOCK_ENV: plan.instance_lock_key,
             ENDPOINT_WORKERS_ENV: str(config.workers),
             LIFECYCLE_HOOKS_ENV: config.lifecycle_hooks.model_dump_json(),
-            HOT_RELOAD_ENV: "true",
+            HOT_RELOAD_ENV: "true" if preview_id else "false",
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
         with self.services.context.database.session() as session:
+            preview = (
+                PreviewSessionRepository(session).get(preview_id, lock=True) if preview_id else None
+            )
+            if preview_id and (
+                preview is None
+                or preview.status != PreviewSessionStatus.Active.value
+                or preview.container_id is not None
+            ):
+                raise NotFoundError("preview session is not available for startup")
+            if preview is not None and (
+                (preview.expires_at is not None and preview.expires_at <= utc_now())
+                or not self.services.redis_client.exists(
+                    PreviewSessionService(self.services).lease_key(preview.id)
+                )
+            ):
+                raise NotFoundError("preview session has expired")
             container = self.services.containers.reserve_pending(
                 session,
                 PendingContainerReservation(
                     name=f"endpoint-{stub.name}",
                     image=image_id,
-                    command=list(plan.entrypoint),
+                    command=entrypoint,
                     workspace_id=stub.workspace_id,
                     stub_id=stub.id,
                     app_id=stub.app_id,
@@ -204,6 +248,8 @@ class EndpointControlService:
                     availability_zone=config.runtime.availability_zone,
                 ),
             )
+            if preview is not None:
+                preview.container_id = container.id
         self.services.containers.publish_lifecycle_change(
             container,
             WorkspaceChangeType.Created,
@@ -227,13 +273,22 @@ class EndpointControlService:
             if config.runtime.checkpoint_enabled
             else None
         )
+        if preview_id is not None:
+            with self.services.context.database.session() as session:
+                if not ContainerRolloutRepository(session).accepting_work(
+                    container.id, stub_id=stub.id
+                ):
+                    raise NotFoundError("preview container admission is closed")
+                self._validate_preview_scope(
+                    session, EndpointForwardRequest(stub_id=stub.id, preview_session_id=preview_id)
+                )
         scheduled = self.services.containers.submit_scheduler_request(
             container,
             ContainerSchedulingOptions(
                 workspace_name=workspace.name,
                 stub_type=stub.kind.value,
                 startup_kind=startup_kind,
-                entrypoint=plan.entrypoint,
+                entrypoint=entrypoint,
                 cwd=WORKER_USER_CODE_VOLUME,
                 env_list=[f"{key}={value}" for key, value in env.items()],
                 image_id=image_id,
@@ -275,37 +330,22 @@ class EndpointControlService:
             ),
         )
         if not scheduled.accepted:
-            with self.services.context.database.session() as session:
-                container.status = ContainerStatus.Failed
-                container.finished_at = utc_now()
-                ContainerRepository(session).records.upsert(
-                    container,
-                    workspace_id=container.workspace_id,
-                    name=container.name,
-                    status=container.status.value,
-                )
-            self.services.containers.publish_lifecycle_change(
-                container,
-                WorkspaceChangeType.Updated,
-            )
             raise UpstreamUnavailableError(
                 scheduled.reason or "endpoint container scheduling failed"
             )
         self.services.events.emit(
-            "endpoint.serve.started",
+            "endpoint.container.started",
             level=EventLevel.Info,
             resource_type="container",
             resource_id=container.id,
-            message=f"started endpoint serve container for {stub.name}",
+            message=f"started endpoint container for {stub.name}",
             data={
                 "stub_id": stub.id,
-                "serve_lock_key": plan.serve_lock_key,
-                "instance_lock_key": plan.instance_lock_key,
-                "timeout_seconds": plan.wait_timeout_seconds,
+                "preview_session_id": preview_id,
             },
             workspace_id=stub.workspace_id,
         )
-        return StartEndpointServeResponse(container_id=container.id)
+        return EndpointWarmupResponse(container_id=container.id)
 
     async def forward_endpoint_request(
         self,
@@ -353,6 +393,9 @@ class EndpointControlService:
         """
 
         try:
+            await self._async_database().run_transaction(
+                lambda session: self._validate_preview_scope(session, request)
+            )
             stub = await self._async_database().run_transaction(
                 lambda session: self.control_plane.get_stub_in_session(
                     session,
@@ -638,6 +681,24 @@ class EndpointControlService:
         )
         return await self._dispatch_task(stub, task, forwarded, settings)
 
+    def _validate_preview_scope(
+        self, session: DatabaseSession, request: EndpointForwardRequest
+    ) -> None:
+        preview = PreviewSessionRepository(session).for_stub(request.stub_id, lock=True)
+        if preview is None:
+            if request.preview_session_id is not None:
+                raise NotFoundError("preview session not found")
+            return
+        if (
+            preview.id != try_uuid(request.preview_session_id)
+            or preview.status != PreviewSessionStatus.Active.value
+            or (preview.expires_at is not None and preview.expires_at <= utc_now())
+            or not self.services.redis_client.exists(
+                PreviewSessionService(self.services).lease_key(preview.id)
+            )
+        ):
+            raise NotFoundError("preview session has ended")
+
     async def _admit_dispatch_task(
         self,
         stub: StubRecord,
@@ -671,6 +732,7 @@ class EndpointControlService:
         task_kwargs: dict[str, JsonValue] | None,
         retry: bool,
     ) -> EndpointDispatchAdmission | None:
+        self._validate_preview_scope(session, request)
         locked_stub = StubRepository(session).get_for_update(
             stub.id,
             workspace_id=stub.workspace_id,
@@ -839,6 +901,10 @@ class EndpointControlService:
         outdated_containers: set[str] = set()
         while True:
             await self._raise_if_cancelled(task.id)
+            previews = PreviewSessionService(self.services)
+            preview = await asyncio.to_thread(previews.for_stub, stub.id)
+            if preview is not None:
+                await asyncio.to_thread(previews.require_active, preview)
             if wait.warmup_attempted:
                 await self._raise_if_capacity_is_dead(dispatcher, stub)
             if wait.remaining() <= 0:
@@ -866,7 +932,9 @@ class EndpointControlService:
             ):
                 outdated_containers.add(target.container_id)
                 continue
-            record = await repository.claim(task, container_id=target.container_id)
+            record = await self._claim_dispatch_task(
+                task, container_id=target.container_id, preview_id=preview.id if preview else None
+            )
             if record is None:
                 await asyncio.sleep(wait.poll_delay())
                 continue
@@ -875,6 +943,28 @@ class EndpointControlService:
             # carries the same attribution every other workload kind has.
             await self.services.tasks.assign_async(task, container_id=target.container_id)
             return target, record
+
+    async def _claim_dispatch_task(
+        self, task: Task, *, container_id: str, preview_id: str | None
+    ) -> EndpointDispatchRecord | None:
+        def claim_in_session(session: DatabaseSession) -> EndpointDispatchRecord | None:
+            if not ContainerRolloutRepository(session).accepting_work(
+                container_id, stub_id=task.stub_id or ""
+            ):
+                return None
+            self._validate_preview_scope(
+                session,
+                EndpointForwardRequest(stub_id=task.stub_id or "", preview_session_id=preview_id),
+            )
+            return _transition_dispatch_in_session(
+                session,
+                task,
+                EndpointDispatchStatus.Inflight,
+                container_id=container_id,
+                error=None,
+            )
+
+        return await self._async_database().run_transaction(claim_in_session)
 
     async def _forward_failed(
         self,
@@ -976,10 +1066,27 @@ class EndpointControlService:
         )
 
     async def _request_capacity(self, stub: StubRecord, task: Task) -> None:
+        previews = PreviewSessionService(self.services)
+        preview = await asyncio.to_thread(previews.for_stub, stub.id)
+        if preview is not None:
+            await asyncio.to_thread(previews.require_active, preview)
+            container_id = preview.container_id
+            if container_id is not None:
+                container = await self._async_database().run_transaction(
+                    lambda session: ContainerRepository(session).get_across_workspaces(container_id)
+                )
+                if container is not None and container.status in {
+                    ContainerStatus.Pending,
+                    ContainerStatus.Running,
+                }:
+                    return
+            raise EndpointDispatchUnavailable(
+                "preview container is unavailable; start a new preview"
+            )
         try:
             warmup = await asyncio.to_thread(
-                self.start_endpoint_serve,
-                StartEndpointServeRequest(stub_id=stub.id),
+                self.warm_endpoint,
+                EndpointWarmupRequest(stub_id=stub.id),
             )
         except (PaymentRequiredError, CapacityLimitReachedError):
             # Not converted to 503. Every other reason capacity cannot be had is a
@@ -1055,7 +1162,7 @@ class EndpointControlService:
         self,
         stub: StubRecord,
         task: Task,
-        warmup: StartEndpointServeResponse,
+        warmup: EndpointWarmupResponse,
     ) -> None:
         await self.services.events.emit_async(
             "endpoint.dispatch.warmup",
@@ -1110,6 +1217,8 @@ class EndpointControlService:
 
 
 def _dispatch_failure(exc: Exception) -> tuple[EndpointDispatchStatus, TaskStatus, int]:
+    if isinstance(exc, NotFoundError):
+        return EndpointDispatchStatus.Failed, TaskStatus.Failed, 404
     if isinstance(exc, EndpointDispatchCancelled):
         return (
             EndpointDispatchStatus.Cancelled,
@@ -1163,22 +1272,6 @@ class AsyncEndpointDispatchStateRepository:
         return await self.database.run_transaction(
             lambda session: ContainerRolloutRepository(session).closed_for_stub(stub_id)
         )
-
-    async def claim(self, task: Task, *, container_id: str) -> EndpointDispatchRecord | None:
-        def claim_in_session(session: DatabaseSession) -> EndpointDispatchRecord | None:
-            if not ContainerRolloutRepository(session).accepting_work(
-                container_id, stub_id=task.stub_id or ""
-            ):
-                return None
-            return _transition_dispatch_in_session(
-                session,
-                task,
-                EndpointDispatchStatus.Inflight,
-                container_id=container_id,
-                error=None,
-            )
-
-        return await self.database.run_transaction(claim_in_session)
 
     async def transition(
         self,

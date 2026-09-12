@@ -75,6 +75,12 @@ its logs. Your working directory is synced into the container as you edit;
 `--sync-dir <dir>` syncs a different one. `--timeout 0`, the default, serves
 until you interrupt it. `--container-port` maps the container port.
 
+Each serve session owns its URL and container. Interrupting the command or
+reaching a positive timeout ends the session and invalidates that URL. If the
+command loses its connection, its lease expires after 60 seconds without a
+heartbeat. Requesting an ended session cannot restart it. Deployed URLs keep
+their own lifecycle.
+
 ## lazycloud shell
 
 ```bash

@@ -123,6 +123,22 @@ spends at most three attempts, including claims lost to a process crash. Final
 delivery clears the target and payload; the identity and status remain until
 task retention removes them through the task foreign key.
 
+## Preview lifetime
+
+A serve preview owns a separate execution stub and one container, with durable
+ownership in PostgreSQL and a renewable 60-second liveness lease in Redis. Its
+source configuration and artifacts remain shared immutable inputs. Session
+ingress checks ownership, status, absolute timeout, and lease while admitting
+work; ordinary endpoint warmup cannot create preview capacity. Zero timeout
+keeps the foreground lease, with no absolute deadline.
+
+Stop locks the container before the session, rechecking a concurrent startup
+binding before closing admission and recording the terminal session together.
+Container stop delivery follows commit. Placement reconciliation revisits ended
+sessions with live containers, so a failed delivery retains its exact target.
+Claiming takes the same container and session fences. Source or stub deletion
+must not cascade away the session's outstanding container stop.
+
 ## A schedule is a property, not a kind
 
 `@app.function(cron=...)` is the only way to declare one, and a scheduled

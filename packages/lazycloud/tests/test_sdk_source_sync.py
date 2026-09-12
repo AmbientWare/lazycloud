@@ -90,6 +90,8 @@ def test_source_package_sync_preserves_canonical_module_prefix(tmp_path: Path) -
     ).sync()
 
     assert result.files == ("tests/e2e/local/function/workloads.py",)
+    assert result.root == tmp_path.resolve()
+    assert result.archive_prefix == ("tests", "e2e", "local", "function")
     data = client.uploads[0]["data"]
     assert isinstance(data, bytes)
     zip_path = tmp_path / "prefixed-source.zip"
@@ -226,17 +228,22 @@ def test_deployment_prepare_keeps_handler_module_and_prefixes_nested_source_root
     gateway = FakeDeploymentClient(stub_id="stub-source")
     upload_client = FakeUploadClient(object_id="obj-runtime-source")
 
-    DeploymentClient(
+    deployment = DeploymentClient(
         client=gateway,
         object_client=upload_client,
         sync_source=True,
         source_root=source_root,
-    ).prepare(
+    )
+    deployment.prepare(
         DeploymentSpec(name="demo", handler=f"{module_name}:handle"),
         workspace="team",
     )
 
     assert gateway.requests[0].handler == f"{module_name}:handle"
+    assert deployment.prepared_source is not None
+    assert deployment.prepared_source.root == source_root.resolve()
+    assert deployment.prepared_source.archive_prefix == ("project_namespace", "functions")
+    assert deployment.prepared_source.files == ("project_namespace/functions/handler.py",)
     data = upload_client.uploads[0]["data"]
     assert isinstance(data, bytes)
     zip_path = tmp_path / "deployment-source.zip"

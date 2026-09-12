@@ -74,6 +74,8 @@ class SourcePackageSyncResult:
     sha256: str
     size: int
     files: tuple[str, ...]
+    root: Path
+    archive_prefix: tuple[str, ...]
 
 
 @dataclass(slots=True)
@@ -122,6 +124,8 @@ class SourcePackageSyncer:
                 sha256=archive.sha256,
                 size=archive.size,
                 files=archive.files,
+                root=root,
+                archive_prefix=self.archive_prefix,
             )
             step.done(description)
         return result

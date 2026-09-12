@@ -368,6 +368,10 @@ class ScheduledFunctionControl(Protocol):
     def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
 
 
+class SchedulerPreviewSessions(Protocol):
+    def expire_previews(self, *, now: datetime | None = None, limit: int = 100) -> int: ...
+
+
 class SchedulerPreemptionRecovery(Protocol):
     def recover_unsettled(self, *, limit: int = 100) -> list[str]: ...
 
@@ -427,6 +431,7 @@ class SchedulerBuildSubmissions(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SchedulerWorkloadControls:
+    previews: SchedulerPreviewSessions | None = None
     image_builds: SchedulerBuildSubmissions | None = None
     containers: SchedulerContainerRequestService | None = None
     dispatch_wake: WakeSignalWaiter | None = None
@@ -708,6 +713,11 @@ class Scheduler:
         if not include_containers:
             return SchedulerRunResult()
         current_time = now or utc_now()
+        if self.workloads.previews is not None:
+            try:
+                self.workloads.previews.expire_previews(now=current_time, limit=container_limit)
+            except Exception:
+                LOGGER.exception("preview session reconciliation failed")
         if self.workloads.functions is not None:
             try:
                 expired = self.workloads.functions.expire_function_attempts(

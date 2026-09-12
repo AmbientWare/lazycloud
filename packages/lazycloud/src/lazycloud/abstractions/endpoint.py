@@ -4,6 +4,7 @@ import inspect
 import json
 import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from functools import update_wrapper
 from pathlib import Path
@@ -36,9 +37,10 @@ from shared.deployment_records import (
 )
 from shared.deployments import DeploymentKind
 from shared.gpu import GpuInput, gpu_preference
-from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.errors import HttpTransportError
 from shared.http.gateway import DeployStubResponse
+from shared.http.previews import PreviewSessionResponse, preview_invocation_path
+from shared.http_transport import HttpChannel
 from shared.placement import ProductRegion
 from shared.serialization import to_json_value
 from shared.tasks import RetryPolicy, TaskPolicy
@@ -62,10 +64,9 @@ from lazycloud.abstractions.metadata import (
     retry_policy_config,
 )
 from lazycloud.abstractions.serve import (
+    PreviewLifecycleClient,
     ServeGatewayClient,
     ServePreviewSession,
-    ServeResourceClient,
-    resolve_serve_url,
     sync_local_workspace,
     write_serve_preview,
 )
@@ -77,15 +78,15 @@ from lazycloud.client_contracts import (
     schema_from_contract_parameters,
     schema_from_contract_return,
 )
-from lazycloud.clients.endpoint.control import EndpointControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
-from lazycloud.clients.resource.control import ResourceControlClient
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.clients.previews import PreviewControlClient
+from lazycloud.control import ControlClientConfig, resolve_control_client_config, workspace_path
 from lazycloud.env import is_local
 from lazycloud.json_contracts import parse_json_value
 from lazycloud.references import dotted_reference
 from lazycloud.schema import prepare_json_input_arguments
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
+from lazycloud.session.source_sync import SourcePackageSyncResult
 from lazycloud.terminal import Terminal
 
 P = ParamSpec("P")
@@ -240,6 +241,7 @@ class Endpoint(Generic[P, R]):
     pool: PoolInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
+    _prepared_source: SourcePackageSyncResult | None = field(default=None, init=False, repr=False)
     deployment_client: DeploymentControlClient | None = field(
         default=None,
         init=False,
@@ -251,7 +253,7 @@ class Endpoint(Generic[P, R]):
     terminal: Terminal | None = field(default=None, init=False, repr=False)
     sync_local_dir: str | None = field(default=None, init=False)
     gateway_client: ServeGatewayClient | None = field(default=None, init=False, repr=False)
-    resource_client: ServeResourceClient | None = field(default=None, init=False, repr=False)
+    preview_client: PreviewLifecycleClient | None = field(default=None, init=False, repr=False)
     _handler_reference_override: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -347,7 +349,7 @@ class Endpoint(Generic[P, R]):
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0) -> PreviewSessionResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
@@ -640,10 +642,11 @@ class ASGI:
     token: str | None = field(default=None, init=False, repr=False)
     timeout: float = field(default=10.0, init=False)
     stub_id: str = field(default="", init=False)
+    _prepared_source: SourcePackageSyncResult | None = field(default=None, init=False, repr=False)
     terminal: Terminal | None = field(default=None, init=False, repr=False)
     sync_local_dir: str | None = field(default=None, init=False)
     gateway_client: ServeGatewayClient | None = field(default=None, init=False, repr=False)
-    resource_client: ServeResourceClient | None = field(default=None, init=False, repr=False)
+    preview_client: PreviewLifecycleClient | None = field(default=None, init=False, repr=False)
     _handler_reference_target: Callable[..., Any] | None = field(
         default=None,
         init=False,
@@ -718,7 +721,7 @@ class ASGI:
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0) -> PreviewSessionResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
@@ -1086,24 +1089,24 @@ def _resolve_endpoint_invocation_target(
     config: ControlClientConfig,
     options: InvocationOptions,
 ) -> InvocationTarget:
-    preview_client = owner.resource_client or ResourceControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
     try:
-        return resolve_invocation_target(
-            kind=spec.kind,
-            name=spec.name,
-            app=owner._app_slug,
-            config=config,
-            deployment_client=owner.deployment_client,
-            preview_client=preview_client,
-            target=options.target,
-            deployment_name=options.deployment_name,
-            deployment_version=options.deployment_version,
-        )
+        with ExitStack() as stack:
+            preview_client = owner.preview_client
+            if preview_client is None:
+                client = PreviewControlClient.from_config(config)
+                stack.enter_context(client.channel)
+                preview_client = client
+            return resolve_invocation_target(
+                kind=spec.kind,
+                name=spec.name,
+                app=owner._app_slug,
+                config=config,
+                deployment_client=owner.deployment_client,
+                preview_client=preview_client,
+                target=options.target,
+                deployment_name=options.deployment_name,
+                deployment_version=options.deployment_version,
+            )
     except InvocationTargetError as exc:
         raise EndpointOperationError(str(exc)) from exc
 
@@ -1165,7 +1168,7 @@ def _prepare_endpoint(
     source_root: str | None = None,
 ) -> str:
     try:
-        response = DeploymentClient(
+        deployment_client = DeploymentClient(
             client=owner.deployment_client,
             workspace=workspace,
             endpoint=owner.endpoint,
@@ -1173,7 +1176,8 @@ def _prepare_endpoint(
             timeout_seconds=owner.timeout,
             sync_source=True,
             terminal=owner.terminal,
-        ).prepare(
+        )
+        response = deployment_client.prepare(
             owner.spec(),
             workspace=workspace,
             image=owner.image,
@@ -1185,6 +1189,7 @@ def _prepare_endpoint(
         msg = f"deployment prepare did not return a {label} stub_id"
         raise EndpointOperationError(msg)
     owner.stub_id = response.stub_id
+    owner._prepared_source = deployment_client.prepared_source
     return owner.stub_id
 
 
@@ -1196,68 +1201,71 @@ def _serve_endpoint(
     sync_dir: str | None,
     container_id: str | None,
     label: str,
-) -> StartEndpointServeResponse:
+) -> PreviewSessionResponse:
     terminal = owner.terminal or Terminal()
     owner.terminal = terminal
     source_root = sync_dir or None
-    stub_id = owner.stub_id or _prepare_endpoint(
+    stub_id = _prepare_endpoint(
         owner,
         workspace=workspace,
         label=label,
         source_root=source_root,
     )
     config = owner._config()
-    gateway_client = owner.gateway_client or GatewayControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
-    resource_client = owner.resource_client or ResourceControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
-    serve_url = resolve_serve_url(
-        gateway_client,
-        stub_id=stub_id,
-        workspace=workspace,
-        external_url=config.endpoint,
-    )
-    response = EndpointControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    ).start_serve(stub_id, timeout=timeout)
-    selected_container_id = container_id or response.container_id
-    if not selected_container_id:
-        raise EndpointOperationError(f"serve did not return a {label} container_id")
-    spec = owner.spec()
-    preview_record = write_serve_preview(
-        kind=spec.kind,
-        name=spec.name,
-        app=owner._app_slug,
-        workspace=config.workspace,
-        endpoint=config.endpoint,
-        stub_id=stub_id,
-        container_id=selected_container_id,
-        url=serve_url.url,
-    )
-    ServePreviewSession(
-        stub_id=stub_id,
-        container_id=selected_container_id,
-        url=serve_url.url,
-        gateway_client=gateway_client,
-        resource_client=resource_client,
-        terminal=terminal,
-        sync_dir=sync_dir,
-        token=owner.token,
-        authorized=owner.authorized is not False,
-        preview_record=preview_record,
-    ).run()
-    return response
+    with ExitStack() as stack:
+        channel = stack.enter_context(
+            HttpChannel(
+                endpoint=config.endpoint,
+                token=config.token,
+                timeout_seconds=config.timeout_seconds,
+            )
+        )
+        gateway_client = owner.gateway_client or GatewayControlClient(
+            channel=channel, workspace=workspace or config.workspace
+        )
+        preview_client = owner.preview_client or PreviewControlClient(
+            channel=channel, workspace=workspace or config.workspace
+        )
+        response = preview_client.create(stub_id, timeout=timeout)
+        try:
+            if not response.container_id or not response.execution_stub_id:
+                raise EndpointOperationError(f"serve did not return a {label} execution")
+            if container_id is not None and container_id != response.container_id:
+                raise EndpointOperationError("serve container belongs to its preview session")
+            path = preview_invocation_path(response.id, public=response.public)
+            if not response.public:
+                path = workspace_path(path, response.workspace_id)
+            url = config.endpoint.rstrip("/") + path
+            spec = owner.spec()
+            preview_record = write_serve_preview(
+                kind=spec.kind,
+                name=spec.name,
+                app=owner._app_slug,
+                workspace=workspace or config.workspace,
+                endpoint=config.endpoint,
+                preview_id=response.id,
+                stub_id=response.execution_stub_id,
+                container_id=response.container_id,
+                url=url,
+                expires_at=response.expires_at.timestamp() if response.expires_at else None,
+            )
+        except BaseException:
+            preview_client.stop(response.id)
+            raise
+        ServePreviewSession(
+            preview_id=response.id,
+            stub_id=response.execution_stub_id,
+            container_id=response.container_id,
+            url=url,
+            gateway_client=gateway_client,
+            preview_client=preview_client,
+            terminal=terminal,
+            source=owner._prepared_source,
+            token=config.token,
+            authorized=not response.public,
+            preview_record=preview_record,
+        ).run()
+        return preview_client.get_preview(response.id)
 
 
 def _shell_endpoint(

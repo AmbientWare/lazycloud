@@ -38,6 +38,7 @@ from database.tables.apps import (
 from database.tables.execution import TaskTable
 from database.tables.images import CheckpointTable
 from database.tables.orchestration import ContainerTable
+from database.tables.previews import PreviewSessionTable
 from pydantic import BaseModel, JsonValue
 from shared.app_lifecycle import (
     UNFINISHED_APP_LIFECYCLE_STATES,
@@ -687,6 +688,11 @@ class StubRepository:
             if not wanted:
                 return []
             statement = statement.where(StubTable.id.in_(wanted))
+        statement = statement.where(
+            ~select(PreviewSessionTable.id)
+            .where(PreviewSessionTable.execution_stub_id == StubTable.id)
+            .exists()
+        )
         rows = self.session.execute(
             statement.order_by(StubTable.created_at.desc(), StubTable.id.asc())
         ).tuples()

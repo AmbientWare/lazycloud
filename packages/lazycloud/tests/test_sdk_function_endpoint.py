@@ -22,7 +22,6 @@ from lazycloud.json_contracts import validate_json_object
 from lazycloud.schema import Integer, Schema
 from lazycloud.values import cloudpickle_bytes
 from pydantic import JsonValue
-from shared.containers import ContainerStatus
 from shared.deployments import DeploymentKind
 from shared.env import (
     CONTAINER_ID_ENV,
@@ -36,23 +35,12 @@ from shared.function_payloads import (
     FunctionInvocationPayload,
 )
 from shared.http.client_manifests import ClientOperationName
-from shared.http.compute import (
-    ContainerResponse,
-    ContainerWithAppPageResponse,
-    ContainerWithAppResponse,
-)
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
     FunctionInvokeResponse,
 )
-from shared.http.gateway import (
-    AttachToContainerResponse,
-    GetUrlRequest,
-    GetUrlResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
-)
+from shared.http.previews import PreviewSessionResponse, PreviewSessionStatus
 from shared.paths import HOME_ENV
 from shared.tasks import TaskPolicy
 from tests.fakes import FakeDeploymentClient
@@ -110,72 +98,28 @@ class FakeFunctionClient:
 
 
 @dataclass
-class FakeEndpointGatewayClient:
-    urls: list[GetUrlRequest] = field(default_factory=list)
-    attached: list[str] = field(default_factory=list)
-    stopped: list[str] = field(default_factory=list)
-    sync_requests: list[SyncContainerWorkspaceBody] = field(default_factory=list)
-
-    def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
-        self.urls.append(request)
-        return GetUrlResponse(url=f"{request.external_url}/endpoint/id/{request.stub_id}")
-
-    def list_containers(
-        self,
-        *,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> ContainerWithAppPageResponse:
-        del limit, cursor
-        return ContainerWithAppPageResponse(
-            data=[
-                ContainerWithAppResponse(
-                    container=ContainerResponse(
-                        id="ctr-preview",
-                        name="preview",
-                        image="image-preview",
-                        command=[],
-                        workspace_id="",
-                        status=ContainerStatus.Running,
-                        created_at=datetime(2026, 7, 12, tzinfo=UTC),
-                    )
-                )
-            ]
-        )
-
-    def attach_to_container_response(self, container_id: str) -> AttachToContainerResponse:
-        self.attached.append(container_id)
-        return AttachToContainerResponse(output="serve ready\n", done=True)
-
-    def attach_to_container_events(
-        self,
-        container_id: str,
-        *,
-        poll_interval_seconds: float = 0.25,
-    ) -> Iterator[AttachToContainerResponse]:
-        _ = poll_interval_seconds
-        self.attached.append(container_id)
-        yield AttachToContainerResponse(output="serve ready\n", done=False)
-        yield AttachToContainerResponse(done=True)
-
-    def stop_container(self, container_id: str) -> ContainerResponse:
-        self.stopped.append(container_id)
-        return ContainerResponse(
-            id=container_id,
-            name="preview",
-            image="image-preview",
-            command=[],
+class FakePreviewClient:
+    def get_preview(self, preview_id: str) -> PreviewSessionResponse:
+        return PreviewSessionResponse(
+            id=preview_id,
             workspace_id="",
-            status=ContainerStatus.Stopped,
+            source_stub_id="stub-source",
+            execution_stub_id="stub-preview",
+            container_id="ctr-preview",
+            status=PreviewSessionStatus.Active,
+            public=False,
             created_at=datetime(2026, 7, 12, tzinfo=UTC),
+            expires_at=None,
         )
 
-    def sync_container_workspace(
-        self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse:
-        self.sync_requests.append(body)
-        return SyncContainerWorkspaceResponse(path=body.path)
+    def create(self, stub_id: str, *, timeout: int = 0) -> PreviewSessionResponse:
+        return self.get_preview("preview-1")
+
+    def renew(self, preview_id: str) -> PreviewSessionResponse:
+        return self.get_preview(preview_id)
+
+    def stop(self, preview_id: str) -> None:
+        pass
 
 
 @dataclass
@@ -742,6 +686,7 @@ def test_endpoint_request_prefers_matching_serve_preview(
         app="test",
         workspace="",
         endpoint="http://127.0.0.1:9000",
+        preview_id="preview-1",
         stub_id="stub-preview",
         container_id="ctr-preview",
         url="http://127.0.0.1:9000/endpoint/id/stub-preview",
@@ -754,8 +699,7 @@ def test_endpoint_request_prefers_matching_serve_preview(
     _bind_internal_state(
         health,
         deployment_client=deployment_client,
-        gateway_client=FakeEndpointGatewayClient(),
-        resource_client=FakeEndpointGatewayClient(),
+        preview_client=FakePreviewClient(),
     )
     response = health.request()
 

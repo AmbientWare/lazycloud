@@ -21,21 +21,24 @@ from fastapi import (
     Request,
     Response,
     WebSocket,
+    WebSocketException,
     status,
 )
 from shared.container_requests import CONTAINER_HEALTH_PATH
+from shared.errors import NotFoundError
 from shared.http.endpoints import (
     EndpointForwardRequest,
-    StartEndpointServeRequest,
-    StartEndpointServeResponse,
+    EndpointWarmupRequest,
+    EndpointWarmupResponse,
 )
+from shared.http.previews import CreatePreviewRequest, PreviewSessionResponse, PreviewSessionStatus
 from starlette.responses import StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 from websockets.typing import Data
 
-from api.server.auth import write_workspace
+from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import (
     authorize_websocket_workspace,
     current_services,
@@ -59,7 +62,6 @@ from api.server.http import (
     websocket_query_params,
     websocket_subprotocols,
 )
-from api.server.ownership import require_endpoint_stub_workspace
 from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, endpoint_service
 from api.server.services import ApiServices, EndpointApiService
@@ -67,20 +69,165 @@ from api.server.services import ApiServices, EndpointApiService
 router = APIRouter(tags=["endpoint"])
 endpoint_router = APIRouter(prefix="/api/v1/endpoints", tags=["endpoint"])
 asgi_router = APIRouter(prefix="/api/v1/asgi", tags=["endpoint"])
+preview_router = APIRouter(prefix="/api/v1/previews", tags=["preview"])
 ENDPOINT_RESOURCE_NAME = "endpoint"
 ENDPOINT_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
 ASGI_METHODS = ["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"]
 
 
-@endpoint_router.post("/serve", response_model=StartEndpointServeResponse)
-def start_endpoint_serve(
-    request: StartEndpointServeRequest,
+@preview_router.post(
+    "",
+    response_model=PreviewSessionResponse,
+    status_code=201,
+    operation_id="create_preview_session",
+)
+def create_preview_session(
+    request: CreatePreviewRequest,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
+) -> PreviewSessionResponse:
+    return service.create_preview(request, workspace_id=workspace_id)
+
+
+@preview_router.get(
+    "/{preview_id}", response_model=PreviewSessionResponse, operation_id="get_preview_session"
+)
+def get_preview_session(
+    preview_id: str,
+    workspace_id: read_workspace,
+    service: EndpointApiService = Depends(endpoint_service),
+) -> PreviewSessionResponse:
+    return service.get_preview(preview_id, workspace_id=workspace_id)
+
+
+@preview_router.post(
+    "/{preview_id}/heartbeat",
+    response_model=PreviewSessionResponse,
+    operation_id="renew_preview_session",
+)
+def renew_preview_session(
+    preview_id: str,
+    workspace_id: write_workspace,
+    service: EndpointApiService = Depends(endpoint_service),
+) -> PreviewSessionResponse:
+    return service.renew_preview(preview_id, workspace_id=workspace_id)
+
+
+@preview_router.delete("/{preview_id}", status_code=204, operation_id="stop_preview_session")
+def stop_preview_session(
+    preview_id: str,
+    workspace_id: write_workspace,
+    service: EndpointApiService = Depends(endpoint_service),
+) -> Response:
+    service.stop_preview(preview_id, workspace_id=workspace_id)
+    return Response(status_code=204)
+
+
+async def _preview_stub(
+    preview_id: str,
+    service: EndpointApiService,
+    control_plane: ControlPlaneService,
+    services: ApiServices,
+    *,
+    workspace_id: str | None = None,
+    public: bool = False,
+) -> StubRecord:
+    preview = await asyncio.to_thread(
+        service.get_preview, preview_id, workspace_id=workspace_id, public=public
+    )
+    if preview.execution_stub_id is None or preview.status is not PreviewSessionStatus.Active:
+        raise NotFoundError("preview session has ended")
+    return await services.require_async_io().database.run_transaction(
+        lambda session: control_plane.get_stub_in_session(
+            session, preview.execution_stub_id or "", workspace=preview.workspace_id
+        )
+    )
+
+
+@preview_router.api_route("/{preview_id}/invoke", methods=ASGI_METHODS, include_in_schema=False)
+@preview_router.api_route(
+    "/{preview_id}/invoke/{subpath:path}", methods=ASGI_METHODS, include_in_schema=False
+)
+async def invoke_preview(
+    preview_id: str,
+    request: Request,
+    workspace_id: write_workspace,
+    subpath: str = "",
+    service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-) -> StartEndpointServeResponse:
-    require_endpoint_stub_workspace(control_plane, request.stub_id, workspace_id)
-    return service.start_endpoint_serve(request)
+    services: ApiServices = Depends(current_services),
+) -> Response:
+    stub = await _preview_stub(
+        preview_id, service, control_plane, services, workspace_id=workspace_id
+    )
+    if stub.kind is StubKind.Asgi:
+        return await _forward_asgi_http_request(
+            stub, service, request, subpath=subpath, preview_id=preview_id
+        )
+    return await _forward_endpoint_request(
+        stub, service, request, subpath=subpath, preview_id=preview_id
+    )
+
+
+@preview_router.api_route(
+    "/public/{preview_id}/invoke", methods=ASGI_METHODS, include_in_schema=False
+)
+@preview_router.api_route(
+    "/public/{preview_id}/invoke/{subpath:path}", methods=ASGI_METHODS, include_in_schema=False
+)
+async def invoke_public_preview(
+    preview_id: str,
+    request: Request,
+    subpath: str = "",
+    service: EndpointApiService = Depends(endpoint_service),
+    control_plane: ControlPlaneService = Depends(control_plane_service),
+    services: ApiServices = Depends(current_services),
+) -> Response:
+    stub = await _preview_stub(preview_id, service, control_plane, services, public=True)
+    if stub.kind is StubKind.Asgi:
+        return await _forward_asgi_http_request(
+            stub, service, request, subpath=subpath, preview_id=preview_id
+        )
+    return await _forward_endpoint_request(
+        stub, service, request, subpath=subpath, preview_id=preview_id
+    )
+
+
+@preview_router.websocket("/{preview_id}/invoke")
+@preview_router.websocket("/{preview_id}/invoke/{subpath:path}")
+async def preview_websocket(
+    preview_id: str,
+    websocket: WebSocket,
+    subpath: str = "",
+    service: EndpointApiService = Depends(endpoint_service),
+    control_plane: ControlPlaneService = Depends(control_plane_service),
+    services: ApiServices = Depends(current_websocket_services),
+) -> None:
+    workspace_id = await authorize_websocket_workspace(services, websocket)
+    try:
+        stub = await _preview_stub(
+            preview_id, service, control_plane, services, workspace_id=workspace_id
+        )
+    except NotFoundError as exc:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason=str(exc)) from exc
+    await _forward_asgi_websocket(stub, service, websocket, subpath=subpath, preview_id=preview_id)
+
+
+@preview_router.websocket("/public/{preview_id}/invoke")
+@preview_router.websocket("/public/{preview_id}/invoke/{subpath:path}")
+async def public_preview_websocket(
+    preview_id: str,
+    websocket: WebSocket,
+    subpath: str = "",
+    service: EndpointApiService = Depends(endpoint_service),
+    control_plane: ControlPlaneService = Depends(control_plane_service),
+    services: ApiServices = Depends(current_websocket_services),
+) -> None:
+    try:
+        stub = await _preview_stub(preview_id, service, control_plane, services, public=True)
+    except NotFoundError as exc:
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason=str(exc)) from exc
+    await _forward_asgi_websocket(stub, service, websocket, subpath=subpath, preview_id=preview_id)
 
 
 @endpoint_router.api_route("/id/{stub_id}", methods=ENDPOINT_METHODS, include_in_schema=False)
@@ -131,14 +278,14 @@ async def deployed_public_endpoint_request_by_id(
     )
 
 
-@endpoint_router.post("/id/{stub_id}/warmup", response_model=StartEndpointServeResponse)
+@endpoint_router.post("/id/{stub_id}/warmup", response_model=EndpointWarmupResponse)
 def deployed_endpoint_warmup_by_id(
     stub_id: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
-) -> StartEndpointServeResponse:
+) -> EndpointWarmupResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
         services,
@@ -148,19 +295,19 @@ def deployed_endpoint_warmup_by_id(
         resource_name=ENDPOINT_RESOURCE_NAME,
         workspace=workspace_id,
     )
-    return _start_deployed_endpoint_serve(stub, service)
+    return _warm_deployed_endpoint(stub, service)
 
 
 @endpoint_router.post(
     "/{deployment_name}/latest/warmup",
-    response_model=StartEndpointServeResponse,
+    response_model=EndpointWarmupResponse,
 )
 def deployed_endpoint_warmup_by_latest_path(
     deployment_name: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     services: ApiServices = Depends(current_services),
-) -> StartEndpointServeResponse:
+) -> EndpointWarmupResponse:
     stub = resolve_deployed_stub(
         services,
         deployment_name,
@@ -169,12 +316,12 @@ def deployed_endpoint_warmup_by_latest_path(
         resource_name=ENDPOINT_RESOURCE_NAME,
         workspace=workspace_id,
     )
-    return _start_deployed_endpoint_serve(stub, service)
+    return _warm_deployed_endpoint(stub, service)
 
 
 @endpoint_router.post(
     "/{deployment_name}/v{version}/warmup",
-    response_model=StartEndpointServeResponse,
+    response_model=EndpointWarmupResponse,
 )
 def deployed_endpoint_warmup_by_version(
     deployment_name: str,
@@ -182,7 +329,7 @@ def deployed_endpoint_warmup_by_version(
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     services: ApiServices = Depends(current_services),
-) -> StartEndpointServeResponse:
+) -> EndpointWarmupResponse:
     stub = resolve_deployed_stub(
         services,
         deployment_name,
@@ -191,7 +338,7 @@ def deployed_endpoint_warmup_by_version(
         resource_name=ENDPOINT_RESOURCE_NAME,
         workspace=workspace_id,
     )
-    return _start_deployed_endpoint_serve(stub, service)
+    return _warm_deployed_endpoint(stub, service)
 
 
 @endpoint_router.api_route(
@@ -249,14 +396,14 @@ async def deployed_endpoint_request_by_version(
     )
 
 
-@asgi_router.post("/id/{stub_id}/warmup", response_model=StartEndpointServeResponse)
+@asgi_router.post("/id/{stub_id}/warmup", response_model=EndpointWarmupResponse)
 def deployed_asgi_warmup_by_id(
     stub_id: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServices = Depends(current_services),
-) -> StartEndpointServeResponse:
+) -> EndpointWarmupResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
         services,
@@ -266,19 +413,19 @@ def deployed_asgi_warmup_by_id(
         resource_name=ENDPOINT_RESOURCE_NAME,
         workspace=workspace_id,
     )
-    return _start_deployed_endpoint_serve(stub, service)
+    return _warm_deployed_endpoint(stub, service)
 
 
 @asgi_router.post(
     "/{deployment_name}/latest/warmup",
-    response_model=StartEndpointServeResponse,
+    response_model=EndpointWarmupResponse,
 )
 def deployed_asgi_warmup_by_latest_path(
     deployment_name: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     services: ApiServices = Depends(current_services),
-) -> StartEndpointServeResponse:
+) -> EndpointWarmupResponse:
     stub = resolve_deployed_stub(
         services,
         deployment_name,
@@ -287,12 +434,12 @@ def deployed_asgi_warmup_by_latest_path(
         resource_name=ENDPOINT_RESOURCE_NAME,
         workspace=workspace_id,
     )
-    return _start_deployed_endpoint_serve(stub, service)
+    return _warm_deployed_endpoint(stub, service)
 
 
 @asgi_router.post(
     "/{deployment_name}/v{version}/warmup",
-    response_model=StartEndpointServeResponse,
+    response_model=EndpointWarmupResponse,
 )
 def deployed_asgi_warmup_by_version(
     deployment_name: str,
@@ -300,7 +447,7 @@ def deployed_asgi_warmup_by_version(
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     services: ApiServices = Depends(current_services),
-) -> StartEndpointServeResponse:
+) -> EndpointWarmupResponse:
     stub = resolve_deployed_stub(
         services,
         deployment_name,
@@ -309,7 +456,7 @@ def deployed_asgi_warmup_by_version(
         resource_name=ENDPOINT_RESOURCE_NAME,
         workspace=workspace_id,
     )
-    return _start_deployed_endpoint_serve(stub, service)
+    return _warm_deployed_endpoint(stub, service)
 
 
 @asgi_router.websocket("/id/{stub_id}")
@@ -554,10 +701,11 @@ async def deployed_asgi_request_by_version(
 
 
 async def _forwarded_request(
-    stub: StubRecord, request: Request, subpath: str
+    stub: StubRecord, request: Request, subpath: str, preview_id: str | None = None
 ) -> EndpointForwardRequest:
     return EndpointForwardRequest(
         stub_id=stub.id,
+        preview_session_id=preview_id,
         method=request.method,
         path=forwarded_path(subpath),
         query_params=request_query_params(request),
@@ -592,8 +740,9 @@ async def _forward_endpoint_request(
     request: Request,
     *,
     subpath: str = "",
+    preview_id: str | None = None,
 ) -> Response:
-    forwarded = await _forwarded_request(stub, request, subpath)
+    forwarded = await _forwarded_request(stub, request, subpath, preview_id)
     result = await service.forward_endpoint_request(forwarded)
     attribute_public_transfer(
         request,
@@ -613,8 +762,9 @@ async def _forward_asgi_http_request(
     request: Request,
     *,
     subpath: str = "",
+    preview_id: str | None = None,
 ) -> Response:
-    forwarded = await _forwarded_request(stub, request, subpath)
+    forwarded = await _forwarded_request(stub, request, subpath, preview_id)
     probe = await _health_probe_response(service, forwarded)
     if probe is not None:
         return probe
@@ -693,11 +843,11 @@ async def _stream_asgi_response_body(
         )
 
 
-def _start_deployed_endpoint_serve(
+def _warm_deployed_endpoint(
     stub: StubRecord,
     service: EndpointApiService,
-) -> StartEndpointServeResponse:
-    return service.start_endpoint_serve(StartEndpointServeRequest(stub_id=stub.id))
+) -> EndpointWarmupResponse:
+    return service.warm_endpoint(EndpointWarmupRequest(stub_id=stub.id))
 
 
 async def _forward_asgi_websocket(
@@ -706,9 +856,11 @@ async def _forward_asgi_websocket(
     websocket: WebSocket,
     *,
     subpath: str = "",
+    preview_id: str | None = None,
 ) -> None:
     forwarded = EndpointForwardRequest(
         stub_id=stub.id,
+        preview_session_id=preview_id,
         method="GET",
         path=forwarded_path(subpath),
         query_params=websocket_query_params(websocket),
@@ -886,3 +1038,4 @@ async def _websocket_to_backend(
 
 router.include_router(endpoint_router)
 router.include_router(asgi_router)
+router.include_router(preview_router)
