@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import secrets
 import shutil
 import threading
@@ -63,6 +64,7 @@ from worker.managed_runtime import (
     plan_managed_runtime,
 )
 from worker.managed_runtime_catalog import (
+    MANAGED_RUNTIME_PYTHON_VERSIONS,
     ManagedRuntimeCatalog,
     load_managed_runtime_catalog,
 )
@@ -263,6 +265,19 @@ class OciRuntimeSpecBuilder:
         init=False,
         repr=False,
     )
+
+    def prepare_managed_runtimes(self) -> None:
+        machine = platform.machine().lower()
+        architectures = {
+            "x86_64": LinuxArchitecture.Amd64,
+            "amd64": LinuxArchitecture.Amd64,
+            "aarch64": LinuxArchitecture.Arm64,
+            "arm64": LinuxArchitecture.Arm64,
+        }
+        if machine not in architectures:
+            raise RuntimeError(f"unsupported managed runtime architecture: {machine}")
+        for version in MANAGED_RUNTIME_PYTHON_VERSIONS:
+            self._managed_runtime_catalog(version, architectures[machine])
 
     def build_spec(
         self,

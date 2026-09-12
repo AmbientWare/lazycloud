@@ -126,6 +126,8 @@ from worker.repository_payloads import (
     ReportImageBuildProgressResponse,
     ReportImageBuildResultRequest,
     ReportImageBuildResultResponse,
+    ReserveContainerIpRequest,
+    ReserveContainerIpResponse,
     ResolveSourceCacheCleanupRequest,
     ResolveSourceCacheCleanupResponse,
     SaveCheckpointStateRequest,
@@ -136,8 +138,6 @@ from worker.repository_payloads import (
     SetContainerAddressResponse,
     SetContainerExitCodeRequest,
     SetContainerExitCodeResponse,
-    SetContainerIpRequest,
-    SetContainerIpResponse,
     SetWorkerAddressRequest,
     SetWorkerAddressResponse,
     StreamWorkerEventsRequest,
@@ -639,11 +639,13 @@ class WorkerRepositoryHttpClient:
             RemoveNetworkLockResponse,
         )
 
-    def set_container_ip(self, request: SetContainerIpRequest) -> SetContainerIpResponse:
+    def reserve_container_ip(
+        self, request: ReserveContainerIpRequest
+    ) -> ReserveContainerIpResponse:
         return self._post_model(
-            "/worker-repository/set-container-ip",
+            "/worker-repository/reserve-container-ip",
             request,
-            SetContainerIpResponse,
+            ReserveContainerIpResponse,
         )
 
     def move_container_ip(self, request: MoveContainerIpRequest) -> MoveContainerIpResponse:
@@ -1319,16 +1321,16 @@ class RemoteWorkerNetworkIpRepository:
             self.client.get_container_ip_assignments(GetContainerIpAssignmentsRequest()).assignments
         )
 
-    def set_container_ip(
+    def reserve_container_ip(
         self,
         network_prefix: str,
         container_id: str,
-        ip_address: str,
+        subnet: str,
     ) -> NetworkIpMutationPlan:
-        response = self.client.set_container_ip(
-            SetContainerIpRequest(
+        response = self.client.reserve_container_ip(
+            ReserveContainerIpRequest(
                 container_id=container_id,
-                ip_address=ip_address,
+                subnet=subnet,
             )
         )
         if response.plan is None:

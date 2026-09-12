@@ -129,6 +129,7 @@ from .image_archives import (
     BrokeredImageArchiveSourceLoader,
     CacheServerImageArchiveMetadataProvider,
 )
+from .image_cache import ImageContentCacheService
 from .image_runtime import ImageRuntimeProcess
 from .process_assembly import (
     WorkerProcessContainerServiceDependencies,
@@ -223,6 +224,10 @@ def build_worker_process_services(
         scratch_root=paths.container_rootfs_root,
     )
     cache_server = _worker_content_cache(config, internal_http)
+    if cache_server is None:
+        raise RuntimeError("worker image startup requires a configured content cache")
+    image_cache_service = ImageContentCacheService(cache_server)
+    image_cache_connection = image_cache_service.start()
     image_runtime_process: ImageRuntimeProcess | None = None
     image_runtime = image_runtime_client
     image_content_cache_root = (
@@ -236,8 +241,13 @@ def build_worker_process_services(
             mount_root=Path(paths.image_mount_root).expanduser().resolve(),
             cache_root=image_content_cache_root,
             build_root=paths.image_build_root.expanduser().resolve(),
+            content_cache=image_cache_connection,
         )
-        image_runtime = image_runtime_process.start()
+        try:
+            image_runtime = image_runtime_process.start()
+        except BaseException:
+            image_cache_service.close()
+            raise
     if image_mounter is None:
         image_mounter = BrokeredClipImageMounter(repository, image_runtime)
     checkpoint_state_sink = RemoteCheckpointStateSink(repository)
@@ -330,6 +340,13 @@ def build_worker_process_services(
         instances=instance_store,
         process_managers=sandbox_process_managers,
     )
+    spec_builder = OciRuntimeSpecBuilder(
+        bundle_root=paths.bundle_root,
+        image_mount_root=Path(paths.image_mount_root),
+        runtime_configs=available_runtime_configs,
+        gateway_settings=_gateway_settings(config),
+        managed_runtime_root=MANAGED_RUNTIME_IMAGE_ROOT,
+    )
     dependencies = WorkerProcessExecutionDependencies(
         image_loader=image_loader,
         port_allocator=HostPortAllocator(config.host_port_bind_address),
@@ -338,13 +355,7 @@ def build_worker_process_services(
             source_materializer,
         ),
         rootfs_preparer=container_rootfs,
-        spec_builder=OciRuntimeSpecBuilder(
-            bundle_root=paths.bundle_root,
-            image_mount_root=Path(paths.image_mount_root),
-            runtime_configs=available_runtime_configs,
-            gateway_settings=_gateway_settings(config),
-            managed_runtime_root=MANAGED_RUNTIME_IMAGE_ROOT,
-        ),
+        spec_builder=spec_builder,
         runtime_executor=runtime,
         runtime_controller=runtime,
         network_preparer=network_backend,
@@ -401,6 +412,7 @@ def build_worker_process_services(
             repository=repository,
             archive_root=Path(paths.image_cache_path),
             index_cache_root=image_content_cache_root,
+            content_cache=image_cache_connection,
             context_loader=RepositoryImageBuildContextLoader(repository, internal_http),
         ),
         image_archive_publisher=image_archive_publisher,
@@ -441,6 +453,7 @@ def build_worker_process_services(
         registration=registration,
         readiness_validator=lambda: _validate_worker_readiness(
             image_runtime,
+            spec_builder=spec_builder,
             network_backend=network_backend,
             gateway_endpoint=_gateway_runtime_network_endpoint(config),
         ),
@@ -460,6 +473,7 @@ def build_worker_process_services(
                 if image_runtime_process is not None
                 else []
             )
+            + [WorkerCleanupAction(name="image-content-cache", action=image_cache_service.close)]
         ),
         container_service_dependencies=container_service_dependencies,
         finalization_dependencies=finalization_dependencies,
@@ -481,9 +495,11 @@ def build_worker_process_services(
 def _validate_worker_readiness(
     image_runtime: ImageRuntimeClient | None,
     *,
+    spec_builder: OciRuntimeSpecBuilder,
     network_backend: AgentBridgeNetworkBackend | None,
     gateway_endpoint: str,
 ) -> None:
+    spec_builder.prepare_managed_runtimes()
     if image_runtime is not None:
         response = image_runtime.health()
         if not response.ok:

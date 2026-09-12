@@ -60,6 +60,7 @@ type request struct {
 	OutputPath      string              `json:"output_path"`
 	Architecture    string              `json:"architecture"`
 	Preload         bool                `json:"preload"`
+	ContentCache    cacheConnection     `json:"content_cache"`
 	Credentials     registryCredentials `json:"credentials"`
 }
 
@@ -75,6 +76,7 @@ type mountedImage struct {
 	server        *fuse.Server
 	archiveSHA256 string
 	mountPoint    string
+	pins          *imageLayerPins
 }
 
 type imageRuntime struct {
@@ -83,6 +85,7 @@ type imageRuntime struct {
 	mu          sync.Mutex
 	mounts      map[string]mountedImage
 	locks       map[string]*sync.Mutex
+	cache       *httpContentCache
 }
 
 type mutableCredentialProvider struct {
@@ -150,6 +153,10 @@ func main() {
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil {
 			slog.Error("invalid image index request")
+			os.Exit(1)
+		}
+		if err := runtime.configureCache(req.ContentCache); err != nil {
+			slog.Error("image cache configuration failed", "error", err)
 			os.Exit(1)
 		}
 		if err := runtime.index(req); err != nil {
@@ -244,6 +251,8 @@ func (r *imageRuntime) dispatch(req request) (result response) {
 		err = r.credentials.update(req.Credentials)
 	case "unmount":
 		err = r.unmount(req.ImageID)
+	case "configure-cache":
+		err = r.configureCache(req.ContentCache)
 	default:
 		err = fmt.Errorf("unsupported image runtime action %q", req.Action)
 	}
@@ -253,6 +262,20 @@ func (r *imageRuntime) dispatch(req request) (result response) {
 	}
 	result.OK = true
 	return result
+}
+
+func (r *imageRuntime) configureCache(connection cacheConnection) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cache != nil {
+		return errors.New("image content cache is already configured")
+	}
+	cache, err := newContentCache(connection)
+	if err != nil {
+		return err
+	}
+	r.cache = cache
+	return nil
 }
 
 func (r *imageRuntime) index(req request) error {
@@ -281,7 +304,7 @@ func (r *imageRuntime) index(req request) error {
 	if err != nil {
 		return err
 	}
-	return clip.CreateFromOCIImage(context.Background(), clip.CreateFromOCIImageOptions{
+	if err := clip.CreateFromOCIImage(context.Background(), clip.CreateFromOCIImageOptions{
 		ImageRef:         req.StorageImageRef,
 		StorageImageRef:  req.StorageImageRef,
 		LocalLayoutPath:  layout,
@@ -290,7 +313,10 @@ func (r *imageRuntime) index(req request) error {
 		Platform:         &v1.Platform{OS: "linux", Architecture: architecture},
 		LayerIndexCache:  layerIndexes,
 		IndexConcurrency: 8,
-	})
+	}); err != nil {
+		return err
+	}
+	return seedImageLayers(layout, output, r.cache)
 }
 
 func clipstorageDiskLayerIndexCache(root string) (*clipstorage.DiskLayerIndexCache, error) {
@@ -298,6 +324,12 @@ func clipstorageDiskLayerIndexCache(root string) (*clipstorage.DiskLayerIndexCac
 }
 
 func (r *imageRuntime) mount(req request) (string, error) {
+	r.mu.Lock()
+	cache := r.cache
+	r.mu.Unlock()
+	if cache == nil {
+		return "", errors.New("image content cache is not configured")
+	}
 	if req.ImageID == "" || strings.ContainsAny(req.ImageID, "/\\\x00") {
 		return "", errors.New("image mount requires a canonical image id")
 	}
@@ -342,16 +374,33 @@ func (r *imageRuntime) mount(req request) (string, error) {
 	if err := validateArchiveReference(archive, req.StorageImageRef); err != nil {
 		return "", err
 	}
+	metadata, err := clip.NewClipArchiver().ExtractMetadata(archive)
+	if err != nil {
+		return "", err
+	}
+	pins, err := pinImageLayers(cachePath, metadata)
+	if err != nil {
+		return "", err
+	}
+	keepPins := false
+	defer func() {
+		if !keepPins {
+			pins.close()
+		}
+	}()
 	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
 		return "", err
 	}
 	options := clip.MountOptions{
-		Context:              context.Background(),
-		ArchivePath:          archive,
-		MountPoint:           mountPoint,
-		CachePath:            cachePath,
-		UseCheckpoints:       true,
-		RegistryCredProvider: r.credentials,
+		Context:               context.Background(),
+		ArchivePath:           archive,
+		Metadata:              metadata,
+		MountPoint:            mountPoint,
+		CachePath:             cachePath,
+		UseCheckpoints:        true,
+		RegistryCredProvider:  r.credentials,
+		ContentCache:          cache,
+		ContentCacheAvailable: true,
 	}
 	if req.Preload {
 		options.PrepareConcurrency = 8
@@ -376,15 +425,20 @@ func (r *imageRuntime) mount(req request) (string, error) {
 		server:        fuseServer,
 		archiveSHA256: req.ArchiveSHA256,
 		mountPoint:    mountPoint,
+		pins:          pins,
 	}
+	keepPins = true
 	r.mu.Unlock()
 	go func() {
 		if serverErr, open := <-serverErrors; open && serverErr != nil {
 			slog.Error("image mount stopped", "image_id", req.ImageID, "error", serverErr)
 		}
 		r.mu.Lock()
-		delete(r.mounts, req.ImageID)
+		if current, ok := r.mounts[req.ImageID]; ok && current.server == fuseServer {
+			delete(r.mounts, req.ImageID)
+		}
 		r.mu.Unlock()
+		pins.close()
 	}()
 	return mountPoint, nil
 }
@@ -407,23 +461,29 @@ func validateArchiveReference(archivePath, expected string) error {
 	if err != nil {
 		return fmt.Errorf("image index metadata is invalid: %w", err)
 	}
-	var info clipcommon.OCIStorageInfo
-	switch value := metadata.StorageInfo.(type) {
-	case clipcommon.OCIStorageInfo:
-		info = value
-	case *clipcommon.OCIStorageInfo:
-		if value == nil {
-			return errors.New("image index OCI metadata is empty")
-		}
-		info = *value
-	default:
-		return errors.New("image index does not use OCI storage")
+	info, err := ociStorageInfo(metadata)
+	if err != nil {
+		return err
 	}
 	actual := fmt.Sprintf("%s/%s@%s", info.RegistryURL, info.Repository, info.Reference)
 	if actual != expected {
 		return errors.New("image index OCI reference does not match the authorized descriptor")
 	}
 	return nil
+}
+
+func ociStorageInfo(metadata *clipcommon.ClipArchiveMetadata) (clipcommon.OCIStorageInfo, error) {
+	switch value := metadata.StorageInfo.(type) {
+	case clipcommon.OCIStorageInfo:
+		return value, nil
+	case *clipcommon.OCIStorageInfo:
+		if value == nil {
+			return clipcommon.OCIStorageInfo{}, errors.New("image index OCI metadata is empty")
+		}
+		return *value, nil
+	default:
+		return clipcommon.OCIStorageInfo{}, errors.New("image index does not use OCI storage")
+	}
 }
 
 func waitForMount(mountPoint string, serverErrors <-chan error) error {
@@ -483,14 +543,20 @@ func (r *imageRuntime) unmount(imageID string) error {
 	defer lock.Unlock()
 	r.mu.Lock()
 	mounted, ok := r.mounts[imageID]
-	if ok {
-		delete(r.mounts, imageID)
-	}
 	r.mu.Unlock()
 	if !ok {
 		return nil
 	}
-	return mounted.server.Unmount()
+	if err := mounted.server.Unmount(); err != nil {
+		return err
+	}
+	mounted.pins.close()
+	r.mu.Lock()
+	if current, exists := r.mounts[imageID]; exists && current.server == mounted.server {
+		delete(r.mounts, imageID)
+	}
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *imageRuntime) unmountAll() {
