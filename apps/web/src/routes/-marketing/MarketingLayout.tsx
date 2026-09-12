@@ -55,7 +55,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
       className="dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
       contentClassName="marketing-site h-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth motion-reduce:scroll-auto"
       contentRef={scrollportRef}
-      blur={0.48}
+      blur={0.68}
       color={[0.08, 0.7, 0.95]}
       cover={0.06}
       density={1.45}
@@ -64,8 +64,8 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
       scale={1.1}
       scrollWithContent={false}
       shading={0.04}
-      speed={0.6}
-      wind={0.72}
+      speed={0.3}
+      wind={0.45}
       windRadius={260}
     >
       <a

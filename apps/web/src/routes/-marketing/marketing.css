@@ -158,7 +158,7 @@
     );
   background-size: 96px 96px;
   mask-image: linear-gradient(to bottom, black, transparent 88%);
-  opacity: 0.9;
+  opacity: 0.4;
   pointer-events: none;
 }
 
