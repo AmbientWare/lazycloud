@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { CodeBlock } from "@/components/ui/code-block";
 
 import { MarketingCard, SectionHeading, StatusDot, shell } from "./MarketingPrimitives";
+import { MarketingReveal } from "./MarketingReveal";
 import {
   GeneratedPackagePanel,
   TypedImportPanel,
@@ -76,7 +77,7 @@ function StubsStory({ active }: { active: boolean }) {
       </div>
 
       <div className="grid grid-cols-[1.02fr_0.98fr] gap-4 sm:gap-6 lg:gap-7 max-lg:grid-cols-1">
-        <div className="relative flex min-w-0 flex-col">
+        <MarketingReveal className="relative flex min-w-0 flex-col">
           <PhaseHeader active={phase === "define"} caption="your app" title="Define" />
           <MarketingCard asChild>
             <CodeBlock
@@ -103,22 +104,22 @@ function StubsStory({ active }: { active: boolean }) {
               {defineExample}
             </CodeBlock>
           </MarketingCard>
-        </div>
+        </MarketingReveal>
 
         <div className="flex min-w-0 flex-col gap-4 sm:gap-5 lg:gap-7">
-          <div className="relative flex min-w-0 flex-col">
+          <MarketingReveal className="relative flex min-w-0 flex-col" delay={80}>
             <PhaseHeader active={phase === "generate"} caption="a pinned client" title="Generate" />
             <GeneratedPackagePanel active={phase === "generate"} clock={clock} />
-          </div>
+          </MarketingReveal>
 
-          <div className="relative flex min-w-0 flex-col">
+          <MarketingReveal className="relative flex min-w-0 flex-col" delay={140}>
             <PhaseHeader
               active={phase === "import"}
               caption="from another project"
               title="Import"
             />
             <TypedImportPanel active={phase === "import"} clock={clock} />
-          </div>
+          </MarketingReveal>
         </div>
       </div>
     </div>
@@ -146,12 +147,10 @@ export function StubsSection() {
   return (
     <section
       className="border-t border-input bg-background-subtle py-14 sm:py-20 lg:py-28"
-      data-animation-state={active ? "running" : "reset"}
+      data-animation-state={active ? "running" : "paused"}
       ref={sectionRef}
     >
-      {/* The key makes each visibility boundary a lifecycle boundary: leaving
-          discards the clock, and re-entering mounts a new run at frame zero. */}
-      <StubsStory active={active} key={active ? "active" : "reset"} />
+      <StubsStory active={active} />
     </section>
   );
 }

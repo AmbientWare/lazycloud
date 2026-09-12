@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowUpRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -7,10 +8,10 @@ import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
+import { MarketingReveal } from "./MarketingReveal";
 import { StubsSection } from "./StubsSection";
 import {
   FinalCta,
-  Glyph,
   GetStartedButton,
   MarketingCard,
   MarketingHero,
@@ -195,7 +196,7 @@ function ParitySection() {
           body="Debug on your laptop, send a one-off cloud run, or deploy the app. The function stays the same."
         />
 
-        <div className="relative max-w-[820px]">
+        <MarketingReveal className="relative max-w-[820px]" delay={80}>
           <MarketingCard asChild>
             <CodeBlock
               tone="paper"
@@ -204,20 +205,24 @@ function ParitySection() {
               {parityDefinition}
             </CodeBlock>
           </MarketingCard>
-        </div>
+        </MarketingReveal>
 
         <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
-          {parityModes.map((mode) => (
-            <article className="relative" key={mode.key}>
-              <mode.Plate />
-              <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
-                {mode.title}
-              </h3>
-              <code className="mt-2 block font-mono text-[12px] break-all text-brand">
-                {mode.call}
-              </code>
-              <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{mode.body}</p>
-            </article>
+          {parityModes.map((mode, index) => (
+            <MarketingReveal className="relative" key={mode.key} delay={index * 70}>
+              <article>
+                <mode.Plate />
+                <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
+                  {mode.title}
+                </h3>
+                <code className="mt-2 block font-mono text-[12px] break-all text-brand">
+                  {mode.call}
+                </code>
+                <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+                  {mode.body}
+                </p>
+              </article>
+            </MarketingReveal>
           ))}
         </div>
       </div>
@@ -240,19 +245,17 @@ export function MarketingHome() {
             </p>
             <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
               <GetStartedButton />
-              {EXAMPLES_URL ? (
-                <Button
-                  asChild
-                  size="lg"
-                  variant="secondary"
-                  className="marketing-button-link justify-between [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full"
-                >
-                  <a href={EXAMPLES_URL}>
-                    <span>Explore examples</span>
-                    <Glyph>↗</Glyph>
-                  </a>
-                </Button>
-              ) : null}
+              <Button
+                asChild
+                size="lg"
+                variant="secondary"
+                className="marketing-button-link justify-between [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full"
+              >
+                <a href={`${EXAMPLES_URL}/index`}>
+                  <span>Explore examples</span>
+                  <ArrowUpRight aria-hidden="true" />
+                </a>
+              </Button>
             </div>
           </div>
 
@@ -322,30 +325,25 @@ export function MarketingHome() {
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
               <SectionHeading title="Example projects" />
-              {EXAMPLES_URL ? (
-                <div className="-mt-6 mb-10 sm:mt-0 sm:mb-14">
-                  <a
-                    className="inline-flex min-h-11 items-center gap-2.5 text-[13px] font-semibold text-foreground"
-                    href={EXAMPLES_URL}
-                  >
-                    Explore examples
-                    <Glyph>→</Glyph>
-                  </a>
-                </div>
-              ) : null}
+              <div className="-mt-6 mb-10 sm:mt-0 sm:mb-14">
+                <a
+                  className="inline-flex min-h-11 items-center gap-2.5 text-[13px] font-semibold text-foreground"
+                  href={`${EXAMPLES_URL}/index`}
+                >
+                  Explore examples
+                  <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
+                </a>
+              </div>
             </div>
-            <div
+            <MarketingReveal
+              delay={80}
               className="relative grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
               role="region"
               tabIndex={0}
               aria-label="Runnable examples"
             >
               {marketingUseCases.map((useCase) => (
-                /* A card is a link only when there is a gallery to open. Without
-                   one it still says what you can build, but it stops offering a
-                   press that goes nowhere — and the arrow goes with it, since the
-                   arrow is the promise. */
-                <UseCaseCard key={useCase.id}>
+                <UseCaseCard key={useCase.id} href={`${EXAMPLES_URL}/${useCase.id}`}>
                   <MarketingExampleImage
                     className="absolute inset-x-0 top-0 h-[56%] object-cover object-[center_72%]"
                     src={useCase.imageSrc}
@@ -355,7 +353,7 @@ export function MarketingHome() {
                     aria-hidden="true"
                   />
                   <div
-                    className="absolute inset-x-0 top-[46%] bottom-0 flex flex-col p-4 text-foreground xl:p-5"
+                    className="relative mt-[61%] flex flex-1 flex-col p-4 text-foreground xl:p-5"
                     data-marketing-example-copy
                   >
                     <h3 className="max-w-[390px] text-[clamp(1.1rem,1.55vw,1.4rem)] leading-[1.12] font-medium">
@@ -364,15 +362,13 @@ export function MarketingHome() {
                     <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-muted-foreground">
                       {useCase.cardSummary}
                     </p>
-                    {EXAMPLES_URL ? (
-                      <span className="mt-auto inline-flex text-muted-foreground/55">
-                        <Glyph>↗</Glyph>
-                      </span>
-                    ) : null}
+                    <span className="mt-auto inline-flex pt-3 text-brand">
+                      <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
+                    </span>
                   </div>
                 </UseCaseCard>
               ))}
-            </div>
+            </MarketingReveal>
           </div>
         </section>
 
@@ -390,15 +386,12 @@ export function MarketingHome() {
 }
 
 const useCaseCard =
-  "relative block aspect-[3/4] w-full text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
+  "relative flex min-h-80 w-full flex-col text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
 
-function UseCaseCard({ children }: { children: ReactNode }) {
-  if (!EXAMPLES_URL) {
-    return <MarketingCard className={useCaseCard}>{children}</MarketingCard>;
-  }
+function UseCaseCard({ children, href }: { children: ReactNode; href: string }) {
   return (
     <MarketingCard asChild>
-      <a className={useCaseCard} href={EXAMPLES_URL}>
+      <a className={useCaseCard} href={href}>
         {children}
       </a>
     </MarketingCard>
@@ -557,7 +550,7 @@ function PlatformStoryRail() {
           </nav>
         </aside>
 
-        <div className="min-w-0">
+        <MarketingReveal className="min-w-0">
           {platformStories.map((story, index) => (
             <article
               aria-labelledby={`platform-story-${story.key}-title`}
@@ -590,7 +583,7 @@ function PlatformStoryRail() {
               </div>
             </article>
           ))}
-        </div>
+        </MarketingReveal>
       </div>
     </section>
   );
@@ -629,7 +622,7 @@ function ComputeSection() {
             }
             body="Start on LazyCloud. Connect AWS or your own Linux machines when you need control of the infrastructure."
           />
-          <div className="border-t border-border">
+          <MarketingReveal className="border-t border-border" delay={80}>
             {computePaths.map((path) => (
               <article className="border-b border-border py-5" key={path.title}>
                 <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
@@ -638,11 +631,11 @@ function ComputeSection() {
                 </p>
               </article>
             ))}
-          </div>
+          </MarketingReveal>
         </div>
-        <div className="flex min-w-0 [&>div]:flex-1">
+        <MarketingReveal className="flex min-w-0 [&>div]:flex-1" delay={140}>
           <ComputePlacementPreview />
-        </div>
+        </MarketingReveal>
       </div>
     </section>
   );

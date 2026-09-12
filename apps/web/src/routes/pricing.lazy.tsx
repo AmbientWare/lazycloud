@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
+import { ArrowDown, CornerDownRight } from "lucide-react";
 
 import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
@@ -11,9 +12,9 @@ import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./-marketing/MarketingLayout";
+import { MarketingReveal } from "./-marketing/MarketingReveal";
 import {
   FinalCta,
-  Glyph,
   GetStartedButton,
   MarketingButton,
   MarketingCard,
@@ -169,7 +170,11 @@ function MarketingPricing() {
             </p>
             <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
               <GetStartedButton />
-              <MarketingButton endGlyph="↓" hash="plans" to="/pricing">
+              <MarketingButton
+                endIcon={<ArrowDown aria-hidden="true" />}
+                hash="plans"
+                to="/pricing"
+              >
                 Compare plans
               </MarketingButton>
             </div>
@@ -200,10 +205,10 @@ function MarketingPricing() {
           id="plans"
         >
           <div className={shell}>
-            <div className="mb-6 max-w-[44rem]">
+            <MarketingReveal className="mb-6 max-w-[44rem]">
               <h2 className={sectionTitle}>Pricing plans</h2>
-            </div>
-            <div className="grid grid-cols-3 gap-4 max-md:grid-cols-1">
+            </MarketingReveal>
+            <MarketingReveal className="grid grid-cols-3 gap-4 max-md:grid-cols-1" delay={100}>
               {catalog.plans.map((plan) => (
                 <MarketingCard asChild key={plan.terms_version}>
                   <article className="flex flex-col p-5 sm:p-6">
@@ -269,11 +274,11 @@ function MarketingPricing() {
                   </article>
                 </MarketingCard>
               ))}
-            </div>
+            </MarketingReveal>
 
             <p className="mt-4 flex max-w-[58rem] items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
               <span className="mt-0.5 shrink-0 text-brand">
-                <Glyph>↳</Glyph>
+                <CornerDownRight className="size-4 shrink-0" aria-hidden="true" />
               </span>
               <span>{accountTerm(catalog)}</span>
             </p>
@@ -318,7 +323,7 @@ function PlanTerm({ children }: { children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2.5 text-[13px] leading-relaxed">
       <span className="mt-0.5 shrink-0 text-brand">
-        <Glyph>↳</Glyph>
+        <CornerDownRight className="size-4 shrink-0" aria-hidden="true" />
       </span>
       <span>{children}</span>
     </li>

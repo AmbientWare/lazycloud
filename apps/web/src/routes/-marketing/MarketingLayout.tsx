@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
-import { Menu, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Menu, X } from "lucide-react";
 
 import { Clouds } from "@/components/canvasui/Clouds";
 import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
-import { Glyph, GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
+import { GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
 
 import "./marketing.css";
 
-/* Only what this build can actually reach. The examples gallery lives outside
-   this app and is absent from some deployments, so it is configured or left out;
-   a menu entry that goes nowhere is worse than a shorter menu. */
 const navigation: readonly { label: string; to?: MarketingRoute; href?: string }[] = [
-  ...(EXAMPLES_URL ? [{ label: "Examples", href: EXAMPLES_URL }] : []),
+  { label: "Examples", href: `${EXAMPLES_URL}/index` },
   { label: "Pricing", to: "/pricing" },
   { label: "Docs", href: DOCS_URL },
 ];
@@ -121,11 +118,9 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
             <Link className={footerLink} to="/pricing">
               Pricing
             </Link>
-            {EXAMPLES_URL ? (
-              <a className={footerLink} href={EXAMPLES_URL}>
-                Examples
-              </a>
-            ) : null}
+            <a className={footerLink} href={`${EXAMPLES_URL}/index`}>
+              Examples
+            </a>
             <a className={footerLink} href={DOCS_URL}>
               Docs
             </a>
@@ -263,7 +258,7 @@ function MobileNavigation() {
                   to={entry.to}
                 >
                   <span>{entry.label}</span>
-                  <Glyph>↗</Glyph>
+                  <ArrowRight className="size-4.5 shrink-0" aria-hidden="true" />
                 </Link>
               ) : (
                 <a
@@ -273,7 +268,7 @@ function MobileNavigation() {
                   onClick={() => setOpen(false)}
                 >
                   <span>{entry.label}</span>
-                  <Glyph>↗</Glyph>
+                  <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
                 </a>
               ),
             )}

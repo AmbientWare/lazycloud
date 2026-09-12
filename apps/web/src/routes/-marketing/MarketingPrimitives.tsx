@@ -1,11 +1,13 @@
 import { Slot } from "@radix-ui/react-slot";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useAuthToken } from "@/hooks/use-auth-token";
 import { githubSignInHref } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
+import { MarketingReveal } from "./MarketingReveal";
 
 export type MarketingRoute = "/" | "/pricing" | "/legal/privacy" | "/legal/terms" | "/dashboard";
 
@@ -44,14 +46,6 @@ export function MarketingCard({
   );
 }
 
-export function Glyph({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center justify-center font-mono text-[0.9em] not-italic">
-      {children}
-    </span>
-  );
-}
-
 /* Live status dot, shared by terminal footers and product rows. */
 export function StatusDot() {
   return <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />;
@@ -62,13 +56,13 @@ export function MarketingButton({
   hash,
   children,
   className,
-  endGlyph = "↗",
+  endIcon = <ArrowUpRight aria-hidden="true" />,
 }: {
   to: MarketingRoute;
   hash?: string;
   children: ReactNode;
   className?: string;
-  endGlyph?: ReactNode | null;
+  endIcon?: ReactNode | null;
 }) {
   return (
     <Button
@@ -77,7 +71,7 @@ export function MarketingButton({
       variant="secondary"
       className={cn(
         "marketing-button-link justify-between text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
-        endGlyph === null && "justify-center",
+        endIcon === null && "justify-center",
         className,
       )}
     >
@@ -96,7 +90,7 @@ export function MarketingButton({
         }}
       >
         <span>{children}</span>
-        {endGlyph === null ? null : <Glyph>{endGlyph}</Glyph>}
+        {endIcon}
       </Link>
     </Button>
   );
@@ -122,7 +116,7 @@ export function GetStartedButton({
   const content = (
     <>
       <span>{token ? "Dashboard" : label}</span>
-      <Glyph>{token ? "→" : "↗"}</Glyph>
+      {token ? <ArrowRight aria-hidden="true" /> : <ArrowUpRight aria-hidden="true" />}
     </>
   );
 
@@ -148,7 +142,7 @@ export function GetStartedButton({
 
 export function SectionHeading({ title, body }: { title: ReactNode; body?: string }) {
   return (
-    <div className="relative mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
+    <MarketingReveal className="relative mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
       <h2 className="max-w-[740px] font-sans text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance [&_em]:text-brand [&_em]:not-italic">
         {title}
       </h2>
@@ -157,14 +151,14 @@ export function SectionHeading({ title, body }: { title: ReactNode; body?: strin
           {body}
         </p>
       ) : null}
-    </div>
+    </MarketingReveal>
   );
 }
 
 export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
   return (
     <section className="marketing-final-cta relative !min-h-[clamp(32rem,75svh,43.125rem)] overflow-hidden border-t border-input text-foreground [@media(max-height:500px)]:!min-h-[27rem]">
-      <div
+      <MarketingReveal
         className={cn(
           shell,
           "marketing-final-inner relative z-[2] flex !min-h-[clamp(32rem,75svh,43.125rem)] flex-col items-center justify-center py-16 text-center sm:py-20 lg:py-30 [@media(max-height:500px)]:!min-h-[27rem] [@media(max-height:500px)]:py-12",
@@ -179,7 +173,7 @@ export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
         <div className="mt-8 flex w-full max-w-[22rem] justify-center sm:w-auto sm:max-w-none">
           <GetStartedButton />
         </div>
-      </div>
+      </MarketingReveal>
     </section>
   );
 }
