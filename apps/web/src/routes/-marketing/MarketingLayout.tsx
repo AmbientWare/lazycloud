@@ -191,7 +191,7 @@ function MarketingFrame({
       scale={0.65}
       scrollWithContent={false}
       shading={0.04}
-      speed={0.35}
+      speed={0.9}
       wind={0.1}
       windRadius={260}
       paused={cloudsPaused}
