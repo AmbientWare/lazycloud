@@ -26,7 +26,6 @@ from shared.compute_enrollment import (
     MachineBootstrapPhase,
     MachineReadinessPhase,
     MachineServiceState,
-    PrivateNetworkEnrollmentPhase,
 )
 from shared.compute_policy import (
     ComputeResourceRequirements,
@@ -595,15 +594,7 @@ def _compute_instance_view(
             record.machine_id,
             pool=pool,
         )
-        if (
-            enrollment is not None
-            and enrollment.network_phase is PrivateNetworkEnrollmentPhase.Failed
-        ):
-            phase = MachineBootstrapPhase.Failed
-            failure_reason = MachineBootstrapFailureReason.NetworkJoinFailed
-            failure_detail = enrollment.network_failure_detail
-            observed_at = max(observed_at, enrollment.updated_at)
-        elif machine_serves_workloads(
+        if machine_serves_workloads(
             enrollment,
             machine_id=record.machine_id,
             worker_state=worker_state,

@@ -1,5 +1,10 @@
 name: lazycloud
 
+x-local-hosts: &local-hosts
+  - "host.docker.internal:host-gateway"
+  - "lazycloud.localhost:host-gateway"
+  - "object-store.localhost:host-gateway"
+
 x-process-env: &process-env
   LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
   LAZYCLOUD_LOG_LEVEL: "${LAZYCLOUD_LOG_LEVEL:-INFO}"
@@ -29,7 +34,10 @@ x-telemetry-env: &telemetry-env
   LAZYCLOUD_TELEMETRY_ENDPOINT: "${LAZYCLOUD_TELEMETRY_ENDPOINT:-http://otel-collector:4318}"
 x-gateway-env: &gateway-env
   LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: "${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL:-http://lazycloud.localhost:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}}"
-  LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL: "${LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL:-http://100.96.0.1:9000}"
+
+x-tunnel-env: &tunnel-env
+  LAZYCLOUD_TUNNEL_HOSTNAME: "${LAZYCLOUD_TUNNEL_HOSTNAME:-tunnels.lazycloud.test}"
+  LAZYCLOUD_TUNNEL_GATEWAY_BOOTSTRAP_SECRET: "${LAZYCLOUD_TUNNEL_GATEWAY_BOOTSTRAP_SECRET:?Initialize local credentials with deploy/setup-local-env.sh}"
 
 # Credentials for the edge that terminates TLS on customer-owned hostnames. Empty
 # by default: a deployment without them serves every platform hostname exactly as
@@ -64,6 +72,8 @@ x-api-env: &api-env
   LAZYCLOUD_TCP_INGRESS_CERTIFICATE_FILE: "/var/lib/lazycloud/tcp-ingress/tls.crt"
   LAZYCLOUD_TCP_INGRESS_KEY_FILE: "/var/lib/lazycloud/tcp-ingress/tls.key"
   LAZYCLOUD_PUBLIC_INGRESS_CLIENT_IP_HEADER: "${LAZYCLOUD_PUBLIC_INGRESS_CLIENT_IP_HEADER:-}"
+  LAZYCLOUD_TUNNEL_ISSUER_CERTIFICATE_FILE: "/run/lazycloud/tunnel-issuer/certificate.pem"
+  LAZYCLOUD_TUNNEL_ISSUER_PRIVATE_KEY_FILE: "/run/lazycloud/tunnel-issuer/private-key.pem"
 
 x-object-store-env: &object-store-env
   LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: "${LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL:?Set the object storage endpoint}"
@@ -118,9 +128,6 @@ x-platform-aws-credentials: &platform-aws-credentials
 x-platform-aws-config: &platform-aws-config
   "${LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR:-$HOME/.lazycloud/compose-aws}:/run/lazycloud/aws:ro"
 
-x-backend-route-credentials: &backend-route-credentials
-  LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY: "${LAZYCLOUD_BACKEND_ROUTE_AUTH_KEY:-}"
-
 x-container-service-credentials: &container-service-credentials
   LAZYCLOUD_CONTAINER_SERVICE_TOKEN: "${LAZYCLOUD_CONTAINER_SERVICE_TOKEN:-}"
 
@@ -144,83 +151,6 @@ x-lazycloud-build-args: &lazycloud-build-args
   # than one that goes nowhere; empty docs means the published site.
   VITE_LAZYCLOUD_EXAMPLES_URL: "${LAZYCLOUD_EXAMPLES_URL:-}"
   VITE_LAZYCLOUD_DOCS_URL: "${LAZYCLOUD_DOCS_URL:-}"
-
-x-container-worker-settings: &container-worker-settings
-  restart: unless-stopped
-  privileged: true
-  cgroup: host
-  # The slot a deployed worker gets from the agent, so a local one is bounded the
-  # same way. Without it the worker's cgroup is unlimited, its memory pressure
-  # describes the whole development machine rather than its own share, and the
-  # eviction watcher correctly refuses to run -- which means the path is never
-  # exercised anywhere a person would notice it breaking.
-  mem_limit: "${LAZYCLOUD_WORKER_MEMORY_LIMIT:-4g}"
-  cap_add:
-    - NET_ADMIN
-    - SYS_ADMIN
-    - SYS_PTRACE
-    - MKNOD
-  security_opt:
-    - seccomp=unconfined
-    - apparmor=unconfined
-  devices:
-    - /dev/fuse:/dev/fuse
-  tmpfs:
-    - /tmp:exec
-    - /run
-    - /run/gvisor
-    - /dev/shm:rw,exec,nosuid,nodev,size=1g
-  stop_grace_period: 90s
-  ulimits:
-    nofile:
-      soft: 1048576
-      hard: 1048576
-  entrypoint:
-    - /bin/sh
-    - -ec
-    - |
-      # The worker's containers live behind its own bridge and cannot resolve a
-      # Compose service name, so the in-stack origin is rewritten to the address the
-      # daemon routes to. WORKER_REPOSITORY_URL and GATEWAY_HTTP_URL must stay the
-      # same string; when they diverged the worker never reported itself available.
-      if [ "$${WORKER_REPOSITORY_URL:-}" = "http://control-plane:9000" ]; then
-        compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
-        if [ -z "$$compose_gateway" ]; then
-          echo "Docker gateway is required for the public worker repository URL" >&2
-          exit 2
-        fi
-        export WORKER_REPOSITORY_URL="http://$${compose_gateway}:$${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
-        export GATEWAY_HTTP_URL="$$WORKER_REPOSITORY_URL"
-      fi
-      if [ -z "$${WORKER_TOKEN:-}" ] && [ -s /var/lib/lazycloud/tokens/worker-token ]; then
-        export WORKER_TOKEN="$$(cat /var/lib/lazycloud/tokens/worker-token)"
-      fi
-      # Registration is refused unless the worker names a unit that feeds its pool,
-      # and the id is assigned when that unit is created rather than derived.
-      if [ -z "$${WORKER_CAPACITY_OWNER_ID:-}" ] && [ -s /var/lib/lazycloud/tokens/worker-capacity-owner ]; then
-        export WORKER_CAPACITY_OWNER_ID="$$(cat /var/lib/lazycloud/tokens/worker-capacity-owner)"
-      fi
-      if [ -z "$${WORKER_TOKEN:-}" ] || [ -z "$${WORKER_CAPACITY_OWNER_ID:-}" ]; then
-        echo "WORKER_TOKEN and WORKER_CAPACITY_OWNER_ID are required" >&2
-        exit 2
-      fi
-      exec /usr/bin/tini -- "$$0" "$$@"
-
-x-container-worker-healthcheck: &container-worker-healthcheck
-  test:
-    [
-      "CMD",
-      "python",
-      "-m",
-      "shared.process_liveness",
-      "/tmp/lazycloud-container-worker.heartbeat",
-      "--max-age-seconds",
-      "45",
-    ]
-  interval: 10s
-  timeout: 5s
-  retries: 12
-  start_period: 120s
 
 x-lazycloud-depends: &lazycloud-depends
   object-store-bootstrap:
@@ -261,7 +191,8 @@ services:
       retries: 10
 
   object-store-bootstrap:
-    image: database-bootstrap:local
+    image: "database-bootstrap:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
+    extra_hosts: *local-hosts
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -304,7 +235,7 @@ services:
       retries: 20
 
   pgbouncer:
-    image: pgbouncer:local
+    image: "pgbouncer:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     build:
       context: ./deploy/pgbouncer
     restart: unless-stopped
@@ -344,7 +275,7 @@ services:
       retries: 30
 
   database-bootstrap:
-    image: database-bootstrap:local
+    image: "database-bootstrap:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -357,7 +288,7 @@ services:
         condition: service_healthy
 
   billing-rates:
-    image: cli:local
+    image: "cli:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -371,7 +302,7 @@ services:
         condition: service_completed_successfully
 
   log-retention:
-    image: cli:local
+    image: "cli:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -402,7 +333,8 @@ services:
       start_period: 300s
 
   administrator-bootstrap:
-    image: database-bootstrap:local
+    image: "database-bootstrap:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
+    extra_hosts: *local-hosts
     entrypoint: ["lazycloud-admin", "--json", "auth", "bootstrap"]
     command:
       - --token-file
@@ -439,7 +371,7 @@ services:
       retries: 20
 
   tcp-certificate:
-    image: api:local
+    image: "api:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     command:
       [
         "lazycloud-tcp-certificate",
@@ -453,75 +385,82 @@ services:
     volumes:
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress
 
-  wireguard-key-bootstrap:
-    image: tunnel-gateway:local
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.control-plane
-      target: tunnel-gateway
-      args: *lazycloud-build-args
+  tunnel-issuer-bootstrap:
+    image: "database-bootstrap:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     command:
-      - lazycloud-wireguard-bootstrap
+      - python
+      - -m
+      - deploy.tunnel_identity
+      - local
       - --directory
-      - /var/lib/lazycloud/wireguard
-      - --platform-peers
-      - "1"
-      - --gateways
-      - "2"
+      - /var/lib/lazycloud/tunnel-issuer
+      - --hostname
+      - "${LAZYCLOUD_TUNNEL_HOSTNAME:-tunnels.lazycloud.test}"
     volumes:
-      - wireguard-keys:/var/lib/lazycloud/wireguard
+      - tunnel-issuer:/var/lib/lazycloud/tunnel-issuer
 
-  tunnel-gateway: &wireguard-gateway
-    image: tunnel-gateway:local
+  connection-gateway: &connection-gateway
+    image: "connection-gateway:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     restart: unless-stopped
-    stop_grace_period: 150s
+    stop_grace_period: 90s
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
-      target: tunnel-gateway
+      target: connection-gateway
       args: *lazycloud-build-args
-    environment: &wireguard-gateway-env
-      <<: [*process-env, *database-env, *redis-env]
-      LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "0"
-      LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/server/private-key
-      LAZYCLOUD_WIREGUARD_PLATFORM_KEY_DIRECTORY: /var/lib/lazycloud/wireguard
-      LAZYCLOUD_WIREGUARD_PLATFORM_PEER_COUNT: "1"
-      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT:-tunnel-gateway:51820}"
-      LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_HOST: control-plane
-      LAZYCLOUD_WIREGUARD_RUNTIME_SERVICE_PORT: "9000"
-    cap_add:
-      - NET_ADMIN
-    sysctls:
-      net.ipv4.ip_forward: "1"
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "${LAZYCLOUD_COMPOSE_WIREGUARD_PORT:-51820}:51820/udp"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export LAZYCLOUD_CONNECTION_GATEWAY_ADVERTISED_ADDRESS="$$(hostname -i):8443"
+        exec lazycloud-connection-gateway
+    environment:
+      <<: [*process-env, *database-env, *redis-env, *gateway-env, *tunnel-env]
+      LAZYCLOUD_CONNECTION_GATEWAY_CONTROL_ADDRESS: "control-plane:9000"
+      LAZYCLOUD_DATABASE_POOL_SIZE: "1"
+      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "0"
+    extra_hosts: *local-hosts
     depends_on:
-      <<: *lazycloud-depends
-      wireguard-key-bootstrap:
-        condition: service_completed_successfully
+      control-plane:
+        condition: service_healthy
     volumes:
-      - wireguard-keys:/var/lib/lazycloud/wireguard:ro
+      - connection-gateway-0:/var/lib/lazycloud/connection-gateway
     healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/lazycloud-tunnel-gateway.ready"]
+      test: ["CMD", "python", "-m", "shared.process_liveness", "--max-age-seconds", "15", "/tmp/lazycloud-connection-gateway.ready"]
       interval: 2s
       timeout: 2s
       retries: 30
       start_period: 2s
 
-  tunnel-gateway-1:
-    <<: *wireguard-gateway
-    environment:
-      <<: *wireguard-gateway-env
-      LAZYCLOUD_WIREGUARD_GATEWAY_INDEX: "1"
-      LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/gateway-1/private-key
-      LAZYCLOUD_WIREGUARD_PUBLIC_ENDPOINT: "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT:-tunnel-gateway-1:51820}"
+  connection-gateway-1:
+    <<: *connection-gateway
+    volumes:
+      - connection-gateway-1:/var/lib/lazycloud/connection-gateway
+
+  connection-ingress:
+    image: haproxy:3.2-alpine
+    restart: unless-stopped
     ports:
-      - "${LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_PORT:-51821}:51820/udp"
+      - "443:443"
+    volumes:
+      - "./deploy/connection-ingress/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
+    networks:
+      default:
+        aliases:
+          - "${LAZYCLOUD_TUNNEL_HOSTNAME:-tunnels.lazycloud.test}"
+    depends_on:
+      connection-gateway:
+        condition: service_healthy
+      connection-gateway-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "443"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
 
   control-plane:
-    image: api:local
+    image: "api:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
+    extra_hosts: *local-hosts
     restart: unless-stopped
     stop_grace_period: 150s
     build:
@@ -551,6 +490,7 @@ services:
           *stripe-env,
           *github-env,
           *api-env,
+          *tunnel-env,
           *object-store-env,
           *workspace-storage-issuer-env,
           *image-build-env,
@@ -558,14 +498,11 @@ services:
           *agent-binary-env,
           *aws-compute-env,
           *platform-aws-credentials,
-          *backend-route-credentials,
           *container-service-credentials,
           *cache-origin-registry,
         ]
     deploy:
       replicas: 1
-    sysctls:
-      net.ipv4.conf.all.src_valid_mark: "1"
     ulimits:
       nofile:
         soft: 1048576
@@ -579,11 +516,14 @@ services:
         condition: service_completed_successfully
       tcp-certificate:
         condition: service_completed_successfully
+      tunnel-issuer-bootstrap:
+        condition: service_completed_successfully
     volumes:
       - lazycloud-files:/var/lib/lazycloud
       - "${LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR:-./.lazycloud/agent-binarys}:/var/lib/lazycloud/agent-binarys:ro"
       - "./.lazycloud-release:/run/lazycloud/release:ro"
       - tcp-ingress-tls:/var/lib/lazycloud/tcp-ingress:ro
+      - tunnel-issuer:/run/lazycloud/tunnel-issuer:ro
       - *platform-aws-config
     healthcheck:
       test:
@@ -598,44 +538,10 @@ services:
       retries: 12
       start_period: 30s
 
-  wireguard-platform:
-    image: tunnel-gateway:local
-    restart: unless-stopped
-    network_mode: "service:control-plane"
-    command: ["lazycloud-wireguard-platform"]
-    environment:
-      <<: [*process-env, *database-env, *redis-env]
-      LAZYCLOUD_WIREGUARD_PRIVATE_KEY_FILE: /var/lib/lazycloud/wireguard/platform-0/private-key
-      LAZYCLOUD_WIREGUARD_PLATFORM_INDEX: "0"
-      LAZYCLOUD_DATABASE_POOL_SIZE: "1"
-      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "0"
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    depends_on:
-      control-plane:
-        condition: service_healthy
-      tunnel-gateway:
-        condition: service_started
-      tunnel-gateway-1:
-        condition: service_started
-    volumes:
-      - type: volume
-        source: wireguard-keys
-        target: /var/lib/lazycloud/wireguard/platform-0
-        volume:
-          subpath: platform-0
-    healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/lazycloud-wireguard-platform.ready"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-      start_period: 2s
-
   cli:
     profiles: ["tools"]
-    image: cli:local
+    image: "cli:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
+    extra_hosts: *local-hosts
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -653,7 +559,6 @@ services:
           *object-store-env,
           *image-build-env,
           *agent-binary-env,
-          *backend-route-credentials,
           *container-service-credentials,
         ]
     depends_on:
@@ -686,7 +591,7 @@ services:
       TUNNEL_METRICS: "127.0.0.1:20241"
 
   agent-join-token:
-    image: cli:local
+    image: "cli:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     build:
       context: .
       dockerfile: docker/Dockerfile.control-plane
@@ -756,50 +661,62 @@ services:
         mode: 0400
 
   agent:
-    image: agent:local
+    image: "agent:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     restart: unless-stopped
     init: true
+    stop_grace_period: 90s
     privileged: true
     build:
       context: .
       dockerfile: deploy/agent-binary/Dockerfile
       target: agent-runtime
-    entrypoint: ["/bin/sh", "-ec"]
+    entrypoint: ["/bin/bash", "-ec"]
     command:
       - |
+        children=()
+        cleanup() {
+          trap - EXIT TERM INT
+          kill -TERM "$${children[@]}" 2>/dev/null || true
+          wait "$${children[@]}" 2>/dev/null || true
+        }
+        trap cleanup EXIT
+        trap 'exit 143' TERM
+        trap 'exit 130' INT
+        socat TCP-LISTEN:5000,bind=127.0.0.1,fork,reuseaddr TCP:workload-registry:5000 &
+        children+=("$$!")
         compose_gateway="$$(ip -4 route show default | awk '/default/ {print $$3; exit}')"
         if [ -z "$$compose_gateway" ]; then
           echo "Docker gateway is required for the agent-managed worker" >&2
           exit 2
         fi
         gateway_url="http://$${compose_gateway}:${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
-        exec lazycloud-agent join \
+        lazycloud-agent join \
           --gateway "$$gateway_url" \
           --join-token-file "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}/join-token" \
           --state-dir "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}" \
           --hostname "${LAZYCLOUD_COMPOSE_AGENT_HOSTNAME:-compose-agent}" \
           --machine-fingerprint "${LAZYCLOUD_COMPOSE_AGENT_MACHINE_FINGERPRINT:-compose-agent}" \
-          --worker-image "container-worker:local" \
-          --worker-route-target "$$compose_gateway" \
-          --worker-runtime-http-url "$$gateway_url" \
-          --worker-network "host" \
+          --worker-image "container-worker:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}" \
+          --worker-network "container:$$HOSTNAME" \
           --worker-bridge-name "${LAZYCLOUD_COMPOSE_AGENT_WORKER_BRIDGE:-rt_br0}" \
           --worker-bridge-subnet "${LAZYCLOUD_COMPOSE_AGENT_WORKER_SUBNET:-192.168.0.0/20}" \
           --worker-bridge-ipv6-subnet "${LAZYCLOUD_COMPOSE_AGENT_WORKER_IPV6_SUBNET:-fd00:abcd::/64}" \
           --max-cpu "${LAZYCLOUD_COMPOSE_AGENT_MAX_CPU_CORES:-4}" \
-          --max-memory "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}MiB" \
-          --stream-interval-seconds "${LAZYCLOUD_COMPOSE_AGENT_STREAM_INTERVAL_SECONDS:-1}"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+          --max-memory "${LAZYCLOUD_COMPOSE_AGENT_MAX_MEMORY_MIB:-8192}MiB" \
+          --stream-interval-seconds "${LAZYCLOUD_COMPOSE_AGENT_STREAM_INTERVAL_SECONDS:-1}" &
+        children+=("$$!")
+        wait -n "$${children[@]}"
+    extra_hosts: *local-hosts
     devices:
       - /dev/fuse:/dev/fuse
-      - /dev/net/tun:/dev/net/tun
     depends_on:
       agent-join-token:
         condition: service_completed_successfully
       cache-server:
         condition: service_healthy
-      wireguard-platform:
+      connection-ingress:
+        condition: service_healthy
+      workload-registry:
         condition: service_healthy
     volumes:
       - "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}:${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}"
@@ -819,7 +736,8 @@ services:
       start_period: 10s
 
   scheduler:
-    image: scheduler:local
+    image: "scheduler:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
+    extra_hosts: *local-hosts
     # Two, like the control plane. The work that spends money already
     # serialises on a Redis key per capacity owner; what needed fixing was the
     # orphan confirmation window and pod expiry, both of which decided from
@@ -858,7 +776,6 @@ services:
           *aws-compute-env,
           *scheduler-env,
           *platform-aws-credentials,
-          *backend-route-credentials,
           *container-service-credentials,
         ]
     depends_on: *lazycloud-role-depends
@@ -881,137 +798,17 @@ services:
       - *platform-aws-config
       - "./.lazycloud-release:/run/lazycloud/release:ro"
 
-  platform-unit:
-    # The capacity owner the shared fleet registers against. A worker is admitted
-    # only into a pool some unit already feeds, and the id is assigned when the unit
-    # is created rather than derived from the pool name, so it is read back here and
-    # handed to the worker through a file.
-    image: cli:local
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
-        pool="${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}"
-        owner_path=/var/lib/lazycloud/tokens/worker-capacity-owner
-        mkdir -p "$$(dirname "$$owner_path")"
-        umask 077
-        lazycloud-admin unit ensure "$$pool-shared" \
-          --pool "$$pool" --provider local --capacity-owner-output "$$owner_path"
-        echo "shared fleet capacity owner ready: $$(cat "$$owner_path")"
-    environment:
-      GATEWAY_HTTP_URL: "http://control-plane:9000"
-      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
-      WORKSPACE_ID: "default"
-    depends_on:
-      <<: *lazycloud-role-depends
-    secrets:
-      - source: lazycloud-bootstrap-administrator-token
-        target: lazycloud-administrator-token
-        mode: 0400
-    volumes:
-      - lazycloud-worker-tokens:/var/lib/lazycloud/tokens
-
-  worker-token:
-    # The shared fleet authenticates as the platform, not as a machine somebody
-    # joined, so its credential is a service token rather than an agent slot token.
-    # Reused when one is already published, so restarts do not mint a second.
-    image: worker-bootstrap:local
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.control-plane
-      target: worker-bootstrap
-      args: *lazycloud-build-args
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        token_path=/var/lib/lazycloud/tokens/worker-token
-        mkdir -p "$$(dirname "$$token_path")"
-        umask 077
-        lazycloud-worker-bootstrap worker-token \
-          "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}" \
-          --output "$$token_path"
-        echo "shared fleet worker token initialized"
-    environment:
-      <<: [*process-env, *database-env, *redis-env]
-      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
-    depends_on:
-      <<: *lazycloud-depends
-      administrator-bootstrap:
-        condition: service_completed_successfully
-    volumes:
-      - lazycloud-worker-tokens:/var/lib/lazycloud/tokens
-
   container-worker:
-    # The shared SaaS fleet: public capacity any account's work can land on, which is
-    # what an unconfigured workspace gets. The agents beside it are joined machines
-    # and serve only the account that connected them.
-    <<: *container-worker-settings
-    image: container-worker:local
-    env_file:
-      - path: .env.release
-        required: false
+    profiles: [build]
+    image: "container-worker:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
       target: container-worker
       args: *lazycloud-build-args
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    # A shell under the shared entrypoint, which is what exports the worker token
-    # and rewrites the repository origin before handing off to tini.
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        socat TCP-LISTEN:5000,bind=127.0.0.1,fork,reuseaddr TCP:workload-registry:5000 &
-        exec lazycloud-container-worker \
-          --worker-id "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}" \
-          --machine-id "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}" \
-          --pool "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}" \
-          --pod-address "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}" \
-          --container-service-port "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
-    environment:
-      LAZYCLOUD_HOME: "${LAZYCLOUD_COMPOSE_CONTAINER_HOME:-/var/lib/lazycloud}"
-      LAZYCLOUD_WORKER_CONFIG_PATH: "/etc/lazycloud/worker/worker.yaml"
-      LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT: "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}"
-      WORKER_REPOSITORY_URL: "http://control-plane:9000"
-      GATEWAY_HTTP_URL: "http://control-plane:9000"
-      BUILDAH_ISOLATION: "chroot"
-      BUILDAH_LAYERS: "true"
-      REGISTRY_AUTH_FILE: "/var/lib/lazycloud/registry/auth.json"
-      WORKER_ID: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_ID:-compose-container-worker}"
-      WORKER_MACHINE: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
-      WORKER_POOL: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POOL:-lazycloud}"
-      WORKER_SOURCE_CACHE_STORAGE_ID: "machine:${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MACHINE:-compose-machine}"
-      WORKER_POD_ADDRESS: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_POD_ADDRESS:-container-worker}"
-      WORKER_CONTAINER_SERVICE_PORT: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_SERVICE_PORT:-8910}"
-      WORKER_NETWORK_PREFIX: "${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_NETWORK_PREFIX:-compose-shared}"
-      WORKER_CACHE_ENDPOINT: "http://cache-server:7900"
-      LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE: "/var/lib/lazycloud/cache-token/cache-service-token"
-    depends_on:
-      <<: *lazycloud-role-depends
-      platform-unit:
-        condition: service_completed_successfully
-      worker-token:
-        condition: service_completed_successfully
-      cache-server:
-        condition: service_healthy
-      workload-registry:
-        condition: service_healthy
-    healthcheck: *container-worker-healthcheck
-    volumes:
-      - lazycloud-shared-worker:/var/lib/lazycloud
-      - lazycloud-worker-tokens:/var/lib/lazycloud/tokens:ro
-      - lazycloud-cache-token:/var/lib/lazycloud/cache-token:ro
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - /var/run/netns:/var/run/netns
-    configs:
-      - source: container-worker-configuration
-        target: /etc/lazycloud/worker/worker.yaml
-        mode: 0444
 
   cache-token:
-    image: cache-server:local
+    image: "cache-server:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     command:
       - python
       - -c
@@ -1020,7 +817,7 @@ services:
       - lazycloud-cache-token:/var/lib/lazycloud/tokens
 
   cache-server:
-    image: cache-server:local
+    image: "cache-server:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     restart: unless-stopped
     build:
       context: .
@@ -1069,39 +866,6 @@ services:
       retries: 12
       start_period: 5s
 
-configs:
-  container-worker-configuration:
-    content: |
-      configuration:
-        execution:
-          runtime: runsc
-          runtimes: [runsc]
-          capacity:
-            cpu_millicores: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_CPU_MILLICORES:-4000}
-            memory_mib: ${LAZYCLOUD_COMPOSE_CONTAINER_WORKER_MEMORY_MIB:-8192}
-            gpu_type: ""
-            gpu_count: 0
-          pool_mode: public
-          billing_owner: platform_fleet
-          preemptible: false
-          persistent: true
-          agent_worker: true
-        network:
-          route_transport: direct
-          agent_bridge_network: true
-          bridge_name: ${LAZYCLOUD_COMPOSE_SHARED_WORKER_BRIDGE:-rt_br2}
-          bridge_subnet: ${LAZYCLOUD_COMPOSE_SHARED_WORKER_SUBNET:-192.168.32.0/20}
-          bridge_ipv6_subnet: ${LAZYCLOUD_COMPOSE_SHARED_WORKER_IPV6_SUBNET:-fd00:abcf::/64}
-        paths:
-          bundle_root: /var/lib/lazycloud/bundles
-          image_cache_path: /var/lib/lazycloud/images
-          image_mount_root: /var/lib/lazycloud/image-mounts
-          image_build_root: /var/lib/lazycloud/builds
-          source_cache_root: /var/lib/lazycloud/source-cache
-          checkpoint_root: /var/lib/lazycloud/checkpoints
-        monitoring:
-          metrics_interval_seconds: 5
-
 volumes:
   garage-data:
   postgres-data:
@@ -1110,11 +874,11 @@ volumes:
   lazycloud-administrator-token:
   lazycloud-cache-token:
   lazycloud-cache:
-  lazycloud-worker-tokens:
-  lazycloud-shared-worker:
   workload-registry-data:
   tcp-ingress-tls:
-  wireguard-keys:
+  tunnel-issuer:
+  connection-gateway-0:
+  connection-gateway-1:
 
 secrets:
   lazycloud-bootstrap-administrator-token:

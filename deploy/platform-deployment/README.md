@@ -14,7 +14,7 @@ deployment, from the branch named for it, and the values file Deploy writes
 there.
 
 [Object storage](OBJECT_STORAGE.md) describes workload identity, scoped workspace
-access and the application data cutover. Infrastructure descriptor version 6 names
+access and the application data cutover. Infrastructure descriptor version 7 names
 the S3 endpoint, bucket identities, workspace grant role and regional fleet networks.
 
 Use the shared [S3 Terraform backend](../terraform-state/README.md):
@@ -38,7 +38,7 @@ connection role and node identity are shared across regions. Adding a region
 or subnets preserves every existing network; removing or replacing one is
 rejected while registering the fleet.
 
-For this rollout, apply and publish the version-6 infrastructure descriptor,
+For this rollout, apply and publish the version-7 infrastructure descriptor,
 publish CPU and GPU images through Connected AWS Node Images, then publish a
 host release containing both regional image catalogs. Deploy the application
 with that host release pinned. Migration `0033_aws_regional_networks` preserves
@@ -71,46 +71,19 @@ role's trust admits that environment only.
 
 What a second deployment needs distinct: its own `deployment`, a Stripe test
 account and key, a `fleet_cidr` that overlaps neither the other's nor the
-cluster's, Helm `wireguard.gateways` endpoints, a `deploy/cloudflare` apply of its own
+cluster's, its own agent tunnel hostname and CA, a `deploy/cloudflare` apply of its own
 with `cloudflare_state_key` naming it, and its own `github_environment`. What it
 shares: the cluster, the images, the storage class, the External Secrets
 operator, and Argo.
 
-## Private network
+## Agent connections
 
-The chart runs independent WireGuard gateways, each behind its own UDP
-`LoadBalancer` Service. Set each `wireguard.gateways` endpoint to the stable
-`<host>:<port>` agents can reach. A Service's assigned NLB hostname works directly;
-a DNS name must resolve to that UDP load balancer. A Cloudflare HTTP tunnel
-does not carry WireGuard traffic.
-
-Each gateway has its own keypair and Redis lease. Agents and platform peers keep
-tunnels to both gateways. Connection marks preserve the return path, and a
-draining gateway stops receiving new connections while established flows finish.
-Gateway zero retains the `tunnel-gateway` Service and its existing key. Follow
-[the staged migration](../active-gateways.md) before replacing its Deployment.
-
-Control-plane replicas run as a StatefulSet with one stable WireGuard keypair
-per ordinal. The chart derives the peer count from `controlPlane.replicas`.
-Agents generate and retain their own private keys. Postgres stores agent public
-keys, assigned addresses, revocation state, and handshake observations.
-
-## WireGuard key storage
-
-Terraform declares one `<deployment>/wireguard` Secrets Manager entry. It does
-not put key material in Terraform state. The chart's `wireguard-bootstrap` Job
-generates missing gateway pairs and configured platform pairs, then writes one
-JSON document through a narrowly scoped Pod Identity role. Repeated runs reuse
-the complete document.
-
-External Secrets projects the keys into the gateway and platform containers as
-read-only files. Secrets Manager is read during bootstrap and projection, not
-for enrollment or packet forwarding. One document per deployment is enough;
-there is no secret per agent.
-
-Do not edit or delete that document on a persistent installation. Replacing the
-gateway key changes that gateway's identity and invalidates its enrolled peer
-configuration.
+The chart owns a two-replica connection gateway Deployment and one public TCP443
+NLB. Gateways terminate mutual TLS and reach the API Service at port9000. API
+replicas have no networking sidecars or stable peer identities. The deployment's
+operator secret holds the issuer and gateway bootstrap credential; only API pods
+mount the issuer key. Follow [connection gateway deployment](../connection-gateway.md)
+for initial CA bootstrap, the dedicated DNS record, and the clean cutover.
 
 ## Secrets and identity
 
@@ -122,9 +95,8 @@ namespace; the operator exchanges that account's token for this module's
 and whose policy reads exactly `<deployment>/*`. Staging cannot read prod's
 documents because IAM refuses the subject, not because a chart is careful.
 
-Every other identity is a Pod Identity association in this namespace: the
-control plane and scheduler hold `<deployment>-control-plane`, the bootstrap
-Job holds `<deployment>-wireguard-bootstrap`.
+The control plane and scheduler hold `<deployment>-control-plane` through Pod
+Identity. Connection gateway pods have no AWS identity.
 
 ## Ownership rules
 
@@ -136,17 +108,15 @@ Customer trust policies name its ARN, and recreating the same IAM name does not
 restore the old role identity. Unset, it is `<deployment>-control-principal`.
 
 Operator-supplied credentials belong in `<deployment>/operator`. Terraform owns
-`<deployment>/platform`, and the WireGuard bootstrap owns
-`<deployment>/wireguard`. Each document has one writer so an apply cannot erase
-values supplied through another path.
+`<deployment>/platform`. The operator document also owns the tunnel issuer and
+gateway bootstrap credential. Terraform never writes those values.
 
 ## Scaling
 
-The API replicas and their platform peers scale together. Add a gateway by
-provisioning its UDP Service, recording its endpoint, and extending the ordered
-`wireguard.gateways` list. Key bootstrap adds the corresponding keypair. Clients
-refresh the registry and establish the additional tunnel. Each gateway adds one
-NLB and its running pod; measure packet and peer limits before increasing the count.
+API and gateway replica counts scale independently. `connectionGateway.replicas`
+adds gateway pods behind the existing NLB. Every pod generates its own key and
+obtains a certificate through the API. Measure stream concurrency, memory, and
+reconnect bursts before raising the count.
 
 ## Application handoff
 

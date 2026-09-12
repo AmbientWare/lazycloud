@@ -79,7 +79,7 @@ from shared.errors import (
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
-from shared.routing import BackendRouteTransport, PrivateUnitFallback
+from shared.routing import PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
@@ -1071,7 +1071,6 @@ class ComputeService:
         scale_up_cooldown_seconds: int = 5,
         scale_down_cooldown_seconds: int = 60,
         registration_timeout_seconds: int = 600,
-        transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork,
         fallback: PrivateUnitFallback = PrivateUnitFallback.Internal,
     ) -> ComputeUnitRecord:
         """Create or update a provisioning unit the workspace owns directly.
@@ -1137,7 +1136,6 @@ class ComputeService:
                     scale_up_cooldown_seconds=scale_up_cooldown_seconds,
                     scale_down_cooldown_seconds=scale_down_cooldown_seconds,
                     registration_timeout_seconds=registration_timeout_seconds,
-                    transport=transport,
                     fallback=fallback,
                 )
             )

@@ -66,6 +66,7 @@ from agent.service_manager import (
     machine_fingerprint,
     plan_agent_preflight,
 )
+from agent.tunnel import AgentTunnelRoute, AgentTunnelService
 from agent.updates import AgentUpdater
 from gateway.http import (
     AgentBootstrapConfig,
@@ -75,12 +76,14 @@ from gateway.http import (
     JoinAgentResponse,
     LeaveAgentRequest,
     LeaveAgentResponse,
+    ListAgentRoutesRequest,
+    ListAgentRoutesResponse,
     StreamAgentRequest,
     StreamAgentResponse,
     UpdateAgentRouteStatusRequest,
     UpdateAgentRouteStatusResponse,
 )
-from networking.wireguard_client import WireGuardClientRuntime
+from networking.tunnel_agent import AgentTunnelRevokedError
 from provider_aws import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
@@ -90,6 +93,7 @@ from provider_clients import (
     provider_node_identity_evidence_provider,
 )
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
+from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import AGENT_NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -99,15 +103,15 @@ from shared.compute_enrollment import (
 )
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
+from shared.http.agent_identity import (
+    AgentCertificateRequest,
+    AgentCertificateResponse,
+    AgentTunnelIdentity,
+)
 from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
     AgentCapacityInterruptionResponse,
-)
-from shared.http.private_network import (
-    PrivateNetworkTopologyRequest,
-    RegisterPrivateNetworkRequest,
-    WireGuardPeerConfiguration,
 )
 from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureRequest,
@@ -123,15 +127,12 @@ from shared.http.releases import (
 )
 from shared.http_transport import HttpChannel
 from shared.provider_config import ProviderKind
-from shared.routing import BackendRouteTransport
+from shared.routing import BackendRouteState
 from shared.timestamps import utc_now
 from worker.configuration import WorkerConfiguration, serialize_worker_configuration
+from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
 
 from agent_app.metrics import agent_metric_snapshot, physical_memory_mb
-from agent_app.route_proxy import (
-    AgentRouteProxyConfig,
-    AgentRouteProxyService,
-)
 from agent_app.telemetry import (
     AgentTelemetryBuffer,
     AgentTelemetryEventType,
@@ -148,9 +149,6 @@ NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
 JOIN_MAX_ATTEMPTS = 6
 JOIN_RETRY_BASE_SECONDS = 2.0
 JOIN_RETRY_MAX_SECONDS = 30.0
-PRIVATE_NETWORK_CONNECT_ATTEMPTS = 30
-PRIVATE_NETWORK_POLL_SECONDS = 2.0
-PRIVATE_NETWORK_TOPOLOGY_SECONDS = 10.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 WORKER_EXIT_LOG_LINES = 200
@@ -217,8 +215,6 @@ class AgentDaemonOptions(ContractModel):
     arch: str = Field(default_factory=platform.machine)
     executor: WorkerExecutor = WorkerExecutor.Container
     worker_image: str = ""
-    worker_route_target: str = "127.0.0.1"
-    worker_runtime_http_url: str = ""
     worker_network: AgentWorkerNetwork = Field(default_factory=AgentWorkerNetwork)
     worker_host_aliases: list[str] = Field(default_factory=list)
     docker_binary: str = "docker"
@@ -227,7 +223,6 @@ class AgentDaemonOptions(ContractModel):
     interruption_grace_seconds: float = DEFAULT_INTERRUPTION_GRACE_SECONDS
     once: bool = False
     capacity: AgentCapacityOptions = Field(default_factory=AgentCapacityOptions)
-    route_proxy: AgentRouteProxyConfig = Field(default_factory=AgentRouteProxyConfig)
 
     @field_validator(
         "stream_interval_seconds",
@@ -274,12 +269,11 @@ class AgentDaemonRunResult(ContractModel):
     machine_id: str = ""
     stream_iterations: int = 0
     route_count: int = 0
-    route_proxy_target: str = ""
     desired_worker_count: int = 0
     slot_action_count: int = 0
     telemetry_sent: bool = False
-    private_network_started: bool = False
-    private_network_address: str = ""
+    tunnel_connected: bool = False
+    runtime_http_url: str = ""
     authority_revoked: bool = False
     capacity_state: AgentCapacityState = AgentCapacityState.Available
     capacity_interrupted: bool = False
@@ -317,6 +311,8 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse: ...
 
+    def list_agent_routes(self, request: ListAgentRoutesRequest) -> ListAgentRoutesResponse: ...
+
     def agent_release(self, request: AgentReleaseRequest) -> AgentReleaseResponse: ...
 
     def record_agent_capacity_interruption(
@@ -329,32 +325,14 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
         request: UpdateAgentRouteStatusRequest,
     ) -> UpdateAgentRouteStatusResponse: ...
 
-    def register_agent_private_network(
-        self,
-        request: RegisterPrivateNetworkRequest,
-    ) -> WireGuardPeerConfiguration: ...
-
-    def private_network_topology(
-        self,
-        request: PrivateNetworkTopologyRequest,
-    ) -> WireGuardPeerConfiguration: ...
+    def issue_agent_certificate(
+        self, request: AgentCertificateRequest
+    ) -> AgentCertificateResponse: ...
 
     def stream_agent_telemetry(
         self,
         request: AgentTelemetryRequest,
     ) -> AgentTelemetryResponse: ...
-
-
-class AgentPrivateNetworkRuntime(Protocol):
-    def public_key(self) -> str: ...
-
-    def configure(self, configuration: WireGuardPeerConfiguration) -> None: ...
-
-    def latest_handshake_at(self, server_public_key: str) -> datetime | None: ...
-
-    def reconcile_connection(self, configuration: WireGuardPeerConfiguration) -> bool: ...
-
-    def close(self) -> None: ...
 
 
 @dataclass(slots=True)
@@ -373,6 +351,11 @@ class HttpAgentGatewayClient:
     def join_agent(self, request: JoinAgentRequest) -> JoinAgentResponse:
         return JoinAgentResponse.model_validate(
             self.channel.post("/gateway/agents/join", _payload(request))
+        )
+
+    def list_agent_routes(self, request: ListAgentRoutesRequest) -> ListAgentRoutesResponse:
+        return ListAgentRoutesResponse.model_validate(
+            self.channel.post("/gateway/agents/routes", _payload(request))
         )
 
     def enroll_provider_node(
@@ -441,20 +424,9 @@ class HttpAgentGatewayClient:
             self.channel.post("/gateway/agents/routes/status", _payload(request))
         )
 
-    def register_agent_private_network(
-        self,
-        request: RegisterPrivateNetworkRequest,
-    ) -> WireGuardPeerConfiguration:
-        return WireGuardPeerConfiguration.model_validate(
-            self.channel.post("/gateway/agents/private-network/register", _payload(request))
-        )
-
-    def private_network_topology(
-        self,
-        request: PrivateNetworkTopologyRequest,
-    ) -> WireGuardPeerConfiguration:
-        return WireGuardPeerConfiguration.model_validate(
-            self.channel.post("/gateway/agents/private-network/topology", _payload(request))
+    def issue_agent_certificate(self, request: AgentCertificateRequest) -> AgentCertificateResponse:
+        return AgentCertificateResponse.model_validate(
+            self.channel.post("/gateway/agents/certificate", _payload(request))
         )
 
     def stream_agent_telemetry(
@@ -631,8 +603,6 @@ class DockerAgentWorkerController:
     state_dir: Path
     docker_binary: str = "docker"
     worker_image_override: str = ""
-    worker_runtime_http_url_override: str = ""
-    target_host: str = "127.0.0.1"
     worker_network: AgentWorkerNetwork = field(default_factory=AgentWorkerNetwork)
     runner: CommandRunner = field(default_factory=SubprocessCommandRunner)
     host_aliases: list[str] = field(default_factory=list)
@@ -779,20 +749,12 @@ class DockerAgentWorkerController:
             raise ValueError(msg)
         if image not in self._images.prepared():
             raise RuntimeError(f"worker image is not prepared for slot {slot.worker_id}")
-        worker_bootstrap = (
-            bootstrap.model_copy(
-                update={"gateway_runtime_http_url": self.worker_runtime_http_url_override}
-            )
-            if self.worker_runtime_http_url_override
-            else bootstrap
-        )
         plan = plan_worker_container(
-            worker_bootstrap,
+            bootstrap,
             slot,
             state_dir=str(self.state_dir),
             image=image,
             agent_binary_sha256=AgentUpdater.running(self.state_dir).binary_sha256(),
-            target_host=self.target_host,
             platform=self.platform,
             host_aliases=self.host_aliases,
             network=self.worker_network,
@@ -903,11 +865,29 @@ class DockerAgentWorkerController:
         template = (
             "{{.State.Running}}\n{{range .Config.Env}}"
             '{{if eq (index (split . "=") 0) "WORKER_AGENT_BINARY_SHA256"}}'
-            '{{index (split . "=") 1}}{{end}}{{end}}'
+            '{{index (split . "=") 1}}{{end}}{{end}}\n{{.HostConfig.NetworkMode}}'
         )
         result = self.runner.run([self.docker_binary, "inspect", "-f", template, name])
-        running, _, digest = result.stdout.strip().partition("\n")
+        running, _, remaining = result.stdout.strip().partition("\n")
+        digest, _, namespace = remaining.partition("\n")
         if result.returncode != 0 or running != "true":
+            return None
+        expected_namespace = self.worker_network.name
+        if expected_namespace.startswith("container:"):
+            owner = self.runner.run(
+                [
+                    self.docker_binary,
+                    "inspect",
+                    "-f",
+                    "{{.Id}}",
+                    expected_namespace.removeprefix("container:"),
+                ]
+            )
+            if owner.returncode != 0 or not owner.stdout.strip():
+                raise RuntimeError("Agent worker network namespace owner is unavailable")
+            expected_namespace = f"container:{owner.stdout.strip()}"
+        if namespace != expected_namespace:
+            LOGGER.info("Worker %s requires the current agent network namespace", slot.worker_id)
             return None
         observed = slot.model_copy()
         observed.agent_binary_sha256 = digest
@@ -930,7 +910,6 @@ class AgentDaemonService:
     resource_detector: AgentResourceDetector | None = None
     interruption_detector: AgentCapacityInterruptionDetector | None = None
     telemetry: AgentTelemetryBuffer = field(default_factory=AgentTelemetryBuffer)
-    private_network_runtime: AgentPrivateNetworkRuntime | None = None
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
     _bootstrap_failure_reported: bool = False
     _capacity_shutdown: CapacityShutdown = field(init=False)
@@ -1016,17 +995,13 @@ class AgentDaemonService:
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
         self._report_bootstrap_phase(MachineBootstrapPhase.Joining)
-        private_network_runtime: AgentPrivateNetworkRuntime | None = None
-        private_network_address = ""
-        private_network_configuration: WireGuardPeerConfiguration | None = None
-        next_private_network_refresh = 0.0
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
             pool=state.pool,
             machine_id=state.machine_id,
         )
-        route_proxy: AgentRouteProxyService | None = None
+        tunnel: AgentTunnelService | None = None
         runtime_ready = False
 
         def close_runtime() -> None:
@@ -1036,25 +1011,14 @@ class AgentDaemonService:
                     self._capacity_shutdown.stop()
             finally:
                 try:
-                    if route_proxy is not None:
-                        route_proxy.close()
+                    if tunnel is not None:
+                        tunnel.close()
                 finally:
-                    try:
-                        if private_network_runtime is not None:
-                            private_network_runtime.close()
-                    finally:
-                        self.worker_controller.close()
+                    self.worker_controller.close()
 
         try:
             try:
-                (
-                    private_network_runtime,
-                    private_network_address,
-                    private_network_configuration,
-                ) = self._join_step(
-                    "private-network.start",
-                    lambda: self._start_private_network(state),
-                )
+                tunnel = self._join_step("tunnel.start", lambda: self._start_tunnel(state))
             except Exception:
                 self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
                 raise
@@ -1068,52 +1032,26 @@ class AgentDaemonService:
                     raise
             last_result = last_result.model_copy(
                 update={
-                    "private_network_started": private_network_runtime is not None,
-                    "private_network_address": private_network_address,
+                    "tunnel_connected": tunnel.connected,
+                    "runtime_http_url": AGENT_TUNNEL_CONTROL_URL,
                 }
             )
-            route_proxy = self._build_route_proxy(
-                state,
-                private_network_address=private_network_address,
-            )
-            route_proxy.start()
             while True:
                 next_iteration = iterations + 1
                 try:
                     state = self.state_store.load(state.gateway_url) or state
-                    if (
-                        private_network_runtime is not None
-                        and private_network_configuration is not None
-                    ):
-                        if time.monotonic() >= next_private_network_refresh:
-                            next_private_network_refresh = (
-                                time.monotonic() + PRIVATE_NETWORK_TOPOLOGY_SECONDS
-                            )
-                            configuration = self.client.private_network_topology(
-                                PrivateNetworkTopologyRequest(agent_token=state.agent_token)
-                            )
-                            if (
-                                configuration.peer_id != private_network_configuration.peer_id
-                                or configuration.address != private_network_configuration.address
-                                or configuration.generation
-                                != private_network_configuration.generation
-                            ):
-                                raise AgentAuthorityRevokedError(
-                                    "agent WireGuard identity is no longer current"
-                                )
-                            private_network_runtime.configure(configuration)
-                            private_network_configuration = configuration
-                        private_network_runtime.reconcile_connection(private_network_configuration)
                     notice = self._poll_capacity_interruption()
                     if notice is not None:
                         state = self._begin_capacity_interruption(state, notice)
+                    if state.capacity_state is AgentCapacityState.Available:
+                        tunnel.check()
                     last_result = self.run_stream_iteration(
                         state,
                         current_iterations=next_iteration,
-                        route_proxy=route_proxy,
+                        tunnel=tunnel,
                         before_agent_update=close_runtime,
-                        private_network_started=private_network_runtime is not None,
-                        private_network_address=private_network_address,
+                        tunnel_connected=tunnel.connected,
+                        runtime_http_url=AGENT_TUNNEL_CONTROL_URL,
                     )
                 except Exception as exc:
                     if agent_authority_was_revoked(exc):
@@ -1209,10 +1147,10 @@ class AgentDaemonService:
         state: AgentState,
         *,
         current_iterations: int = 1,
-        route_proxy: AgentRouteProxyService,
+        tunnel: AgentTunnelService,
         before_agent_update: Callable[[], None],
-        private_network_started: bool = False,
-        private_network_address: str = "",
+        tunnel_connected: bool = False,
+        runtime_http_url: str = "",
     ) -> AgentDaemonRunResult:
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
@@ -1220,8 +1158,8 @@ class AgentDaemonService:
             result = self._resume_capacity_interruption(
                 state,
                 current_iterations=current_iterations,
-                private_network_started=private_network_started,
-                private_network_address=private_network_address,
+                tunnel_connected=tunnel_connected,
+                runtime_http_url=runtime_http_url,
             )
             if result.capacity_interrupted:
                 return result
@@ -1249,8 +1187,8 @@ class AgentDaemonService:
             return self._resume_capacity_interruption(
                 state,
                 current_iterations=current_iterations,
-                private_network_started=private_network_started,
-                private_network_address=private_network_address,
+                tunnel_connected=tunnel_connected,
+                runtime_http_url=runtime_http_url,
             )
         desired_slots = [
             _agent_slot_from_gateway(slot).model_copy(
@@ -1264,8 +1202,29 @@ class AgentDaemonService:
             executor=self.options.executor,
             os_name=agent_worker_reconcile_os(self.options.os_name),
         )
+        network = self.options.worker_network
+        bridge = AgentBridgeNetworkConfig(
+            bridge_name=network.bridge_name,
+            subnet=network.bridge_subnet,
+            ipv6_subnet=network.bridge_ipv6_subnet,
+        )
+        tunnel.reconcile_listeners({bridge.gateway} if desired_slots or active_slots else set())
         applied = self.worker_controller.apply(plan, state.bootstrap)
-        route_count = route_proxy.reconcile_routes(stream.routes)
+        ready_routes = tunnel.reconcile_routes(
+            [
+                AgentTunnelRoute(route.route_id, route.local_target, route.state)
+                for route in stream.routes
+            ]
+        )
+        for route_id in ready_routes:
+            self.client.update_agent_route_status(
+                UpdateAgentRouteStatusRequest(
+                    agent_token=state.agent_token,
+                    route_id=route_id,
+                    state=BackendRouteState.Ready,
+                )
+            )
+        route_count = len(stream.routes)
         telemetry_sent = self._send_telemetry(
             state,
             desired_worker_count=len(desired_slots),
@@ -1291,12 +1250,11 @@ class AgentDaemonService:
             machine_id=state.machine_id,
             stream_iterations=current_iterations,
             route_count=route_count,
-            route_proxy_target=route_proxy.proxy_target,
             desired_worker_count=len(desired_slots),
             slot_action_count=len(applied),
             telemetry_sent=telemetry_sent,
-            private_network_started=private_network_started,
-            private_network_address=private_network_address,
+            tunnel_connected=tunnel_connected,
+            runtime_http_url=runtime_http_url,
         )
 
     def _poll_capacity_interruption(self) -> AgentCapacityInterruptionNotice | None:
@@ -1353,8 +1311,8 @@ class AgentDaemonService:
         state: AgentState,
         *,
         current_iterations: int,
-        private_network_started: bool,
-        private_network_address: str,
+        tunnel_connected: bool,
+        runtime_http_url: str,
     ) -> AgentDaemonRunResult:
         if (
             state.capacity_state is AgentCapacityState.Draining
@@ -1372,16 +1330,16 @@ class AgentDaemonService:
             return _capacity_interruption_result(
                 state,
                 current_iterations=current_iterations,
-                private_network_started=private_network_started,
-                private_network_address=private_network_address,
+                tunnel_connected=tunnel_connected,
+                runtime_http_url=runtime_http_url,
             )
         if state.capacity_state is AgentCapacityState.Cordoned:
             self._capacity_shutdown.stop()
             return _capacity_interruption_result(
                 state,
                 current_iterations=current_iterations,
-                private_network_started=private_network_started,
-                private_network_address=private_network_address,
+                tunnel_connected=tunnel_connected,
+                runtime_http_url=runtime_http_url,
             )
         reason = state.capacity_reason or "agent capacity interruption resumed"
         return self._cordon_and_stop_capacity(
@@ -1389,8 +1347,8 @@ class AgentDaemonService:
             reason=reason,
             notice_at=state.capacity_notice_at,
             current_iterations=current_iterations,
-            private_network_started=private_network_started,
-            private_network_address=private_network_address,
+            tunnel_connected=tunnel_connected,
+            runtime_http_url=runtime_http_url,
         )
 
     def _cordon_and_stop_capacity(
@@ -1400,8 +1358,8 @@ class AgentDaemonService:
         reason: str,
         notice_at: datetime | None,
         current_iterations: int,
-        private_network_started: bool,
-        private_network_address: str,
+        tunnel_connected: bool,
+        runtime_http_url: str,
     ) -> AgentDaemonRunResult:
         cordoned = state.model_copy(update={"capacity_state": AgentCapacityState.Cordoned})
         try:
@@ -1424,8 +1382,8 @@ class AgentDaemonService:
         return _capacity_interruption_result(
             cordoned,
             current_iterations=current_iterations,
-            private_network_started=private_network_started,
-            private_network_address=private_network_address,
+            tunnel_connected=tunnel_connected,
+            runtime_http_url=runtime_http_url,
         )
 
     def _record_capacity_interruption(
@@ -1654,79 +1612,38 @@ class AgentDaemonService:
                 )
                 time.sleep(delay)
 
-    def _start_private_network(
-        self,
-        state: AgentState,
-    ) -> tuple[
-        AgentPrivateNetworkRuntime | None,
-        str,
-        WireGuardPeerConfiguration | None,
-    ]:
-        if not _agent_uses_private_network(state.bootstrap.transport):
-            return (None, "", None)
-        runtime = self.private_network_runtime or WireGuardClientRuntime(
-            Path(self.options.state_dir) / "wireguard",
+    def _start_tunnel(self, state: AgentState) -> AgentTunnelService:
+        network = self.options.worker_network
+        bridge = AgentBridgeNetworkConfig(
+            bridge_name=network.bridge_name,
+            subnet=network.bridge_subnet,
+            ipv6_subnet=network.bridge_ipv6_subnet,
         )
-        try:
-            configuration = self.client.register_agent_private_network(
-                RegisterPrivateNetworkRequest(
-                    agent_token=state.agent_token,
-                    public_key=runtime.public_key(),
-                )
-            )
-            runtime.configure(configuration)
-            for attempt in range(1, PRIVATE_NETWORK_CONNECT_ATTEMPTS + 1):
-                handshakes = {
-                    gateway.index: runtime.latest_handshake_at(gateway.public_key)
-                    for gateway in configuration.gateways
-                }
-                healthy = runtime.reconcile_connection(configuration)
-                LOGGER.info(
-                    "private-network poll attempt=%s gateways=%s healthy=%s peer_id=%s",
-                    attempt,
-                    {
-                        index: handshake.isoformat() if handshake is not None else "pending"
-                        for index, handshake in handshakes.items()
-                    },
-                    healthy,
-                    configuration.peer_id,
-                )
-                if healthy and any(handshake is not None for handshake in handshakes.values()):
-                    return (
-                        runtime,
-                        _private_network_host(configuration.address),
-                        configuration,
-                    )
-                time.sleep(PRIVATE_NETWORK_POLL_SECONDS)
-            raise RuntimeError(
-                "WireGuard has no reachable gateway after initial connection polls; "
-                "verify outbound UDP and gateway readiness"
-            )
-        except Exception:
-            runtime.close()
-            raise
-
-    def _build_route_proxy(
-        self,
-        state: AgentState,
-        *,
-        private_network_address: str = "",
-    ) -> AgentRouteProxyService:
-        config = self.options.route_proxy
-        if private_network_address and _agent_uses_private_network(state.bootstrap.transport):
-            update: dict[str, str] = {}
-            if config.bind_host == "127.0.0.1":
-                update["bind_host"] = private_network_address
-            if not config.advertise_host:
-                update["advertise_host"] = private_network_address
-            if update:
-                config = config.model_copy(update=update)
-        return AgentRouteProxyService(
-            config,
-            self.client,
-            state.agent_token,
-            telemetry=self.telemetry,
+        registered = self.client.list_agent_routes(
+            ListAgentRoutesRequest(agent_token=state.agent_token)
         )
+        tunnel = AgentTunnelService(
+            state_dir=self.state_store.state_dir,
+            identity=AgentTunnelIdentity(
+                workspace_id=state.workspace_id,
+                enrollment_id=state.credential_id,
+                credential_generation=state.credential_generation,
+            ),
+            issue_certificate=self.client.issue_agent_certificate,
+            agent_token=state.agent_token,
+            callback_firewall=AgentBridgeCallbackFirewall(
+                config=bridge,
+                owner_id=state.machine_id,
+            ),
+        )
+        tunnel.start(
+            callback_hosts={bridge.gateway},
+            routes=[
+                AgentTunnelRoute(route.route_id, route.local_target, route.state)
+                for route in registered.routes
+            ],
+        )
+        return tunnel
 
 
 def build_agent_daemon_service(
@@ -1736,7 +1653,6 @@ def build_agent_daemon_service(
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: AgentResourceDetector | None = None,
     interruption_detector: AgentCapacityInterruptionDetector | None = None,
-    private_network_runtime: AgentPrivateNetworkRuntime | None = None,
     provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
 ) -> AgentDaemonService:
     state_dir = Path(options.state_dir)
@@ -1754,10 +1670,8 @@ def build_agent_daemon_service(
             state_dir,
             docker_binary=options.docker_binary,
             worker_image_override=options.worker_image,
-            worker_runtime_http_url_override=options.worker_runtime_http_url,
-            target_host=options.worker_route_target,
             worker_network=options.worker_network,
-            host_aliases=_worker_host_aliases(options),
+            host_aliases=list(dict.fromkeys(options.worker_host_aliases)),
             platform=agent_worker_platform(options.os_name, options.arch),
             telemetry=telemetry,
         ),
@@ -1765,7 +1679,6 @@ def build_agent_daemon_service(
         interruption_detector=(
             interruption_detector or _provider_capacity_interruption_detector(options)
         ),
-        private_network_runtime=private_network_runtime,
         provider_identity=provider_identity,
     )
 
@@ -1793,24 +1706,6 @@ def _provider_capacity_interruption_detector(
         )
 
     return detect
-
-
-def _agent_uses_private_network(transport: BackendRouteTransport) -> bool:
-    return transport is BackendRouteTransport.PrivateNetwork
-
-
-def _private_network_host(address: str) -> str:
-    host = address.strip().split("/", 1)[0]
-    if not host:
-        raise RuntimeError("WireGuard peer address is empty")
-    return host
-
-
-def _worker_host_aliases(options: AgentDaemonOptions) -> list[str]:
-    aliases = list(options.worker_host_aliases)
-    if options.worker_route_target.strip().lower() == "host.docker.internal":
-        aliases.append("host.docker.internal:host-gateway")
-    return list(dict.fromkeys(aliases))
 
 
 def detect_agent_resource_plan(
@@ -1985,15 +1880,12 @@ def _agent_bootstrap(
     if config is None:
         return AgentBootstrap(
             gateway_public_http_url=fallback_gateway_url,
-            gateway_runtime_http_url=fallback_gateway_url,
         )
     return AgentBootstrap(
         gateway_public_http_url=config.gateway_public_http_url or fallback_gateway_url,
-        gateway_runtime_http_url=config.gateway_runtime_http_url or fallback_gateway_url,
         gateway_grpc_host=config.gateway_grpc_host,
         gateway_grpc_port=config.gateway_grpc_port,
         gateway_grpc_tls=config.gateway_grpc_tls,
-        transport=config.transport,
         image_local_cache_enabled=config.image_local_cache_enabled,
         image_registry_store=config.image_registry_store,
         image_clip_version=config.image_clip_version,
@@ -2067,16 +1959,16 @@ def _capacity_interruption_result(
     state: AgentState,
     *,
     current_iterations: int,
-    private_network_started: bool,
-    private_network_address: str,
+    tunnel_connected: bool,
+    runtime_http_url: str,
 ) -> AgentDaemonRunResult:
     return AgentDaemonRunResult(
         workspace_id=state.workspace_id,
         pool=state.pool,
         machine_id=state.machine_id,
         stream_iterations=current_iterations,
-        private_network_started=private_network_started,
-        private_network_address=private_network_address,
+        tunnel_connected=tunnel_connected,
+        runtime_http_url=runtime_http_url,
         capacity_state=state.capacity_state,
         capacity_interrupted=state.capacity_state is not AgentCapacityState.Draining,
     )
@@ -2116,6 +2008,8 @@ def _agent_lock_pid(contents: str) -> int:
 
 
 def _recoverable_stream_error(exc: Exception) -> bool:
+    if isinstance(exc, AgentAuthorityRevokedError | AgentTunnelRevokedError):
+        return False
     if isinstance(exc, HttpApiError):
         return exc.status_code >= 500
     # A transport error means the request never reached a response, so the
@@ -2137,7 +2031,7 @@ def _recoverable_stream_error(exc: Exception) -> bool:
 
 
 def agent_authority_was_revoked(exc: Exception) -> bool:
-    if isinstance(exc, AgentAuthorityRevokedError):
+    if isinstance(exc, AgentAuthorityRevokedError | AgentTunnelRevokedError):
         return True
     if not isinstance(exc, HttpApiError) or not 400 <= exc.status_code < 500:
         return False

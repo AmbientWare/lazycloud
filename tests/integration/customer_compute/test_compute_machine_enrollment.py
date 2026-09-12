@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import shlex
 from dataclasses import replace
@@ -14,12 +13,8 @@ from compute.agent_control import agent_machine_worker_id, hash_compute_token
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.compute import (
-    PRIMARY_WIREGUARD_GATEWAY_ID,
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
-    WireGuardGatewayRepository,
-    WireGuardPeerRepository,
-    wireguard_gateway_id,
 )
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
@@ -41,6 +36,7 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerContainerState,
 )
+from shared.agent_connections import AgentConnectionRecord
 from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
@@ -48,8 +44,6 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
     PreflightSeverity,
-    PrivateNetworkEnrollmentPhase,
-    WireGuardGateway,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
@@ -59,7 +53,6 @@ from shared.compute_policy import (
 from shared.errors import ConflictError, InvalidInputError
 from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
-from shared.http.private_network import PrivateNetworkTopologyRequest, RegisterPrivateNetworkRequest
 from shared.identity import TokenKind, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
@@ -69,49 +62,6 @@ from tests.releases import select_worker_release
 from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 from worker.repository_payloads import WorkerRepositoryPrincipal
 from worker_repository.source_cache import WorkerSourceCacheService
-
-
-class _ProbeConnection:
-    def close(self) -> None:
-        return None
-
-
-class _PrivateNetworkConnector:
-    def __init__(self) -> None:
-        self.reachable = True
-
-    def connect(self, _address: str, _timeout_seconds: float) -> _ProbeConnection:
-        if not self.reachable:
-            raise TimeoutError("route proxy is unreachable")
-        return _ProbeConnection()
-
-
-def _gateway(
-    services: ApiServices,
-    *,
-    private_network_connector: _PrivateNetworkConnector | None = None,
-) -> GatewayControlService:
-    _publish_wireguard_gateway(services)
-    return replace(
-        services.gateway_service,
-        private_network_connector=private_network_connector or _PrivateNetworkConnector(),
-    )
-
-
-def _wireguard_public_key(identity: str) -> str:
-    return base64.b64encode(hashlib.sha256(identity.encode()).digest()).decode()
-
-
-def _publish_wireguard_gateway(services: ApiServices) -> None:
-    with services.context.database.session() as session:
-        WireGuardGatewayRepository(session).save(
-            WireGuardGateway(
-                id=PRIMARY_WIREGUARD_GATEWAY_ID,
-                public_key=_wireguard_public_key("test-gateway"),
-                endpoint="wireguard.test:51820",
-                updated_at=utc_now(),
-            )
-        )
 
 
 def _create_join_token(
@@ -137,29 +87,32 @@ def _pool_machines(
     return [machine for machine in gateway.machine_views(workspace_id) if machine.pool == pool]
 
 
-def _bind_private_network(
-    gateway: GatewayControlService,
-    workspace_id: str,
-    agent_token: str,
-    machine_id: str,
+def _record_agent_connection(
+    gateway: GatewayControlService, workspace_id: str, agent_token: str, machine_id: str
 ) -> str:
-    binding = gateway.register_private_network(
-        RegisterPrivateNetworkRequest(
-            agent_token=agent_token,
-            public_key=_wireguard_public_key(machine_id),
-        )
-    )
     with gateway.services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            workspace_id,
-            machine_id,
+            workspace_id, machine_id
         )
         assert enrollment is not None
-        peers = WireGuardPeerRepository(session)
-        peer = peers.by_enrollment(enrollment.id, for_update=True)
-        assert peer is not None
-        peers.save(peer.model_copy(update={"last_handshake_at": utc_now()}))
-    return binding.peer_id
+    identity = gateway.tunnel_authority.bind_key(
+        enrollment.id,
+        workspace_id,
+        hash_compute_token(agent_token),
+        hashlib.sha256(machine_id.encode()).hexdigest(),
+    )
+    previous = gateway.connections.get(workspace_id, enrollment.id)
+    assert gateway.connections.claim(
+        AgentConnectionRecord(
+            identity=identity,
+            gateway_id=str(uuid4()),
+            connection_id=str(uuid4()),
+            gateway_address="gateway.test:443",
+            expires_at=utc_now() + timedelta(hours=1),
+        ),
+        previous_connection_id=previous.connection_id if previous is not None else None,
+    )
+    return enrollment.id
 
 
 def _join_request(token: str, *, fingerprint: str = "host-fingerprint") -> JoinAgentRequest:
@@ -196,11 +149,11 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
     bootstrap = _create_join_token(gateway, MachinePool("customer-machines"), workspace_id)
 
     joined = gateway.join_agent(_join_request(bootstrap.token))
-    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
+    _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
 
     assert UUID(joined.machine_id)
     assert joined.bootstrap is not None
@@ -250,6 +203,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     assert rejoined.machine_id == joined.machine_id
     assert rejoined.agent_token != joined.agent_token
     assert not gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
+    _record_agent_connection(gateway, workspace_id, rejoined.agent_token, rejoined.machine_id)
     assert gateway.stream_agent(StreamAgentRequest(agent_token=rejoined.agent_token)).ok
 
     with isolated_services.context.database.session() as session:
@@ -277,7 +231,7 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     workspace_id = _workspace_id(services)
     pool = MachinePool("worker-image-update")
     unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
-    gateway = _gateway(services)
+    gateway = services.gateway_service
     select_worker_release("registry.test/worker@sha256:old")
     assert isinstance(gateway.scheduler_workers, RedisSchedulerWorkerRepository)
     assert isinstance(gateway.scheduler_containers, RedisSchedulerContainerRepository)
@@ -285,7 +239,7 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     scheduler_containers = gateway.scheduler_containers
     bootstrap = _create_join_token(gateway, pool, workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
-    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
+    _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
     worker_id = agent_machine_worker_id(joined.machine_id)
     scheduler_workers.add_worker(
         SchedulerWorkerRecord(
@@ -360,131 +314,6 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     assert switch.slots[0].machine_id == joined.machine_id
 
 
-def test_private_network_registration_preserves_readiness_until_its_key_changes(
-    isolated_services: ApiServices,
-) -> None:
-    workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_unit(
-        UnitName("fresh-private-network"),
-        provider="agent",
-        workspace=workspace_id,
-    )
-    connector = _PrivateNetworkConnector()
-    gateway = _gateway(isolated_services, private_network_connector=connector)
-    bootstrap = _create_join_token(gateway, MachinePool("fresh-private-network"), workspace_id)
-    joined = gateway.join_agent(_join_request(bootstrap.token))
-    public_key = _wireguard_public_key(joined.machine_id)
-
-    first = gateway.register_private_network(
-        RegisterPrivateNetworkRequest(
-            agent_token=joined.agent_token,
-            public_key=public_key,
-        )
-    )
-    with isolated_services.context.database.session() as session:
-        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            workspace_id,
-            joined.machine_id,
-            for_update=True,
-        )
-        assert enrollment is not None
-        peers = WireGuardPeerRepository(session)
-        peer = peers.by_enrollment(enrollment.id, for_update=True)
-        assert peer is not None
-        peers.save(peer.model_copy(update={"last_handshake_at": utc_now()}))
-    assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
-
-    with isolated_services.context.database.session() as session:
-        enrolled = ComputeMachineEnrollmentRepository(session).by_machine(
-            workspace_id, joined.machine_id
-        )
-        connected_peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
-        WireGuardGatewayRepository(session).save(
-            WireGuardGateway(
-                id=wireguard_gateway_id(1),
-                index=1,
-                public_key=_wireguard_public_key("second-gateway"),
-                endpoint="second-gateway.test:51820",
-                updated_at=utc_now(),
-            )
-        )
-    retry = gateway.register_private_network(
-        RegisterPrivateNetworkRequest(
-            agent_token=joined.agent_token,
-            public_key=public_key,
-        )
-    )
-    assert retry.generation == first.generation
-    topology = gateway.private_network_topology(
-        PrivateNetworkTopologyRequest(agent_token=joined.agent_token)
-    )
-    assert topology == retry
-    assert [item.index for item in topology.gateways] == [0, 1]
-    with isolated_services.context.database.session() as session:
-        assert (
-            ComputeMachineEnrollmentRepository(session).by_machine(workspace_id, joined.machine_id)
-            == enrolled
-        )
-        assert WireGuardPeerRepository(session).by_enrollment(enrollment.id) == connected_peer
-
-    second = gateway.register_private_network(
-        RegisterPrivateNetworkRequest(
-            agent_token=joined.agent_token,
-            public_key=_wireguard_public_key("rotated-agent-key"),
-        )
-    )
-
-    assert second.generation == first.generation + 1
-    assert second.address == first.address
-    with isolated_services.context.database.session() as session:
-        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            workspace_id,
-            joined.machine_id,
-        )
-        assert enrollment is not None
-        peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
-    assert enrollment.network_phase is PrivateNetworkEnrollmentPhase.AwaitingHandshake
-    assert enrollment.network_verified_at is None
-    assert not enrollment.schedulable
-    assert peer is not None
-    assert peer.last_handshake_at is None
-    rejected = gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token))
-    assert not rejected.ok
-    assert rejected.retryable
-    assert rejected.err_msg == "agent WireGuard handshake has not been observed"
-
-    with isolated_services.context.database.session() as session:
-        peers = WireGuardPeerRepository(session)
-        current = peers.by_enrollment(enrollment.id, for_update=True)
-        assert current is not None
-        peers.save(current.model_copy(update={"last_handshake_at": utc_now()}))
-    connector.reachable = False
-    rejected = gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token))
-    assert not rejected.ok
-    assert rejected.retryable
-    assert "could not reach TCP 29443" in rejected.err_msg
-    [machine] = _pool_machines(
-        gateway,
-        MachinePool("fresh-private-network"),
-        workspace_id,
-    )
-    assert machine.readiness_phase is MachineReadinessPhase.Blocked
-    assert machine.readiness_message in machine.remediation
-    assert "100.96.0.0/24" in machine.readiness_message
-
-    connector.reachable = True
-    assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
-    with isolated_services.context.database.session() as session:
-        connected = ComputeMachineEnrollmentRepository(session).by_machine(
-            workspace_id,
-            joined.machine_id,
-        )
-    assert connected is not None
-    assert connected.network_phase is PrivateNetworkEnrollmentPhase.Connected
-    assert connected.network_verified_at is not None
-    assert connected.network_failure_detail == ""
-
-
 def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
     isolated_services: ApiServices,
 ) -> None:
@@ -494,10 +323,10 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
     bootstrap = _create_join_token(gateway, MachinePool("preemptible-machines"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
-    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
+    _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
     observed_at = datetime(2026, 7, 21, tzinfo=UTC)
     request = AgentCapacityInterruptionRequest(
@@ -552,10 +381,10 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
     first_token = _create_join_token(gateway, MachinePool("cleanup-machines"), workspace_id)
     first = gateway.join_agent(_join_request(first_token.token, fingerprint="first-host"))
-    first_peer_id = _bind_private_network(
+    first_enrollment_id = _record_agent_connection(
         gateway,
         workspace_id,
         first.agent_token,
@@ -567,13 +396,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     assert _pool_machines(gateway, MachinePool("cleanup-machines"), workspace_id) == []
     assert not gateway.stream_agent(StreamAgentRequest(agent_token=first.agent_token)).ok
     with isolated_services.context.database.session() as session:
-        assert (
-            WireGuardPeerRepository(session).records.get(
-                first_peer_id,
-                workspace_id=workspace_id,
-            )
-            is None
-        )
+        assert gateway.connections.get(workspace_id, first_enrollment_id) is None
         assert MachineRepository(session).get_across_workspaces(first.machine_id) is None
         assert (
             WorkerRepository(session).get_across_workspaces(
@@ -634,7 +457,7 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
     bootstrap = _create_join_token(gateway, MachinePool("cache-decommission"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     worker_id = agent_machine_worker_id(joined.machine_id)
@@ -697,7 +520,7 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
     bootstrap = _create_join_token(gateway, MachinePool("deleted-machine-pool"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     join_token_hash = hash_compute_token(bootstrap.token)
@@ -826,7 +649,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
     bootstrap = _create_join_token(gateway, MachinePool("metered-machines"), workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     state = gateway.compute_states.get_agent_token_state(hash_compute_token(joined.agent_token))
@@ -888,7 +711,7 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
         provider="agent",
         workspace=workspace_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
     previous = _create_join_token(gateway, MachinePool("rotated-bootstrap"), workspace_id)
     current = _create_join_token(gateway, MachinePool("rotated-bootstrap"), workspace_id)
 
@@ -912,7 +735,7 @@ def test_machine_join_command_owns_the_account_self_hosted_fleet(
         "second-workspace",
         owner_user_id=user_id,
     )
-    gateway = _gateway(isolated_services)
+    gateway = isolated_services.gateway_service
 
     first = gateway.machine_join_command(
         MachineJoinCommandRequest(),
@@ -979,10 +802,10 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
     workspace_id = _workspace_id(async_services)
     pool = MachinePool("silent-machines")
     async_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
-    gateway = _gateway(async_services)
+    gateway = async_services.gateway_service
     bootstrap = _create_join_token(gateway, pool, workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
-    _bind_private_network(gateway, workspace_id, joined.agent_token, joined.machine_id)
+    _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
     # A platform defect belongs to the platform, so it carries no workspace. It is
     # here to prove the customer's feed does not fold those in.

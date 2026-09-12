@@ -15,7 +15,6 @@ from agent.operations import (
 from agent_app.daemon import CommandResult, DockerAgentWorkerController
 from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
-from shared.routing import BackendRouteTransport
 from shared.usage import UsageBillingOwner
 from worker.configuration import WorkerConfiguration
 
@@ -40,7 +39,7 @@ class _RunningWorkerRunner(_Runner):
         del stop
         self.calls.append(args)
         if len(args) > 1 and args[1] == "inspect":
-            return CommandResult(args=args, returncode=0, stdout="true")
+            return CommandResult(args=args, returncode=0, stdout="true\n\nhost")
         return CommandResult(args=args, returncode=0)
 
 
@@ -51,7 +50,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
     controller = DockerAgentWorkerController(
         state_dir=tmp_path,
         worker_image_override="container-worker:test",
-        worker_network=AgentWorkerNetwork(name="lazycloud_default"),
+        worker_network=AgentWorkerNetwork(name="host"),
         runner=runner,
     )
     request.addfinalizer(controller.close)
@@ -77,8 +76,6 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
         plan_worker_slot_reconciliation([slot], []),
         AgentBootstrap(
             gateway_public_http_url="https://gateway.example.test",
-            gateway_runtime_http_url="http://host.docker.internal:8000",
-            transport=BackendRouteTransport.PrivateNetwork,
         ),
     )
 
@@ -98,10 +95,8 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
     assert config_path.stat().st_mode & 0o777 == 0o600
     assert f"{config_path}:/etc/lazycloud/worker/worker.yaml:ro" in docker_run
     # Both clients must reach the control plane through the runtime origin.
-    assert "WORKER_REPOSITORY_URL=http://host.docker.internal:8000" in docker_run
-    assert "GATEWAY_HTTP_URL=http://host.docker.internal:8000" in docker_run
-    assert "WORKER_ROUTE_TARGET=127.0.0.1" in docker_run
-    assert docker_run[docker_run.index("--network") + 1] == "lazycloud_default"
+    assert "GATEWAY_HTTP_URL=http://127.0.0.1:9000" in docker_run
+    assert docker_run[docker_run.index("--network") + 1] == "host"
     assert docker_run[docker_run.index("--cgroupns") + 1] == "host"
 
 

@@ -19,8 +19,9 @@ from fastapi import Depends
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
 from gateway.service import GatewayControlService
+from gateway.tunnel_certificates import TunnelCertificateService
 from images.control import ImageControlService
-from networking.dialer import BackendRouteDialerConfig
+from networking.dialer import BackendRouteDialer
 from provider_clients.settings import (
     AWS_CONNECTION_CONTROL_PRINCIPAL_ENV,
     RELEASE_MANIFEST_URL_ENV,
@@ -105,6 +106,12 @@ def gateway_service(
     return services.gateway_service
 
 
+def tunnel_certificate_service(
+    services: Annotated[ApiServices, Depends(api_services)],
+) -> TunnelCertificateService:
+    return services.tunnel_certificate_service
+
+
 def image_service(
     services: Annotated[ApiServices, Depends(api_services)],
 ) -> ImageControlService:
@@ -153,10 +160,10 @@ def backend_route_resolver(
     return services.backend_route_resolver
 
 
-def backend_route_dialer_config(
+def backend_route_dialer(
     services: Annotated[ApiServices, Depends(api_services)],
-) -> BackendRouteDialerConfig:
-    return services.backend_route_dialer_config
+) -> BackendRouteDialer:
+    return services.backend_route_dialer
 
 
 def task_rerun_service(

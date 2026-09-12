@@ -93,10 +93,10 @@ resource "aws_security_group" "fleet_node" {
 }
 
 # No inbound rule, and none should be added. A worker is reached over the
-# WireGuard network, which is a session the node itself establishes outbound.
+# agent tunnel, which the node establishes outbound over TLS.
 resource "aws_vpc_security_group_egress_rule" "fleet_node" {
   security_group_id = aws_security_group.fleet_node.id
-  description       = "Image pulls, WireGuard, and the control plane."
+  description       = "Image pulls, outbound agent TLS, and the control plane."
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }

@@ -175,12 +175,6 @@ variable "control_plane_service_accounts" {
   default = { controlPlane = "control-plane", scheduler = "scheduler" }
 }
 
-variable "wireguard_bootstrap_service_account" {
-  description = "Service account permitted to initialize the deployment's WireGuard key document."
-  type        = string
-  default     = "wireguard-bootstrap"
-}
-
 variable "secrets_reader_service_account" {
   description = <<-EOT
     Service account the deployment's External Secrets store presents. Named in

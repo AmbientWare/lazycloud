@@ -4,7 +4,7 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 from database.repositories.common import (
     GlobalTableRepository,
@@ -21,8 +21,6 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    WireGuardGatewayTable,
-    WireGuardPeerTable,
     WorkspaceComputePolicyTable,
 )
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
@@ -45,10 +43,6 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
     MachineReadinessPhase,
-    PrivateNetworkEnrollmentPhase,
-    WireGuardGateway,
-    WireGuardPeer,
-    WireGuardPeerStatus,
 )
 from shared.compute_policy import (
     ComputeUnitPhase,
@@ -81,7 +75,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -257,6 +250,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     join_credential_id: str | None = None
     credential_hash: str
     credential_generation: int = 1
+    tunnel_public_key_sha256: str = Field(default="", strict=True, pattern=r"^(?:[0-9a-f]{64})?$")
     status: ComputeMachineEnrollmentStatus = ComputeMachineEnrollmentStatus.Active
     preflight_passed: bool = False
     heartbeat_confirmed: bool = False
@@ -278,13 +272,6 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     executor: str = ""
     preflight: list[ComputePreflightCheck] = Field(default_factory=list)
     agent_version: str = ""
-    network_generation: int = Field(default=0, ge=0)
-    network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured
-    network_peer_id: str = ""
-    network_public_key: str = ""
-    network_address: str = ""
-    network_verified_at: datetime | None = None
-    network_failure_detail: str = Field(default="", max_length=512)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
@@ -337,13 +324,6 @@ class ComputeMachineEnrollmentCreate(ContractModel):
     executor: str = ""
     preflight: list[ComputePreflightCheck] = Field(default_factory=list)
     agent_version: str = ""
-    network_generation: int = Field(default=0, ge=0)
-    network_phase: PrivateNetworkEnrollmentPhase = PrivateNetworkEnrollmentPhase.Unconfigured
-    network_peer_id: str = ""
-    network_public_key: str = ""
-    network_address: str = ""
-    network_verified_at: datetime | None = None
-    network_failure_detail: str = Field(default="", max_length=512)
     last_join_at: datetime
     last_heartbeat_at: datetime | None = None
     last_disconnect_at: datetime | None = None
@@ -355,14 +335,15 @@ class ComputeMachineEnrollmentCreate(ContractModel):
         *,
         updated_at: datetime,
     ) -> ComputeMachineEnrollmentRecord:
-        """Re-state the row from a fresh join, keeping its WireGuard peer."""
+        """Apply a snapshot, retaining the tunnel key within its credential generation."""
         return existing.model_copy(
             update={
-                **{
-                    field: value
-                    for field, value in dict(self).items()
-                    if not field.startswith("network_")
-                },
+                **dict(self),
+                "tunnel_public_key_sha256": (
+                    ""
+                    if self.credential_generation > existing.credential_generation
+                    else existing.tunnel_public_key_sha256
+                ),
                 "updated_at": updated_at,
             }
         )
@@ -939,7 +920,6 @@ class ComputeUnitRepository:
         row.scale_down_cooldown_seconds = record.scale_down_cooldown_seconds
         row.registration_timeout_seconds = record.registration_timeout_seconds
         row.root_volume_gib = record.root_volume_gib
-        row.transport = record.transport.value
         row.fallback = record.fallback.value
         self.session.flush()
 
@@ -1628,6 +1608,21 @@ class ComputeMachineEnrollmentRepository:
             status=enrollment.status.value,
         )
 
+    def by_id(
+        self,
+        enrollment_id: str,
+        *,
+        workspace_id: str,
+        for_update: bool = False,
+    ) -> ComputeMachineEnrollmentRecord | None:
+        return self._one(
+            select(ComputeMachineEnrollmentTable).where(
+                ComputeMachineEnrollmentTable.id == enrollment_id,
+                ComputeMachineEnrollmentTable.workspace_id == workspace_id,
+            ),
+            for_update=for_update,
+        )
+
     def save(self, record: ComputeMachineEnrollmentRecord) -> ComputeMachineEnrollmentRecord:
         return self.records.upsert(
             record,
@@ -1911,143 +1906,6 @@ class ComputeMachineEnrollmentRepository:
         return (
             ComputeMachineEnrollmentRecord.model_validate(row.payload) if row is not None else None
         )
-
-
-@dataclass(slots=True)
-class WireGuardPeerRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[WireGuardPeer]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(WireGuardPeerTable, WireGuardPeer),
-        )
-
-    def lock_allocator(self) -> None:
-        if self.session.bind is not None and self.session.bind.dialect.name == "postgresql":
-            self.session.execute(select(func.pg_advisory_xact_lock(1_282_385_785)))
-
-    def address_allocated(self, address: str) -> bool:
-        return (
-            self.session.scalar(
-                select(WireGuardPeerTable.id).where(WireGuardPeerTable.address == address).limit(1)
-            )
-            is not None
-        )
-
-    def by_enrollment(
-        self,
-        enrollment_id: str,
-        *,
-        for_update: bool = False,
-    ) -> WireGuardPeer | None:
-        statement = select(WireGuardPeerTable).where(
-            WireGuardPeerTable.enrollment_id == enrollment_id
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        row = self.session.scalars(statement).one_or_none()
-        return WireGuardPeer.model_validate(row.payload) if row is not None else None
-
-    def active(self) -> list[WireGuardPeer]:
-        rows = self.session.scalars(
-            select(WireGuardPeerTable)
-            .where(WireGuardPeerTable.status == WireGuardPeerStatus.Active.value)
-            .order_by(WireGuardPeerTable.address)
-        )
-        return [WireGuardPeer.model_validate(row.payload) for row in rows]
-
-    def save(self, peer: WireGuardPeer) -> WireGuardPeer:
-        saved = self.records.upsert(
-            peer,
-            workspace_id=peer.workspace_id,
-            status=peer.status.value,
-        )
-        row = self.session.scalars(
-            select(WireGuardPeerTable).where(WireGuardPeerTable.id == peer.id)
-        ).one()
-        row.enrollment_id = saved.enrollment_id
-        row.machine_id = saved.machine_id
-        row.public_key = saved.public_key
-        row.address = saved.address
-        row.generation = saved.generation
-        row.last_handshake_at = saved.last_handshake_at
-        row.revoked_at = saved.revoked_at
-        self.session.flush()
-        return saved
-
-
-PRIMARY_WIREGUARD_GATEWAY_ID = "3acde72c-e3ae-43d2-a119-cfeb8c0309be"
-
-
-def wireguard_gateway_id(index: int) -> str:
-    if not 0 <= index < 32:
-        raise ValueError("WireGuard gateway index must be between 0 and 31")
-    if index == 0:
-        return PRIMARY_WIREGUARD_GATEWAY_ID
-    return str(uuid5(NAMESPACE_URL, f"lazycloud:wireguard:gateway:{index}"))
-
-
-@dataclass(slots=True)
-class WireGuardGatewayRepository:
-    session: Session
-
-    def list_all(self) -> list[WireGuardGateway]:
-        rows = self.session.scalars(
-            select(WireGuardGatewayTable).order_by(WireGuardGatewayTable.index)
-        )
-        return [self._model(row) for row in rows]
-
-    def get_by_index(self, index: int) -> WireGuardGateway | None:
-        row = self.session.scalars(
-            select(WireGuardGatewayTable).where(WireGuardGatewayTable.index == index)
-        ).one_or_none()
-        return self._model(row) if row is not None else None
-
-    def save(self, gateway: WireGuardGateway) -> WireGuardGateway:
-        gateway = WireGuardGateway.model_validate(dict(gateway))
-        if gateway.id != wireguard_gateway_id(gateway.index):
-            raise ConflictError("WireGuard gateway identity does not match its index")
-        # The column owns the index; payload readers reconstruct it from that column.
-        payload = _model_json(gateway)
-        del payload["index"]
-        statement = postgresql_insert(WireGuardGatewayTable).values(
-            id=gateway.id,
-            index=gateway.index,
-            public_key=gateway.public_key,
-            endpoint=gateway.endpoint,
-            payload=payload,
-            updated_at=gateway.updated_at,
-        )
-        statement = statement.on_conflict_do_update(
-            index_elements=[WireGuardGatewayTable.id],
-            set_={
-                "endpoint": statement.excluded.endpoint,
-                "payload": statement.excluded.payload,
-                "updated_at": statement.excluded.updated_at,
-            },
-            where=and_(
-                WireGuardGatewayTable.index == statement.excluded.index,
-                WireGuardGatewayTable.public_key == statement.excluded.public_key,
-            ),
-        ).returning(WireGuardGatewayTable)
-        try:
-            with self.session.begin_nested():
-                row = self.session.scalars(
-                    statement, execution_options={"populate_existing": True}
-                ).one_or_none()
-        except IntegrityError as exc:
-            raise ConflictError(
-                "WireGuard gateway index or public key is already registered"
-            ) from exc
-        if row is None:
-            raise ConflictError("WireGuard gateway index and public key cannot be changed")
-        return self._model(row)
-
-    @staticmethod
-    def _model(row: WireGuardGatewayTable) -> WireGuardGateway:
-        return WireGuardGateway.model_validate({**row.payload, "index": row.index})
 
 
 @dataclass(slots=True)

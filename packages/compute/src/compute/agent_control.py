@@ -32,8 +32,6 @@ from shared.gpu import GPU_ANY, normalize_gpu_type
 from shared.routing import (
     AgentBackendRoute,
     BackendRouteState,
-    BackendRouteTransport,
-    RoutePrewarmDecision,
 )
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
@@ -42,7 +40,6 @@ from compute.projection import (
     PoolConfig,
     PrivateUnitFallback,
     PrivateUnitState,
-    normalize_backend_route_transport,
     normalize_unit_config,
     parse_ttl_seconds,
 )
@@ -57,8 +54,6 @@ DEFAULT_PRIVATE_EXECUTOR = "container"
 AGENT_STREAM_REFRESH_SECONDS = 30.0
 AGENT_STREAM_HEARTBEAT_SECONDS = 10.0
 AGENT_STREAM_EVENT_COALESCE_SECONDS = 0.025
-ROUTE_PREWARM_INTERVAL_SECONDS = 30.0
-ROUTE_PREWARM_TIMEOUT_SECONDS = 3.0
 
 
 class JoinTokenDecision(StrEnum):
@@ -74,12 +69,6 @@ class PoolGpuDecision(StrEnum):
     Accepted = "accepted"
     LockedPoolGpu = "locked-pool-gpu"
     Rejected = "rejected"
-
-
-class TransportCredentialDecision(StrEnum):
-    Ready = "ready"
-    Disabled = "disabled"
-    Unsupported = "unsupported"
 
 
 class AgentStreamDecision(StrEnum):
@@ -201,22 +190,13 @@ class AgentImageConfig(ContractModel):
     local_cache_enabled: bool = True
 
 
-class TransportValidationPlan(ContractModel):
-    decision: TransportCredentialDecision
-    accepted: bool
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
-    err_msg: str = ""
-
-
 class AgentBootstrapConfig(ContractModel):
     gateway_public_http_url: str
-    gateway_runtime_http_url: str
     gateway_grpc_host: str = ""
     gateway_grpc_port: int = 443
     gateway_grpc_tls: bool = True
     workspace_id: str
     pool: MachinePool
-    transport: BackendRouteTransport = BackendRouteTransport.PrivateNetwork
     executor: str = DEFAULT_PRIVATE_EXECUTOR
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     image_registry_store: str = ""
@@ -246,7 +226,6 @@ class AgentHeartbeatTouchPlan(ContractModel):
 class AgentRouteStatusRequest(ContractModel):
     route_id: str
     state: BackendRouteState | str | None = None
-    proxy_target: str = ""
     error: str = ""
     attrs: dict[str, str] = Field(default_factory=dict)
 
@@ -262,22 +241,7 @@ class AgentRouteStatusPlan(ContractModel):
     updated: AgentBackendRoute | None = None
     should_save: bool = False
     should_emit_event: bool = False
-    should_prewarm: bool = False
     event_attrs: dict[str, str] = Field(default_factory=dict)
-
-
-class RoutePrewarmAttemptPlan(ContractModel):
-    decision: RoutePrewarmDecision
-    should_attempt: bool
-    proxy_target: str = ""
-    next_attempts: dict[str, datetime] = Field(default_factory=dict)
-    timeout_seconds: float = ROUTE_PREWARM_TIMEOUT_SECONDS
-
-
-class RoutePrewarmResultPlan(ContractModel):
-    status: str
-    message: str = ""
-    attrs: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentStreamSnapshotPlan(ContractModel):
@@ -653,7 +617,6 @@ def plan_agent_join(
         last_join_at=current_time,
         last_heartbeat_at=None,
         metadata={
-            "pool_transport": normalized_pool_config.transport.value,
             "pool_mode": normalized_pool_config.mode.value,
             "pool_fallback": normalized_pool_config.fallback.value,
             "pool_source": str(getattr(pool_state.source, "value", pool_state.source)),
@@ -870,38 +833,10 @@ def agent_install_command(
     )
 
 
-def validate_agent_transport_config(
-    transport: BackendRouteTransport | str,
-) -> TransportValidationPlan:
-    try:
-        normalized = normalize_backend_route_transport(str(transport))
-    except ValueError:
-        return TransportValidationPlan(
-            decision=TransportCredentialDecision.Unsupported,
-            accepted=False,
-            err_msg=f"unsupported agent transport {transport!r}",
-        )
-    if normalized is not BackendRouteTransport.PrivateNetwork:
-        return TransportValidationPlan(
-            decision=TransportCredentialDecision.Unsupported,
-            accepted=False,
-            transport=normalized,
-            err_msg=f"unsupported agent transport {normalized.value!r}",
-        )
-    return TransportValidationPlan(
-        decision=TransportCredentialDecision.Ready,
-        accepted=True,
-        transport=normalized,
-    )
-
-
-_LOCAL_RUNTIME_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
-
-
 def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
     """Whether a remote machine could never reach this host.
 
-    Private addresses can be routable through WireGuard, a VPC, or another
+    Private addresses can be routable through a VPC or another
     operator-owned network. Loopback, unspecified, link-local, and multicast
     addresses cannot name the control-plane peer from another machine. A name is
     accepted here and left to DNS except for a single container-local label.
@@ -918,63 +853,25 @@ def host_is_unreachable_from_a_remote_machine(host: str) -> bool:
     )
 
 
-def _reject_unroutable_runtime_url(
-    url: str,
-    *,
-    pool: MachinePool,
-    transport: BackendRouteTransport,
-) -> None:
-    """Refuse a runtime callback a remote machine could never resolve.
-
-    Workers validate readiness by calling this origin. A Compose service name or
-    loopback address resolves on the control-plane host and nowhere else, so a
-    remote machine enrolls, reports healthy, and then crash-loops its worker
-    forever on `Name or service not known`. Failing here names the cause instead
-    of producing a machine that looks ready and can never run work.
-    """
-    if transport is not BackendRouteTransport.PrivateNetwork:
-        return
-    host = urlparse(url).hostname or ""
-    if not host:
-        raise ValueError("remote-machine runtime callback URL has no host")
-    if host in _LOCAL_RUNTIME_HOSTS or host_is_unreachable_from_a_remote_machine(host):
-        raise ValueError(
-            f"pool {pool!r} serves remote machines and cannot use runtime callback host "
-            f"{host!r}: a remote machine cannot resolve it. Set "
-            "LAZYCLOUD_GATEWAY_RUNTIME_HTTP_URL to a publicly reachable origin."
-        )
-
-
 def build_agent_bootstrap_config(
     workspace_id: str,
     pool_state: PrivateUnitState,
     gateway: GatewayEndpointConfig,
     image: AgentImageConfig,
     *,
-    gateway_runtime_http_url: str,
     executor: str = DEFAULT_PRIVATE_EXECUTOR,
 ) -> AgentBootstrapConfig:
     normalized = normalize_unit_config(pool_state.config or PoolConfig(name=pool_state.name))
     if normalized is None:
         msg = "pool config is required"
         raise ValueError(msg)
-    transport_plan = validate_agent_transport_config(normalized.transport)
-    if not transport_plan.accepted:
-        raise ValueError(transport_plan.err_msg)
-    _reject_unroutable_runtime_url(
-        gateway_runtime_http_url,
-        pool=pool_state.pool,
-        transport=normalized.transport,
-    )
     return AgentBootstrapConfig(
         gateway_public_http_url=gateway.http_url,
-        gateway_runtime_http_url=gateway_runtime_http_url,
         gateway_grpc_host=gateway.grpc_host,
         gateway_grpc_port=gateway.grpc_port,
         gateway_grpc_tls=gateway.grpc_tls,
         workspace_id=workspace_id,
         pool=pool_state.pool,
-        transport=normalized.transport,
         executor=executor,
         fallback=normalized.fallback,
         image_registry_store=image.registry_store,
@@ -1081,31 +978,24 @@ def plan_route_status_update(
         return AgentRouteStatusPlan(accepted=False, err_msg="route does not belong to this agent")
 
     previous_state = route.state
-    previous_proxy_target = route.proxy_target
     previous_error = route.error
     update_state = _route_state(request.state) if request.state else previous_state
     updated = route.model_copy(
         update={
             "state": update_state,
-            "proxy_target": request.proxy_target or route.proxy_target,
             "error": request.error,
             "updated_at": int(_utc(now).timestamp()),
         }
     )
     state_changed = previous_state is not updated.state
-    proxy_changed = previous_proxy_target != updated.proxy_target
     error_changed = previous_error != updated.error
-    should_emit = state_changed or proxy_changed or error_changed
-    should_prewarm = updated.state is BackendRouteState.Ready and (
-        previous_state is not BackendRouteState.Ready or proxy_changed
-    )
+    should_emit = state_changed or error_changed
     return AgentRouteStatusPlan(
         accepted=True,
         previous=route,
         updated=updated,
         should_save=True,
         should_emit_event=should_emit,
-        should_prewarm=should_prewarm,
         event_attrs=route_status_event_attrs(updated, request.attrs),
     )
 
@@ -1125,75 +1015,6 @@ def route_status_event_attrs(
         if key.strip() and value:
             attrs[key] = value
     return attrs
-
-
-def plan_route_prewarm_attempt(
-    route: AgentBackendRoute,
-    attempts: dict[str, datetime] | None = None,
-    *,
-    now: datetime | None = None,
-    interval_seconds: float = ROUTE_PREWARM_INTERVAL_SECONDS,
-) -> RoutePrewarmAttemptPlan:
-    current_time = _utc(now)
-    proxy_target = route.proxy_target.strip()
-    next_attempts = dict(attempts or {})
-    if route.state is not BackendRouteState.Ready:
-        return RoutePrewarmAttemptPlan(
-            decision=RoutePrewarmDecision.NotReady,
-            should_attempt=False,
-            proxy_target=proxy_target,
-            next_attempts=next_attempts,
-        )
-    try:
-        transport = _transport(route.transport)
-    except ValueError:
-        transport = BackendRouteTransport.Direct
-    if transport is not BackendRouteTransport.PrivateNetwork:
-        return RoutePrewarmAttemptPlan(
-            decision=RoutePrewarmDecision.UnsupportedTransport,
-            should_attempt=False,
-            proxy_target=proxy_target,
-            next_attempts=next_attempts,
-        )
-    if proxy_target == "":
-        return RoutePrewarmAttemptPlan(
-            decision=RoutePrewarmDecision.EmptyTarget,
-            should_attempt=False,
-            next_attempts=next_attempts,
-        )
-    last_attempt = next_attempts.get(proxy_target)
-    if last_attempt is not None and current_time - _utc(last_attempt) < timedelta(
-        seconds=interval_seconds
-    ):
-        return RoutePrewarmAttemptPlan(
-            decision=RoutePrewarmDecision.Throttled,
-            should_attempt=False,
-            proxy_target=proxy_target,
-            next_attempts=next_attempts,
-        )
-    next_attempts[proxy_target] = current_time
-    return RoutePrewarmAttemptPlan(
-        decision=RoutePrewarmDecision.Attempt,
-        should_attempt=True,
-        proxy_target=proxy_target,
-        next_attempts=next_attempts,
-    )
-
-
-def plan_route_prewarm_result(
-    route: AgentBackendRoute,
-    *,
-    dial_latency_ms: int,
-    error: str = "",
-) -> RoutePrewarmResultPlan:
-    attrs = {
-        "proxy_target": route.proxy_target,
-        "dial_ms": str(max(dial_latency_ms, 0)),
-    }
-    if error:
-        attrs["reason"] = error
-        return RoutePrewarmResultPlan(status="error", message=error, attrs=attrs)
-    return RoutePrewarmResultPlan(status="ready", attrs=attrs)
 
 
 def plan_agent_worker_token(
@@ -1358,12 +1179,6 @@ def _route_state(value: BackendRouteState | str) -> BackendRouteState:
     if isinstance(value, BackendRouteState):
         return value
     return BackendRouteState(str(value))
-
-
-def _transport(value: BackendRouteTransport | str) -> BackendRouteTransport:
-    if isinstance(value, BackendRouteTransport):
-        return value
-    return normalize_backend_route_transport(str(value))
 
 
 def _utc(value: datetime | None) -> datetime:

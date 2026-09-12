@@ -7,6 +7,7 @@ from datetime import datetime
 
 import pytest
 from pydantic import JsonValue
+from scheduler.state import RedisSchedulerContainerRepository
 from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason, WorkerStartupKind
 from shared.scheduling import (
@@ -18,13 +19,17 @@ from shared.scheduling import (
     WorkerExecutionRecord,
     WorkerExecutionRequest,
 )
+from tests.real_redis import RealRedisActors
+from worker.adapters import WorkerRouteIdentity, WorkerRouteRecovery
 from worker.container_execution import (
     ContainerExecutionContext,
     ContainerExecutionPhase,
     ContainerExecutionPhaseResult,
     ContainerExecutionResult,
 )
+from worker.container_service.state import LocalWorkerContainerInstanceStore
 from worker.events import WorkerBuildCancelRegistry
+from worker.oci_runtime import OciRuntimeCommandController
 from worker.repository_client import (
     WorkerRepositoryClientError,
 )
@@ -38,6 +43,18 @@ from worker.scheduler_requests import (
 from worker.worker_lifecycle import WorkerLifecycleOrchestrator
 
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
+
+
+@pytest.fixture
+def route_recovery(real_redis_actors: RealRedisActors) -> WorkerRouteRecovery:
+    return WorkerRouteRecovery(
+        identity=WorkerRouteIdentity(
+            worker_id="worker-1", machine_id="machine-1", pod_address="127.0.0.1:9001"
+        ),
+        containers=RedisSchedulerContainerRepository(real_redis_actors.client()),
+        instances=LocalWorkerContainerInstanceStore(),
+        runtime=OciRuntimeCommandController(),
+    )
 
 
 def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> None:
@@ -79,7 +96,9 @@ def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> 
     assert execution.contexts[0].run_delayed_cleanup
 
 
-def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown() -> None:
+def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown(
+    route_recovery: WorkerRouteRecovery,
+) -> None:
     request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
     workers = _WorkerRepository(requests=[request])
     containers = _ContainerRepository(
@@ -88,7 +107,9 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
     runtime_started = threading.Event()
     stop_requested = threading.Event()
     stopper = _ShutdownStopper(stop_requested)
-    lifecycle = WorkerLifecycleOrchestrator(worker_id="worker-1", stopper=stopper)
+    lifecycle = WorkerLifecycleOrchestrator(
+        worker_id="worker-1", route_restorer=route_recovery.restore, stopper=stopper
+    )
     execution = _BlockingExecutionService(
         started=runtime_started,
         stop_requested=stop_requested,
@@ -125,7 +146,9 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
     assert result.status is WorkerSchedulerRequestStatus.Executed
 
 
-def test_worker_scheduler_request_processor_backgrounds_long_lived_container() -> None:
+def test_worker_scheduler_request_processor_backgrounds_long_lived_container(
+    route_recovery: WorkerRouteRecovery,
+) -> None:
     request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
     workers = _WorkerRepository(requests=[request])
     containers = _ContainerRepository(
@@ -135,6 +158,7 @@ def test_worker_scheduler_request_processor_backgrounds_long_lived_container() -
     stop_requested = threading.Event()
     lifecycle = WorkerLifecycleOrchestrator(
         worker_id="worker-1",
+        route_restorer=route_recovery.restore,
         stopper=_ShutdownStopper(stop_requested),
     )
     execution = _BlockingExecutionService(
@@ -257,7 +281,9 @@ def test_worker_scheduler_request_processor_reports_execution_failure() -> None:
     assert workers.capacity_changes == [("worker-1", "ctr-1", WorkerCapacityChange.Add)]
 
 
-def test_worker_scheduler_request_processor_reconciles_a_redelivered_request() -> None:
+def test_worker_scheduler_request_processor_reconciles_a_redelivered_request(
+    route_recovery: WorkerRouteRecovery,
+) -> None:
     """A redelivery of a container this worker holds must not start a second one."""
 
     request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
@@ -271,7 +297,9 @@ def test_worker_scheduler_request_processor_reconciles_a_redelivered_request() -
     runtime_started = threading.Event()
     stop_requested = threading.Event()
     stopper = _ShutdownStopper(stop_requested)
-    lifecycle = WorkerLifecycleOrchestrator(worker_id="worker-1", stopper=stopper)
+    lifecycle = WorkerLifecycleOrchestrator(
+        worker_id="worker-1", route_restorer=route_recovery.restore, stopper=stopper
+    )
     execution = _BlockingExecutionService(
         started=runtime_started,
         stop_requested=stop_requested,

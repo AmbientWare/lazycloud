@@ -30,13 +30,10 @@ substitutes, and gives every service an explicit owner and health check.
 - Sidecars that share another service's network namespace are destroyed when
   that service is recreated, and the stack will not say so. Treat the lifetime
   relationship as part of the change, not as something to rediscover.
-- Two workers share this host and nothing coordinates them: the `container-worker`
-  service is the shared platform fleet, and the `agent` service runs one machine a
-  customer account joined. Each allocates container addresses inside its own
-  control-plane scope, keyed on its own machine id, so a bridge name or subnet used
-  twice is two allocators issuing one address with no lock between them. Machine
-  fingerprint, state directory, pool, and bridge are the four values that must
-  differ, and none of them fails visibly when it does not.
+- Local workers run through an enrolled agent, using the production tunnel and
+  route authority. The `container-worker` build profile provides its image; it
+  has no standalone runtime. Give each additional agent its own fingerprint,
+  state directory, bridge and subnet so allocators cannot share addresses.
 - A release and a deploy are separate workflows, chained by `ship.yml`. They are
   not merged because a release is public and immutable: a customer's own AWS
   account resolves the agent binary, worker image, and exact node AMI IDs out of
@@ -57,8 +54,8 @@ substitutes, and gives every service an explicit owner and health check.
   has fresh request intake. Host replacement is reserved for host lifecycle changes.
 - The network image records its executable linux/amd64 manifest digest, not its
   commit tag or attestation index. Ship selects it from the same published
-  commit automatically. Its Docker build copies only the installed network
-  workspace dependencies, so an unrelated API edit does not restart WireGuard.
+  commit automatically. Its Docker build copies only the installed connection gateway
+  workspace dependencies, so an unrelated API edit does not restart agent connections.
   Network source or dependency changes publish and select a new image without an
   operator-maintained release pin.
 - Helm owns application settings and secret property bindings. Terraform publishes

@@ -40,7 +40,6 @@ from cli.resources import (
 )
 from cli.storage import cache_app, object_app
 from cli.usage import usage_app
-from cli.wireguard import wireguard_app
 
 _ADMIN_ROOT_ORDER = (
     "deploy",
@@ -97,7 +96,6 @@ _ADMIN_GROUP_ORDER = (
     "billing",
     "economics",
     "example",
-    "wireguard",
 )
 
 
@@ -149,7 +147,6 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("auth", auth_app)
     registry.add_group("user", user_app)
     registry.add_group("usage", usage_app)
-    registry.add_group("wireguard", wireguard_app)
 
     # The admin CLI ships inside the control-plane image, not from PyPI.
     registry.remove_root_command("update")

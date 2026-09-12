@@ -77,7 +77,7 @@ from worker.container_service.models import (
     WorkerContainerServiceInstance,
 )
 from worker.container_service.protocols import (
-    LocalSandboxPortPublisher,
+    BridgeSandboxPortPublisher,
     WorkerContainerArchiveCreator,
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
@@ -122,7 +122,7 @@ class WorkerContainerService:
     checkpoints: WorkerContainerCheckpointCreator | None = None
     archives: WorkerContainerArchiveCreator | None = None
     network_policy: WorkerSandboxNetworkPolicyUpdater | None = None
-    ports: WorkerSandboxPortPublisher = field(default_factory=LocalSandboxPortPublisher)
+    ports: WorkerSandboxPortPublisher = field(default_factory=BridgeSandboxPortPublisher)
 
     def container_status(self, request: ContainerStatusRequest) -> ContainerStatusResponse:
         instance = self._instance(request.container_id)
@@ -686,7 +686,6 @@ class WorkerContainerService:
                 host_port=host_port,
                 local_target=local_target,
                 route_context=instance.route_context,
-                agent_worker=instance.agent_worker,
             )
         )
         if not plan.ok:

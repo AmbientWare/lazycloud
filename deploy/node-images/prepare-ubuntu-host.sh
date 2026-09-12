@@ -33,7 +33,6 @@ systemctl start dev-zram0.swap
 sysctl --system
 systemctl enable --now docker
 docker info --format '{{.CgroupVersion}}' | grep -x 2
-wg --version
 iptables --version
 swapon --show
 grep -q '^/dev/zram0 ' /proc/swaps

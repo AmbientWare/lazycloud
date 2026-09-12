@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import socket
 from pathlib import Path
-from urllib.parse import urlparse
 
 from cache.server import (
     FileCacheServer,
@@ -11,6 +9,7 @@ from cache.server import (
 )
 from foundation.process import ProcessTimeoutError, run_process
 from networking.internal_http import InternalHttpClient
+from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT, AGENT_TUNNEL_CONTROL_URL
 from shared.identity import TokenKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from worker.adapters import WorkerRouteIdentity
@@ -161,7 +160,7 @@ def build_worker_process_services(
     identity = _worker_identity(config)
     internal_http = _internal_http_client(config)
     repository = repository_client or build_worker_repository_http_client(
-        endpoint=config.worker_repository_endpoint,
+        endpoint=AGENT_TUNNEL_CONTROL_URL,
         token=config.worker_token,
         timeout_seconds=config.worker_repository_timeout_seconds,
         http=internal_http,
@@ -277,7 +276,7 @@ def build_worker_process_services(
             worker_id=identity.worker_id,
             sink=RemoteContainerMetricsSink(repository),
             disk_usage=container_rootfs,
-            network_egress=network_backend.egress_counters if network_backend is not None else None,
+            network_egress=network_backend.egress_counters,
         ),
         metrics_source_factory=CgroupContainerMetricsSourceFactory(),
         usage_recorder=WorkerSupervisionService(
@@ -344,7 +343,13 @@ def build_worker_process_services(
         bundle_root=paths.bundle_root,
         image_mount_root=Path(paths.image_mount_root),
         runtime_configs=available_runtime_configs,
-        gateway_settings=_gateway_settings(config),
+        gateway_settings=GatewayServiceSettings(
+            http=GatewayEndpointSettings(
+                host=network_backend.config.gateway,
+                port=AGENT_TUNNEL_CONTROL_PORT,
+                tls=False,
+            )
+        ),
         managed_runtime_root=MANAGED_RUNTIME_IMAGE_ROOT,
     )
     dependencies = WorkerProcessExecutionDependencies(
@@ -396,7 +401,6 @@ def build_worker_process_services(
             publisher=image_archive_publisher,
         ),
         network_policy=network_backend,
-        port_exposer=network_backend,
     )
     finalization_dependencies = WorkerProcessFinalizationDependencies(
         bundle_root=paths.bundle_root,
@@ -455,14 +459,9 @@ def build_worker_process_services(
             image_runtime,
             spec_builder=spec_builder,
             network_backend=network_backend,
-            gateway_endpoint=_gateway_runtime_network_endpoint(config),
         ),
         cleanup_actions=(
-            (
-                [WorkerCleanupAction(name="prepared-networks", action=network_backend.close)]
-                if network_backend is not None
-                else []
-            )
+            [WorkerCleanupAction(name="prepared-networks", action=network_backend.close)]
             + (
                 [
                     WorkerCleanupAction(
@@ -496,16 +495,14 @@ def _validate_worker_readiness(
     image_runtime: ImageRuntimeClient | None,
     *,
     spec_builder: OciRuntimeSpecBuilder,
-    network_backend: AgentBridgeNetworkBackend | None,
-    gateway_endpoint: str,
+    network_backend: AgentBridgeNetworkBackend,
 ) -> None:
     spec_builder.prepare_managed_runtimes()
     if image_runtime is not None:
         response = image_runtime.health()
         if not response.ok:
             raise RuntimeError(response.error or "image runtime is unavailable")
-    if network_backend is not None:
-        _initialize_network_backend(network_backend, gateway_endpoint)
+    network_backend.initialize()
 
 
 def planned_scheduler_worker_record_from_settings(
@@ -576,56 +573,7 @@ def _worker_identity(config: WorkerSettings) -> WorkerRouteIdentity:
         pod_address=config.pod_address,
         container_service_port=config.container_service_port,
         persistent=execution.persistent,
-        route_transport=config.configuration.network.route_transport,
-        route_local_target_host=config.route_local_target_host,
-        agent_worker=execution.agent_worker,
     )
-
-
-def _gateway_settings(config: WorkerSettings) -> GatewayServiceSettings:
-    gateway_url = _gateway_runtime_network_endpoint(config)
-    if gateway_url and "://" not in gateway_url:
-        gateway_url = f"http://{gateway_url}"
-    parsed = urlparse(gateway_url)
-    if not parsed.hostname:
-        return GatewayServiceSettings()
-    port = parsed.port
-    tls = parsed.scheme == "https"
-    return GatewayServiceSettings(
-        http=GatewayEndpointSettings(
-            host=parsed.hostname,
-            port=port or (443 if tls else 80),
-            tls=tls,
-        )
-    )
-
-
-def _gateway_runtime_network_endpoint(config: WorkerSettings) -> str:
-    endpoint = config.gateway_runtime_http_endpoint
-    parsed = urlparse(endpoint)
-    route_target = config.route_local_target_host.strip().lower()
-    if (
-        parsed.scheme != "http"
-        or parsed.hostname is None
-        or parsed.hostname.lower() != route_target
-    ):
-        return endpoint
-    try:
-        addresses = socket.getaddrinfo(
-            parsed.hostname,
-            parsed.port or 80,
-            type=socket.SOCK_STREAM,
-        )
-    except OSError as exc:
-        msg = f"worker runtime gateway host {parsed.hostname!r} could not be resolved"
-        raise RuntimeError(msg) from exc
-    if not addresses:
-        msg = f"worker runtime gateway host {parsed.hostname!r} did not resolve to an address"
-        raise RuntimeError(msg)
-    address = str(addresses[0][4][0])
-    host = f"[{address}]" if ":" in address else address
-    netloc = f"{host}:{parsed.port}" if parsed.port is not None else host
-    return parsed._replace(netloc=netloc).geturl()
 
 
 def _scheduler_worker_record(
@@ -720,10 +668,8 @@ def _verify_runtime_binary(path: str) -> str | None:
 def _client_network_backend(
     config: WorkerSettings,
     client: WorkerRepositoryHttpClient,
-) -> AgentBridgeNetworkBackend | None:
+) -> AgentBridgeNetworkBackend:
     network = config.configuration.network
-    if not network.agent_bridge_network:
-        return None
     bridge = AgentBridgeNetworkConfig(
         bridge_name=network.bridge_name,
         subnet=network.bridge_subnet,
@@ -748,13 +694,6 @@ def _client_network_backend(
             event_sink=RemoteWorkerEventSink(client),
         ),
     )
-
-
-def _initialize_network_backend(
-    backend: AgentBridgeNetworkBackend,
-    gateway_public_http_url: str,
-) -> None:
-    backend.initialize(gateway_public_http_url)
 
 
 def _gpu_assigner(config: WorkerSettings) -> WorkerGpuRuntimeAssigner:

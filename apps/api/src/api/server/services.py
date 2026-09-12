@@ -18,6 +18,7 @@ from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
+from compute.tunnel_authority import AgentTunnelAuthority
 from control.apps import (
     AppService,
     DatabaseAppExecutionAdmission,
@@ -30,6 +31,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.routes import RouteService
 from control.service import ControlPlaneService, WorkspaceBucketClient
+from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.event_bus import RedisEventBus
 from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
@@ -73,10 +75,10 @@ from gateway.pod_proxy import (
 )
 from gateway.pool_bootstrap import pool_bootstrap_provisioner
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
-from gateway.route_prewarm import RoutePrewarmService
 from gateway.service import GatewayControlService
-from gateway.settings import GatewaySettings
+from gateway.settings import GatewaySettings, TunnelCertificateSettings
 from gateway.shell_proxy import connect_shell_backend
+from gateway.tunnel_certificates import TunnelCertificateService
 from identity.auth import AuthService, AuthTokenCache
 from identity.invitations import WorkspaceInvitationService
 from identity.sign_in import BillingProvisioner, SignInService
@@ -99,9 +101,8 @@ from images.submission import ImageBuildSubmissionService
 from networking.async_http import AsyncBackendHttpClient
 from networking.dialer import (
     BackendRouteDialer,
-    BackendRouteDialerConfig,
 )
-from networking.settings import BackendRouteSettings
+from networking.tunnel_client import TunnelRouteClient
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
@@ -242,6 +243,7 @@ from api.server.provider_compute import (
     RedisProviderNodeIdentityReplayGuard,
     aws_account_connection_composition_from_settings,
 )
+from api.server.tunnel_identity import ControlPlaneTunnelIdentity
 from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
@@ -499,7 +501,8 @@ class ApiServiceCore:
     aws_capacity_settings: AwsCapacitySettings
     platform_capacity_settings: PlatformCapacitySettings
     aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
-    backend_route_settings: BackendRouteSettings
+    tunnel_certificate_service: TunnelCertificateService
+    agent_tunnel_client: TunnelRouteClient
     object_store_settings: S3ObjectStoreSettings
     workspace_storage_issuer: WorkspaceStorageIssuer
     image_archive_settings: ImageArchiveSettings
@@ -589,7 +592,7 @@ class ApiServices(ApiServiceCore):
     provider_node_enrollment_service: ProviderNodeEnrollmentService | None
     machine_lifecycle_service: MachineLifecycleService
     backend_route_resolver: SchedulerBackendRouteResolver
-    backend_route_dialer_config: BackendRouteDialerConfig
+    backend_route_dialer: BackendRouteDialer
     task_rerun_service: TaskRerunService
     autoscaler_operations_service: AutoscalerOperationsService
     scheduler_worker_admin_service: SchedulerWorkerAdminService
@@ -613,7 +616,6 @@ class ApiServices(ApiServiceCore):
         aws_capacity_settings: AwsCapacitySettings | None = None,
         platform_capacity_settings: PlatformCapacitySettings | None = None,
         aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
-        backend_route_settings: BackendRouteSettings | None = None,
         object_store_settings: S3ObjectStoreSettings | None = None,
         workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
         object_storage: ObjectStorage | None = None,
@@ -677,7 +679,6 @@ class ApiServices(ApiServiceCore):
         aws_capacity_reconciliation_config = (
             aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
         )
-        resolved_backend_route_settings = backend_route_settings or BackendRouteSettings()
         object_store_config = object_store_settings or S3ObjectStoreSettings()
         image_archive_config = ImageArchiveSettings(bucket=object_store_config.bucket)
         image_build_execution_config = (
@@ -861,7 +862,6 @@ class ApiServices(ApiServiceCore):
                 ),
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.endpoint_url,
-                backend_route=resolved_backend_route_settings,
             )
             if aws_account_connection_config.configured or platform_capacity_config.configured
             else None
@@ -898,7 +898,6 @@ class ApiServices(ApiServiceCore):
             connection_settings=aws_account_connection_config,
             capacity_settings=aws_capacity_config,
             gateway_origin=gateway_config.public_http_url,
-            backend_route=resolved_backend_route_settings,
             workspace_changes=workspace_changes,
             capacity_baseline=compute_policies,
             admission=DatabaseBillingAdmission(),
@@ -1032,6 +1031,17 @@ class ApiServices(ApiServiceCore):
             retention_seconds=retention_config.checkpoint_seconds,
         )
         autoscaler_states = AutoscalerStateService(context)
+        tunnel_certificate_service = TunnelCertificateService.load(
+            context.database, RedisComputeStateRepository(redis), TunnelCertificateSettings()
+        )
+        tunnel_identity = ControlPlaneTunnelIdentity(tunnel_certificate_service)
+        owned_runtime_resources.append(tunnel_identity)
+        agent_tunnel_client = TunnelRouteClient(
+            RedisAgentConnectionDirectory(redis),
+            tunnel_identity.credentials,
+            tunnel_certificate_service.settings.hostname,
+        )
+        owned_runtime_resources.append(agent_tunnel_client)
         core = ApiServiceCore(
             client_release_version=client_release_version,
             context=context,
@@ -1053,7 +1063,8 @@ class ApiServices(ApiServiceCore):
             aws_capacity_settings=aws_capacity_config,
             platform_capacity_settings=platform_capacity_config,
             aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
-            backend_route_settings=resolved_backend_route_settings,
+            tunnel_certificate_service=tunnel_certificate_service,
+            agent_tunnel_client=agent_tunnel_client,
             object_store_settings=object_store_config,
             workspace_storage_issuer=workspace_storage_issuer,
             image_archive_settings=image_archive_config,
@@ -1171,36 +1182,20 @@ class ApiServices(ApiServiceCore):
 
     def close(self) -> None:
         failures: list[Exception] = []
-        route_prewarm_quiesced = True
-        try:
-            self.gateway_service.route_prewarmer.close()
-        except Exception as exc:
-            failures.append(exc)
-            route_prewarm_quiesced = False
-        try:
-            self.auth_token_cache.close()
-        except Exception as exc:
-            failures.append(exc)
-        if route_prewarm_quiesced:
-            for resource in reversed(self.owned_resources):
-                try:
-                    resource.close()
-                except Exception as exc:
-                    failures.append(exc)
-            if self.owns_redis_client:
-                try:
-                    self.redis_client.close()
-                except Exception as exc:
-                    failures.append(exc)
-            if self.owns_binary_redis_client and self.binary_redis_client is not self.redis_client:
-                try:
-                    self.binary_redis_client.close()
-                except Exception as exc:
-                    failures.append(exc)
+        resources: list[ApiOwnedResource] = [self.auth_token_cache, *reversed(self.owned_resources)]
+        if self.owns_redis_client:
+            resources.append(self.redis_client)
+        if self.owns_binary_redis_client and self.binary_redis_client is not self.redis_client:
+            resources.append(self.binary_redis_client)
+        for resource in resources:
             try:
-                self.context.database.dispose()
+                resource.close()
             except Exception as exc:
                 failures.append(exc)
+        try:
+            self.context.database.dispose()
+        except Exception as exc:
+            failures.append(exc)
         if failures:
             raise ExceptionGroup("API service shutdown was incomplete", failures)
 
@@ -1226,10 +1221,9 @@ def _compose_api_services(
     scheduler_containers = core.scheduler_containers
     scheduler_pool_states = core.scheduler_pool_states
     route_resolver = SchedulerBackendRouteResolver(core.routes, scheduler_containers)
-    route_dialer_config = core.backend_route_settings.to_dialer_config()
+    route_dialer = BackendRouteDialer(core.agent_tunnel_client, route_resolver)
     transport_factory = HttpContainerServiceTransportFactory(
-        route_resolver=route_resolver,
-        route_dialer_config=route_dialer_config,
+        route_dialer=route_dialer,
     )
     container_clients = SchedulerContainerClientFactory(
         scheduler_containers=scheduler_containers,
@@ -1237,8 +1231,7 @@ def _compose_api_services(
         service_token=core.container_service_settings.token.get_secret_value(),
     )
     proxy_client = PodProxySocketClient(
-        route_resolver=route_resolver,
-        route_dialer_config=route_dialer_config,
+        route_dialer=route_dialer,
     )
     async_io = core.async_io
     async_database = async_io.database if async_io is not None else None
@@ -1249,26 +1242,21 @@ def _compose_api_services(
     if async_io is not None:
         async_scheduler_containers = AsyncRedisSchedulerContainerReader(async_io.redis)
         async_http = AsyncBackendHttpClient(
-            route_resolver=route_resolver,
-            route_dialer_config=route_dialer_config,
+            route_dialer=route_dialer,
         )
         async_container_readiness = AsyncRedisContainerReadiness(async_io.redis, async_http)
         async_dispatcher = AsyncEndpointInstanceDispatcher(
             async_scheduler_containers,
             async_http,
             async_container_readiness,
-            route_resolver=route_resolver,
-            route_dialer_config=route_dialer_config,
         )
     endpoint = endpoint_service or EndpointControlService(
         core,
         async_database=async_database,
         async_dispatcher=async_dispatcher,
-        gateway_http_url=lambda: core.gateway_settings.public_http_url,
     )
     function = function_service or FunctionControlService(
         core,
-        gateway_http_url=lambda: core.gateway_settings.public_http_url,
         async_database=async_database,
         task_changes=AsyncTaskChangeReader(async_io.realtime) if async_io is not None else None,
     )
@@ -1278,7 +1266,6 @@ def _compose_api_services(
         scheduler_containers=scheduler_containers,
         scheduler_pool_states=scheduler_pool_states,
         container_clients=container_clients,
-        async_http=async_http,
     )
     image = image_service or ImageControlService(
         core,
@@ -1302,8 +1289,7 @@ def _compose_api_services(
         container_clients=container_clients,
         backend_connector=partial(
             connect_shell_backend,
-            route_resolver=route_resolver,
-            route_dialer_config=route_dialer_config,
+            route_dialer=route_dialer,
         ),
         async_database=async_database,
         async_scheduler_containers=async_scheduler_containers,
@@ -1399,7 +1385,8 @@ def _compose_api_services(
         aws_capacity_settings=core.aws_capacity_settings,
         platform_capacity_settings=core.platform_capacity_settings,
         aws_capacity_reconciliation_settings=core.aws_capacity_reconciliation_settings,
-        backend_route_settings=core.backend_route_settings,
+        tunnel_certificate_service=core.tunnel_certificate_service,
+        agent_tunnel_client=core.agent_tunnel_client,
         object_store_settings=core.object_store_settings,
         workspace_storage_issuer=core.workspace_storage_issuer,
         image_archive_settings=core.image_archive_settings,
@@ -1471,7 +1458,7 @@ def _compose_api_services(
             provider_compute=core.compute,
         ),
         backend_route_resolver=route_resolver,
-        backend_route_dialer_config=route_dialer_config,
+        backend_route_dialer=route_dialer,
         task_rerun_service=TaskRerunService(core, function_invoker=function),
         autoscaler_operations_service=autoscaler_operations,
         scheduler_worker_admin_service=scheduler_worker_admin,
@@ -1492,12 +1479,8 @@ def _gateway_control_service(
     scheduler_containers: RedisSchedulerContainerRepository,
     scheduler_pool_states: RedisWorkerPoolStateRepository,
     container_clients: SchedulerContainerClientFactory,
-    async_http: AsyncBackendHttpClient | None,
 ) -> GatewayControlService:
     compute_states = RedisComputeStateRepository(core.redis())
-    route_dialer = BackendRouteDialer(
-        config=core.backend_route_settings.to_dialer_config(),
-    )
     return GatewayControlService(
         core,
         control_plane=core.control_plane_service,
@@ -1513,14 +1496,13 @@ def _gateway_control_service(
         object_storage=core.object_storage,
         agent_image=AgentImageConfig(),
         event_streams=RedisEventStreamRepository(core.redis()),
-        route_prewarmer=RoutePrewarmService(route_dialer, core.events),
+        connections=RedisAgentConnectionDirectory(core.redis()),
+        tunnel_authority=AgentTunnelAuthority(core.context.database, compute_states),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
         container_client_factory=container_clients,
-        route_authenticator=core.backend_route_settings.to_authenticator(),
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
         agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
-        runtime_origin=lambda: core.gateway_settings.runtime_callback_http_url,
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(
                 SchedulerWorkerPreemptionService(
@@ -1536,7 +1518,6 @@ def _gateway_control_service(
             )
         ),
         scheduler_maintenance=SchedulerWorkerMaintenanceService(scheduler_workers),
-        async_http_client=async_http,
     )
 
 

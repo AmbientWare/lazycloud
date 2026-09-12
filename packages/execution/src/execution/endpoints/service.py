@@ -4,7 +4,7 @@ import asyncio
 import json
 import socket
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -32,13 +32,11 @@ from shared.env import (
     ENDPOINT_INSTANCE_LOCK_ENV,
     ENDPOINT_SERVE_LOCK_ENV,
     ENDPOINT_WORKERS_ENV,
-    GATEWAY_HTTP_URL_ENV,
     HOT_RELOAD_DIR_ENV,
     HOT_RELOAD_ENV,
     LIFECYCLE_HOOKS_ENV,
     STUB_ID_ENV,
     STUB_TYPE_ENV,
-    no_gateway_origin,
 )
 from shared.errors import (
     CapacityLimitReachedError,
@@ -147,7 +145,6 @@ class EndpointControlService:
     services: ExecutionServices
     async_database: AsyncDatabaseClient | None = None
     async_dispatcher: AsyncEndpointRequestDispatcher | None = None
-    gateway_http_url: Callable[[], str] = no_gateway_origin
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -192,9 +189,6 @@ class EndpointControlService:
             HOT_RELOAD_ENV: "true",
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
-        gateway_http_url = self.gateway_http_url()
-        if gateway_http_url:
-            env[GATEWAY_HTTP_URL_ENV] = gateway_http_url
         with self.services.context.database.session() as session:
             container = self.services.containers.reserve_pending(
                 session,

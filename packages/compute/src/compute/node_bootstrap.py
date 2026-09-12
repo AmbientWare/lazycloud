@@ -8,7 +8,7 @@ proof. So the script lives here and the provider supplies a shell fragment. The
 alternative was a copy per cloud, which is how the script would drift.
 
 Everything after identity belongs to the published agent installer, which this
-script downloads and runs. It installs the container runtime, WireGuard, the agent,
+script downloads and runs. It installs the container runtime, the agent,
 and the agent's systemd unit.
 """
 
@@ -77,8 +77,7 @@ def validate_agent_binary_url(value: str) -> str:
 class NodeBootstrapSettings(ContractModel):
     """Everything a booting node needs that no provider owns.
 
-    `control_plane_url` is the public origin a node uses before and after
-    private-network enrollment.
+    `control_plane_url` is the public origin for enrollment and agent management.
     """
 
     control_plane_url: str
@@ -180,10 +179,6 @@ bootstrap_main() {
   STEP=identity
   resolve_node_identity
 
-  # Docker, WireGuard, the agent binary, and the systemd unit are the published
-  # installer's job. This script duplicated all four, and the copies drifted:
-  # it wrote a unit the agent also writes, and pinned a connector version the
-  # installer pins per-architecture.
   STEP=install
   installer=/tmp/lazycloud-agent-install.sh
   curl -fsS --retry 5 --retry-all-errors --retry-delay 2 \\

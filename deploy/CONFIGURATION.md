@@ -105,8 +105,8 @@ when changing the server ceiling or replica count.
 
 Add a property binding under `secrets.map` and include it only in the required
 consumers under `environment`. Preserve unrelated properties when updating the
-operator-managed document. Terraform continues to own the platform document;
-the WireGuard bootstrap owns its key document.
+operator-managed document. It also holds the tunnel issuer and dedicated gateway
+bootstrap credential. Terraform continues to own the platform document.
 
 For rotation, refresh External Secrets first. Poll its Ready condition and refresh
 time and the destination Secret's resource version without printing its contents.
@@ -116,8 +116,8 @@ operation after rollout. Keep the predecessor credential valid during overlap
 where the provider supports it. Database credentials affect API, scheduler,
 gateway and bootstrap jobs; cache-token changes affect cache, API and scheduler.
 
-Changing WireGuard server keys requires a separate peer migration. Do not rotate
-them by editing the document or bumping a Helm revision.
+The tunnel CA needs a planned trust migration. Bootstrap never rotates it.
+See [connection gateway deployment](connection-gateway.md).
 
 ## Pause and resume
 

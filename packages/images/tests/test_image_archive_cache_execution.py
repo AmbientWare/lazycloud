@@ -57,7 +57,7 @@ def test_restore_image_archive_from_content_cache_writes_validates_and_renames(
     assert result.complete
     assert result.bytes_written == len(payload)
     assert archive_path.read_bytes() == payload
-    assert not Path(plan.temp_path).exists()
+    assert set(archive_path.parent.iterdir()) == {archive_path}
 
 
 def test_restore_image_archive_from_content_cache_cleans_up_read_and_validation_failures(
@@ -80,7 +80,7 @@ def test_restore_image_archive_from_content_cache_cleans_up_read_and_validation_
     assert missing_result.status is ImageArchiveContentCacheRestoreExecutionStatus.Error
     assert "image archive cache read failed" in missing_result.reason
     assert not archive_path.exists()
-    assert not Path(missing.temp_path).exists()
+    assert list(archive_path.parent.iterdir()) == []
 
     payload = b"oci-archive"
     content_hash = hashlib.sha256(payload).hexdigest()
@@ -107,7 +107,7 @@ def test_restore_image_archive_from_content_cache_cleans_up_read_and_validation_
     assert invalid_result.status is ImageArchiveContentCacheRestoreExecutionStatus.Error
     assert invalid_result.reason == "restored v2 image archive is missing embedded image metadata"
     assert not archive_path.exists()
-    assert not Path(invalid.temp_path).exists()
+    assert list(archive_path.parent.iterdir()) == []
 
 
 def test_publish_image_archive_to_content_cache_stores_and_reports_failures(

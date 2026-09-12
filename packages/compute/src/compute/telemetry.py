@@ -220,7 +220,6 @@ def agent_telemetry_state(state: ComputeAgentTokenState) -> AgentTelemetryState:
 class PoolTelemetryState(ContractModel):
     source: CapacitySource = CapacitySource.Attached
     mode: PoolMode = PoolMode.Private
-    transport: str = ""
 
 
 class AgentMetricUpdatePlan(ContractModel):
@@ -473,7 +472,6 @@ def agent_node_usage_metadata(
         "node_type": node_type.value,
         "capacity_source": pool_state.source.value,
         "pool_mode": pool_state.mode.value,
-        "transport": pool_state.transport,
         "executor": state.executor,
         "os": state.os,
         "arch": state.arch,

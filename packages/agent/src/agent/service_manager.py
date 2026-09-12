@@ -54,7 +54,6 @@ class PreflightCheckName(StrEnum):
     PythonVersion = "python-version"
     K3s = "k3s"
     Flux = "flux"
-    PrivateNetworkConnector = "private-network-connector"
     LocalDev = "local-dev"
     AgentContainer = "agent-container"
     Linux = "linux"
@@ -520,19 +519,13 @@ def plan_agent_preflight(probes: AgentPreflightProbeSet) -> AgentPreflightPlan:
             "not installed or required for agent worker-container mode",
             required=False,
         ),
-        _preflight_check(
-            PreflightCheckName.PrivateNetworkConnector,
-            True,
-            "private-network transport uses the managed WireGuard connector",
-            required=False,
-        ),
     ]
     if probes.dev_mode:
         checks.append(
             _preflight_check(
                 PreflightCheckName.LocalDev,
                 True,
-                "local joins use the embedded route listener",
+                "local joins use the outbound agent tunnel",
                 required=False,
             )
         )

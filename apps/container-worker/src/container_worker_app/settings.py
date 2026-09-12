@@ -13,10 +13,6 @@ from pydantic_settings import (
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
-from shared.env import (
-    GATEWAY_HTTP_URL_ENV,
-    WORKER_REPOSITORY_URL_ENV,
-)
 from worker.configuration import (
     WORKER_CONFIG_PATH_ENV,
     WorkerConfiguration,
@@ -80,15 +76,6 @@ class WorkerSettings(BaseSettings):
         default="",
         validation_alias="WORKER_TOKEN",
     )
-    worker_repository_url: str = Field(
-        default="",
-        validation_alias=WORKER_REPOSITORY_URL_ENV,
-    )
-
-    gateway_runtime_http_url: str = Field(
-        default="",
-        validation_alias=GATEWAY_HTTP_URL_ENV,
-    )
     worker_repository_timeout_seconds: float = Field(
         default=30.0,
         validation_alias="WORKER_REPOSITORY_TIMEOUT_SECONDS",
@@ -124,10 +111,6 @@ class WorkerSettings(BaseSettings):
     worker_spindown_seconds: float = Field(
         default=DEFAULT_WORKER_SPINDOWN_SECONDS,
         validation_alias="WORKER_SPINDOWN_SECONDS",
-    )
-    route_local_target_host: str = Field(
-        default="",
-        validation_alias="WORKER_ROUTE_TARGET",
     )
     network_prefix: str = Field(
         default="",
@@ -261,11 +244,3 @@ class WorkerSettings(BaseSettings):
             msg = "worker artifact retention low watermark must be in (0, 1]"
             raise ValueError(msg)
         return value
-
-    @property
-    def worker_repository_endpoint(self) -> str:
-        return self.worker_repository_url.rstrip("/")
-
-    @property
-    def gateway_runtime_http_endpoint(self) -> str:
-        return self.gateway_runtime_http_url.rstrip("/")

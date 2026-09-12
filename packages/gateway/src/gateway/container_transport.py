@@ -4,15 +4,11 @@ import http.client
 import json
 import socket
 from collections.abc import Iterable
-from dataclasses import dataclass, field
-from urllib.parse import ParseResult, urlparse
+from dataclasses import dataclass
 
 from networking.dialer import (
     BackendRouteDialer,
-    BackendRouteDialerConfig,
-    BackendRouteResolver,
 )
-from networking.routing import build_backend_route_dial_plan
 from pydantic import JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from worker.container_client.control import ContainerServiceTransport
@@ -36,8 +32,7 @@ _JSON_VALUE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 @dataclass(slots=True)
 class HttpContainerServiceTransportFactory:
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
+    route_dialer: BackendRouteDialer
 
     def create_transport(
         self,
@@ -45,16 +40,14 @@ class HttpContainerServiceTransportFactory:
     ) -> ContainerServiceTransport:
         return HttpContainerServiceTransport(
             options,
-            route_resolver=self.route_resolver,
-            route_dialer_config=self.route_dialer_config,
+            route_dialer=self.route_dialer,
         )
 
 
 @dataclass(slots=True)
 class HttpContainerServiceTransport:
     options: ContainerClientConnectionOptions
-    route_resolver: BackendRouteResolver | None = None
-    route_dialer_config: BackendRouteDialerConfig = field(default_factory=BackendRouteDialerConfig)
+    route_dialer: BackendRouteDialer
 
     def unary(
         self,
@@ -153,22 +146,14 @@ class HttpContainerServiceTransport:
             connection.close()
 
     def _connection(self, timeout_seconds: float | None) -> http.client.HTTPConnection:
-        timeout = timeout_seconds or self.route_dialer_config.timeout_seconds
-        if self.options.backend_route_id:
-            backend_connection = BackendRouteDialer(
-                resolver=self.route_resolver,
-                config=self.route_dialer_config,
-            ).dial_plan(build_backend_route_dial_plan(self.options.backend_route_id))
-            if not isinstance(backend_connection, socket.socket):
-                backend_connection.close()
-                msg = "container HTTP dialer returned a non-socket connection"
-                raise TypeError(msg)
-            return _ExistingSocketHttpConnection(backend_connection, timeout=timeout)
-
-        parsed = _parse_service_url(self.options)
-        if parsed.scheme == "https":
-            return http.client.HTTPSConnection(parsed.hostname or "", parsed.port, timeout=timeout)
-        return http.client.HTTPConnection(parsed.hostname or "", parsed.port, timeout=timeout)
+        timeout = timeout_seconds or self.route_dialer.config.timeout_seconds
+        if not self.options.backend_route_id:
+            raise ConnectionError("Container control requires an authorized backend route")
+        connection = self.route_dialer.dial_backend_route(
+            self.options.backend_route_id,
+            timeout_seconds=timeout,
+        )
+        return _ExistingSocketHttpConnection(connection, timeout=timeout)
 
 
 class _ExistingSocketHttpConnection(http.client.HTTPConnection):
@@ -179,21 +164,6 @@ class _ExistingSocketHttpConnection(http.client.HTTPConnection):
     def connect(self) -> None:
         self.sock = self._socket
         self.sock.settimeout(self.timeout)
-
-
-def _parse_service_url(options: ContainerClientConnectionOptions) -> ParseResult:
-    raw = options.service_url.strip()
-    if not raw:
-        msg = "container service URL is required"
-        raise ValueError(msg)
-    if "://" not in raw:
-        scheme = "https" if options.tls else "http"
-        raw = f"{scheme}://{raw}"
-    parsed = urlparse(raw)
-    if parsed.hostname is None or parsed.port is None:
-        msg = f"invalid container service URL: {options.service_url}"
-        raise ValueError(msg)
-    return parsed
 
 
 __all__ = [

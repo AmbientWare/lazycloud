@@ -1,7 +1,7 @@
 # Deployment
 
 Ship publishes the platform images from Docker Bake and records their executable
-digests in one complete release manifest. An unchanged network image keeps the WireGuard
+digests in one complete release manifest. An unchanged connection gateway image keeps its
 Deployment unchanged during an API release. Changes to its source, dependencies,
 or system packages select a new digest automatically. Ship and Promote use the
 same selection, with no separate network release input or Terraform apply.
@@ -163,25 +163,18 @@ connection later.
 
 ```sh
 uv run --frozen --group workspace python -m deploy.release
-docker compose ps control-plane wireguard-platform tunnel-gateway tunnel-gateway-1
+docker compose ps control-plane connection-gateway connection-gateway-1 connection-ingress
 ```
 
-`wireguard-platform` shares the control plane's network namespace. Recreate it
-with the control plane so it does not remain attached to a replaced namespace.
-The separate gateway services keep their network namespaces and continue serving
-enrolled agents.
+The API and connection gateways run independently. Recreate the API without
+recreating the gateway services.
 
-Workers send runtime callbacks to `100.96.0.1:9000`, the private gateway address.
-The gateway forwards them to `control-plane:9000`, whose Kubernetes Service
-selects a ready API replica. Helm supplies that Service host and port; Compose
-supplies its control-plane service name. The gateway refreshes Service DNS rather
-than retaining a replaced API container's address.
+Workers and user containers send callbacks to their local agent connector. Its
+authenticated outbound tunnel carries them to a gateway, which opens the API
+Service at `control-plane:9000`. API replica addresses never become agent state.
 
-Agents and platform sidecars probe the gateway through WireGuard. When it is
-unreachable, they refresh the configured endpoint's DNS without removing the
-interface or replacing peer keys. This recovery is provider-neutral. Existing
-hosts need an updated host agent binary to receive it; shipping a new worker
-container image alone does not update that binary.
+Check authenticated session ownership and logs at the agent and gateway when a
+machine is unreachable. Gateway process health alone does not prove that route.
 
 For managed AWS pools, selecting a new host release changes the launch template.
 The pool controller adds a replacement, checks that it enrolled, drains the
@@ -195,47 +188,28 @@ preserving their service arguments and enrollment state. Cordon each worker and
 finish its active work before restarting its host agent, then verify private
 connectivity before uncordoning it.
 
-The stack is usable when the API, platform sidecar and both gateways are healthy.
-The sidecar proves at least one encrypted gateway path. Each gateway requires a
-platform handshake before becoming ready, so the sidecar starts after gateway
-process creation without depending on their readiness.
+The stack is usable after an authenticated agent session can run a real function.
+API and gateway health prove their processes and dependencies, not workload routes.
 
-### Shared fleet and one customer machine
+### Enrolled local capacity
 
-The stack runs the two kinds of capacity a workload can land on, so the choice
-between them is exercised by the ordinary local stack rather than assembled by hand.
+The `agent` service joins a machine owned by the `customer` account. Its
+`tenant-customer` workspace selects the `self-hosted` pool. The agent launches
+the built worker image in its own network namespace and registers authenticated
+routes through the outbound tunnel.
 
-| | `container-worker` | `agent` |
-| --- | --- | --- |
-| Is | the shared LazyCloud fleet | one customer's own machine |
-| Runs as | a platform service with a `worker` service token | an agent joining with a join token |
-| Owned by | nobody; shared capacity has no account | the `customer` account |
-| Pool | `lazycloud` | `self-hosted` |
-| Private | no — serves every account | yes — serves only its owner's workspaces |
-| Reached by | any workspace that names no pool | `tenant-customer`, whose `default_pool` names it |
-| Container bridge | `rt_br2`, `192.168.32.0/20` | `rt_br0`, `192.168.0.0/20` |
+The agent's Compose entrypoint also forwards loopback port 5000 to the local
+workload registry. The worker shares that namespace. This registry listener is
+bound only to 127.0.0.1 and exits with the agent; it carries no control-plane RPC.
 
-`default` is left with no compute policy on purpose: a workspace that names no pool
-gets one written for it pointing at `lazycloud`, which is what a real new signup
-gets, and it lands on the shared fleet. The customer's workspace names
-`self-hosted`, so its work goes to the machine its account connected. Placement
-compares accounts rather than workspaces, so the shared worker takes anyone's work
-while the joined machine refuses everyone but its owner.
+The `container-worker` Compose entry belongs to the `build` profile and never
+runs as a standalone service. `deploy.release` builds that image before publishing
+its immutable local image ID to the agent. Workspaces without a configured
+enrolled machine have no local execution capacity.
 
-Three things must differ between the two workers, and none of them fails visibly
-when it does not: the machine fingerprint, which decides the machine id, so a shared
-one makes them evict each other's credentials; the bridge name and subnet, because
-each allocator issues addresses inside its own control-plane scope and a shared
-bridge is two allocators handing out one address with no lock between them; and the
-pool, because a workspace whose `default_pool` names the other's pool has its work
-placed where that worker will refuse it.
-
-The customer account is created as a platform administrator only because creating a
-workspace is an administrator action. What the stack is exercising is that a second
-*account* owns the machine, not what that account may do elsewhere.
-
-Both state directories want daemon-local storage with room for their own image cache
-and build scratch — nothing is shared between them.
+The customer's machine uses its own state directory, bridge and subnet. Keep
+those distinct when adding another local agent, and allow disk space for its
+image cache and build scratch.
 
 ### Resetting local state
 
@@ -249,36 +223,15 @@ outlive both. Clear `slots/`, `agent-state.json`, `active-worker-slots.json`, an
 enrollment at a database with no record of its machine. Leave `images/` alone
 unless the image cache is the thing being tested.
 
-The shared fleet needs nothing cleared: its unit, token, and worker record are all
-derived on start, and its volumes hold only caches.
+### Agent tunnel endpoint and credentials
 
-### WireGuard endpoint and keys
+Compose runs two connection gateways behind HAProxy TCP passthrough on host port
+443. Agents reach `tunnels.lazycloud.test:443`; worker and container requests cross the
+agent's local connector. `tunnel-issuer-bootstrap` initializes the CA once in its
+own volume. API pods alone hold its key; gateway and agent keys remain separate.
+See [connection gateway deployment](connection-gateway.md) for credentials, local
+startup, and production DNS. Recreating the API preserves gateway connections.
 
-Compose runs two gateways and publishes host UDP ports 51820 and 51821. Its
-bundled agent reaches `tunnel-gateway:51820` and `tunnel-gateway-1:51820`. For
-agents outside Compose, set `LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_0_ENDPOINT` and
-`LAZYCLOUD_COMPOSE_WIREGUARD_GATEWAY_1_ENDPOINT` to the corresponding reachable
-`<host>:<port>` addresses. A Cloudflare HTTP tunnel cannot carry WireGuard traffic.
-
-`wireguard-key-bootstrap` creates two gateway keypairs and one platform keypair
-in the `wireguard-keys` named volume. Existing gateway zero keys stay in `server/`;
-gateway one uses `gateway-1/`. The volume keeps those identities stable across
-container recreation. Agents keep private keys in their own state directories.
-Postgres owns gateway identities, endpoints, public peer keys and assigned addresses.
-Redis owns gateway leases and expiring peer path presence. Platform traffic
-selects only gateways with presence for the destination's current generation.
-
-The platform sidecar reads both gateways from PostgreSQL. The `control-plane`
-service creates its shared network namespace with `src_valid_mark=1`; Docker
-does not allow the sidecar to set network sysctls on another container's namespace.
-The sidecar mounts only the writable `platform-0` subdirectory of the key volume
-so its route journal survives a process restart without exposing gateway keys.
-Each gateway has 150 seconds to stop, including its bounded connection drain.
-
-Deleting the key volume changes the gateway and platform identities. During a
-complete local reset, delete it together with Postgres and the agent state so
-the bootstrap can create a coherent network. Never apply that reset to an
-external deployment.
 
 ### Public ingress and DNS
 

@@ -4,7 +4,7 @@ import asyncio
 import socket
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -14,18 +14,16 @@ from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 import uvicorn
+from anyio.from_thread import start_blocking_portal
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubRecord
 from database.records.endpoint_dispatch import EndpointDispatchStateRecord
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.execution import TaskRepository
-from database.repositories.orchestration import ContainerRepository
 from execution.endpoints.dispatch import (
-    DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
     AsyncEndpointInstanceDispatcher,
     AsyncEndpointRequestDispatcher,
-    AsyncEndpointResponseStream,
     EndpointDispatchRecord,
     EndpointDispatchStatus,
     EndpointDispatchTarget,
@@ -52,20 +50,18 @@ from shared.container_requests import (
     CONTAINER_INNER_PORT,
     WorkerContainerRequestPayload,
 )
-from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.http.endpoints import EndpointForwardRequest
 from shared.http.gateway_tasks import AppendTaskLogRequest, AppendTaskLogResponse
 from shared.http_transport import HttpChannel
+from shared.routing import AgentBackendRoute
 from shared.tasks import RetryPolicy, Task, TaskStatus
 from sqlalchemy.orm import Session
 from starlette.websockets import WebSocketDisconnect
+from tests.agent_tunnels import enrolled_tunnel_route
 from tests.http_server import running_http_server
 from tests.metric_helpers import metric_value
-from tests.real_redis import RealRedisActors
-from tests.releases import assign_runtime
-from tests.scheduler_composition import services_with_redis_container_control
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -172,12 +168,19 @@ async def app(scope, receive, send):
     stub = _stub_for_deployment(isolated_services, deployment.id)
     _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=2)
 
-    with _serve_asgi_handler(f"{handler_file}:app") as served:
-        _record_dispatch_container(
-            isolated_services,
-            stub,
-            _STREAMING_ASGI_CONTAINER_ID,
-        )
+    with (
+        _serve_asgi_handler(f"{handler_file}:app") as served,
+        start_blocking_portal() as portal,
+        portal.wrap_async_context_manager(
+            enrolled_tunnel_route(
+                isolated_services,
+                stub,
+                _STREAMING_ASGI_CONTAINER_ID,
+                served.address,
+                tmp_path / "tunnel",
+            )
+        ) as route,
+    ):
         containers = _EndpointContainers(
             states=[
                 SchedulerContainerState(
@@ -188,6 +191,7 @@ async def app(scope, receive, send):
                 )
             ],
             addresses={_STREAMING_ASGI_CONTAINER_ID: served.address},
+            routes={_STREAMING_ASGI_CONTAINER_ID: route},
         )
         service = _endpoint_service(
             isolated_services,
@@ -201,7 +205,7 @@ async def app(scope, receive, send):
                 headers=_auth_headers(isolated_services),
                 content=b"through-api",
             )
-            assert response.status_code == 200
+            assert response.status_code == 200, response.text
             assert response.content == b"firstsecond"
             assert response.headers["x-body"] == "through-api"
             assert response.headers["x-task-id"]
@@ -223,16 +227,24 @@ async def app(scope, receive, send):
 @pytest.mark.anyio
 async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
     async_services: ApiServices,
+    tmp_path: Path,
 ) -> None:
+    handler_file = tmp_path / "heartbeat.py"
+    handler_file.write_text(
+        "async def app(scope, receive, send):\n"
+        "    await receive()\n"
+        "    await send({'type': 'lifespan.startup.complete'})\n"
+        "    await receive()\n"
+        "    await send({'type': 'lifespan.shutdown.complete'})\n"
+    )
     deployment = async_services.deployments.deploy(
         DeploymentSpec(
             name="realtime-heartbeat",
             kind=DeploymentKind.Asgi,
-            handler="module:app",
+            handler=f"{handler_file}:app",
         )
     )
     stub = _stub_for_deployment(async_services, deployment.id)
-    _record_dispatch_container(async_services, stub, _HEARTBEAT_CONTAINER_ID)
     containers = _EndpointContainers(
         states=[
             SchedulerContainerState(
@@ -242,25 +254,30 @@ async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
                 status=SchedulerContainerStatus.Running,
             )
         ],
-        addresses={_HEARTBEAT_CONTAINER_ID: "127.0.0.1:8001"},
     )
     service = _endpoint_service(async_services, containers)
 
-    session = await service.prepare_asgi_websocket(
-        EndpointForwardRequest(
-            stub_id=stub.id,
-            method="GET",
-            path="/ws",
-            headers={"x-client": ["realtime"]},
-        )
-    )
-    task = async_services.tasks.get(session.task_id)
-    before = _dispatch_record(async_services, task).heartbeat_at
+    with _serve_asgi_handler(f"{handler_file}:app") as served:
+        async with enrolled_tunnel_route(
+            async_services, stub, _HEARTBEAT_CONTAINER_ID, served.address, tmp_path / "tunnel"
+        ) as route:
+            containers.addresses[_HEARTBEAT_CONTAINER_ID] = served.address
+            containers.routes[_HEARTBEAT_CONTAINER_ID] = route
+            session = await service.prepare_asgi_websocket(
+                EndpointForwardRequest(
+                    stub_id=stub.id,
+                    method="GET",
+                    path="/ws",
+                    headers={"x-client": ["realtime"]},
+                )
+            )
+            task = async_services.tasks.get(session.task_id)
+            before = _dispatch_record(async_services, task).heartbeat_at
 
-    await service.heartbeat_asgi_websocket(session.task_id)
-    task = async_services.tasks.get(session.task_id)
-    after = _dispatch_record(async_services, task).heartbeat_at
-    await service.finish_asgi_websocket(session.task_id)
+            await service.heartbeat_asgi_websocket(session.task_id)
+            task = async_services.tasks.get(session.task_id)
+            after = _dispatch_record(async_services, task).heartbeat_at
+            await service.finish_asgi_websocket(session.task_id)
 
     finished = async_services.tasks.get(session.task_id)
     assert session.target.container_id == _HEARTBEAT_CONTAINER_ID
@@ -342,21 +359,20 @@ def predict():
                 break
             await asyncio.sleep(0.01)
         assert len(scheduler.requests) == 1
-        # The dispatch in flight commits its transaction from this loop, so a
-        # sync write here must not block the loop while it waits on that lock.
-        await asyncio.to_thread(
-            _record_dispatch_container, async_services, stub, _WARM_CONTAINER_ID
-        )
-        containers.states.append(
-            SchedulerContainerState(
-                container_id=_WARM_CONTAINER_ID,
-                stub_id=stub.id,
-                workspace_id=stub.workspace_id,
-                status=SchedulerContainerStatus.Running,
+        async with enrolled_tunnel_route(
+            async_services, stub, _WARM_CONTAINER_ID, served.address, tmp_path / "tunnel"
+        ) as route:
+            containers.states.append(
+                SchedulerContainerState(
+                    container_id=_WARM_CONTAINER_ID,
+                    stub_id=stub.id,
+                    workspace_id=stub.workspace_id,
+                    status=SchedulerContainerStatus.Running,
+                )
             )
-        )
-        containers.addresses[_WARM_CONTAINER_ID] = served.address
-        response = await asyncio.wait_for(invocation, timeout=2)
+            containers.addresses[_WARM_CONTAINER_ID] = served.address
+            containers.routes[_WARM_CONTAINER_ID] = route
+            response = await asyncio.wait_for(invocation, timeout=2)
 
     assert response.status_code == 200
     assert response.body == b"ready"
@@ -369,19 +385,27 @@ def predict():
 @pytest.mark.anyio
 async def test_endpoint_retry_requeues_the_relational_dispatch(
     async_services: ApiServices,
+    tmp_path: Path,
 ) -> None:
+    handler_file = tmp_path / "retry_endpoint.py"
+    handler_file.write_text(
+        "attempts = 0\n"
+        "def handler():\n"
+        "    global attempts\n"
+        "    attempts += 1\n"
+        "    return ('retry', 500) if attempts == 1 else ('complete', 200)\n"
+    )
     deployment = async_services.deployments.deploy(
         DeploymentSpec(
             name="retry-dispatch",
             kind=DeploymentKind.Endpoint,
-            handler="module:handler",
+            handler=f"{handler_file}:handler",
             retry_policy=RetryPolicy(max_attempts=2),
         )
     )
     stub = _stub_for_deployment(async_services, deployment.id)
     _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=1)
     container_id = str(uuid5(NAMESPACE_URL, "lazycloud:test:retry-container"))
-    _record_dispatch_container(async_services, stub, container_id)
     containers = _EndpointContainers(
         states=[
             SchedulerContainerState(
@@ -391,24 +415,26 @@ async def test_endpoint_retry_requeues_the_relational_dispatch(
                 status=SchedulerContainerStatus.Running,
             )
         ],
-        addresses={container_id: "127.0.0.1:1"},
     )
-    dispatcher = _RetryingEndpointDispatcher(
-        containers,
-        AsyncBackendHttpClient(),
-        _ServingContainers(),
-    )
-
-    response = await _endpoint_service(
-        async_services,
-        containers,
-        dispatcher=dispatcher,
-    ).forward_endpoint_request(EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"))
+    with _serve_handler(
+        f"{handler_file}:handler", stub_type=DeploymentKind.Endpoint.value
+    ) as served:
+        async with enrolled_tunnel_route(
+            async_services, stub, container_id, served.address, tmp_path / "tunnel"
+        ) as route:
+            containers.addresses[container_id] = served.address
+            containers.routes[container_id] = route
+            response = await _endpoint_service(
+                async_services,
+                containers,
+            ).forward_endpoint_request(
+                EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+            )
 
     task = next(task for task in async_services.tasks.list() if task.stub_id == stub.id)
     dispatch = _dispatch_record(async_services, task)
     assert response.status_code == 200
-    assert dispatcher.attempts == 2
+    assert response.body == b"complete"
     assert task.status is TaskStatus.Complete
     assert dispatch.status is EndpointDispatchStatus.Complete
     assert dispatch.attempts == 2
@@ -506,12 +532,8 @@ async def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is
 @pytest.mark.anyio
 async def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
     async_services: ApiServices,
-    real_redis_actors: RealRedisActors,
 ) -> None:
-    services = services_with_redis_container_control(
-        async_services,
-        real_redis_actors.client(),
-    )
+    services = async_services
     deployment = services.deployments.deploy(
         DeploymentSpec(
             name="stale-busy",
@@ -552,12 +574,8 @@ async def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
 @pytest.mark.anyio
 async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
     async_services: ApiServices,
-    real_redis_actors: RealRedisActors,
 ) -> None:
-    services = services_with_redis_container_control(
-        async_services,
-        real_redis_actors.client(),
-    )
+    services = async_services
     deployment = services.deployments.deploy(
         DeploymentSpec(
             name="cancel-wait",
@@ -660,33 +678,6 @@ def _insert_dispatch_state(
         )
 
 
-def _record_dispatch_container(
-    services: ApiServices,
-    stub: StubRecord,
-    container_id: str,
-) -> ContainerRecord:
-    with services.context.database.session() as session:
-        record = ContainerRepository(session).upsert(
-            ContainerRecord(
-                id=container_id,
-                name=f"endpoint-{container_id}",
-                image="endpoint-image",
-                command=["python", "-m", "runner.serve"],
-                workspace_id=stub.workspace_id,
-                app_id=stub.app_id,
-                stub_id=stub.id,
-                status=ContainerStatus.Pending,
-            )
-        )
-    assign_runtime(services.containers, services.scheduler_workers, container_id)
-    with services.context.database.session() as session:
-        assigned = ContainerRepository(session).get_across_workspaces(record.id)
-        assert assigned is not None
-        return ContainerRepository(session).upsert(
-            assigned.model_copy(update={"status": ContainerStatus.Running})
-        )
-
-
 def _set_endpoint_dispatch_limits(
     services: ApiServices,
     stub: StubRecord,
@@ -720,39 +711,8 @@ def _serve_handler(handler_ref: str, *, stub_type: str) -> Iterator[_ServedEndpo
         yield _ServedEndpoint(f"127.0.0.1:{server.server_port}")
 
 
-@dataclass(frozen=True, slots=True)
-class _ServingContainers:
-    """For the tests that never stand a backend up.
-
-    They cover dispatch bookkeeping — queue admission, heartbeats, cancellation —
-    against an address nothing listens on, so a real probe would correctly find
-    nothing serving and time them out. The probe itself is exercised by the tests
-    that do serve a runner, which use `_readiness`.
-    """
-
-    async def is_ready(
-        self,
-        *,
-        container_id: str,
-        stub_id: str,
-        address: str,
-        route_id: str,
-        port: int,
-        health_path: str = "",
-    ) -> bool:
-        _ = container_id, stub_id, address, route_id, port, health_path
-        return True
-
-
 def _readiness(services: ApiServices) -> AsyncRedisContainerReadiness:
-    """The production probe, dialing the served runner directly.
-
-    These addresses are plain host:port rather than backend routes, so the
-    gateway client needs no resolver — and the runner answers `/health` itself,
-    which is exactly what the probe asks in production.
-    """
-
-    client = AsyncBackendHttpClient()
+    client = AsyncBackendHttpClient(services.backend_route_dialer)
     return AsyncRedisContainerReadiness(services.require_async_io().redis, client)
 
 
@@ -760,7 +720,7 @@ def _endpoint_service(
     services: ApiServices,
     containers: _EndpointContainers,
     *,
-    readiness: _ServingContainers | AsyncRedisContainerReadiness | None = None,
+    readiness: AsyncRedisContainerReadiness | None = None,
     dispatcher: AsyncEndpointRequestDispatcher | None = None,
 ) -> EndpointControlService:
     async_io = services.require_async_io()
@@ -771,8 +731,8 @@ def _endpoint_service(
             dispatcher
             or AsyncEndpointInstanceDispatcher(
                 containers,
-                AsyncBackendHttpClient(),
-                readiness or _ServingContainers(),
+                AsyncBackendHttpClient(services.backend_route_dialer),
+                readiness or _readiness(services),
             )
         ),
     )
@@ -845,6 +805,7 @@ class _EndpointContainers:
     states: list[SchedulerContainerState] = field(default_factory=list)
     addresses: dict[str, str] = field(default_factory=dict)
     address_maps: dict[str, SchedulerContainerAddressMap] = field(default_factory=dict)
+    routes: dict[str, AgentBackendRoute] = field(default_factory=dict)
 
     async def list_by_stub(self, stub_id: str) -> list[SchedulerContainerState]:
         return [state for state in self.states if state.stub_id == stub_id]
@@ -856,7 +817,9 @@ class _EndpointContainers:
         address = self.addresses.get(container_id, "")
         if not address:
             return None
-        return SchedulerContainerAddress(container_id=container_id, address=address)
+        return SchedulerContainerAddress(
+            container_id=container_id, address=address, route=self.routes.get(container_id)
+        )
 
     async def get_container_address_maps(
         self,
@@ -873,7 +836,9 @@ class _EndpointContainers:
 
 class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
     def __init__(self, containers: _EndpointContainers, runtime: ApiServices) -> None:
-        super().__init__(containers, AsyncBackendHttpClient(), _ServingContainers())
+        super().__init__(
+            containers, AsyncBackendHttpClient(runtime.backend_route_dialer), _readiness(runtime)
+        )
         self.runtime = runtime
         self.cancelled_task: Task | None = None
 
@@ -903,36 +868,6 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
             max_inflight_per_container=max_inflight_per_container,
             excluded_container_ids=excluded_container_ids,
         )
-
-
-@dataclass(slots=True)
-class _StaticEndpointResponse:
-    status_code: int
-    body: bytes
-    headers: dict[str, list[str]] = field(default_factory=dict)
-
-    async def iter_chunks(self) -> AsyncIterator[bytes]:
-        yield self.body
-
-    async def close(self) -> None:
-        return
-
-
-class _RetryingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
-    attempts = 0
-
-    async def open_http_stream(
-        self,
-        target: EndpointDispatchTarget,
-        request: EndpointForwardRequest,
-        *,
-        timeout_seconds: float = DEFAULT_ENDPOINT_FORWARD_TIMEOUT_SECONDS,
-    ) -> AsyncEndpointResponseStream:
-        del target, request, timeout_seconds
-        self.attempts += 1
-        if self.attempts == 1:
-            return _StaticEndpointResponse(status_code=500, body=b"retry")
-        return _StaticEndpointResponse(status_code=200, body=b"complete")
 
 
 @dataclass
@@ -1004,7 +939,15 @@ async def app(scope, receive, send):
     _set_endpoint_dispatch_limits(isolated_services, stub, timeout_seconds=2)
     container_id = "00000000-0000-4000-8000-0000000003b1"
 
-    with _serve_asgi_handler(f"{handler_file}:app") as served:
+    with (
+        _serve_asgi_handler(f"{handler_file}:app") as served,
+        start_blocking_portal() as portal,
+        portal.wrap_async_context_manager(
+            enrolled_tunnel_route(
+                isolated_services, stub, container_id, served.address, tmp_path / "tunnel"
+            )
+        ) as route,
+    ):
         containers = _EndpointContainers(
             states=[
                 SchedulerContainerState(
@@ -1015,6 +958,7 @@ async def app(scope, receive, send):
                 )
             ],
             addresses={container_id: served.address},
+            routes={container_id: route},
         )
         service = _endpoint_service(
             isolated_services,

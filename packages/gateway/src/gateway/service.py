@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
 from typing import Protocol
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 from uuid import uuid4
 
+import httpx
 from compute.agent_control import (
     DEFAULT_PRIVATE_JOIN_TTL_SECONDS,
     AgentImageConfig,
@@ -63,11 +63,13 @@ from compute.telemetry import (
 from compute.telemetry import (
     AgentMetricSnapshot as AgentMetricSnapshotProtocol,
 )
+from compute.tunnel_authority import AgentTunnelAuthority
 from control.apps import AppService
 from control.deployment_resources import DeploymentResourceService, client_manifest_resource
 from control.deployments import DeploymentService
 from control.releases import DeploymentReleaseService
 from control.service import ControlPlaneService, StubKind
+from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
 from database.context import ServiceContext
 from database.repositories.compute import (
@@ -77,8 +79,6 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
-    WireGuardGatewayRepository,
-    WireGuardPeerRepository,
 )
 from database.repositories.execution import LogRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
@@ -95,16 +95,6 @@ from execution.tasks import TaskService
 from identity.auth import AuthorizationDeniedError, AuthService
 from identity.authz import AuthzRequirement
 from identity.signatures import sign_payload
-from networking.async_http import AsyncBackendHttpClient, AsyncBackendHttpError
-from networking.dialer import BackendConnector, SocketBackendConnector
-from networking.routing import BackendRouteAuthenticator
-from networking.wireguard import (
-    WIREGUARD_AGENT_ROUTE_PROXY_PORT,
-    WIREGUARD_KEEPALIVE_SECONDS,
-    WIREGUARD_PLATFORM_NETWORK,
-    allocate_wireguard_agent_address,
-    validate_wireguard_public_key,
-)
 from observability.events import EventService
 from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
@@ -134,9 +124,6 @@ from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineReadinessPhase,
-    PrivateNetworkEnrollmentPhase,
-    WireGuardPeer,
-    WireGuardPeerStatus,
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -155,6 +142,7 @@ from shared.errors import (
     UpstreamUnavailableError,
 )
 from shared.events import EventLevel
+from shared.http.agent_identity import AgentTunnelIdentity
 from shared.http.client_manifests import (
     CLIENT_MANIFEST_DEPLOYMENT_KINDS,
     ClientManifestRequest,
@@ -201,13 +189,6 @@ from shared.http.objects import (
     ObjectMetadata,
     PutObjectRequest,
     PutObjectResponse,
-)
-from shared.http.private_network import (
-    PrivateNetworkTopologyRequest,
-    RegisterPrivateNetworkRequest,
-    WireGuardGatewayConfiguration,
-    WireGuardPeerConfiguration,
-    WireGuardRouteConfiguration,
 )
 from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
@@ -266,11 +247,9 @@ from gateway.payloads import (
     object_key,
     task_result_value,
 )
-from gateway.route_prewarm import RoutePrewarmService
 from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
 from gateway.unit_state import GatewayUnitStateCoordinator, billing_owner_for_unit
 from gateway.views import (
-    agent_pool_transport,
     agent_route_view,
     agent_telemetry_state,
     agent_worker_slot_view,
@@ -404,21 +383,15 @@ class GatewayControlService:
     gateway_endpoint: GatewayEndpointConfig
     agent_image: AgentImageConfig
     event_streams: RedisEventStreamRepository
-    route_prewarmer: RoutePrewarmService
     container_stopper: GatewayContainerStopper
     container_client_factory: SchedulerContainerClientFactory
-    # Resolved per use, not held: the control plane publishes where it is
-    # actually reachable, and a value captured at construction would outlive a
-    # device rename that every agent picks up on its next poll.
-    runtime_origin: Callable[[], str]
-    private_network_connector: BackendConnector = field(default_factory=SocketBackendConnector)
+    connections: RedisAgentConnectionDirectory
+    tunnel_authority: AgentTunnelAuthority
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
     scheduler_maintenance: SchedulerWorkerMaintenance | None = None
-    route_authenticator: BackendRouteAuthenticator | None = None
     agent_cluster_name: str = AGENT_NAME
     agent_artifact_version: str = ""
     agent_sha256_by_arch: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
-    async_http_client: AsyncBackendHttpClient | None = None
 
     @property
     def objects(self) -> ObjectStorage:
@@ -501,9 +474,8 @@ class GatewayControlService:
         *,
         workspace_id: str,
         database: AsyncDatabaseClient,
+        http: httpx.AsyncClient,
     ) -> PutObjectResponse:
-        if self.async_http_client is None:
-            raise UpstreamUnavailableError("async object upload transport is unavailable")
         key = object_key(request.object_metadata, request.hash)
         upload = None
         try:
@@ -521,18 +493,14 @@ class GatewayControlService:
             target = urlsplit(upload.upload.url)
             if target.scheme not in {"http", "https"} or not target.netloc:
                 raise UpstreamUnavailableError("object store returned an invalid upload target")
-            response = await self.async_http_client.open_stream(
-                address=urlunsplit((target.scheme, target.netloc, "", "", "")),
-                route_id="",
-                method="PUT",
-                path=urlunsplit(("", "", target.path or "/", target.query, "")),
-                headers=upload.upload.headers,
-                body=self._validated_upload_chunks(request, chunks),
-                content_length=request.object_metadata.size,
-                timeout_seconds=OBJECT_UPLOAD_TIMEOUT_SECONDS,
-                resource="object store",
+            headers = httpx.Headers(upload.upload.headers)
+            headers["Content-Length"] = str(request.object_metadata.size)
+            response = await http.put(
+                upload.upload.url,
+                headers=headers,
+                content=self._validated_upload_chunks(request, chunks),
+                timeout=OBJECT_UPLOAD_TIMEOUT_SECONDS,
             )
-            await response.read()
             if 400 <= response.status_code < 500:
                 raise InvalidInputError("object store rejected the upload")
             if response.status_code < 200 or response.status_code >= 300:
@@ -551,8 +519,8 @@ class GatewayControlService:
                     ) from None
             if isinstance(exc, KeyError | ValueError):
                 raise _domain_error(exc) from exc
-            if isinstance(exc, AsyncBackendHttpError | RuntimeError | OSError):
-                raise UpstreamUnavailableError(str(exc)) from exc
+            if isinstance(exc, httpx.HTTPError | RuntimeError | OSError):
+                raise UpstreamUnavailableError("Object upload transport failed") from exc
             raise
         return PutObjectResponse(object_id=record.id)
 
@@ -771,7 +739,6 @@ class GatewayControlService:
             if stub is not None and stub.kind is StubKind.Function:
                 task = FunctionControlService(
                     self.services,
-                    gateway_http_url=self.runtime_origin,
                 ).finish_function_task(
                     request.task_id,
                     request.task_status,
@@ -1433,13 +1400,16 @@ class GatewayControlService:
                 machine_view(
                     machine,
                     _agent_state_from_enrollment(enrollment),
-                    network_phase=(
-                        enrollment.network_phase
-                        if enrollment is not None
-                        else PrivateNetworkEnrollmentPhase.Unconfigured
-                    ),
-                    network_failure_detail=(
-                        enrollment.network_failure_detail if enrollment is not None else ""
+                    tunnel_connected=(
+                        enrollment is not None
+                        and (
+                            connection := self.connections.get(
+                                enrollment.workspace_id, enrollment.id
+                            )
+                        )
+                        is not None
+                        and connection.identity.credential_generation
+                        == enrollment.credential_generation
                     ),
                 )
             )
@@ -1518,7 +1488,7 @@ class GatewayControlService:
             with suppress(NotFoundError):
                 admin.delete_worker(worker_id)
         revoked = self._revoke_enrollment_authority(enrollment)
-        self._remove_enrollment_private_network_identity(revoked)
+        self._release_agent_connection(revoked)
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             current = enrollments.by_machine(
@@ -1574,7 +1544,7 @@ class GatewayControlService:
             for enrollment in enrollment_records
         ]
         for enrollment in revoked_enrollments:
-            self._remove_enrollment_private_network_identity(enrollment)
+            self._release_agent_connection(enrollment)
         for enrollment in enrollment_records:
             self.compute_states.delete_agent_token_state(enrollment.credential_hash)
             self.compute_states.delete_agent_machine_state_for_machine(
@@ -1628,8 +1598,6 @@ class GatewayControlService:
                 revoked = current.model_copy(
                     update={
                         "status": ComputeMachineEnrollmentStatus.Revoked,
-                        "network_generation": current.network_generation + 1,
-                        "network_phase": PrivateNetworkEnrollmentPhase.Revoked,
                         "schedulable": False,
                         "readiness_phase": MachineReadinessPhase.Revoked,
                         "revoked_at": current_time,
@@ -1749,7 +1717,6 @@ class GatewayControlService:
                 bootstrap_pool,
                 self.gateway_endpoint,
                 self.agent_image,
-                gateway_runtime_http_url=self.runtime_origin(),
                 executor=state.executor,
             ),
         )
@@ -1902,7 +1869,6 @@ class GatewayControlService:
                 bootstrap_pool,
                 self.gateway_endpoint,
                 self.agent_image,
-                gateway_runtime_http_url=self.runtime_origin(),
                 executor=agent_state.executor,
             )
             consumes_use = existing is None
@@ -2127,148 +2093,6 @@ class GatewayControlService:
         if not destroyed.complete:
             raise ConflictError("machine-owned source cache destruction is incomplete")
 
-    def register_private_network(
-        self,
-        request: RegisterPrivateNetworkRequest,
-    ) -> WireGuardPeerConfiguration:
-        try:
-            public_key = validate_wireguard_public_key(request.public_key)
-            state = self._require_agent_state(request.agent_token)
-        except ValueError as exc:
-            raise InvalidInputError(str(exc)) from exc
-        now = utc_now()
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = self._current_private_network_enrollment(session, state, for_update=True)
-            peers = WireGuardPeerRepository(session)
-            peer = peers.by_enrollment(enrollment.id, for_update=True)
-            if peer is None:
-                peers.lock_allocator()
-                peer = peers.by_enrollment(enrollment.id, for_update=True)
-            if (
-                peer is not None
-                and peer.public_key == public_key
-                and _wireguard_peer_matches_enrollment(peer, enrollment)
-            ):
-                return self._private_network_configuration(session, peer)
-            if peer is None:
-                generation = enrollment.network_generation + 1
-                peer = WireGuardPeer(
-                    id=str(uuid4()),
-                    enrollment_id=enrollment.id,
-                    workspace_id=enrollment.workspace_id,
-                    machine_id=enrollment.machine_id,
-                    public_key=public_key,
-                    address=allocate_wireguard_agent_address(
-                        enrollment.id,
-                        is_allocated=peers.address_allocated,
-                    ),
-                    generation=generation,
-                    created_at=now,
-                    updated_at=now,
-                )
-            else:
-                generation = max(peer.generation, enrollment.network_generation) + 1
-                peer = peer.model_copy(
-                    update={
-                        "generation": generation,
-                        "last_handshake_at": None,
-                        "updated_at": now,
-                        "public_key": public_key,
-                        "status": WireGuardPeerStatus.Active,
-                        "revoked_at": None,
-                    }
-                )
-            saved_peer = peers.save(peer)
-            enrollments.save(
-                enrollment.model_copy(
-                    update={
-                        "heartbeat_confirmed": False,
-                        "schedulable": False,
-                        "readiness_phase": MachineReadinessPhase.Joining,
-                        "network_generation": generation,
-                        "network_phase": PrivateNetworkEnrollmentPhase.AwaitingHandshake,
-                        "network_peer_id": saved_peer.id,
-                        "network_public_key": saved_peer.public_key,
-                        "network_address": saved_peer.address,
-                        "network_verified_at": None,
-                        "network_failure_detail": "",
-                        "updated_at": now,
-                    }
-                )
-            )
-            configuration = self._private_network_configuration(session, saved_peer)
-        self.compute_states.save_agent_token_state(
-            state.model_copy(update={"heartbeat_confirmed": False, "schedulable": False})
-        )
-        return configuration
-
-    def private_network_topology(
-        self,
-        request: PrivateNetworkTopologyRequest,
-    ) -> WireGuardPeerConfiguration:
-        try:
-            state = self._require_agent_state(request.agent_token)
-        except ValueError as exc:
-            raise InvalidInputError(str(exc)) from exc
-        with self.services.context.database.session() as session:
-            enrollment = self._current_private_network_enrollment(session, state, for_update=False)
-            peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
-            if peer is None or not _wireguard_peer_matches_enrollment(peer, enrollment):
-                raise InvalidInputError("agent WireGuard peer does not match its enrollment")
-            return self._private_network_configuration(session, peer)
-
-    def _current_private_network_enrollment(
-        self,
-        session: DatabaseSession,
-        state: ComputeAgentTokenState,
-        *,
-        for_update: bool,
-    ) -> ComputeMachineEnrollmentRecord:
-        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            state.workspace_id,
-            state.machine_id,
-            pool=state.pool,
-            for_update=for_update,
-        )
-        if (
-            enrollment is None
-            or enrollment.status is not ComputeMachineEnrollmentStatus.Active
-            or enrollment.credential_hash != state.token_hash
-        ):
-            raise InvalidInputError("agent credential is no longer current")
-        return enrollment
-
-    def _private_network_configuration(
-        self,
-        session: DatabaseSession,
-        peer: WireGuardPeer,
-    ) -> WireGuardPeerConfiguration:
-        gateways = WireGuardGatewayRepository(session).list_all()
-        if not gateways:
-            raise UpstreamUnavailableError("WireGuard gateways are not configured")
-        return WireGuardPeerConfiguration(
-            peer_id=peer.id,
-            address=peer.address,
-            allowed_ips=(str(WIREGUARD_PLATFORM_NETWORK),),
-            persistent_keepalive_seconds=WIREGUARD_KEEPALIVE_SECONDS,
-            generation=peer.generation,
-            gateways=tuple(
-                WireGuardGatewayConfiguration(
-                    index=gateway.index,
-                    public_key=gateway.public_key,
-                    endpoint=gateway.endpoint,
-                )
-                for gateway in gateways
-            ),
-            routes=(
-                WireGuardRouteConfiguration(
-                    network=str(WIREGUARD_PLATFORM_NETWORK),
-                    gateway_indices=tuple(gateway.index for gateway in gateways),
-                ),
-            ),
-        )
-
     def list_agent_routes(
         self,
         request: ListAgentRoutesRequest,
@@ -2304,7 +2128,6 @@ class GatewayControlService:
                 AgentRouteStatusRequest(
                     route_id=request.route_id,
                     state=request.state,
-                    proxy_target=request.proxy_target,
                     error=request.error,
                     attrs=request.attrs,
                 ),
@@ -2328,18 +2151,9 @@ class GatewayControlService:
                     data=event_data,
                     workspace_id=state.workspace_id,
                 )
-            if plan.should_prewarm:
-                self._prewarm_route(plan.updated, state)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return UpdateAgentRouteStatusResponse(route_id=request.route_id)
-
-    def _prewarm_route(
-        self,
-        route: AgentBackendRoute,
-        agent_state: ComputeAgentTokenState,
-    ) -> None:
-        self.route_prewarmer.prewarm_route(route, agent_state)
 
     def agent_release(self, request: AgentReleaseRequest) -> AgentReleaseResponse:
         state = self._agent_state_for_token(request.agent_token)
@@ -2417,7 +2231,7 @@ class GatewayControlService:
                     ok=False, err_msg=snapshot.current.err_msg, generation=release.generation
                 )
             try:
-                self._require_verified_private_network_identity(current_state)
+                self._require_active_tunnel(current_state)
             except ValueError as exc:
                 return StreamAgentResponse(
                     ok=False, err_msg=str(exc), retryable=True, generation=release.generation
@@ -2467,7 +2281,6 @@ class GatewayControlService:
                 bootstrap_pool,
                 self.gateway_endpoint,
                 self.agent_image,
-                gateway_runtime_http_url=self.runtime_origin(),
                 executor=response_state.executor,
             )
         except (KeyError, ValueError) as exc:
@@ -2560,13 +2373,8 @@ class GatewayControlService:
             changed=changed,
         )
 
-    def _agent_route_view(self, route: AgentBackendRoute | AgentBackendRoute) -> AgentRoute:
-        if self.route_authenticator is None:
-            raise RuntimeError("backend route authenticator is not configured")
-        return agent_route_view(
-            route,
-            proxy_auth_token=self.route_authenticator.credential(route.route_id),
-        )
+    def _agent_route_view(self, route: AgentBackendRoute) -> AgentRoute:
+        return agent_route_view(route)
 
     def _agent_slots_for_machine(
         self,
@@ -3023,7 +2831,7 @@ class GatewayControlService:
                 plan = plan_agent_metric_update(
                     agent_telemetry_state(state),
                     snapshot,
-                    pool=PoolTelemetryState(transport=agent_pool_transport(state)),
+                    pool=PoolTelemetryState(),
                 )
                 metadata: dict[str, JsonValue] = {
                     **state.metadata,
@@ -3098,7 +2906,6 @@ class GatewayControlService:
                 "node_type": str(metadata.get("node_type") or ""),
                 "capacity_source": str(metadata.get("capacity_source") or ""),
                 "pool_mode": str(metadata.get("pool_mode") or ""),
-                "transport": str(metadata.get("transport") or ""),
             },
             metadata=metadata,
         )
@@ -3432,151 +3239,24 @@ class GatewayControlService:
             raise ValueError(msg)
         return state
 
-    def _require_verified_private_network_identity(
-        self,
-        state: ComputeAgentTokenState,
-    ) -> ComputeMachineEnrollmentRecord:
-        enrollment, peer = self._private_network_identity(state)
-        if enrollment.network_phase is PrivateNetworkEnrollmentPhase.Connected:
-            return enrollment
-        target = (
-            f"{ipaddress.ip_interface(enrollment.network_address).ip}:"
-            f"{WIREGUARD_AGENT_ROUTE_PROXY_PORT}"
+    def _require_active_tunnel(self, state: ComputeAgentTokenState) -> None:
+        identity = AgentTunnelIdentity(
+            workspace_id=state.workspace_id,
+            enrollment_id=state.credential_id,
+            credential_generation=state.credential_generation,
         )
-        try:
-            connection = self.private_network_connector.connect(
-                target,
-                PRIVATE_NETWORK_PROBE_TIMEOUT_SECONDS,
-            )
-        except OSError as exc:
-            detail = (
-                "WireGuard connected, but LazyCloud could not reach TCP "
-                f"{WIREGUARD_AGENT_ROUTE_PROXY_PORT} through the private network; allow traffic "
-                f"from {WIREGUARD_PLATFORM_NETWORK}"
-            )
-            self._record_private_network_failure(
-                state,
-                peer_id=peer.id,
-                generation=peer.generation,
-                detail=detail,
-            )
-            raise ValueError(detail) from exc
-        connection.close()
+        self.tunnel_authority.validate_agent(identity)
+        connection = self.connections.get(identity.workspace_id, identity.enrollment_id)
+        if connection is None or connection.identity != identity:
+            raise ValueError("Agent has not established its authenticated tunnel")
 
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if enrollment is None or not enrollment.network_peer_id:
-                raise ValueError("agent WireGuard peer is not registered")
-            peer = WireGuardPeerRepository(session).by_enrollment(
-                enrollment.id,
-                for_update=True,
-            )
-            if peer is None or not _wireguard_peer_matches_enrollment(peer, enrollment):
-                raise ValueError("agent WireGuard peer does not match its enrollment")
-            if peer.last_handshake_at is None:
-                raise ValueError("agent WireGuard handshake has not been observed")
-            verified_at = utc_now()
-            verified = enrollment.model_copy(
-                update={
-                    "network_phase": PrivateNetworkEnrollmentPhase.Connected,
-                    "network_verified_at": verified_at,
-                    "network_failure_detail": "",
-                    "updated_at": verified_at,
-                }
-            )
-            return enrollments.save(verified)
-
-    def _private_network_identity(
-        self,
-        state: ComputeAgentTokenState,
-    ) -> tuple[ComputeMachineEnrollmentRecord, WireGuardPeer]:
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-            )
-            if enrollment is None or not enrollment.network_peer_id:
-                raise ValueError("agent WireGuard peer is not registered")
-            peer = WireGuardPeerRepository(session).by_enrollment(enrollment.id)
-        if peer is None or not _wireguard_peer_matches_enrollment(peer, enrollment):
-            raise ValueError("agent WireGuard peer does not match its enrollment")
-        if peer.last_handshake_at is None:
-            raise ValueError("agent WireGuard handshake has not been observed")
-        return enrollment, peer
-
-    def _record_private_network_failure(
-        self,
-        state: ComputeAgentTokenState,
-        *,
-        peer_id: str,
-        generation: int,
-        detail: str,
-    ) -> None:
-        with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment = enrollments.by_machine(
-                state.workspace_id,
-                state.machine_id,
-                pool=state.pool,
-                for_update=True,
-            )
-            if (
-                enrollment is None
-                or enrollment.network_peer_id != peer_id
-                or enrollment.network_generation != generation
-            ):
-                return
-            enrollments.save(
-                enrollment.model_copy(
-                    update={
-                        "network_phase": PrivateNetworkEnrollmentPhase.Failed,
-                        "network_verified_at": None,
-                        "network_failure_detail": detail,
-                        "updated_at": utc_now(),
-                    }
-                )
-            )
-
-    def _remove_enrollment_private_network_identity(
-        self,
-        enrollment: ComputeMachineEnrollmentRecord,
-    ) -> None:
-        now = utc_now()
-        with self.services.context.database.session() as session:
-            peers = WireGuardPeerRepository(session)
-            peer = peers.by_enrollment(enrollment.id, for_update=True)
-            if peer is None or peer.status is WireGuardPeerStatus.Revoked:
-                return
-            peers.save(
-                peer.model_copy(
-                    update={
-                        "status": WireGuardPeerStatus.Revoked,
-                        "revoked_at": now,
-                        "updated_at": now,
-                    }
-                )
-            )
-
-
-def _wireguard_peer_matches_enrollment(
-    peer: WireGuardPeer,
-    enrollment: ComputeMachineEnrollmentRecord,
-) -> bool:
-    return (
-        peer.status is WireGuardPeerStatus.Active
-        and peer.id == enrollment.network_peer_id
-        and peer.public_key == enrollment.network_public_key
-        and peer.address == enrollment.network_address
-        and peer.generation == enrollment.network_generation
-    )
+    def _release_agent_connection(self, enrollment: ComputeMachineEnrollmentRecord) -> None:
+        connection = self.connections.get(enrollment.workspace_id, enrollment.id)
+        if (
+            connection is not None
+            and connection.identity.credential_generation == enrollment.credential_generation
+        ):
+            self.connections.release(connection)
 
 
 def _join_token_state(

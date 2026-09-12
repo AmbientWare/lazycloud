@@ -82,7 +82,7 @@ from shared.image_building.records import BuildStatus
 from shared.objects import ObjectRecord
 from shared.placement import product_region
 from shared.realtime.contracts import EventRecordType
-from shared.routing import AgentBackendRoute
+from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from shared.scheduling import (
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
@@ -218,6 +218,7 @@ from worker.repository_payloads import (
     WorkerRecordResponse,
     WorkerRepositoryPrincipal,
 )
+from worker.routes import backend_route_id
 from worker.tools import ContainerCredentialRequest
 from worker_repository.admission import (
     WorkerRequestNotAdmissibleError,
@@ -1543,15 +1544,13 @@ class WorkerRepositoryService:
         *,
         principal: WorkerRepositoryPrincipal,
     ) -> SetWorkerAddressResponse:
-        self._authorize_worker_container(
-            request.container_id,
-            worker_id=principal.worker_id,
-            operation="worker address publication",
+        route = self._prepare_agent_route(
+            request.route, request.container_id, principal.worker_id, BackendRouteKind.Worker
         )
         address = self.containers.set_worker_address(
             request.container_id,
             request.address,
-            route=request.route,
+            route=route,
         )
         self._publish_agent_routes([address.route] if address.route is not None else [])
         return SetWorkerAddressResponse(address=address)
@@ -1559,11 +1558,16 @@ class WorkerRepositoryService:
     def set_container_address(
         self,
         request: SetContainerAddressRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
     ) -> SetContainerAddressResponse:
+        route = self._prepare_agent_route(
+            request.route, request.container_id, principal.worker_id, BackendRouteKind.Container
+        )
         address = self.containers.set_container_address(
             request.container_id,
             request.address,
-            route=request.route,
+            route=route,
         )
         self._publish_agent_routes([address.route] if address.route is not None else [])
         return SetContainerAddressResponse(address=address)
@@ -1571,11 +1575,24 @@ class WorkerRepositoryService:
     def set_container_address_map(
         self,
         request: SetContainerAddressMapRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
     ) -> SetContainerAddressMapResponse:
+        self._authorize_worker_container(
+            request.container_id,
+            worker_id=principal.worker_id,
+            operation="backend route publication",
+        )
+        routes = [
+            self._prepare_agent_route(
+                route, request.container_id, principal.worker_id, BackendRouteKind.Container
+            )
+            for route in request.routes
+        ]
         address_map = self.containers.set_container_address_map(
             request.container_id,
             request.address_map,
-            routes=request.routes,
+            routes=routes,
         )
         self._publish_agent_routes(address_map.routes)
         return SetContainerAddressMapResponse(address_map=address_map)
@@ -1593,30 +1610,76 @@ class WorkerRepositoryService:
             address=self.containers.get_worker_address(request.container_id)
         )
 
+    def _prepare_agent_route(
+        self,
+        route: AgentBackendRoute | None,
+        container_id: str,
+        worker_id: str,
+        kind: BackendRouteKind,
+    ) -> AgentBackendRoute:
+        container = self._authorize_worker_container(
+            container_id, worker_id=worker_id, operation="backend route publication"
+        )
+        worker = self.workers.get_worker(worker_id)
+        if route is None or worker is None or self.services is None or self.redis is None:
+            raise UpstreamUnavailableError("Backend route publication requires an enrolled worker")
+        if (
+            route.worker_id != worker_id
+            or route.container_id != container_id
+            or route.machine_id != worker.machine_id
+            or route.machine_id != container.runtime_machine_id
+            or route.kind is not kind
+            or route.route_id
+            != backend_route_id(
+                machine_id=worker.machine_id,
+                worker_id=worker_id,
+                container_id=container_id,
+                kind=kind,
+                port=route.port,
+            )
+        ):
+            raise AuthorizationDeniedError("Backend route does not match the assigned container")
+        with self.services.context.database.session() as session:
+            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                worker.workspace_id, worker.machine_id, pool=worker.pool
+            )
+        if (
+            enrollment is None
+            or enrollment.status is not ComputeMachineEnrollmentStatus.Active
+            or not enrollment.tunnel_public_key_sha256
+        ):
+            raise AuthorizationDeniedError("Backend route requires a current enrolled agent")
+        normalized = route.model_copy(
+            update={
+                "workspace_id": enrollment.workspace_id,
+                "capacity_owner_id": enrollment.capacity_owner_id,
+                "enrollment_id": enrollment.id,
+                "pool": enrollment.pool,
+                "state": BackendRouteState.Opening,
+                "error": "",
+            }
+        )
+        previous = RedisComputeStateRepository(self.redis).get_agent_route_state(
+            enrollment.workspace_id,
+            enrollment.capacity_owner_id,
+            enrollment.machine_id,
+            route.route_id,
+        )
+        if (
+            previous is not None
+            and previous.state is BackendRouteState.Ready
+            and previous.model_dump(exclude={"state", "error", "updated_at"})
+            == normalized.model_dump(exclude={"state", "error", "updated_at"})
+        ):
+            return previous
+        return normalized
+
     def _publish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:
-            return
+            raise UpstreamUnavailableError("Backend route publication requires Redis")
         repository = RedisComputeStateRepository(self.redis)
         for route in routes:
-            if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
-                continue
-            # Keyed by the machine, from its worker record, rather than by the
-            # container's workspace: a backend route is a port on one host, and the
-            # agent reads its routes under the workspace and unit that enrolled it.
-            # Keying by the container's workspace filed a route the owning agent
-            # could never see, so a workload from another of the account's
-            # workspaces waited for a route nothing would ever open.
-            worker = self.workers.get_worker(route.worker_id)
-            if worker is None or not (worker.capacity_owner_id and worker.workspace_id):
-                continue
-            repository.save_agent_route_state(
-                route.model_copy(
-                    update={
-                        "workspace_id": worker.workspace_id,
-                        "capacity_owner_id": worker.capacity_owner_id,
-                    }
-                )
-            )
+            repository.save_agent_route_state(route)
 
     def _unpublish_agent_routes(self, routes: list[AgentBackendRoute]) -> None:
         if self.redis is None:

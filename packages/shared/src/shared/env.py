@@ -116,16 +116,6 @@ def importing_user_code_now(env: Mapping[str, str] | None = None) -> bool:
     return truthy_env_value(source.get(IMPORTING_USER_CODE_ENV))
 
 
-def no_gateway_origin() -> str:
-    """The origin a service resolves before one is configured.
-
-    A callable rather than a bare string because the control plane publishes
-    where it is reachable at runtime; holding the value would freeze whatever
-    was true at construction.
-    """
-    return ""
-
-
 __all__ = [
     "APP_ID_ENV",
     "CHECKPOINT_ENABLED_ENV",
@@ -162,6 +152,5 @@ __all__ = [
     "ExecutionEnvVar",
     "importing_user_code",
     "importing_user_code_now",
-    "no_gateway_origin",
     "truthy_env_value",
 ]
