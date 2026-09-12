@@ -6,10 +6,10 @@ from database.records.apps import AppRecord, StubRecord
 from database.repositories.apps import DeploymentResourceRepository, DeploymentResourceRow
 from database.types import DatabaseSession
 from shared.deployment_records import Deployment
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, StubKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.client_manifests import ClientManifestResource, client_manifest_schemas
-from shared.urls import StubUrlTarget, build_deployment_url, deployment_handler_path
+from shared.urls import StubUrlTarget, build_deployment_url, build_pod_url, deployment_handler_path
 
 from control.context import ControlContext
 
@@ -20,7 +20,9 @@ class DeploymentResource:
     deployment: Deployment
     stub: StubRecord
 
-    def invoke_url(self, external_url: str, *, pin_version: bool = False) -> str:
+    def invoke_url(
+        self, external_url: str, *, pin_version: bool = False, port: int | None = None
+    ) -> str:
         target = StubUrlTarget(
             kind=self.stub.kind.value,
             stub_id=self.stub.id,
@@ -28,8 +30,16 @@ class DeploymentResource:
             deployment_version=self.deployment.version,
             subdomain=self.deployment.subdomain,
             public=self.stub.public,
+            ports=(
+                [port]
+                if port is not None
+                else list(self.stub.config.ports.values())
+                or list(self.stub.config.runtime.ports.values())
+            ),
         )
         try:
+            if self.stub.kind is StubKind.Pod:
+                return build_pod_url(external_url, target)
             return build_deployment_url(external_url, target, pin_version=pin_version)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc

@@ -30,6 +30,7 @@ from scheduler.state import SchedulerContainerAddressMap, SchedulerContainerStat
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.http.gateway import GetUrlResponse
 from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from starlette.websockets import WebSocketDisconnect
 from tests.url_constants import TEST_DOMAIN, TEST_URL
@@ -40,12 +41,24 @@ from websockets.typing import Subprotocol
 BASE_URL = TEST_URL
 
 
-def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
+def test_generated_pod_url_preserves_request_and_selects_port_ready_container(
     isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with ExitStack() as client_stack:
+        monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
         control = ControlPlaneService(isolated_services.context)
-        stub = control.create_stub("web", kind=StubKind.Pod)
+        deployment = isolated_services.deployments.deploy(
+            DeploymentSpec(
+                name="web",
+                kind=DeploymentKind.Pod,
+                metadata={"app": "pod_url"},
+                command=["python", "-m", "http.server", "8080"],
+                ports={"http": 8080, "health": 9090},
+            )
+        )
+        assert deployment.stub_id is not None
+        stub = control.get_stub(deployment.stub_id)
         missing_port = _create_container(isolated_services, stub, "missing-port")
         busy = _create_container(isolated_services, stub, "busy")
         selected = _create_container(isolated_services, stub, "selected")
@@ -72,8 +85,21 @@ def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
             TestClient(create_app(isolated_services, pod_service=service))
         )
 
+        generated = client.post(
+            "/gateway/stubs/url",
+            headers=_auth_headers(isolated_services),
+            json={
+                "stub_id": stub.id,
+                "deployment_id": deployment.id,
+                "url_type": "deployment",
+                "external_url": BASE_URL,
+                "port": 8080,
+            },
+        )
+        assert generated.status_code == 200, generated.text
+        url = GetUrlResponse.model_validate_json(generated.content).url
         response = client.patch(
-            f"/pod/id/{stub.id}/8080/api/users",
+            f"{url}/api/users",
             params=[("tag", "a"), ("tag", "b")],
             headers=_auth_headers(isolated_services) | {"x-client-header": "kept"},
             content=b"payload",

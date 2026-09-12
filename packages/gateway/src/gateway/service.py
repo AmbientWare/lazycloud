@@ -901,6 +901,7 @@ class GatewayControlService:
                     request.deployment_id,
                     workspace=request.workspace,
                     external_url=request.external_url,
+                    port=request.port,
                 ).url
             else:
                 url = self.control_plane.stub_url(
