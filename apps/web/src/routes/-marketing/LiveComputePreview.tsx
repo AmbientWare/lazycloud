@@ -49,8 +49,8 @@ type Lane = {
 const LANES: Lane[] = [
   {
     key: "managed",
-    name: "Managed serverless",
-    meta: "default placement · no setup",
+    name: "LazyCloud",
+    meta: "managed CPU",
     target: "managed serverless",
     slots: [
       {
@@ -98,8 +98,8 @@ const LANES: Lane[] = [
   },
   {
     key: "aws",
-    name: "Connected AWS",
-    meta: "workspace account · us-east-1",
+    name: "Your AWS account",
+    meta: "CPU and GPU",
     target: "connected aws",
     slots: [
       {
@@ -141,8 +141,8 @@ const LANES: Lane[] = [
   },
   {
     key: "metal",
-    name: "Self-hosted Linux",
-    meta: "machine join · 2 machines",
+    name: "Your own machines",
+    meta: "2 Linux machines",
     target: "self-hosted",
     slots: [
       {
@@ -255,11 +255,9 @@ export function LiveComputePreview() {
         ].map((stat) => (
           <div
             key={stat.label}
-            className="compute-overview-stat rounded-md border border-[var(--border)] bg-[var(--background)]/40 px-2 py-1.5"
+            className="compute-overview-stat rounded-md border border-border bg-card px-2 py-1.5"
           >
-            <span className="block truncate font-mono text-[8px] tracking-[0.12em] text-[var(--muted-foreground)] uppercase">
-              {stat.label}
-            </span>
+            <span className="block truncate text-[10px] text-muted-foreground">{stat.label}</span>
             <strong className="text-[13px] font-semibold text-[var(--foreground)]">
               {stat.value}
             </strong>
@@ -270,9 +268,9 @@ export function LiveComputePreview() {
       {LANES.map((lane, laneIndex) => (
         <div
           key={lane.key}
-          className="compute-lane flex min-h-0 flex-1 flex-col gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--background)]/30 p-2"
+          className="compute-lane flex min-h-0 flex-1 flex-col gap-2 rounded-lg border border-border bg-[var(--product-inset)] p-2.5"
         >
-          <div className="compute-lane-heading flex items-baseline justify-between gap-2 font-mono text-[8px]">
+          <div className="compute-lane-heading flex items-baseline justify-between gap-2 text-[10px]">
             <span className="truncate text-[var(--foreground)]">
               {lane.name}
               <span className="text-[var(--muted-foreground)]"> · {lane.meta}</span>
@@ -320,7 +318,7 @@ export function LiveComputePreview() {
                           : "size-[5px] shrink-0 animate-pulse rounded-full bg-[var(--positive)] motion-reduce:animate-none"
                       }
                     />
-                    <strong className="truncate text-[10px] font-semibold text-[var(--foreground)]">
+                    <strong className="truncate text-[11px] font-semibold text-[var(--foreground)]">
                       {assignment.name}
                     </strong>
                     {assignment.volume ? (
@@ -348,7 +346,7 @@ export function LiveComputePreview() {
         </div>
       ))}
 
-      <div className="compute-volume flex items-baseline justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--background)]/40 px-2 py-1.5 font-mono text-[8px]">
+      <div className="compute-volume flex items-baseline justify-between gap-2 rounded-md border border-border bg-card px-2 py-1.5 font-mono text-[8px]">
         <span className="truncate text-[var(--foreground)]">
           <b aria-hidden="true" className="text-[var(--brand)]">
             ◆

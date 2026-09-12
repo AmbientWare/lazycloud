@@ -605,53 +605,50 @@ function PlatformStoryRail() {
 
 const computePaths = [
   {
-    title: "Managed compute",
-    body: "Run on LazyCloud CPU capacity. It scales down when idle.",
-    command: null,
+    title: "LazyCloud",
+    body: "Run CPU workloads without managing servers. Capacity scales down when idle.",
   },
   {
     title: "Your AWS account",
-    body: "Place CPU or GPU workloads in a connected AWS account.",
-    command: "lazycloud cloud connect aws",
+    body: "Run CPU and GPU workloads in your own AWS account.",
   },
   {
-    title: "Supported Linux machines",
-    body: "Join a systemd-based amd64 or arm64 VM, bare-metal server, or on-premises GPU.",
-    command: "lazycloud machine join",
+    title: "Your own machines",
+    body: "Connect supported Linux servers, VMs, or GPU machines you already own.",
   },
 ];
 
 function ComputeSection() {
   return (
-    <section className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
-      <div className={shell}>
-        <SectionHeading
-          title={
-            <>
-              Use our compute, <em>or bring your own.</em>
-            </>
-          }
-          body="Start with managed capacity. Connect AWS or join a Linux machine when you want workloads to run in your infrastructure."
-        />
-        <div className="grid grid-cols-[0.9fr_1.1fr] gap-7 max-lg:grid-cols-1">
-          <div className="relative flex flex-col gap-4">
+    <section id="compute" className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
+      <div
+        className={cn(
+          shell,
+          "grid items-center gap-10 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-16",
+        )}
+      >
+        <div className="min-w-0">
+          <SectionHeading
+            title={
+              <>
+                Choose where <em>your code runs.</em>
+              </>
+            }
+            body="Start on LazyCloud. Connect AWS or your own Linux machines when you need control of the infrastructure."
+          />
+          <div className="border-t border-border">
             {computePaths.map((path) => (
-              <MarketingCard asChild key={path.title}>
-                <article className="flex-1 p-5 sm:p-6">
-                  <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
-                  <p className="mt-3 text-[13px] text-muted-foreground">{path.body}</p>
-                  {path.command ? (
-                    <code className="mt-3 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1.5 font-mono text-[11px] break-all text-foreground">
-                      <span className="text-brand">$</span> {path.command}
-                    </code>
-                  ) : null}
-                </article>
-              </MarketingCard>
+              <article className="border-b border-border py-5" key={path.title}>
+                <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
+                <p className="mt-2 max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
+                  {path.body}
+                </p>
+              </article>
             ))}
           </div>
-          <div className="relative flex [&>div]:flex-1">
-            <ComputePlacementPreview />
-          </div>
+        </div>
+        <div className="flex min-w-0 [&>div]:flex-1">
+          <ComputePlacementPreview />
         </div>
       </div>
     </section>
