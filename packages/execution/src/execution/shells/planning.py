@@ -6,6 +6,7 @@ import hmac
 import shlex
 from enum import StrEnum
 
+from pydantic import Field
 from shared.app_identity import CONTAINER_HELPER_PATH
 from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
@@ -105,7 +106,7 @@ class ShellStandaloneRequest(ContractModel):
     container_id_suffix: str = ""
     cpu_millicores: int = 0
     memory_mib: int = 0
-    disk_mib: int = 0
+    disk_mib: int = Field(gt=0)
     gpu: tuple[str, ...] = ()
     gpu_count: int = 0
     requires_gpu: bool = False
@@ -121,7 +122,7 @@ class ShellStandalonePlan(ContractModel):
     idle_timeout_seconds: int
     cpu_millicores: int
     memory_mib: int
-    disk_mib: int = 0
+    disk_mib: int = Field(gt=0)
     gpu: tuple[str, ...]
     gpu_count: int
     env: tuple[str, ...]

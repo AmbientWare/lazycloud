@@ -40,6 +40,7 @@ from shared.shell_protocol import (
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
+from execution.config import ContainerResourceConfig
 from execution.container_clients import (
     PodContainerControlClient,
     SchedulerContainerClientFactory,
@@ -604,6 +605,7 @@ class ShellControlService:
         container_id: str,
     ) -> ShellStandaloneRequest:
         runtime_config = stub.config.runtime
+        resources = ContainerResourceConfig.model_validate(runtime_config.model_dump())
         return ShellStandaloneRequest(
             stub_id=stub.id,
             handler=stub.handler or stub.config.handler or "",
@@ -614,6 +616,7 @@ class ShellControlService:
             container_id_suffix=secrets.token_hex(4),
             cpu_millicores=runtime_config.cpu_millicores,
             memory_mib=runtime_config.memory_mib,
+            disk_mib=resources.requested_disk_mib,
             gpu_count=runtime_config.gpu_count,
             requires_gpu=runtime_config.requires_gpu,
             gpu=tuple(runtime_config.gpu),
