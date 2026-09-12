@@ -9,6 +9,7 @@ from agent.operations import (
     AgentWorkerSlot,
     WorkerExecutor,
     WorkerSlotAction,
+    agent_gateway_env,
     parse_cpu_millicores,
     parse_nvidia_smi_gpu_devices,
     plan_worker_slot_reconciliation,
@@ -23,7 +24,7 @@ from shared.routing import BackendRouteTransport
 from shared.usage import UsageBillingOwner
 
 
-def test_agent_bootstrap_requires_private_runtime_after_serialization() -> None:
+def test_agent_worker_environment_requires_private_runtime() -> None:
     bootstrap = AgentBootstrap(
         gateway_public_http_url="https://gateway.example.test",
         gateway_runtime_http_url="http://100.96.0.1:9000",
@@ -36,13 +37,13 @@ def test_agent_bootstrap_requires_private_runtime_after_serialization() -> None:
         AgentBootstrap.model_validate(serialized)
 
     serialized["gateway_runtime_http_url"] = bootstrap.gateway_public_http_url
-    with pytest.raises(ValidationError, match="WireGuard runtime service"):
-        AgentBootstrap.model_validate(serialized)
+    with pytest.raises(ValueError, match="WireGuard runtime service"):
+        agent_gateway_env(AgentBootstrap.model_validate(serialized))
 
     serialized = bootstrap.model_dump(mode="json")
     serialized["transport"] = BackendRouteTransport.Direct.value
-    with pytest.raises(ValidationError, match="transport"):
-        AgentBootstrap.model_validate(serialized)
+    with pytest.raises(ValueError, match="transport"):
+        agent_gateway_env(AgentBootstrap.model_validate(serialized))
 
 
 def test_capacity_selection_respects_requested_limits_and_rejects_host_overcommit() -> None:

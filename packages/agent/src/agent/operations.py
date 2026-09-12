@@ -913,20 +913,11 @@ class AgentBootstrap(ContractModel):
     image_registry_store: str = "local"
     image_clip_version: int = 2
 
-    @field_validator("gateway_runtime_http_url")
-    @classmethod
-    def require_wireguard_runtime_origin(cls, value: str) -> str:
-        return validate_wireguard_runtime_http_origin(value)
-
-    @field_validator("transport")
-    @classmethod
-    def require_private_network_transport(
-        cls, value: BackendRouteTransport
-    ) -> BackendRouteTransport:
-        plan = validate_agent_transport_config(value)
+    def validate_runtime(self) -> None:
+        validate_wireguard_runtime_http_origin(self.gateway_runtime_http_url)
+        plan = validate_agent_transport_config(self.transport)
         if not plan.accepted:
             raise ValueError(plan.err_msg)
-        return value
 
     @field_validator("gateway_grpc_port", "image_clip_version")
     @classmethod
@@ -1362,6 +1353,7 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
 
 
 def agent_gateway_env(bootstrap: AgentBootstrap) -> dict[str, str]:
+    bootstrap.validate_runtime()
     runtime_http_url = bootstrap.gateway_runtime_http_url
     http_host, http_port, http_tls = agent_gateway_http_parts(runtime_http_url)
     grpc_port = bootstrap.gateway_grpc_port or 443

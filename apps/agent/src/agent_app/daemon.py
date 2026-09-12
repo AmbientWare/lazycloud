@@ -1975,7 +1975,7 @@ def _agent_bootstrap(
 ) -> AgentBootstrap:
     if config is None:
         raise RuntimeError("gateway did not return agent runtime bootstrap configuration")
-    return AgentBootstrap(
+    bootstrap = AgentBootstrap(
         gateway_public_http_url=config.gateway_public_http_url,
         gateway_runtime_http_url=config.gateway_runtime_http_url,
         gateway_grpc_host=config.gateway_grpc_host,
@@ -1986,6 +1986,8 @@ def _agent_bootstrap(
         image_registry_store=config.image_registry_store,
         image_clip_version=config.image_clip_version,
     )
+    bootstrap.validate_runtime()
+    return bootstrap
 
 
 def _agent_state_from_join_response(
@@ -2022,6 +2024,16 @@ def _agent_state_from_stream_response(
         or response.credential_generation != state.credential_generation
     ):
         raise RuntimeError("gateway returned the wrong agent stream session")
+    if response.bootstrap is None:
+        bootstrap = state.bootstrap
+        try:
+            bootstrap.validate_runtime()
+        except ValueError as exc:
+            raise AgentStreamRetryableError(
+                "agent requires current runtime bootstrap from the gateway"
+            ) from exc
+    else:
+        bootstrap = _agent_bootstrap(response.bootstrap)
     return state.model_copy(
         update={
             "release_generation": response.generation,
@@ -2031,11 +2043,7 @@ def _agent_state_from_stream_response(
                 and response.capacity_state is AgentCapacityState.Available
                 else response.capacity_state
             ),
-            "bootstrap": (
-                state.bootstrap
-                if response.bootstrap is None
-                else _agent_bootstrap(response.bootstrap)
-            ),
+            "bootstrap": bootstrap,
             "updated_at": utc_now(),
         }
     )
