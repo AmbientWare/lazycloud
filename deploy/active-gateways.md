@@ -1,9 +1,9 @@
 # Active gateways
 
-This final migration release replaces gateway zero with an independent indexed
-gateway, then rolls gateway one. Both require fresh encrypted probes from every
-platform peer before becoming ready. It removes the temporary image pins,
-singular registration endpoint and server public-key projection.
+This release updates agent and worker forwarding while keeping both deployed
+gateway templates and Services unchanged. Container traffic must select a healthy
+gateway before gateway zero can be replaced. Host-originated requests alone do
+not prove that path.
 The API allows 120 seconds for request draining inside a 150-second pod grace.
 
 Publish only after every active enrollment uses the indexed agent runtime and
@@ -75,7 +75,12 @@ merged into `main`.
    throughout this rollout. Gateway 1 carries new platform-to-agent connections
    because the old gateway 0 publishes no presence. Verify the gateway-one path
    and a real agent request from every platform peer.
-4. Apply the final chart and handshake-gated gateway readiness. Replace gateway
+4. Update every agent and worker with forwarded-connection selection and NAT rules
+   for both tunnel interfaces. Keep both gateway templates, images and Services
+   unchanged. Verify a real function claim and stream from a user container
+   through gateway one; an agent heartbeat or host HTTP request is insufficient.
+   Confirm the running binary and worker image on every authorized enrollment.
+5. Apply the final chart and handshake-gated gateway readiness. Replace gateway
    0's shared Deployment while gateway 1 serves traffic. Preserve gateway 0's key
    and Service object. Prove gateway 0 through the public NLB before its wave
    completes, then let Argo roll gateway 1. Remove the old registration endpoint,
@@ -173,6 +178,17 @@ return through the incoming gateway, an unchanged topology preserves connections
 draining moves new requests, and the surviving gateway carries requests during a
 restart. Inspect routes, handshakes and request outcomes every cycle. Remove only
 the containers, network and key files created by this scenario.
+
+Run the forwarding scenario from the repository root:
+
+```sh
+uv run --frozen --group dev --group workspace python -m packages.networking.tests.acceptance.forwarded_gateway_failover
+```
+
+It exercises forwarded packets in both directions through each gateway drain,
+then blocks that gateway's UDP traffic and checks the surviving path. The
+canonical Compose agent additionally exercises the worker's installed NAT rules
+and real user containers in the same isolated network namespace.
 
 Before production promotion, run continuous function calls and a stream across
 gateway and API rollouts. Correlate assignment, container startup, request latency,
