@@ -511,15 +511,15 @@ class AgentProcessLock:
     fd: int
 
     @classmethod
-    def acquire(cls, state_dir: Path, *, pid: int | None = None) -> AgentProcessLock:
+    def acquire(cls, state_dir: Path) -> AgentProcessLock:
         state_dir.mkdir(parents=True, exist_ok=True)
         state_dir.chmod(0o700)
-        plan = plan_agent_lock(str(state_dir), pid=pid or os.getpid())
+        plan = plan_agent_lock(str(state_dir), pid=os.getpid())
         lock_path = Path(plan.path)
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, plan.permissions)
         except FileExistsError as exc:
-            if _agent_lock_is_stale(lock_path, current_pid=pid or os.getpid()):
+            if _agent_lock_is_stale(lock_path, current_pid=os.getpid()):
                 lock_path.unlink(missing_ok=True)
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, plan.permissions)
                 os.write(fd, plan.contents.encode("utf-8"))

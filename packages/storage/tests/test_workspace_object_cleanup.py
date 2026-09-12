@@ -35,7 +35,9 @@ def test_object_storage_deletes_each_workspace_physical_object_independently(
     last_physical_key = object_storage.physical_key_for_record(last_record)
     physical_bucket = object_storage.physical_bucket(SOURCE_PACKAGE_BUCKET)
 
-    assert object_storage.delete_workspace_objects(first.id) == 1
+    assert object_storage.delete_for_workspace(
+        workspace_id=first.id, bucket=SOURCE_PACKAGE_BUCKET, key=key
+    )
     assert not object_client.exists(first_physical_key, bucket=physical_bucket)
     assert object_client.exists(last_physical_key, bucket=physical_bucket)
     assert object_storage.list_for_workspace(workspace_id=first.id) == []
@@ -44,7 +46,9 @@ def test_object_storage_deletes_each_workspace_physical_object_independently(
         == last_record.id
     )
 
-    assert object_storage.delete_workspace_objects(last.id) == 1
+    assert object_storage.delete_for_workspace(
+        workspace_id=last.id, bucket=SOURCE_PACKAGE_BUCKET, key=key
+    )
     assert not object_client.exists(last_physical_key, bucket=physical_bucket)
     assert first_record.id != last_record.id
 
@@ -64,7 +68,9 @@ def test_object_storage_preserves_metadata_when_physical_delete_is_not_confirmed
     physical_key = object_storage.physical_key_for_record(record)
 
     with pytest.raises(UpstreamUnavailableError, match="object deletion was not confirmed"):
-        object_storage.delete_workspace_objects(workspace.id)
+        object_storage.delete_for_workspace(
+            workspace_id=workspace.id, bucket=record.bucket, key=record.key
+        )
 
     assert (
         object_storage.get_by_id_for_workspace(record.id, workspace_id=workspace.id).id == record.id

@@ -12,7 +12,7 @@ from worker.container_rootfs import (
     ContainerRootfsStatus,
     ContainerRootfsSystem,
     RootfsCommandRunner,
-    path_filesystem_type,
+    path_filesystem_mount,
     plan_container_rootfs_overlay,
 )
 from worker.events import ContainerRequestContext
@@ -177,7 +177,7 @@ def test_overlay_backed_scratch_root_is_rejected_by_name(tmp_path: Path) -> None
 
     resolved = str(scratch.resolve())
     mountinfo = f"30 24 0:50 / {resolved} rw,relatime shared:2 - overlay overlay rw\n"
-    assert path_filesystem_type(scratch, mountinfo_text=mountinfo) == "overlay"
+    assert path_filesystem_mount(scratch, mountinfo_text=mountinfo).filesystem == "overlay"
 
     # Provisioning is what normally rescues a non-quota root; with it off, the
     # overlay-on-overlay problem must be named rather than surfaced as a kernel error.

@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pytest
 from api.server.services import ApiServices
+from coordination.event_bus import event_key
 from coordination.redis_client import RedisClient
 from database.repositories.apps import (
     AppContainerShutdownIntentRepository,
@@ -498,7 +499,7 @@ def test_disconnected_worker_shutdown_remains_durable_and_retry_cleans_ack_state
         assert AppContainerShutdownIntentRepository(session).list(app_id=app.id) == []
     assert redis.set_members(pending_key) == set()
     assert not redis.exists(ack_key)
-    assert not services.container_shutdowns.events.claim(event_id).claimed
+    assert not redis.exists(redis.key(event_key(event_id)))
 
 
 def test_pause_fences_a_queued_container_no_worker_owns(

@@ -28,11 +28,6 @@ class ServicePaths:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def build_path(self, build_id: str) -> Path:
-        path = self.root / "builds" / build_id
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
 
 @dataclass(slots=True)
 class ServiceContext:

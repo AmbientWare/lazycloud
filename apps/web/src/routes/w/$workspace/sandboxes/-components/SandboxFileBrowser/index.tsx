@@ -17,6 +17,7 @@ import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PodFileInfo } from "@/lib/api/schemas";
+import { base64ToBytes, downloadBlob } from "@/lib/files";
 import {
   deleteSandboxFileMutationOptions,
   downloadSandboxFile,
@@ -117,18 +118,7 @@ export function SandboxFileBrowser({
     try {
       const download = await downloadSandboxFile(workspace.id, containerId, target);
       const bytes = base64ToBytes(download.value_base64);
-      const buffer = new ArrayBuffer(bytes.byteLength);
-      new Uint8Array(buffer).set(bytes);
-      const blob = new Blob([buffer]);
-      const url = URL.createObjectURL(blob);
-      try {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = file.name;
-        link.click();
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      downloadBlob(file.name, new Blob([bytes]));
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : "Failed to download file");
     }
@@ -347,11 +337,6 @@ function decodePreview(valueBase64: string): string {
     return `[file is ${formatBytes(bytes.length)}; preview truncated]\n${preview}`;
   }
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-}
-
-function base64ToBytes(valueBase64: string): Uint8Array {
-  const binary = atob(valueBase64);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
 function isProbablyBinary(bytes: Uint8Array): boolean {

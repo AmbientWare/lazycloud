@@ -188,25 +188,15 @@ function ReadingCell({
 function Reading({
   label,
   value,
-  reading,
   detail,
   tone = "neutral",
-  meter,
   query,
   className,
 }: {
   label: string;
   value?: number;
-  /** The figure as written when it is not one count, such as `3 / 10` against a ceiling. */
-  reading?: string;
   detail?: ReactNode;
   tone?: "neutral" | "danger";
-  /**
-   * Only a reading with a bound gets a bar, because only it has something to be
-   * near. Its colour is a second reading of a fact the cell already states in
-   * both numbers, never the only one.
-   */
-  meter?: { used: number; limit: number };
   query: ReadingQuery;
   className?: string;
 }) {
@@ -218,11 +208,8 @@ function Reading({
           tone === "danger" ? "text-destructive" : "text-foreground",
         )}
       >
-        {reading ?? value?.toLocaleString() ?? "—"}
+        {value?.toLocaleString() ?? "—"}
       </div>
-      {meter && meter.limit > 0 ? (
-        <ShareBar share={meter.used / meter.limit} tone="capacity" className="mt-1.5 w-full" />
-      ) : null}
       {detail ? <p className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</p> : null}
     </ReadingCell>
   );

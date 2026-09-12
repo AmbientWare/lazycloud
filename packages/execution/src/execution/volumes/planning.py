@@ -6,15 +6,8 @@ from enum import StrEnum
 
 from shared.contracts import ContractModel
 
-DEFAULT_VOLUMES_PATH = "/data/volumes"
 VOLUME_PRESIGNED_URL_DEFAULT_EXPIRES_SECONDS = 300
 VOLUME_PRESIGNED_URL_MAX_EXPIRES_SECONDS = 604800
-
-
-class VolumePathStatus(StrEnum):
-    Valid = "valid"
-    MissingVolumeName = "missing-volume-name"
-    EscapesRoot = "escapes-root"
 
 
 class VolumeMultipartStatus(StrEnum):
@@ -26,21 +19,6 @@ class VolumeMultipartStatus(StrEnum):
 class VolumeInputPath(ContractModel):
     volume_name: str
     volume_path: str
-
-
-class VolumePathPlan(ContractModel):
-    status: VolumePathStatus
-    workspace_id: str
-    volume_id: str
-    volume_name: str
-    volume_path: str
-    root_path: str
-    full_path: str
-    error_message: str = ""
-
-    @property
-    def ok(self) -> bool:
-        return self.status is VolumePathStatus.Valid
 
 
 class VolumeFileServiceInfoPlan(ContractModel):
@@ -73,68 +51,6 @@ def parse_volume_input(input_path: str) -> VolumeInputPath:
     volume_name, separator, rest = input_path.partition("/")
     volume_path = posixpath.normpath(rest) if separator else "."
     return VolumeInputPath(volume_name=volume_name, volume_path=volume_path)
-
-
-def join_clean_path(*parts: str) -> str:
-    cleaned = [posixpath.normpath(part) for part in parts if part != ""]
-    return posixpath.normpath(posixpath.join(*cleaned)) if cleaned else "."
-
-
-def join_volume_path(
-    workspace_id: str,
-    volume_id: str,
-    *sub_paths: str,
-    volumes_path: str = DEFAULT_VOLUMES_PATH,
-) -> str:
-    return join_clean_path(volumes_path, workspace_id, volume_id, *sub_paths)
-
-
-def plan_volume_path(
-    workspace_id: str,
-    volume_id: str,
-    input_path: str,
-    *,
-    volumes_path: str = DEFAULT_VOLUMES_PATH,
-) -> VolumePathPlan:
-    parsed = parse_volume_input(input_path)
-    root_path = join_volume_path(workspace_id, volume_id, volumes_path=volumes_path)
-    full_path = join_volume_path(
-        workspace_id,
-        volume_id,
-        parsed.volume_path,
-        volumes_path=volumes_path,
-    )
-    if parsed.volume_name == "":
-        return VolumePathPlan(
-            status=VolumePathStatus.MissingVolumeName,
-            workspace_id=workspace_id,
-            volume_id=volume_id,
-            volume_name=parsed.volume_name,
-            volume_path=parsed.volume_path,
-            root_path=root_path,
-            full_path=full_path,
-            error_message="must provide volume name",
-        )
-    if posixpath.commonpath([root_path, full_path]) != root_path:
-        return VolumePathPlan(
-            status=VolumePathStatus.EscapesRoot,
-            workspace_id=workspace_id,
-            volume_id=volume_id,
-            volume_name=parsed.volume_name,
-            volume_path=parsed.volume_path,
-            root_path=root_path,
-            full_path=full_path,
-            error_message="parent directory does not exist",
-        )
-    return VolumePathPlan(
-        status=VolumePathStatus.Valid,
-        workspace_id=workspace_id,
-        volume_id=volume_id,
-        volume_name=parsed.volume_name,
-        volume_path=parsed.volume_path,
-        root_path=root_path,
-        full_path=full_path,
-    )
 
 
 def clamp_presigned_url_expires(expires_seconds: int) -> int:
@@ -199,7 +115,6 @@ def plan_volume_multipart_upload(
 
 
 __all__ = [
-    "DEFAULT_VOLUMES_PATH",
     "VOLUME_PRESIGNED_URL_DEFAULT_EXPIRES_SECONDS",
     "VOLUME_PRESIGNED_URL_MAX_EXPIRES_SECONDS",
     "VolumeFileServiceInfoPlan",
@@ -207,13 +122,8 @@ __all__ = [
     "VolumeInputPath",
     "VolumeMultipartStatus",
     "VolumeMultipartUploadPlan",
-    "VolumePathPlan",
-    "VolumePathStatus",
     "clamp_presigned_url_expires",
-    "join_clean_path",
-    "join_volume_path",
     "parse_volume_input",
     "plan_volume_file_service_info",
     "plan_volume_multipart_upload",
-    "plan_volume_path",
 ]

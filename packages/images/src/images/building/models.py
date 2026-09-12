@@ -56,15 +56,6 @@ class ImageBuildLifecycleAction(StrEnum):
     KillContainer = "kill-container"
 
 
-class ImageBuildWaitOutcome(StrEnum):
-    Continue = "continue"
-    Running = "running"
-    Complete = "complete"
-    Failed = "failed"
-    Aborted = "aborted"
-    Timeout = "timeout"
-
-
 class ImageBuildSpinupTimeoutReason(StrEnum):
     Default = "default"
     Dockerfile = "dockerfile"
@@ -187,17 +178,6 @@ class ImageBuildSpinupTimeoutPlan(ContractModel):
     reason: ImageBuildSpinupTimeoutReason
     source_image_size_bytes: int = 0
     archive_nanoseconds_per_byte: int = 0
-
-
-class ImageBuildWaitPlan(ContractModel):
-    outcome: ImageBuildWaitOutcome
-    action: ImageBuildLifecycleAction
-    terminal: bool = False
-    status: BuildStatus = BuildStatus.Running
-    phase: ImageBuildPhase = ImageBuildPhase.Submitted
-    message: str = ""
-    stop_container: bool = False
-    reason: str = ""
 
 
 class ImageBuildStreamEventPlan(ContractModel):

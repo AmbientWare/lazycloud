@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from shared.env import parse_environment
 from shared.errors import InvalidInputError
 from shared.http.images import (
     BuildImageEvent,
@@ -72,10 +73,6 @@ class ImageBuildWorkflow(Protocol):
     ) -> ImageBuildRecord | None: ...
 
     def find_by_fingerprint(
-        self, fingerprint: str, *, workspace_id: str | None = None
-    ) -> ImageBuildRecord | None: ...
-
-    def find_active_by_fingerprint(
         self, fingerprint: str, *, workspace_id: str | None = None
     ) -> ImageBuildRecord | None: ...
 
@@ -467,7 +464,7 @@ def _image_spec_from_verify(
         packages=list(request.python_packages),
         commands=list(request.commands),
         build_steps=[_build_step(step) for step in request.build_steps],
-        env=_env_mapping(request.env_vars),
+        env=parse_environment(request.env_vars),
         dockerfile=request.dockerfile or None,
         context_digest=context_digest,
         context_object_id=request.build_ctx_object or None,
@@ -491,7 +488,7 @@ def _image_spec_from_build(
         packages=list(request.python_packages),
         commands=list(request.commands),
         build_steps=[_build_step(step) for step in request.build_steps],
-        env=_env_mapping(request.env_vars),
+        env=parse_environment(request.env_vars),
         dockerfile=request.dockerfile or None,
         context_digest=context_digest,
         context_object_id=request.build_ctx_object or None,
@@ -513,15 +510,6 @@ def _build_step(step: BuildStep) -> ImageBuildStep:
     if kind == ImageBuildStepKind.Micromamba.value:
         return ImageBuildStep(kind=ImageBuildStepKind.Micromamba, args=step.command.split())
     return ImageBuildStep(kind=ImageBuildStepKind.Shell, command=step.command)
-
-
-def _env_mapping(values: list[str]) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for value in values:
-        key, separator, item = value.partition("=")
-        if separator:
-            env[key] = item
-    return env
 
 
 def _source_image_for_spec(spec: ImageSpec) -> str:

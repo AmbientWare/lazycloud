@@ -37,62 +37,20 @@ type BytesKey = keyof Pick<
 
 export function ContainerMetricsCharts({
   points,
-  variant = "full",
   className,
 }: {
   points: ContainerMetricsPoint[] | undefined;
-  /** `compact` fits a drawer tab; `full` is a responsive detail-page grid. */
-  variant?: "full" | "compact";
   className?: string;
 }) {
   const samples = points ?? [];
   const data = buildMetricData(samples);
 
   if (!data.length) {
-    return (
-      <PanelEmpty
-        message="No compute samples"
-        className={variant === "compact" ? "h-36" : "h-44"}
-      />
-    );
+    return <PanelEmpty message="No compute samples" className="h-44" />;
   }
 
   const hasGpu = data.some((point) => point.gpuMemoryTotal > 0);
   const hasIo = hasIoSamples(samples);
-
-  if (variant === "compact") {
-    const readout = latestComputeReadout(data);
-    return (
-      <div className={cn("grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2", className)}>
-        <CpuChart data={data} compact readout={readout?.cpu} />
-        <MemoryChart
-          title="Memory"
-          data={data}
-          usedKey="memoryUsed"
-          totalKey="memoryTotal"
-          usedLabel="RSS"
-          color="var(--chart-2)"
-          compact
-          readout={readout?.memory}
-        />
-        {hasIo ? (
-          <RatePairChart
-            title="Network"
-            data={data}
-            primaryKey="networkRecvRate"
-            secondaryKey="networkSentRate"
-            primaryLabel="Received"
-            secondaryLabel="Sent"
-            color="var(--chart-5)"
-            compact
-            readout={readout?.network ?? undefined}
-            className="sm:col-span-2"
-          />
-        ) : null}
-      </div>
-    );
-  }
-
   const readout = latestComputeReadout(data);
   const latest = data[data.length - 1];
   const gpuReadout = latest?.gpuMemoryTotal ? formatBytes(latest.gpuMemoryUsed) : undefined;
@@ -153,22 +111,16 @@ export function ContainerMetricsCharts({
 }
 
 /** Layout-matched loading placeholder for one compute chart panel. */
-export function ChartSkeleton({
-  className,
-  compact = false,
-}: {
-  className?: string;
-  compact?: boolean;
-}) {
+export function ChartSkeleton() {
   return (
-    <div className={cn("space-y-2", className)} aria-hidden="true">
+    <div className="space-y-2" aria-hidden="true">
       <Skeleton className="h-3.5 w-16" />
-      <Skeleton className={cn("w-full", compact ? "h-36" : "h-44")} />
+      <Skeleton className="h-44 w-full" />
     </div>
   );
 }
 
-/** Chart section header: metric name, plus the latest-sample readout in compact mode. */
+/** Metric name and latest-sample readout. */
 function ChartHeader({ title, readout }: { title: string; readout?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
@@ -179,15 +131,7 @@ function ChartHeader({ title, readout }: { title: string; readout?: string }) {
 }
 
 /** CPU utilization as a percentage of the container allocation on a fixed 0-100% axis. */
-function CpuChart({
-  data,
-  compact = false,
-  readout,
-}: {
-  data: MetricDatum[];
-  compact?: boolean;
-  readout?: string;
-}) {
+function CpuChart({ data, readout }: { data: MetricDatum[]; readout?: string }) {
   const config: ChartConfig = {
     cpuPercent: { label: "Used", color: "var(--chart-1)" },
   };
@@ -195,7 +139,7 @@ function CpuChart({
   return (
     <section className="space-y-2" aria-label="CPU">
       <ChartHeader title="CPU" readout={readout} />
-      <ChartContainer config={config} className={cn("w-full", compact ? "h-36" : "h-44")}>
+      <ChartContainer config={config} className="h-44 w-full">
         <LineChart
           data={data}
           syncId={METRICS_SYNC_ID}
@@ -215,9 +159,9 @@ function CpuChart({
             stroke="var(--muted-foreground)"
             tickLine={false}
             axisLine={false}
-            width={compact ? 36 : 44}
+            width={44}
             domain={[0, 100]}
-            ticks={compact ? [0, 50, 100] : [0, 25, 50, 75, 100]}
+            ticks={[0, 25, 50, 75, 100]}
             tickFormatter={(value: number | string) => `${value}%`}
             tick={{ fontSize: 10 }}
           />
@@ -258,7 +202,6 @@ function MemoryChart({
   totalKey,
   usedLabel,
   color,
-  compact = false,
   readout,
 }: {
   title: string;
@@ -268,7 +211,6 @@ function MemoryChart({
   usedLabel: string;
   /** Per-metric hue, beam-style; the capacity line stays muted. */
   color: string;
-  compact?: boolean;
   readout?: string;
 }) {
   const config: ChartConfig = {
@@ -279,7 +221,7 @@ function MemoryChart({
   return (
     <section className="space-y-2" aria-label={title}>
       <ChartHeader title={title} readout={readout} />
-      <ChartContainer config={config} className={cn("w-full", compact ? "h-36" : "h-44")}>
+      <ChartContainer config={config} className="h-44 w-full">
         <ComposedChart
           data={data}
           syncId={METRICS_SYNC_ID}
@@ -299,8 +241,7 @@ function MemoryChart({
             stroke="var(--muted-foreground)"
             tickLine={false}
             axisLine={false}
-            width={compact ? 56 : 76}
-            tickCount={compact ? 3 : undefined}
+            width={76}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytes)}
             tick={{ fontSize: 10 }}
           />
@@ -326,7 +267,7 @@ function MemoryChart({
             strokeDasharray="4 3"
             isAnimationActive={false}
           />
-          {compact ? null : <ChartLegend content={<ChartLegendContent />} />}
+          <ChartLegend content={<ChartLegendContent />} />
         </ComposedChart>
       </ChartContainer>
     </section>
@@ -347,9 +288,7 @@ function RatePairChart({
   primaryLabel,
   secondaryLabel,
   color,
-  compact = false,
   readout,
-  className,
 }: {
   title: string;
   data: MetricDatum[];
@@ -358,9 +297,7 @@ function RatePairChart({
   primaryLabel: string;
   secondaryLabel: string;
   color: string;
-  compact?: boolean;
   readout?: string;
-  className?: string;
 }) {
   const config: ChartConfig = {
     [primaryKey]: { label: primaryLabel, color },
@@ -368,9 +305,9 @@ function RatePairChart({
   };
 
   return (
-    <section className={cn("space-y-2", className)} aria-label={title}>
+    <section className="space-y-2" aria-label={title}>
       <ChartHeader title={title} readout={readout} />
-      <ChartContainer config={config} className={cn("w-full", compact ? "h-36" : "h-44")}>
+      <ChartContainer config={config} className="h-44 w-full">
         <LineChart
           data={data}
           syncId={METRICS_SYNC_ID}
@@ -390,8 +327,7 @@ function RatePairChart({
             stroke="var(--muted-foreground)"
             tickLine={false}
             axisLine={false}
-            width={compact ? 56 : 76}
-            tickCount={compact ? 3 : undefined}
+            width={76}
             tickFormatter={(value: number | string) => formatAxisValue(value, formatBytesPerSecond)}
             tick={{ fontSize: 10 }}
           />
@@ -415,7 +351,7 @@ function RatePairChart({
             dot={false}
             isAnimationActive={false}
           />
-          {compact ? null : <ChartLegend content={<ChartLegendContent />} />}
+          <ChartLegend content={<ChartLegendContent />} />
         </LineChart>
       </ChartContainer>
     </section>

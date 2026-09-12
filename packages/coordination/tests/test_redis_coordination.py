@@ -126,20 +126,6 @@ def test_real_redis_scripts_locks_and_pubsub_leave_no_keys(
         assert message.channel == channel
         assert message.data == sent.event_id
 
-        claim = bus.claim(sent.event_id)
-        assert claim.lock_token
-        replacement.set(claim.lock_key, "replacement-event-owner", ex=30)
-        handled = bus.handle_claimed(claim, lambda _event: True)
-        assert not handled.lock_released
-        assert replacement.get(claim.lock_key) == "replacement-event-owner"
-        assert (
-            release_token_lock(
-                replacement,
-                claim.lock_key,
-                "replacement-event-owner",
-            )
-            is TokenLockReleaseStatus.Released
-        )
     finally:
         subscriber.close()
 

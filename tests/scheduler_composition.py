@@ -64,7 +64,6 @@ def services_with_redis_container_control(
         object_storage=services.object_storage,
         image_build_registry_settings=services.image_build_registry_settings,
         container_service_settings=services.container_service_settings,
-        volume_filesystem=services.volume_filesystem,
         volume_metering=services.volume_metering,
         redis_client=redis,
         binary_redis_client=redis,

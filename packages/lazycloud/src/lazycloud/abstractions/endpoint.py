@@ -343,7 +343,6 @@ class Endpoint(Generic[P, R]):
             self,
             name=name,
             workspace=workspace,
-            label="endpoint",
             source_root=source_root,
         )
 
@@ -715,7 +714,6 @@ class ASGI:
             self,
             name=name,
             workspace=workspace,
-            label="ASGI app",
             source_root=source_root,
         )
 
@@ -803,8 +801,12 @@ class RealtimeASGI(ASGI):
         return spec
 
 
+ASGIResourceT = TypeVar("ASGIResourceT", bound=ASGI)
+
+
 def _asgi(
     *,
+    resource_type: type[ASGIResourceT],
     _app_slug: str,
     name: str = "asgi",
     image: Image | None = None,
@@ -833,76 +835,9 @@ def _asgi(
     region: str | None = None,
     availability_zone: str = "",
     pool: PoolInput = None,
-) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
-    def decorate(target: Callable[..., Awaitable[Any]] | Callable[..., Any]) -> ASGI:
-        return ASGI(
-            app=target,
-            _app_slug=_app_slug,
-            name=name,
-            image=image or Image(),
-            route=route,
-            domain=domain,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            timeout_seconds=timeout_seconds,
-            workers=workers,
-            concurrent_requests=concurrent_requests,
-            keep_warm_seconds=keep_warm_seconds,
-            max_pending_tasks=max_pending_tasks,
-            authorized=authorized,
-            callback_url=callback_url,
-            env=env or {},
-            secrets=secrets or [],
-            volumes=volume_mounts(volumes or ()),
-            on_start=on_start,
-            autoscaler=autoscaler,
-            task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
-            preemptible=preemptible,
-            region=region,
-            availability_zone=availability_zone,
-            pool=pool,
-        )
-
-    return decorate
-
-
-def _realtime(
-    *,
-    _app_slug: str,
-    name: str = "realtime",
-    image: Image | None = None,
-    route: str = "/",
-    domain: str | None = None,
-    cpu: CpuRequest | None = DEFAULT_HTTP_CPU,
-    memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY,
-    disk: str | None = None,
-    gpu: GpuInput = None,
-    gpu_count: int = 0,
-    timeout_seconds: int | None = 180,
-    workers: int = 1,
-    concurrent_requests: int = 1,
-    keep_warm_seconds: int = 180,
-    max_pending_tasks: int = 100,
-    authorized: bool = True,
-    callback_url: str | None = None,
-    env: dict[str, str] | None = None,
-    secrets: list[str] | None = None,
-    volumes: Iterable[VolumeMount | VolumeExport] | None = None,
-    on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
-    task_policy: TaskPolicy | Mapping[str, Any] | None = None,
-    checkpoint_enabled: bool = False,
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
-    region: str | None = None,
-    availability_zone: str = "",
-    pool: PoolInput = None,
-) -> Callable[[Callable[..., Any]], RealtimeASGI]:
-    def decorate(target: Callable[..., Any]) -> RealtimeASGI:
-        return RealtimeASGI(
+) -> Callable[[Callable[..., Any]], ASGIResourceT]:
+    def decorate(target: Callable[..., Any]) -> ASGIResourceT:
+        return resource_type(
             app=target,
             _app_slug=_app_slug,
             name=name,
@@ -1195,7 +1130,6 @@ def _deploy_endpoint(
     *,
     name: str | None = None,
     workspace: str | None,
-    label: str,
     source_root: str | Path | None = None,
 ) -> DeployStubResponse:
     try:
@@ -1408,5 +1342,4 @@ __all__ = [
     "RealtimeASGI",
     "_asgi",
     "_endpoint",
-    "_realtime",
 ]

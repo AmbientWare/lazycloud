@@ -43,9 +43,12 @@ from shared.http.volumes import (
     VolumeInstance,
 )
 from shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
-from typing_extensions import Self
 
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.control import (
+    ControlClientConfig,
+    ResourceControlBinding,
+    resolve_control_client_config,
+)
 
 DEFAULT_VOLUME_MOUNT_ROOT = "/volumes"
 DEFAULT_MULTIPART_CHUNK_SIZE_BYTES = 5 * 1024 * 1024
@@ -269,7 +272,7 @@ class CloudBucket:
 
 
 @dataclass(slots=True)
-class Volume:
+class Volume(ResourceControlBinding[VolumeClient]):
     name: str
     mount_path: str | None = None
     workspace: str | None = None
@@ -291,26 +294,6 @@ class Volume:
             )
             self.client = _default_volume_client(config)
         return self.client
-
-    def _bind_control(
-        self,
-        client: VolumeClient | None = None,
-        *,
-        workspace: str | None = None,
-        endpoint: str | None = None,
-        token: str | None = None,
-        timeout_seconds: float | None = None,
-    ) -> Self:
-        self.client = client
-        if workspace is not None:
-            self.workspace = workspace
-        if endpoint is not None:
-            self.endpoint = endpoint
-        if token is not None:
-            self.token = token
-        if timeout_seconds is not None:
-            self.timeout_seconds = timeout_seconds
-        return self
 
     def get_or_create(self) -> bool:
         response = self.control_client.create(self.name)

@@ -1,26 +1,30 @@
 from __future__ import annotations
 
+import io
+import tarfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cache.protocol import CacheContentStoreResult, CacheContentStoreStatus
+import httpx
+from networking.internal_http import InternalHttpClient
 from pydantic import JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord
 from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_ARTIFACT_VOLUME
 from worker.checkpoint_activity import CheckpointLeaseRegistry
+from worker.checkpoint_transfer import RemoteCheckpointPersister
 from worker.checkpoints import CheckpointStatePayload, WorkerCheckpointStatus
 from worker.container_checkpoints import (
     ContainerFilesystemArchiveCreator,
     ContainerImageArchiveResult,
-    FilesystemCheckpointPersister,
     RuntimeCheckpointCreator,
 )
 from worker.container_client.models import ContainerArchiveResponse
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.execution import CHECKPOINT_FILESYSTEM_DIR
 from worker.image_build_execution import WorkerImageArchivePublishResult
+from worker.repository_client import WorkerRepositoryHttpClient, WorkerRepositoryHttpTransport
 
 type JsonObject = dict[str, JsonValue]
 
@@ -47,12 +51,27 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
     checkpoint_activity = CheckpointLeaseRegistry()
     runtime = RuntimeCheckpoint(checkpoint_activity=checkpoint_activity)
     state = CheckpointState()
-    uploader = CheckpointUploader()
-    cache = CheckpointCache()
+    uploaded: list[bytes] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            uploaded.append(request.read())
+            return httpx.Response(204)
+        if request.url.path.endswith("prepare-checkpoint-archive-upload"):
+            return httpx.Response(200, json={"upload_url": "https://storage.test/archive"})
+        return httpx.Response(200, json={"accelerator": "L4"})
+
+    http = InternalHttpClient()
     creator = RuntimeCheckpointCreator(
         runtime=runtime,
         state_sink=state,
-        persister=FilesystemCheckpointPersister(uploader=uploader, cache_store=cache),
+        persister=RemoteCheckpointPersister(
+            repository=WorkerRepositoryHttpClient(
+                WorkerRepositoryHttpTransport("https://repository.test", "worker-token", http=http)
+            ),
+            internal_http=http,
+            cache_namespace="checkpoints",
+        ),
         checkpoint_root=str(tmp_path / "checkpoints"),
         content_cache_available=True,
         id_factory=lambda: "chk-1",
@@ -72,7 +91,9 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
         gpu="l4",
     )
 
-    checkpoint_id = creator.create_checkpoint(instance)
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        http._client = client
+        checkpoint_id = creator.create_checkpoint(instance)
 
     checkpoint_path = tmp_path / "checkpoints" / "chk-1"
     filesystem_path = checkpoint_path / CHECKPOINT_FILESYSTEM_DIR
@@ -87,9 +108,10 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
         filesystem_path / "workspace" / _ARTIFACT_DIR / "data"
     ).read_bytes() == b"application data"
     assert not (filesystem_path / _ARTIFACT_DIR).exists()
-    assert uploader.calls[0][0] == "checkpoints/chk-1.tar"
     payload = state.payloads[-1]
-    assert cache.calls[0][1:] == ("checkpoints/chk-1.tar", payload.cache_hash)
+    with tarfile.open(fileobj=io.BytesIO(uploaded[0])) as archive:
+        assert "chk-1/filesystem/app.py" in archive.getnames()
+    assert payload.origin_key == "checkpoints/chk-1.tar"
     assert not (tmp_path / "checkpoints" / "chk-1.tar").exists()
     assert payload.checkpoint_id == "chk-1"
     assert payload.status is WorkerCheckpointStatus.Available
@@ -115,9 +137,12 @@ def test_runtime_checkpoint_creator_records_failed_state_on_runtime_error(
     creator = RuntimeCheckpointCreator(
         runtime=runtime,
         state_sink=state,
-        persister=FilesystemCheckpointPersister(
-            uploader=CheckpointUploader(),
-            cache_store=CheckpointCache(),
+        persister=RemoteCheckpointPersister(
+            repository=WorkerRepositoryHttpClient(
+                WorkerRepositoryHttpTransport("https://repository.test", "worker-token")
+            ),
+            internal_http=InternalHttpClient(),
+            cache_namespace="checkpoints",
         ),
         checkpoint_root=str(tmp_path / "checkpoints"),
         content_cache_available=True,
@@ -237,33 +262,6 @@ class CheckpointState:
     def save_checkpoint_state(self, payload: CheckpointStatePayload) -> CheckpointRecord:
         self.payloads.append(payload)
         return CheckpointRecord(checkpoint_id=payload.checkpoint_id)
-
-
-@dataclass(slots=True)
-class CheckpointUploader:
-    calls: list[tuple[str, Path]] = field(default_factory=list)
-
-    def upload_file(self, key: str, path: Path) -> None:
-        self.calls.append((key, path))
-
-
-@dataclass(slots=True)
-class CheckpointCache:
-    calls: list[tuple[Path, str, str]] = field(default_factory=list)
-
-    def store_file(
-        self,
-        path: Path,
-        *,
-        cache_path: str,
-        routing_key: str,
-    ) -> CacheContentStoreResult:
-        self.calls.append((path, cache_path, routing_key))
-        return CacheContentStoreResult(
-            status=CacheContentStoreStatus.Stored,
-            content_hash=routing_key,
-            cache_path=cache_path,
-        )
 
 
 @dataclass(slots=True)

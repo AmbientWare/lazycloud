@@ -14,9 +14,12 @@ from shared.http.collections import (
     MapSetResponse,
 )
 from shared.http.errors import HttpApiError
-from typing_extensions import Self
 
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.control import (
+    ControlClientConfig,
+    ResourceControlBinding,
+    resolve_control_client_config,
+)
 from lazycloud.values import decode_value, encode_value
 
 _MISSING = object()
@@ -48,7 +51,7 @@ class MapSetError(ValueError):
 
 
 @dataclass(slots=True)
-class Map(MutableMapping[str, Any]):
+class Map(ResourceControlBinding[MapClient], MutableMapping[str, Any]):
     name: str
     workspace: str | None = None
     client: MapClient | None = field(default=None, init=False, repr=False)
@@ -67,26 +70,6 @@ class Map(MutableMapping[str, Any]):
             )
             self.client = _default_map_client(config)
         return self.client
-
-    def _bind_control(
-        self,
-        client: MapClient | None = None,
-        *,
-        workspace: str | None = None,
-        endpoint: str | None = None,
-        token: str | None = None,
-        timeout_seconds: float | None = None,
-    ) -> Self:
-        self.client = client
-        if workspace is not None:
-            self.workspace = workspace
-        if endpoint is not None:
-            self.endpoint = endpoint
-        if token is not None:
-            self.token = token
-        if timeout_seconds is not None:
-            self.timeout_seconds = timeout_seconds
-        return self
 
     def set(
         self,

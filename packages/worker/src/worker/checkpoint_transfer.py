@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from networking.internal_http import InternalHttpClient
 from shared.checkpoints import CheckpointRecord
+
 from worker.checkpoints import (
     CheckpointPersistencePlan,
     checkpoint_archive_hash_and_size,

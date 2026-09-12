@@ -21,8 +21,13 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import select
-from storage.volume_filesystem import LocalVolumeFilesystem, VolumeNamespace
+from storage.volume_filesystem import (
+    VolumeNamespace,
+    WorkspaceVolumeFilesystem,
+    workspace_volume_store_resolver,
+)
 from storage.volume_metering import PersistentVolumeMeteringService
+from tests.fakes import FakeObjectClient
 
 from storage import volume_metering
 
@@ -46,7 +51,9 @@ def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
         metered_at=started_at,
     )
     payload = b"persistent-volume-payload"
-    filesystem = LocalVolumeFilesystem(service_context.paths.root / "volumes")
+    filesystem = WorkspaceVolumeFilesystem(
+        workspace_volume_store_resolver(service_context.database, object_store=FakeObjectClient())
+    )
     namespace = VolumeNamespace(workspace_id=workspace_id, volume_id=record.id)
     filesystem.ensure_volume(namespace)
     filesystem.write_path(namespace, "nested/payload.bin", (payload,))
@@ -103,7 +110,9 @@ def test_volume_metering_scans_only_the_stable_volume_namespace(
         size_bytes=3,
         metered_at=started_at,
     )
-    filesystem = LocalVolumeFilesystem(service_context.paths.root / "volumes")
+    filesystem = WorkspaceVolumeFilesystem(
+        workspace_volume_store_resolver(service_context.database, object_store=FakeObjectClient())
+    )
     first_namespace = VolumeNamespace(workspace_id, first.id)
     second_namespace = VolumeNamespace(workspace_id, second.id)
     filesystem.write_path(first_namespace, "a.bin", (b"1234",))
@@ -139,7 +148,14 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
         size_bytes=7,
         metered_at=started_at,
     )
-    filesystem = _FailingOccupancyFilesystem(service_context.paths.root / "unavailable-volumes")
+    filesystem = WorkspaceVolumeFilesystem(
+        workspace_volume_store_resolver(service_context.database, object_store=FakeObjectClient())
+    )
+
+    def unavailable(self: WorkspaceVolumeFilesystem, namespace: VolumeNamespace) -> int:
+        raise TimeoutError(f"timed out scanning {namespace.volume_id}")
+
+    monkeypatch.setattr(WorkspaceVolumeFilesystem, "occupancy_bytes", unavailable)
     metering = PersistentVolumeMeteringService(service_context, filesystem)
     monkeypatch.setattr(volume_metering, "utc_now", lambda: observed_at)
 
@@ -192,7 +208,11 @@ def test_a_metered_volume_window_prices_byte_seconds_exactly(
 
     result = PersistentVolumeMeteringService(
         service_context,
-        LocalVolumeFilesystem(service_context.paths.root / "volumes"),
+        WorkspaceVolumeFilesystem(
+            workspace_volume_store_resolver(
+                service_context.database, object_store=FakeObjectClient()
+            )
+        ),
     ).reconcile_volume(record.name, workspace_id=workspace_id, now=observed_at)
 
     assert result is not None
@@ -210,11 +230,6 @@ def test_a_metered_volume_window_prices_byte_seconds_exactly(
     assert segments[0].cost_nanos == 69_443
     assert segments[0].component == LedgerComponent.VolumeStorage.value
     assert segments[0].quantity == Decimal(result.byte_seconds)
-
-
-class _FailingOccupancyFilesystem(LocalVolumeFilesystem):
-    def occupancy_bytes(self, namespace: VolumeNamespace) -> int:
-        raise TimeoutError(f"timed out scanning {namespace.volume_id}")
 
 
 def _set_checkpoint(

@@ -64,7 +64,6 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
       scale={1.1}
       scrollWithContent={false}
       shading={0.04}
-      shadow={0}
       speed={0.6}
       wind={0.72}
       windRadius={260}

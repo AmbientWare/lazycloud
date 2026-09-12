@@ -39,7 +39,7 @@ from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.container_requests import OciRuntimeName, capacity_memory_mib
 from shared.contracts import ContractModel
 from shared.errors import CapacityLimitReachedError, UpstreamUnavailableError
-from shared.gpu import GPU_ANY, gpu_preference_accepts
+from shared.gpu import gpu_preference_accepts
 from shared.placement import ProductRegion, product_region
 from shared.scheduling import (
     SchedulerWorkerRecord,
@@ -1976,32 +1976,6 @@ class CapacityReservationService:
         )
 
 
-def reservation_shape_for_request(
-    request: SchedulerWorkerRequest,
-    *,
-    worker_cpu_millicores: int,
-    worker_memory_mib: int,
-    worker_gpu_type: str,
-    worker_gpu_count: int,
-    worker_runtimes: Iterable[str],
-    worker_preemptible: bool,
-) -> CapacityRequestShape:
-    requested_gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
-    requested_gpu_type = _requested_gpu_type(request)
-    gpu_count = max(worker_gpu_count, requested_gpu_count)
-    gpu_type = worker_gpu_type or requested_gpu_type if gpu_count > 0 else ""
-    return CapacityRequestShape(
-        cpu_millicores=max(worker_cpu_millicores, request.cpu_millicores),
-        memory_mib=max(worker_memory_mib, capacity_memory_mib(request.memory_mib)),
-        gpu_type=gpu_type,
-        gpu_count=gpu_count,
-        runtime_class=request.runtime_class,
-        runtime_classes=tuple(dict.fromkeys(runtime for runtime in worker_runtimes if runtime)),
-        docker_enabled=request.docker_enabled,
-        preemptible=worker_preemptible,
-    )
-
-
 def reservation_matches_worker(
     reservation: CapacityProvisioningReservation,
     worker: SchedulerWorkerRecord,
@@ -2166,17 +2140,6 @@ def _redis_strings(values: Iterable[str | bytes | int | float | bool]) -> list[s
     return sorted(redis_text(value) for value in values)
 
 
-def _requested_gpu_type(request: SchedulerWorkerRequest) -> str:
-    """The card a shape is named after, which is the first real model asked for.
-
-    A shape describes one machine, so it carries one model however many the
-    request would accept. `any` is not one: it is a wildcard, and a shape built
-    around it would name hardware nothing reports.
-    """
-
-    return next((entry for entry in request.gpu if entry != GPU_ANY), "")
-
-
 def _supports_docker(runtimes: Iterable[str]) -> bool:
     # "gvisor" and "sandboxed-oci" are spellings a worker registered before the
     # move to gVisor; they mean runsc and are matched so an existing reservation
@@ -2207,5 +2170,4 @@ __all__ = [
     "ComputeUnitCapacityController",
     "RedisCapacityReservationRepository",
     "reservation_matches_worker",
-    "reservation_shape_for_request",
 ]

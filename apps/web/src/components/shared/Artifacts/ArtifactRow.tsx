@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { TableRow, TableCell } from "@/components/ui/table";
 import { exactTime, formatBytes } from "@/lib/format";
+import { downloadBlob } from "@/lib/files";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { useLiveNow } from "@/hooks/use-live-now";
 import {
@@ -181,19 +182,13 @@ export function ArtifactRow({
 
   async function download(): Promise<void> {
     setDownloading(true);
-    let url: string | null = null;
     try {
-      url = URL.createObjectURL(await fetchArtifactBlob(workspaceId, artifact));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = artifact.filename;
-      link.click();
+      downloadBlob(artifact.filename, await fetchArtifactBlob(workspaceId, artifact));
     } catch (error) {
       toast.error("Download failed", {
         description: error instanceof Error ? error.message : "unknown error",
       });
     } finally {
-      if (url) URL.revokeObjectURL(url);
       setDownloading(false);
     }
   }

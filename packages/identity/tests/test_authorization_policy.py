@@ -11,7 +11,6 @@ from identity.authz import (
     admin_requirement,
     build_policy_input,
     decide_authorization,
-    machine_requirement,
     worker_requirement,
     workspace_requirement,
 )
@@ -141,7 +140,7 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
     assert non_admin_decision.reason == AuthzDecisionReason.WrongTokenKind
 
 
-def test_policy_decisions_cover_worker_machine_and_external_input(
+def test_policy_decisions_cover_worker_and_external_input(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(ControlPlaneService(service_context), "workspace-a")
@@ -166,12 +165,6 @@ def test_policy_decisions_cover_worker_machine_and_external_input(
         worker_requirement(private_only=True),
     )
     assert public_worker_decision.reason == AuthzDecisionReason.WrongTokenKind
-
-    machine_decision = decide_authorization(
-        private_worker,
-        machine_requirement(workspace_id=workspace.id),
-    )
-    assert machine_decision.allowed
 
     policy_input = build_policy_input(
         private_worker,

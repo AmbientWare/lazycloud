@@ -8,35 +8,22 @@ import {
 } from "./ActivitySparkline";
 import type { AppRunActivity } from "./app-activity-buckets";
 
-/** One app's 24 hours, drawn the same way wherever it appears.
-
-    The card and the app view once fed the same bars from different shapes: the
-    view resolved every status into a band, the card named only its failures and
-    left the rest unattributed. The bars agreed and the colours did not, so the
-    same hour was grey in one place and green in the other. Both now pass an
-    `AppRunActivity` and this decides the rest.
-
-    Legend and axis are the parts a card has no room for, so they are asked for
-    rather than assumed. Everything that carries meaning, the bands, their
-    order, their colours and their tooltips, is not optional. */
+/** App cards and detail views share the same activity bands and tooltips. */
 export function AppActivityChart({
   activity,
   label,
   className,
   chartClassName,
-  showLegend = false,
   showAxis = false,
 }: {
   activity: AppRunActivity;
   label: string;
   className?: string;
   chartClassName?: string;
-  showLegend?: boolean;
   showAxis?: boolean;
 }) {
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      {showLegend ? <AppActivityLegend activity={activity} className="mb-1 self-end" /> : null}
       <ActivitySparkline
         values={activity.tasks}
         bands={activity.bands}

@@ -101,7 +101,6 @@ class SchedulerRuntime:
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
         image_build_container_settings: ImageBuildContainerSettings,
-        create_schema: bool = False,
     ) -> SchedulerRuntime:
         database = DatabaseClient.from_settings(
             DatabaseSettings(application_name=DatabaseApplicationName.Scheduler)
@@ -112,7 +111,6 @@ class SchedulerRuntime:
         try:
             app_services = SchedulerAppServices.create(
                 database,
-                create_schema=create_schema,
                 redis_client=redis_client,
                 gateway_origin=public_gateway_http_url,
                 observability=observability,

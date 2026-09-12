@@ -33,7 +33,10 @@ from database.repositories.orchestration import (
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from execution.containers.preemption import PreemptedContainerControl
-from execution.containers.runtime_state import ContainerRuntimeStateRepository
+from execution.containers.runtime_state import (
+    ContainerRuntimeStateRepository,
+    release_container_runtime_state,
+)
 from execution.task_claims import TaskClaimReleaseService
 from execution.tasks import TaskService
 from foundation.network import worker_network_prefix
@@ -2799,7 +2802,7 @@ class WorkerRepositoryService:
                     container.started_at = now
                 if container_status in TERMINAL_CONTAINER_STATUSES:
                     container.finished_at = container.finished_at or now
-                    self._release_container_runtime_state(container)
+                    release_container_runtime_state(self.runtime_state, container)
                     updated_task = self._sync_runtime_task_for_container_terminal_state(
                         session,
                         container,
@@ -2890,7 +2893,7 @@ class WorkerRepositoryService:
                 )
                 container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
-                self._release_container_runtime_state(container)
+                release_container_runtime_state(self.runtime_state, container)
                 if not preempted:
                     updated_task = self._sync_runtime_task_for_container_terminal_state(
                         session,
@@ -2930,7 +2933,9 @@ class WorkerRepositoryService:
                     if task.id != container.task_id
                 ]
             else:
-                self._release_pooled_claims(session, container)
+                TaskClaimReleaseService(session).release_container(
+                    container.id, except_task_id=container.task_id
+                )
             # The preemption retry intent must commit with the terminal state it belongs to.
             # A container that needs no settling is marked settled here so the recovery
             # sweep only ever sees work that is genuinely outstanding. A pooled
@@ -2970,54 +2975,11 @@ class WorkerRepositoryService:
         if updated_task is not None:
             self._publish_runtime_task_change(container, updated_task)
 
-    def _release_pooled_claims(
-        self,
-        session: DatabaseSession,
-        container: ContainerRecord,
-    ) -> None:
-        """Give back the invocations a pooled container was holding when it died.
-
-        Read from the task side because the claim is the only record: a function
-        container is started for its stub and its `task_id` stays empty for its
-        whole life. Released rather than failed, and released with its retry
-        budget untouched — the platform took this container away, so the caller's
-        invocation is still wanted and has spent nothing. The caller sees only
-        that it ran somewhere else.
-        """
-
-        TaskClaimReleaseService(session).release_container(
-            container.id,
-            except_task_id=container.task_id,
-        )
-
     def _mark_container_preemption_settled(self, container_id: str) -> None:
         if self.services is None:
             return
         with self.services.context.database.session() as session:
             ContainerRepository(session).mark_preemption_settled(container_id, now=utc_now())
-
-    def _release_container_runtime_state(self, container: ContainerRecord) -> None:
-        """A worker reporting an exit is a terminal transition like any other.
-
-        These are the only paths that ever write Exited, and they run from worker
-        callbacks rather than through the container service, so the release has
-        to be made here too or a container that simply finished keeps its
-        keep-warm marker and its share of the deployment's connection count.
-        """
-        if self.runtime_state is None or not container.stub_id:
-            return
-        try:
-            self.runtime_state.release(
-                workspace_id=container.workspace_id,
-                stub_id=container.stub_id,
-                container_id=container.id,
-            )
-        except Exception:
-            LOGGER.warning(
-                "releasing container runtime state failed",
-                exc_info=True,
-                extra={"container_id": container.id},
-            )
 
     def _sync_runtime_task_for_container_terminal_state(
         self,
@@ -3086,7 +3048,7 @@ class WorkerRepositoryService:
                 container.exit_code = 1
                 container.finished_at = container.finished_at or finished_at
                 container.startup_error = error
-                self._release_container_runtime_state(container)
+                release_container_runtime_state(self.runtime_state, container)
                 if previous_state != (
                     container.task_id,
                     container.status,

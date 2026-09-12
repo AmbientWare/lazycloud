@@ -1,6 +1,7 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { fileBase64 } from "@/lib/files";
 import {
   podCreateImageSchema,
   podEmptyMutationSchema,
@@ -89,7 +90,7 @@ export function uploadSandboxFileMutationOptions(workspaceId: string, containerI
         podEmptyMutationSchema,
         {
           container_path: path,
-          value_base64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+          value_base64: await fileBase64(file),
         },
       ),
   });
@@ -180,13 +181,4 @@ function encodeSandboxPath(path: string): string {
     .split("/")
     .map((part) => encodeURIComponent(part))
     .join("/");
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 32_768;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
 }

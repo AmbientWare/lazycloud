@@ -46,14 +46,6 @@ priced into the ledger that no meter event can carry is a charge nobody can
 collect.
 """
 
-METER_EVENT_DEDUPLICATION_HOURS = 24
-"""How long Stripe enforces uniqueness on a meter event's `identifier`.
-
-At-least-once delivery is safe only inside this window: a resend after it has
-passed is counted a second time. It is the ceiling every retry schedule that
-sends meter events has to fit under.
-"""
-
 _CUSTOMER_REGISTRATION_KEY_PREFIX = "customer-registration-"
 
 
@@ -588,9 +580,8 @@ class StripeBilling:
     ) -> None:
         """Report one priced window of usage against a customer's meter.
 
-        The deduplication the protocol relies on lasts
-        `METER_EVENT_DEDUPLICATION_HOURS` here, which is the ceiling every retry
-        schedule that sends these has to fit under.
+        Stripe deduplicates event identifiers for 24 hours. Retry schedules must
+        fit inside that window to avoid counting the same event twice.
 
         Which refusals are permanent is decided here rather than by the caller,
         because the limits behind them are Stripe's. Only two are: a payload this
@@ -1192,6 +1183,5 @@ def _epoch(value: datetime, field: str) -> str:
 
 __all__ = [
     "METER_EVENT_BACKFILL_DAYS",
-    "METER_EVENT_DEDUPLICATION_HOURS",
     "StripeBilling",
 ]
