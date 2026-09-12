@@ -212,13 +212,11 @@ def stub_url(
     port: int | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> StubUrlResponse:
     return _stub_url_response(
         service.stub_url(
             stub_id,
-            apps=services.apps,
             workspace=workspace_id,
             external_url=external_url,
             deployment_id=deployment_id,

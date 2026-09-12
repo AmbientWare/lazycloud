@@ -13,7 +13,6 @@ from shared.urls import handler_prefix
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from api.server.deployed_stubs import stub_is_public_in_session
 from api.server.services import ApiServices
 
 PORT_HOST_PATTERN = re.compile(r"^(?P<target>.+)-(?P<port>[1-9][0-9]{0,4})$")
@@ -124,7 +123,7 @@ def _resolve_handler_path(
     if target.stub.kind in PROXY_STUB_KINDS and target.port is None:
         return None
     route_id = target.container_id or target.stub.id
-    if stub_is_public_in_session(services, session, target.stub):
+    if target.stub.public:
         base_path = f"/{prefix}/public/{route_id}"
     elif target.stub_id_route:
         base_path = f"/{prefix}/id/{route_id}"

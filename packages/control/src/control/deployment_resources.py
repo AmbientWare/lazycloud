@@ -27,7 +27,7 @@ class DeploymentResource:
             deployment_name=self.deployment.name,
             deployment_version=self.deployment.version,
             subdomain=self.deployment.subdomain,
-            public=self.stub.public or self.app.public,
+            public=self.stub.public,
         )
         try:
             return build_deployment_url(external_url, target, pin_version=pin_version)
