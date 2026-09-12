@@ -1,5 +1,5 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -82,7 +82,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
             className="shrink-0"
             disabled={!valid || !balance.data?.ready || purchase.isPending}
           >
-            {purchase.isPending ? "Opening checkout…" : "Add credit"}
+            {purchase.isPending ? "Opening checkout…" : "Add credits"}
           </Button>
         </div>
         {terms && (
