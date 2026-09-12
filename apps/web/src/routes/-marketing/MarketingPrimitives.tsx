@@ -1,17 +1,35 @@
 import { Slot } from "@radix-ui/react-slot";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useAuthToken } from "@/hooks/use-auth-token";
 import { githubSignInHref } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
+import { MarketingReveal } from "./MarketingReveal";
 
 export type MarketingRoute = "/" | "/pricing" | "/legal/privacy" | "/legal/terms" | "/dashboard";
 
 /* Shared page rhythm: compact phone gutters that open up with the viewport. */
 export const shell =
   "ml-[max(1rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] w-auto max-w-[1200px] mr-[max(1rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] sm:ml-[max(1.5rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] sm:mr-[max(1.5rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] lg:ml-[max(2rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] lg:mr-[max(2rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))]";
+
+export function MarketingHero({ children }: { children: ReactNode }) {
+  return (
+    <section className="marketing-hero relative overflow-hidden border-b border-border bg-background">
+      <div className="marketing-grid-field" aria-hidden="true" />
+      <div
+        className={cn(
+          shell,
+          "marketing-hero-content relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 sm:gap-12 lg:gap-16 max-lg:grid-cols-1",
+        )}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
 
 export function MarketingCard({
   asChild = false,
@@ -28,14 +46,6 @@ export function MarketingCard({
   );
 }
 
-export function Glyph({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center justify-center font-mono text-[0.9em] not-italic">
-      {children}
-    </span>
-  );
-}
-
 /* Live status dot, shared by terminal footers and product rows. */
 export function StatusDot() {
   return <i className="size-1.5 rounded-full bg-positive shadow-[0_0_10px_var(--positive)]" />;
@@ -46,22 +56,22 @@ export function MarketingButton({
   hash,
   children,
   className,
-  endGlyph = "↗",
+  endIcon = <ArrowUpRight aria-hidden="true" />,
 }: {
   to: MarketingRoute;
   hash?: string;
   children: ReactNode;
   className?: string;
-  endGlyph?: ReactNode | null;
+  endIcon?: ReactNode | null;
 }) {
   return (
     <Button
       asChild
       size="lg"
-      variant="outline"
+      variant="secondary"
       className={cn(
         "marketing-button-link justify-between text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
-        endGlyph === null && "justify-center",
+        endIcon === null && "justify-center",
         className,
       )}
     >
@@ -80,7 +90,7 @@ export function MarketingButton({
         }}
       >
         <span>{children}</span>
-        {endGlyph === null ? null : <Glyph>{endGlyph}</Glyph>}
+        {endIcon}
       </Link>
     </Button>
   );
@@ -91,22 +101,22 @@ export function MarketingButton({
  *
  * A browser that already holds a credential enters the dashboard without
  * restarting OAuth. The signed-out action remains a real anchor because leaving
- * for GitHub is a document navigation. `outline` has an explicit foreground
- * because `marketing-action-primary` paints a light brand wash whose default
- * light-on-primary text fails contrast.
+ * for GitHub is a document navigation.
  */
 export function GetStartedButton({
   className,
   label = "Get started",
+  variant = "default",
 }: {
   className?: string;
   label?: string;
+  variant?: "default" | "secondary";
 }) {
   const token = useAuthToken();
   const content = (
     <>
       <span>{token ? "Dashboard" : label}</span>
-      <Glyph>{token ? "→" : "↗"}</Glyph>
+      {token ? <ArrowRight aria-hidden="true" /> : <ArrowUpRight aria-hidden="true" />}
     </>
   );
 
@@ -114,9 +124,10 @@ export function GetStartedButton({
     <Button
       asChild
       size="lg"
-      variant="outline"
+      variant={variant}
       className={cn(
-        "marketing-button-link justify-between text-foreground [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
+        "marketing-button-link justify-between [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full",
+        variant === "default" && "marketing-action-primary",
         className,
       )}
     >
@@ -131,8 +142,8 @@ export function GetStartedButton({
 
 export function SectionHeading({ title, body }: { title: ReactNode; body?: string }) {
   return (
-    <div className="mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
-      <h2 className="max-w-[740px] font-serif text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.02] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
+    <MarketingReveal className="relative mb-10 max-w-[770px] sm:mb-12 lg:mb-14">
+      <h2 className="max-w-[740px] font-sans text-[clamp(2.125rem,8vw,3.625rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance [&_em]:text-brand [&_em]:not-italic">
         {title}
       </h2>
       {body ? (
@@ -140,30 +151,29 @@ export function SectionHeading({ title, body }: { title: ReactNode; body?: strin
           {body}
         </p>
       ) : null}
-    </div>
+    </MarketingReveal>
   );
 }
 
 export function FinalCta({ title, body }: { title: ReactNode; body: string }) {
   return (
     <section className="marketing-final-cta relative !min-h-[clamp(32rem,75svh,43.125rem)] overflow-hidden border-t border-input text-foreground [@media(max-height:500px)]:!min-h-[27rem]">
-      <div className="marketing-cta-grid" aria-hidden="true" />
-      <div
+      <MarketingReveal
         className={cn(
           shell,
           "marketing-final-inner relative z-[2] flex !min-h-[clamp(32rem,75svh,43.125rem)] flex-col items-center justify-center py-16 text-center sm:py-20 lg:py-30 [@media(max-height:500px)]:!min-h-[27rem] [@media(max-height:500px)]:py-12",
         )}
       >
-        <h2 className="max-w-[950px] font-serif !text-[clamp(2.5rem,10vw,5rem)] leading-[1.01] font-normal tracking-[-0.005em] text-balance sm:leading-[0.99] [&_em]:text-brand [&_em]:italic">
+        <h2 className="relative max-w-[950px] font-sans !text-[clamp(2.5rem,10vw,5rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance [&_em]:text-brand [&_em]:not-italic">
           {title}
         </h2>
-        <p className="mt-5 max-w-[600px] !text-base leading-relaxed text-muted-foreground sm:mt-6 sm:!text-[17px]">
+        <p className="relative mt-5 max-w-[600px] !text-base leading-relaxed text-muted-foreground sm:mt-6 sm:!text-[17px]">
           {body}
         </p>
         <div className="mt-8 flex w-full max-w-[22rem] justify-center sm:w-auto sm:max-w-none">
-          <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
+          <GetStartedButton />
         </div>
-      </div>
+      </MarketingReveal>
     </section>
   );
 }

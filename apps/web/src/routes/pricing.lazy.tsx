@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
+import { ArrowDown, CornerDownRight } from "lucide-react";
 
 import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
 import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
@@ -11,12 +12,13 @@ import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./-marketing/MarketingLayout";
+import { MarketingReveal } from "./-marketing/MarketingReveal";
 import {
   FinalCta,
-  Glyph,
   GetStartedButton,
   MarketingButton,
   MarketingCard,
+  MarketingHero,
   shell,
 } from "./-marketing/MarketingPrimitives";
 
@@ -132,7 +134,7 @@ function accountTerm(catalog: PricingCatalog): string {
 }
 
 const sectionTitle =
-  "font-serif text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.05] font-normal tracking-[-0.005em] text-balance [&_em]:text-brand [&_em]:italic";
+  "font-sans text-[clamp(1.75rem,4.2vw,2.5rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance [&_em]:text-brand [&_em]:not-italic";
 
 function MarketingPricing() {
   const [meter, setMeter] = useState<Meter>("hour");
@@ -157,66 +159,61 @@ function MarketingPricing() {
 
   return (
     <MarketingLayout>
-      <main id="marketing-main">
-        <section className="border-b border-border bg-background">
-          <div
-            className={cn(
-              shell,
-              "grid grid-cols-[minmax(0,0.68fr)_minmax(0,1fr)] gap-x-14 gap-y-12 pt-12 pb-16 sm:pt-14 lg:gap-x-20 lg:pt-20 lg:pb-24 max-lg:grid-cols-1",
-            )}
-          >
-            <div className="flex min-w-0 flex-col">
-              <h1 className="font-serif text-[clamp(2.75rem,6.6vw,4.5rem)] leading-[0.94] font-normal tracking-[-0.01em] text-balance [&_em]:text-brand [&_em]:italic">
-                Compute pricing <em>by the second.</em>
-              </h1>
-              <p className="mt-6 max-w-[30rem] text-[15px] leading-[1.6] text-muted-foreground sm:text-base">
-                Compute billing starts with the container and stops with it. You pay by the second.
-              </p>
-              <div className="mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-                <GetStartedButton className="marketing-action-primary stamp border-brand/45" />
-                <MarketingButton
-                  className="marketing-action-secondary stamp-quiet border-input"
-                  endGlyph="↓"
-                  hash="plans"
-                  to="/pricing"
-                >
-                  Compare plans
-                </MarketingButton>
-              </div>
-            </div>
-
-            <MarketingCard className="min-w-0 p-5 sm:p-6">
-              <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
-                <h2 className="font-serif text-[clamp(1.625rem,3vw,2.125rem)] leading-none font-normal">
-                  Usage rates
-                </h2>
-                <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
-              </div>
-              <RateList
-                groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
-                id={fleetRatesId}
-              />
-              <a
-                className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
-                href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
+      <main className="marketing-hero-page" id="marketing-main">
+        <MarketingHero>
+          <div className="flex min-w-0 flex-col">
+            <h1 className="max-w-[620px] text-balance">
+              Compute pricing <em>by the second.</em>
+            </h1>
+            <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
+              Compute billing starts with the container and stops with it. You pay by the second.
+            </p>
+            <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
+              <GetStartedButton />
+              <MarketingButton
+                endIcon={<ArrowDown aria-hidden="true" />}
+                hash="plans"
+                to="/pricing"
               >
-                Pricing details
-              </a>
-            </MarketingCard>
-          </div>
-        </section>
-
-        <section className="border-b border-border bg-muted py-14 sm:py-16 lg:py-20" id="plans">
-          <div className={shell}>
-            <div className="mb-6 max-w-[44rem]">
-              <h2 className={sectionTitle}>Pricing plans</h2>
+                Compare plans
+              </MarketingButton>
             </div>
-            <div className="grid grid-cols-3 gap-4 max-md:grid-cols-1">
+          </div>
+
+          <MarketingCard className="min-w-0 p-5 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+              <h2 className="font-sans text-[clamp(1.625rem,3vw,2.125rem)] leading-[1.08] font-[550] tracking-[-0.045em]">
+                Usage rates
+              </h2>
+              <MeterToggle controls={fleetRatesId} meter={meter} onChange={setMeter} />
+            </div>
+            <RateList
+              groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
+              id={fleetRatesId}
+            />
+            <a
+              className="interactive-link text-[12.5px] text-muted-foreground underline underline-offset-4"
+              href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
+            >
+              Pricing details
+            </a>
+          </MarketingCard>
+        </MarketingHero>
+
+        <section
+          className="border-b border-border bg-background-subtle py-14 sm:py-16 lg:py-20"
+          id="plans"
+        >
+          <div className={shell}>
+            <MarketingReveal className="mb-6 max-w-[44rem]">
+              <h2 className={sectionTitle}>Pricing plans</h2>
+            </MarketingReveal>
+            <MarketingReveal className="grid grid-cols-3 gap-4 max-md:grid-cols-1" delay={100}>
               {catalog.plans.map((plan) => (
                 <MarketingCard asChild key={plan.terms_version}>
                   <article className="flex flex-col p-5 sm:p-6">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                      <h3 className="font-serif text-[24px] leading-none font-normal">
+                      <h3 className="font-sans text-[24px] leading-[1.08] font-[550] tracking-[-0.045em]">
                         {plan.name}
                       </h3>
                       <p className="flex items-baseline gap-2">
@@ -273,15 +270,15 @@ function MarketingPricing() {
                         <PlanTerm key={term}>{term}</PlanTerm>
                       ))}
                     </ul>
-                    <GetStartedButton className="marketing-action-secondary stamp-quiet mt-auto w-full border-input" />
+                    <GetStartedButton variant="secondary" className="mt-auto w-full" />
                   </article>
                 </MarketingCard>
               ))}
-            </div>
+            </MarketingReveal>
 
             <p className="mt-4 flex max-w-[58rem] items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
               <span className="mt-0.5 shrink-0 text-brand">
-                <Glyph>↳</Glyph>
+                <CornerDownRight className="size-4 shrink-0" aria-hidden="true" />
               </span>
               <span>{accountTerm(catalog)}</span>
             </p>
@@ -326,7 +323,7 @@ function PlanTerm({ children }: { children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2.5 text-[13px] leading-relaxed">
       <span className="mt-0.5 shrink-0 text-brand">
-        <Glyph>↳</Glyph>
+        <CornerDownRight className="size-4 shrink-0" aria-hidden="true" />
       </span>
       <span>{children}</span>
     </li>
@@ -375,7 +372,7 @@ function MeterToggle({
   return (
     <fieldset className="shrink-0">
       <legend className="sr-only">Read every rate per hour or per second</legend>
-      <div className="flex rounded-full border border-border bg-card p-1">
+      <div className="flex rounded-md border border-border bg-card p-1">
         {meters.map((option) => (
           <label className="cursor-pointer" key={option.value}>
             <input
@@ -387,7 +384,7 @@ function MeterToggle({
               type="radio"
               value={option.value}
             />
-            <span className="inline-flex min-h-8 items-center rounded-full px-3.5 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground peer-checked:bg-brand peer-checked:font-semibold peer-checked:text-brand-foreground peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand [@media(pointer:coarse)]:min-h-11">
+            <span className="inline-flex min-h-8 items-center rounded-md px-3.5 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground peer-checked:bg-brand peer-checked:font-semibold peer-checked:text-brand-foreground peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand [@media(pointer:coarse)]:min-h-11">
               {option.label}
             </span>
           </label>

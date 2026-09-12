@@ -49,7 +49,7 @@ export function QuickstartEmptyState() {
               key={step.title}
               className="grid gap-3 border-b border-border p-4 last:border-b-0 sm:grid-cols-[1.75rem_minmax(0,1fr)] sm:p-5"
             >
-              <span className="mono flex size-7 items-center justify-center rounded-full border border-border bg-muted/30 text-[11px] text-muted-foreground">
+              <span className="mono flex size-7 items-center justify-center rounded-md border border-border bg-muted/30 text-[11px] text-muted-foreground">
                 {String(index + 1).padStart(2, "0")}
               </span>
               <div className="min-w-0">

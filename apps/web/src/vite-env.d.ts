@@ -8,8 +8,6 @@
  * here is what turns that into a failed build instead.
  */
 interface ImportMetaEnv {
-  /** Where the runnable examples live. Absent in builds that have none. */
-  readonly VITE_LAZYCLOUD_EXAMPLES_URL?: string;
   /** Where the documentation lives. Absent, the build links the published site. */
   readonly VITE_LAZYCLOUD_DOCS_URL?: string;
 }
