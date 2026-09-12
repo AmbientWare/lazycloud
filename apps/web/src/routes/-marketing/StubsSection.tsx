@@ -64,7 +64,7 @@ function StubsStory({ active }: { active: boolean }) {
 
   return (
     <div className={shell}>
-      <div className="max-w-[760px]">
+      <div className="marketing-client-heading max-w-[760px]">
         <SectionHeading
           title={
             <>

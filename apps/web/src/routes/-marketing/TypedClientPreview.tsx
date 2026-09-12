@@ -48,7 +48,7 @@ const TONE: Record<Tone, string> = {
   num: "text-warning",
   type: "text-positive",
   punc: "text-muted-foreground",
-  note: "text-muted-foreground/70",
+  note: "text-muted-foreground",
 };
 
 type Seg = [Tone, string];
