@@ -3847,14 +3847,19 @@ class ComputeService:
     def delete_machine(self, machine_id: str, *, workspace: str = "default") -> None:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            scoped_ids = {
-                machine.id
-                for machine in MachineRepository(session).records.list(workspace_id=workspace_id)
-            }
-            if machine_id not in scoped_ids:
+            machines = MachineRepository(session)
+            machine = machines.get(machine_id, workspace_id=workspace_id)
+            if machine is None:
                 msg = f"machine not found in workspace: {machine_id}"
                 raise KeyError(msg)
-            MachineRepository(session).records.delete(machine_id, workspace_id=workspace_id)
+            if machine.status is ResourceStatus.Deleted:
+                return
+            machines.upsert(
+                machine.model_copy(
+                    update={"status": ResourceStatus.Deleted, "updated_at": utc_now()}
+                ),
+                workspace_id=workspace_id,
+            )
         self._publish_change(
             workspace_id=workspace_id,
             topic=WorkspaceChangeTopic.ComputeMachines,
@@ -3891,7 +3896,11 @@ class ComputeService:
 
     def list_workers(self) -> list[Worker]:
         with self.context.database.session() as session:
-            records = WorkerRepository(session).list_across_workspaces()
+            records = [
+                worker
+                for worker in WorkerRepository(session).list_across_workspaces()
+                if worker.status is not ResourceStatus.Deleted
+            ]
         records.sort(key=lambda item: item.created_at, reverse=True)
         return records
 
