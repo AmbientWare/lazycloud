@@ -85,6 +85,60 @@
   color: var(--brand);
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .marketing-hero-content > :first-child > * {
+    animation: marketing-enter-copy 760ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  .marketing-hero-content > :first-child > :nth-child(2) {
+    animation-delay: 110ms;
+  }
+
+  .marketing-hero-content > :first-child > :nth-child(3) {
+    animation-delay: 210ms;
+  }
+
+  .marketing-hero-content > :last-child {
+    --hero-enter-x: 28px;
+    --hero-enter-y: 12px;
+    animation: marketing-enter-panel 900ms cubic-bezier(0.22, 1, 0.36, 1) 160ms backwards;
+  }
+
+  .marketing-hero-content > :first-child > :focus-within,
+  .marketing-hero-content > :last-child:focus-within {
+    animation: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .marketing-hero-content > :last-child {
+    --hero-enter-x: 0px;
+    --hero-enter-y: 24px;
+  }
+}
+
+@keyframes marketing-enter-copy {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes marketing-enter-panel {
+  from {
+    opacity: 0;
+    transform: translate(var(--hero-enter-x), var(--hero-enter-y)) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
 .marketing-site main > .marketing-hero::before {
   backdrop-filter: none;
   background: linear-gradient(
@@ -992,17 +1046,6 @@
 .marketing-story-visual .marketing-sandbox-preview {
   gap: 7px;
   padding: 9px 11px 10px;
-}
-
-@keyframes marketing-rise {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 @keyframes marketing-blink {

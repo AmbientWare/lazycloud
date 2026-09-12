@@ -230,7 +230,7 @@ export function MarketingHome() {
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
         <MarketingHero>
-          <div className="relative marketing-rise">
+          <div className="relative">
             <h1 className="max-w-[620px] text-balance">
               Deploy as fast <em>as you develop.</em>
             </h1>
@@ -257,7 +257,7 @@ export function MarketingHome() {
           </div>
 
           <div className="relative min-w-0">
-            <MarketingCard className="marketing-rise relative z-[2] min-w-0 [animation-delay:100ms]">
+            <MarketingCard className="relative z-[2] min-w-0">
               <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
                 <TabsList
                   /* The split hero keeps a stable 3×2 control through compact
