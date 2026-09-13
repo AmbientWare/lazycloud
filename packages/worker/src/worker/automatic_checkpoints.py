@@ -75,6 +75,8 @@ class WorkerAutomaticCheckpointService:
         if not context.checkpoint_enabled and not context.checkpoint_id:
             return mount_result
         self._validate(context)
+        if context.startup_kind is WorkerStartupKind.Sandbox:
+            return mount_result
         signal = plan_checkpoint_signal_mount(
             container_id=context.request.container_id,
             container_hostname=socket.gethostname(),
@@ -97,7 +99,8 @@ class WorkerAutomaticCheckpointService:
         container_hostname: str,
     ) -> str:
         if context.checkpoint_id:
-            self._complete(context.request.container_id, container_hostname=container_hostname)
+            if context.startup_kind is not WorkerStartupKind.Sandbox:
+                self._complete(context.request.container_id, container_hostname=container_hostname)
             return context.checkpoint_id
         decision = plan_auto_checkpoint(
             checkpoint_enabled=context.checkpoint_enabled,
