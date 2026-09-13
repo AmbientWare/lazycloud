@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-import execution.shells.service as shell_service_module
 import pytest
 from anyio.from_thread import start_blocking_portal
 from api.fastapi_app import create_app
@@ -402,7 +401,6 @@ def test_existing_container_shell_reuses_credentials_through_worker_client(
 def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port(
     isolated_services: ApiServices,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with ExitStack() as resources:
         control = ControlPlaneService(isolated_services.context)
@@ -452,7 +450,6 @@ def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port
                 ),
             }
         )
-        monkeypatch.setattr(shell_service_module, "SHELL_SERVER_READY_TIMEOUT_SECONDS", 0.01)
         service = ShellControlService(
             isolated_services,
             scheduler_containers=scheduler_containers,

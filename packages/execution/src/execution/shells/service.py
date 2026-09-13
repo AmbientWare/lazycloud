@@ -34,6 +34,7 @@ from shared.shell_protocol import (
     SHELL_FRAME_HEADER_SIZE,
     SHELL_FRAME_MAX_PAYLOAD_BYTES,
     ShellAuthRequest,
+    ShellFrameError,
     ShellFrameType,
     encode_shell_frame,
 )
@@ -772,7 +773,7 @@ def _read_shell_frame(connection: socket.socket) -> tuple[bytes, bytes]:
     header = _read_exact(connection, SHELL_FRAME_HEADER_SIZE)
     payload_size = int.from_bytes(header[1:], "big")
     if payload_size > SHELL_FRAME_MAX_PAYLOAD_BYTES:
-        raise OSError("shell frame payload exceeds maximum size")
+        raise ShellFrameError("shell frame payload exceeds maximum size")
     return header[:1], _read_exact(connection, payload_size)
 
 
