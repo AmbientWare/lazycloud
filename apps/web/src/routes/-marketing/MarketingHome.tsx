@@ -149,8 +149,8 @@ const platformStories: PlatformStory[] = [
   {
     key: "sandboxes",
     label: "Agent sandboxes",
-    title: "Give your coding agent room to run.",
-    body: "Let your agent run code and tests in an isolated sandbox with files, processes, ports, Docker, snapshots, and a network policy you control.",
+    title: "Run your agent's code in a sandbox.",
+    body: "Run code and tests in isolation. Control files, processes, ports, Docker, snapshots, and network access.",
     visual: "sandbox",
   },
 ];
@@ -240,8 +240,8 @@ export function MarketingHome() {
               Deploy as fast <em>as you develop.</em>
             </h1>
             <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-              Your coding agent helps you build faster. LazyCloud gets your product running. Use the
-              same Python code locally, for a one-off cloud run, or as a deployed app.
+              Your coding agent helps you build faster. LazyCloud runs your product in the cloud.
+              Use the same Python code locally, for a one-off cloud run, or as a deployed app.
             </p>
             <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
               <GetStartedButton />

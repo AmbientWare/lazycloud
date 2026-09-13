@@ -166,7 +166,7 @@ function MarketingPricing() {
               Compute pricing <em>by the second.</em>
             </h1>
             <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-              Compute billing starts with the container and stops with it. You pay by the second.
+              Pay for compute while your container is running.
             </p>
             <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
               <GetStartedButton />
