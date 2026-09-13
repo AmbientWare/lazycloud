@@ -1051,6 +1051,7 @@ class ManagementService:
         *,
         workspace: str | None = None,
         external_url: str = "http://127.0.0.1:9000",
+        port: int | None = None,
     ) -> DeploymentUrlResult:
         deployment = (
             self.retrieve_deployment(workspace, deployment_id_or_name)
@@ -1067,7 +1068,7 @@ class ManagementService:
         return DeploymentUrlResult(
             deployment=resource.deployment,
             stub=resource.stub,
-            url=resource.invoke_url(external_url),
+            url=resource.invoke_url(external_url, port=port),
         )
 
     def deployment_manifest(

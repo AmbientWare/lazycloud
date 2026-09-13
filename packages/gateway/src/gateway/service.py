@@ -869,23 +869,7 @@ class GatewayControlService:
             if resource is None:
                 msg = f"deployment resource not found after deploy: {deployment.id}"
                 raise ValueError(msg)
-            if resource.stub.kind is StubKind.Pod:
-                pod_ports = list(resource.stub.config.ports.values()) or list(
-                    resource.stub.config.runtime.ports.values()
-                )
-                invoke_url = (
-                    self.control_plane.stub_url(
-                        resource.stub.id,
-                        workspace=workspace,
-                        external_url=request.external_url,
-                        deployment_id=deployment.id,
-                        port=pod_ports[0],
-                    ).url
-                    if pod_ports
-                    else ""
-                )
-            else:
-                invoke_url = resource.invoke_url(request.external_url)
+            invoke_url = resource.invoke_url(request.external_url)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return DeployStubResponse(
@@ -903,6 +887,7 @@ class GatewayControlService:
                     request.deployment_id,
                     workspace=request.workspace,
                     external_url=request.external_url,
+                    port=request.port,
                 ).url
             else:
                 url = self.control_plane.stub_url(
