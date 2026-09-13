@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import os
 import signal
 import socket
@@ -313,9 +312,12 @@ class FunctionRunner:
         except BaseException as exc:
             duration = time.perf_counter() - started
             formatted = traceback.format_exc()
-            with contextlib.suppress(Exception):
+            try:
                 self.append_task_logs(task.task_id, "stderr", formatted)
-            print(formatted, file=sys.stderr)
+            except Exception as log_error:
+                self.report_log_delivery_failure(
+                    task.task_id, f"traceback: {type(log_error).__name__}: {log_error}"
+                )
             self.run_error_hooks(task, exc, duration_seconds=duration)
             response = self.end_failed_task(task, exc, duration_seconds=duration)
             self.run_final_failure_hooks(task, exc, response, duration_seconds=duration)
@@ -326,12 +328,11 @@ class FunctionRunner:
         return self._handler
 
     def execute_with_log_capture(self, task: ClaimedTask) -> Any:
-        container_stdout, container_stderr = self.container_streams
         logs = TaskLogBuffer(
             lambda stream, messages: self.append_task_logs(task.task_id, stream, messages)
         )
-        stdout = RunnerTaskLogStream("stdout", container_stdout, logs)
-        stderr = RunnerTaskLogStream("stderr", container_stderr, logs)
+        stdout = RunnerTaskLogStream("stdout", logs)
+        stderr = RunnerTaskLogStream("stderr", logs)
         with routed_output(stdout, stderr):
             try:
                 return invoke_handler(
@@ -343,6 +344,19 @@ class FunctionRunner:
                 stdout.close()
                 stderr.close()
                 logs.close()
+                if logs.dropped_appends:
+                    unit = "line" if logs.dropped_appends == 1 else "lines"
+                    self.report_log_delivery_failure(
+                        task.task_id,
+                        f"{logs.dropped_appends} log {unit}: {logs.last_append_error}",
+                    )
+
+    def report_log_delivery_failure(self, task_id: str, detail: str) -> None:
+        print(
+            f"task {task_id}: log delivery failed for {detail}",
+            file=self.container_streams[1],
+            flush=True,
+        )
 
     def set_result(self, task: ClaimedTask, result: FunctionResultPayload) -> None:
         FunctionSetResultResponse.model_validate(
