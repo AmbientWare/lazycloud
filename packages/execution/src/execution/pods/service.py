@@ -1041,7 +1041,10 @@ class PodControlService:
         while True:
             container = self._container(container.id)
             if container.status in TERMINAL_CONTAINER_STATUSES:
-                raise ConflictError(f"container {container.id} is {container.status.value}")
+                reason = container.startup_error or (
+                    f"container {container.id} is {container.status.value}"
+                )
+                raise ConflictError(reason)
             state = self.scheduler_containers.get_container_state(container.id)
             if state is None:
                 last_reason = f"scheduler state not found for container {container.id}"

@@ -947,8 +947,16 @@ class WorkerContainerExecutionService:
                 on_started=monitored_started,
                 output_sink=output_sink,
             )
-        except ContainerRuntimeStartError as exc:
-            result.runtime_output = _redact_runtime_output(exc.output, context.request)
+        except Exception as exc:
+            if isinstance(exc, ContainerRuntimeStartError):
+                result.runtime_output = _redact_runtime_output(exc.output, context.request)
+            if log_capture is not None:
+                failed_phase, detail = _first_phase_failure(result)
+                phase = failed_phase or ContainerExecutionPhase.RunRuntime
+                safe_detail = _redact_runtime_output(detail or str(exc), context.request)
+                log_capture.record_diagnostic(
+                    f"container startup failed during {phase.value}: {safe_detail}"
+                )
             raise
         finally:
             result.monitoring = monitor.stop()
