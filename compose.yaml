@@ -146,10 +146,7 @@ x-database-bootstrap-env: &database-bootstrap-env
   LAZYCLOUD_DATABASE_DIRECT_URL: "${LAZYCLOUD_COMPOSE_DATABASE_DIRECT_URL:-postgresql+psycopg://lazycloud:${POSTGRES_PASSWORD:-lazycloud}@postgres:5432/lazycloud}"
 
 x-lazycloud-build-args: &lazycloud-build-args
-  # Where the examples and the docs live, baked into the web bundle at build
-  # time. Empty examples means the marketing pages render no entry point rather
-  # than one that goes nowhere; empty docs means the published site.
-  VITE_LAZYCLOUD_EXAMPLES_URL: "${LAZYCLOUD_EXAMPLES_URL:-}"
+  # An empty docs URL uses the published documentation site.
   VITE_LAZYCLOUD_DOCS_URL: "${LAZYCLOUD_DOCS_URL:-}"
 
 x-lazycloud-depends: &lazycloud-depends

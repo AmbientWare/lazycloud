@@ -7,7 +7,7 @@ export function AccountSettings() {
     <section className="flex min-w-0 items-center gap-3 border-b border-border pb-3">
       <div className="flex min-w-0 items-center gap-3">
         {user.avatar_url ? (
-          <img src={user.avatar_url} alt="" className="size-8 shrink-0 rounded-full" />
+          <img src={user.avatar_url} alt="" className="size-8 shrink-0 rounded-md" />
         ) : null}
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold tracking-tight">{user.display_name}</h2>

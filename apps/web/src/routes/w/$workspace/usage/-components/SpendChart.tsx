@@ -146,7 +146,7 @@ function IntervalBreakdown({
           <span className="flex items-center gap-1.5">
             <span
               aria-hidden="true"
-              className="size-2 shrink-0 rounded-[2px]"
+              className="size-2 shrink-0 rounded-xs"
               style={{ backgroundColor: COST_DIMENSIONS[total.dimension].color }}
             />
             {COST_DIMENSIONS[total.dimension].label}

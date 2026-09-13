@@ -61,7 +61,7 @@ function InvokeTarget({
     <div className="min-w-[18rem] flex-1 basis-[32rem]">
       <div className="micro-label mb-1.5">Invoke URL</div>
       <div className="flex min-w-0 items-start gap-1.5">
-        <code className="mono min-w-0 flex-1 rounded bg-muted/60 px-2.5 py-1.5 text-xs break-all">
+        <code className="mono min-w-0 flex-1 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs break-all">
           {query.data.url}
         </code>
         <CopyButton value={query.data.url} label="invoke URL" className="shrink-0" />

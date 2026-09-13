@@ -1,20 +1,17 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
-import { Menu, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Menu, X } from "lucide-react";
 
 import { Clouds } from "@/components/canvasui/Clouds";
 import { DOCS_URL, EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
-import { Glyph, GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
+import { GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
 
 import "./marketing.css";
 
-/* Only what this build can actually reach. The examples gallery lives outside
-   this app and is absent from some deployments, so it is configured or left out;
-   a menu entry that goes nowhere is worse than a shorter menu. */
 const navigation: readonly { label: string; to?: MarketingRoute; href?: string }[] = [
-  ...(EXAMPLES_URL ? [{ label: "Examples", href: EXAMPLES_URL }] : []),
+  { label: "Examples", href: `${EXAMPLES_URL}/index` },
   { label: "Pricing", to: "/pricing" },
   { label: "Docs", href: DOCS_URL },
 ];
@@ -29,7 +26,6 @@ const navLinkActive = "data-[status=active]:font-semibold data-[status=active]:t
 const footerLink =
   "inline-flex min-h-9 w-max items-center text-[13px] text-muted-foreground transition-colors hover:text-foreground [@media(pointer:coarse)]:min-h-11";
 
-/* Public routes use the same dark palette as the workspace. */
 export function MarketingLayout({ children }: { children: ReactNode }) {
   const scrollportRef = useRef<HTMLDivElement>(null);
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -51,23 +47,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
   }, [hash, pathname]);
 
   return (
-    <Clouds
-      className="dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
-      contentClassName="marketing-site h-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth motion-reduce:scroll-auto"
-      contentRef={scrollportRef}
-      blur={0.48}
-      color={[0.08, 0.7, 0.95]}
-      cover={0.06}
-      density={1.45}
-      opacity={0.12}
-      quality={0.4}
-      scale={1.1}
-      scrollWithContent={false}
-      shading={0.04}
-      speed={0.6}
-      wind={0.72}
-      windRadius={260}
-    >
+    <MarketingFrame key={pathname} scrollportRef={scrollportRef}>
       <a
         className="fixed top-[max(0.75rem,env(safe-area-inset-top))] left-[max(0.75rem,env(safe-area-inset-left))] -translate-y-[160%] rounded-lg bg-foreground px-3.5 py-2.5 text-background focus:translate-y-0"
         href="#marketing-main"
@@ -82,7 +62,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
         <div
           className={cn(
             shell,
-            "relative flex h-14 items-center justify-between gap-3 rounded-2xl border border-border/80 bg-card px-3 shadow-[0_12px_32px_color-mix(in_oklab,var(--foreground)_10%,transparent)] sm:px-4",
+            "relative flex h-14 items-center justify-between gap-3 border border-border/80 px-3 sm:px-4",
           )}
         >
           <Link
@@ -108,10 +88,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
                 ),
               )}
             </nav>
-            <GetStartedButton
-              className="marketing-action-primary stamp border-brand/45 max-[479px]:hidden"
-              label="Sign in"
-            />
+            <GetStartedButton className="max-[479px]:hidden" label="Sign in" />
             <MobileNavigation />
           </div>
         </div>
@@ -141,11 +118,9 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
             <Link className={footerLink} to="/pricing">
               Pricing
             </Link>
-            {EXAMPLES_URL ? (
-              <a className={footerLink} href={EXAMPLES_URL}>
-                Examples
-              </a>
-            ) : null}
+            <a className={footerLink} href={`${EXAMPLES_URL}/index`}>
+              Examples
+            </a>
             <a className={footerLink} href={DOCS_URL}>
               Docs
             </a>
@@ -162,6 +137,53 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
           <p className="shrink-0 font-mono text-xs text-muted-foreground">© 2026 LazyCloud</p>
         </div>
       </footer>
+    </MarketingFrame>
+  );
+}
+
+function MarketingFrame({
+  children,
+  scrollportRef,
+}: {
+  children: ReactNode;
+  scrollportRef: RefObject<HTMLDivElement | null>;
+}) {
+  const [cloudsPaused, setCloudsPaused] = useState(false);
+
+  useEffect(() => {
+    const scrollport = scrollportRef.current;
+    if (!scrollport) return;
+
+    const syncCloudMotion = () => setCloudsPaused(scrollport.scrollTop > 0);
+
+    scrollport.addEventListener("scroll", syncCloudMotion, { passive: true });
+    syncCloudMotion();
+    return () => scrollport.removeEventListener("scroll", syncCloudMotion);
+  }, [scrollportRef]);
+
+  const contentClassName =
+    "marketing-site h-full scroll-pt-24 scroll-pb-[max(1rem,env(safe-area-inset-bottom))] overflow-x-hidden overflow-y-auto overscroll-y-contain scroll-smooth motion-reduce:scroll-auto";
+
+  return (
+    <Clouds
+      className="dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
+      contentClassName={contentClassName}
+      contentRef={scrollportRef}
+      blur={0.9}
+      color={[0.48, 0.48, 0.48]}
+      cover={0.06}
+      density={1.45}
+      opacity={0.4}
+      quality={0.4}
+      scale={0.65}
+      scrollWithContent={false}
+      shading={0.04}
+      speed={0.9}
+      wind={0.1}
+      windRadius={260}
+      paused={cloudsPaused}
+    >
+      {children}
     </Clouds>
   );
 }
@@ -236,7 +258,7 @@ function MobileNavigation() {
                   to={entry.to}
                 >
                   <span>{entry.label}</span>
-                  <Glyph>↗</Glyph>
+                  <ArrowRight className="size-4.5 shrink-0" aria-hidden="true" />
                 </Link>
               ) : (
                 <a
@@ -246,14 +268,11 @@ function MobileNavigation() {
                   onClick={() => setOpen(false)}
                 >
                   <span>{entry.label}</span>
-                  <Glyph>↗</Glyph>
+                  <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
                 </a>
               ),
             )}
-            <GetStartedButton
-              className="marketing-action-primary stamp mt-3 border-brand/45"
-              label="Sign in"
-            />
+            <GetStartedButton className="mt-3" label="Sign in" />
           </div>
         </nav>
       ) : null}

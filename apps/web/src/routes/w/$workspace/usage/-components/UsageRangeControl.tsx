@@ -35,7 +35,7 @@ export function UsageRangeControl({
             aria-pressed={selected}
             onClick={() => onChange(key)}
             className={cn(
-              "h-6 rounded-[3px] px-2 text-xs whitespace-nowrap outline-none transition-colors",
+              "h-6 rounded-xs px-2 text-xs whitespace-nowrap outline-none transition-colors",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               selected
                 ? "bg-accent font-medium text-foreground"

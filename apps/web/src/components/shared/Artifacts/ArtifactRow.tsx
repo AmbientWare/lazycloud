@@ -136,7 +136,7 @@ function PreviewBody({
       );
     }
     return (
-      <div className="flex flex-1 items-center justify-center overflow-auto rounded bg-muted p-3">
+      <div className="flex flex-1 items-center justify-center overflow-auto rounded-md bg-muted p-3">
         <img
           src={url}
           alt={artifact.filename}
@@ -147,10 +147,10 @@ function PreviewBody({
     );
   }
   if (kind === "pdf") {
-    return <iframe src={url} title={artifact.filename} className="flex-1 rounded border-0" />;
+    return <iframe src={url} title={artifact.filename} className="flex-1 rounded-md border-0" />;
   }
   return (
-    <pre className="mono flex-1 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
+    <pre className="mono flex-1 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
       {text ?? ""}
     </pre>
   );

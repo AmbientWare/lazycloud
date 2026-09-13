@@ -269,7 +269,7 @@ function ConnectionActions({
       {customerAction?.stack ? (
         <div className="space-y-3 border border-border bg-card p-4 text-xs">
           <p>Use an AWS CLI profile for account {customerAction.stack.account_id}.</p>
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-muted p-3">
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-3">
             lazycloud cloud authorize --profile YOUR_AWS_PROFILE
           </pre>
           <p>After CloudFormation finishes, select Check authorization.</p>
