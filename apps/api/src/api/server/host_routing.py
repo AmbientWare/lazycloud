@@ -123,6 +123,8 @@ def _resolve_handler_path(
     if target.stub.kind in PROXY_STUB_KINDS and target.port is None:
         return None
     route_id = target.container_id or target.stub.id
+    if target.container_id is not None and target.stub.kind is StubKind.Pod:
+        prefix = f"{prefix}/containers"
     if target.stub.public:
         base_path = f"/{prefix}/public/{route_id}"
     elif target.stub_id_route:
@@ -209,7 +211,7 @@ def _port_host_target(
             stub = None
         if (
             stub is not None
-            and stub.kind is StubKind.Sandbox
+            and stub.kind in PROXY_STUB_KINDS
             and stub.workspace_id == container.workspace_id
         ):
             return _HostTarget(

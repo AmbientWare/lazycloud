@@ -164,13 +164,10 @@ def pod_proxy_url(
     if isinstance(port, bool) or not 1 <= port <= 65535:
         msg = "pod proxy port must be between 1 and 65535"
         raise ValueError(msg)
-    if resource is StubKind.Sandbox:
-        if not container_id:
-            msg = "container id is required for sandbox proxy URLs"
-            raise ValueError(msg)
+    if container_id:
         return _replace_host(parsed, f"{container_id}-{port}.{parsed.netloc}")
-    if container_id is not None:
-        msg = "container id is supported only for sandbox proxy URLs"
+    if resource is StubKind.Sandbox:
+        msg = "container id is required for sandbox proxy URLs"
         raise ValueError(msg)
     return _replace_host(parsed, f"{stub_id}-{port}.{parsed.netloc}")
 
