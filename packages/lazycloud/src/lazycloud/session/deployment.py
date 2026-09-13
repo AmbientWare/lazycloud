@@ -149,6 +149,11 @@ class DeploymentSubmission:
     def result(self, *, wait: bool = False) -> object:
         if self.task is not None:
             result = self.task.result(wait=wait)
+            if not result.ok:
+                detail = f": {result.error}" if result.error else ""
+                raise DeploymentOperationError(
+                    f"deployment task {result.id} is {result.status.value}{detail}"
+                )
             if result.value is None:
                 return None
             try:
