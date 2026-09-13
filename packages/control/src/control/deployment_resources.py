@@ -50,10 +50,11 @@ def client_manifest_resource(
         stub_id=resource.stub.id,
         deployment_id=resource.deployment.id,
         deployment_version=resource.deployment.version,
-        invoke_url=resource.invoke_url(external_url),
+        invoke_url=resource.invoke_url(external_url, pin_version=True),
         invoke_path=deployment_handler_path(
             resource.deployment.kind.value,
             resource.deployment.name,
+            version=resource.deployment.version,
         ),
         route=spec.route,
         methods=list(spec.methods),
