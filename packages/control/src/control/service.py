@@ -67,7 +67,7 @@ from shared.urls import (
 from shared.workload_config import StubConfig
 from sqlalchemy.orm import Session
 
-from control.apps import AppReader, AppRegistry
+from control.apps import AppRegistry
 from control.context import ControlContext
 from control.events import publish_workload_change
 from control.models import (
@@ -1159,7 +1159,6 @@ class ControlPlaneService:
         self,
         stub_id_or_name: str,
         *,
-        apps: AppReader,
         workspace: str | None = None,
         external_url: str = "http://127.0.0.1:9000",
         deployment_id: str | None = None,
@@ -1167,7 +1166,6 @@ class ControlPlaneService:
     ) -> StubUrlPlan:
         stub = self.get_stub(stub_id_or_name, workspace=workspace)
         deployment = self._deployment(deployment_id or stub.deployment_id or "")
-        app = apps.get(stub.app_id, workspace=workspace) if stub.app_id else None
         ports = _stub_ports(stub, port=port)
         target = StubUrlTarget(
             kind=stub.kind.value,
@@ -1175,7 +1173,7 @@ class ControlPlaneService:
             deployment_name=deployment.name if deployment else stub.name,
             deployment_version=deployment.version if deployment else 1,
             subdomain=deployment.subdomain if deployment else "",
-            public=stub.public or bool(app and app.public),
+            public=stub.public,
             ports=ports,
         )
         try:

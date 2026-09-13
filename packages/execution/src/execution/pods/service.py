@@ -424,7 +424,6 @@ class PodControlService:
         if request.external_url and ports and stub.kind is not StubKind.Sandbox:
             url = self.control_plane.stub_url(
                 stub.id,
-                apps=self.services.apps,
                 workspace=stub.workspace_id,
                 external_url=request.external_url,
                 port=ports[0],
