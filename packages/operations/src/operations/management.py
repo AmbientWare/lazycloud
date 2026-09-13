@@ -25,6 +25,7 @@ from database.repositories.apps import (
     AppRepository,
     AppSummaryRepository,
     DeploymentRepository,
+    StubRepository,
 )
 from database.repositories.billing_costs import BillingLedgerCostRepository
 from database.repositories.execution import (
@@ -37,6 +38,7 @@ from database.repositories.execution import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
+    AutoscalingTargetRepository,
     ContainerRepository,
 )
 from database.repositories.storage import ObjectRepository
@@ -49,6 +51,7 @@ from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
 from observability.usage import UsageService
 from pydantic import Field
+from shared.autoscaler_state import autoscaler_target_kind
 from shared.billing_quotes import LedgerComponent
 from shared.container_requests import (
     ContainerShutdownTarget,
@@ -829,6 +832,18 @@ class ManagementService:
                 name=deployment.name,
                 status="active" if deployment.active else "inactive",
             )
+            if active:
+                targets = AutoscalingTargetRepository(session)
+                for stub in StubRepository(session).list_for_deployments(
+                    [updated.id], workspace_id=workspace_id
+                ):
+                    target_kind = autoscaler_target_kind(stub.kind)
+                    if target_kind is not None:
+                        targets.activate(
+                            stub_id=stub.id,
+                            workspace_id=workspace_id,
+                            target_kind=target_kind,
+                        )
         self._publish_deployment_change(updated, workspace_id=workspace_id)
         # Unconditional: the call matches on deployment id, so a deployment with
         # no schedule has nothing to toggle and asking is cheaper than knowing.
