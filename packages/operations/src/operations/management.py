@@ -1538,19 +1538,7 @@ class ManagementService:
         return TaskStopResult(stopped=tuple(stopped), skipped=tuple(skipped))
 
     def _cancel_task(self, task: Task) -> None:
-        """Cancel one task through whatever owns stopping its kind of work.
-
-        Nothing inside a container watches the task row, so writing `cancelled`
-        on it stops no work. Reaching the handler means going through the service
-        that knows what stopping this workload does to the invocations beside
-        it.
-
-        Built here the way this service builds its control plane, and safe to
-        build without a gateway origin because cancelling only settles work: it
-        stops a container and fails what was waiting on the cancelled call.
-        Nothing on this path starts a container, which is the one thing that
-        would need to tell a container where to call back.
-        """
+        """Let the workload owner cancel execution and settle its dependents."""
 
         stub = self._stub_for_task(task)
         if stub is not None and stub.kind is StubKind.Function:

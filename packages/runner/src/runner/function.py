@@ -7,8 +7,9 @@ import sys
 import threading
 import time
 import traceback
+from contextlib import suppress
 from dataclasses import dataclass, field
-from multiprocessing import Process
+from multiprocessing import Pipe, Process
 from types import FrameType
 from typing import Any, Protocol, TextIO
 
@@ -40,12 +41,14 @@ from shared.function_payloads import (
     FunctionPayloadEncoding,
     FunctionResultPayload,
 )
-from shared.http.errors import HttpApiError
+from shared.http.errors import HttpApiError, HttpTransportError
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionClaimResponse,
+    FunctionMonitorRequest,
+    FunctionMonitorResponse,
     FunctionRetireRequest,
     FunctionRetireResponse,
     FunctionSetResultBody,
@@ -85,6 +88,7 @@ from runner.worker_processes import stop_worker_processes
 # at a warm container is served promptly, which is the whole point of holding
 # one open.
 DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS = 0.1
+_CANCELLED_WORKER_EXIT_CODE = 75
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,10 +145,21 @@ class FunctionControlChannel(Protocol):
     ) -> JsonValue: ...
 
 
+class FunctionWorkerChannel(Protocol):
+    def send_bytes(self, buf: bytes) -> None: ...
+
+    def recv_bytes(self) -> bytes: ...
+
+    def poll(self, timeout: float = 0.0) -> bool: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass(slots=True)
 class FunctionRunner:
     config: FunctionRunnerConfig
     channel: FunctionControlChannel | None = None
+    cancellation_channel: FunctionWorkerChannel | None = None
     _handler: Any = field(default=None, init=False)
     _startup_hooks_ran: bool = field(default=False, init=False)
     # Identity lives here rather than on the config because restoring from a
@@ -154,6 +169,10 @@ class FunctionRunner:
     container_hostname: str = field(default="", init=False)
     _container_streams: tuple[TextIO, TextIO] | None = field(default=None, init=False)
     _retired: threading.Event = field(default_factory=threading.Event, init=False)
+    _active_task: ClaimedTask | None = field(default=None, init=False)
+    _active_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _monitor_shutdown: threading.Event = field(default_factory=threading.Event, init=False)
+    _monitor: threading.Thread | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.container_id = self.config.container_id
@@ -186,13 +205,64 @@ class FunctionRunner:
             self.close()
             return 1
         try:
+            if self.cancellation_channel is not None:
+                self._monitor = threading.Thread(target=self._monitor_cancellation, daemon=True)
+                self._monitor.start()
             return self.serve()
         finally:
             self.close()
 
     def close(self) -> None:
+        self._monitor_shutdown.set()
+        if self._monitor is not None:
+            self._monitor.join()
         if isinstance(self.channel, HttpChannel):
             self.channel.close()
+
+    def _monitor_cancellation(self) -> None:
+        with HttpChannel(
+            endpoint=self.config.endpoint,
+            token=self.config.token or None,
+            timeout_seconds=5,
+        ) as channel:
+            while not self._monitor_shutdown.wait(0.25):
+                with self._active_lock:
+                    task = self._active_task
+                if task is None:
+                    continue
+                try:
+                    response = FunctionMonitorResponse.model_validate(
+                        channel.post(
+                            "/api/v1/functions/monitor",
+                            FunctionMonitorRequest(
+                                task_id=task.task_id,
+                                stub_id=self.config.stub_id,
+                                container_id=self.container_id,
+                            ).model_dump(mode="json"),
+                        )
+                    )
+                except (HttpApiError, HttpTransportError) as exc:
+                    print(
+                        f"function cancellation monitor failed: {exc}",
+                        file=self.container_streams[1],
+                        flush=True,
+                    )
+                    continue
+                except ValidationError as exc:
+                    print(
+                        f"invalid function cancellation response: {exc}",
+                        file=self.container_streams[1],
+                        flush=True,
+                    )
+                    os._exit(1)
+                if response.cancelled:
+                    with self._active_lock:
+                        if self._active_task is not task:
+                            continue
+                        if self.cancellation_channel is None:
+                            raise RuntimeError("function worker cancellation channel is closed")
+                        self.cancellation_channel.send_bytes(task.task_id.encode())
+                        os._exit(_CANCELLED_WORKER_EXIT_CODE)
 
     def install_output_routing(self) -> None:
         """Take over this process's streams once, before anything writes.
@@ -285,8 +355,15 @@ class FunctionRunner:
         )
 
     def run_task(self, task: ClaimedTask) -> None:
-        with task_context(task.task_id, task.root_task_id):
-            self._run_claimed_task(task)
+        with self._active_lock:
+            if self.cancellation_channel is not None:
+                self._active_task = task
+        try:
+            with task_context(task.task_id, task.root_task_id):
+                self._run_claimed_task(task)
+        finally:
+            with self._active_lock:
+                self._active_task = None
 
     def _run_claimed_task(self, task: ClaimedTask) -> None:
         started = time.perf_counter()
@@ -728,25 +805,14 @@ def _keep_warm_seconds(value: str | None) -> int:
 
 @dataclass(slots=True)
 class FunctionProcessManager:
-    """Serve several invocations at once, one process each.
-
-    A process per invocation rather than threads, because everything a second
-    concurrent call would collide on in this runner is process-global: the
-    stdout redirection that attributes logs to a task, and the task id the SDK
-    reads from the environment. One task per process keeps both correct without
-    having to make either of them concurrent.
-
-    A worker exiting is the ordinary end of a keep-warm window rather than a
-    fault, so only a worker that exits non-zero brings the container down, and
-    the container stops once they have all finished rather than when the first
-    one does.
-    """
+    """Keep one process per slot and replace only a cancelled invocation's slot."""
 
     config: FunctionRunnerConfig
     workers: int
     poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
     shutdown: threading.Event = field(default_factory=threading.Event)
     processes: list[Process] = field(default_factory=list, init=False)
+    cancellation_channels: list[FunctionWorkerChannel] = field(default_factory=list, init=False)
 
     def run(self) -> int:
         previous_handlers = {
@@ -757,6 +823,23 @@ class FunctionProcessManager:
             for index in range(self.workers):
                 self.processes.append(self._start_worker(index))
             while not self.shutdown.wait(self.poll_interval_seconds):
+                for index, process in enumerate(self.processes):
+                    if process.exitcode != _CANCELLED_WORKER_EXIT_CODE:
+                        continue
+                    channel = self.cancellation_channels[index]
+                    if not channel.poll():
+                        continue
+                    task_id = channel.recv_bytes().decode()
+                    process.join()
+                    self._kill_process_group(process)
+                    channel.close()
+                    print(
+                        f"cancelled function task {task_id}; replacing its worker slot",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    self.processes[index] = self._start_worker(index)
+                    process.close()
                 codes = [process.exitcode for process in self.processes]
                 failed = next((code for code in codes if code not in (None, 0)), None)
                 if failed is not None:
@@ -776,14 +859,32 @@ class FunctionProcessManager:
 
     def stop(self) -> None:
         stop_worker_processes(self.shutdown, self.processes)
+        for process in self.processes:
+            self._kill_process_group(process)
+            process.close()
+        for channel in self.cancellation_channels:
+            channel.close()
+
+    @staticmethod
+    def _kill_process_group(process: Process) -> None:
+        if process.pid is None:
+            raise RuntimeError("function worker process never started")
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
 
     def _start_worker(self, index: int) -> Process:
+        receive, send = Pipe(duplex=False)
         process = Process(
             target=_run_function_worker,
-            args=(self.config,),
+            args=(self.config, send, receive),
             name=f"function-worker-{index}",
         )
         process.start()
+        send.close()
+        if index < len(self.cancellation_channels):
+            self.cancellation_channels[index] = receive
+        else:
+            self.cancellation_channels.append(receive)
         return process
 
     def _request_shutdown(self, signum: int, frame: FrameType | None) -> None:
@@ -791,10 +892,17 @@ class FunctionProcessManager:
         self.shutdown.set()
 
 
-def _run_function_worker(config: FunctionRunnerConfig) -> None:
+def _run_function_worker(
+    config: FunctionRunnerConfig, send: FunctionWorkerChannel, receive: FunctionWorkerChannel
+) -> None:
+    receive.close()
+    os.setsid()
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    raise SystemExit(FunctionRunner(config).run())
+    try:
+        raise SystemExit(FunctionRunner(config, cancellation_channel=send).run())
+    finally:
+        send.close()
 
 
 @dataclass(slots=True)

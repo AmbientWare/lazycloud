@@ -725,17 +725,14 @@ class FunctionControlService:
             exit_code=1,
         )
         if decision.should_stop_container and current.container_id:
-            # Stopping the container is the only way to reach the handler, and a
-            # pooled one is also serving calls nobody cancelled. `User` would
-            # settle their claims the way it settles this one — cancelled, which
-            # is terminal and carries no retry — so the reason says the platform
-            # stopped it. Their claims are released instead and run again
-            # elsewhere; the cancelled task is already terminal, and a released
-            # claim never resurrects one.
-            self.services.containers.stop(
-                current.container_id,
-                reason=StopContainerReason.Scheduler,
-            )
+            if not current.stub_id:
+                raise InvalidInputError("running function task has no stub")
+            runtime = self.control_plane.get_stub(current.stub_id).config.runtime
+            if runtime.in_process or runtime.concurrency <= 1:
+                self.services.containers.stop(
+                    current.container_id,
+                    reason=StopContainerReason.Scheduler,
+                )
         self.release_dependents(updated)
         return updated
 
