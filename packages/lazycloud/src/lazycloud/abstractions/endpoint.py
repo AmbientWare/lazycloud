@@ -67,7 +67,6 @@ from lazycloud.abstractions.serve import (
     ServePreviewSession,
     ServeResourceClient,
     resolve_serve_url,
-    sync_local_workspace,
     write_serve_preview,
 )
 from lazycloud.abstractions.shell import Shell, ShellSession
@@ -1287,18 +1286,11 @@ def _shell_endpoint(
         timeout_seconds=owner.timeout,
     )
     if container_id:
-        session = shell.create_existing(container_id)
-    else:
-        session = shell.create_standalone(
-            owner.stub_id or _prepare_endpoint(owner, workspace=workspace, label=label)
-        )
-    if sync_dir:
-        _sync_shell_dir(
-            session.container_id,
-            sync_dir,
-            owner=owner,
-        )
-    return session
+        return shell.create_existing(container_id, sync_dir=sync_dir)
+    return shell.create_standalone(
+        owner.stub_id or _prepare_endpoint(owner, workspace=workspace, label=label),
+        sync_dir=sync_dir,
+    )
 
 
 def _effective_timeout_seconds(
@@ -1320,29 +1312,6 @@ def _endpoint_transport_timeout_seconds(spec: DeploymentSpec) -> float:
             resolve_timeout_seconds(spec.kind, spec.resources.timeout_seconds)
         )
         + ENDPOINT_TRANSPORT_OVERHEAD_SECONDS
-    )
-
-
-def _sync_shell_dir(
-    container_id: str,
-    sync_dir: str | None,
-    *,
-    owner: Endpoint[..., Any] | ASGI,
-) -> None:
-    if not sync_dir or not container_id:
-        return
-    config = owner._config()
-    gateway_client = owner.gateway_client or GatewayControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
-    sync_local_workspace(
-        container_id=container_id,
-        local_dir=sync_dir,
-        gateway_client=gateway_client,
-        terminal=owner.terminal,
     )
 
 

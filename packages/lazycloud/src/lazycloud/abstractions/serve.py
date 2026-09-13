@@ -178,6 +178,9 @@ class ServePreviewSession:
             self._syncer.start()
         try:
             self._attach_foreground(terminal)
+            if self._syncer is not None:
+                self._syncer.stop()
+                self._syncer.raise_if_failed()
         except KeyboardInterrupt:
             terminal.header("Stopping serve container")
             self._stop_with_warning(terminal)
@@ -208,11 +211,15 @@ class ServePreviewSession:
         attach_timeout_reported = False
         reconnect_reported = False
         while True:
+            if self._syncer is not None:
+                self._syncer.raise_if_failed()
             try:
                 for response in self.gateway_client.attach_to_container_events(
                     self.container_id,
                     poll_interval_seconds=self.attach_poll_seconds,
                 ):
+                    if self._syncer is not None:
+                        self._syncer.raise_if_failed()
                     retry.reset()
                     attach_timeout_reported = False
                     reconnect_reported = False
@@ -258,6 +265,8 @@ class ContainerWorkspaceSyncer:
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _thread: threading.Thread | None = field(default=None, init=False, repr=False)
     _snapshot: dict[str, FileState] = field(default_factory=dict, init=False, repr=False)
+    _initialized: bool = field(default=False, init=False, repr=False)
+    _failure: Exception | None = field(default=None, init=False, repr=False)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -268,13 +277,17 @@ class ContainerWorkspaceSyncer:
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=2)
+            self._thread.join()
+
+    def raise_if_failed(self) -> None:
+        if self._failure is not None:
+            raise RuntimeError(f"directory sync failed: {self._failure}") from self._failure
 
     def _run(self) -> None:
         try:
             self._sync_initial_with_retries()
         except Exception as exc:
-            self._warn(f"serve sync disabled: {exc}")
+            self._failure = exc
             return
         while not self._stop_event.wait(self.poll_seconds):
             try:
@@ -282,9 +295,12 @@ class ContainerWorkspaceSyncer:
                 self._sync_delta(next_snapshot)
                 self._snapshot = next_snapshot
             except Exception as exc:
-                self._warn(f"serve sync failed: {exc}")
+                self._failure = exc
+                return
 
     def _sync_initial_with_retries(self) -> None:
+        if self._initialized:
+            return
         if not self.full_initial_sync:
             self.record_seed_snapshot()
             return
@@ -310,14 +326,18 @@ class ContainerWorkspaceSyncer:
     def sync_once(self) -> None:
         self._snapshot = _snapshot(self.local_dir)
         self._sync_initial(self._snapshot)
+        self._initialized = True
         self._detail(f"Synced {len(self._snapshot)} files")
 
     def record_seed_snapshot(self) -> None:
         self._snapshot = _snapshot(self.local_dir)
+        self._initialized = True
         self._detail(f"Watching {len(self._snapshot)} files")
 
     def _sync_initial(self, snapshot: dict[str, FileState]) -> None:
         for relative in sorted(snapshot):
+            if self._stop_event.is_set():
+                return
             self._write_file(relative)
 
     def _sync_delta(self, next_snapshot: dict[str, FileState]) -> None:
@@ -328,11 +348,15 @@ class ContainerWorkspaceSyncer:
             if self._snapshot.get(relative) != state
         ]
         for relative in removed:
+            if self._stop_event.is_set():
+                return
             self._sync(
                 operation=ContainerWorkspaceSyncOperation.Delete,
                 path=relative,
             )
         for relative in changed:
+            if self._stop_event.is_set():
+                return
             self._write_file(relative)
         if removed or changed:
             self._detail(f"Synced {len(changed)} changed, {len(removed)} removed")
@@ -368,10 +392,6 @@ class ContainerWorkspaceSyncer:
     def _detail(self, message: str) -> None:
         if self.terminal is not None:
             self.terminal.detail(message)
-
-    def _warn(self, message: str) -> None:
-        if self.terminal is not None:
-            self.terminal.warn(message)
 
 
 @dataclass(frozen=True, slots=True)

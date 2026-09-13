@@ -5,7 +5,7 @@ import select
 import signal
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from types import FrameType
@@ -189,6 +189,7 @@ class InteractiveShell:
         credentials: ShellCredentials,
         plan: ShellConnectPlanResponse,
         open_timeout_seconds: float,
+        check_health: Callable[[], None] | None = None,
     ) -> int:
         from websockets.exceptions import ConnectionClosed
 
@@ -222,7 +223,7 @@ class InteractiveShell:
                         auth.model_dump_json().encode("utf-8"),
                     )
                 )
-                return self._bridge(websocket, open_timeout_seconds)
+                return self._bridge(websocket, open_timeout_seconds, check_health)
         except ShellConnectionError:
             raise
         except ConnectionClosed as exc:
@@ -238,7 +239,12 @@ class InteractiveShell:
             msg = "shell proxy did not confirm the backend connection"
             raise ShellConnectionError(msg)
 
-    def _bridge(self, websocket: ShellWebSocket, ready_timeout_seconds: float) -> int:
+    def _bridge(
+        self,
+        websocket: ShellWebSocket,
+        ready_timeout_seconds: float,
+        check_health: Callable[[], None] | None,
+    ) -> int:
         decoder = ShellFrameDecoder()
         state = _ServerState()
         self._receive_until_ready(websocket, decoder, state, ready_timeout_seconds)
@@ -248,6 +254,8 @@ class InteractiveShell:
         input_open = True
         with self.terminal.activate():
             while state.exit_code is None:
+                if check_health is not None:
+                    check_health()
                 signal_exit_code = self.terminal.signal_exit_code
                 if signal_exit_code is not None:
                     return signal_exit_code

@@ -31,7 +31,7 @@ from typing_extensions import Self
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import PoolInput, build_resource_metadata
-from lazycloud.abstractions.serve import sync_local_workspace
+from lazycloud.abstractions.serve import ContainerWorkspaceSyncer
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import volume_mounts
 from lazycloud.control import ControlClientConfigMixin, resolve_control_client_config
@@ -155,25 +155,41 @@ class Container:
         hide_logs: bool = False,
     ) -> AttachToContainerResponse:
         selected_container_id = container_id or self.container_id
-        if sync_dir:
-            sync_local_workspace(
+        syncer = (
+            ContainerWorkspaceSyncer(
                 container_id=selected_container_id,
                 local_dir=sync_dir,
                 gateway_client=self.control_client,
             )
+            if sync_dir
+            else None
+        )
         output: list[str] = []
         terminal: AttachToContainerResponse | None = None
         try:
-            for response in self.control_client.attach_to_container_events(selected_container_id):
-                if response.error_msg:
-                    raise PodOperationError(response.error_msg)
-                if response.output:
-                    output.append(response.output)
-                    if not hide_logs:
-                        (self.terminal or Terminal()).write(response.output)
-                if response.done:
-                    terminal = response
-                    break
+            try:
+                if syncer is not None:
+                    syncer.sync_once()
+                    syncer.start()
+                for response in self.control_client.attach_to_container_events(
+                    selected_container_id
+                ):
+                    if syncer is not None:
+                        syncer.raise_if_failed()
+                    if response.error_msg:
+                        raise PodOperationError(response.error_msg)
+                    if response.output:
+                        output.append(response.output)
+                        if not hide_logs:
+                            (self.terminal or Terminal()).write(response.output)
+                    if response.done:
+                        terminal = response
+                        break
+            finally:
+                if syncer is not None:
+                    syncer.stop()
+            if syncer is not None:
+                syncer.raise_if_failed()
         except RuntimeError as exc:
             if isinstance(exc, PodOperationError):
                 raise
@@ -438,16 +454,10 @@ class Pod(ControlClientConfigMixin):
             timeout_seconds=self.timeout_seconds,
         )
         if container_id:
-            session = shell.create_existing(container_id)
-        else:
-            session = shell.create_standalone(self.stub_id or self.prepare(workspace=workspace))
-        if sync_dir:
-            sync_local_workspace(
-                container_id=session.container_id,
-                local_dir=sync_dir,
-                gateway_client=gateway_control_client(self._config()),
-            )
-        return session
+            return shell.create_existing(container_id, sync_dir=sync_dir)
+        return shell.create_standalone(
+            self.stub_id or self.prepare(workspace=workspace), sync_dir=sync_dir
+        )
 
     def deploy(
         self,

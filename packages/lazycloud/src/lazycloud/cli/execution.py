@@ -9,7 +9,6 @@ from lazycloud.abstractions.app import App, AppDeployResult
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
-from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.apps import resolve_app_id
 from lazycloud.cli.components.cards import notice_card, result_card
@@ -39,7 +38,6 @@ from lazycloud.cli.workflow_options import (
     workflow_kwargs,
 )
 from lazycloud.control import control_workspace_scope, resolve_control_client_config
-from lazycloud.control_clients import gateway_control_client
 from lazycloud.json_contracts import resource_payload
 from lazycloud.session.deployment import DeploymentClient
 
@@ -379,14 +377,7 @@ def open_existing_shell(
     _require_interactive_output(ctx)
     selected_workspace = current_workspace(workspace)
     shell_client = Shell(workspace=selected_workspace)
-    session = shell_client.create_existing(container_id)
-    if sync_dir:
-        config = resolve_control_client_config(workspace=selected_workspace)
-        sync_local_workspace(
-            container_id=container_id,
-            local_dir=sync_dir,
-            gateway_client=gateway_control_client(config),
-        )
+    session = shell_client.create_existing(container_id, sync_dir=sync_dir)
     _exit_with_shell_status(shell_client.connect(session))
 
 

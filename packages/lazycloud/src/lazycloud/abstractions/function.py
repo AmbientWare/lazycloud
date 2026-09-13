@@ -60,7 +60,6 @@ from lazycloud.abstractions.metadata import (
     lifecycle_hooks,
     retry_policy_config,
 )
-from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
@@ -71,7 +70,6 @@ from lazycloud.client_contracts import (
 )
 from lazycloud.clients.function.control import FunctionControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
-from lazycloud.control_clients import gateway_control_client
 from lazycloud.env import called_on_import, is_local
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
@@ -420,19 +418,9 @@ class Function(Generic[P, R]):
             timeout_seconds=self.timeout,
         )
         if container_id:
-            session = shell.create_existing(container_id)
-        else:
-            session = shell.create_standalone(self.stub_id or self.prepare(workspace=workspace))
-        if sync_dir:
-            self._sync_shell_dir(session.container_id, sync_dir)
-        return session
-
-    def _sync_shell_dir(self, container_id: str, sync_dir: str) -> None:
-        sync_local_workspace(
-            container_id=container_id,
-            local_dir=sync_dir,
-            gateway_client=gateway_control_client(self._config()),
-            terminal=self.terminal,
+            return shell.create_existing(container_id, sync_dir=sync_dir)
+        return shell.create_standalone(
+            self.stub_id or self.prepare(workspace=workspace), sync_dir=sync_dir
         )
 
     def remote(self, *args: P.args, **kwargs: P.kwargs) -> R:
