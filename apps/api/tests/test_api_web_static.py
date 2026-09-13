@@ -92,6 +92,7 @@ def test_a_retired_build_asset_is_not_answered_with_the_document(
         retired = client.get("/assets/app-oldhash.js", headers={"accept": "*/*"})
         assert retired.status_code == 404
         assert "web-shell" not in retired.text
+        assert retired.headers["cache-control"] == "no-store"
 
         current = client.get("/assets/app-abc123.js")
         assert current.status_code == 200

@@ -42,13 +42,14 @@ class _SpaStaticFiles(StaticFiles):
         try:
             response = await super().get_response(path, scope)
         except HTTPException as exc:
-            if exc.status_code != 404:
-                raise
-            # A build asset is not a client-side route. Its name carries a content
-            # hash, so a miss means that exact file is gone; answering with the
-            # document hands the browser HTML where it asked for a module, and the
-            # failure it then reports names neither the file nor the reason.
             if namespace == _BUILD_ASSET_NAMESPACE:
+                # During a rolling deploy, an old pod can receive a new asset's URL.
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail=exc.detail,
+                    headers={**(exc.headers or {}), "cache-control": "no-store"},
+                ) from exc
+            if exc.status_code != 404:
                 raise
             response = await super().get_response(_SPA_DOCUMENT, scope)
         return _with_cache_policy(response, namespace=namespace)
