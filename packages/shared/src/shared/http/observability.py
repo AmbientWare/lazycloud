@@ -10,6 +10,8 @@ from shared.events import Event
 from shared.http.base import HttpModel
 from shared.logs import LogEntry
 
+SSE_HEARTBEAT_SECONDS = 15.0
+
 
 class LogObjectType(StringEnum):
     Deployment = "deployment"
@@ -360,6 +362,7 @@ class TaskLatencyTimeseriesResponse(HttpModel):
 
 __all__ = [
     "ACTIVITY_MEASURE_UNITS",
+    "SSE_HEARTBEAT_SECONDS",
     "AccountActivityBucketResponse",
     "AccountActivityMeasure",
     "AccountActivityResponse",
