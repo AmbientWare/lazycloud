@@ -64,7 +64,7 @@ def render_uv_project_sync_command(
 def render_micromamba_install_command(
     packages: Iterable[str],
     *,
-    environment: str = "",
+    environment: str = "base",
 ) -> str:
     tokens = _install_tokens(packages)
     if not tokens:
@@ -221,17 +221,16 @@ def _render_non_install_step(
 
 
 def _install_tokens(args: Iterable[str]) -> list[str]:
-    flag_tokens: list[str] = []
-    package_tokens: list[str] = []
+    tokens: list[str] = []
     for value in args:
         item = value.strip()
         if not item:
             continue
         if item.startswith("-"):
-            flag_tokens.extend(_split_flag_tokens(item))
+            tokens.extend(shlex.quote(token) for token in _split_flag_tokens(item))
         else:
-            package_tokens.append(shlex.quote(item))
-    return [*flag_tokens, *package_tokens]
+            tokens.append(shlex.quote(item))
+    return tokens
 
 
 def _split_flag_tokens(value: str) -> list[str]:
