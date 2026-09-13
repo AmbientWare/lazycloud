@@ -8,8 +8,6 @@ import { cn } from "@/lib/utils";
 
 import { GetStartedButton, shell, type MarketingRoute } from "./MarketingPrimitives";
 
-import "./marketing.css";
-
 const navigation: readonly { label: string; to?: MarketingRoute; href?: string }[] = [
   { label: "Examples", href: `${EXAMPLES_URL}/index` },
   { label: "Pricing", to: "/pricing" },
