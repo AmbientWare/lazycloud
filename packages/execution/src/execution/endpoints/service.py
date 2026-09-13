@@ -1141,7 +1141,7 @@ def _headers_with_task_id(
     *,
     content_type: str | None = None,
 ) -> dict[str, list[str]]:
-    forwarded = {key: list(values) for key, values in headers.items()}
+    forwarded = {key: list(values) for key, values in headers.items() if key.lower() != "x-task-id"}
     forwarded["X-Task-Id"] = [task_id]
     if content_type is not None:
         forwarded["Content-Type"] = [content_type]
