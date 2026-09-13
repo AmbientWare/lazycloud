@@ -38,7 +38,6 @@ from shared.shell_protocol import (
     ShellFrameType,
     encode_shell_frame,
 )
-from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
 from execution.container_clients import (
@@ -227,11 +226,8 @@ class ShellControlService:
         )
         if not submitted.accepted:
             reason = submitted.reason or "failed to schedule shell container"
-            self._mark_container_failed(record, reason)
             raise UpstreamUnavailableError(reason)
-        if not self._wait_for_running(record, plan.wait_timeout_seconds):
-            msg = "shell container did not become running before timeout"
-            raise UpstreamUnavailableError(msg)
+        self._poll_running(record.id, plan.wait_timeout_seconds)
         self.services.events.emit(
             "shell.created",
             level=EventLevel.Info,
@@ -657,63 +653,42 @@ class ShellControlService:
             workspace_id=stub.workspace_id,
         )
 
-    def _wait_for_running(self, record: ContainerRecord, timeout_seconds: int) -> bool:
+    def _poll_running(self, container_id: str, timeout_seconds: int) -> None:
         if self.scheduler_containers is None:
-            return True
+            raise UpstreamUnavailableError("shell scheduler directory is unavailable")
         deadline = time.monotonic() + max(timeout_seconds, 0)
         while True:
-            state = self.scheduler_containers.get_container_state(record.id)
+            record = self.services.containers.get(container_id)
+            state = self.scheduler_containers.get_container_state(container_id)
+            LOGGER.info(
+                "shell startup container=%s durable_status=%s scheduler_status=%s worker=%s",
+                container_id,
+                record.status.value,
+                state.status.value if state is not None else "absent",
+                record.worker_id,
+            )
+            if record.status in TERMINAL_CONTAINER_STATUSES:
+                raise ShellTargetUnavailableError(
+                    record.startup_error or f"shell container is {record.status.value}"
+                )
             if state is not None:
-                if state.status is SchedulerContainerStatus.Running:
-                    record.status = ContainerStatus.Running
-                    record.started_at = state.started_at or utc_now()
-                    with self.services.context.database.session() as session:
-                        ContainerRepository(session).records.upsert(
-                            record,
-                            key=record.id,
-                            workspace_id=record.workspace_id,
-                            name=record.name,
-                            status=record.status.value,
-                        )
-                    self.services.containers.publish_lifecycle_change(
-                        record,
-                        WorkspaceChangeType.Updated,
-                    )
-                    return True
+                if (
+                    state.status is SchedulerContainerStatus.Running
+                    and record.status is ContainerStatus.Running
+                ):
+                    return
                 if state.status in {
                     SchedulerContainerStatus.Complete,
                     SchedulerContainerStatus.Failed,
                     SchedulerContainerStatus.Stopping,
                 }:
-                    return False
+                    raise ShellTargetUnavailableError(
+                        record.startup_error or f"shell container is {state.status.value}"
+                    )
             if time.monotonic() >= deadline:
-                return False
+                self.services.containers.stop(container_id)
+                raise ShellTargetUnavailableError("shell container startup timed out")
             time.sleep(max(self.poll_interval_seconds, 0.0))
-
-    def _mark_container_failed(self, record: ContainerRecord, reason: str) -> None:
-        record.status = ContainerStatus.Failed
-        record.exit_code = 1
-        record.finished_at = utc_now()
-        with self.services.context.database.session() as session:
-            ContainerRepository(session).records.upsert(
-                record,
-                key=record.id,
-                workspace_id=record.workspace_id,
-                name=record.name,
-                status=record.status.value,
-            )
-        self.services.containers.publish_lifecycle_change(
-            record,
-            WorkspaceChangeType.Updated,
-        )
-        self.services.events.emit(
-            "shell.schedule.failed",
-            level=EventLevel.Error,
-            resource_type="container",
-            resource_id=record.id,
-            message=reason or f"failed to schedule shell container {record.name}",
-            workspace_id=record.workspace_id,
-        )
 
     def _container_after_stop_failure(
         self,
