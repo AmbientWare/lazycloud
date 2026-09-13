@@ -504,7 +504,12 @@ class SandboxProcessManager:
         env: dict[str, str] | None = None,
     ) -> SandboxProcessResponse:
         process = self._exec_command(command, cwd=cwd, env=env)
-        exit_code = process.wait(timeout_seconds)
+        try:
+            exit_code = process.wait(timeout_seconds)
+        except SandboxProcessError:
+            process.kill()
+            process.wait(timeout=SANDBOX_CONTROL_TIMEOUT_SECONDS)
+            raise
         return SandboxProcessResponse(
             pid=process.pid,
             exit_code=exit_code,
