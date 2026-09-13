@@ -136,7 +136,7 @@ class DeploymentResourceService:
         )
         return resources
 
-    def resolve_invoke_target(
+    def resolve_target(
         self,
         name: str,
         kind: DeploymentKind,
@@ -145,15 +145,9 @@ class DeploymentResourceService:
         version: int | None = None,
         app_id: str | None = None,
     ) -> DeploymentResource:
-        """Resolve the deployment version an invoke URL targets.
-
-        An unversioned invoke always targets the newest non-deleted version,
-        even when that version has been stopped; a versioned invoke targets
-        exactly that version. A stopped target is a client error, never a
-        silent fallback to an older active version.
-        """
+        """Resolve the selected non-deleted version, including stopped deployments."""
         with self.context.database.session() as session:
-            return self.resolve_invoke_target_in_session(
+            return self.resolve_target_in_session(
                 session,
                 name,
                 kind,
@@ -163,6 +157,24 @@ class DeploymentResourceService:
             )
 
     def resolve_invoke_target_in_session(
+        self,
+        session: DatabaseSession,
+        name: str,
+        kind: DeploymentKind,
+        *,
+        workspace: str,
+        version: int | None = None,
+        app_id: str | None = None,
+    ) -> DeploymentResource:
+        target = self.resolve_target_in_session(
+            session, name, kind, workspace=workspace, version=version, app_id=app_id
+        )
+        if not target.deployment.active:
+            msg = f"deployment is not active: {name} v{target.deployment.version}"
+            raise InvalidInputError(msg)
+        return target
+
+    def resolve_target_in_session(
         self,
         session: DatabaseSession,
         name: str,
@@ -183,11 +195,7 @@ class DeploymentResourceService:
         )
         if not candidates:
             raise NotFoundError(f"deployment not found: {name}")
-        target = max(candidates, key=lambda item: item.deployment.version)
-        if not target.deployment.active:
-            msg = f"deployment is not active: {name} v{target.deployment.version}"
-            raise InvalidInputError(msg)
-        return target
+        return max(candidates, key=lambda item: item.deployment.version)
 
     def get_by_deployment_id(
         self,

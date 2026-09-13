@@ -1091,7 +1091,7 @@ class ManagementService:
         except ValueError as exc:
             msg = f"deployment kind is not invokable: {stub_type}"
             raise InvalidInputError(msg) from exc
-        resource = self.services.deployment_resources.resolve_invoke_target(
+        resource = self.services.deployment_resources.resolve_target(
             deployment_name,
             deployment_kind,
             workspace=workspace,

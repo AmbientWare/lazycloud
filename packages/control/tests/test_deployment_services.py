@@ -320,12 +320,10 @@ def test_new_deployment_version_keeps_prior_versions_invokable(
     assert isolated_services.deployments.get(v1.id).active
     assert isolated_services.deployments.get(v2.id).active
 
-    latest = resources.resolve_invoke_target(
-        "predict", DeploymentKind.Function, workspace="default"
-    )
+    latest = resources.resolve_target("predict", DeploymentKind.Function, workspace="default")
     assert latest.deployment.id == v2.id
 
-    versioned = resources.resolve_invoke_target(
+    versioned = resources.resolve_target(
         "predict", DeploymentKind.Function, workspace="default", version=1
     )
     assert versioned.deployment.id == v1.id
@@ -345,30 +343,36 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
 
     management.set_deployment_active("default", v2.id, active=False)
 
-    with pytest.raises(InvalidInputError, match="not active: predict v2"):
-        resources.resolve_invoke_target("predict", DeploymentKind.Function, workspace="default")
-    with pytest.raises(InvalidInputError, match="not active: predict v2"):
-        management.deployment_url_by_name("default", StubKind.Function, "predict")
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(InvalidInputError, match="not active: predict v2"),
+    ):
+        resources.resolve_invoke_target_in_session(
+            session, "predict", DeploymentKind.Function, workspace="default"
+        )
+    stopped = management.deployment_url_by_name("default", StubKind.Function, "predict")
+    assert stopped.deployment.id == v2.id and not stopped.deployment.active
 
-    still_versioned = resources.resolve_invoke_target(
+    still_versioned = resources.resolve_target(
         "predict", DeploymentKind.Function, workspace="default", version=1
     )
     assert still_versioned.deployment.id == v1.id
 
     management.set_deployment_active("default", v1.id, active=False)
-    with pytest.raises(InvalidInputError, match="not active: predict v1"):
-        resources.resolve_invoke_target(
-            "predict", DeploymentKind.Function, workspace="default", version=1
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(InvalidInputError, match="not active: predict v1"),
+    ):
+        resources.resolve_invoke_target_in_session(
+            session, "predict", DeploymentKind.Function, workspace="default", version=1
         )
 
     management.set_deployment_active("default", v2.id, active=True)
-    restarted = resources.resolve_invoke_target(
-        "predict", DeploymentKind.Function, workspace="default"
-    )
+    restarted = resources.resolve_target("predict", DeploymentKind.Function, workspace="default")
     assert restarted.deployment.id == v2.id
 
     with pytest.raises(NotFoundError, match="deployment not found"):
-        resources.resolve_invoke_target("missing", DeploymentKind.Function, workspace="default")
+        resources.resolve_target("missing", DeploymentKind.Function, workspace="default")
 
 
 def test_cron_schedule_follows_deployment_lifecycle(
