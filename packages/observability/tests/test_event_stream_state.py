@@ -20,6 +20,11 @@ async def test_redis_event_stream_repository_reads_and_follows_generic_streams(
 ) -> None:
     repo = RedisEventStreamRepository(real_redis_actors.client())
     repo.append_event(
+        EventRecordType.ContainerMetrics,
+        {"workspace_id": "workspace", "stub_id": "stub", "container_id": "container"},
+        event_id="unscoped-metrics",
+    )
+    repo.append_event(
         EventRecordType.TaskUpdated,
         {
             "workspace_id": "workspace",
@@ -41,6 +46,17 @@ async def test_redis_event_stream_repository_reads_and_follows_generic_streams(
         },
         event_id="event-log",
     )
+    repo.append_event(
+        EventRecordType.ContainerLog,
+        {
+            "workspace_id": "workspace",
+            "stub_id": "stub",
+            "container_id": "container",
+            "message": "container-only",
+            "stream": "stdout",
+        },
+        event_id="unscoped-log",
+    )
 
     events = repo.read_event_history(
         EventHistoryQuery(workspace_id="workspace", stub_id="stub", task_id="task")
@@ -58,6 +74,6 @@ async def test_redis_event_stream_repository_reads_and_follows_generic_streams(
         if record is not None
     ]
 
-    assert events[0].body["id"] == "event-task"
-    assert logs[0].body["id"] == "event-log"
+    assert [record.body["id"] for record in events] == ["event-task"]
+    assert [record.body["id"] for record in logs] == ["event-log"]
     assert followed[0].body["id"] == "event-task"
