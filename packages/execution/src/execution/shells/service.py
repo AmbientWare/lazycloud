@@ -47,7 +47,11 @@ from execution.container_clients import (
 )
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
-from execution.mounts import source_code_mounts
+from execution.mounts import (
+    container_resource_mounts,
+    container_resource_mounts_require_workspace_storage,
+)
+from execution.pods.config import PodStubConfig
 from execution.services import ExecutionServices
 from execution.shells.planning import (
     SHELL_SERVER_PROBE_TIMEOUT_SECONDS,
@@ -135,9 +139,63 @@ class ShellControlService:
 
         token_key = secrets.token_urlsafe(24)
         container_id = str(uuid4())
-        request = self._standalone_request(stub, token_key=token_key, container_id=container_id)
+        config = PodStubConfig.model_validate(stub.config, from_attributes=True)
+        request = self._standalone_request(
+            stub, config=config, token_key=token_key, container_id=container_id
+        )
         plan = plan_shell_standalone(request)
-        env = parse_environment(plan.env) | {"SHELL_CONTAINER_ID": plan.container_id}
+        runtime = config.runtime
+        env = parse_environment(config.env_list) | parse_environment(plan.env)
+        env["SHELL_CONTAINER_ID"] = plan.container_id
+        workspace = self.control_plane.get_workspace(stub.workspace_id)
+        mounts = container_resource_mounts(
+            context=self.services.context,
+            object_storage=self.services.object_storage,
+            workspace_id=stub.workspace_id,
+            workspace_name=workspace.name,
+            object_id=config.object_id,
+            stub_id=stub.id,
+            container_id=plan.container_id,
+            volumes=config.volume_inputs,
+        )
+        options = ContainerSchedulingOptions(
+            region=runtime.region,
+            availability_zone=runtime.availability_zone,
+            workspace_name=workspace.name,
+            stub_type="shell",
+            preemptible=runtime.preemptible,
+            startup_kind=WorkerStartupKind.Pod,
+            entrypoint=list(plan.entrypoint),
+            env=env,
+            image_id=request.image_id or SHELL_IMAGE,
+            app_id=stub.app_id or "",
+            deployment_id=stub.deployment_id or "",
+            ports=[SHELL_WORKER_PORT],
+            requested_ports=[SHELL_WORKER_PORT],
+            cpu_millicores=plan.cpu_millicores,
+            cpu_limit_millicores=runtime.limit_cpu_millicores,
+            memory_mib=plan.memory_mib,
+            memory_limit_mib=runtime.limit_memory_mib,
+            disk_mib=plan.disk_mib,
+            gpu=list(plan.gpu),
+            gpu_count=plan.gpu_count,
+            pool_selector=runtime.pool_selector or "",
+            runtime=runtime.runtime,
+            runtime_class=runtime.runtime_class or "",
+            docker_enabled=runtime.docker_enabled,
+            block_network=runtime.block_network,
+            allow_list=runtime.allow_list,
+            workspace_gpu_quota=runtime.workspace_gpu_quota,
+            workspace_cpu_quota_millicores=runtime.workspace_cpu_quota_millicores,
+            secret_names=config.secrets,
+            gateway_token_required=True,
+            workspace_storage_required=container_resource_mounts_require_workspace_storage(
+                context=self.services.context,
+                workspace_id=stub.workspace_id,
+                mounts=mounts,
+            ),
+            mounts=mounts,
+        )
         with self.services.context.database.session() as session:
             record = self.services.containers.reserve_pending(
                 session,
@@ -155,43 +213,17 @@ class ShellControlService:
                     ports={"shell": SHELL_WORKER_PORT},
                     gpu=list(plan.gpu),
                     gpu_count=plan.gpu_count,
+                    network_blocked=runtime.block_network,
+                    network_allow_list=list(runtime.allow_list),
                 ),
             )
         self.services.containers.publish_lifecycle_change(
             record,
             WorkspaceChangeType.Created,
         )
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
         submitted = self.services.containers.submit_scheduler_request(
             record,
-            ContainerSchedulingOptions(
-                region=stub.config.runtime.region,
-                availability_zone=stub.config.runtime.availability_zone,
-                workspace_name=workspace.name,
-                stub_type="shell",
-                preemptible=stub.config.runtime.preemptible,
-                startup_kind=WorkerStartupKind.Pod,
-                entrypoint=list(plan.entrypoint),
-                env=env,
-                env_list=list(plan.env),
-                image_id=record.image,
-                app_id=stub.app_id or "",
-                deployment_id=stub.deployment_id or "",
-                ports=[SHELL_WORKER_PORT],
-                requested_ports=[SHELL_WORKER_PORT],
-                cpu_millicores=plan.cpu_millicores,
-                memory_mib=plan.memory_mib,
-                disk_mib=plan.disk_mib,
-                gpu=list(record.gpu),
-                gpu_count=record.gpu_count,
-                mounts=source_code_mounts(
-                    context=self.services.context,
-                    object_storage=self.services.object_storage,
-                    workspace_id=stub.workspace_id,
-                    workspace_name=workspace.name,
-                    object_id=stub.config.object_id,
-                ),
-            ),
+            options.model_copy(update={"gpu": list(record.gpu), "gpu_count": record.gpu_count}),
         )
         if not submitted.accepted:
             reason = submitted.reason or "failed to schedule shell container"
@@ -601,10 +633,11 @@ class ShellControlService:
         self,
         stub: StubRecord,
         *,
+        config: PodStubConfig,
         token_key: str,
         container_id: str,
     ) -> ShellStandaloneRequest:
-        runtime_config = stub.config.runtime
+        runtime_config = config.runtime
         return ShellStandaloneRequest(
             stub_id=stub.id,
             handler=stub.handler or stub.config.handler or "",
@@ -613,12 +646,13 @@ class ShellControlService:
             token_key=token_key,
             container_id=container_id,
             container_id_suffix=secrets.token_hex(4),
-            cpu_millicores=runtime_config.cpu_millicores,
-            memory_mib=runtime_config.memory_mib,
+            cpu_millicores=runtime_config.requested_cpu_millicores,
+            memory_mib=runtime_config.requested_memory_mib,
+            disk_mib=runtime_config.requested_disk_mib,
             gpu_count=runtime_config.gpu_count,
-            requires_gpu=runtime_config.requires_gpu,
+            requires_gpu=runtime_config.gpu_required,
             gpu=tuple(runtime_config.gpu),
-            image_id=runtime_config.image_id or "",
+            image_id=config.effective_image_id,
             app_id=stub.app_id or "",
             workspace_id=stub.workspace_id,
         )
