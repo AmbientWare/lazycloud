@@ -28,9 +28,9 @@ def run_cli(
     if not _help_requested(args):
         set_json_output(json_output)
     try:
-        application(args=args, prog_name=prog_name, standalone_mode=False)
-    except typer.Exit as exc:
-        raise SystemExit(exc.exit_code) from None
+        exit_code = application(args=args, prog_name=prog_name, standalone_mode=False)
+        if isinstance(exit_code, int):
+            raise SystemExit(exit_code)
     except (Exception, KeyboardInterrupt) as exc:
         if debug_errors_enabled(args):
             if not json_output:
