@@ -43,7 +43,7 @@ from shared.placement import ProductRegion
 from shared.serialization import to_json_value
 from shared.tasks import RetryPolicy, TaskPolicy
 
-from lazycloud._invocation import encode_arguments, prepare_arguments
+from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
 from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.invocation import (
@@ -268,12 +268,14 @@ class Endpoint(Generic[P, R]):
 
     def local(self, *args: P.args, **kwargs: P.kwargs) -> R:
         if self.inputs is None:
-            return self.func(*args, **kwargs)
+            return serialize_result(self.func, self.func(*args, **kwargs), self.outputs)
         return self.invoke_arguments(args, kwargs)
 
     def invoke_arguments(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> R:
         prepared_args, prepared_kwargs = prepare_arguments(self.func, args, kwargs, self.inputs)
-        return self.func(*prepared_args, **prepared_kwargs)
+        return serialize_result(
+            self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
+        )
 
     def spec(self, *, kind: DeploymentKind = DeploymentKind.Endpoint) -> DeploymentSpec:
         client_contract = build_client_contract(

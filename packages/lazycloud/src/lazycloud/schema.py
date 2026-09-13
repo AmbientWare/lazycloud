@@ -34,6 +34,10 @@ class ValidationError(InvalidInputError, ValueError):
         return payload
 
 
+class OutputValidationError(ValueError):
+    pass
+
+
 @runtime_checkable
 class PublicUrlProvider(Protocol):
     def public_url(self) -> str: ...
@@ -201,17 +205,17 @@ class File(SchemaField):
         raw = _text_path(value)
         if raw is not None:
             path = Path(raw).expanduser()
-            if path.is_file():
+            if _is_file_path(raw):
                 from lazycloud.abstractions.artifact import Artifact
 
-                return Artifact.file(path).public_url()
+                artifact = Artifact.file(path)
+                artifact.save()
+                return artifact.public_url()
         if isinstance(value, PublicUrlProvider):
             return str(value.public_url())
 
         validated = self.validate(value)
-        from lazycloud.abstractions.artifact import Artifact
-
-        return Artifact.from_file(_binary_reader(validated)).public_url()
+        return _publish_bytes(_binary_reader(validated).read(), suffix=".bin")
 
 
 @with_config(ConfigDict(extra="forbid"))
@@ -253,6 +257,9 @@ class Image(File):
         }
 
     def validate(self, value: Any) -> Any:
+        if isinstance(value, ValidatedImage):
+            self._validate_image(value.format, value.size)
+            return value
         if isinstance(value, SerializableImage):
             self._validate_image(value.format or "", value.size)
             return value
@@ -270,16 +277,7 @@ class Image(File):
             return self._dump_serializable_image(value)
 
         image = value if isinstance(value, ValidatedImage) else self.validate(value)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{image.format.lower()}") as handle:
-            handle.write(image.data)
-            path = Path(handle.name)
-        try:
-            from lazycloud.abstractions.artifact import Artifact
-
-            with path.open("rb") as handle:
-                return Artifact.from_file(handle, suffix=path.suffix).public_url()
-        finally:
-            path.unlink(missing_ok=True)
+        return _publish_bytes(image.data, suffix=f".{image.format.lower()}")
 
     def _dump_serializable_image(self, value: SerializableImage) -> str:
         output_format = (value.format or "PNG").upper()
@@ -295,16 +293,14 @@ class Image(File):
         if output_format == "JPEG" and value.mode in {"RGBA", "LA"}:
             value = value.convert("RGB")
         suffix = f".{output_format.lower()}"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
-            path = Path(handle.name)
-        value.save(path, format=output_format, **save_params)
-        try:
+        with tempfile.TemporaryDirectory(prefix="lazycloud-image-") as directory:
+            path = Path(directory) / f"image{suffix}"
+            value.save(path, format=output_format, **save_params)
             from lazycloud.abstractions.artifact import Artifact
 
-            with path.open("rb") as handle:
-                return Artifact.from_file(handle, suffix=path.suffix).public_url()
-        finally:
-            path.unlink(missing_ok=True)
+            artifact = Artifact.file(path)
+            artifact.save()
+            return artifact.public_url()
 
     def _validate_image(self, format_name: str, size: tuple[int, int]) -> None:
         normalized = format_name.upper()
@@ -384,10 +380,9 @@ class Schema:
         return result
 
     def dump(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        validated = self.validate(value)
         return {
-            name: field_value.dump(value[name])
-            for name, field_value in self.fields.items()
-            if name in value
+            name: field_value.dump(validated[name]) for name, field_value in self.fields.items()
         }
 
     def to_dict(self) -> dict[str, JsonValue]:
@@ -406,6 +401,17 @@ class Schema:
                 raise ValidationError("schema field must be an object", field=name)
             fields[name] = SchemaField.from_dict(field_value)
         return cls(fields=fields)
+
+
+def _publish_bytes(data: bytes, *, suffix: str) -> str:
+    from lazycloud.abstractions.artifact import Artifact
+
+    with tempfile.TemporaryDirectory(prefix="lazycloud-output-") as directory:
+        path = Path(directory) / f"output{suffix}"
+        path.write_bytes(data)
+        artifact = Artifact.file(path)
+        artifact.save()
+        return artifact.public_url()
 
 
 def _is_url(value: str) -> bool:
@@ -580,6 +586,7 @@ __all__ = [
     "Integer",
     "Number",
     "Object",
+    "OutputValidationError",
     "Schema",
     "SchemaField",
     "String",

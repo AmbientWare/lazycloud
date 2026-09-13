@@ -4,10 +4,42 @@ import inspect
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from pydantic import TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 from shared.callables import bind_arguments, coerce_arguments
 
 from lazycloud.abstractions.metadata import SchemaInput, schema_metadata
-from lazycloud.schema import Schema
+from lazycloud.schema import OutputValidationError, Schema, ValidationError
+
+
+def serialize_result(target: Callable[..., Any], value: Any, outputs: SchemaInput) -> Any:
+    if outputs is None:
+        return value
+    if inspect.isawaitable(value):
+        return _serialize_awaited_result(target, value, outputs)
+    schema = outputs if isinstance(outputs, Schema) else Schema.from_dict(schema_metadata(outputs))
+    try:
+        if isinstance(value, Mapping):
+            values = TypeAdapter[dict[str, Any]](dict[str, Any]).validate_python(value)
+            return schema.dump(values)
+        if (
+            len(schema.fields) == 1
+            and inspect.signature(target).return_annotation is not inspect.Signature.empty
+        ):
+            name = next(iter(schema.fields))
+            return schema.dump({name: value})[name]
+        raise ValidationError("expected an object matching the output schema")
+    except ValidationError as exc:
+        raise OutputValidationError(f"invalid output: {exc}") from None
+    except PydanticValidationError as exc:
+        detail = "; ".join(error["msg"] for error in exc.errors(include_input=False))
+        raise OutputValidationError(f"invalid output: {detail}") from None
+
+
+async def _serialize_awaited_result(
+    target: Callable[..., Any], value: Any, outputs: SchemaInput
+) -> Any:
+    return serialize_result(target, await value, outputs)
 
 
 def encode_arguments(
