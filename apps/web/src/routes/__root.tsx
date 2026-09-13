@@ -14,6 +14,7 @@ import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 
 import "../styles.css";
+import "./-marketing/marketing.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
