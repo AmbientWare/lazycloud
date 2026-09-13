@@ -916,7 +916,13 @@ class App:
                 "external_url": external_url,
                 "source_root": source_root,
             }
-            results.append(_invoke_method(method, method_kwargs))
+            try:
+                results.append(_invoke_method(method, method_kwargs))
+            except RuntimeError as exc:
+                spec = item.spec()
+                raise AppOperationError(
+                    f"failed to deploy {spec.kind.value}:{spec.name}: {exc}"
+                ) from exc
         return AppDeployResult(app=self.slug, resources=tuple(results))
 
     def serve(
