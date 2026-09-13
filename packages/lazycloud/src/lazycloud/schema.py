@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, BinaryIO, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
+from PIL import Image as PILImage
+from PIL.PngImagePlugin import PngInfo
 from pydantic import ConfigDict, TypeAdapter, with_config
 from pydantic import ValidationError as PydanticValidationError
 from shared.errors import InvalidInputError
@@ -62,17 +64,6 @@ class UrlBinaryResponse(Protocol):
     def __exit__(self, *args: object) -> None: ...
 
     def read(self) -> bytes: ...
-
-
-@runtime_checkable
-class SerializableImage(Protocol):
-    format: str | None
-    size: tuple[int, int]
-    mode: str
-
-    def save(self, fp: str | Path, *, format: str, **params: object) -> None: ...
-
-    def convert(self, mode: str) -> SerializableImage: ...
 
 
 @dataclass(frozen=True)
@@ -258,32 +249,58 @@ class Image(File):
 
     def validate(self, value: Any) -> Any:
         if isinstance(value, ValidatedImage):
-            self._validate_image(value.format, value.size)
-            return value
-        if isinstance(value, SerializableImage):
-            self._validate_image(value.format or "", value.size)
-            return value
+            value = value.data
+        try:
+            if isinstance(value, PILImage.Image):
+                self._validate_image(value.format or "PNG", value.size)
+                value.load()
+                return value
+            data = _read_media_bytes(value, field="image")
+            with PILImage.open(BytesIO(data)) as decoded:
+                format_name = decoded.format or ""
+                size = decoded.size
+                self._validate_image(format_name, size)
+                decoded.verify()
+            with PILImage.open(BytesIO(data)) as decoded:
+                decoded.load()
+            return ValidatedImage(data=data, format=format_name, width=size[0], height=size[1])
+        except (OSError, SyntaxError, PILImage.DecompressionBombError) as exc:
+            raise ValidationError(f"invalid image data: {type(exc).__name__}") from None
 
-        data = _read_media_bytes(value, field="image")
-        image = _open_image(data)
-        self._validate_image(image.format, (image.width, image.height))
-        return image
+    def encode_input(self, value: Any) -> Any:
+        if isinstance(value, PILImage.Image):
+            data, _ = self._encode_image(value)
+            return base64.b64encode(data).decode("ascii")
+        if isinstance(value, ValidatedImage):
+            return base64.b64encode(value.data).decode("ascii")
+        return super().encode_input(value)
 
     def dump(self, value: Any) -> str:
         if isinstance(value, str) and _is_url(value):
             return value
 
-        if isinstance(value, SerializableImage):
-            return self._dump_serializable_image(value)
+        image = self.validate(value)
+        if isinstance(image, PILImage.Image):
+            data, format_name = self._encode_image(image)
+        else:
+            with PILImage.open(BytesIO(image.data)) as decoded:
+                data, format_name = self._encode_image(decoded)
+        return _publish_bytes(data, suffix=f".{format_name.lower()}")
 
-        image = value if isinstance(value, ValidatedImage) else self.validate(value)
-        return _publish_bytes(image.data, suffix=f".{image.format.lower()}")
-
-    def _dump_serializable_image(self, value: SerializableImage) -> str:
+    def _encode_image(self, value: PILImage.Image) -> tuple[bytes, str]:
         output_format = (value.format or "PNG").upper()
-        if output_format not in self.allowed_formats:
-            output_format = "PNG"
-        save_params: dict[str, object] = {}
+        self._validate_image(output_format, value.size)
+        save_params: dict[str, object] = {"exif": b"", "icc_profile": None, "xmp": b""}
+        if self.preserve_metadata:
+            for name in ("exif", "icc_profile", "xmp"):
+                if name in value.info:
+                    save_params[name] = value.info[name]
+            if output_format == "PNG":
+                metadata = PngInfo()
+                for name, item in value.info.items():
+                    if isinstance(name, str) and isinstance(item, str):
+                        metadata.add_text(name, item)
+                save_params["pnginfo"] = metadata
         if output_format in {"JPEG", "WEBP"}:
             save_params["quality"] = self.quality
             if output_format == "JPEG":
@@ -292,15 +309,9 @@ class Image(File):
                 save_params["lossless"] = False
         if output_format == "JPEG" and value.mode in {"RGBA", "LA"}:
             value = value.convert("RGB")
-        suffix = f".{output_format.lower()}"
-        with tempfile.TemporaryDirectory(prefix="lazycloud-image-") as directory:
-            path = Path(directory) / f"image{suffix}"
-            value.save(path, format=output_format, **save_params)
-            from lazycloud.abstractions.artifact import Artifact
-
-            artifact = Artifact.file(path)
-            artifact.save()
-            return artifact.public_url()
+        encoded = BytesIO()
+        value.save(encoded, format=output_format, **save_params)
+        return encoded.getvalue(), output_format
 
     def _validate_image(self, format_name: str, size: tuple[int, int]) -> None:
         normalized = format_name.upper()
@@ -503,79 +514,6 @@ def _text_path(value: Any) -> str | None:
     if isinstance(value, TextPathLike):
         return value.__fspath__()
     return None
-
-
-def _open_image(data: bytes) -> ValidatedImage:
-    return _open_image_header(data)
-
-
-def _open_image_header(data: bytes) -> ValidatedImage:
-    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
-        width = int.from_bytes(data[16:20], "big")
-        height = int.from_bytes(data[20:24], "big")
-        return ValidatedImage(data=data, format="PNG", width=width, height=height)
-    if data.startswith(b"\xff\xd8"):
-        width, height = _jpeg_size(data)
-        return ValidatedImage(data=data, format="JPEG", width=width, height=height)
-    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-        width, height = _webp_size(data)
-        return ValidatedImage(data=data, format="WEBP", width=width, height=height)
-    raise ValidationError("invalid image data or unsupported image format")
-
-
-def _jpeg_size(data: bytes) -> tuple[int, int]:
-    index = 2
-    while index + 9 < len(data):
-        if data[index] != 0xFF:
-            index += 1
-            continue
-        marker = data[index + 1]
-        index += 2
-        if marker in {0xD8, 0xD9}:
-            continue
-        if index + 2 > len(data):
-            break
-        length = int.from_bytes(data[index : index + 2], "big")
-        if length < 2:
-            break
-        if marker in {
-            0xC0,
-            0xC1,
-            0xC2,
-            0xC3,
-            0xC5,
-            0xC6,
-            0xC7,
-            0xC9,
-            0xCA,
-            0xCB,
-            0xCD,
-            0xCE,
-            0xCF,
-        }:
-            height = int.from_bytes(data[index + 3 : index + 5], "big")
-            width = int.from_bytes(data[index + 5 : index + 7], "big")
-            return width, height
-        index += length
-    raise ValidationError("invalid JPEG image data")
-
-
-def _webp_size(data: bytes) -> tuple[int, int]:
-    chunk = data[12:16]
-    if chunk == b"VP8X" and len(data) >= 30:
-        width = int.from_bytes(data[24:27], "little") + 1
-        height = int.from_bytes(data[27:30], "little") + 1
-        return width, height
-    if chunk == b"VP8 " and len(data) >= 30:
-        width = int.from_bytes(data[26:28], "little") & 0x3FFF
-        height = int.from_bytes(data[28:30], "little") & 0x3FFF
-        return width, height
-    if chunk == b"VP8L" and len(data) >= 25:
-        bits = int.from_bytes(data[21:25], "little")
-        width = (bits & 0x3FFF) + 1
-        height = ((bits >> 14) & 0x3FFF) + 1
-        return width, height
-    raise ValidationError("invalid WEBP image data")
 
 
 __all__ = [
