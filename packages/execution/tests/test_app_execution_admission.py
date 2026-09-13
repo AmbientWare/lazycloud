@@ -11,7 +11,6 @@ from shared.errors import ConflictError
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.endpoints import StartEndpointServeRequest
 from shared.http.functions import FunctionInvokeBody
-from shared.tasks import TaskStatus
 
 
 @pytest.mark.parametrize("producer", ["function", "endpoint"])
@@ -31,16 +30,13 @@ def test_paused_app_rejects_every_execution_producer_without_container_orphans(
     isolated_services.apps.pause(app.id, workspace=app.workspace_id)
 
     if producer == "function":
-        response = FunctionControlService(isolated_services).function_invoke(
-            FunctionInvokeBody(
-                stub_id=stub.id,
-                invocation=FunctionJsonInvocation(args=[1]),
+        with pytest.raises(ConflictError, match="is not active"):
+            FunctionControlService(isolated_services).function_invoke(
+                FunctionInvokeBody(
+                    stub_id=stub.id,
+                    invocation=FunctionJsonInvocation(args=[1]),
+                )
             )
-        )
-        assert response.task_id
-        task = isolated_services.tasks.get(response.task_id)
-        assert task.status is TaskStatus.Cancelled
-        assert task.error == "owning app is not active"
     else:
         with pytest.raises(ConflictError, match="is not active"):
             EndpointControlService(isolated_services).start_endpoint_serve(

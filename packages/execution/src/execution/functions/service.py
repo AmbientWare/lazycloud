@@ -8,7 +8,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from control.apps import DatabaseAppExecutionAdmission
 from control.service import ControlPlaneService, StubKind, StubRecord
+from database.repositories.apps import DeploymentRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import (
     LogPage,
@@ -36,7 +38,6 @@ from shared.errors import (
     DomainError,
     InvalidInputError,
     NotFoundError,
-    PaymentRequiredError,
 )
 from shared.events import EventLevel
 from shared.function_payloads import (
@@ -108,12 +109,7 @@ class FunctionControlService:
         try:
             stub = self.control_plane.get_stub(request.stub_id)
             if stub.kind is not StubKind.Function:
-                return FunctionInvokeResponse.from_result(
-                    task_id="",
-                    output=f"stub is not a function: {stub.id}",
-                    done=True,
-                    exit_code=1,
-                )
+                raise InvalidInputError(f"stub is not a function: {stub.id}")
             config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
             # Before the task row, because everything after this commits: a
             # refusal taken later leaves a task queued forever for an account
@@ -140,20 +136,36 @@ class FunctionControlService:
             )
             parent_task_id, root_task_id = self._task_graph_context(request, stub.workspace_id)
             task_args, task_kwargs = _persisted_invocation_arguments(invoke_plan.invocation)
-            task = self.services.tasks.create(
-                f"function-{stub.name}",
-                workspace_id=stub.workspace_id,
-                app_id=stub.app_id,
-                stub_id=stub.id,
-                deployment_id=stub.deployment_id,
-                parent_task_id=parent_task_id or None,
-                root_task_id=root_task_id or None,
-                handler=stub.handler,
-                args=task_args,
-                kwargs=task_kwargs,
-                invocation=invoke_plan.invocation,
-                retry_policy=retry_policy,
-            )
+            deployment_id = stub.deployment_id
+            with self.services.context.database.session() as session:
+                if stub.app_id:
+                    DatabaseAppExecutionAdmission().assert_active(
+                        session, app_id=stub.app_id, workspace_id=stub.workspace_id
+                    )
+                if deployment_id:
+                    deployment = DeploymentRepository(session).get_for_update(
+                        deployment_id, workspace_id=stub.workspace_id
+                    )
+                    if deployment is None or deployment.stub_id != stub.id:
+                        raise NotFoundError(f"deployment not found for function: {deployment_id}")
+                    if not deployment.active:
+                        raise ConflictError(f"deployment is not active: {deployment_id}")
+                task = self.services.tasks.create_in_transaction(
+                    session,
+                    f"function-{stub.name}",
+                    workspace_id=stub.workspace_id,
+                    app_id=stub.app_id,
+                    stub_id=stub.id,
+                    deployment_id=deployment_id,
+                    parent_task_id=parent_task_id or None,
+                    root_task_id=root_task_id or None,
+                    handler=stub.handler,
+                    args=task_args,
+                    kwargs=task_kwargs,
+                    invocation=invoke_plan.invocation,
+                    retry_policy=retry_policy,
+                )
+            self.services.tasks.publish_created(task)
             if not task.root_task_id:
                 task.root_task_id = task.id
                 task = self.services.tasks.save(task)
@@ -168,7 +180,7 @@ class FunctionControlService:
                 task_id=task.id,
                 kind=stub.kind.value,
                 app_id=stub.app_id or "",
-                deployment_id=stub.deployment_id or "",
+                deployment_id=task.deployment_id or "",
             )
             dependencies = self._create_task_dependencies(task, request)
             scheduled = self._try_schedule_waiting_task(task.id)
@@ -195,13 +207,7 @@ class FunctionControlService:
                 workspace_id=stub.workspace_id,
             )
             return FunctionInvokeResponse.from_result(task_id=task.id)
-        except (PaymentRequiredError, CapacityLimitReachedError):
-            # Told to the caller as a refusal rather than folded into a result.
-            # Everything else here is something that went wrong while running
-            # their code, which a failed task describes; these are the platform
-            # declining to run it at all, and there is no task to describe them.
-            # Reported as a failed invocation, an account at its container limit
-            # reads as a bug in the code it never ran.
+        except DomainError:
             raise
         except Exception as exc:
             return FunctionInvokeResponse.from_result(
