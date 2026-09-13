@@ -104,6 +104,12 @@ type supervisor struct {
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "filesystem" {
+		if err := runFilesystem(os.Args[2]); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "snapshot-filesystem" {
 		if err := snapshotFilesystem(os.Args[2]); err != nil {
 			fatal(err)

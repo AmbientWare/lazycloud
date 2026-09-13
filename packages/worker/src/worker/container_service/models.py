@@ -10,10 +10,19 @@ from shared.contracts import ContractModel
 
 from worker.routes import WorkerRouteContext
 from worker.runtime_config import OciRuntimeName
-from worker.sandbox_server import SandboxContainerMount, SandboxLogStream
+from worker.sandbox_server import SandboxContainerMount, SandboxFileOperation, SandboxLogStream
 
 CONTAINER_NOT_FOUND_MESSAGE = "Container not found"
 SANDBOX_PROCESS_MANAGER_NOT_READY_MESSAGE = "Sandbox process manager is not ready"
+
+
+class SandboxFilesystemRequest(ContractModel):
+    operation: SandboxFileOperation
+    path: str
+    source: str = ""
+    mode: int = 0o644
+    pattern: str = ""
+    replacement: str = ""
 
 
 class SandboxProcessEventType(StrEnum):
