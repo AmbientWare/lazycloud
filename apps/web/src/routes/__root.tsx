@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { LinkHTMLAttributes, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createRootRoute,
@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-router";
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import { Toaster } from "sonner";
+import instrumentSansUrl from "@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2?url";
+import jetbrainsMonoUrl from "@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url";
 
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
@@ -35,7 +37,16 @@ export const Route = createRootRoute({
       },
       { title: "LazyCloud" },
     ],
-    links: [{ rel: "icon", href: "/favicon.ico" }],
+    links: [
+      { rel: "icon", href: "/favicon.ico" },
+      ...[instrumentSansUrl, jetbrainsMonoUrl].map<LinkHTMLAttributes<HTMLLinkElement>>((href) => ({
+        rel: "preload",
+        href,
+        as: "font",
+        type: "font/woff2",
+        crossOrigin: "anonymous",
+      })),
+    ],
   }),
   component: RootComponent,
   errorComponent: RootErrorComponent,

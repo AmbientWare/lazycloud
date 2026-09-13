@@ -45,7 +45,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
   }, [hash, pathname]);
 
   return (
-    <MarketingFrame key={pathname} scrollportRef={scrollportRef}>
+    <MarketingFrame scrollportRef={scrollportRef}>
       <a
         className="fixed top-[max(0.75rem,env(safe-area-inset-top))] left-[max(0.75rem,env(safe-area-inset-left))] -translate-y-[160%] rounded-lg bg-foreground px-3.5 py-2.5 text-background focus:translate-y-0"
         href="#marketing-main"
