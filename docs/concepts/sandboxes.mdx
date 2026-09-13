@@ -103,6 +103,11 @@ With `docker_enabled=True` the sandbox has its own Docker daemon, and
 `stop`, `rm`, `exec`, `login`, `compose_up`, `compose_down`, and volume
 commands.
 
+Nested containers share the sandbox's network. Bind each service to a distinct
+port, then call `instance.expose_port(port)` to obtain its platform URL. Docker
+`run(ports=...)` and Compose `ports` mappings are rejected because shared
+networking cannot apply them.
+
 ## Snapshots
 
 ```python

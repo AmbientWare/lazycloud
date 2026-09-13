@@ -926,6 +926,11 @@ class SandboxDockerManager:
         volumes: Mapping[str, str] | Sequence[str] | None = None,
         cwd: str = "/workspace",
     ) -> DockerResult:
+        if ports:
+            raise SandboxProcessError(
+                "Nested Docker shares the sandbox network and cannot publish port mappings. "
+                "Bind the service to its sandbox port and use instance.expose_port(port)."
+            )
         args = ["docker", "run"]
         if detach:
             args.append("--detach")
@@ -936,7 +941,6 @@ class SandboxDockerManager:
             args.extend(["--security-opt", option])
         if name:
             args.extend(["--name", name])
-        args.extend(_docker_port_args(ports or {}))
         args.extend(_docker_env_args(env or {}))
         args.extend(_docker_volume_args(volumes or {}))
         args.append(image)
@@ -1053,6 +1057,12 @@ class SandboxDockerManager:
         override_services: dict[str, dict[str, JsonValue]] = {}
         for name, config in services.items():
             service_name = str(name)
+            if isinstance(config, dict) and config.get("ports"):
+                raise SandboxProcessError(
+                    f"Compose service {service_name} declares port mappings, but nested Docker "
+                    "shares the sandbox network. Remove ports, bind the service to its sandbox "
+                    "port and use instance.expose_port(port)."
+                )
             service_override: dict[str, JsonValue] = {
                 "network_mode": "host",
                 "pid": "host",
@@ -1969,13 +1979,6 @@ def _docker_env_args(env: Mapping[str, str]) -> list[str]:
     args: list[str] = []
     for key, value in env.items():
         args.extend(["--env", f"{key}={value}"])
-    return args
-
-
-def _docker_port_args(ports: Mapping[int | str, int | str]) -> list[str]:
-    args: list[str] = []
-    for host, container in ports.items():
-        args.extend(["--publish", f"{host}:{container}"])
     return args
 
 
