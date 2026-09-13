@@ -8,14 +8,14 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import Field
 from shared.contracts import ContractModel
-from shared.image_building.authoring import LinuxArchitecture
+from shared.image_building.authoring import LinuxArchitecture, PythonVersion
 from shared.managed_runtime_integrity import (
     managed_package_source_digest,
     managed_runtime_artifact_digest,
 )
 
 MANAGED_RUNTIME_SCHEMA_VERSION = 3
-MANAGED_RUNTIME_PYTHON_VERSIONS = ("3.10", "3.11", "3.12", "3.13", "3.14")
+MANAGED_RUNTIME_PYTHON_VERSIONS = tuple(version.value for version in PythonVersion)
 MANAGED_RUNTIME_ARCHITECTURES = (
     LinuxArchitecture.Amd64,
     LinuxArchitecture.Arm64,
