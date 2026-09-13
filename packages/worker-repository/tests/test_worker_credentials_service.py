@@ -3,8 +3,9 @@ from __future__ import annotations
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from identity.auth import AuthService
+from identity.auth import AuthorizationDeniedError, AuthService
 from shared.container_requests import RequestMount, RequestMountPointConfig, RequestMountType
+from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.identity import TokenKind, WorkspaceStorageConfig
 from shared.mounts import MountAuthMode
 from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
@@ -16,7 +17,6 @@ from worker.events import ContainerRequestContext
 from worker.tools import ContainerCredentialRequest, ContainerMountCredentialRequest
 from worker_repository.credentials import (
     GATEWAY_TOKEN_ENV,
-    WorkerCredentialError,
     WorkerCredentialService,
 )
 
@@ -310,7 +310,7 @@ def test_worker_credential_service_rejects_invalid_principal_and_assignment(
         gateway_token=True,
     )
 
-    with pytest.raises(WorkerCredentialError, match="worker token is required"):
+    with pytest.raises(AuthorizationDeniedError, match="worker token is required"):
         service.vend(
             request,
             principal=WorkerCredentialPrincipal(
@@ -328,7 +328,7 @@ def test_worker_credential_service_rejects_invalid_principal_and_assignment(
     )
     assert any(item.startswith(f"{GATEWAY_TOKEN_ENV}=") for item in credentials.env)
 
-    with pytest.raises(WorkerCredentialError, match="private worker token"):
+    with pytest.raises(AuthorizationDeniedError, match="private worker token"):
         service.vend(
             request,
             principal=WorkerCredentialPrincipal(
@@ -337,7 +337,7 @@ def test_worker_credential_service_rejects_invalid_principal_and_assignment(
             ),
         )
 
-    with pytest.raises(WorkerCredentialError, match="workspace/stub"):
+    with pytest.raises(AuthorizationDeniedError, match="workspace/stub"):
         service.vend(
             request.model_copy(update={"stub_id": "other-stub"}),
             principal=WorkerCredentialPrincipal(
@@ -368,7 +368,7 @@ def test_worker_credential_service_rejects_unavailable_secret_storage_and_mount(
         token_kind=TokenKind.Worker,
     )
 
-    with pytest.raises(WorkerCredentialError, match="secret 'MISSING'"):
+    with pytest.raises(NotFoundError, match="secret not found: MISSING"):
         service.vend(
             ContainerCredentialRequest(
                 workspace_id=workspace.id,
@@ -379,7 +379,7 @@ def test_worker_credential_service_rejects_unavailable_secret_storage_and_mount(
             principal=principal,
         )
 
-    with pytest.raises(WorkerCredentialError, match="workspace storage"):
+    with pytest.raises(UpstreamUnavailableError, match="workspace storage"):
         service.vend(
             ContainerCredentialRequest(
                 workspace_id=workspace.id,
@@ -390,7 +390,7 @@ def test_worker_credential_service_rejects_unavailable_secret_storage_and_mount(
             principal=principal,
         )
 
-    with pytest.raises(WorkerCredentialError, match="mount credentials"):
+    with pytest.raises(AuthorizationDeniedError, match="mount credentials"):
         service.vend(
             ContainerCredentialRequest(
                 workspace_id=workspace.id,
