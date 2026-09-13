@@ -390,21 +390,33 @@ def test_endpoint_host_routing_preserves_numeric_deployment_suffixes(
     with ExitStack() as client_stack:
         monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
         _deploy(isolated_services, "analytics", DeploymentKind.Endpoint)
-        deployment, stub = _deploy(isolated_services, "analytics-2026", DeploymentKind.Endpoint)
+        deployment, stub = _deploy(
+            isolated_services, "analytics-2026", DeploymentKind.Endpoint, route="/reports"
+        )
         service = RecordingEndpointService()
         client = client_stack.enter_context(
             TestClient(create_app(isolated_services, endpoint_service=service))
         )
         headers = _auth_headers(isolated_services)
 
+        url = (
+            ControlPlaneService(isolated_services.context)
+            .stub_url(stub.id, external_url=BASE_URL)
+            .url
+        )
+        parsed = urlsplit(url)
+        assert parsed.path == "/reports"
+        assert parsed.netloc == f"{deployment.subdomain}.{_base_host(BASE_URL)}"
         latest_response = client.post(
-            "/",
-            headers=headers | {"host": f"{deployment.subdomain}.{_base_host(BASE_URL)}"},
+            parsed.path,
+            params={"subpath": "not-the-route"},
+            headers=headers | {"host": parsed.netloc},
             json={"value": "numeric-suffix"},
         )
 
         assert latest_response.status_code == 202
         assert latest_response.json()["stub_id"] == stub.id
+        assert latest_response.json()["path"] == "/reports"
         assert [request.stub_id for request in service.forward_requests] == [stub.id]
 
 

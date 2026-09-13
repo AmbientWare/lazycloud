@@ -34,7 +34,7 @@ from shared.deployment_records import (
     resolve_http_wait_timeout_seconds,
     resolve_timeout_seconds,
 )
-from shared.deployments import DeploymentKind
+from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.errors import HttpTransportError
@@ -208,7 +208,7 @@ class Endpoint(Generic[P, R]):
     name: str | None = None
     route: str = "/"
     domain: str | None = None
-    methods: list[str] = field(default_factory=lambda: ["GET", "POST"])
+    methods: list[str] = field(default_factory=lambda: list(DEFAULT_ENDPOINT_METHODS))
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
@@ -600,7 +600,7 @@ def _endpoint(
             metadata=metadata or {},
             route=route,
             domain=domain,
-            methods=methods or ["GET", "POST"],
+            methods=methods or list(DEFAULT_ENDPOINT_METHODS),
         )
 
     if func is None:

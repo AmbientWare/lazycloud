@@ -40,6 +40,7 @@ class DeploymentResource:
             subdomain=self.deployment.subdomain,
             public=self.stub.public,
             ports=ports,
+            route=self.stub.config.route,
         )
         try:
             if self.stub.kind is StubKind.Pod:
@@ -69,6 +70,7 @@ def client_manifest_resource(
             resource.deployment.kind.value,
             resource.deployment.name,
             version=resource.deployment.version,
+            route=spec.route,
         ),
         route=spec.route,
         methods=list(spec.methods),

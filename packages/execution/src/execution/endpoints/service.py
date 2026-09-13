@@ -25,6 +25,7 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerStatus
+from shared.deployments import DEFAULT_ENDPOINT_METHODS
 from shared.env import (
     APP_ID_ENV,
     CHECKPOINT_ENABLED_ENV,
@@ -56,6 +57,7 @@ from shared.http.task_payload import serialize_http_task_payload
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
+from shared.urls import endpoint_route_path
 
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
@@ -571,6 +573,13 @@ class EndpointControlService:
         stub: StubRecord,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse:
+        if request.path != endpoint_route_path(stub.config.route):
+            return error_response(404, "endpoint route not found")
+        methods = stub.config.methods or DEFAULT_ENDPOINT_METHODS
+        if request.method not in methods:
+            response = error_response(405, "endpoint method not allowed")
+            response.headers["Allow"] = [", ".join(methods)]
+            return response
         try:
             payload = serialize_http_task_payload(request.body, query_params=request.query_params)
         except ValueError as exc:

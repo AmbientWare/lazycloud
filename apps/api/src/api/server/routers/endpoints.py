@@ -253,6 +253,17 @@ async def deployed_endpoint_request_by_version(
     )
 
 
+for endpoint_path, endpoint_handler in (
+    ("/id/{stub_id}/{subpath:path}", deployed_endpoint_request_by_id),
+    ("/public/{stub_id}/{subpath:path}", deployed_public_endpoint_request_by_id),
+    ("/{deployment_name}/latest/{subpath:path}", deployed_endpoint_request_by_latest_path),
+    ("/{deployment_name}/v{version}/{subpath:path}", deployed_endpoint_request_by_version),
+):
+    endpoint_router.add_api_route(
+        endpoint_path, endpoint_handler, methods=ENDPOINT_METHODS, include_in_schema=False
+    )
+
+
 @asgi_router.post("/id/{stub_id}/warmup", response_model=StartEndpointServeResponse)
 def deployed_asgi_warmup_by_id(
     stub_id: str,
@@ -575,13 +586,7 @@ async def _health_probe_response(
     service: EndpointApiService,
     forwarded: EndpointForwardRequest,
 ) -> Response | None:
-    """The probe path, which answers without opening an invocation.
-
-    ASGI only, because only ASGI routes a subpath: a function endpoint is invoked
-    at `/` with a payload and has nowhere to put `/health`. Its runner serves the
-    route all the same, so reaching it is a matter of publishing a URL rather than
-    of the probe working.
-    """
+    """Read ASGI runner health without opening an invocation."""
 
     if forwarded.path != CONTAINER_HEALTH_PATH:
         return None
@@ -595,10 +600,8 @@ async def _forward_endpoint_request(
     stub: StubRecord,
     service: EndpointApiService,
     request: Request,
-    *,
-    subpath: str = "",
 ) -> Response:
-    forwarded = await _forwarded_request(stub, request, subpath)
+    forwarded = await _forwarded_request(stub, request, request.path_params.get("subpath", ""))
     result = await service.forward_endpoint_request(forwarded)
     attribute_public_transfer(
         request,

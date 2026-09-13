@@ -1177,6 +1177,7 @@ class ControlPlaneService:
             subdomain=deployment.subdomain if deployment else "",
             public=stub.public,
             ports=ports,
+            route=stub.config.route,
         )
         try:
             if container_id is not None:
@@ -1188,7 +1189,7 @@ class ControlPlaneService:
                     )
                 if container is None or container.stub_id != stub.id:
                     raise NotFoundError("endpoint container not found")
-                url = build_container_url(external_url, container.id)
+                url = build_container_url(external_url, container.id, path=target.invoke_path)
             elif stub.kind is StubKind.Pod:
                 url = build_pod_url(external_url, target)
             elif stub.kind is StubKind.Sandbox:

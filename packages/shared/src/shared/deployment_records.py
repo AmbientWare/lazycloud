@@ -10,7 +10,7 @@ from shared.autoscaling import QueueDepthAutoscaler
 from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.custom_domains import normalize_assignable_hostname
-from shared.deployments import DeploymentKind
+from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
@@ -321,7 +321,7 @@ class DeploymentSpec(ContractModel):
     secrets: list[str] = Field(default_factory=list)
     volumes: list[VolumeMount] = Field(default_factory=list)
     route: str | None = None
-    methods: list[str] = Field(default_factory=lambda: ["GET", "POST"])
+    methods: list[str] = Field(default_factory=lambda: list(DEFAULT_ENDPOINT_METHODS))
     domain: str | None = None
     """Hostname this resource should serve, under a domain the workspace registered.
 
