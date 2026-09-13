@@ -561,6 +561,8 @@ class Pod(ControlClientConfigMixin):
             token=self.token,
             timeout_seconds=self.timeout_seconds,
         )
+        if self.deployment_id and version is None:
+            return deployment, selected_workspace
         try:
             target = deployment.resolve_target(
                 kind=DeploymentKind.Pod,
