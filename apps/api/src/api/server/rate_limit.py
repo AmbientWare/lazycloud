@@ -39,6 +39,8 @@ DEFAULT_UNAUTHENTICATED_LIMITS: tuple[UnauthenticatedRouteLimit, ...] = (
     # behind one address, and every one of them lands here within a minute of
     # each other.
     UnauthenticatedRouteLimit("/auth/github/callback", 20, 400),
+    # Five-second polling must not spend the code-creation budget.
+    UnauthenticatedRouteLimit("/auth/device/token", 120, 2_400),
     UnauthenticatedRouteLimit("/auth/device", 10, 200),
     UnauthenticatedRouteLimit("/auth/authorize", 10, 200),
     # Redeeming a sign-in code. The budget bounds abuse of the exchange rather than
