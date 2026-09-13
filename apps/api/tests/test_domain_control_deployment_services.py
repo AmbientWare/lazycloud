@@ -75,7 +75,7 @@ def test_deployment_manifest_route_serves_invoke_schema(
         assert _json_path(manifest, "deployment_id") == deployment.id
         invoke_url = _json_path(manifest, "invoke_url")
         assert isinstance(invoke_url, str)
-        assert invoke_url == f"https://{deployment.subdomain}.ui.example"
+        assert invoke_url == f"https://{deployment.subdomain}-v{deployment.version}.ui.example"
         assert _json_path(manifest, "inputs", "fields", "value", "type") == "integer"
         assert _json_path(manifest, "client_contract", "operation", "name") == "remote"
         assert (
