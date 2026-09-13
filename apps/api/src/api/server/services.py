@@ -1381,7 +1381,6 @@ def _gateway_control_service(
         ),
         object_storage=core.object_storage,
         agent_image=AgentImageConfig(),
-        event_streams=RedisEventStreamRepository(core.redis()),
         connections=RedisAgentConnectionDirectory(core.redis()),
         tunnel_authority=AgentTunnelAuthority(core.context.database, compute_states),
         container_stopper=SchedulerContainerServiceStopper(container_clients),

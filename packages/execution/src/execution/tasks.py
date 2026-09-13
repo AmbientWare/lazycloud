@@ -939,7 +939,10 @@ class TaskService:
         return repository.page(query, workspace_id=workspace_id, limit=limit)
 
     def publish_lifecycle_change(self, task: Task, change: WorkspaceChangeType) -> None:
-        if self.workspace_changes is None or not task.workspace_id:
+        if not task.workspace_id:
+            return
+        self._publish_lifecycle_event(task, change)
+        if self.workspace_changes is None:
             return
         self.workspace_changes.emit_change(
             workspace_id=task.workspace_id,
@@ -959,7 +962,10 @@ class TaskService:
         task: Task,
         change: WorkspaceChangeType,
     ) -> None:
-        if self.async_workspace_changes is None or not task.workspace_id:
+        if not task.workspace_id:
+            return
+        await asyncio.to_thread(self._publish_lifecycle_event, task, change)
+        if self.async_workspace_changes is None:
             return
         await self.async_workspace_changes.emit_change(
             workspace_id=task.workspace_id,
@@ -972,6 +978,30 @@ class TaskService:
             task_id=task.id,
             root_task_id=task.root_task_id,
             container_id=task.container_id,
+        )
+
+    def _publish_lifecycle_event(self, task: Task, change: WorkspaceChangeType) -> None:
+        self.log_streams.append_event(
+            EventRecordType.TaskCreated
+            if change is WorkspaceChangeType.Created
+            else EventRecordType.TaskUpdated,
+            {
+                "task_id": task.id,
+                "workspace_id": task.workspace_id,
+                "app_id": task.app_id,
+                "stub_id": task.stub_id,
+                "deployment_id": task.deployment_id,
+                "container_id": task.container_id,
+                "root_task_id": task.root_task_id,
+                "parent_task_id": task.parent_task_id,
+                "status": task.status.value,
+                "attempt_number": task.attempt_number,
+                "max_attempts": task.max_attempts,
+                "error": task.error,
+                "exit_code": task.exit_code,
+                "created_at": task.created_at,
+                "updated_at": utc_now(),
+            },
         )
 
     async def publish_created_async(self, task: Task) -> None:

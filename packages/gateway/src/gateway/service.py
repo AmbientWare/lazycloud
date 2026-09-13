@@ -98,7 +98,7 @@ from identity.signatures import sign_payload
 from observability.events import EventService
 from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
-from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
+from observability.stream_state import AsyncRedisEventStreamRepository
 from observability.usage import UsageService
 from operations.management import ManagementService
 from pydantic import JsonValue, SecretStr
@@ -194,7 +194,6 @@ from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
 from shared.logs import LogEntry
 from shared.objects import ObjectRecord
-from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import LogStreamQuery
 from shared.releases import ActiveRelease
 from shared.routing import AgentBackendRoute
@@ -381,7 +380,6 @@ class GatewayControlService:
     object_storage: ObjectStorage
     gateway_endpoint: GatewayEndpointConfig
     agent_image: AgentImageConfig
-    event_streams: RedisEventStreamRepository
     container_stopper: GatewayContainerStopper
     container_client_factory: SchedulerContainerClientFactory
     connections: RedisAgentConnectionDirectory
@@ -824,7 +822,6 @@ class GatewayControlService:
             data=data,
             workspace_id=workspace_id or None,
         )
-        self.event_streams.append_event(EventRecordType.TaskUpdated, data)
 
     def get_or_create_stub(self, request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
         try:
