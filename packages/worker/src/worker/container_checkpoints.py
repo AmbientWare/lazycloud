@@ -91,6 +91,8 @@ class RuntimeCheckpointCreator:
             raise RuntimeError(msg)
         checkpoint_id = checkpoint_id or self.id_factory()
         with self.checkpoint_activity.acquire(checkpoint_id):
+            if instance.checkpoint_readiness is not None:
+                instance.checkpoint_readiness.assert_ready(instance.container_ip)
             request = build_checkpoint_plan(
                 _checkpoint_request(
                     instance,

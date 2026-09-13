@@ -26,6 +26,7 @@ from shared.timestamps import utc_now
 from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
 
+from worker.checkpoint_readiness import CheckpointReadinessProbe
 from worker.container_logs import ContainerLogCaptureResult
 from worker.container_rootfs import (
     ContainerRootfsReleaseResult,
@@ -337,6 +338,19 @@ class ContainerExecutionContext(ContractModel):
 
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = False
+
+    @property
+    def checkpoint_readiness_probe(self) -> CheckpointReadinessProbe | None:
+        if not self.checkpoint_enabled or self.startup_kind not in {
+            WorkerStartupKind.Pod,
+            WorkerStartupKind.PodRun,
+        }:
+            return None
+        return CheckpointReadinessProbe(
+            path=self.checkpoint_readiness_path,
+            port=self.checkpoint_readiness_port,
+            timeout_seconds=min(self.checkpoint_readiness_interval_seconds, 5.0),
+        )
 
 
 class ContainerExecutionPhaseResult(ContractModel):

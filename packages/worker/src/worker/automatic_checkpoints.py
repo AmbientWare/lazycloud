@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import http.client
 import shutil
 import socket
 import time
@@ -207,22 +206,13 @@ class WorkerAutomaticCheckpointService:
         instance = self.instances.get_container_instance(context.request.container_id)
         if instance is None or not instance.container_ip:
             return False
-        host = (
-            f"[{instance.container_ip}]" if ":" in instance.container_ip else instance.container_ip
-        )
-        connection = http.client.HTTPConnection(
-            host,
-            context.checkpoint_readiness_port,
-            timeout=min(context.checkpoint_readiness_interval_seconds, 5.0),
-        )
+        if instance.checkpoint_readiness is None:
+            raise RuntimeError("Pod checkpoint readiness probe is not configured")
         try:
-            connection.request("GET", context.checkpoint_readiness_path)
-            response = connection.getresponse()
-            return 200 <= response.status < 400
-        except OSError:
+            instance.checkpoint_readiness.assert_ready(instance.container_ip)
+        except RuntimeError:
             return False
-        finally:
-            connection.close()
+        return True
 
     def _complete(self, container_id: str, *, container_hostname: str) -> None:
         signal_dir = Path(checkpoint_signal_dir(container_id, root=self.signal_root))

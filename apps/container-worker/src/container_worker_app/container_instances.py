@@ -116,6 +116,7 @@ class OciContainerServiceInstanceRecorder:
             cache_available=self.cache_available,
             gpu=context.request.gpu,
             gpu_count=context.request.gpu_count,
+            checkpoint_readiness=context.checkpoint_readiness_probe,
         )
         self.instances.save_container_instance(instance)
 

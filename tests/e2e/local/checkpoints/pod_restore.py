@@ -35,6 +35,7 @@ def main() -> int:
     )
     primary_error: BaseException | None = None
     evidence: dict[str, object] = {}
+    readiness_rejected = False
     try:
         deployed = pod.deploy(
             workspace=workspace,
@@ -47,7 +48,35 @@ def main() -> int:
         time.sleep(0.25)
         later = _pod_state(deployed.invoke_url, token, "checkpoint")
         _same_process(first, later)
-        _checkpoint(source, workspace)
+        control_url = deployed.invoke_url.rstrip("/") + "/readiness/"
+        headers = {"Authorization": f"Bearer {token}"}
+        httpx.post(control_url + "disable", headers=headers, timeout=5).raise_for_status()
+        response = httpx.get(deployed.invoke_url.rstrip("/") + "/ready", headers=headers, timeout=5)
+        assert response.status_code == 503
+        rejected_id = str(uuid4())
+        rejected = _checkpoint(source, workspace, checkpoint_id=rejected_id)
+        readiness_rejected = rejected.returncode != 0
+        if readiness_rejected:
+            assert "readiness" in rejected.stderr.lower() and "503" in rejected.stderr
+            _same_process(later, _pod_state(deployed.invoke_url, token, "after-rejection"))
+        print(
+            json.dumps(
+                {
+                    "case": "checkpoint-unready",
+                    "container": source,
+                    "checkpoint": rejected_id,
+                    "cli_exit": rejected.returncode,
+                    "rejected": readiness_rejected,
+                }
+            ),
+            flush=True,
+        )
+        httpx.post(control_url + "enable", headers=headers, timeout=5).raise_for_status()
+        selected_id = str(uuid4())
+        created = _checkpoint(source, workspace, checkpoint_id=selected_id)
+        if created.returncode != 0:
+            raise RuntimeError(created.stderr.strip() or "public checkpoint command failed")
+        assert json.loads(created.stdout)["checkpoint_id"] == selected_id
         client.stop_container(source)
         replacement = _running_container(client, deployed.stub_id, exclude={source})
         restored = _pod_state(deployed.invoke_url, token, "restored")
@@ -72,6 +101,7 @@ def main() -> int:
         raise primary_error
     if cleanup_error:
         raise RuntimeError(f"Pod restore cleanup failed: {cleanup_error}")
+    assert readiness_rejected, "manual checkpoint ignored the workload's failed readiness probe"
     print(json.dumps({"accepted": True, "evidence": evidence}, sort_keys=True))
     return 0
 
@@ -122,13 +152,23 @@ def _running_container(
     deadline = time.monotonic() + 120
     excluded = exclude or set()
     while time.monotonic() < deadline:
+        containers = client.list_containers(stub_ids=(stub_id,)).data
+        print(
+            json.dumps(
+                {
+                    "case": "checkpoint-containers",
+                    "containers": [
+                        (item.container.id, item.container.status.value) for item in containers
+                    ],
+                }
+            ),
+            flush=True,
+        )
         running = [
             item.container.id
-            for item in client.list_containers(
-                stub_ids=(stub_id,),
-                statuses=(ContainerStatus.Running,),
-            ).data
-            if item.container.id not in excluded
+            for item in containers
+            if item.container.status is ContainerStatus.Running
+            and item.container.id not in excluded
         ]
         if len(running) == 1:
             return running[0]
@@ -136,8 +176,10 @@ def _running_container(
     raise RuntimeError("checkpoint Pod did not expose one running container")
 
 
-def _checkpoint(container_id: str, workspace: str) -> None:
-    completed = subprocess.run(
+def _checkpoint(
+    container_id: str, workspace: str, *, checkpoint_id: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [
             "uv",
             "run",
@@ -146,6 +188,8 @@ def _checkpoint(container_id: str, workspace: str) -> None:
             "container",
             "checkpoint",
             container_id,
+            "--checkpoint-id",
+            checkpoint_id,
             "--workspace",
             workspace,
         ],
@@ -153,8 +197,6 @@ def _checkpoint(container_id: str, workspace: str) -> None:
         capture_output=True,
         check=False,
     )
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or "public checkpoint command failed")
 
 
 def _delete_app(client: ResourceControlClient, app_name: str) -> str:

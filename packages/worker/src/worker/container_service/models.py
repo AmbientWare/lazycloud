@@ -8,6 +8,7 @@ from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.contracts import ContractModel
 
+from worker.checkpoint_readiness import CheckpointReadinessProbe
 from worker.routes import WorkerRouteContext
 from worker.runtime_config import OciRuntimeName
 from worker.sandbox_server import SandboxContainerMount, SandboxFileOperation, SandboxLogStream
@@ -111,6 +112,7 @@ class WorkerContainerServiceInstance(ContractModel):
     cache_available: bool = False
     gpu: str = ""
     gpu_count: int = 0
+    checkpoint_readiness: CheckpointReadinessProbe | None = None
 
     @property
     def workspace_root(self) -> str:

@@ -14,6 +14,7 @@ PORT = 8091
 _boot_id = str(uuid4())
 _born_at_ns = time.time_ns()
 _counter = 0
+_ready = True
 _lock = threading.Lock()
 
 
@@ -29,7 +30,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path, _, label = self.path.partition("?")
         if path == "/ready":
-            self._write(HTTPStatus.OK, {"ready": True})
+            self._write(
+                HTTPStatus.OK if _ready else HTTPStatus.SERVICE_UNAVAILABLE, {"ready": _ready}
+            )
             return
         if path == "/state":
             with _lock:
@@ -46,6 +49,14 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         self._write(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        global _ready
+        if self.path not in {"/readiness/enable", "/readiness/disable"}:
+            self._write(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
+        _ready = self.path.endswith("/enable")
+        self._write(HTTPStatus.OK, {"ready": _ready})
 
     def log_message(self, format: str, *args: object) -> None:
         print(format % args, flush=True)
