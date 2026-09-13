@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import traceback
+
 import typer
 
 from lazycloud.cli.components.errors import (
     CliErrorPolicy,
     debug_errors_enabled,
     json_errors_enabled,
+    mask_secrets,
     render_exception,
 )
-from lazycloud.cli.components.output import json_output_active, set_json_output
+from lazycloud.cli.components.output import error_console, json_output_active, set_json_output
 
 
 def run_cli(
@@ -30,7 +33,13 @@ def run_cli(
         raise SystemExit(exc.exit_code) from None
     except (Exception, KeyboardInterrupt) as exc:
         if debug_errors_enabled(args):
-            raise
+            if not json_output:
+                raise
+            error_console.print(
+                mask_secrets("".join(traceback.format_exception(exc))),
+                markup=False,
+                highlight=False,
+            )
         exit_code = render_exception(exc, json_output=json_output, policy=policy)
         raise SystemExit(exit_code) from None
     finally:
