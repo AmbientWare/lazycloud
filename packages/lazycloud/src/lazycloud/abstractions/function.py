@@ -49,6 +49,7 @@ from shared.placement import ProductRegion
 from shared.task_context import current_root_task_id, current_task_id
 from shared.tasks import RetryPolicy, TaskPolicy
 
+from lazycloud._invocation import prepare_arguments
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
@@ -228,7 +229,13 @@ class Function(Generic[P, R]):
         return self.local(*args, **kwargs)
 
     def local(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        return self.func(*args, **kwargs)
+        if self.inputs is None:
+            return self.func(*args, **kwargs)
+        return self.invoke_arguments(args, kwargs)
+
+    def invoke_arguments(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> R:
+        prepared_args, prepared_kwargs = prepare_arguments(self.func, args, kwargs, self.inputs)
+        return self.func(*prepared_args, **prepared_kwargs)
 
     def configure(
         self,

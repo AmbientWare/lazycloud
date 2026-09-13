@@ -12,12 +12,15 @@ from pathlib import Path
 from typing import Any, BinaryIO, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from typing_extensions import Self
+from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ValidationError as PydanticValidationError
+from shared.errors import InvalidInputError
+from typing_extensions import Self, TypedDict
 
 from lazycloud.json_contracts import JsonValue
 
 
-class ValidationError(ValueError):
+class ValidationError(InvalidInputError, ValueError):
     def __init__(self, message: str, field: str | None = None) -> None:
         self.message = message
         self.field = field
@@ -91,11 +94,34 @@ class SchemaField:
         field_type = str(value.get("type", ""))
         nested = value.get("fields", {})
         fields: dict[str, SchemaField] = {}
-        if isinstance(nested, dict):
-            for name, field_value in nested.items():
-                if isinstance(field_value, dict):
-                    fields[name] = SchemaField.from_dict(field_value)
-        return cls(type=field_type, fields=fields)
+        if not isinstance(nested, dict):
+            raise ValidationError("schema fields must be an object")
+        for name, field_value in nested.items():
+            if not isinstance(field_value, dict):
+                raise ValidationError("schema field must be an object", field=name)
+            fields[name] = SchemaField.from_dict(field_value)
+        match field_type:
+            case "string":
+                return String()
+            case "integer":
+                return Integer()
+            case "number":
+                return Number()
+            case "boolean":
+                return Boolean()
+            case "json":
+                return JSON()
+            case "file":
+                return File()
+            case "image":
+                options = TypeAdapter[_ImageOptions](_ImageOptions).validate_python(
+                    {key: item for key, item in value.items() if key not in {"type", "fields"}}
+                )
+                return Image(**options)
+            case "object":
+                return Object(fields)
+            case _:
+                raise ValidationError(f"unknown schema field type: {field_type!r}")
 
 
 class String(SchemaField):
@@ -142,6 +168,11 @@ class JSON(SchemaField):
     def __init__(self) -> None:
         super().__init__("json")
 
+    def validate(self, value: Any) -> JsonValue:
+        return TypeAdapter[JsonValue](
+            JsonValue, config=ConfigDict(allow_inf_nan=False)
+        ).validate_python(value)
+
 
 class File(SchemaField):
     def __init__(self) -> None:
@@ -183,6 +214,15 @@ class File(SchemaField):
         return Artifact.from_file(_binary_reader(validated)).public_url()
 
 
+@with_config(ConfigDict(extra="forbid"))
+class _ImageOptions(TypedDict, total=False):
+    max_size: tuple[int, int] | None
+    min_size: tuple[int, int] | None
+    allowed_formats: list[str] | tuple[str, ...] | None
+    quality: int
+    preserve_metadata: bool
+
+
 class Image(File):
     def __init__(
         self,
@@ -201,6 +241,16 @@ class Image(File):
         )
         self.quality = max(1, min(100, quality))
         self.preserve_metadata = preserve_metadata
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "type": self.type,
+            "max_size": list(self.max_size) if self.max_size is not None else None,
+            "min_size": list(self.min_size) if self.min_size is not None else None,
+            "allowed_formats": list(self.allowed_formats),
+            "quality": self.quality,
+            "preserve_metadata": self.preserve_metadata,
+        }
 
     def validate(self, value: Any) -> Any:
         if isinstance(value, SerializableImage):
@@ -296,6 +346,15 @@ class Object(SchemaField):
         fields = schema.fields if isinstance(schema, Schema) else dict(schema)
         super().__init__("object", fields=fields)
 
+    def validate(self, value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise ValidationError(f"expected object, got {type(value).__name__}")
+        values = TypeAdapter[dict[str, Any]](dict[str, Any]).validate_python(value)
+        return Schema(self.fields).validate(values)
+
+    def dump(self, value: Any) -> dict[str, Any]:
+        return Schema(self.fields).dump(self.validate(value))
+
 
 @dataclass(frozen=True)
 class Schema:
@@ -306,7 +365,13 @@ class Schema:
         for name, field_value in self.fields.items():
             if name not in value:
                 raise ValidationError(f"missing required field: {name}", field=name)
-            result[name] = field_value.validate(value[name])
+            try:
+                result[name] = field_value.validate(value[name])
+            except ValidationError as exc:
+                raise ValidationError(f"{name}: {exc}", field=name) from None
+            except PydanticValidationError as exc:
+                detail = "; ".join(error["msg"] for error in exc.errors(include_input=False))
+                raise ValidationError(f"{name}: {detail}", field=name) from None
         return result
 
     def dump(self, value: Mapping[str, Any]) -> dict[str, Any]:
@@ -325,10 +390,12 @@ class Schema:
     def from_dict(cls, value: Mapping[str, JsonValue]) -> Self:
         raw_fields = value.get("fields", value)
         fields: dict[str, SchemaField] = {}
-        if isinstance(raw_fields, Mapping):
-            for name, field_value in raw_fields.items():
-                if isinstance(name, str) and isinstance(field_value, dict):
-                    fields[name] = SchemaField.from_dict(field_value)
+        if not isinstance(raw_fields, Mapping):
+            raise ValidationError("schema fields must be an object")
+        for name, field_value in raw_fields.items():
+            if not isinstance(field_value, dict):
+                raise ValidationError("schema field must be an object", field=name)
+            fields[name] = SchemaField.from_dict(field_value)
         return cls(fields=fields)
 
 

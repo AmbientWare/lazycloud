@@ -35,6 +35,7 @@ from shared.env import (
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
+from shared.errors import InvalidInputError
 from shared.http.endpoint_forwarding import ASGIMessage, ASGIReceive, ASGISend
 from shared.http.endpoints import EndpointForwardRequest, EndpointForwardResponse
 from shared.http.task_payload import serialize_http_task_payload
@@ -163,6 +164,8 @@ class EndpointServeRunner:
             if self.is_asgi:
                 return call_asgi_app(self.handler(), request)
             return self._handle_function_endpoint(request)
+        except InvalidInputError as exc:
+            return error_response(400, str(exc))
         except Exception as exc:
             formatted = traceback.format_exc()
             task_id = _task_id(request)
