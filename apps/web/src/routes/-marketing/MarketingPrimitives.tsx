@@ -1,5 +1,5 @@
 import { Slot } from "@radix-ui/react-slot";
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
 
@@ -16,8 +16,17 @@ export const shell =
   "ml-[max(1rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] w-auto max-w-[1200px] mr-[max(1rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] sm:ml-[max(1.5rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] sm:mr-[max(1.5rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] lg:ml-[max(2rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] lg:mr-[max(2rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))]";
 
 export function MarketingHero({ children }: { children: ReactNode }) {
+  const [entered, setEntered] = useState(false);
+
   return (
-    <section className="marketing-hero relative overflow-hidden border-b border-border bg-background">
+    <section
+      className="marketing-hero relative overflow-hidden border-b border-border bg-background"
+      data-hero-entered={entered}
+      onFocusCapture={() => setEntered(true)}
+      onAnimationEnd={(event) => {
+        if (event.animationName === "marketing-enter-panel") setEntered(true);
+      }}
+    >
       <div className="marketing-grid-field" aria-hidden="true" />
       <div
         className={cn(

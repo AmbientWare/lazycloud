@@ -108,8 +108,8 @@
     animation: marketing-enter-panel 900ms cubic-bezier(0.22, 1, 0.36, 1) 160ms backwards;
   }
 
-  .marketing-hero-content > :first-child > :focus-within,
-  .marketing-hero-content > :last-child:focus-within {
+  .marketing-hero[data-hero-entered="true"] .marketing-hero-content > :first-child > *,
+  .marketing-hero[data-hero-entered="true"] .marketing-hero-content > :last-child {
     animation: none;
   }
 }
