@@ -54,6 +54,7 @@ def write_client_package(
         response = GatewayControlClient.from_endpoint(
             config.endpoint,
             token=config.token,
+            workspace=config.workspace,
             timeout_seconds=config.timeout_seconds,
         ).client_manifest(
             ClientManifestRequest(
