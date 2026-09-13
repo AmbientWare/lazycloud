@@ -23,7 +23,7 @@ export function CreditPrompt({ onOpenSettings }: { onOpenSettings: () => void })
     <Button
       type="button"
       onClick={onOpenSettings}
-      className="mb-3 h-10 w-full justify-start gap-2 border-brand bg-brand px-3 text-[13px] text-brand-foreground hover:bg-lazycloud-light focus-visible:border-brand focus-visible:ring-brand/40"
+      className="mb-3 h-10 w-full justify-start gap-2 px-3 text-[13px]"
     >
       <Plus className="shrink-0" aria-hidden="true" />
       <span className="flex-1 whitespace-nowrap text-left">Add credits</span>

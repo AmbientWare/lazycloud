@@ -38,12 +38,17 @@ export function Terminal({
     const host = containerRef.current;
     if (!host) return;
 
+    const style = getComputedStyle(host);
     const term = new XTerm({
       fontSize: 12,
-      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+      fontFamily: style.fontFamily,
       cursorBlink: true,
       convertEol: true,
-      theme: { background: "#0a0a0f" },
+      theme: {
+        background: style.backgroundColor,
+        foreground: style.color,
+        cursor: style.getPropertyValue("--brand").trim(),
+      },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -176,7 +181,7 @@ export function Terminal({
       </div>
       <div
         ref={containerRef}
-        className="min-h-0 flex-1 overflow-hidden rounded-md bg-[#0a0a0f] p-2"
+        className="min-h-0 flex-1 overflow-hidden rounded-md bg-background p-2 font-mono text-foreground"
       />
     </div>
   );

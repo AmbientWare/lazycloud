@@ -205,7 +205,7 @@ function DesktopRail({
           className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Search className="size-3.5 shrink-0" aria-hidden="true" />
-          <kbd className="mono shrink-0 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+          <kbd className="mono shrink-0 rounded-md border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
             ⌘ K
           </kbd>
         </button>

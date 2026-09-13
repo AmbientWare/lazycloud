@@ -33,17 +33,19 @@
 @theme inline {
   --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
-  /* Display serif; its @font-face ships with the marketing route chunk. */
-  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
-  --radius-xs: calc(var(--radius) - 6px);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-xs: var(--radius);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
   --color-lazycloud: var(--lazycloud);
   --color-lazycloud-light: var(--lazycloud-light);
   --color-lazycloud-dark: var(--lazycloud-dark);
   --color-background: var(--background);
+  --color-background-subtle: var(--background-subtle);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -89,50 +91,51 @@
 :root,
 .dark {
   color-scheme: dark;
-  --radius: 0.625rem;
-  --lazycloud: #66cbff;
-  --lazycloud-light: #8cd7ff;
+  --radius: 0px;
+  --lazycloud: #76d6f5;
+  --lazycloud-light: #a1e6fb;
   --lazycloud-dark: #4dbce8;
-  --background: #0e1217;
-  --foreground: #e7edf4;
-  --card: #151b23;
-  --card-foreground: #e7edf4;
-  --popover: #151b23;
-  --popover-foreground: #e7edf4;
+  --background: #080808;
+  --background-subtle: #111113;
+  --foreground: #eef3f7;
+  --card: #121d26;
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
   /* The brand cyan itself carries dark ink for AA on filled brand surfaces. */
   --brand: var(--lazycloud);
-  --brand-foreground: oklch(0.2 0.03 240);
-  --primary: #e7edf4;
-  --primary-foreground: #0e1217;
+  --brand-foreground: var(--background);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
   --positive: #7fd0a4;
-  --positive-foreground: #0e1217;
-  --secondary: #1d2530;
-  --secondary-foreground: #e7edf4;
-  --muted: #1d2530;
-  --muted-foreground: #96a6ba;
-  --accent: #1d2530;
-  --accent-foreground: #e7edf4;
+  --positive-foreground: var(--background);
+  --secondary: var(--card);
+  --secondary-foreground: var(--foreground);
+  --muted: #18232d;
+  --muted-foreground: #a4b4c2;
+  --accent: var(--muted);
+  --accent-foreground: var(--foreground);
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: hsl(0 0% 9%);
   --warning: hsl(43 90% 60%);
   --warning-foreground: hsl(0 0% 9%);
   --info: hsl(197 90% 65%);
   --info-foreground: hsl(0 0% 9%);
-  --border: rgb(231 237 244 / 15%);
-  --input: rgb(231 237 244 / 22%);
+  --border: #354550;
+  --input: var(--border);
   --ring: var(--brand);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: #151b23;
-  --sidebar-foreground: #e7edf4;
-  --sidebar-primary: #e7edf4;
-  --sidebar-primary-foreground: #0e1217;
-  --sidebar-accent: #1d2530;
-  --sidebar-accent-foreground: #e7edf4;
-  --sidebar-border: rgb(231 237 244 / 15%);
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
   --sidebar-ring: var(--brand);
 }
 
@@ -170,17 +173,9 @@
   }
 }
 
-/* Functional workspace surface: visible depth without decorative card chrome. */
 .panel {
   background: var(--card);
-  border: 1px solid var(--input);
-  box-shadow: 0 1px 2px oklch(0 0 0 / 6%);
-}
-
-.dark .panel {
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 3%),
-    0 10px 28px oklch(0 0 0 / 12%);
+  border: 1px solid var(--border);
 }
 
 /* Clickable panels keep their geometry stable while making hover intent explicit. */
@@ -194,15 +189,6 @@
 .interactive-panel:focus-visible {
   background: color-mix(in oklab, var(--card) 92%, var(--brand) 8%);
   border-color: color-mix(in oklab, var(--brand) 42%, transparent);
-  box-shadow: 0 2px 8px oklch(0 0 0 / 10%);
-}
-
-.dark .interactive-panel:hover,
-.dark .interactive-panel:focus-visible {
-  background: color-mix(in oklab, var(--card) 90%, var(--brand) 10%);
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 4%),
-    0 12px 30px oklch(0 0 0 / 20%);
 }
 
 /* Navigable rows share one stable hover, selected, and keyboard-focus treatment. */
@@ -238,7 +224,7 @@
 
 /* Inline navigation keeps a text-level affordance without inventing route colors. */
 .interactive-link {
-  border-radius: calc(var(--radius) - 4px);
+  border-radius: var(--radius);
   outline: none;
   transition: color 150ms ease;
 }
@@ -292,30 +278,6 @@
   color: var(--brand);
 }
 
-/* Offset stamp: drafting-press depth for page-level actions. The quiet variant
-   carries the same geometry for secondary controls. */
-.stamp,
-.stamp-quiet {
-  box-shadow: 3px 3px 0 0 var(--brand);
-  transition:
-    transform 180ms ease,
-    box-shadow 180ms ease;
-}
-
-.stamp-quiet {
-  box-shadow: 3px 3px 0 0 var(--input);
-}
-
-.stamp:hover {
-  box-shadow: 1px 1px 0 0 var(--brand);
-  transform: translate(2px, 2px);
-}
-
-.stamp-quiet:hover {
-  box-shadow: 1px 1px 0 0 var(--input);
-  transform: translate(2px, 2px);
-}
-
 /* Instrument-panel micro label for stat and section headers. */
 .micro-label {
   font-size: 11px;
@@ -352,15 +314,8 @@
   .pulse-live,
   .interactive-panel,
   .interactive-row,
-  .interactive-link,
-  .stamp,
-  .stamp-quiet {
+  .interactive-link {
     animation: none;
     transition: none;
-  }
-
-  .stamp:hover,
-  .stamp-quiet:hover {
-    transform: none;
   }
 }

@@ -193,7 +193,7 @@ export function SandboxFileBrowser({
                 <div key={file.name} className="flex min-h-9 items-center gap-1 px-2">
                   <button
                     type="button"
-                    className="interactive-row flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-1.5 text-left text-sm"
+                    className="interactive-row flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1.5 text-left text-sm"
                     onClick={() => (file.is_dir ? navigateDirectory(target) : void openFile(file))}
                   >
                     {file.is_dir ? (

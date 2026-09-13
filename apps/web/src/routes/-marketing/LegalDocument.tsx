@@ -37,7 +37,7 @@ export function LegalDocument({
             )}
           >
             <h1
-              className="max-w-[52rem] font-serif text-[clamp(2.75rem,7vw,4.75rem)] leading-[0.96] font-normal tracking-[-0.01em] text-balance"
+              className="max-w-[52rem] font-sans text-[clamp(2.75rem,7vw,4.75rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-balance"
               id="legal-document-title"
             >
               {title}
@@ -80,7 +80,7 @@ export function LegalDocument({
                 id={section.id}
                 key={section.id}
               >
-                <h2 className="font-serif text-[clamp(1.75rem,4vw,2.25rem)] leading-[1.08] font-normal text-foreground">
+                <h2 className="font-sans text-[clamp(1.75rem,4vw,2.25rem)] leading-[1.08] font-[550] tracking-[-0.045em] text-foreground">
                   {section.title}
                 </h2>
                 <div className="mt-5 space-y-4 [&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:decoration-border [&_a]:underline-offset-4 hover:[&_a]:decoration-foreground [&_h3]:pt-2 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-foreground [&_li]:pl-1 [&_strong]:font-semibold [&_strong]:text-foreground [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">

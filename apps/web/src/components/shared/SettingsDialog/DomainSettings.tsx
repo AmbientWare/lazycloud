@@ -222,7 +222,7 @@ function CopyValue({ value, label }: { value: string; label: string }) {
       aria-label={`Copy ${label}`}
       title={copied ? "Copied" : `Copy ${label}`}
       onClick={copy}
-      className="mono inline-flex max-w-full items-center gap-1.5 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted"
+      className="mono inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted"
     >
       <span className="truncate">{value}</span>
       {copied ? (
