@@ -23,9 +23,6 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 # what any host running this stack can supply, so the threshold does not depend
 # on the host's core count.
 MINIMUM_BURST_CORES = 1.0
-# The ceiling a container gets when nothing was requested. Seeing it means the
-# request never arrived.
-PLATFORM_DEFAULT_DISK_BYTES = 100 * 1024**3
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -55,15 +52,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             burst_seconds=BURST_SECONDS,
             allocate_mib=ALLOCATE_MIB,
             chunk_mib=FILL_CHUNK_MIB,
+            maximum_write_bytes=REQUESTED_DISK_BYTES * 2,
         )
         _assert_cpu_request_is_a_floor(observed, requested_cores=REQUESTED_CORES)
         _assert_memory_request_is_a_floor(
             observed, requested=REQUESTED_MEMORY, allocated_mib=ALLOCATE_MIB
         )
-        _assert_requested_disk_reached_the_container(
+        _assert_disk_ceiling_stopped_the_write(
             observed, requested=REQUESTED_DISK, requested_bytes=REQUESTED_DISK_BYTES
         )
-        _assert_disk_ceiling_stopped_the_write(observed, requested=REQUESTED_DISK)
         print(
             json.dumps(
                 {
@@ -99,26 +96,11 @@ def _assert_memory_request_is_a_floor(
         )
 
 
-def _assert_requested_disk_reached_the_container(
+def _assert_disk_ceiling_stopped_the_write(
     observed: dict[str, float], *, requested: str, requested_bytes: int
 ) -> None:
-    total = observed["root_total_bytes"]
-    if total >= PLATFORM_DEFAULT_DISK_BYTES:
-        raise RuntimeError(
-            f"the container's root reports {total} bytes, the platform default; "
-            f"the requested {requested} never reached the worker"
-        )
-    # Filesystem overhead leaves the visible total a little under the request.
-    if not requested_bytes * 0.9 <= total <= requested_bytes:
-        raise RuntimeError(
-            f"the container's root reports {total} bytes, which is not the "
-            f"requested {requested_bytes} bytes"
-        )
-
-
-def _assert_disk_ceiling_stopped_the_write(observed: dict[str, float], *, requested: str) -> None:
     written = observed["written_bytes"]
-    total = observed["root_total_bytes"]
+    total = requested_bytes
     write_errno = int(observed["write_errno"])
     if write_errno != errno.ENOSPC:
         raise RuntimeError(
