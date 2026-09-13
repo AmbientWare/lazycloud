@@ -135,6 +135,10 @@ from execution.pods.proxy import (
 from execution.services import ExecutionServices
 
 
+class SandboxFilesystemImages(Protocol):
+    def create(self, container: ContainerRecord) -> str: ...
+
+
 class AsyncPodSchedulerContainerDirectory(Protocol):
     async def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
 
@@ -158,6 +162,7 @@ class PodControlService:
     gateway_http_url: str = "http://127.0.0.1:9000"
     scheduler_containers: ContainerSchedulingDirectory | None = None
     container_clients: SchedulerContainerClientFactory[PodContainerControlClient] | None = None
+    filesystem_images: SandboxFilesystemImages | None = None
     async_database: AsyncDatabaseClient | None = None
     async_scheduler_containers: AsyncPodSchedulerContainerDirectory | None = None
     async_pod_proxy_http_client: AsyncPodProxyForwardClient | None = None
@@ -809,15 +814,10 @@ class PodControlService:
         request: PodSandboxCreateImageFromFilesystemRequest,
     ) -> PodSandboxCreateImageFromFilesystemResponse:
         _ = request
-        container = self._container(container_id)
-        if not container.stub_id:
-            raise InvalidInputError(f"container has no owning stub: {container_id}")
-        image_id = f"image-{container.stub_id}-{uuid4().hex[:8]}"
-        self._client(container_id).archive(
-            container_id,
-            image_id,
-            lambda _: None,
-        )
+        container, _stub = self._sandbox_container(container_id)
+        if self.filesystem_images is None:
+            raise UpstreamUnavailableError("filesystem image builds are not configured")
+        image_id = self.filesystem_images.create(container)
         return PodSandboxCreateImageFromFilesystemResponse(image_id=image_id)
 
     def sandbox_snapshot_memory(

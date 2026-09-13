@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from shared.contracts import ContractModel
 
 from worker.container_client.models import (
-    ContainerArchiveRequest,
     ContainerCheckpointRequest,
     ContainerExecRequest,
     ContainerKillRequest,
@@ -144,8 +143,6 @@ class WorkerContainerServiceTransport:
         match method:
             case ContainerServiceMethod.ContainerStreamLogs:
                 return self.service.stream_logs(_request(request, ContainerStreamLogsRequest))
-            case ContainerServiceMethod.ContainerArchive:
-                return self.service.container_archive(_request(request, ContainerArchiveRequest))
             case _:
                 msg = f"{method.value} is a unary container service method"
                 raise ValueError(msg)

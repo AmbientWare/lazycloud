@@ -46,7 +46,6 @@ from worker.container_execution import (
     WorkerContainerExecutionService,
 )
 from worker.container_service.protocols import (
-    WorkerContainerArchiveCreator,
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
@@ -157,7 +156,6 @@ class WorkerProcessContainerServiceDependencies:
     sandbox_docker: WorkerSandboxDockerLifecycle | None = None
     logs: WorkerSandboxLogSink | None = None
     checkpoints: WorkerContainerCheckpointCreator | None = None
-    archives: WorkerContainerArchiveCreator | None = None
     network_policy: WorkerSandboxNetworkPolicyUpdater | None = None
     ports: WorkerSandboxPortPublisher | None = None
 
@@ -278,7 +276,6 @@ def assemble_worker_process_services(
         runtime=dependencies.runtime_controller,
         logs=container_service_dependencies.logs,
         checkpoints=container_service_dependencies.checkpoints,
-        archives=container_service_dependencies.archives,
         network_policy=container_service_dependencies.network_policy,
         ports=container_service_dependencies.ports
         or SchedulerSandboxPortPublisher(

@@ -72,6 +72,7 @@ class OciContainerServiceInstanceRecorder:
             cwd=context.cwd,
             runtime=context.runtime,
             env=_spec_process_env(spec),
+            image_env=spec.image_env,
             request_env=list(context.request.env),
             docker_enabled=context.docker_enabled,
             docker_daemon_status=(

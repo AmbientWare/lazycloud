@@ -54,7 +54,13 @@ from lazycloud.control import workspace_path
 
 
 class PodControlChannel(Protocol):
-    def post(self, path: str, payload: dict[str, Any] | None = None) -> Any: ...
+    def post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any: ...
 
     def get(self, path: str) -> Any: ...
 
@@ -322,6 +328,7 @@ class PodControlClient:
             self.channel.post(
                 self._scoped(f"/api/v1/pods/{container_id}/create-image-from-filesystem"),
                 request.model_dump(mode="json"),
+                timeout_seconds=3600,
             )
         )
 

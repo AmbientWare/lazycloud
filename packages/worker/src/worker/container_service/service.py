@@ -13,8 +13,6 @@ from uuid import uuid4
 from shared.deployments import StubKind
 
 from worker.container_client.models import (
-    ContainerArchiveRequest,
-    ContainerArchiveResponse,
     ContainerCheckpointRequest,
     ContainerCheckpointResponse,
     ContainerExecRequest,
@@ -78,7 +76,6 @@ from worker.container_service.models import (
 )
 from worker.container_service.protocols import (
     BridgeSandboxPortPublisher,
-    WorkerContainerArchiveCreator,
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
@@ -120,7 +117,6 @@ class WorkerContainerService:
     runtime: WorkerContainerRuntimeController | None = None
     logs: WorkerSandboxLogSink | None = None
     checkpoints: WorkerContainerCheckpointCreator | None = None
-    archives: WorkerContainerArchiveCreator | None = None
     network_policy: WorkerSandboxNetworkPolicyUpdater | None = None
     ports: WorkerSandboxPortPublisher = field(default_factory=BridgeSandboxPortPublisher)
 
@@ -228,37 +224,6 @@ class WorkerContainerService:
             if streams_suspended and self.process_managers is not None:
                 self.process_managers.resume_process_streams(instance)
         return ContainerCheckpointResponse(ok=True, checkpoint_id=checkpoint_id)
-
-    def container_archive(
-        self,
-        request: ContainerArchiveRequest,
-    ) -> tuple[ContainerArchiveResponse, ...]:
-        instance = self._instance(request.container_id)
-        if instance is None:
-            return (
-                ContainerArchiveResponse(
-                    done=True,
-                    success=False,
-                    error_msg=CONTAINER_NOT_FOUND_MESSAGE,
-                ),
-            )
-        if self.archives is None:
-            return (
-                ContainerArchiveResponse(
-                    done=True,
-                    success=False,
-                    error_msg="archive creator is not configured",
-                ),
-            )
-        try:
-            return tuple(
-                self.archives.archive_container(
-                    instance,
-                    image_id=request.image_id,
-                )
-            )
-        except Exception as exc:
-            return (ContainerArchiveResponse(done=True, success=False, error_msg=str(exc)),)
 
     def stream_logs(self, request: ContainerStreamLogsRequest) -> Iterable[ContainerLogEntry]:
         instance = self._instance(request.container_id)

@@ -1547,7 +1547,8 @@ def _scheduling_request(
         runtime_class=request.runtime_class,
         docker_enabled=request.docker_enabled,
         preemptible=request.preemptible,
-        provisionable=provisionable,
+        provisionable=provisionable and not request.required_worker_id,
+        required_worker_id=request.required_worker_id,
         retry_count=request.retry_count,
         created_at=request.timestamp,
     )

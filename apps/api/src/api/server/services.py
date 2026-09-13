@@ -82,6 +82,7 @@ from identity.invitations import WorkspaceInvitationService
 from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
 from images.control import ImageControlService
+from images.filesystem import FilesystemImageService
 from images.publication import (
     ArchiveImageBuildPublicationPublisher,
     CacheImageBuildPublicationPublisher,
@@ -1419,6 +1420,7 @@ def _pod_control_service(
     async_io = core.async_io
     return PodControlService(
         core,
+        filesystem_images=FilesystemImageService(core.images),
         gateway_http_url=core.gateway_settings.public_http_url,
         scheduler_containers=scheduler_containers,
         container_clients=container_clients,

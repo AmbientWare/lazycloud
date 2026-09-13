@@ -7,7 +7,7 @@ from typing import Protocol
 from shared.contracts import ContractModel
 from shared.routing import AgentBackendRoute
 
-from worker.container_client.models import ContainerArchiveResponse, ContainerExecResponse
+from worker.container_client.models import ContainerExecResponse
 from worker.container_service.models import (
     SandboxProcessEvent,
     WorkerContainerServiceInstance,
@@ -145,15 +145,6 @@ class WorkerContainerCheckpointCreator(Protocol):
         *,
         checkpoint_id: str = "",
     ) -> str: ...
-
-
-class WorkerContainerArchiveCreator(Protocol):
-    def archive_container(
-        self,
-        instance: WorkerContainerServiceInstance,
-        *,
-        image_id: str,
-    ) -> Iterable[ContainerArchiveResponse]: ...
 
 
 @dataclass(slots=True)

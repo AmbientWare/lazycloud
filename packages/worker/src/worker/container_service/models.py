@@ -62,6 +62,7 @@ class WorkerContainerServiceInstance(ContractModel):
     runtime: OciRuntimeName = OciRuntimeName.Runsc
     env: list[str] = Field(default_factory=list)
     request_env: list[str] = Field(default_factory=list)
+    image_env: list[str] = Field(default_factory=list, repr=False)
     build_secret_env: list[str] = Field(default_factory=list)
     build_request: bool = False
     status: str = ""
