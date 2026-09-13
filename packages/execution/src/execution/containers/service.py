@@ -727,6 +727,7 @@ class ContainerService:
         *,
         reason: StopContainerReason | None = None,
         only_if_pending: bool = False,
+        force: bool = False,
     ) -> ContainerRecord:
         """Stop a container, recording why if the caller said.
 
@@ -778,6 +779,7 @@ class ContainerService:
                         current.id,
                         worker_id=stop_worker_id,
                         reason=settlement_reason,
+                        force=force,
                     )
                 current.status = ContainerStatus.Stopped
                 current.finished_at = utc_now()
@@ -924,12 +926,13 @@ class ContainerService:
         *,
         worker_id: str,
         reason: StopContainerReason,
+        force: bool = False,
     ) -> None:
         event = EventBusEvent(
             type=EventBusEventType.StopContainer,
             args={
                 "container_id": container_id,
-                "force": False,
+                "force": force,
                 "reason": reason.value,
                 "worker_id": worker_id,
             },

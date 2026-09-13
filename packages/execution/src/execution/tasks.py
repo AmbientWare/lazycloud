@@ -561,6 +561,7 @@ class TaskService:
         error: str | None = None,
         exit_code: int | None = None,
         retry_allowed: bool = True,
+        attempt_number: int | None = None,
     ) -> TaskFinishOutcome:
         with self.context.database.session() as session:
             outcome = self._finish_with_retry_in_session(
@@ -573,6 +574,7 @@ class TaskService:
                 error=error,
                 exit_code=exit_code,
                 retry_allowed=retry_allowed,
+                attempt_number=attempt_number,
             )
         if not outcome.state_changed:
             return outcome
@@ -681,6 +683,7 @@ class TaskService:
         error: str | None,
         exit_code: int | None,
         retry_allowed: bool,
+        attempt_number: int | None = None,
     ) -> TaskFinishOutcome:
         task_repository = TaskRepository(session)
         current = task_repository.get_for_update_across_workspaces(task_id)
@@ -697,6 +700,8 @@ class TaskService:
                 current,
                 "completion does not own the active task container",
             )
+        if attempt_number is not None and current.attempt_number != attempt_number:
+            return _unchanged_finish_outcome(current, "completion does not own the active attempt")
         policy = current.retry_policy or RetryPolicy(max_attempts=current.max_attempts)
         decision = (
             plan_retry(
@@ -732,7 +737,7 @@ class TaskService:
         attempts = TaskAttemptRepository(session)
         latest = attempts.latest_for_task(updated.id)
         if latest is not None:
-            latest.status = next_status
+            latest.status = status
             if attempt_container_id:
                 latest.container_id = attempt_container_id
             latest.finished_at = now

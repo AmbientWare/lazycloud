@@ -32,6 +32,7 @@ from database.tables.orchestration import ContainerTable
 from pydantic import BaseModel, JsonValue, field_validator
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
+from shared.deployment_records import DEFAULT_FUNCTION_TIMEOUT_SECONDS
 from shared.deployments import StubKind
 from shared.events import Event
 from shared.logs import LogEntry
@@ -847,6 +848,47 @@ def _is_uuid_text(value: str) -> bool:
 @dataclass(slots=True)
 class TaskAttemptRepository:
     session: Session
+
+    def expired_function_attempts(self, *, now: datetime, limit: int) -> list[TaskAttempt]:
+        timeout = func.coalesce(
+            StubTable.payload["config"]["runtime"]["timeout_seconds"].as_float(),
+            DEFAULT_FUNCTION_TIMEOUT_SECONDS,
+        )
+        statement = (
+            select(TaskAttemptTable)
+            .join(TaskTable, TaskTable.id == TaskAttemptTable.task_id)
+            .join(StubTable, StubTable.id == TaskTable.stub_id)
+            .where(
+                StubTable.type == StubKind.Function.value,
+                TaskTable.status == TaskStatus.Running.value,
+                TaskAttemptTable.status == TaskStatus.Running.value,
+                TaskAttemptTable.attempt_number == TaskTable.attempt_number,
+                TaskAttemptTable.container_id == TaskTable.container_id,
+                timeout > 0,
+                func.extract("epoch", now - TaskAttemptTable.started_at) >= timeout,
+            )
+            .order_by(TaskAttemptTable.started_at, TaskAttemptTable.id)
+            .limit(limit)
+        )
+        return [TaskAttempt.model_validate(row.payload) for row in self.session.scalars(statement)]
+
+    def containers_with_timed_out_attempts(self, *, limit: int) -> list[str]:
+        statement = (
+            select(ContainerTable.id)
+            .join(TaskAttemptTable, TaskAttemptTable.container_id == ContainerTable.id)
+            .join(StubTable, StubTable.id == ContainerTable.stub_id)
+            .where(
+                StubTable.type == StubKind.Function.value,
+                TaskAttemptTable.status == TaskStatus.Timeout.value,
+                ContainerTable.status.in_(
+                    [ContainerStatus.Pending.value, ContainerStatus.Running.value]
+                ),
+            )
+            .distinct()
+            .order_by(ContainerTable.id)
+            .limit(limit)
+        )
+        return [str(identifier) for identifier in self.session.scalars(statement)]
 
     def latest_finished_at_for_container(self, container_id: str) -> datetime | None:
         return self.session.scalar(

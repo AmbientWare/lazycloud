@@ -350,6 +350,8 @@ class SchedulerCustomDomainService(Protocol):
 
 
 class ScheduledFunctionControl(Protocol):
+    def expire_timed_out_tasks(self, *, now: datetime, limit: int = 100) -> None: ...
+
     def schedule_due_retries(
         self,
         *,
@@ -699,6 +701,8 @@ class Scheduler:
         if not include_containers:
             return SchedulerRunResult()
         current_time = now or utc_now()
+        if self.workloads.functions is not None:
+            self.workloads.functions.expire_timed_out_tasks(now=current_time, limit=container_limit)
         self.container_scheduler.recover_scheduling_requests(
             now=current_time, limit=container_limit
         )

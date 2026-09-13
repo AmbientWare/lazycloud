@@ -778,6 +778,39 @@ class FunctionControlService:
                 scheduled.append(self.services.tasks.get(task.id))
         return scheduled
 
+    def expire_timed_out_tasks(self, *, now: datetime, limit: int = 100) -> None:
+        with self.services.context.database.session() as session:
+            attempts = TaskAttemptRepository(session).expired_function_attempts(
+                now=now, limit=limit
+            )
+        for attempt in attempts:
+            try:
+                outcome = self.services.tasks.finish_with_retry(
+                    attempt.task_id,
+                    TaskStatus.Timeout,
+                    container_id=attempt.container_id,
+                    attempt_number=attempt.attempt_number,
+                    error="function execution timed out",
+                    exit_code=124,
+                )
+                if outcome.state_changed and is_terminal_task_status(outcome.task.status):
+                    self.release_dependents(outcome.task)
+            except DomainError:
+                LOGGER.exception("expiring function task %s failed", attempt.task_id)
+        # Attempts retain the container after a retry releases its claim. Read
+        # them again so a scheduler restart cannot lose the stop obligation.
+        with self.services.context.database.session() as session:
+            containers = TaskAttemptRepository(session).containers_with_timed_out_attempts(
+                limit=limit
+            )
+        for container_id in containers:
+            try:
+                self.services.containers.stop(
+                    container_id, reason=StopContainerReason.Scheduler, force=True
+                )
+            except DomainError:
+                LOGGER.exception("stopping timed-out function container %s failed", container_id)
+
     def fail_unclaimed_tasks(
         self,
         stub_id: str,
