@@ -150,6 +150,7 @@ class WorkerImageMountResult(ContractModel):
     status: WorkerImageMountStatus
     mount_point: str
     reason: str = ""
+    env: list[str] = Field(default_factory=list, repr=False)
 
     @property
     def mounted(self) -> bool:
@@ -293,7 +294,7 @@ class WorkerImageStartupLoader:
                 reason=reason,
             )
         )
-        return ContainerImageLoadResult(loaded=True, reason=reason)
+        return ContainerImageLoadResult(loaded=True, reason=reason, env=mount.env)
 
     def _load_mounted_image_hit(
         self,
@@ -336,7 +337,7 @@ class WorkerImageStartupLoader:
                 reason=reason,
             )
         )
-        return ContainerImageLoadResult(loaded=True, reason=reason)
+        return ContainerImageLoadResult(loaded=True, reason=reason, env=mount.env)
 
     def _materialized_archive_sha256(
         self,

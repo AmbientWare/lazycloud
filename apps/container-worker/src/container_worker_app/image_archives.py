@@ -189,7 +189,8 @@ class BrokeredClipImageMounter:
             )
         return WorkerImageMountResult(
             status=WorkerImageMountStatus.Ready,
-            mount_point=str(mounted),
+            mount_point=str(mounted.mount_point),
+            env=list(mounted.env),
             reason=(
                 "image layers prepared and mounted"
                 if request.preload

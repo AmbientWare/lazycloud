@@ -173,6 +173,7 @@ class ContainerSpecBuilder(Protocol):
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
+        image_result: ContainerImageLoadResult | None = None,
     ) -> OciRuntimeContainerSpec: ...
 
 
@@ -262,6 +263,7 @@ class ContainerLifecyclePublisher(Protocol):
 class ContainerImageLoadResult(ContractModel):
     loaded: bool = True
     reason: str = ""
+    env: list[str] = Field(default_factory=list, repr=False)
 
 
 class ContainerMountSetupResult(ContractModel):
@@ -851,6 +853,7 @@ class WorkerContainerExecutionService:
             network_result=network_result,
             gpu_result=gpu_result,
             rootfs_result=rootfs_result,
+            image_result=result.image_result,
         )
 
     def _set_rootfs_result(

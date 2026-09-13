@@ -31,6 +31,7 @@ import worker.oci_spec
 from worker.container_client.models import ContainerExecResponse
 from worker.container_execution import (
     ContainerExecutionContext,
+    ContainerImageLoadResult,
     ContainerMountSetupResult,
     ContainerNetworkSetupResult,
     ContainerRuntimeRunResult,
@@ -289,6 +290,7 @@ class OciRuntimeSpecBuilder:
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
+        image_result: ContainerImageLoadResult | None = None,
     ) -> worker.oci_spec.OciRuntimeContainerSpec:
         _ = bind_ports
         runtime_config = _select_runtime_config(context.runtime, self.runtime_configs)
@@ -298,6 +300,7 @@ class OciRuntimeSpecBuilder:
             context,
             bind_ports=bind_ports,
             network_result=network_result,
+            image_result=image_result,
         )
         original_command = context.entrypoint or self.command
         managed_command = original_command or []
@@ -493,6 +496,7 @@ class OciRuntimeSpecBuilder:
         *,
         bind_ports: list[int],
         network_result: ContainerNetworkSetupResult | None,
+        image_result: ContainerImageLoadResult | None,
     ) -> dict[str, str]:
         identity = network_result.identity if network_result is not None else None
         env_plan = build_container_environment(
@@ -508,6 +512,7 @@ class OciRuntimeSpecBuilder:
                 bind_ports=bind_ports or [CONTAINER_INNER_PORT],
                 storage_available=context.request.workspace_storage_available,
                 request_env=list(context.request.env),
+                image_env=image_result.env if image_result is not None else [],
             ),
             self.gateway_settings,
         )

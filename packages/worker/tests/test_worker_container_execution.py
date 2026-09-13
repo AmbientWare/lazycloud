@@ -265,6 +265,7 @@ class SpecBuilder:
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
+        image_result: ContainerImageLoadResult | None = None,
     ) -> OciRuntimeContainerSpec:
         self.log.calls.append(f"spec:{context.request.container_id}")
         self.rootfs_result = rootfs_result
