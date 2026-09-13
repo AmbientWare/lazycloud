@@ -112,6 +112,11 @@
   .marketing-hero[data-hero-entered="true"] .marketing-hero-content > :last-child {
     animation: none;
   }
+
+  .marketing-hero[data-fonts-ready="false"] .marketing-hero-content > :first-child > *,
+  .marketing-hero[data-fonts-ready="false"] .marketing-hero-content > :last-child {
+    animation-play-state: paused;
+  }
 }
 
 @media (max-width: 1023px) {
@@ -135,11 +140,11 @@
 @keyframes marketing-enter-panel {
   from {
     opacity: 0;
-    transform: translate(var(--hero-enter-x), var(--hero-enter-y)) scale(0.985);
+    transform: translate(var(--hero-enter-x), var(--hero-enter-y));
   }
   to {
     opacity: 1;
-    transform: translate(0, 0) scale(1);
+    transform: translate(0, 0);
   }
 }
 

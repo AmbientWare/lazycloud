@@ -1,5 +1,5 @@
 import { Slot } from "@radix-ui/react-slot";
-import { useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { useEffect, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
 
@@ -17,11 +17,23 @@ export const shell =
 
 export function MarketingHero({ children }: { children: ReactNode }) {
   const [entered, setEntered] = useState(false);
+  const [fontsReady, setFontsReady] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void document.fonts.ready.then(() => {
+      if (mounted) setFontsReady(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
     <section
       className="marketing-hero relative overflow-hidden border-b border-border bg-background"
       data-hero-entered={entered}
+      data-fonts-ready={fontsReady}
       onFocusCapture={() => setEntered(true)}
       onAnimationEnd={(event) => {
         if (event.animationName === "marketing-enter-panel") setEntered(true);
