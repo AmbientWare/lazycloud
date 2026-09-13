@@ -4,8 +4,11 @@ from collections.abc import AsyncIterable, Mapping
 
 from fastapi import Request, Response, WebSocket
 from foundation.http import HOP_BY_HOP_REQUEST_HEADERS
+from starlette.requests import HTTPConnection
 from starlette.responses import StreamingResponse
 from websockets.typing import Subprotocol
+
+from api.server.host_routing import invoke_host_workspace_id
 
 HOP_BY_HOP_RESPONSE_HEADERS = {
     "connection",
@@ -39,16 +42,12 @@ def forwarded_path(subpath: str) -> str:
     return subpath if subpath.startswith("/") else f"/{subpath}"
 
 
-def request_query_params(request: Request) -> dict[str, list[str]]:
+def request_query_params(request: HTTPConnection) -> dict[str, list[str]]:
     values: dict[str, list[str]] = {}
     for key, value in request.query_params.multi_items():
-        values.setdefault(key, []).append(value)
-    return values
-
-
-def websocket_query_params(websocket: WebSocket) -> dict[str, list[str]]:
-    values: dict[str, list[str]] = {}
-    for key, value in websocket.query_params.multi_items():
+        # API paths reserve workspace for authorization; workload hosts already name it.
+        if key == "workspace" and invoke_host_workspace_id(request.scope) is None:
+            continue
         values.setdefault(key, []).append(value)
     return values
 

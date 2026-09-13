@@ -52,7 +52,6 @@ from api.server.http import (
     request_headers,
     request_query_params,
     websocket_headers,
-    websocket_query_params,
     websocket_subprotocols,
 )
 from api.server.public_transfers import attribute_public_transfer
@@ -666,7 +665,7 @@ async def _forward_pod_websocket(
         port=port,
         method="GET",
         path=forwarded_path(subpath),
-        query_params=websocket_query_params(websocket),
+        query_params=request_query_params(websocket),
         headers=websocket_headers(websocket),
     )
     session: PodProxySession | None = None

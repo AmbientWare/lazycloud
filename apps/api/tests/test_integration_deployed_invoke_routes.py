@@ -18,6 +18,7 @@ from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.function_payloads import FunctionJsonInvocation
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
@@ -334,6 +335,9 @@ def test_private_invoke_hostname_cannot_select_a_same_named_foreign_workload(
         )
         assert allowed.status_code == 200
         assert [request.stub_id for request in service.requests] == [stub.id]
+        invocation = service.requests[0].invocation
+        assert isinstance(invocation, FunctionJsonInvocation)
+        assert invocation.kwargs == {"workspace": "host-stranger"}
 
 
 def test_endpoint_version_routes_follow_deployment_lifecycle(
@@ -555,7 +559,7 @@ def test_generated_asgi_urls_forward_subpaths_and_warmup(
             f"{id_path}/api/items/1",
             headers=headers | {"x-client-header": "asgi-id"},
             content=b"alpha",
-            params={"search": "one"},
+            params={"search": "one", "workspace": "default"},
         )
         deployment_response = client.patch(
             f"{deployment_path}/api/items/2",

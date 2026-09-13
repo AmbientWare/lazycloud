@@ -60,7 +60,6 @@ from api.server.http import (
     request_headers,
     request_query_params,
     websocket_headers,
-    websocket_query_params,
     websocket_subprotocols,
 )
 from api.server.ownership import require_endpoint_stub_workspace
@@ -732,7 +731,7 @@ async def _forward_asgi_websocket(
         container_id=invoke_host_container_id(websocket.scope),
         method="GET",
         path=forwarded_path(subpath),
-        query_params=websocket_query_params(websocket),
+        query_params=request_query_params(websocket),
         headers=websocket_headers(websocket),
     )
     session: EndpointIngressDispatchSession | None = None
