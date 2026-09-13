@@ -647,7 +647,7 @@ class DeploymentClient(ControlClientConfigMixin):
         if self.client is not None and self.object_client is None and selected_root is None:
             return metadata_object_id
 
-        from lazycloud.session.source_sync import SourcePackageSyncer
+        from lazycloud.source_sync import SourcePackageSyncer
 
         result = SourcePackageSyncer(
             self._object_client(),

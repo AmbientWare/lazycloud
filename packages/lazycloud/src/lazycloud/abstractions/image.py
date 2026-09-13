@@ -43,6 +43,7 @@ from shared.image_building.credentials import (
 )
 from typing_extensions import Self
 
+from lazycloud.source_sync import collect_source_files
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 
 _DOCKER_APT_DISTRIBUTION = (
@@ -470,6 +471,10 @@ class Image:
     def _context_archive(self) -> ImageBuildContext:
         context = Path(self.context_path or ".").expanduser().resolve()
         files = _context_files(context, self.include_files_patterns)
+        if any(step.kind is ImageBuildStepKind.UvProject for step in self.build_steps):
+            files = sorted(
+                {*files, *(path.relative_to(context) for path in collect_source_files(context))}
+            )
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for relative_path in files:

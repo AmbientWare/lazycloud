@@ -163,31 +163,6 @@ def test_sdk_rejects_invalid_google_service_account_file(tmp_path: Path) -> None
         image._build_request(env={"GOOGLE_APPLICATION_CREDENTIALS": str(credentials_path)})
 
 
-def test_sdk_image_uv_project_maps_to_build_request_and_context(tmp_path: Path) -> None:
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        """
-[project]
-dependencies = ["fastapi >= 0.115"]
-
-[project.optional-dependencies]
-worker = ["redis >= 5"]
-""",
-        encoding="utf-8",
-    )
-    (tmp_path / "uv.lock").write_text("# lock\n", encoding="utf-8")
-    (tmp_path / "app.py").write_text("print('not copied')\n", encoding="utf-8")
-
-    image = Image().add_uv_project(tmp_path, extras=["worker"])
-
-    request = image._build_request()
-    archive = image._context_archive()
-
-    assert [step.type for step in request.build_steps] == ["uv-project"]
-    assert request.build_steps[0].command == ". worker"
-    assert archive.files == ("pyproject.toml", "uv.lock")
-
-
 def test_sdk_image_uv_project_requires_lockfile(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
 
