@@ -106,13 +106,12 @@ class ImageBuildContext:
     files: tuple[str, ...] = field(default_factory=tuple)
 
 
-class ImageBuildClient(Protocol):
-    def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]: ...
-
-
-@runtime_checkable
 class ImageVerifyClient(Protocol):
     def verify_image_build(self, request: VerifyImageBuildRequest) -> VerifyImageBuildResponse: ...
+
+
+class ImageBuildClient(ImageVerifyClient, Protocol):
+    def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]: ...
 
 
 @runtime_checkable
@@ -415,7 +414,9 @@ class Image:
                 image_id=response.image_id,
                 python_version=self.spec().python_version,
                 build_id=response.build_id,
-                error="" if response.valid else response.reason,
+                error=response.reason
+                if not response.valid or (self.explicit_image_id and not response.exists)
+                else "",
             ),
         )
 
@@ -425,14 +426,6 @@ class Image:
         *,
         env: Mapping[str, str] | None = None,
     ) -> Iterator[BuildImageResponse]:
-        if self.explicit_image_id:
-            yield BuildImageResponse(
-                image_id=self.explicit_image_id,
-                done=True,
-                success=True,
-                python_version=self.spec().python_version,
-            )
-            return
         yield from client.build_image(self._build_request(env=env))
 
     def build(
@@ -554,25 +547,14 @@ class ImageBuildOperation:
             self._step.__exit__(exc_type, exc, traceback)
 
     def verify(self) -> None:
-        if self.image.explicit_image_id:
-            self._result = ImageBuildResult(
-                success=True,
-                image_id=self.image.explicit_image_id,
-                python_version=self.image.spec().python_version,
-            )
+        exists, result = self.image.exists(self.client, env=self.env)
+        if exists or result.error or self.image.explicit_image_id:
+            self._result = result
             if self._step is not None:
-                self._step.done(f"{self.image.explicit_image_id} · pinned")
-        else:
-            verify_client = _image_verify_client(self.client)
-            if verify_client is not None:
-                exists, result = self.image.exists(verify_client, env=self.env)
-                if exists or result.error:
-                    self._result = result
-                    if self._step is not None:
-                        if exists:
-                            self._step.done(f"python {result.python_version} · cached")
-                        else:
-                            self._step.fail(result.error)
+                if exists:
+                    self._step.done(f"python {result.python_version} · cached")
+                else:
+                    self._step.fail(result.error)
         self._verified = True
 
     def finish(self) -> ImageBuildResult:
@@ -608,12 +590,6 @@ class ImageBuildOperation:
                 responses=tuple(responses),
             )
         return self._result
-
-
-def _image_verify_client(client: ImageBuildClient) -> ImageVerifyClient | None:
-    if isinstance(client, ImageVerifyClient):
-        return client
-    return None
 
 
 def _credential_values(
