@@ -36,6 +36,7 @@ from shared.app_identity import (
 )
 from shared.contracts import ContractModel
 from shared.deployment_settings import MissingDeploymentSettingError
+from shared.errors import InvalidInputError, NotFoundError
 from typing_extensions import TypeVar
 
 
@@ -782,12 +783,20 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         client = self.client
         if not isinstance(client, _MultipartClient):
             raise TypeError("configured S3 client does not support multipart uploads")
-        client.complete_multipart_upload(
-            Bucket=bucket or self.settings.bucket,
-            Key=key,
-            UploadId=upload_id,
-            MultipartUpload=_MultipartUpload(Parts=parts),
-        )
+        try:
+            client.complete_multipart_upload(
+                Bucket=bucket or self.settings.bucket,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload=_MultipartUpload(Parts=parts),
+            )
+        except ClientError as exc:
+            code, _ = _client_error_code_and_status(exc)
+            if code == "InvalidPart":
+                raise InvalidInputError("multipart parts do not match the uploaded parts") from exc
+            if code == "NoSuchUpload":
+                raise NotFoundError("multipart upload not found") from exc
+            raise
 
     def abort_multipart_upload(
         self,
@@ -799,11 +808,16 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         client = self.client
         if not isinstance(client, _MultipartClient):
             raise TypeError("configured S3 client does not support multipart uploads")
-        client.abort_multipart_upload(
-            Bucket=bucket or self.settings.bucket,
-            Key=key,
-            UploadId=upload_id,
-        )
+        try:
+            client.abort_multipart_upload(
+                Bucket=bucket or self.settings.bucket,
+                Key=key,
+                UploadId=upload_id,
+            )
+        except ClientError as exc:
+            code, _ = _client_error_code_and_status(exc)
+            if code != "NoSuchUpload":
+                raise
 
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         client = self.client
