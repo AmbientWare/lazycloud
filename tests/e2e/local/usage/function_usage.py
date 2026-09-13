@@ -54,7 +54,10 @@ def main() -> int:
         if result != {"value": 42}:
             raise RuntimeError("Function returned an unexpected result")
         app_id = _owned_app(resources).id
-        record = _await_task_usage(usage, task_id, resources.task(task_id).stub_id, started_at)
+        stub_id = resources.task(task_id).stub_id
+        if stub_id is None:
+            raise RuntimeError("completed Function task has no Function resource")
+        record = _await_task_usage(usage, task_id, stub_id, started_at)
         evidence = {
             "app_id": app_id,
             "task_id": task_id,
