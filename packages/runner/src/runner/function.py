@@ -382,6 +382,7 @@ class FunctionRunner:
                         task_id=task.task_id,
                         task_duration=duration_seconds,
                         task_status=TaskStatus.Failed,
+                        error=f"{type(exc).__name__}: {exc}",
                         container_id=self.container_id,
                         container_hostname=self.container_hostname,
                         result_base64="",

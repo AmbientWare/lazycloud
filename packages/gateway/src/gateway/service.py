@@ -732,7 +732,9 @@ class GatewayControlService:
             pending = self._task_for_workspace(request.task_id, workspace_id)
             result = task_result_value(request)
             error = (
-                None if request.task_status is TaskStatus.Complete else request.task_status.value
+                None
+                if request.task_status is TaskStatus.Complete
+                else request.error or request.task_status.value
             )
             stub = stub_for_task(self.control_plane, pending)
             if stub is not None and stub.kind is StubKind.Function:
