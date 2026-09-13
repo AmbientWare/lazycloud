@@ -62,7 +62,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -1084,6 +1083,24 @@ class LogRepository:
         """System-authority write; runner/worker logs may be cluster-level."""
         return self.records.upsert_across_workspaces(entry, workspace_id=workspace_id)
 
+    def append_batch(self, entries: Sequence[LogEntry], *, workspace_id: str) -> None:
+        if not entries:
+            return
+        self.session.execute(
+            postgresql_insert(LogTable)
+            .values(
+                [
+                    {
+                        **entry.model_dump(),
+                        "workspace_id": workspace_id,
+                        "payload": entry.model_dump(mode="json"),
+                    }
+                    for entry in entries
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=[LogTable.id])
+        )
+
     def page(
         self,
         query: LogStreamQuery,
@@ -1136,42 +1153,24 @@ class LogRepository:
             query.app_id,
             query.deployment_id,
             query.container_id,
-            query.machine_id,
-            query.worker_id,
         )
         if any(identifier and not _is_uuid_text(identifier) for identifier in identifiers):
             return LogPage(data=())
-        statement = (
-            select(
-                LogTable,
-                TaskTable.app_id,
-                TaskTable.deployment_id,
-                TaskTable.stub_id,
-                TaskTable.container_id,
-                ContainerTable.machine_id,
-                ContainerTable.worker_id,
-            )
-            .join(TaskTable, LogTable.task_id == TaskTable.id)
-            .outerjoin(ContainerTable, TaskTable.container_id == ContainerTable.id)
-            .where(
-                LogTable.workspace_id == workspace_id,
-                TaskTable.workspace_id == workspace_id,
-            )
-        )
+        statement = select(LogTable).where(LogTable.workspace_id == workspace_id)
         if query.task_id:
-            statement = statement.where(TaskTable.id == query.task_id)
+            statement = statement.where(LogTable.task_id == query.task_id)
         if query.stub_id:
-            statement = statement.where(TaskTable.stub_id == query.stub_id)
+            statement = statement.where(LogTable.stub_id == query.stub_id)
         if query.app_id:
-            statement = statement.where(TaskTable.app_id == query.app_id)
+            statement = statement.where(LogTable.app_id == query.app_id)
         if query.deployment_id:
-            statement = statement.where(TaskTable.deployment_id == query.deployment_id)
+            statement = statement.where(LogTable.deployment_id == query.deployment_id)
         if query.container_id:
-            statement = statement.where(TaskTable.container_id == query.container_id)
+            statement = statement.where(LogTable.container_id == query.container_id)
         if query.machine_id:
-            statement = statement.where(ContainerTable.machine_id == query.machine_id)
+            statement = statement.where(LogTable.machine_id == query.machine_id)
         if query.worker_id:
-            statement = statement.where(ContainerTable.worker_id == query.worker_id)
+            statement = statement.where(LogTable.worker_id == query.worker_id)
         if query.query:
             statement = statement.where(
                 func.lower(LogTable.message).contains(query.query.lower(), autoescape=True)
@@ -1199,11 +1198,11 @@ class LogRepository:
             if descending
             else (LogTable.created_at.asc(), LogTable.id.asc())
         )
-        rows = list(self.session.execute(statement.order_by(*ordering).limit(page_limit + 1)))
+        rows = list(self.session.scalars(statement.order_by(*ordering).limit(page_limit + 1)))
         page_rows = rows[:page_limit]
         next_cursor = None
         if len(rows) > page_limit and page_rows:
-            boundary = page_rows[-1][0]
+            boundary = page_rows[-1]
             next_cursor = LogPageCursor(
                 created_at=_utc_datetime(boundary.created_at),
                 id=str(boundary.id),
@@ -1214,20 +1213,7 @@ class LogRepository:
         return LogPage(data=records, next=next_cursor)
 
     @staticmethod
-    def _record_from_row(
-        row: Row[
-            tuple[
-                LogTable,
-                str | None,
-                str | None,
-                str | None,
-                str | None,
-                str | None,
-                str | None,
-            ]
-        ],
-    ) -> LogPageRecord:
-        log, app_id, deployment_id, stub_id, container_id, machine_id, worker_id = row
+    def _record_from_row(log: LogTable) -> LogPageRecord:
         return LogPageRecord(
             entry=LogEntry.model_validate(log.payload),
             cursor=LogPageCursor(
@@ -1235,12 +1221,12 @@ class LogRepository:
                 id=str(log.id),
             ),
             workspace_id=str(log.workspace_id),
-            app_id=str(app_id) if app_id is not None else "",
-            deployment_id=str(deployment_id) if deployment_id is not None else "",
-            stub_id=str(stub_id) if stub_id is not None else "",
-            container_id=str(container_id) if container_id is not None else "",
-            machine_id=str(machine_id) if machine_id is not None else "",
-            worker_id=str(worker_id) if worker_id is not None else "",
+            app_id=log.app_id or "",
+            deployment_id=log.deployment_id or "",
+            stub_id=log.stub_id or "",
+            container_id=log.container_id or "",
+            machine_id=log.machine_id or "",
+            worker_id=log.worker_id or "",
         )
 
 

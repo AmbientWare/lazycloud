@@ -198,11 +198,30 @@ class TaskService:
     def append_logs(self, task_id: str, stream: str, messages: list[str]) -> None:
         task = self.get(task_id)
         with self.context.database.session() as session:
+            container = (
+                ContainerRepository(session).get_across_workspaces(task.container_id)
+                if task.container_id
+                else None
+            )
             records = LogRepository(session).records
             entries = [
                 records.create_across_workspaces(
                     {
                         "task_id": required_uuid(task_id, field="task_id"),
+                        "container_id": task.container_id,
+                        "app_id": task.app_id,
+                        "stub_id": task.stub_id,
+                        "deployment_id": task.deployment_id,
+                        "machine_id": (
+                            container.runtime_machine_id or container.machine_id
+                            if container is not None
+                            else None
+                        ),
+                        "worker_id": (
+                            container.runtime_worker_id or container.worker_id
+                            if container is not None
+                            else None
+                        ),
                         "stream": stream,
                         "message": message.rstrip("\n"),
                     },
@@ -220,6 +239,8 @@ class TaskService:
                     "app_id": task.app_id or "",
                     "deployment_id": task.deployment_id or "",
                     "container_id": task.container_id or "",
+                    "machine_id": entry.machine_id or "",
+                    "worker_id": entry.worker_id or "",
                     "stream": entry.stream,
                     "message": entry.message,
                     "timestamp": entry.created_at.isoformat(),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -7,7 +8,7 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.execution import TaskRepository
+from database.repositories.execution import LogRepository, TaskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -22,12 +23,14 @@ from observability.container_logs import (
 )
 from observability.stream_state import (
     RedisEventStreamRepository,
+    log_record_from_redis,
 )
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_fleet import Machine, Worker
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.errors import ConflictError
+from shared.logs import LogEntry
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import Task
 
@@ -36,6 +39,7 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 def test_container_log_ingestion_service_supports_direct_durable_attribution(
     isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
@@ -88,6 +92,66 @@ def test_container_log_ingestion_service_supports_direct_durable_attribution(
     second_data = _JSON_OBJECT_ADAPTER.validate_python(captured[1].body["data"])
     assert first_data["source_sequence"] == 0
     assert second_data["stream"] == "stderr"
+
+    replay = service.append_batch(
+        container_id=container.id,
+        capture_id="direct-capture",
+        entries=[*entries, _Entry(sequence=2, message="", kind="flush")],
+    )
+    assert replay.accepted_through == 2
+    with isolated_services.context.database.session() as session:
+        history = LogRepository(session).page(
+            LogStreamQuery(
+                workspace_id=workspace_id, container_id=container.id, worker_id=worker.id
+            ),
+            workspace_id=workspace_id,
+            limit=10,
+        )
+        assert (
+            LogRepository(session)
+            .page(
+                LogStreamQuery(workspace_id=workspace_id, container_id=container.id),
+                workspace_id=str(uuid4()),
+                limit=10,
+            )
+            .data
+            == ()
+        )
+    assert sorted((row.entry.id, row.entry.message) for row in history.data) == sorted(
+        (log.id, log.message) for log in map(log_record_from_redis, captured)
+    )
+    assert all(row.entry.task_id is None for row in history.data)
+
+    append_batch = LogRepository.append_batch
+
+    def fail_commit(logs: LogRepository, entries: Sequence[LogEntry], *, workspace_id: str) -> None:
+        append_batch(logs, entries, workspace_id=workspace_id)
+        raise OSError("database commit unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LogRepository, "append_batch", fail_commit)
+        with pytest.raises(OSError, match="database commit unavailable"):
+            service.append_batch(
+                container_id=container.id,
+                capture_id="commit-failure",
+                entries=[_Entry(sequence=0, message="retried after rollback")],
+            )
+    service.append_batch(
+        container_id=container.id,
+        capture_id="commit-failure",
+        entries=[_Entry(sequence=0, message="retried after rollback")],
+    )
+    with isolated_services.context.database.session() as session:
+        repaired = LogRepository(session).page(
+            LogStreamQuery(workspace_id=workspace_id, container_id=container.id),
+            workspace_id=workspace_id,
+            limit=10,
+        )
+    assert sorted(row.entry.message for row in repaired.data) == [
+        "retried after rollback",
+        "root stderr",
+        "root stdout",
+    ]
 
     with pytest.raises(ContainerLogWorkerAssignmentError, match="assigned worker"):
         service.append_batch(
@@ -193,6 +257,27 @@ def test_container_log_runtime_attribution_uses_durable_ownership(
     assert captured[0].body["taskid"] == task.id
     assert captured[0].body["workerid"] == runtime_worker_id
     assert captured[0].body["machineid"] == runtime_machine_id
+    assert stub.app_id is not None
+    with isolated_services.context.database.session() as session:
+        TaskRepository(session).upsert(
+            task.model_copy(update={"container_id": None}), workspace_id=stub.workspace_id
+        )
+        history = LogRepository(session).page(
+            LogStreamQuery(
+                workspace_id=stub.workspace_id,
+                task_id=task.id,
+                container_id=container.id,
+                app_id=stub.app_id,
+                deployment_id=deployment.id,
+                stub_id=stub.id,
+                worker_id=runtime_worker_id,
+                machine_id=runtime_machine_id,
+            ),
+            workspace_id=stub.workspace_id,
+            limit=10,
+        )
+    assert len(history.data) == 1
+    assert history.data[0].entry.id == log_record_from_redis(captured[0]).id
 
     with pytest.raises(ContainerLogWorkerAssignmentError, match="execution assignment"):
         service.append_runtime_batch(

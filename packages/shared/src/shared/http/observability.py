@@ -62,7 +62,7 @@ class LogRecord(HttpModel):
             timestamp=entry.created_at,
             message=entry.message,
             stream=entry.stream,
-            task_id=entry.task_id,
+            task_id=entry.task_id or "",
             workspace_id=workspace_id,
             app_id=app_id,
             deployment_id=deployment_id,
