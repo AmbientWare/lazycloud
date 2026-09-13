@@ -82,6 +82,7 @@ class Shell:
         terminal = self.interactive_shell or InteractiveShell()
         return terminal.run(
             endpoint=config.endpoint,
+            workspace=config.workspace,
             token=config.token,
             credentials=session,
             plan=plan,

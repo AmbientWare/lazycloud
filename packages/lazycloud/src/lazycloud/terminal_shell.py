@@ -24,6 +24,8 @@ from shared.shell_protocol import (
     encode_shell_frame,
 )
 
+from lazycloud.control import workspace_path
+
 
 class ShellConnectionError(RuntimeError):
     pass
@@ -182,6 +184,7 @@ class InteractiveShell:
         self,
         *,
         endpoint: str,
+        workspace: str,
         token: str | None,
         credentials: ShellCredentials,
         plan: ShellConnectPlanResponse,
@@ -192,7 +195,7 @@ class InteractiveShell:
         if not token:
             msg = "an authenticated profile token is required to open a shell"
             raise ShellConnectionError(msg)
-        url = shell_websocket_url(endpoint, plan.route_path)
+        url = workspace_path(shell_websocket_url(endpoint, plan.route_path), workspace)
         max_message_bytes = max(
             plan.buffer_size_bytes,
             SHELL_FRAME_HEADER_SIZE + SHELL_FRAME_MAX_PAYLOAD_BYTES,
