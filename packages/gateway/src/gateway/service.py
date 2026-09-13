@@ -144,7 +144,7 @@ from shared.errors import (
 from shared.events import EventLevel
 from shared.http.agent_identity import AgentTunnelIdentity
 from shared.http.client_manifests import (
-    CLIENT_MANIFEST_DEPLOYMENT_KINDS,
+    INVOKABLE_DEPLOYMENT_KINDS,
     ClientManifestRequest,
     ClientManifestResponse,
 )
@@ -954,7 +954,7 @@ class GatewayControlService:
             deployed_resources = self.services.deployment_resources.list(
                 workspace=request.workspace,
                 app=app.name,
-                kinds=CLIENT_MANIFEST_DEPLOYMENT_KINDS,
+                kinds=INVOKABLE_DEPLOYMENT_KINDS,
                 active=True,
                 latest_per_resource=True,
             )
