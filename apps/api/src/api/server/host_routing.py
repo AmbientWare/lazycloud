@@ -111,11 +111,17 @@ class _HostTarget:
 class _HandlerRoute:
     path: str
     container_id: str | None
+    workspace_id: str
 
 
 def invoke_host_container_id(scope: Scope) -> str | None:
     route = scope.get("lazycloud.invoke_host_route")
     return route.container_id if isinstance(route, _HandlerRoute) else None
+
+
+def invoke_host_workspace_id(scope: Scope) -> str | None:
+    route = scope.get("lazycloud.invoke_host_route")
+    return route.workspace_id if isinstance(route, _HandlerRoute) else None
 
 
 def _resolve_handler_route(
@@ -151,7 +157,9 @@ def _resolve_handler_route(
         base_path = f"/{prefix}/{target.deployment_name}/latest"
     if target.port is not None:
         base_path = f"{base_path}/{target.port}"
-    return _HandlerRoute(_join_paths(base_path, original_path), target.container_id)
+    return _HandlerRoute(
+        _join_paths(base_path, original_path), target.container_id, target.stub.workspace_id
+    )
 
 
 def _resolve_host_target(

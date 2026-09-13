@@ -308,6 +308,34 @@ def test_private_function_deployed_routes_use_token_workspace(
         assert [request.stub_id for request in service.requests] == [stub.id, public_stub.id]
 
 
+def test_private_invoke_hostname_cannot_select_a_same_named_foreign_workload(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
+    deployment, stub = _deploy(
+        isolated_services, "shared-name", DeploymentKind.Function, workspace="host-owner"
+    )
+    _deploy(isolated_services, "shared-name", DeploymentKind.Function, workspace="host-stranger")
+    service = RecordingFunctionService()
+    host = f"{deployment.subdomain}.{_base_host(BASE_URL)}"
+    with TestClient(create_app(isolated_services, function_service=service)) as client:
+        denied = client.post(
+            "/?workspace=host-stranger",
+            headers=_auth_headers(isolated_services, workspace="host-stranger") | {"host": host},
+            json={},
+        )
+        assert denied.status_code == 403
+        assert not service.requests
+        allowed = client.post(
+            "/?workspace=host-stranger",
+            headers=_auth_headers(isolated_services, workspace="host-owner") | {"host": host},
+            json={},
+        )
+        assert allowed.status_code == 200
+        assert [request.stub_id for request in service.requests] == [stub.id]
+
+
 def test_endpoint_version_routes_follow_deployment_lifecycle(
     isolated_services: ApiServices,
 ) -> None:
