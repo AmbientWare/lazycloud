@@ -375,7 +375,9 @@ class EndpointControlService:
             dispatcher = self.async_dispatcher
             if dispatcher is None:
                 return error_response(503, "endpoint dispatcher is not configured")
-            target = await dispatcher.unprobed_target(stub.id)
+            if request.container_id is not None:
+                await self._require_container_target(stub, request.container_id)
+            target = await dispatcher.unprobed_target(stub.id, container_id=request.container_id)
             if target is None:
                 return error_response(503, "no running endpoint containers")
             stream = await dispatcher.open_http_stream(
@@ -384,6 +386,8 @@ class EndpointControlService:
             return await _read_forward_response(stream)
         except NotFoundError:
             return error_response(404, "endpoint not found")
+        except EndpointDispatchUnavailable as exc:
+            return error_response(503, str(exc))
         except Exception as exc:
             return error_response(502, str(exc))
 
@@ -445,6 +449,7 @@ class EndpointControlService:
                 task,
                 wait,
                 max_inflight_per_container=settings.max_inflight_per_container,
+                container_id=request.container_id,
             )
             self._observe_dispatch_latencies(stub, record)
         except Exception as exc:
@@ -801,6 +806,7 @@ class EndpointControlService:
                 task,
                 wait,
                 max_inflight_per_container=max_inflight_per_container,
+                container_id=request.container_id,
             )
             started = time.monotonic()
             try:
@@ -809,7 +815,9 @@ class EndpointControlService:
                     request,
                     timeout_seconds=max(wait.remaining(), 0.01),
                 )
-            except EndpointBackendUnreachable:
+            except EndpointBackendUnreachable as exc:
+                if request.container_id is not None:
+                    raise EndpointDispatchUnavailable("endpoint container is unavailable") from exc
                 # Nothing was written, so the target was stale rather than the
                 # endpoint broken: a container can register a route and die before
                 # anyone dials it. Selecting again replays nothing, and the next
@@ -835,10 +843,13 @@ class EndpointControlService:
         wait: _CapacityWait,
         *,
         max_inflight_per_container: int,
+        container_id: str | None,
     ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
         outdated_containers: set[str] = set()
         while True:
             await self._raise_if_cancelled(task.id)
+            if container_id is not None:
+                await self._require_container_target(stub, container_id)
             if wait.warmup_attempted:
                 await self._raise_if_capacity_is_dead(dispatcher, stub)
             if wait.remaining() <= 0:
@@ -853,8 +864,14 @@ class EndpointControlService:
                 max_inflight_per_container=max_inflight_per_container,
                 excluded_container_ids=(await repository.closed_containers(stub.id))
                 | outdated_containers,
+                container_id=container_id,
             )
             if target is None:
+                if container_id is not None:
+                    if loads.get(container_id, 0) >= max_inflight_per_container:
+                        await asyncio.sleep(wait.poll_delay())
+                        continue
+                    raise EndpointDispatchUnavailable("endpoint container is not ready")
                 if not wait.warmup_attempted:
                     await self._request_capacity(stub, task)
                     wait.warmup_attempted = True
@@ -875,6 +892,19 @@ class EndpointControlService:
             # carries the same attribution every other workload kind has.
             await self.services.tasks.assign_async(task, container_id=target.container_id)
             return target, record
+
+    async def _require_container_target(self, stub: StubRecord, container_id: str) -> None:
+        container = await self._async_database().run_transaction(
+            lambda session: ContainerRepository(session).get(
+                container_id, workspace_id=stub.workspace_id
+            )
+        )
+        if (
+            container is None
+            or container.stub_id != stub.id
+            or container.status is not ContainerStatus.Running
+        ):
+            raise EndpointDispatchUnavailable("endpoint container is unavailable")
 
     async def _forward_failed(
         self,

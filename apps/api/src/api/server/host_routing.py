@@ -56,8 +56,8 @@ class GeneratedInvokeHostRoutingMiddleware:
         if not _is_routable_host(host, base_host=base_host):
             await self.app(scope, receive, send)
             return
-        handler_path = await services.require_async_io().database.run_transaction(
-            lambda session: _resolve_handler_path(
+        route = await services.require_async_io().database.run_transaction(
+            lambda session: _resolve_handler_route(
                 services,
                 session,
                 host,
@@ -65,7 +65,7 @@ class GeneratedInvokeHostRoutingMiddleware:
                 original_path=str(scope.get("path") or "/"),
             )
         )
-        if handler_path is None:
+        if route is None:
             # A host that names nothing falls through to the platform's own routes,
             # which authorize for themselves. Refusing here by hostname is not
             # available: internal callers reach the control plane by service name, so
@@ -74,8 +74,9 @@ class GeneratedInvokeHostRoutingMiddleware:
             await self.app(scope, receive, send)
             return
         rewritten = dict(scope)
-        rewritten["path"] = handler_path
-        rewritten["raw_path"] = handler_path.encode("utf-8")
+        rewritten["path"] = route.path
+        rewritten["raw_path"] = route.path.encode("utf-8")
+        rewritten["lazycloud.invoke_host_route"] = route
         await self.app(rewritten, receive, send)
 
 
@@ -106,14 +107,25 @@ class _HostTarget:
     stub_id_route: bool = False
 
 
-def _resolve_handler_path(
+@dataclass(frozen=True, slots=True)
+class _HandlerRoute:
+    path: str
+    container_id: str | None
+
+
+def invoke_host_container_id(scope: Scope) -> str | None:
+    route = scope.get("lazycloud.invoke_host_route")
+    return route.container_id if isinstance(route, _HandlerRoute) else None
+
+
+def _resolve_handler_route(
     services: ApiServices,
     session: DatabaseSession,
     host: str,
     *,
     base_host: str,
     original_path: str,
-) -> str | None:
+) -> _HandlerRoute | None:
     target = _resolve_host_target(services, session, host, base_host=base_host)
     if target is None:
         return None
@@ -122,7 +134,11 @@ def _resolve_handler_path(
         return None
     if target.stub.kind in PROXY_STUB_KINDS and target.port is None:
         return None
-    route_id = target.container_id or target.stub.id
+    route_id = (
+        target.container_id
+        if target.container_id is not None and target.stub.kind in PROXY_STUB_KINDS
+        else target.stub.id
+    )
     if target.container_id is not None and target.stub.kind is StubKind.Pod:
         prefix = f"{prefix}/containers"
     if target.stub.public:
@@ -135,7 +151,7 @@ def _resolve_handler_path(
         base_path = f"/{prefix}/{target.deployment_name}/latest"
     if target.port is not None:
         base_path = f"{base_path}/{target.port}"
-    return _join_paths(base_path, original_path)
+    return _HandlerRoute(_join_paths(base_path, original_path), target.container_id)
 
 
 def _resolve_host_target(
@@ -162,6 +178,20 @@ def _resolve_host_target(
         stub = None
     if stub is not None:
         return _HostTarget(stub=stub, stub_id_route=True)
+
+    try:
+        container = services.containers.get_in_session(session, label)
+    except NotFoundError:
+        container = None
+    if container is not None and container.stub_id is not None:
+        try:
+            stub = control_plane.get_stub_in_session(
+                session, container.stub_id, workspace=container.workspace_id
+            )
+        except NotFoundError:
+            stub = None
+        if stub is not None and stub.kind in {StubKind.Endpoint, StubKind.Asgi}:
+            return _HostTarget(stub=stub, container_id=container.id, stub_id_route=True)
 
     port_target = _port_host_target(services, session, control_plane, label)
     if port_target is not None:

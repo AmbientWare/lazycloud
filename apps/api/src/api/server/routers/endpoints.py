@@ -9,6 +9,7 @@ from control.service import ControlPlaneService, StubKind, StubRecord
 from execution.endpoints.dispatch import (
     AsyncEndpointResponseStream,
     EndpointBackendProtocol,
+    EndpointDispatchUnavailable,
     endpoint_backend_url,
 )
 from execution.endpoints.service import (
@@ -47,6 +48,7 @@ from api.server.deployed_stubs import (
     resolve_deployed_stub_id,
     resolve_deployed_stub_id_async,
 )
+from api.server.host_routing import invoke_host_container_id
 from api.server.http import (
     HOP_BY_HOP_RESPONSE_HEADERS,
     backend_websocket_headers,
@@ -558,6 +560,7 @@ async def _forwarded_request(
 ) -> EndpointForwardRequest:
     return EndpointForwardRequest(
         stub_id=stub.id,
+        container_id=invoke_host_container_id(request.scope),
         method=request.method,
         path=forwarded_path(subpath),
         query_params=request_query_params(request),
@@ -624,6 +627,8 @@ async def _forward_asgi_http_request(
         stream = await service.open_asgi_http_stream(session, forwarded)
     except EndpointWebSocketDispatchRejected as exc:
         return Response(content=str(exc), status_code=exc.status_code)
+    except EndpointDispatchUnavailable:
+        raise
     except Exception as exc:
         if session is not None:
             await service.finish_asgi_http(
@@ -709,6 +714,7 @@ async def _forward_asgi_websocket(
 ) -> None:
     forwarded = EndpointForwardRequest(
         stub_id=stub.id,
+        container_id=invoke_host_container_id(websocket.scope),
         method="GET",
         path=forwarded_path(subpath),
         query_params=websocket_query_params(websocket),

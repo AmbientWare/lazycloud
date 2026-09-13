@@ -911,6 +911,7 @@ class GatewayControlService:
                     deployment_id=request.deployment_id or None,
                     external_url=request.external_url,
                     port=request.port,
+                    container_id=request.container_id,
                 ).url
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc

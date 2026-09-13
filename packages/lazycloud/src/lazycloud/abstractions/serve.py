@@ -384,12 +384,14 @@ def resolve_serve_url(
     client: ServeUrlClient,
     *,
     stub_id: str,
+    container_id: str,
     workspace: str | None = None,
     external_url: str,
 ) -> ServePreviewUrl:
     response = client.get_url(
         GetUrlRequest(
             stub_id=stub_id,
+            container_id=container_id,
             url_type=GatewayUrlKind.Stub,
             workspace=workspace,
             external_url=external_url,

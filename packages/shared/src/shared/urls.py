@@ -137,6 +137,11 @@ def build_stub_url(external_url: str, target: StubUrlTarget) -> str:
     return _replace_host(parsed, f"{target.stub_id}.{parsed.netloc}")
 
 
+def build_container_url(external_url: str, container_id: str) -> str:
+    parsed = _parse_external_url(external_url)
+    return _replace_host(parsed, f"{container_id}.{parsed.netloc}")
+
+
 def build_pod_url(external_url: str, target: StubUrlTarget) -> str:
     parsed = _parse_external_url(external_url)
     port = str(target.ports[0]) if len(target.ports) == 1 else "<PORT>"

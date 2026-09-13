@@ -1226,12 +1226,6 @@ def _serve_endpoint(
         workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     )
-    serve_url = resolve_serve_url(
-        gateway_client,
-        stub_id=stub_id,
-        workspace=workspace,
-        external_url=config.endpoint,
-    )
     response = EndpointControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
@@ -1241,17 +1235,28 @@ def _serve_endpoint(
     selected_container_id = container_id or response.container_id
     if not selected_container_id:
         raise EndpointOperationError(f"serve did not return a {label} container_id")
-    spec = owner.spec()
-    preview_record = write_serve_preview(
-        kind=spec.kind,
-        name=spec.name,
-        app=owner._app_slug,
-        workspace=config.workspace,
-        endpoint=config.endpoint,
-        stub_id=stub_id,
-        container_id=selected_container_id,
-        url=serve_url.url,
-    )
+    try:
+        serve_url = resolve_serve_url(
+            gateway_client,
+            stub_id=stub_id,
+            container_id=selected_container_id,
+            workspace=workspace,
+            external_url=config.endpoint,
+        )
+        spec = owner.spec()
+        preview_record = write_serve_preview(
+            kind=spec.kind,
+            name=spec.name,
+            app=owner._app_slug,
+            workspace=config.workspace,
+            endpoint=config.endpoint,
+            stub_id=stub_id,
+            container_id=selected_container_id,
+            url=serve_url.url,
+        )
+    except BaseException:
+        resource_client.stop_container(response.container_id)
+        raise
     ServePreviewSession(
         stub_id=stub_id,
         container_id=selected_container_id,

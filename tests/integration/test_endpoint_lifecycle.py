@@ -868,6 +868,7 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = 1,
         excluded_container_ids: frozenset[str] | set[str] = frozenset(),
+        container_id: str | None = None,
     ) -> EndpointDispatchTarget | None:
         _ = container_loads, max_inflight_per_container
         if self.cancelled_task is None:
@@ -886,6 +887,7 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
             container_loads=container_loads,
             max_inflight_per_container=max_inflight_per_container,
             excluded_container_ids=excluded_container_ids,
+            container_id=container_id,
         )
 
 
