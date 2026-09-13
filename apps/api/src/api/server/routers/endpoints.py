@@ -13,6 +13,7 @@ from execution.endpoints.dispatch import (
     endpoint_backend_url,
 )
 from execution.endpoints.service import (
+    EndpointDispatchTimedOut,
     EndpointIngressDispatchSession,
     EndpointWebSocketDispatchRejected,
 )
@@ -24,6 +25,7 @@ from fastapi import (
     WebSocket,
     status,
 )
+from networking.async_http import AsyncBackendTimeoutError
 from shared.container_requests import CONTAINER_HEALTH_PATH
 from shared.http.endpoints import (
     EndpointForwardRequest,
@@ -627,6 +629,10 @@ async def _forward_asgi_http_request(
         stream = await service.open_asgi_http_stream(session, forwarded)
     except EndpointWebSocketDispatchRejected as exc:
         return Response(content=str(exc), status_code=exc.status_code)
+    except EndpointDispatchTimedOut as exc:
+        if session is not None:
+            await service.finish_asgi_http(session.task_id, error=str(exc), timed_out=True)
+        raise
     except EndpointDispatchUnavailable:
         raise
     except Exception as exc:
@@ -678,12 +684,17 @@ async def _stream_asgi_response_body(
 ) -> AsyncIterator[bytes]:
     body_size_bytes = 0
     completed = False
+    timed_out = False
     error: str | None = None
     try:
         async for chunk in stream.iter_chunks():
             body_size_bytes += len(chunk)
             yield chunk
         completed = True
+    except AsyncBackendTimeoutError as exc:
+        timed_out = True
+        error = str(exc)
+        raise
     except Exception as exc:
         error = str(exc)
         raise
@@ -694,6 +705,7 @@ async def _stream_asgi_response_body(
             status_code=stream.status_code,
             body_size_bytes=body_size_bytes,
             cancelled=not completed and error is None,
+            timed_out=timed_out,
             error=error,
         )
 

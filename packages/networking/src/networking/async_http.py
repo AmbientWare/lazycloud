@@ -24,6 +24,10 @@ class AsyncBackendResponseError(AsyncBackendHttpError):
     pass
 
 
+class AsyncBackendTimeoutError(AsyncBackendResponseError):
+    pass
+
+
 @dataclass(slots=True)
 class AsyncBackendHttpResponse:
     status_code: int
@@ -52,7 +56,9 @@ class AsyncBackendHttpResponse:
                         return
                     if event is h11.PAUSED:
                         return
-            except (ConnectionError, OSError, TimeoutError, h11.ProtocolError) as exc:
+            except TimeoutError as exc:
+                raise AsyncBackendTimeoutError("backend response timed out") from exc
+            except (ConnectionError, OSError, h11.ProtocolError) as exc:
                 raise AsyncBackendResponseError(str(exc)) from exc
         finally:
             await self.close()
@@ -150,9 +156,11 @@ class AsyncBackendHttpClient:
             writer.close()
             with suppress(ConnectionError, OSError):
                 await writer.wait_closed()
+            if isinstance(exc, TimeoutError):
+                raise AsyncBackendTimeoutError("backend response timed out") from exc
             if isinstance(
                 exc,
-                (ConnectionError, OSError, TimeoutError, UnicodeError, h11.ProtocolError),
+                (ConnectionError, OSError, UnicodeError, h11.ProtocolError),
             ):
                 raise AsyncBackendResponseError(str(exc)) from exc
             raise
@@ -236,4 +244,5 @@ __all__ = [
     "AsyncBackendHttpError",
     "AsyncBackendHttpResponse",
     "AsyncBackendResponseError",
+    "AsyncBackendTimeoutError",
 ]

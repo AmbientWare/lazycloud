@@ -49,6 +49,10 @@ class UpstreamUnavailableError(DomainError):
     """A required backing service or worker is unavailable."""
 
 
+class UpstreamTimeoutError(DomainError):
+    """A required backing service or worker exceeded the request deadline."""
+
+
 class PaymentRequiredError(DomainError):
     """This account owes money, so the platform will not start more work.
 
@@ -65,5 +69,6 @@ __all__ = [
     "InvalidInputError",
     "NotFoundError",
     "PaymentRequiredError",
+    "UpstreamTimeoutError",
     "UpstreamUnavailableError",
 ]

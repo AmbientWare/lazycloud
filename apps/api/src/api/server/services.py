@@ -390,6 +390,7 @@ class EndpointApiService(Protocol):
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None: ...
 

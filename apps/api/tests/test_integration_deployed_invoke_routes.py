@@ -187,6 +187,7 @@ class RecordingEndpointService:
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None:
         _ = task_id, status_code, body_size_bytes, cancelled, error

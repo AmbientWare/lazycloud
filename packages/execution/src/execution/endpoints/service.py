@@ -16,6 +16,7 @@ from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
+from networking.async_http import AsyncBackendTimeoutError
 from pydantic import JsonValue
 from shared.app_identity import ENDPOINT_IMAGE
 from shared.container_requests import (
@@ -40,6 +41,7 @@ from shared.errors import (
     InvalidInputError,
     NotFoundError,
     PaymentRequiredError,
+    UpstreamTimeoutError,
     UpstreamUnavailableError,
 )
 from shared.events import EventLevel
@@ -476,11 +478,14 @@ class EndpointControlService:
         session: EndpointIngressDispatchSession,
         request: EndpointForwardRequest,
     ) -> AsyncEndpointResponseStream:
-        return await self._dispatcher().open_http_stream(
-            session.target,
-            request.model_copy(update={"headers": session.headers}),
-            timeout_seconds=session.wait_timeout_seconds,
-        )
+        try:
+            return await self._dispatcher().open_http_stream(
+                session.target,
+                request.model_copy(update={"headers": session.headers}),
+                timeout_seconds=session.wait_timeout_seconds,
+            )
+        except AsyncBackendTimeoutError as exc:
+            raise EndpointDispatchTimedOut(str(exc)) from exc
 
     async def finish_asgi_http(
         self,
@@ -489,6 +494,7 @@ class EndpointControlService:
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None:
         if error is None and status_code is not None and not 200 <= status_code < 400:
@@ -501,6 +507,7 @@ class EndpointControlService:
             },
             cancelled=cancelled,
             error=error,
+            timed_out=timed_out,
         )
 
     async def finish_asgi_websocket(
@@ -524,6 +531,7 @@ class EndpointControlService:
         result: dict[str, JsonValue],
         cancelled: bool,
         error: str | None,
+        timed_out: bool = False,
     ) -> None:
         try:
             task = await self.services.tasks.get_async(task_id)
@@ -532,7 +540,9 @@ class EndpointControlService:
         try:
             record = await AsyncEndpointDispatchStateRepository(self._async_database()).transition(
                 task,
-                _websocket_terminal_status(cancelled=cancelled, error=error),
+                EndpointDispatchStatus.Timeout
+                if timed_out
+                else _websocket_terminal_status(cancelled=cancelled, error=error),
                 error=error,
             )
             stub = await self._async_database().run_transaction(
@@ -544,6 +554,8 @@ class EndpointControlService:
         task_status = TaskStatus.Complete
         if cancelled:
             task_status = TaskStatus.Cancelled
+        elif timed_out:
+            task_status = TaskStatus.Timeout
         elif error:
             task_status = TaskStatus.Failed
         await self.services.tasks.transition_async(
@@ -813,8 +825,12 @@ class EndpointControlService:
                 # pass decides whether capacity can still arrive.
                 await asyncio.sleep(wait.poll_delay())
                 continue
+            except AsyncBackendTimeoutError as exc:
+                raise EndpointDispatchTimedOut(str(exc)) from exc
             try:
                 response = await _read_forward_response(stream)
+            except AsyncBackendTimeoutError as exc:
+                raise EndpointDispatchTimedOut(str(exc)) from exc
             except Exception as exc:
                 # The request left this process, so this attempt is final whatever
                 # went wrong and whatever the application already did with it.
@@ -1342,7 +1358,7 @@ class EndpointDispatchCancelled(RuntimeError):
     pass
 
 
-class EndpointDispatchTimedOut(RuntimeError):
+class EndpointDispatchTimedOut(UpstreamTimeoutError):
     pass
 
 
