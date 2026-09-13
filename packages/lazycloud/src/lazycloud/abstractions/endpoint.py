@@ -43,7 +43,7 @@ from shared.placement import ProductRegion
 from shared.serialization import to_json_value
 from shared.tasks import RetryPolicy, TaskPolicy
 
-from lazycloud._invocation import prepare_arguments
+from lazycloud._invocation import encode_arguments, prepare_arguments
 from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.invocation import (
@@ -1021,13 +1021,14 @@ def _callable_accepts_args(value: Callable[..., Any], count: int) -> bool:
 
 
 def _request_function_endpoint(
-    owner: Endpoint[..., Any] | ASGI,
+    owner: Endpoint[..., Any],
     *,
     args: tuple[Any, ...],
     kwargs: Mapping[str, Any],
     options: InvocationOptions,
 ) -> EndpointResponse:
-    payload = _endpoint_request_payload(args=args, kwargs=kwargs)
+    encoded_args, encoded_kwargs = encode_arguments(owner.func, args, kwargs, owner.inputs)
+    payload = _endpoint_request_payload(args=encoded_args, kwargs=encoded_kwargs)
     return _request_http_endpoint(
         owner,
         method=_endpoint_request_method(owner),

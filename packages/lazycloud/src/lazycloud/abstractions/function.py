@@ -49,7 +49,7 @@ from shared.placement import ProductRegion
 from shared.task_context import current_root_task_id, current_task_id
 from shared.tasks import RetryPolicy, TaskPolicy
 
-from lazycloud._invocation import prepare_arguments
+from lazycloud._invocation import encode_arguments, prepare_arguments
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
@@ -577,7 +577,8 @@ class Function(Generic[P, R]):
             msg = "stub_id is required to invoke a remote function"
             raise FunctionOperationError(msg)
         last_response: FunctionInvokeResponse | None = None
-        serialized = _serialize_invocation(args, kwargs)
+        encoded_args, encoded_kwargs = encode_arguments(self.func, args, kwargs, self.inputs)
+        serialized = _serialize_invocation(encoded_args, encoded_kwargs)
         parent_task_id, root_task_id = _current_task_context()
         reported_task_id = ""
         reported_status = ""

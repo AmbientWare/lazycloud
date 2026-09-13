@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import tempfile
 import urllib.error
 import urllib.request
@@ -79,6 +80,9 @@ class SchemaField:
         return value
 
     def dump(self, value: Any) -> Any:
+        return value
+
+    def encode_input(self, value: Any) -> Any:
         return value
 
     def to_dict(self) -> dict[str, JsonValue]:
@@ -181,19 +185,15 @@ class File(SchemaField):
     def validate(self, value: Any) -> Any:
         if isinstance(value, BinaryReader):
             return value
-        raw = _text_path(value)
-        if raw is not None:
-            path = Path(raw).expanduser()
-            if path.is_file():
-                return path.open("rb")
-            if _is_url(raw):
-                return _download_to_tempfile(raw, field="file")
-            return _decode_base64_to_file(raw, field="file")
-        if isinstance(value, memoryview):
-            return BytesIO(value.tobytes())
-        if isinstance(value, bytes | bytearray):
-            return BytesIO(bytes(value))
-        raise ValidationError("expected file-like object, path, URL, base64 string, or bytes")
+        return BytesIO(_read_media_bytes(value, field="file"))
+
+    def encode_input(self, value: Any) -> Any:
+        if isinstance(value, str):
+            if _is_url(value) or not _is_file_path(value):
+                return value
+        elif not isinstance(value, BinaryReader | TextPathLike | bytes | bytearray | memoryview):
+            return value
+        return base64.b64encode(_read_media_bytes(value, field=self.type)).decode("ascii")
 
     def dump(self, value: Any) -> str:
         if isinstance(value, str) and _is_url(value):
@@ -355,6 +355,15 @@ class Object(SchemaField):
     def dump(self, value: Any) -> dict[str, Any]:
         return Schema(self.fields).dump(self.validate(value))
 
+    def encode_input(self, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        values = TypeAdapter[dict[str, Any]](dict[str, Any]).validate_python(value)
+        return {
+            name: self.fields[name].encode_input(item) if name in self.fields else item
+            for name, item in values.items()
+        }
+
 
 @dataclass(frozen=True)
 class Schema:
@@ -407,22 +416,16 @@ def _is_url(value: str) -> bool:
     return bool(parsed.scheme and parsed.netloc)
 
 
-def _download_to_tempfile(url: str, *, field: str) -> BinaryIO:
-    name: str | None = None
+def _download_bytes(url: str, *, field: str) -> bytes:
     try:
         with _url_binary_response(url) as response:
-            data = response.read()
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        raise ValidationError(f"failed to download {field} from URL: HTTP {exc.code}") from None
     except (urllib.error.URLError, OSError) as exc:
-        raise ValidationError(f"failed to download {field} from URL: {exc}") from exc
-    try:
-        with tempfile.NamedTemporaryFile(delete=False) as handle:
-            handle.write(data)
-            name = handle.name
-        return Path(name).open("rb")
-    except OSError as exc:
-        if name is not None:
-            Path(name).unlink(missing_ok=True)
-        raise ValidationError(f"failed to store downloaded {field}: {exc}") from exc
+        raise ValidationError(
+            f"failed to download {field} from URL: {type(exc).__name__}"
+        ) from None
 
 
 def _url_binary_response(url: str) -> UrlBinaryResponse:
@@ -430,20 +433,6 @@ def _url_binary_response(url: str) -> UrlBinaryResponse:
     if not isinstance(response, UrlBinaryResponse):
         raise ValidationError("URL response does not provide binary content")
     return response
-
-
-def _decode_base64_to_file(value: str, *, field: str) -> BinaryIO:
-    data = _decode_base64(value, field=field)
-    name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False) as handle:
-            handle.write(data)
-            name = handle.name
-        return Path(name).open("rb")
-    except OSError as exc:
-        if name is not None:
-            Path(name).unlink(missing_ok=True)
-        raise ValidationError(f"failed to store decoded {field}: {exc}") from exc
 
 
 def _decode_base64(value: str, *, field: str) -> bytes:
@@ -461,8 +450,12 @@ def _decode_base64(value: str, *, field: str) -> bytes:
 def _binary_reader(value: Any) -> BinaryIO:
     if not isinstance(value, BinaryReader):
         raise ValidationError("expected a binary file-like object")
-    value.seek(0)
-    return BytesIO(value.read())
+    position = value.seek(0, 1)
+    try:
+        value.seek(0)
+        return BytesIO(value.read())
+    finally:
+        value.seek(position)
 
 
 def _read_media_bytes(value: Any, *, field: str) -> bytes:
@@ -476,16 +469,26 @@ def _read_media_bytes(value: Any, *, field: str) -> bytes:
         return bytes(value)
     raw = _text_path(value)
     if raw is not None:
-        path = Path(raw).expanduser()
-        if path.is_file():
-            return path.read_bytes()
-        if _is_url(raw):
-            with _download_to_tempfile(raw, field=field) as handle:
-                return handle.read()
+        if isinstance(value, str) and _is_url(raw):
+            return _download_bytes(raw, field=field)
+        if isinstance(value, TextPathLike) or _is_file_path(raw):
+            try:
+                return Path(raw).expanduser().read_bytes()
+            except OSError as exc:
+                raise ValidationError(f"failed to read {field} path: {exc.strerror}") from None
         return _decode_base64(raw, field=field)
     type_name = type(value).__name__
-    msg = f"expected image-like object, path, URL, base64 string, or bytes; got {type_name}"
+    msg = f"expected {field}, path, URL, base64 string, or bytes; got {type_name}"
     raise ValidationError(msg)
+
+
+def _is_file_path(value: str) -> bool:
+    try:
+        return Path(value).expanduser().is_file()
+    except OSError as exc:
+        if exc.errno == errno.ENAMETOOLONG:
+            return False
+        raise
 
 
 def _text_path(value: Any) -> str | None:
