@@ -121,7 +121,7 @@ def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
 
         assert response.status_code == 200
         created = CreatePodResponse.model_validate_json(response.content)
-        assert created.url == f"https://{stub.id}-8080.lazycloud.test"
+        assert created.url == f"https://{created.container_id}-8080.lazycloud.test"
         assert created.timeout_seconds == 30
         assert created.expires_at is not None
         assert scheduler.requests[0].payload["entrypoint"] == ["python", "override.py"]
