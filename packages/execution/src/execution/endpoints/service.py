@@ -27,8 +27,6 @@ from shared.containers import ContainerStatus
 from shared.env import (
     APP_ID_ENV,
     CHECKPOINT_ENABLED_ENV,
-    ENDPOINT_INSTANCE_LOCK_ENV,
-    ENDPOINT_SERVE_LOCK_ENV,
     ENDPOINT_WORKERS_ENV,
     HOT_RELOAD_DIR_ENV,
     HOT_RELOAD_ENV,
@@ -74,8 +72,6 @@ from execution.endpoints.dispatch import (
     EndpointDispatchTarget,
     EndpointDispatchUnavailable,
 )
-from execution.endpoints.keys import DEFAULT_ENDPOINT_SERVE_TIMEOUT_SECONDS
-from execution.endpoints.serve import EndpointServeRequest, plan_endpoint_serve
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
@@ -157,18 +153,8 @@ class EndpointControlService:
             raise InvalidInputError(f"stub is not an endpoint: {stub.id}")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
-        timeout_seconds = request.timeout or DEFAULT_ENDPOINT_SERVE_TIMEOUT_SECONDS
-        plan = plan_endpoint_serve(
-            EndpointServeRequest(
-                stub_id=stub.id,
-                workspace_name=workspace.name,
-                workspace_id=workspace.id,
-                timeout_seconds=timeout_seconds,
-                python_executable=config.image.python_executable,
-            )
-        )
-        if not plan.authorized:
-            raise InvalidInputError("Unauthorized")
+        created_at = utc_now()
+        entrypoint = [config.image.python_executable, "-m", "runner.serve"]
         image_id = config.effective_image_id or ENDPOINT_IMAGE
         startup_kind = (
             WorkerStartupKind.Asgi if stub.kind is StubKind.Asgi else WorkerStartupKind.Endpoint
@@ -180,8 +166,6 @@ class EndpointControlService:
             STUB_ID_ENV: stub.id,
             STUB_TYPE_ENV: stub.kind.value,
             "HANDLER": stub.handler or "",
-            ENDPOINT_SERVE_LOCK_ENV: plan.serve_lock_key,
-            ENDPOINT_INSTANCE_LOCK_ENV: plan.instance_lock_key,
             ENDPOINT_WORKERS_ENV: str(config.workers),
             LIFECYCLE_HOOKS_ENV: config.lifecycle_hooks.model_dump_json(),
             HOT_RELOAD_ENV: "true",
@@ -193,7 +177,7 @@ class EndpointControlService:
                 PendingContainerReservation(
                     name=f"endpoint-{stub.name}",
                     image=image_id,
-                    command=list(plan.entrypoint),
+                    command=entrypoint,
                     workspace_id=stub.workspace_id,
                     stub_id=stub.id,
                     app_id=stub.app_id,
@@ -202,6 +186,13 @@ class EndpointControlService:
                     gpu_count=config.runtime.gpu_count,
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
+                    timeout_seconds=request.timeout,
+                    expires_at=(
+                        created_at + timedelta(seconds=request.timeout)
+                        if request.timeout > 0
+                        else None
+                    ),
+                    created_at=created_at,
                 ),
             )
         self.services.containers.publish_lifecycle_change(
@@ -233,7 +224,7 @@ class EndpointControlService:
                 workspace_name=workspace.name,
                 stub_type=stub.kind.value,
                 startup_kind=startup_kind,
-                entrypoint=plan.entrypoint,
+                entrypoint=entrypoint,
                 cwd=WORKER_USER_CODE_VOLUME,
                 env_list=[f"{key}={value}" for key, value in env.items()],
                 image_id=image_id,
@@ -299,9 +290,7 @@ class EndpointControlService:
             message=f"started endpoint serve container for {stub.name}",
             data={
                 "stub_id": stub.id,
-                "serve_lock_key": plan.serve_lock_key,
-                "instance_lock_key": plan.instance_lock_key,
-                "timeout_seconds": plan.wait_timeout_seconds,
+                "timeout_seconds": request.timeout,
             },
             workspace_id=stub.workspace_id,
         )

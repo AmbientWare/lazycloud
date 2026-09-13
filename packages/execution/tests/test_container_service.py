@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -707,3 +707,37 @@ def test_pending_only_stop_preserves_a_concurrent_durable_start(
     with isolated_services.context.database.session() as session:
         durable = ContainerRepository(session).get_across_workspaces(pending.id)
     assert durable is not None and durable.status is ContainerStatus.Running
+
+
+def test_expiry_preserves_a_concurrently_extended_lifetime(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cutoff = datetime.now(UTC)
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        expired = ContainerRecord(
+            id=str(uuid4()),
+            name="extended-lifetime",
+            workspace_id=workspace_id,
+            image="",
+            command=[],
+            status=ContainerStatus.Running,
+            expires_at=cutoff,
+        )
+        extended = expired.model_copy(update={"expires_at": cutoff + timedelta(seconds=60)})
+        ContainerRepository(session).upsert(extended)
+
+    def stale_read(service: ContainerService, container_id: str) -> ContainerRecord:
+        return expired
+
+    monkeypatch.setattr(ContainerService, "get", stale_read)
+    result = isolated_services.containers.stop(
+        expired.id, reason=StopContainerReason.Ttl, only_if_expired_at=cutoff
+    )
+    assert result.status is ContainerStatus.Running
+    assert result.expires_at == extended.expires_at
+    with isolated_services.context.database.session() as session:
+        durable = ContainerRepository(session).get(expired.id, workspace_id=workspace_id)
+    assert durable is not None and durable.status is ContainerStatus.Running
+    assert durable.expires_at == extended.expires_at

@@ -129,8 +129,11 @@ def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
         container = services.containers.get(created.container_id)
         assert container.timeout_seconds == 30
         assert container.expires_at is not None
-        assert service.expire_pods(now=container.expires_at - timedelta(seconds=1)) == []
-        expired = service.expire_pods(now=container.expires_at)
+        assert (
+            services.containers.expire_containers(now=container.expires_at - timedelta(seconds=1))
+            == []
+        )
+        expired = services.containers.expire_containers(now=container.expires_at)
         assert [item.id for item in expired] == [container.id]
         assert services.containers.get(container.id).status is ContainerStatus.Stopped
 

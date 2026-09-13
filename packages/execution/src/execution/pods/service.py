@@ -467,44 +467,6 @@ class PodControlService:
             raise ConflictError("checkpoint does not identify its source sandbox stub")
         return checkpoint
 
-    def expire_pods(self, *, now: datetime | None = None) -> list[ContainerRecord]:
-        current_time = now or utc_now()
-        with self.services.context.database.session() as session:
-            expired = ContainerRepository(session).expired_containers_across_workspaces(
-                now=current_time,
-                stub_types=(StubKind.Pod.value,),
-            )
-        stopped: list[ContainerRecord] = []
-        for container in expired:
-            if not container.stub_id:
-                continue
-            stub = self.control_plane.get_stub(container.stub_id)
-            # Named, because the default is `User` and settles the invocations this
-            # container held as cancellations: the caller is told they stopped work
-            # they did not stop, and charged the attempt. A TTL is the platform's
-            # own deadline, so the work is released and runs somewhere else.
-            record = self.services.containers.stop(container.id, reason=StopContainerReason.Ttl)
-            self._delete_keep_warm_lock(
-                pod_keep_warm_lock_key(container.workspace_id, stub.id, container.id)
-            )
-            stopped.append(record)
-            self.services.events.emit(
-                "pod.expired",
-                level=EventLevel.Info,
-                resource_type="container",
-                resource_id=record.id,
-                message=f"expired pod container {record.name}",
-                data={
-                    "stub_id": record.stub_id or "",
-                    "timeout_seconds": record.timeout_seconds,
-                    "expires_at": (
-                        record.expires_at.isoformat() if record.expires_at is not None else None
-                    ),
-                },
-                workspace_id=record.workspace_id,
-            )
-        return stopped
-
     def sandbox_exec(
         self, container_id: str, request: PodSandboxExecRequest
     ) -> PodSandboxExecResponse:
@@ -771,19 +733,28 @@ class PodControlService:
         request: PodSandboxUpdateTTLRequest,
     ) -> PodSandboxUpdateTTLResponse:
         container, _stub = self._sandbox_container(container_id)
-        container.timeout_seconds = request.ttl
-        container.expires_at = (
-            utc_now() + timedelta(seconds=request.ttl) if request.ttl > 0 else None
-        )
         with self.services.context.database.session() as session:
-            ContainerRepository(session).upsert(container)
+            repository = ContainerRepository(session)
+            current = repository.lock(container.id, workspace_id=container.workspace_id)
+            if current is None or current.status not in {
+                ContainerStatus.Pending,
+                ContainerStatus.Running,
+            }:
+                raise ConflictError("sandbox is no longer active")
+            current.timeout_seconds = request.ttl
+            current.expires_at = (
+                utc_now() + timedelta(seconds=request.ttl) if request.ttl > 0 else None
+            )
+            container = repository.upsert(current)
+            self._set_keep_warm_lock(
+                pod_keep_warm_lock_key(
+                    container.workspace_id, container.stub_id or "", container.id
+                ),
+                ttl_seconds=request.ttl if request.ttl > 0 else None,
+            )
         self.services.containers.publish_lifecycle_change(
             container,
             WorkspaceChangeType.Updated,
-        )
-        self._set_keep_warm_lock(
-            pod_keep_warm_lock_key(container.workspace_id, container.stub_id or "", container.id),
-            ttl_seconds=request.ttl if request.ttl > 0 else None,
         )
         return PodSandboxUpdateTTLResponse(
             ttl=container.timeout_seconds,

@@ -52,7 +52,6 @@ from scheduler.autoscaling import (
     AutoscaleResult,
     AutoscalingDriver,
     AutoscalingPlacementSnapshot,
-    PodControl,
     load_autoscaling_placement_snapshot,
 )
 from scheduler.capacity_reservations import (
@@ -81,7 +80,7 @@ WORKER_POOL_DRAIN_SOURCE = "worker_pool.drain"
 CRON_JOB_LOCK_TTL_SECONDS = 10
 # Short enough that a scheduler dying mid-sweep does not hold expiry shut for
 # long, and long enough that one sweep finishes inside it.
-POD_EXPIRY_LOCK_TTL_SECONDS = 30
+CONTAINER_EXPIRY_LOCK_TTL_SECONDS = 30
 BILLING_ENFORCEMENT_LOCK_TTL_SECONDS = 30
 """Long enough for one bounded pass, short enough that a scheduler killed
 mid-sweep does not leave unfunded compute running for a minute."""
@@ -427,7 +426,6 @@ class SchedulerWorkloadControls:
     function_autoscaler: AutoscalingDriver | None = None
     endpoints: AutoscalingDriver | None = None
     pods: AutoscalingDriver | None = None
-    pod_control: PodControl | None = None
     functions: ScheduledFunctionControl | None = None
     preemption_recovery: SchedulerPreemptionRecovery | None = None
     autoscaling_targets: SchedulerAutoscalingTargetService | None = None
@@ -850,7 +848,7 @@ class Scheduler:
                 limit=container_limit
             ),
             capacity_interruptions=self._best_effort_reconcile_capacity_interruptions(now=now),
-            expired_pods=self._best_effort_expire_pods(now=now),
+            expired_containers=self._best_effort_expire_containers(now=now),
             worker_cleanups=self._best_effort_cleanup_workers(now=now),
             settled_preemptions=self._best_effort_recover_unsettled_preemptions(
                 limit=container_limit
@@ -1464,34 +1462,27 @@ class Scheduler:
             LOGGER.exception("scheduler agent pool reconciliation failed")
             return []
 
-    def _best_effort_expire_pods(
+    def _best_effort_expire_containers(
         self,
         *,
         now: datetime | None,
     ) -> list[ContainerRecord]:
-        pod_control = self.workloads.pod_control
-        if pod_control is None:
-            return []
         cron_job_locks = self.states.cron_job_locks
         if cron_job_locks is None:
             return []
-        # Expiring a pod stops its container, cancels its task and announces both.
-        # Nothing downstream of that is idempotent, and the decision is taken from
-        # a read rather than a locked row, so two schedulers sweeping together
-        # each act on the same expired pod.
-        lock_key = cron_job_locks.key("scheduler", "leases", "pod-expiry")
+        lock_key = cron_job_locks.key("scheduler", "leases", "container-expiry")
         token = uuid4().hex
         if not try_acquire_token_lock(
             cron_job_locks,
             lock_key,
             token,
-            ttl_seconds=POD_EXPIRY_LOCK_TTL_SECONDS,
+            ttl_seconds=CONTAINER_EXPIRY_LOCK_TTL_SECONDS,
         ):
             return []
         try:
-            return pod_control.expire_pods(now=now)
+            return self.runtime_services.containers.expire_containers(now=now)
         except Exception:
-            LOGGER.exception("scheduler pod expiry failed")
+            LOGGER.exception("scheduler container expiry failed")
             return []
         finally:
             release_token_lock(cron_job_locks, lock_key, token)
@@ -1783,7 +1774,7 @@ class SchedulerRunResult(ContractModel):
     function_autoscaling: list[AutoscaleResult] = Field(default_factory=list)
     endpoint_autoscaling: list[AutoscaleResult] = Field(default_factory=list)
     pod_autoscaling: list[AutoscaleResult] = Field(default_factory=list)
-    expired_pods: list[ContainerRecord] = Field(default_factory=list)
+    expired_containers: list[ContainerRecord] = Field(default_factory=list)
     pool_states: dict[str, WorkerPoolStateSnapshot] = Field(default_factory=dict)
     capacity_reservations: list[CapacityProvisioningReservation] = Field(default_factory=list)
     capacity_interruptions: list[WorkerPreemptionResult] = Field(default_factory=list)
