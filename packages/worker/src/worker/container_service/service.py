@@ -124,6 +124,15 @@ class WorkerContainerService:
     network_policy: WorkerSandboxNetworkPolicyUpdater | None = None
     ports: WorkerSandboxPortPublisher = field(default_factory=BridgeSandboxPortPublisher)
 
+    def prepare_workload(self, container_id: str) -> None:
+        manager = self._ready_process_manager(self._required_instance(container_id))
+        if isinstance(manager, str):
+            raise RuntimeError(manager)
+        try:
+            manager.start_workload()
+        finally:
+            manager.cleanup()
+
     def container_status(self, request: ContainerStatusRequest) -> ContainerStatusResponse:
         instance = self._instance(request.container_id)
         if instance is None:

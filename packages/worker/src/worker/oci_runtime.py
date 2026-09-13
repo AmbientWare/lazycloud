@@ -416,13 +416,10 @@ class OciRuntimeSpecBuilder:
         process = spec.get("process")
         if not isinstance(process, dict):
             raise RuntimeError("sandbox OCI process configuration is missing")
-        if context.request.stub_type == "sandbox":
-            process["args"] = [self.sandbox_supervisor_path]
-        else:
-            command = process.get("args")
-            if not isinstance(command, list) or not command:
-                raise RuntimeError("Docker-enabled workload command is missing")
-            process["args"] = [self.sandbox_supervisor_path, "--", *command]
+        command = process.get("args")
+        if not isinstance(command, list) or not command:
+            raise RuntimeError("supervised workload command is missing")
+        process["args"] = [self.sandbox_supervisor_path, "--", *command]
         token_path = (
             bundle_path / SANDBOX_SUPERVISOR_CONTROL_DIR_NAME / SANDBOX_SUPERVISOR_TOKEN_FILE_NAME
         )

@@ -242,8 +242,8 @@ class ContainerInstanceRecorder(Protocol):
     ) -> None: ...
 
 
-class ContainerSandboxDockerPreparer(Protocol):
-    def prepare(self, container_id: str) -> None: ...
+class ContainerWorkloadPreparer(Protocol):
+    def prepare_workload(self, container_id: str) -> None: ...
 
 
 class ContainerExitEventPublisher(Protocol):
@@ -430,7 +430,7 @@ class WorkerContainerExecutionService:
     workspace_storage_mounter: ContainerWorkspaceStorageMounter | None = None
     gpu_assigner: ContainerGpuAssigner | None = None
     instance_recorder: ContainerInstanceRecorder | None = None
-    sandbox_docker_preparer: ContainerSandboxDockerPreparer | None = None
+    workload_preparer: ContainerWorkloadPreparer | None = None
     credential_hydrator: ContainerCredentialHydrator | None = None
     oom_supervisor: WorkerSupervisionService | None = None
     exit_events: ContainerExitEventPublisher | None = None
@@ -613,9 +613,9 @@ class WorkerContainerExecutionService:
             self._apply_deferred_cgroup_parameters(context)
             if not self._phase(
                 result,
-                ContainerExecutionPhase.PrepareSandboxDocker,
-                lambda: self._prepare_sandbox_docker(context),
-                skip=not context.docker_enabled,
+                ContainerExecutionPhase.PrepareWorkload,
+                lambda: self._prepare_workload(context),
+                skip=context.request.stub_type != "sandbox" and not context.docker_enabled,
                 request=context.request,
             ):
                 msg = result.phases[-1].error_message
@@ -985,11 +985,11 @@ class WorkerContainerExecutionService:
             container_hostname=self._container_hostname(context, result),
         )
 
-    def _prepare_sandbox_docker(self, context: ContainerExecutionContext) -> None:
-        if self.sandbox_docker_preparer is None:
-            msg = "Docker-enabled sandbox lifecycle is not configured"
+    def _prepare_workload(self, context: ContainerExecutionContext) -> None:
+        if self.workload_preparer is None:
+            msg = "supervised workload startup is not configured"
             raise RuntimeError(msg)
-        self.sandbox_docker_preparer.prepare(context.request.container_id)
+        self.workload_preparer.prepare_workload(context.request.container_id)
 
     def _update_running_status(self, context: ContainerExecutionContext) -> None:
         if self.status_repository is None:
