@@ -57,7 +57,7 @@ def shell_server_exec_command(
     return shlex.join(
         (
             "/bin/sh",
-            "-lc",
+            "-c",
             shell_server_command(
                 port,
                 log_path=log_path,
@@ -72,7 +72,7 @@ def shell_server_probe_command(port: int, *, timeout_seconds: float) -> str:
     command = (
         f"{shlex.quote(CONTAINER_HELPER_PATH)} shell --probe --port {port} --timeout {timeout:g}s"
     )
-    return shlex.join(("/bin/sh", "-lc", command))
+    return shlex.join(("/bin/sh", "-c", command))
 
 
 class ShellContainerEnvVar(StrEnum):
