@@ -198,11 +198,30 @@ class TaskService:
     def append_logs(self, task_id: str, stream: str, messages: list[str]) -> None:
         task = self.get(task_id)
         with self.context.database.session() as session:
+            container = (
+                ContainerRepository(session).get_across_workspaces(task.container_id)
+                if task.container_id
+                else None
+            )
             records = LogRepository(session).records
             entries = [
                 records.create_across_workspaces(
                     {
                         "task_id": required_uuid(task_id, field="task_id"),
+                        "container_id": task.container_id,
+                        "app_id": task.app_id,
+                        "stub_id": task.stub_id,
+                        "deployment_id": task.deployment_id,
+                        "machine_id": (
+                            container.runtime_machine_id or container.machine_id
+                            if container is not None
+                            else None
+                        ),
+                        "worker_id": (
+                            container.runtime_worker_id or container.worker_id
+                            if container is not None
+                            else None
+                        ),
                         "stream": stream,
                         "message": message.rstrip("\n"),
                     },
@@ -220,6 +239,8 @@ class TaskService:
                     "app_id": task.app_id or "",
                     "deployment_id": task.deployment_id or "",
                     "container_id": task.container_id or "",
+                    "machine_id": entry.machine_id or "",
+                    "worker_id": entry.worker_id or "",
                     "stream": entry.stream,
                     "message": entry.message,
                     "timestamp": entry.created_at.isoformat(),
@@ -561,6 +582,7 @@ class TaskService:
         error: str | None = None,
         exit_code: int | None = None,
         retry_allowed: bool = True,
+        attempt_number: int | None = None,
     ) -> TaskFinishOutcome:
         with self.context.database.session() as session:
             outcome = self._finish_with_retry_in_session(
@@ -573,6 +595,7 @@ class TaskService:
                 error=error,
                 exit_code=exit_code,
                 retry_allowed=retry_allowed,
+                attempt_number=attempt_number,
             )
         if not outcome.state_changed:
             return outcome
@@ -681,6 +704,7 @@ class TaskService:
         error: str | None,
         exit_code: int | None,
         retry_allowed: bool,
+        attempt_number: int | None = None,
     ) -> TaskFinishOutcome:
         task_repository = TaskRepository(session)
         current = task_repository.get_for_update_across_workspaces(task_id)
@@ -697,6 +721,8 @@ class TaskService:
                 current,
                 "completion does not own the active task container",
             )
+        if attempt_number is not None and current.attempt_number != attempt_number:
+            return _unchanged_finish_outcome(current, "completion does not own the active attempt")
         policy = current.retry_policy or RetryPolicy(max_attempts=current.max_attempts)
         decision = (
             plan_retry(
@@ -732,7 +758,7 @@ class TaskService:
         attempts = TaskAttemptRepository(session)
         latest = attempts.latest_for_task(updated.id)
         if latest is not None:
-            latest.status = next_status
+            latest.status = status
             if attempt_container_id:
                 latest.container_id = attempt_container_id
             latest.finished_at = now
@@ -913,7 +939,10 @@ class TaskService:
         return repository.page(query, workspace_id=workspace_id, limit=limit)
 
     def publish_lifecycle_change(self, task: Task, change: WorkspaceChangeType) -> None:
-        if self.workspace_changes is None or not task.workspace_id:
+        if not task.workspace_id:
+            return
+        self._publish_lifecycle_event(task, change)
+        if self.workspace_changes is None:
             return
         self.workspace_changes.emit_change(
             workspace_id=task.workspace_id,
@@ -933,7 +962,10 @@ class TaskService:
         task: Task,
         change: WorkspaceChangeType,
     ) -> None:
-        if self.async_workspace_changes is None or not task.workspace_id:
+        if not task.workspace_id:
+            return
+        await asyncio.to_thread(self._publish_lifecycle_event, task, change)
+        if self.async_workspace_changes is None:
             return
         await self.async_workspace_changes.emit_change(
             workspace_id=task.workspace_id,
@@ -946,6 +978,30 @@ class TaskService:
             task_id=task.id,
             root_task_id=task.root_task_id,
             container_id=task.container_id,
+        )
+
+    def _publish_lifecycle_event(self, task: Task, change: WorkspaceChangeType) -> None:
+        self.log_streams.append_event(
+            EventRecordType.TaskCreated
+            if change is WorkspaceChangeType.Created
+            else EventRecordType.TaskUpdated,
+            {
+                "task_id": task.id,
+                "workspace_id": task.workspace_id,
+                "app_id": task.app_id,
+                "stub_id": task.stub_id,
+                "deployment_id": task.deployment_id,
+                "container_id": task.container_id,
+                "root_task_id": task.root_task_id,
+                "parent_task_id": task.parent_task_id,
+                "status": task.status.value,
+                "attempt_number": task.attempt_number,
+                "max_attempts": task.max_attempts,
+                "error": task.error,
+                "exit_code": task.exit_code,
+                "created_at": task.created_at,
+                "updated_at": utc_now(),
+            },
         )
 
     async def publish_created_async(self, task: Task) -> None:

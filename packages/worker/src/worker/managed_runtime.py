@@ -95,11 +95,11 @@ def managed_runtime_python_version(command: Sequence[str]) -> str:
     if not command:
         raise RuntimeError("managed workload entrypoint has no target Python interpreter")
     executable = Path(command[0]).name
-    match = re.fullmatch(r"(?:python|micromamba)(3\.\d+)", executable)
+    match = re.fullmatch(r"python(3\.\d+)", executable)
     if match is None:
         raise RuntimeError(
             "managed workload entrypoint must use an explicit target interpreter such as "
-            "python3.10 through python3.14, or the matching micromamba executable"
+            "python3.10 through python3.14"
         )
     return match.group(1)
 

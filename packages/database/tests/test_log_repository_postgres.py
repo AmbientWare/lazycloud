@@ -12,16 +12,18 @@ from database.repositories.identity import (
     WorkspaceMemberRepository,
     WorkspaceRepository,
 )
+from database.repositories.orchestration import ContainerRepository
 from database.tables.execution import LogTable
 from observability.log_retention import LogRetentionService
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
 from shared.billing_rate_card import published_plan
+from shared.containers import ContainerRecord
 from shared.logs import LogEntry
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import Task
 from shared.timestamps import utc_now
-from sqlalchemy import select, update
+from sqlalchemy import insert, select, update
 from sqlalchemy.engine import URL
 
 from database import (
@@ -29,6 +31,66 @@ from database import (
     DatabaseClient,
     DatabaseSettings,
 )
+
+
+def test_task_log_attribution_survives_reassignment_and_replayed_writes(
+    database: DatabaseClient,
+) -> None:
+    with database.session() as session:
+        workspace = WorkspaceRepository(session).create(name="log-attribution")
+        container = ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="log-source",
+                image="image",
+                command=["python"],
+                workspace_id=workspace.id,
+                runtime_machine_id="source-machine",
+                runtime_worker_id="source-worker",
+            )
+        )
+        task = TaskRepository(session).upsert(
+            Task(
+                id=str(uuid4()),
+                name="log-task",
+                workspace_id=workspace.id,
+                container_id=container.id,
+            ),
+            workspace_id=workspace.id,
+        )
+        entry = LogEntry(id=str(uuid4()), task_id=task.id, message="retained output")
+        payload = entry.model_dump(mode="json", exclude_none=True)
+        session.execute(
+            insert(LogTable).values(
+                id=entry.id,
+                workspace_id=workspace.id,
+                task_id=task.id,
+                stream=entry.stream,
+                message=entry.message,
+                created_at=entry.created_at,
+                payload=payload,
+            )
+        )
+        task.container_id = None
+        TaskRepository(session).upsert(task, workspace_id=workspace.id)
+        session.execute(
+            update(LogTable)
+            .where(LogTable.id == entry.id)
+            .values(container_id=None, machine_id=None, worker_id=None, payload=payload)
+        )
+
+    with database.session() as session:
+        page = LogRepository(session).page(
+            LogStreamQuery(workspace_id=workspace.id, container_id=container.id),
+            workspace_id=workspace.id,
+            limit=10,
+        )
+        assert len(page.data) == 1
+        retained = page.data[0]
+        assert retained.entry.message == entry.message
+        assert retained.container_id == retained.entry.container_id == container.id
+        assert retained.machine_id == retained.entry.machine_id == "source-machine"
+        assert retained.worker_id == retained.entry.worker_id == "source-worker"
 
 
 def test_log_pages_are_workspace_scoped_and_resume_by_row_identity(

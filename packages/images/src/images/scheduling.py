@@ -32,6 +32,7 @@ class ImageBuildSchedulerCredentialSource(StrEnum):
 class ImageBuildContainerBuildOptions(ContractModel):
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
     source_image: str = ""
+    filesystem_source_container_id: str = ""
     dockerfile: str = ""
     build_context_object: str = ""
     build_context_path: str = ""
@@ -71,6 +72,11 @@ def plan_image_build_container_request(
     build_options = ImageBuildContainerBuildOptions(
         architecture=request.plan.spec.architecture,
         source_image=request.plan.spec.base,
+        filesystem_source_container_id=(
+            request.plan.spec.filesystem_source.container_id
+            if request.plan.spec.filesystem_source is not None
+            else ""
+        ),
         dockerfile=request.plan.dockerfile,
         build_context_object=request.plan.spec.context_object_id or "",
         build_context_path=(
@@ -110,6 +116,11 @@ def plan_image_build_container_request(
         workspace_id=workspace_id,
         stub_id=stub_id or IMAGE_BUILD_REQUEST_KIND,
         container_id=request.session.container_id,
+        required_worker_id=(
+            request.plan.spec.filesystem_source.worker_id
+            if request.plan.spec.filesystem_source is not None
+            else ""
+        ),
         cpu_millicores=cpu_millicores,
         memory_mib=memory_mib,
         preemptible=True,

@@ -19,6 +19,7 @@ from shared.identity import (
 )
 from starlette.requests import HTTPConnection
 
+from api.server.host_routing import invoke_host_workspace_id
 from api.server.services import ApiServices
 
 _bearer = HTTPBearer(auto_error=False)
@@ -109,6 +110,7 @@ def require_workspace_scope(
 ) -> WorkspaceScopeDependency:
     async def dependency(
         services: Annotated[ApiServices, Depends(current_services)],
+        connection: HTTPConnection,
         credentials: AuthorizationCredentials = None,
         workspace: str | None = None,
     ) -> str:
@@ -117,7 +119,10 @@ def require_workspace_scope(
         return await authorize_token_workspace_async(
             services,
             token,
-            workspace or token.workspace_id or await _unnamed_workspace(services, token),
+            invoke_host_workspace_id(connection.scope)
+            or workspace
+            or token.workspace_id
+            or await _unnamed_workspace(services, token),
             scope,
             platform_role=principal.platform_role,
             strict=strict,
@@ -294,10 +299,8 @@ async def websocket_workspace(
 ) -> str:
     """The workspace an already-authorized socket acts in.
 
-    A socket carries no dependency-injected workspace, so it reads the one the query
-    string names and puts it through the same check an HTTP request gets. Reading it
-    off the credential instead would answer nothing for an account credential, which
-    names a person rather than a workspace.
+    A resolved workload hostname names its workspace. Otherwise the query or
+    credential selects it, with the same account default as an HTTP request.
     """
     named = websocket.query_params.get("workspace", "")
     token = principal.token
@@ -305,7 +308,10 @@ async def websocket_workspace(
         return await authorize_token_workspace_async(
             services,
             token,
-            named or token.workspace_id or DEFAULT_WORKSPACE_NAME,
+            invoke_host_workspace_id(websocket.scope)
+            or named
+            or token.workspace_id
+            or await _unnamed_workspace(services, token),
             scope,
             platform_role=principal.platform_role,
         )

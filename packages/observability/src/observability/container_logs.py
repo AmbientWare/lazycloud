@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID, uuid5
 
 from database.repositories.apps import AppRepository, StubRepository
-from database.repositories.execution import TaskRepository
+from database.repositories.execution import LogRepository, TaskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -18,6 +18,7 @@ from database.repositories.orchestration import (
 from database.types import DatabaseSession
 from shared.containers import ContainerRecord
 from shared.errors import ConflictError, NotFoundError
+from shared.logs import ContainerLogEntryKind, LogEntry
 from shared.realtime.contracts import EventRecordType, create_cloud_event_record
 
 from observability.context import ObservabilityContext
@@ -184,6 +185,30 @@ class ContainerLogIngestionService:
             raise ConflictError(
                 f"container log sequence gap: expected sequence {result.accepted_through + 1}"
             )
+        # A retried batch must repair a failed SQL write even if Redis already accepted it.
+        with self.context.database.session() as session:
+            LogRepository(session).append_batch(
+                tuple(
+                    LogEntry.model_validate(
+                        {
+                            "id": event.id,
+                            "task_id": ownership.task_id or None,
+                            "container_id": container.id,
+                            "app_id": container.app_id,
+                            "stub_id": container.stub_id,
+                            "deployment_id": ownership.deployment_id or None,
+                            "machine_id": attribution.machine_id or None,
+                            "worker_id": attribution.worker_id,
+                            "stream": entry.stream,
+                            "message": entry.message,
+                            "created_at": entry.timestamp,
+                        }
+                    )
+                    for entry, event in zip(entries, events, strict=True)
+                    if entry.kind != ContainerLogEntryKind.Flush
+                ),
+                workspace_id=container.workspace_id,
+            )
         return ContainerLogIngestionResult(
             accepted_through=result.accepted_through,
             appended_count=result.appended_count,
@@ -321,5 +346,4 @@ class ContainerLogIngestionService:
 
 
 def _container_log_event_id(container_id: str, capture_id: str, sequence: int) -> str:
-    digest = hashlib.sha256(f"{container_id}\0{capture_id}\0{sequence}".encode()).hexdigest()
-    return f"container-log-{digest}"
+    return str(uuid5(UUID(container_id), f"{capture_id}\0{sequence}"))

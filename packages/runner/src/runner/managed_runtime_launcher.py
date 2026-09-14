@@ -16,7 +16,6 @@ from typing import NoReturn, TypeAlias, TypeGuard
 CATALOG_DIGEST_ENV = "LAZYCLOUD_MANAGED_RUNTIME_CATALOG_DIGEST"
 ARTIFACT_DIGEST_ENV = "LAZYCLOUD_MANAGED_RUNTIME_DIGEST"
 CATALOG_FILE = "catalog.json"
-SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
 JsonScalar: TypeAlias = bool | int | float | str | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -42,13 +41,6 @@ def main() -> None:
         _fail("catalog content digest verification failed")
 
     python_version = f"{sys.version_info[0]}.{sys.version_info[1]}"
-    if python_version not in SUPPORTED_PYTHON_VERSIONS:
-        _fail(
-            "Python {} is unsupported; supported managed runtimes are {}".format(
-                python_version,
-                ", ".join(SUPPORTED_PYTHON_VERSIONS),
-            )
-        )
     architecture = _linux_architecture(platform.machine())
     artifacts = _object(catalog.get("artifacts"), "catalog artifacts")
     version_artifacts = _object(

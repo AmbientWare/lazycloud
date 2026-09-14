@@ -11,7 +11,7 @@ from pydantic import Field
 from shared.contracts import ContractModel
 
 DEFAULT_POD_PROXY_TIMEOUT_SECONDS = 175.0
-PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS = 1.0
+PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS = 1.0
 
 
 class PodProxyUnavailable(RuntimeError):

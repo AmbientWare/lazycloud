@@ -721,12 +721,27 @@ class ContainerService:
             with self.context.database.session() as session:
                 TaskClaimReleaseService(session).release(task_id, container_id=record.id)
 
+    def expire_containers(self, *, now: datetime | None = None) -> list[ContainerRecord]:
+        cutoff = now or utc_now()
+        with self.context.database.session() as session:
+            expired = ContainerRepository(session).expired_containers_across_workspaces(now=cutoff)
+        stopped: list[ContainerRecord] = []
+        for container in expired:
+            record = self.stop(
+                container.id, reason=StopContainerReason.Ttl, only_if_expired_at=cutoff
+            )
+            if record.termination_reason is StopContainerReason.Ttl:
+                stopped.append(record)
+        return stopped
+
     def stop(
         self,
         container_id: str,
         *,
         reason: StopContainerReason | None = None,
         only_if_pending: bool = False,
+        force: bool = False,
+        only_if_expired_at: datetime | None = None,
     ) -> ContainerRecord:
         """Stop a container, recording why if the caller said.
 
@@ -755,6 +770,10 @@ class ContainerService:
                 raise NotFoundError(f"container not found: {container_id}")
             if only_if_pending and current.status is not ContainerStatus.Pending:
                 return current
+            if only_if_expired_at is not None and (
+                current.expires_at is None or current.expires_at > only_if_expired_at
+            ):
+                return current
             if current.status in TERMINAL_CONTAINER_STATUSES:
                 # The worker's report landed while this was deciding, and it
                 # says what actually happened: a full-payload write from the
@@ -778,6 +797,7 @@ class ContainerService:
                         current.id,
                         worker_id=stop_worker_id,
                         reason=settlement_reason,
+                        force=force,
                     )
                 current.status = ContainerStatus.Stopped
                 current.finished_at = utc_now()
@@ -924,12 +944,13 @@ class ContainerService:
         *,
         worker_id: str,
         reason: StopContainerReason,
+        force: bool = False,
     ) -> None:
         event = EventBusEvent(
             type=EventBusEventType.StopContainer,
             args={
                 "container_id": container_id,
-                "force": False,
+                "force": force,
                 "reason": reason.value,
                 "worker_id": worker_id,
             },

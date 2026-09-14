@@ -265,6 +265,7 @@ class SpecBuilder:
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
+        image_result: ContainerImageLoadResult | None = None,
     ) -> OciRuntimeContainerSpec:
         self.log.calls.append(f"spec:{context.request.container_id}")
         self.rootfs_result = rootfs_result
@@ -326,12 +327,12 @@ class RuntimeExecutor:
 
 
 @dataclass(slots=True)
-class SandboxDockerPreparer:
+class WorkloadPreparer:
     log: CallLog
     fail: bool = False
 
-    def prepare(self, container_id: str) -> None:
-        self.log.calls.append(f"sandbox-docker:{container_id}")
+    def prepare_workload(self, container_id: str) -> None:
+        self.log.calls.append(f"workload:{container_id}")
         if self.fail:
             raise RuntimeError("Docker daemon failed to start")
 
@@ -590,7 +591,7 @@ def test_worker_container_execution_fails_before_running_when_docker_startup_fai
     service = _service(
         log,
         repo=repo,
-        sandbox_docker_preparer=SandboxDockerPreparer(log, fail=True),
+        workload_preparer=WorkloadPreparer(log, fail=True),
     )
 
     result = service.execute(
@@ -602,7 +603,7 @@ def test_worker_container_execution_fails_before_running_when_docker_startup_fai
     )
 
     assert not result.ok
-    assert result.failed_phase is ContainerExecutionPhase.PrepareSandboxDocker
+    assert result.failed_phase is ContainerExecutionPhase.PrepareWorkload
     assert all(
         status is not SchedulerContainerStatus.Running for _, status, _ in repo.status_updates
     )
@@ -971,7 +972,7 @@ def _service(
     image_loader: ImageLoader | None = None,
     credential_hydrator: CredentialHydrator | None = None,
     workspace_storage_mounter: WorkspaceStorageMounter | None = None,
-    sandbox_docker_preparer: SandboxDockerPreparer | None = None,
+    workload_preparer: WorkloadPreparer | None = None,
     checkpoint_restorer: FallbackCheckpointRestorer | None = None,
     automatic_checkpoints: AutomaticCheckpointCoordinator | None = None,
 ) -> WorkerContainerExecutionService:
@@ -995,7 +996,7 @@ def _service(
         network_preparer=network_preparer,
         workspace_storage_mounter=workspace_storage_mounter,
         gpu_assigner=gpu_assigner,
-        sandbox_docker_preparer=sandbox_docker_preparer,
+        workload_preparer=workload_preparer,
         credential_hydrator=credential_hydrator,
         oom_supervisor=oom_supervisor,
         exit_events=exit_events,

@@ -157,6 +157,7 @@ class LogTable(IdPayloadTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_logs_created", "created_at", "id"),
         Index("ix_logs_task_created", "task_id", "created_at", "id"),
+        Index("ix_logs_container_created", "container_id", "created_at", "id"),
         Index("ix_logs_workspace_created", "workspace_id", "created_at", "id"),
     )
 
@@ -165,11 +166,18 @@ class LogTable(IdPayloadTable, DatabaseBase):
         ForeignKey("workspaces.id", ondelete="SET NULL"),
         nullable=True,
     )
-    task_id: Mapped[str] = mapped_column(
+    task_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("tasks.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
+    # Attribution survives resource deletion and reassignment until log retention expires.
+    container_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    app_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    deployment_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    stub_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    machine_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     stream: Mapped[str] = mapped_column(String(40), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
 

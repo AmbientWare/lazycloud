@@ -257,9 +257,10 @@ def test_public_cli_generated_client_returns_typed_endpoint_result(
         endpoint: str,
         *,
         token: str | None,
+        workspace: str | None,
         timeout_seconds: float,
     ) -> _FakeClientManifestGateway:
-        _ = endpoint, token, timeout_seconds
+        _ = endpoint, token, workspace, timeout_seconds
         return gateway
 
     monkeypatch.setattr(

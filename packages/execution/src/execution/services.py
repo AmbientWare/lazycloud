@@ -79,6 +79,7 @@ class ExecutionContainerService(Protocol):
         container_id: str,
         *,
         reason: StopContainerReason = StopContainerReason.User,
+        force: bool = False,
     ) -> ContainerRecord: ...
 
     def delete(self, container_id: str) -> None: ...

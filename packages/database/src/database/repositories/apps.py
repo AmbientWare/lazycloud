@@ -841,6 +841,18 @@ class StubRepository:
 class DeploymentRepository:
     session: Session
 
+    def get_for_update(self, deployment_id: str, *, workspace_id: str) -> Deployment | None:
+        row = self.session.scalars(
+            select(DeploymentTable)
+            .where(
+                DeploymentTable.id == deployment_id,
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .with_for_update()
+        ).first()
+        return Deployment.model_validate(row.payload) if row is not None else None
+
     @property
     def records(self) -> WorkspaceTableRepository[Deployment]:
         return WorkspaceTableRepository(

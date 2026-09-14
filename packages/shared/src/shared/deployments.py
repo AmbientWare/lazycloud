@@ -1,5 +1,7 @@
 from shared.enums import StringEnum
 
+DEFAULT_ENDPOINT_METHODS = ("GET", "POST")
+
 
 class DeploymentKind(StringEnum):
     Function = "function"
@@ -20,4 +22,4 @@ class StubKind(StringEnum):
     Command = "command"
 
 
-__all__ = ["DeploymentKind", "StubKind"]
+__all__ = ["DEFAULT_ENDPOINT_METHODS", "DeploymentKind", "StubKind"]

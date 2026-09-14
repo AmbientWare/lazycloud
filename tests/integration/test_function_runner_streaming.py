@@ -123,6 +123,39 @@ def fail_value():
     assert async_services.tasks.get(task_id).status is TaskStatus.Failed
 
 
+@pytest.mark.anyio
+async def test_function_log_delivery_failure_reports_lost_lines_and_preserves_result(
+    async_services: ApiServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handler_ref = _write_handler_module(
+        tmp_path,
+        "def output_value():\n    print('unpersisted output')\n    return 64\n",
+        "output_value",
+    )
+
+    def unavailable(
+        runner: FunctionRunner, task_id: str, stream: str, messages: str | list[str]
+    ) -> None:
+        raise OSError("log service unavailable")
+
+    monkeypatch.setattr(FunctionRunner, "append_task_logs", unavailable)
+    responses = await _invoke_and_run(async_services, handler_ref)
+    final = _final_response(responses)
+    assert final.exit_code == 0
+    assert isinstance(final.result, FunctionCloudpickleResult)
+    assert final.result.bytes_value() == cloudpickle_bytes(64)
+    assert async_services.tasks.logs(final.task_id) == []
+    captured = capsys.readouterr()
+    assert "unpersisted output" not in captured.out
+    assert (
+        f"task {final.task_id}: log delivery failed for 1 log line: "
+        "OSError: log service unavailable" in captured.err
+    )
+
+
 async def _invoke_and_run(
     runtime: ApiServices,
     handler_ref: str,

@@ -65,11 +65,14 @@ class _NoEndpointDispatcher:
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = 1,
         excluded_container_ids: frozenset[str] | set[str] = frozenset(),
+        container_id: str | None = None,
     ) -> EndpointDispatchTarget | None:
         del stub_id, container_loads, max_inflight_per_container, excluded_container_ids
         return None
 
-    async def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None:
+    async def unprobed_target(
+        self, stub_id: str, *, container_id: str | None = None
+    ) -> EndpointDispatchTarget | None:
         del stub_id
         return None
 

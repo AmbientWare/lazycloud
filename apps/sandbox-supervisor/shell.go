@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -236,6 +238,19 @@ func runShell(args []string) error {
 		}
 		return fmt.Errorf("listen for shell connections: %w", err)
 	}
+	// Background shell jobs inherit ignored SIGINT/SIGQUIT. Catch them here so
+	// exec gives interactive children the default signal dispositions.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
+	defer stop()
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = listener.Close()
+		case <-finished:
+		}
+	}()
 	return serveShellListener(listener, username, password, *idleTimeout)
 }
 

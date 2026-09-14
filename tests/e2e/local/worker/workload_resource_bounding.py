@@ -34,6 +34,7 @@ def bounded_workload(
     burst_seconds: float,
     allocate_mib: int,
     chunk_mib: int,
+    maximum_write_bytes: int,
 ) -> dict[str, float]:
     """Burst past every request from inside the container and report what happened.
 
@@ -81,8 +82,7 @@ def bounded_workload(
     write_errno = 0
     try:
         with open(fill_path, "wb") as handle:
-            # Twice the visible root: reaching that bound means nothing stopped us.
-            while written_bytes < root_total_bytes * 2:
+            while written_bytes < maximum_write_bytes:
                 handle.write(chunk)
                 handle.flush()
                 written_bytes += len(chunk)

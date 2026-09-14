@@ -128,6 +128,8 @@ def test_asgi_runner_streams_http_and_proxies_websocket_subprotocol(
         """
 import asyncio
 
+from shared.task_context import current_task_id
+
 
 async def app(scope, receive, send):
     if scope["type"] == "lifespan":
@@ -140,7 +142,10 @@ async def app(scope, receive, send):
         await receive()
         await send({"type": "websocket.accept", "subprotocol": "events.v1"})
         message = await receive()
-        await send({"type": "websocket.send", "text": "echo:" + message["text"]})
+        await send({
+            "type": "websocket.send",
+            "text": current_task_id() + ":echo:" + message["text"],
+        })
         await send({"type": "websocket.close", "code": 4001, "reason": "stream complete"})
         return
     message = await receive()
@@ -148,7 +153,11 @@ async def app(scope, receive, send):
         {
             "type": "http.response.start",
             "status": 200,
-            "headers": [(b"content-type", b"text/plain"), (b"x-body", message["body"])],
+            "headers": [
+                (b"content-type", b"text/plain"),
+                (b"x-body", message["body"]),
+                (b"x-handler-task", current_task_id().encode()),
+            ],
         }
     )
     await send({"type": "http.response.body", "body": b"first", "more_body": True})
@@ -201,22 +210,27 @@ async def app(scope, receive, send):
         with TestClient(create_app(isolated_services, endpoint_service=service)) as client:
             response = client.post(
                 f"/api/v1/asgi/id/{stub.id}/events",
-                headers=_auth_headers(isolated_services),
+                headers={**_auth_headers(isolated_services), "x-task-id": "caller-task"},
                 content=b"through-api",
             )
             assert response.status_code == 200, response.text
             assert response.content == b"firstsecond"
             assert response.headers["x-body"] == "through-api"
             assert response.headers["x-task-id"]
+            assert response.headers["x-handler-task"] == response.headers["x-task-id"]
+            assert response.headers["x-handler-task"] != "caller-task"
 
             with client.websocket_connect(
                 f"/api/v1/asgi/id/{stub.id}/events",
-                headers=_auth_headers(isolated_services),
+                headers={**_auth_headers(isolated_services), "x-task-id": "caller-task"},
                 subprotocols=["events.v1"],
             ) as websocket:
                 assert websocket.accepted_subprotocol == "events.v1"
                 websocket.send_text("hello")
-                assert websocket.receive_text() == "echo:hello"
+                task_id, message = websocket.receive_text().split(":", 1)
+                assert task_id and task_id != "caller-task"
+                assert isolated_services.tasks.get(task_id).stub_id == stub.id
+                assert message == "echo:hello"
                 with pytest.raises(WebSocketDisconnect) as closed:
                     websocket.receive_text()
                 assert closed.value.code == 4001
@@ -854,6 +868,7 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = 1,
         excluded_container_ids: frozenset[str] | set[str] = frozenset(),
+        container_id: str | None = None,
     ) -> EndpointDispatchTarget | None:
         _ = container_loads, max_inflight_per_container
         if self.cancelled_task is None:
@@ -872,6 +887,7 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
             container_loads=container_loads,
             max_inflight_per_container=max_inflight_per_container,
             excluded_container_ids=excluded_container_ids,
+            container_id=container_id,
         )
 
 

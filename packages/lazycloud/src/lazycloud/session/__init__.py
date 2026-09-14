@@ -113,13 +113,14 @@ class Client:
 
     @property
     def deployment(self) -> DeploymentClient:
+        config = self._config()
         return DeploymentClient(
             client=self.deployment_client,
             resource_client=self.deployment_resource_client,
-            workspace=self._config().workspace,
-            endpoint=self.endpoint,
-            token=self.token,
-            timeout_seconds=self.timeout_seconds,
+            workspace=config.workspace,
+            endpoint=config.endpoint,
+            token=config.token,
+            timeout_seconds=config.timeout_seconds,
         )
 
     def submit_deployment(
@@ -144,13 +145,14 @@ class Client:
 
     @property
     def task_client(self) -> TaskClient:
+        config = self._config()
         return TaskClient(
             client=self.task_control_client,
             observability_client=self.observability_client,
-            workspace=self._config().workspace,
-            endpoint=self.endpoint,
-            token=self.token,
-            timeout_seconds=self.timeout_seconds,
+            workspace=config.workspace,
+            endpoint=config.endpoint,
+            token=config.token,
+            timeout_seconds=config.timeout_seconds,
         )
 
     def task(self, task_id: str) -> TaskDetailResponse:
@@ -289,10 +291,18 @@ class Client:
         return self.observability.events(request)
 
     def _config(self) -> ControlClientConfig:
+        endpoint, token, workspace = self.endpoint, self.token, self.workspace
+        if self.profile is not None:
+            if endpoint is None:
+                endpoint = self.profile.resolved_endpoint()
+            if token is None:
+                token = self.profile.token
+            if workspace is None:
+                workspace = self.profile.workspace
         return resolve_control_client_config(
-            endpoint=self.endpoint,
-            token=self.token,
-            workspace=self.workspace or self.active_profile.workspace,
+            endpoint=endpoint,
+            token=token,
+            workspace=workspace,
             timeout_seconds=self.timeout_seconds,
         )
 

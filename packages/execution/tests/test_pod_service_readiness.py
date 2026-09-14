@@ -44,6 +44,7 @@ class _TerminalTransitionRepository:
                 assert container is not None
                 container.status = ContainerStatus.Failed
                 container.exit_code = 1
+                container.startup_error = "workload executable does not exist"
                 repository.upsert(container)
         return None
 
@@ -82,7 +83,7 @@ def test_wait_for_container_client_reloads_durable_terminal_state(
         redis=RedisClient(FakeRedis(), key_prefix="test"),
     )
 
-    with pytest.raises(ConflictError, match=f"container {CONTAINER_ID} is failed"):
+    with pytest.raises(ConflictError, match="workload executable does not exist"):
         service._wait_for_container_client(container, timeout_seconds=1)
 
     assert scheduler.calls == 1

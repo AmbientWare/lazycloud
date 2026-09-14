@@ -72,6 +72,7 @@ class OciContainerServiceInstanceRecorder:
             cwd=context.cwd,
             runtime=context.runtime,
             env=_spec_process_env(spec),
+            image_env=spec.image_env,
             request_env=list(context.request.env),
             docker_enabled=context.docker_enabled,
             docker_daemon_status=(
@@ -115,6 +116,7 @@ class OciContainerServiceInstanceRecorder:
             cache_available=self.cache_available,
             gpu=context.request.gpu,
             gpu_count=context.request.gpu_count,
+            checkpoint_readiness=context.checkpoint_readiness_probe,
         )
         self.instances.save_container_instance(instance)
 

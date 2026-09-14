@@ -57,7 +57,7 @@ class ContainerExecutionPhase(StrEnum):
     AssignGpu = "assign-gpu"
     BuildSpec = "build-spec"
     PrepareRuntime = "prepare-runtime"
-    PrepareSandboxDocker = "prepare-sandbox-docker"
+    PrepareWorkload = "prepare-workload"
     CompleteCheckpointStartup = "complete-checkpoint-startup"
     MarkRunning = "mark-running"
     RunRuntime = "run-runtime"

@@ -129,6 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if len(matches) != 1:
         raise RuntimeError("device-login workspace is unavailable or ambiguous")
     before = _live_token_ids(admin)
+    existing_ids = {token.id for token in _tokens(admin)}
     minted: AuthTokenResponse | None = None
     profile = f"e2e-device-{time.time_ns()}"
     try:
@@ -164,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            user_code = _approve(
+            _approve(
                 process,
                 admin=admin,
                 workspace=workspace,
@@ -181,7 +182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 or result.token_source != "device"
             ):
                 raise RuntimeError("public CLI device login returned an invalid outcome")
-        created = [token for token in _tokens(admin) if token.id not in before]
+        created = [token for token in _tokens(admin) if token.id not in existing_ids]
         if len(created) != 1:
             raise RuntimeError("device login did not mint exactly one token")
         minted = created[0]
@@ -194,14 +195,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "capability": "authorization.device-login",
                     "token_id": minted.id,
-                    "user_code": user_code,
                     "workspace": workspace,
                 }
             )
         )
     finally:
         if minted is None:
-            candidates = [token for token in _tokens(admin) if token.id not in before]
+            candidates = [token for token in _tokens(admin) if token.id not in existing_ids]
             if len(candidates) == 1:
                 minted = candidates[0]
         if minted is not None:

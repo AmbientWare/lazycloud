@@ -10,7 +10,11 @@ from shared.image_building.authoring import (
 )
 
 from images.building.commands import _normalize_step
-from images.building.constants import MANAGED_PYTHON_PREFIX, UV_COPY_INSTRUCTION
+from images.building.constants import (
+    MANAGED_PYTHON_PREFIX,
+    MICROMAMBA_IMAGE_REFERENCE,
+    UV_COPY_INSTRUCTION,
+)
 from images.building.models import (
     PythonRuntimeSetupAction,
     PythonRuntimeSetupPlan,
@@ -41,16 +45,23 @@ def plan_python_runtime_setup(image: ImageSpec) -> PythonRuntimeSetupPlan:
         )
 
     if _is_micromamba_python_version(python_version):
+        minor = PythonVersion(python_version.removeprefix("micromamba")).value
         return PythonRuntimeSetupPlan(
             action=PythonRuntimeSetupAction.ConfigureMicromamba,
             requires_python=True,
             python_version=python_version,
-            dockerfile_instructions=[UV_COPY_INSTRUCTION] if requires_uv else [],
+            dockerfile_instructions=[
+                f"COPY --from={MICROMAMBA_IMAGE_REFERENCE} /bin/micromamba /usr/local/bin/",
+                "ENV MAMBA_ROOT_PREFIX=/opt/micromamba",
+                "ENV PATH=${MAMBA_ROOT_PREFIX}/bin:${PATH}",
+                *([UV_COPY_INSTRUCTION] if requires_uv else []),
+            ],
             commands=[
-                "micromamba config set use_lockfiles False",
+                f"micromamba create -y -n base -c conda-forge python={minor} pip"
+                " && micromamba clean --all --yes",
                 _bytecode_compile_command("python"),
             ],
-            reason="micromamba base handles Python environment management",
+            reason="micromamba installs the selected Python in the image environment",
         )
 
     if _image_base_provides_python(image):

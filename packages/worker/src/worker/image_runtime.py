@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,6 +23,13 @@ class ImageRuntimeResponse(ContractModel):
     mount_point: str = ""
     mounts: int = Field(default=0, ge=0)
     error: str = ""
+    env: list[str] = Field(default_factory=list, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ImageRuntimeMount:
+    mount_point: Path
+    env: tuple[str, ...] = field(repr=False)
 
 
 @dataclass(slots=True)
@@ -49,7 +56,7 @@ class ImageRuntimeClient:
         storage_image_ref: str,
         credentials: ImageRegistryCredentials,
         preload: bool,
-    ) -> Path:
+    ) -> ImageRuntimeMount:
         response = self._call(
             "mount",
             image_id=image_id,
@@ -63,7 +70,7 @@ class ImageRuntimeClient:
         )
         if not response.ok:
             raise RuntimeError(response.error or "image runtime could not mount the image")
-        return Path(response.mount_point)
+        return ImageRuntimeMount(Path(response.mount_point), tuple(response.env))
 
     def unmount(self, image_id: str) -> None:
         response = self._call("unmount", image_id=image_id)

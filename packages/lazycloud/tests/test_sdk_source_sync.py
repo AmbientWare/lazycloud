@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from lazycloud.references import source_root_handler_reference
 from lazycloud.session.deployment import DeploymentClient
-from lazycloud.session.source_sync import (
+from lazycloud.source_sync import (
     SOURCE_PACKAGE_BUCKET,
     SOURCE_PACKAGE_CONTENT_TYPE,
     SourcePackageSyncer,

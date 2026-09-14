@@ -36,6 +36,7 @@ class EndTaskRequest(HttpModel):
     container_hostname: str = ""
     keep_warm_seconds: float = 0
     result_base64: str = ""
+    error: str | None = None
 
     def result_bytes(self) -> bytes:
         return decode_bytes(self.result_base64)

@@ -33,6 +33,7 @@ from worker.container_execution import WorkerAddressPublisher
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.container_service.protocols import WorkerContainerInstanceStore
 from worker.events import ContainerRequestContext, WorkerBuildCancelRegistry
+from worker.filesystem_images import ContainerFilesystemExporter
 from worker.image_archive_transfer import (
     image_archive_file_identity,
     upload_image_archive,
@@ -620,6 +621,7 @@ class BuildahWorkerImageBuilder:
     archive_root: Path
     index_cache_root: Path
     content_cache: ImageContentCacheConnection
+    filesystem_exporter: ContainerFilesystemExporter | None = None
     context_loader: WorkerImageBuildContextLoader | None = None
     architecture_preparer: ImageBuildArchitecturePreparer = field(
         default_factory=ImageBuildArchitectureRuntime
@@ -730,7 +732,7 @@ class BuildahWorkerImageBuilder:
             if registry_auth_file is not None:
                 env["REGISTRY_AUTH_FILE"] = str(registry_auth_file)
             build_arg_file = _write_build_arg_file(root, build_args)
-            self._prepare_context(
+            filesystem_env = self._prepare_context(
                 payload,
                 context_dir,
                 container_id=container_id,
@@ -810,6 +812,21 @@ class BuildahWorkerImageBuilder:
                 msg = "image build request requires a Dockerfile or source image"
                 raise RuntimeError(msg)
 
+            if filesystem_env:
+                self._run_buildah(
+                    [
+                        "config",
+                        *(argument for value in filesystem_env for argument in ("--env", value)),
+                        build_container_name,
+                    ],
+                    directories=directories,
+                    driver=driver,
+                    env=env,
+                    cwd=context_dir,
+                    log=log,
+                    scratch=lease,
+                    resources=resources,
+                )
             self._run_buildah(
                 ["commit", "--format", "oci", build_container_name, image_ref],
                 directories=directories,
@@ -958,7 +975,15 @@ class BuildahWorkerImageBuilder:
         *,
         container_id: str,
         log: ImageBuildLog,
-    ) -> None:
+    ) -> list[str]:
+        source_id = payload.build_options.filesystem_source_container_id
+        if source_id:
+            if self.filesystem_exporter is None:
+                raise RuntimeError("filesystem image capture is not configured")
+            log(f"capturing filesystem from container {source_id}")
+            return self.filesystem_exporter.export(
+                source_id, workspace_id=payload.workspace_id, context_dir=context_dir
+            )
         object_id = payload.build_options.build_context_object
         if object_id:
             if self.context_loader is None:
@@ -977,21 +1002,22 @@ class BuildahWorkerImageBuilder:
                 )
                 raise RuntimeError(msg)
             log(f"image build context extracted: {object_id} ({len(loaded.files)} files)")
-            return
+            return []
 
         requested = payload.build_options.build_context_path
         if not requested:
-            return
+            return []
         source = Path(requested)
         if source.exists() and source.is_dir():
             shutil.copytree(source, context_dir, dirs_exist_ok=True, symlinks=True)
-            return
+            return []
         if payload.build_options.build_context_digest:
             msg = (
                 "image build context is not available on this worker: "
                 f"{payload.build_options.build_context_path}"
             )
             raise FileNotFoundError(msg)
+        return []
 
     def _run_buildah(
         self,

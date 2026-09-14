@@ -67,6 +67,7 @@ class WorkerExecutionRequest(ContractModel):
     deployment_id: str = ""
     container_id: str
     cpu_millicores: int = 0
+    required_worker_id: str = ""
     memory_mib: int = 0
     gpu: list[str] = Field(default_factory=list)
     """Models this request accepts, best first; empty asks for no GPU.

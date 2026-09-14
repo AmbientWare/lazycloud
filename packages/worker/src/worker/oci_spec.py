@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
 
 from worker.runtime_config import RuntimeBinaryConfig
@@ -17,3 +17,4 @@ class OciRuntimeContainerSpec(ContractModel):
     sandbox_supervisor_token_path: str = ""
     spec: dict[str, JsonValue]
     docker_enabled: bool = False
+    image_env: list[str] = Field(default_factory=list, repr=False)

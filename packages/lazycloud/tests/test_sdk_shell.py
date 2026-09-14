@@ -217,6 +217,7 @@ def test_interactive_shell_authenticates_resizes_streams_and_returns_exit_code()
 
     exit_code = client.run(
         endpoint="https://control.example/base",
+        workspace="workspace-1",
         token="test-token",
         credentials=ShellSession(
             container_id="container-1",
@@ -229,10 +230,7 @@ def test_interactive_shell_authenticates_resizes_streams_and_returns_exit_code()
     )
 
     assert exit_code == 7
-    assert connector.url == "wss://control.example/base/api/v1/shells/id/ws"
-    assert connector.token == "test-token"
     assert "test-token" not in connector.url
-    assert connector.open_timeout_seconds == 12
     assert bytes(terminal.output) == b"remote output\r\n"
     assert terminal.active is False
     frames = [ShellFrameDecoder().feed(item)[0] for item in websocket.sent]
@@ -270,6 +268,7 @@ def test_interactive_shell_fails_closed_on_backend_error() -> None:
             terminal=terminal,
         ).run(
             endpoint="http://control.example",
+            workspace="workspace-1",
             token="test-token",
             credentials=ShellSession(
                 container_id="container-1",

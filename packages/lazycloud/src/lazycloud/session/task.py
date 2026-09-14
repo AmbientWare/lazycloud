@@ -102,7 +102,7 @@ class TaskResult:
 class TaskLifecycleEvent:
     event: str
     data: dict[str, JsonValue]
-    task: shared.tasks.Task | None = None
+    task: TaskResponse | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,12 +581,11 @@ def _parse_task_events(raw: object) -> list[TaskLifecycleEvent]:
 
 def _task_event_from_data(event: str, data: Mapping[str, JsonValue]) -> TaskLifecycleEvent:
     task = None
-    task_value = data.get("task")
-    if isinstance(task_value, dict):
+    if event == "status":
         try:
-            task = shared.tasks.Task.model_validate(task_value)
-        except ValueError:
-            task = None
+            task = TaskResponse.model_validate(data)
+        except ValueError as exc:
+            raise HttpResponseDecodeError("task subscription returned an invalid task") from exc
     return TaskLifecycleEvent(event=event, data=dict(data), task=task)
 
 

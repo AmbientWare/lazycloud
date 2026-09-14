@@ -9,7 +9,6 @@ from starlette.types import Receive, Scope, Send
 
 type SseItem = tuple[str, str, object] | None
 
-SSE_HEARTBEAT_SECONDS = 15.0
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "X-Accel-Buffering": "no",
@@ -78,7 +77,6 @@ def sse_response_items(items: Iterable[tuple[str, str, object]]) -> StreamingRes
 
 
 __all__ = [
-    "SSE_HEARTBEAT_SECONDS",
     "SseItem",
     "sse_event",
     "sse_response",

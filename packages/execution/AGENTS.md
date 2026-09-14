@@ -87,23 +87,17 @@ people who asked for none of it.
 
 ## Cancelling reaches the work, and stops there
 
-Nothing inside a container watches the task row, so writing `cancelled` on it
-stops nothing: the handler runs to completion, keeps its side effects, and keeps
-being billed while the caller has been told it stopped. Cancelling a function
-therefore stops the container it is running in, which is the only lever the
-platform has on a running handler.
+Concurrent function process slots observe cancellation through the function
+monitor contract. The selected slot exits, and its supervisor kills that slot's
+process group before replacing it. Other slots retain their invocation and
+container identity. A slot cannot act on a stale monitor response after it has
+moved to another task.
 
-That container is usually also serving invocations nobody cancelled. They are
-released rather than cancelled. The reason is `Scheduler`, because the platform
-stopped the container, not the caller who owns those calls. Each one is claimed
-again and runs elsewhere, so what is lost is partial execution, never the
-invocation: a non-idempotent handler among them re-executes from the start.
-Cancelling one call of a concurrent function is that expensive, and the
-alternative was a cancel that did not cancel.
-
-Per-invocation cancellation is what would make it cheap, and it is reachable:
-outside `in_process`, every invocation already has its own process. It needs a
-control-plane-to-container signal that does not exist yet.
+Single-slot functions and `in_process` functions stop their container. Shared
+interpreter threads cannot be independently terminated. Unselected invocations
+in that interpreter are released for execution elsewhere, so their partial side
+effects may repeat. The stop reason is `Scheduler`, preserving their attempt
+budget rather than reporting cancellation on calls nobody cancelled.
 
 ## A schedule is a property, not a kind
 

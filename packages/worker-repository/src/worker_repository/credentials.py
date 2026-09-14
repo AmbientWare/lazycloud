@@ -12,12 +12,12 @@ from control.service import ControlPlaneService
 from database.repositories.identity import WorkspaceRepository
 from database.types import DatabaseSession
 from execution.mounts import volume_container_mount_paths
-from identity.auth import AuthError, AuthService
+from identity.auth import AuthError, AuthorizationDeniedError, AuthService
 from pydantic import field_validator
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
-from shared.errors import NotFoundError
+from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.identity import TokenKind, WorkspaceRecord
 from shared.mounts import MountAuthMode
 from shared.scheduling import SchedulerContainerState
@@ -40,10 +40,6 @@ from worker.tools import (
 from database import DatabaseClient
 
 DEFAULT_GATEWAY_TOKEN_TTL_SECONDS = 24 * 60 * 60
-
-
-class WorkerCredentialError(PermissionError):
-    pass
 
 
 class WorkerCredentialContextPaths(Protocol):
@@ -170,7 +166,7 @@ class WorkerCredentialService:
     ) -> None:
         if not principal.is_worker:
             msg = "worker token is required"
-            raise WorkerCredentialError(msg)
+            raise AuthorizationDeniedError(msg)
         if principal.token_kind is TokenKind.WorkerPrivate and (
             not principal.workspace_id or principal.workspace_id != request.workspace_id
         ):
@@ -178,32 +174,32 @@ class WorkerCredentialService:
                 "private worker token cannot request credentials for workspace "
                 f"{request.workspace_id!r}"
             )
-            raise WorkerCredentialError(msg)
+            raise AuthorizationDeniedError(msg)
 
     def _validate_container_assignment(self, request: ContainerCredentialRequest) -> None:
         if self.container_repository is not None:
             state = self.container_repository.get_container_state(request.container_id)
             if state is None:
                 msg = f"container {request.container_id!r} is unavailable"
-                raise WorkerCredentialError(msg)
+                raise NotFoundError(msg)
             if state.workspace_id != request.workspace_id or state.stub_id != request.stub_id:
                 msg = f"container {request.container_id!r} is not assigned to workspace/stub"
-                raise WorkerCredentialError(msg)
+                raise AuthorizationDeniedError(msg)
             return
 
         container_lookup = self._container_lookup()
         if container_lookup is None:
             msg = f"container {request.container_id!r} is unavailable"
-            raise WorkerCredentialError(msg)
+            raise UpstreamUnavailableError(msg)
 
         try:
             container = container_lookup.get(request.container_id)
         except NotFoundError as exc:
             msg = f"container {request.container_id!r} is unavailable"
-            raise WorkerCredentialError(msg) from exc
+            raise NotFoundError(msg) from exc
         if container.workspace_id != request.workspace_id or container.stub_id != request.stub_id:
             msg = f"container {request.container_id!r} is not assigned to workspace/stub"
-            raise WorkerCredentialError(msg)
+            raise AuthorizationDeniedError(msg)
 
     def _secret_env(self, secret_names: list[str], *, workspace_id: str) -> list[str]:
         env: list[str] = []
@@ -212,11 +208,7 @@ class WorkerCredentialService:
             if not name or name in seen:
                 continue
             seen.add(name)
-            try:
-                value = self._secret_value(name, workspace_id=workspace_id)
-            except NotFoundError as exc:
-                msg = f"secret {name!r} is unavailable"
-                raise WorkerCredentialError(msg) from exc
+            value = self._secret_value(name, workspace_id=workspace_id)
             env.append(f"{name}={value}")
         return env
 
@@ -270,14 +262,14 @@ class WorkerCredentialService:
     def _workspace_storage_credentials(self, workspace_id: str) -> WorkspaceStorageCredentials:
         if self.storage_issuer is None:
             msg = "workspace storage issuer is required to vend workspace credentials"
-            raise WorkerCredentialError(msg)
+            raise UpstreamUnavailableError(msg)
         with self._services().context.database.session() as session:
             # Deletion must see every admitted grant before it retires the bucket's keys.
             workspace = WorkspaceRepository(session).lock_active_owner(workspace_id)
             storage = workspace.storage
             if not storage.bucket:
                 msg = f"workspace storage is unavailable for {workspace_id!r}"
-                raise WorkerCredentialError(msg)
+                raise UpstreamUnavailableError(msg)
             grant = self.storage_issuer.issue(workspace_id=workspace_id, storage=storage)
         return workspace_storage_credentials(grant)
 
@@ -300,7 +292,7 @@ class WorkerCredentialService:
             source = source_by_key.get(wanted.credential_key)
             if source is None:
                 msg = f"mount credentials are unavailable for {wanted.mount_path}"
-                raise WorkerCredentialError(msg)
+                raise AuthorizationDeniedError(msg)
             access_key = self._secret_value(
                 source.access_key_secret,
                 workspace_id=request.workspace_id,
@@ -311,7 +303,7 @@ class WorkerCredentialService:
             )
             if not access_key or not secret_key:
                 msg = f"mount credential secrets are empty for {wanted.mount_path}"
-                raise WorkerCredentialError(msg)
+                raise InvalidInputError(msg)
             credentials.append(
                 ContainerMountCredentials(
                     mount_path=wanted.mount_path,

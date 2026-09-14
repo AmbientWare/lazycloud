@@ -40,9 +40,8 @@ def post_task_logs(
 
 
 class RunnerTaskLogStream(io.TextIOBase):
-    def __init__(self, stream: str, wrapped: TextIO, logs: TaskLogBuffer) -> None:
+    def __init__(self, stream: str, logs: TaskLogBuffer) -> None:
         self.stream = stream
-        self.wrapped = wrapped
         self.logs = logs
         self._pending = ""
         self._lock = threading.Lock()
@@ -55,8 +54,6 @@ class RunnerTaskLogStream(io.TextIOBase):
         with self._lock:
             if self._closing:
                 raise ValueError("I/O operation on closed task log stream")
-            self.wrapped.write(value)
-            self.wrapped.flush()
             self._pending += value
             lines = self._pending.split("\n")
             self._pending = lines.pop()
@@ -65,7 +62,6 @@ class RunnerTaskLogStream(io.TextIOBase):
         return len(value)
 
     def flush(self) -> None:
-        self.wrapped.flush()
         with self._lock:
             pending, self._pending = self._pending, ""
             if pending and not self._closing:
@@ -145,9 +141,6 @@ class TaskLogBuffer:
         try:
             self._append_logs(stream, values)
         except Exception as exc:
-            # `write` already put this line on the real stream, so only the
-            # platform's copy is lost. Reporting through a logger would write
-            # back into this same stream.
             self.dropped_appends += len(values)
             self.last_append_error = f"{type(exc).__name__}: {exc}"
 

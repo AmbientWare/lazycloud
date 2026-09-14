@@ -136,7 +136,7 @@ def test_checkpoint_restore_completes_runner_identity_handshake(tmp_path: Path) 
     )
     context = ContainerExecutionContext(
         request=ContainerRequestContext(container_id="restored-container"),
-        startup_kind=WorkerStartupKind.Sandbox,
+        startup_kind=WorkerStartupKind.Endpoint,
         checkpoint_id="checkpoint-1",
     )
 

@@ -21,6 +21,7 @@ from pydantic import Field
 from shared.container_requests import CONTAINER_HEALTH_PATH, CONTAINER_INNER_PORT
 from shared.contracts import ContractModel
 from shared.deployment_records import DEFAULT_MAX_PENDING_TASKS
+from shared.errors import UpstreamUnavailableError
 from shared.http.endpoints import EndpointForwardRequest
 from shared.scheduling import SchedulerContainerStatus
 from shared.timestamps import utc_now
@@ -37,7 +38,7 @@ DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY = 1
 UNLIMITED_ENDPOINT_CONTAINER_CONCURRENCY = sys.maxsize
 
 
-class EndpointDispatchUnavailable(RuntimeError):
+class EndpointDispatchUnavailable(UpstreamUnavailableError):
     pass
 
 
@@ -222,9 +223,12 @@ class AsyncEndpointRequestDispatcher(Protocol):
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
         excluded_container_ids: frozenset[str] | set[str] = frozenset(),
+        container_id: str | None = None,
     ) -> EndpointDispatchTarget | None: ...
 
-    async def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None: ...
+    async def unprobed_target(
+        self, stub_id: str, *, container_id: str | None = None
+    ) -> EndpointDispatchTarget | None: ...
 
     async def container_states(self, stub_id: str) -> Sequence[EndpointContainerState]: ...
 
@@ -265,6 +269,7 @@ class AsyncEndpointInstanceDispatcher:
         container_loads: Mapping[str, int] | None = None,
         max_inflight_per_container: int = DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
         excluded_container_ids: frozenset[str] | set[str] = frozenset(),
+        container_id: str | None = None,
     ) -> EndpointDispatchTarget | None:
         # Probed one at a time in load order rather than all at once: the slowest
         # probe is the container that is not answering, and it would otherwise put
@@ -273,6 +278,7 @@ class AsyncEndpointInstanceDispatcher:
             stub_id,
             container_loads=container_loads,
             max_inflight_per_container=max_inflight_per_container,
+            container_id=container_id,
         ):
             if target.container_id not in excluded_container_ids and await self._is_ready(
                 target, stub_id
@@ -280,11 +286,14 @@ class AsyncEndpointInstanceDispatcher:
                 return target
         return None
 
-    async def unprobed_target(self, stub_id: str) -> EndpointDispatchTarget | None:
+    async def unprobed_target(
+        self, stub_id: str, *, container_id: str | None = None
+    ) -> EndpointDispatchTarget | None:
         targets = await self._ordered_targets(
             stub_id,
             container_loads=None,
             max_inflight_per_container=UNLIMITED_ENDPOINT_CONTAINER_CONCURRENCY,
+            container_id=container_id,
         )
         return targets[0] if targets else None
 
@@ -326,11 +335,13 @@ class AsyncEndpointInstanceDispatcher:
         *,
         container_loads: Mapping[str, int] | None,
         max_inflight_per_container: int,
+        container_id: str | None = None,
     ) -> list[EndpointDispatchTarget]:
         states = [
             state
             for state in await self.containers.list_by_stub(stub_id)
             if state.status is SchedulerContainerStatus.Running
+            and (container_id is None or state.container_id == container_id)
         ]
         loads = dict(container_loads or {})
         states = [

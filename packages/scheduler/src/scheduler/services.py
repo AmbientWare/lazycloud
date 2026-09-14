@@ -147,6 +147,8 @@ class SchedulerCollectionService(Protocol):
 
 
 class SchedulerContainerService(Protocol):
+    def expire_containers(self, *, now: datetime | None = None) -> list[ContainerRecord]: ...
+
     def list(
         self,
         *,

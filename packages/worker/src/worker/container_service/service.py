@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shutil
 import time
 from collections.abc import Iterable
@@ -10,16 +9,15 @@ from pathlib import Path
 from threading import Thread
 from uuid import uuid4
 
+from shared.app_identity import CONTAINER_HELPER_PATH
+from shared.contracts import ContractModel
 from shared.deployments import StubKind
 
 from worker.container_client.models import (
-    ContainerArchiveRequest,
-    ContainerArchiveResponse,
     ContainerCheckpointRequest,
     ContainerCheckpointResponse,
     ContainerExecRequest,
     ContainerExecResponse,
-    ContainerFileSearchMatch,
     ContainerKillRequest,
     ContainerKillResponse,
     ContainerLogEntry,
@@ -35,7 +33,6 @@ from worker.container_client.models import (
     ContainerSandboxExecResponse,
     ContainerSandboxExposePortRequest,
     ContainerSandboxExposePortResponse,
-    ContainerSandboxFileInfo,
     ContainerSandboxFindInFilesRequest,
     ContainerSandboxFindInFilesResponse,
     ContainerSandboxKillRequest,
@@ -72,13 +69,13 @@ from worker.container_client.models import (
 from worker.container_service.models import (
     CONTAINER_NOT_FOUND_MESSAGE,
     SANDBOX_PROCESS_MANAGER_NOT_READY_MESSAGE,
+    SandboxFilesystemRequest,
     SandboxProcessEvent,
     SandboxProcessEventType,
     WorkerContainerServiceInstance,
 )
 from worker.container_service.protocols import (
     BridgeSandboxPortPublisher,
-    WorkerContainerArchiveCreator,
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
@@ -96,19 +93,17 @@ from worker.execution import (
     plan_sandbox_exec,
     plan_workspace_sync,
 )
-from worker.runtime_config import OciRuntimeName
 from worker.sandbox_server import (
+    WORKER_CONTAINER_UPLOADS_HOST_PATH,
+    WORKER_CONTAINER_UPLOADS_MOUNT_PATH,
     SandboxExposePortRequest,
-    SandboxFileAccessMode,
     SandboxFileOperation,
-    SandboxFileOperationPlan,
     SandboxLogStream,
     plan_sandbox_expose_port,
-    plan_sandbox_file_operation,
     plan_sandbox_list_exposed_ports,
     plan_sandbox_process_log_ack,
     plan_sandbox_status,
-    plan_sandbox_upload_file,
+    resolve_sandbox_container_path,
 )
 
 
@@ -120,9 +115,17 @@ class WorkerContainerService:
     runtime: WorkerContainerRuntimeController | None = None
     logs: WorkerSandboxLogSink | None = None
     checkpoints: WorkerContainerCheckpointCreator | None = None
-    archives: WorkerContainerArchiveCreator | None = None
     network_policy: WorkerSandboxNetworkPolicyUpdater | None = None
     ports: WorkerSandboxPortPublisher = field(default_factory=BridgeSandboxPortPublisher)
+
+    def prepare_workload(self, container_id: str) -> None:
+        manager = self._ready_process_manager(self._required_instance(container_id))
+        if isinstance(manager, str):
+            raise RuntimeError(manager)
+        try:
+            manager.start_workload()
+        finally:
+            manager.cleanup()
 
     def container_status(self, request: ContainerStatusRequest) -> ContainerStatusResponse:
         instance = self._instance(request.container_id)
@@ -219,37 +222,6 @@ class WorkerContainerService:
             if streams_suspended and self.process_managers is not None:
                 self.process_managers.resume_process_streams(instance)
         return ContainerCheckpointResponse(ok=True, checkpoint_id=checkpoint_id)
-
-    def container_archive(
-        self,
-        request: ContainerArchiveRequest,
-    ) -> tuple[ContainerArchiveResponse, ...]:
-        instance = self._instance(request.container_id)
-        if instance is None:
-            return (
-                ContainerArchiveResponse(
-                    done=True,
-                    success=False,
-                    error_msg=CONTAINER_NOT_FOUND_MESSAGE,
-                ),
-            )
-        if self.archives is None:
-            return (
-                ContainerArchiveResponse(
-                    done=True,
-                    success=False,
-                    error_msg="archive creator is not configured",
-                ),
-            )
-        try:
-            return tuple(
-                self.archives.archive_container(
-                    instance,
-                    image_id=request.image_id,
-                )
-            )
-        except Exception as exc:
-            return (ContainerArchiveResponse(done=True, success=False, error_msg=str(exc)),)
 
     def stream_logs(self, request: ContainerStreamLogsRequest) -> Iterable[ContainerLogEntry]:
         instance = self._instance(request.container_id)
@@ -448,53 +420,26 @@ class WorkerContainerService:
         self,
         request: ContainerSandboxUploadFileRequest,
     ) -> ContainerSandboxUploadFileResponse:
-        instance = self._instance(request.container_id)
-        if instance is None:
-            return ContainerSandboxUploadFileResponse(
-                ok=False, error_msg=CONTAINER_NOT_FOUND_MESSAGE
-            )
-        plan = plan_sandbox_upload_file(
-            container_id=request.container_id,
-            container_path=request.container_path,
-            root_path=instance.root_path,
-            mounts=instance.mounts,
-            cwd=instance.cwd,
-            runtime=instance.runtime,
-            mode=request.mode,
-            data_size_bytes=len(request.data),
-            upload_file_name=f"upload_{uuid4().hex}",
-        )
         try:
-            if plan.access_mode is SandboxFileAccessMode.SandboxedRuntimeStagedUpload:
-                if self.runtime is None:
-                    return ContainerSandboxUploadFileResponse(
-                        ok=False,
-                        error_msg="container runtime is required for staged sandbox uploads",
-                    )
-                temp_path = Path(plan.temp_host_path)
-                temp_path.parent.mkdir(parents=True, exist_ok=True)
-                temp_path.write_bytes(request.data)
-                temp_path.chmod(request.mode)
-                try:
-                    result = self.runtime.exec_container(
-                        request.container_id,
-                        argv=["sh", "-c", plan.command],
-                        env=instance.env,
-                        cwd=instance.cwd,
-                    )
-                    if not result.ok:
-                        return ContainerSandboxUploadFileResponse(
-                            ok=False,
-                            error_msg=result.error_msg or "staged upload move failed",
-                        )
-                finally:
-                    temp_path.unlink(missing_ok=True)
-                return ContainerSandboxUploadFileResponse(ok=True)
-            host_path = Path(plan.host_path)
-            host_path.parent.mkdir(parents=True, exist_ok=True)
-            host_path.write_bytes(request.data)
-            host_path.chmod(request.mode)
-            return ContainerSandboxUploadFileResponse(ok=True)
+            instance = self._required_instance(request.container_id)
+            filename = f"upload-{uuid4().hex}"
+            staged = Path(WORKER_CONTAINER_UPLOADS_HOST_PATH) / instance.container_id / filename
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with staged.open("xb") as target:
+                    target.write(request.data)
+                return self._filesystem_response(
+                    request.container_id,
+                    SandboxFilesystemRequest(
+                        operation=SandboxFileOperation.UploadFile,
+                        path=request.container_path,
+                        source=f"{WORKER_CONTAINER_UPLOADS_MOUNT_PATH}/{filename}",
+                        mode=request.mode,
+                    ),
+                    ContainerSandboxUploadFileResponse,
+                )
+            finally:
+                staged.unlink(missing_ok=True)
         except Exception as exc:
             return ContainerSandboxUploadFileResponse(ok=False, error_msg=str(exc))
 
@@ -504,27 +449,13 @@ class WorkerContainerService:
     ) -> ContainerSandboxDownloadFileResponse:
         try:
             instance = self._required_instance(request.container_id)
-            plan = self._file_plan(
+            data = self._filesystem_bytes(
                 instance,
-                request.container_path,
-                SandboxFileOperation.DownloadFile,
+                SandboxFilesystemRequest(
+                    operation=SandboxFileOperation.DownloadFile, path=request.container_path
+                ),
             )
-            if instance.runtime is OciRuntimeName.Runsc:
-                stdout, stderr, exit_code = self._sandbox_control_exec(
-                    instance,
-                    ["cat", plan.container_path],
-                )
-                if exit_code != 0:
-                    detail = stderr.decode("utf-8", errors="replace").strip()
-                    return ContainerSandboxDownloadFileResponse(
-                        ok=False,
-                        error_msg=detail or f"sandbox file read exited {exit_code}",
-                    )
-                return ContainerSandboxDownloadFileResponse(ok=True, data=stdout)
-            return ContainerSandboxDownloadFileResponse(
-                ok=True,
-                data=Path(plan.host_path).read_bytes(),
-            )
+            return ContainerSandboxDownloadFileResponse(ok=True, data=data)
         except Exception as exc:
             return ContainerSandboxDownloadFileResponse(ok=False, error_msg=str(exc))
 
@@ -532,132 +463,92 @@ class WorkerContainerService:
         self,
         request: ContainerSandboxDeleteFileRequest,
     ) -> ContainerSandboxDeleteFileResponse:
-        try:
-            _remove_path(
-                self._file_path(
-                    request.container_id,
-                    request.container_path,
-                    SandboxFileOperation.DeleteFile,
-                )
-            )
-            return ContainerSandboxDeleteFileResponse(ok=True)
-        except Exception as exc:
-            return ContainerSandboxDeleteFileResponse(ok=False, error_msg=str(exc))
+        return self._filesystem_response(
+            request.container_id,
+            SandboxFilesystemRequest(
+                operation=SandboxFileOperation.DeleteFile, path=request.container_path
+            ),
+            ContainerSandboxDeleteFileResponse,
+        )
 
     def sandbox_create_directory(
         self,
         request: ContainerSandboxCreateDirectoryRequest,
     ) -> ContainerSandboxCreateDirectoryResponse:
-        try:
-            path = self._file_path(
-                request.container_id,
-                request.container_path,
-                SandboxFileOperation.CreateDirectory,
+        return self._filesystem_response(
+            request.container_id,
+            SandboxFilesystemRequest(
+                operation=SandboxFileOperation.CreateDirectory,
+                path=request.container_path,
                 mode=request.mode,
-            )
-            path.mkdir(parents=True, exist_ok=True)
-            path.chmod(request.mode)
-            return ContainerSandboxCreateDirectoryResponse(ok=True)
-        except Exception as exc:
-            return ContainerSandboxCreateDirectoryResponse(ok=False, error_msg=str(exc))
+            ),
+            ContainerSandboxCreateDirectoryResponse,
+        )
 
     def sandbox_delete_directory(
         self,
         request: ContainerSandboxDeleteDirectoryRequest,
     ) -> ContainerSandboxDeleteDirectoryResponse:
-        try:
-            path = self._file_path(
-                request.container_id,
-                request.container_path,
-                SandboxFileOperation.DeleteDirectory,
-            )
-            if path.is_dir():
-                shutil.rmtree(path)
-            return ContainerSandboxDeleteDirectoryResponse(ok=True)
-        except Exception as exc:
-            return ContainerSandboxDeleteDirectoryResponse(ok=False, error_msg=str(exc))
+        return self._filesystem_response(
+            request.container_id,
+            SandboxFilesystemRequest(
+                operation=SandboxFileOperation.DeleteDirectory, path=request.container_path
+            ),
+            ContainerSandboxDeleteDirectoryResponse,
+        )
 
     def sandbox_stat_file(
         self,
         request: ContainerSandboxStatFileRequest,
     ) -> ContainerSandboxStatFileResponse:
-        try:
-            return ContainerSandboxStatFileResponse(
-                ok=True,
-                file_info=_container_file_info(
-                    self._file_path(
-                        request.container_id,
-                        request.container_path,
-                        SandboxFileOperation.StatFile,
-                    )
-                ),
-            )
-        except Exception as exc:
-            return ContainerSandboxStatFileResponse(ok=False, error_msg=str(exc))
+        return self._filesystem_response(
+            request.container_id,
+            SandboxFilesystemRequest(
+                operation=SandboxFileOperation.StatFile, path=request.container_path
+            ),
+            ContainerSandboxStatFileResponse,
+        )
 
     def sandbox_list_files(
         self,
         request: ContainerSandboxListFilesRequest,
     ) -> ContainerSandboxListFilesResponse:
-        try:
-            path = self._file_path(
-                request.container_id,
-                request.container_path,
-                SandboxFileOperation.ListFiles,
-            )
-            if not path.exists():
-                return ContainerSandboxListFilesResponse(ok=True)
-            children = (path,) if path.is_file() else tuple(sorted(path.iterdir()))
-            return ContainerSandboxListFilesResponse(
-                ok=True,
-                files=tuple(_container_file_info(child) for child in children),
-            )
-        except Exception as exc:
-            return ContainerSandboxListFilesResponse(ok=False, error_msg=str(exc))
+        return self._filesystem_response(
+            request.container_id,
+            SandboxFilesystemRequest(
+                operation=SandboxFileOperation.ListFiles, path=request.container_path
+            ),
+            ContainerSandboxListFilesResponse,
+        )
 
     def sandbox_replace_in_files(
         self,
         request: ContainerSandboxReplaceInFilesRequest,
     ) -> ContainerSandboxReplaceInFilesResponse:
-        try:
-            target = self._file_path(
-                request.container_id,
-                request.container_path,
-                SandboxFileOperation.ReplaceInFiles,
-            )
-            for file_path in _iter_text_files(target):
-                content = file_path.read_text(encoding="utf-8")
-                if request.pattern in content:
-                    file_path.write_text(
-                        content.replace(request.pattern, request.new_string),
-                        encoding="utf-8",
-                    )
-            return ContainerSandboxReplaceInFilesResponse(ok=True)
-        except Exception as exc:
-            return ContainerSandboxReplaceInFilesResponse(ok=False, error_msg=str(exc))
+        return self._filesystem_response(
+            request.container_id,
+            SandboxFilesystemRequest(
+                operation=SandboxFileOperation.ReplaceInFiles,
+                path=request.container_path,
+                pattern=request.pattern,
+                replacement=request.new_string,
+            ),
+            ContainerSandboxReplaceInFilesResponse,
+        )
 
     def sandbox_find_in_files(
         self,
         request: ContainerSandboxFindInFilesRequest,
     ) -> ContainerSandboxFindInFilesResponse:
-        try:
-            instance = self._required_instance(request.container_id)
-            target = self._file_path(
-                request.container_id,
-                request.container_path,
-                SandboxFileOperation.FindInFiles,
-            )
-            root = Path(instance.root_path)
-            return ContainerSandboxFindInFilesResponse(
-                ok=True,
-                results=tuple(
-                    _search_match(file_path, root, request.pattern)
-                    for file_path in _iter_text_files(target)
-                    if request.pattern in file_path.read_text(encoding="utf-8")
-                ),
-            )
-        except Exception as exc:
-            return ContainerSandboxFindInFilesResponse(ok=False, error_msg=str(exc))
+        return self._filesystem_response(
+            request.container_id,
+            SandboxFilesystemRequest(
+                operation=SandboxFileOperation.FindInFiles,
+                path=request.container_path,
+                pattern=request.pattern,
+            ),
+            ContainerSandboxFindInFilesResponse,
+        )
 
     def sandbox_expose_port(
         self,
@@ -805,34 +696,33 @@ class WorkerContainerService:
         except Exception as exc:
             return SyncContainerWorkspaceResponse(ok=False, error_msg=str(exc))
 
-    def _file_path(
+    def _filesystem_response[Response: ContractModel](
         self,
         container_id: str,
-        container_path: str,
-        operation: SandboxFileOperation,
-        *,
-        mode: int = 0o644,
-    ) -> Path:
-        instance = self._required_instance(container_id)
-        return Path(self._file_plan(instance, container_path, operation, mode=mode).host_path)
+        request: SandboxFilesystemRequest,
+        response_type: type[Response],
+    ) -> Response:
+        try:
+            instance = self._required_instance(container_id)
+            return response_type.model_validate_json(self._filesystem_bytes(instance, request))
+        except Exception as exc:
+            return response_type.model_validate({"ok": False, "error_msg": str(exc)})
 
-    @staticmethod
-    def _file_plan(
+    def _filesystem_bytes(
+        self,
         instance: WorkerContainerServiceInstance,
-        container_path: str,
-        operation: SandboxFileOperation,
-        *,
-        mode: int = 0o644,
-    ) -> SandboxFileOperationPlan:
-        return plan_sandbox_file_operation(
-            operation,
-            container_id=instance.container_id,
-            container_path=container_path,
-            root_path=instance.root_path,
-            mounts=instance.mounts,
-            cwd=instance.cwd,
-            mode=mode,
+        request: SandboxFilesystemRequest,
+    ) -> bytes:
+        request.path = resolve_sandbox_container_path(request.path, cwd=instance.cwd)
+        stdout, stderr, exit_code = self._sandbox_control_exec(
+            instance, [CONTAINER_HELPER_PATH, "filesystem", request.model_dump_json()]
         )
+        if exit_code != 0:
+            raise RuntimeError(
+                stderr.decode("utf-8", errors="replace").strip()
+                or f"sandbox filesystem operation exited {exit_code}"
+            )
+        return stdout
 
     def _sandbox_control_exec(
         self,
@@ -1006,53 +896,6 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(path)
     elif path.exists():
         path.unlink()
-
-
-def _container_file_info(path: Path) -> ContainerSandboxFileInfo:
-    stat = path.stat()
-    return ContainerSandboxFileInfo(
-        name=path.name,
-        mode=stat.st_mode,
-        size=stat.st_size,
-        mod_time=int(stat.st_mtime),
-        owner=str(getattr(stat, "st_uid", "")),
-        group=str(getattr(stat, "st_gid", "")),
-        is_dir=path.is_dir(),
-        permissions=stat.st_mode & 0o777,
-    )
-
-
-def _iter_text_files(path: Path) -> Iterable[Path]:
-    candidates = (path,) if path.is_file() else tuple(sorted(path.rglob("*")))
-    for candidate in candidates:
-        if not candidate.is_file():
-            continue
-        try:
-            candidate.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        yield candidate
-
-
-def _search_match(path: Path, root: Path, pattern: str) -> ContainerFileSearchMatch:
-    content = path.read_text(encoding="utf-8")
-    for line_number, line in enumerate(content.splitlines(), start=1):
-        column = line.find(pattern)
-        if column != -1:
-            return ContainerFileSearchMatch(
-                path=_display_path(path, root),
-                text=pattern,
-                line=line_number,
-                column=column + 1,
-            )
-    return ContainerFileSearchMatch(path=_display_path(path, root), text=pattern)
-
-
-def _display_path(path: Path, root: Path) -> str:
-    try:
-        return os.fspath(path.relative_to(root))
-    except ValueError:
-        return os.fspath(path)
 
 
 def _container_runtime_missing(error: Exception) -> bool:

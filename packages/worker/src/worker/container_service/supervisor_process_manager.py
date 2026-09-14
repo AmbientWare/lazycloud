@@ -128,7 +128,7 @@ class SupervisorSandboxProcessManager:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def ready(self) -> bool:
-        response = self._request(SupervisorRequest(op="ready"))
+        response = self._request(SupervisorRequest(op="ready"), wait_ready=True)
         return response.type == "ready"
 
     def start_workload(self) -> None:

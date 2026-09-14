@@ -33,13 +33,6 @@ class ClientContract(HttpModel):
     operation: ClientOperation
 
 
-CLIENT_MANIFEST_DEPLOYMENT_KINDS = frozenset(
-    {
-        DeploymentKind.Endpoint,
-        DeploymentKind.Asgi,
-    }
-)
-
 INVOKABLE_DEPLOYMENT_KINDS = frozenset(
     {
         DeploymentKind.Function,
@@ -115,7 +108,6 @@ class ClientManifestResponse(HttpModel):
 
 
 __all__ = [
-    "CLIENT_MANIFEST_DEPLOYMENT_KINDS",
     "INVOKABLE_DEPLOYMENT_KINDS",
     "ClientContract",
     "ClientManifestRequest",

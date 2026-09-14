@@ -8,12 +8,22 @@ from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.contracts import ContractModel
 
+from worker.checkpoint_readiness import CheckpointReadinessProbe
 from worker.routes import WorkerRouteContext
 from worker.runtime_config import OciRuntimeName
-from worker.sandbox_server import SandboxContainerMount, SandboxLogStream
+from worker.sandbox_server import SandboxContainerMount, SandboxFileOperation, SandboxLogStream
 
 CONTAINER_NOT_FOUND_MESSAGE = "Container not found"
 SANDBOX_PROCESS_MANAGER_NOT_READY_MESSAGE = "Sandbox process manager is not ready"
+
+
+class SandboxFilesystemRequest(ContractModel):
+    operation: SandboxFileOperation
+    path: str
+    source: str = ""
+    mode: int = 0o644
+    pattern: str = ""
+    replacement: str = ""
 
 
 class SandboxProcessEventType(StrEnum):
@@ -62,6 +72,7 @@ class WorkerContainerServiceInstance(ContractModel):
     runtime: OciRuntimeName = OciRuntimeName.Runsc
     env: list[str] = Field(default_factory=list)
     request_env: list[str] = Field(default_factory=list)
+    image_env: list[str] = Field(default_factory=list, repr=False)
     build_secret_env: list[str] = Field(default_factory=list)
     build_request: bool = False
     status: str = ""
@@ -101,6 +112,7 @@ class WorkerContainerServiceInstance(ContractModel):
     cache_available: bool = False
     gpu: str = ""
     gpu_count: int = 0
+    checkpoint_readiness: CheckpointReadinessProbe | None = None
 
     @property
     def workspace_root(self) -> str:

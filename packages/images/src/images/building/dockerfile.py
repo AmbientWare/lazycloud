@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable
-from pathlib import Path
 
 from pydantic import JsonValue
 from shared.image_building.authoring import ImageBuildStepKind, ImageSpec
@@ -70,8 +69,12 @@ def render_image_dockerfile(image: ImageSpec) -> str:
         python_executable=python_setup.python_executable,
     ):
         if build_command.kind is ImageBuildStepKind.UvProject:
-            lines.extend(_uv_project_copy_lines(image, build_command.args))
+            lines.extend(_uv_project_copy_lines(build_command.args))
+            lines.append("ENV UV_PROJECT_ENVIRONMENT=/opt/lazycloud/.venv")
         lines.append(f"RUN {build_command.command}")
+        if build_command.kind is ImageBuildStepKind.UvProject:
+            lines.append("ENV VIRTUAL_ENV=${UV_PROJECT_ENVIRONMENT}")
+            lines.append("ENV PATH=${VIRTUAL_ENV}/bin:${PATH}")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -125,16 +128,9 @@ def _append_env_and_build_args(lines: list[str], image: ImageSpec) -> None:
         lines.append(f"ARG {secret}")
 
 
-def _uv_project_copy_lines(image: ImageSpec, args: Iterable[str]) -> list[str]:
+def _uv_project_copy_lines(args: Iterable[str]) -> list[str]:
     project_dir = next((value for value in args if value.strip()), ".")
-    source_prefix = "" if project_dir in {"", "."} else project_dir.rstrip("/") + "/"
-    metadata_files = ["pyproject.toml", "uv.lock"]
-    context_path = Path(image.context_path) if image.context_path else None
-    if context_path is not None:
-        source_dir = context_path / ("" if project_dir in {"", "."} else project_dir)
-        if (source_dir / ".python-version").is_file():
-            metadata_files.append(".python-version")
-    return [f"COPY {source_prefix}{name} ./{name}" for name in metadata_files]
+    return [f"COPY {json.dumps([project_dir.rstrip('/') + '/', './'])}"]
 
 
 def _docker_value(value: str) -> str:

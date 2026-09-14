@@ -41,12 +41,20 @@ class CapacityLimitReachedError(ConflictError):
     """
 
 
+class EndpointReplicaLimitReachedError(CapacityLimitReachedError):
+    """An endpoint already holds its configured maximum number of containers."""
+
+
 class InvalidInputError(DomainError):
     """Request is well-formed but semantically invalid."""
 
 
 class UpstreamUnavailableError(DomainError):
     """A required backing service or worker is unavailable."""
+
+
+class UpstreamTimeoutError(DomainError):
+    """A required backing service or worker exceeded the request deadline."""
 
 
 class PaymentRequiredError(DomainError):
@@ -61,9 +69,11 @@ __all__ = [
     "CapacityLimitReachedError",
     "ConflictError",
     "DomainError",
+    "EndpointReplicaLimitReachedError",
     "ExpiredCursorError",
     "InvalidInputError",
     "NotFoundError",
     "PaymentRequiredError",
+    "UpstreamTimeoutError",
     "UpstreamUnavailableError",
 ]

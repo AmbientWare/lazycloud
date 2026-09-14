@@ -26,7 +26,13 @@ class ContainerLogEntryKind(StringEnum):
 
 class LogEntry(ContractModel):
     id: str
-    task_id: str
+    task_id: str | None = None
+    container_id: str | None = None
+    app_id: str | None = None
+    deployment_id: str | None = None
+    stub_id: str | None = None
+    machine_id: str | None = None
+    worker_id: str | None = None
     stream: Literal["stdout", "stderr", "system"] = "system"
     message: str
     created_at: datetime = Field(default_factory=utc_now)

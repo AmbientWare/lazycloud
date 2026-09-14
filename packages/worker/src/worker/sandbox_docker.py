@@ -153,18 +153,6 @@ class WorkerSandboxDockerService:
         repr=False,
     )
 
-    def prepare(self, container_id: str) -> None:
-        instance = self.instances.get_container_instance(container_id)
-        if instance is None:
-            raise RuntimeError(f"sandbox {container_id} was not recorded before Docker startup")
-        self.ensure_ready(instance)
-        if instance.stub_type != "sandbox":
-            manager = self.process_managers.create_process_manager(instance)
-            try:
-                manager.start_workload()
-            finally:
-                manager.cleanup()
-
     def ensure_ready(self, instance: WorkerContainerServiceInstance) -> None:
         with self._lifecycle_locks.hold(instance.container_id):
             current = self.instances.get_container_instance(instance.container_id)

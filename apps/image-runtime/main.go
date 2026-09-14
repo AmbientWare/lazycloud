@@ -65,11 +65,12 @@ type request struct {
 }
 
 type response struct {
-	ID         string `json:"id"`
-	OK         bool   `json:"ok"`
-	MountPoint string `json:"mount_point,omitempty"`
-	Mounts     int    `json:"mounts,omitempty"`
-	Error      string `json:"error,omitempty"`
+	ID         string   `json:"id"`
+	OK         bool     `json:"ok"`
+	MountPoint string   `json:"mount_point,omitempty"`
+	Mounts     int      `json:"mounts,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	Env        []string `json:"env,omitempty"`
 }
 
 type mountedImage struct {
@@ -77,6 +78,7 @@ type mountedImage struct {
 	archiveSHA256 string
 	mountPoint    string
 	pins          *imageLayerPins
+	env           []string
 }
 
 type imageRuntime struct {
@@ -246,7 +248,10 @@ func (r *imageRuntime) dispatch(req request) (result response) {
 		result.Mounts = len(r.mounts)
 		r.mu.Unlock()
 	case "mount":
-		result.MountPoint, err = r.mount(req)
+		var mounted mountedImage
+		mounted, err = r.mount(req)
+		result.MountPoint = mounted.mountPoint
+		result.Env = mounted.env
 	case "credentials":
 		err = r.credentials.update(req.Credentials)
 	case "unmount":
@@ -323,30 +328,30 @@ func clipstorageDiskLayerIndexCache(root string) (*clipstorage.DiskLayerIndexCac
 	return clipstorage.NewDiskLayerIndexCache(root)
 }
 
-func (r *imageRuntime) mount(req request) (string, error) {
+func (r *imageRuntime) mount(req request) (mountedImage, error) {
 	r.mu.Lock()
 	cache := r.cache
 	r.mu.Unlock()
 	if cache == nil {
-		return "", errors.New("image content cache is not configured")
+		return mountedImage{}, errors.New("image content cache is not configured")
 	}
 	if req.ImageID == "" || strings.ContainsAny(req.ImageID, "/\\\x00") {
-		return "", errors.New("image mount requires a canonical image id")
+		return mountedImage{}, errors.New("image mount requires a canonical image id")
 	}
 	archive, err := pathWithin(r.config.imageRoot, req.ArchivePath)
 	if err != nil {
-		return "", fmt.Errorf("invalid image archive path: %w", err)
+		return mountedImage{}, fmt.Errorf("invalid image archive path: %w", err)
 	}
 	mountPoint, err := pathWithin(r.config.mountRoot, req.MountPoint)
 	if err != nil {
-		return "", fmt.Errorf("invalid image mount point: %w", err)
+		return mountedImage{}, fmt.Errorf("invalid image mount point: %w", err)
 	}
 	cachePath, err := pathWithin(r.config.cacheRoot, req.CachePath)
 	if err != nil {
-		return "", fmt.Errorf("invalid image cache path: %w", err)
+		return mountedImage{}, fmt.Errorf("invalid image cache path: %w", err)
 	}
 	if err := r.credentials.update(req.Credentials); err != nil {
-		return "", err
+		return mountedImage{}, err
 	}
 
 	lock := r.imageLock(req.ImageID)
@@ -357,30 +362,37 @@ func (r *imageRuntime) mount(req request) (string, error) {
 	r.mu.Unlock()
 	if mounted {
 		if existing.archiveSHA256 != req.ArchiveSHA256 || existing.mountPoint != mountPoint {
-			return "", errors.New("mounted image identity does not match the request")
+			return mountedImage{}, errors.New("mounted image identity does not match the request")
 		}
-		return mountPoint, nil
+		return existing, nil
 	}
 	if len(req.ArchiveSHA256) != 64 {
-		return "", errors.New("image mount requires the verified index digest")
+		return mountedImage{}, errors.New("image mount requires the verified index digest")
 	}
 	actualDigest, err := fileSHA256(archive)
 	if err != nil {
-		return "", fmt.Errorf("image index could not be verified: %w", err)
+		return mountedImage{}, fmt.Errorf("image index could not be verified: %w", err)
 	}
 	if actualDigest != req.ArchiveSHA256 {
-		return "", errors.New("image index digest does not match the authorized artifact")
+		return mountedImage{}, errors.New("image index digest does not match the authorized artifact")
 	}
 	if err := validateArchiveReference(archive, req.StorageImageRef); err != nil {
-		return "", err
+		return mountedImage{}, err
 	}
 	metadata, err := clip.NewClipArchiver().ExtractMetadata(archive)
 	if err != nil {
-		return "", err
+		return mountedImage{}, err
+	}
+	storage, err := ociStorageInfo(metadata)
+	if err != nil {
+		return mountedImage{}, err
+	}
+	if storage.ImageMetadata == nil {
+		return mountedImage{}, errors.New("image index is missing OCI runtime configuration")
 	}
 	pins, err := pinImageLayers(cachePath, metadata)
 	if err != nil {
-		return "", err
+		return mountedImage{}, err
 	}
 	keepPins := false
 	defer func() {
@@ -389,7 +401,7 @@ func (r *imageRuntime) mount(req request) (string, error) {
 		}
 	}()
 	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
-		return "", err
+		return mountedImage{}, err
 	}
 	options := clip.MountOptions{
 		Context:               context.Background(),
@@ -405,28 +417,30 @@ func (r *imageRuntime) mount(req request) (string, error) {
 	if req.Preload {
 		options.PrepareConcurrency = 8
 		if err := clip.PrepareArchiveContent(options); err != nil {
-			return "", err
+			return mountedImage{}, err
 		}
 		options.PrepareConcurrency = 0
 	}
 	start, serverErrors, fuseServer, err := clip.MountArchive(options)
 	if err != nil {
-		return "", err
+		return mountedImage{}, err
 	}
 	if err := start(); err != nil {
-		return "", err
+		return mountedImage{}, err
 	}
 	if err := waitForMount(mountPoint, serverErrors); err != nil {
 		_ = fuseServer.Unmount()
-		return "", err
+		return mountedImage{}, err
 	}
-	r.mu.Lock()
-	r.mounts[req.ImageID] = mountedImage{
+	image := mountedImage{
 		server:        fuseServer,
 		archiveSHA256: req.ArchiveSHA256,
 		mountPoint:    mountPoint,
 		pins:          pins,
+		env:           storage.ImageMetadata.Env,
 	}
+	r.mu.Lock()
+	r.mounts[req.ImageID] = image
 	keepPins = true
 	r.mu.Unlock()
 	go func() {
@@ -440,7 +454,7 @@ func (r *imageRuntime) mount(req request) (string, error) {
 		r.mu.Unlock()
 		pins.close()
 	}()
-	return mountPoint, nil
+	return image, nil
 }
 
 func fileSHA256(path string) (string, error) {

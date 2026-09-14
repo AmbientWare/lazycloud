@@ -129,6 +129,14 @@ class CloudEventRecord(ContractModel):
     data: JsonValue = Field(default_factory=dict)
     extensions: dict[str, str] = Field(default_factory=dict)
 
+    @classmethod
+    def from_envelope(cls, envelope: Mapping[str, JsonValue]) -> CloudEventRecord:
+        fields = {key: value for key, value in envelope.items() if key in cls.model_fields}
+        fields["extensions"] = {
+            key: value for key, value in envelope.items() if key not in cls.model_fields
+        }
+        return cls.model_validate(fields)
+
     def as_envelope(self) -> dict[str, JsonValue]:
         envelope: dict[str, JsonValue] = {
             "specversion": self.specversion,

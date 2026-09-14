@@ -33,6 +33,7 @@ class ImageRegistryCredentialKind(StrEnum):
 class ImageBuildContainerBuildOptions(ContractModel):
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
     source_image: str = ""
+    filesystem_source_container_id: str = ""
     dockerfile: str = ""
     build_context_object: str = ""
     build_context_path: str = ""

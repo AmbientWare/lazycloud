@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import typer
 from shared.compute_policy import MachinePool
 from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.gpu import GpuInput
+
+from lazycloud.abstractions.image import Image
 
 WorkflowValue = (
     str
@@ -114,6 +117,18 @@ def build_deployment_overrides(
         sync_dir=sync_dir,
         container_id=container_id,
     )
+
+
+def deployment_image(overrides: DeploymentOverrides) -> Image | None:
+    if overrides.image and overrides.dockerfile:
+        raise typer.BadParameter("use either --image or --dockerfile, not both")
+    if overrides.context_dir and not overrides.dockerfile:
+        raise typer.BadParameter("--context requires --dockerfile")
+    if overrides.dockerfile:
+        return Image.from_dockerfile(overrides.dockerfile, context_dir=overrides.context_dir)
+    if overrides.image:
+        return Image.from_registry(overrides.image)
+    return None
 
 
 def workflow_kwargs(

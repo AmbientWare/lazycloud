@@ -35,6 +35,7 @@ from shared.env import (
     WORKSPACE_ID_ENV,
     WORKSPACE_NAME_ENV,
 )
+from shared.errors import InvalidInputError
 from shared.http.endpoint_forwarding import ASGIMessage, ASGIReceive, ASGISend
 from shared.http.endpoints import EndpointForwardRequest, EndpointForwardResponse
 from shared.http.task_payload import serialize_http_task_payload
@@ -44,6 +45,7 @@ from shared.lifecycle import (
     LifecycleHooks,
     LifecycleStartupContext,
 )
+from shared.task_context import task_context
 
 from runner.checkpoints import wait_for_checkpoint
 from runner.endpoint_forwarding import (
@@ -160,9 +162,12 @@ class EndpointServeRunner:
 
     def handle(self, request: EndpointForwardRequest) -> EndpointForwardResponse:
         try:
-            if self.is_asgi:
-                return call_asgi_app(self.handler(), request)
-            return self._handle_function_endpoint(request)
+            with task_context(_task_id(request)):
+                if self.is_asgi:
+                    return call_asgi_app(self.handler(), request)
+                return self._handle_function_endpoint(request)
+        except InvalidInputError as exc:
+            return error_response(400, str(exc))
         except Exception as exc:
             formatted = traceback.format_exc()
             task_id = _task_id(request)
@@ -238,9 +243,10 @@ class RunnerASGIApplication:
             await send({"type": "http.response.body", "body": b"ok"})
             return
         try:
-            result = self.runner.handler()(scope, receive, send)
-            if inspect.isawaitable(result):
-                await result
+            with task_context(_asgi_task_id(scope)):
+                result = self.runner.handler()(scope, receive, send)
+                if inspect.isawaitable(result):
+                    await result
         except Exception:
             formatted = traceback.format_exc()
             task_id = _asgi_task_id(scope)

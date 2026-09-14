@@ -47,6 +47,7 @@ class SchedulingRequest(ContractModel):
 
     gpu_count: int = 0
     pool_selector: str = ""
+    required_worker_id: str = ""
     runtime_class: str = ""
     docker_enabled: bool = False
     preemptible: bool = False
@@ -112,6 +113,8 @@ class WorkerCapacity(ContractModel):
         # which other tenant owns the worker is not theirs to learn.
         if not self.serves_owner(request.owner_user_id):
             return "worker is private to another account"
+        if request.required_worker_id and self.worker_id != request.required_worker_id:
+            return "request requires the worker holding its source container"
         if request.region is not None and self.region != request.region:
             return "worker is outside the selected region"
         if request.availability_zone and self.availability_zone != request.availability_zone:
@@ -138,6 +141,8 @@ class WorkerCapacity(ContractModel):
 
     def can_fit(self, request: SchedulingRequest) -> bool:
         if not self.serves_owner(request.owner_user_id):
+            return False
+        if request.required_worker_id and self.worker_id != request.required_worker_id:
             return False
         if request.region is not None and self.region != request.region:
             return False

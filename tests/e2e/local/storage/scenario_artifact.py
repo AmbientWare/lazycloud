@@ -40,6 +40,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     endpoint = profile.resolved_endpoint().rstrip("/")
     workspace = profile.workspace
     marker = f"artifact-{secrets.token_hex(12)}"
+    artifacts = ArtifactControlClient.from_endpoint(
+        endpoint, token=profile.token, timeout_seconds=30, workspace=workspace
+    )
+    saved_artifact: tuple[str, str] | None = None
     try:
         app.deploy(
             workspace=workspace,
@@ -49,12 +53,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         call = artifact_owner.spawn(marker)
         if call.get(timeout_seconds=120, poll_interval_seconds=0.5) != marker:
             raise RuntimeError("Artifact owner Function returned the wrong marker")
-        artifacts = ArtifactControlClient.from_endpoint(
-            endpoint,
-            token=profile.token,
-            timeout_seconds=30,
-            workspace=workspace,
-        )
         content = marker.encode()
         saved = artifacts.save(
             call.task_id,
@@ -62,6 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             content,
             content_type="text/plain",
         )
+        saved_artifact = saved.id, call.task_id
         stat = artifacts.stat(saved.id, call.task_id, "accepted.txt")
         if stat.stat is None or stat.stat.size != len(content):
             raise RuntimeError("Artifact stat returned the wrong size")
@@ -85,7 +84,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
     finally:
-        _delete_app(workspace, APP_NAME)
+        try:
+            if saved_artifact is not None:
+                artifact_id, task_id = saved_artifact
+                artifacts.delete(artifact_id)
+                assert not artifacts.list(task_id=task_id).data
+        finally:
+            _delete_app(workspace, APP_NAME)
     return 0
 
 

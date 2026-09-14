@@ -40,6 +40,7 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     ".ruff_cache",
     ".dockerignore",
     ".ipynb_checkpoints",
+    ".env",
     ".env.local",
     ".envrc",
     "**/__pycache__/",

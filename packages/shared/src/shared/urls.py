@@ -17,6 +17,18 @@ class StubUrlTarget(ContractModel):
     subdomain: str = ""
     public: bool = False
     ports: list[int] = Field(default_factory=list)
+    route: str | None = None
+
+    @property
+    def invoke_path(self) -> str:
+        if self.kind != StubKind.Endpoint.value:
+            return ""
+        path = endpoint_route_path(self.route)
+        return path if path != "/" else ""
+
+
+def endpoint_route_path(route: str | None) -> str:
+    return "/" + (route or "").lstrip("/")
 
 
 def url_path_segment(value: str) -> str:
@@ -106,10 +118,12 @@ def build_deployment_url(
         target.subdomain,
         version=target.deployment_version if pin_version else None,
     )
-    return _replace_host(parsed, f"{label}.{parsed.netloc}")
+    return _replace_host(parsed, f"{label}.{parsed.netloc}", path=target.invoke_path)
 
 
-def deployment_handler_path(kind: str, name: str, *, version: int | None = None) -> str:
+def deployment_handler_path(
+    kind: str, name: str, *, version: int | None = None, route: str | None = None
+) -> str:
     """Where the platform itself serves a deployed resource.
 
     The address a public hostname is rewritten onto, and the one a first-party
@@ -119,7 +133,10 @@ def deployment_handler_path(kind: str, name: str, *, version: int | None = None)
 
     prefix = handler_prefix(kind)
     suffix = "latest" if version is None else f"v{version}"
-    return f"/{prefix}/{url_path_segment(name)}/{suffix}"
+    path = endpoint_route_path(route) if kind == StubKind.Endpoint.value else "/"
+    return f"/{prefix}/{url_path_segment(name)}/{suffix}" + (
+        quote(path, safe="/") if path != "/" else ""
+    )
 
 
 def handler_prefix(kind: str) -> str:
@@ -134,7 +151,12 @@ def handler_prefix(kind: str) -> str:
 
 def build_stub_url(external_url: str, target: StubUrlTarget) -> str:
     parsed = _parse_external_url(external_url)
-    return _replace_host(parsed, f"{target.stub_id}.{parsed.netloc}")
+    return _replace_host(parsed, f"{target.stub_id}.{parsed.netloc}", path=target.invoke_path)
+
+
+def build_container_url(external_url: str, container_id: str, *, path: str = "") -> str:
+    parsed = _parse_external_url(external_url)
+    return _replace_host(parsed, f"{container_id}.{parsed.netloc}", path=path)
 
 
 def build_pod_url(external_url: str, target: StubUrlTarget) -> str:
@@ -164,13 +186,10 @@ def pod_proxy_url(
     if isinstance(port, bool) or not 1 <= port <= 65535:
         msg = "pod proxy port must be between 1 and 65535"
         raise ValueError(msg)
-    if resource is StubKind.Sandbox:
-        if not container_id:
-            msg = "container id is required for sandbox proxy URLs"
-            raise ValueError(msg)
+    if container_id:
         return _replace_host(parsed, f"{container_id}-{port}.{parsed.netloc}")
-    if container_id is not None:
-        msg = "container id is supported only for sandbox proxy URLs"
+    if resource is StubKind.Sandbox:
+        msg = "container id is required for sandbox proxy URLs"
         raise ValueError(msg)
     return _replace_host(parsed, f"{stub_id}-{port}.{parsed.netloc}")
 
@@ -194,5 +213,5 @@ def _parse_external_url(external_url: str) -> ParseResult:
     return parsed
 
 
-def _replace_host(parsed: ParseResult, host: str) -> str:
-    return urlunparse((parsed.scheme, host, "", "", "", ""))
+def _replace_host(parsed: ParseResult, host: str, *, path: str = "") -> str:
+    return urlunparse((parsed.scheme, host, quote(path, safe="/"), "", "", ""))

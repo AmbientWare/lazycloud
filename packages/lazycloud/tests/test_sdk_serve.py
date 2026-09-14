@@ -8,15 +8,12 @@ from pathlib import Path
 from lazycloud.abstractions.serve import (
     ContainerWorkspaceSyncer,
     ServePreviewSession,
-    resolve_serve_url,
 )
 from lazycloud.terminal import Terminal
 from shared.http.compute import ContainerResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
     ContainerWorkspaceSyncOperation,
-    GetUrlRequest,
-    GetUrlResponse,
     SyncContainerWorkspaceBody,
     SyncContainerWorkspaceResponse,
 )
@@ -25,13 +22,8 @@ from tests.fakes import http_api_error
 
 @dataclass
 class InterruptingGatewayClient:
-    urls: list[GetUrlRequest] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
     sync_requests: list[SyncContainerWorkspaceBody] = field(default_factory=list)
-
-    def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
-        self.urls.append(request)
-        return GetUrlResponse(url=f"{request.external_url}/endpoint/id/{request.stub_id}")
 
     def attach_to_container_events(
         self,
@@ -126,18 +118,12 @@ class FailingAttachGatewayClient(InterruptingGatewayClient):
         raise RuntimeError("attach failed")
 
 
-def test_serve_preview_resolves_stub_url_and_stops_container_on_interrupt() -> None:
+def test_serve_preview_stops_container_on_interrupt() -> None:
     gateway = InterruptingGatewayClient()
-
-    url = resolve_serve_url(
-        gateway,
-        stub_id="stub-endpoint",
-        external_url="https://example.test",
-    )
     session = ServePreviewSession(
         stub_id="stub-endpoint",
         container_id="ctr-serve",
-        url=url.url,
+        url="https://ctr-serve.example.test",
         gateway_client=gateway,
         resource_client=gateway,
         terminal=Terminal(quiet=True),
@@ -146,7 +132,6 @@ def test_serve_preview_resolves_stub_url_and_stops_container_on_interrupt() -> N
 
     session.run()
 
-    assert url.url == "https://example.test/endpoint/id/stub-endpoint"
     assert gateway.stopped == ["ctr-serve"]
 
 

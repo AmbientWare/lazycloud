@@ -46,7 +46,6 @@ from worker.container_execution import (
     WorkerContainerExecutionService,
 )
 from worker.container_service.protocols import (
-    WorkerContainerArchiveCreator,
     WorkerContainerCheckpointCreator,
     WorkerContainerInstanceStore,
     WorkerContainerRuntimeController,
@@ -157,7 +156,6 @@ class WorkerProcessContainerServiceDependencies:
     sandbox_docker: WorkerSandboxDockerLifecycle | None = None
     logs: WorkerSandboxLogSink | None = None
     checkpoints: WorkerContainerCheckpointCreator | None = None
-    archives: WorkerContainerArchiveCreator | None = None
     network_policy: WorkerSandboxNetworkPolicyUpdater | None = None
     ports: WorkerSandboxPortPublisher | None = None
 
@@ -271,6 +269,20 @@ def assemble_worker_process_services(
             bundle_root=finalization_dependencies.bundle_root,
         ),
     )
+    container_service = WorkerContainerService(
+        instances=instance_store,
+        process_managers=container_service_dependencies.process_managers,
+        sandbox_docker=container_service_dependencies.sandbox_docker,
+        runtime=dependencies.runtime_controller,
+        logs=container_service_dependencies.logs,
+        checkpoints=container_service_dependencies.checkpoints,
+        network_policy=container_service_dependencies.network_policy,
+        ports=container_service_dependencies.ports
+        or SchedulerSandboxPortPublisher(
+            identity,
+            container_repository,
+        ),
+    )
     execution = WorkerContainerExecutionService(
         runtime_resources=runtime_stopper,
         address_publisher=address_publisher,
@@ -290,7 +302,7 @@ def assemble_worker_process_services(
         workspace_storage_mounter=dependencies.workspace_storage_mounter,
         gpu_assigner=dependencies.gpu_assigner,
         instance_recorder=dependencies.instance_recorder,
-        sandbox_docker_preparer=container_service_dependencies.sandbox_docker,
+        workload_preparer=container_service,
         credential_hydrator=dependencies.credential_hydrator,
         oom_supervisor=WorkerSupervisionService(
             worker_id=identity.worker_id,
@@ -307,21 +319,6 @@ def assemble_worker_process_services(
         checkpoint_restorer=dependencies.checkpoint_restorer,
         automatic_checkpoints=dependencies.automatic_checkpoints,
         container_logs=dependencies.container_logs,
-    )
-    container_service = WorkerContainerService(
-        instances=instance_store,
-        process_managers=container_service_dependencies.process_managers,
-        sandbox_docker=container_service_dependencies.sandbox_docker,
-        runtime=dependencies.runtime_controller,
-        logs=container_service_dependencies.logs,
-        checkpoints=container_service_dependencies.checkpoints,
-        archives=container_service_dependencies.archives,
-        network_policy=container_service_dependencies.network_policy,
-        ports=container_service_dependencies.ports
-        or SchedulerSandboxPortPublisher(
-            identity,
-            container_repository,
-        ),
     )
     transport = WorkerContainerServiceTransport(container_service)
 

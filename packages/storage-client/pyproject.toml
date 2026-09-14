@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Boundary-safe object clients and mounted storage primitives for LazyCloud."
 requires-python = ">=3.12"
 dependencies = [
-    "boto3>=1.41,<2",
+    "boto3>=1.43.77,<2",
     "foundation",
     "lazycloud-shared==0.1.0",
     "pydantic>=2.8,<3",

@@ -267,6 +267,7 @@ class DeployStubResponse(HttpModel):
 
 class GetUrlRequest(HttpModel):
     stub_id: str
+    container_id: str | None = None
     deployment_id: str = ""
     url_type: GatewayUrlKind = GatewayUrlKind.Stub
     is_shell: bool = False
