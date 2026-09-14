@@ -638,7 +638,7 @@ class GatewayControlService:
         return AttachToContainerResponse(
             output=output,
             done=done,
-            exit_code=container.exit_code or 0,
+            exit_code=container.exit_code,
         )
 
     @staticmethod

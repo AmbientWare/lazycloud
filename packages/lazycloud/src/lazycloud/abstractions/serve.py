@@ -277,7 +277,9 @@ class ServePreviewSession:
                     if response.output:
                         terminal.write(response.output)
                     if response.done:
-                        if response.exit_code:
+                        if response.exit_code is None:
+                            terminal.warn("serve container stopped; its exit code is not reported")
+                        elif response.exit_code:
                             terminal.error(f"serve container exited with code {response.exit_code}")
                         return
             except TimeoutError:
