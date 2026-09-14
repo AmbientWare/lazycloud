@@ -165,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            user_code = _approve(
+            _approve(
                 process,
                 admin=admin,
                 workspace=workspace,
@@ -195,7 +195,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "capability": "authorization.device-login",
                     "token_id": minted.id,
-                    "user_code": user_code,
                     "workspace": workspace,
                 }
             )
