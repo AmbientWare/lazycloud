@@ -1346,6 +1346,20 @@ class AuthService:
         )
         if token is None:
             return decide_authorization(None, requirement)
+        if requirement.workspace_id is not None:
+            with self.context.database.session() as session:
+                workspace = self.context.workspace(session, requirement.workspace_id)
+                membership = (
+                    WorkspaceMemberRepository(session).membership(
+                        workspace_id=workspace.id,
+                        user_id=token.user_id,
+                    )
+                    if token.names_user and token.user_id
+                    else None
+                )
+            requirement = requirement.model_copy(
+                update={"workspace_id": workspace.id, "membership": membership}
+            )
         return decide_authorization(
             token,
             requirement,
