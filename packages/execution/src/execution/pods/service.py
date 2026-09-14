@@ -17,9 +17,10 @@ from coordination.redis_client import RedisClient
 from database.records.apps import StubRecord
 from database.repositories.execution import PodExecutionRepository
 from database.repositories.images import CheckpointRepository
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.types import DatabaseSession
 from shared.app_identity import POD_IMAGE
+from shared.autoscaler_state import AutoscalerTargetKind
 from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
@@ -872,6 +873,13 @@ class PodControlService:
             else:
                 await connections.increment_total_connections(workspace_id, stub_id)
                 demand_recorded = True
+                await self._async_database().run_transaction(
+                    lambda session: AutoscalingTargetRepository(session).activate(
+                        stub_id=stub_id,
+                        workspace_id=workspace_id,
+                        target_kind=AutoscalerTargetKind.Pod,
+                    )
+                )
                 target = await self._wait_for_pod_proxy_target(
                     stub,
                     request,
@@ -887,7 +895,7 @@ class PodControlService:
                 target.container_id,
                 keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
             )
-        except Exception:
+        except BaseException:
             if demand_recorded:
                 await connections.decrement_total_connections(workspace_id, stub_id)
             raise
