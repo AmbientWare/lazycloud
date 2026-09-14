@@ -784,41 +784,37 @@ class FunctionAutoscaler:
         signal: AutoscalingSignal,
         now: datetime,
     ) -> list[AutoscaleAction]:
-        """Remove containers only where nothing else will.
+        """Release excess pending capacity and idle containers without an expiry.
 
-        A function container ends itself when its idle window passes, so where
-        there is a window the way to have fewer is to stop giving them work —
-        stopping one early would throw away exactly the warm container the next
-        call was going to reach. A stub with a warm floor has no window to wait
-        for, and then this is the only thing that can bring the count down.
-
-        Busy containers are left alone. Stopping one settles what it holds by
-        releasing it, so no invocation is lost, but the part that had already
-        run is, and a handler that is not idempotent would run it twice.
+        Running containers with an idle window retire themselves. Pending
+        containers cannot retire themselves, and cancelled work may leave them
+        waiting for capacity indefinitely.
         """
 
         del scheduler_statuses, active_instance, signal, now
-        if stub.config.runtime.keep_warm >= 0:
-            return []
-        # Every container the excess was counted from, starting ones included.
-        # Two schedulers provisioning the same floor leave the newest half still
-        # pending, and considering only the running ones would answer an excess
-        # of two by stopping the two that are warm and keeping the two that are
-        # not — reclaiming the floor by discarding exactly what it is for.
+        pending_only = stub.config.runtime.keep_warm >= 0
         busy = self.functions.containers_holding_work([item.id for item in containers])
-        idle = [container for container in containers if container.id not in busy]
+        idle = [
+            container
+            for container in containers
+            if container.id not in busy
+            and (not pending_only or container.status is ContainerStatus.Pending)
+        ]
         idle.sort(key=lambda container: container.created_at, reverse=True)
         actions: list[AutoscaleAction] = []
         for container in idle[:count]:
             stopped = self.services.containers.stop(
                 container.id,
                 reason=StopContainerReason.Scheduler,
+                only_if_pending=pending_only,
             )
+            if stopped.status in {ContainerStatus.Pending, ContainerStatus.Running}:
+                continue
             actions.append(
                 AutoscaleAction(
                     container_id=stopped.id,
                     action="stop",
-                    reason="held container count is above the warm floor",
+                    reason="container count exceeds workload demand and warm floor",
                 )
             )
         return actions
