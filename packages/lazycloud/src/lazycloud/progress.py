@@ -13,7 +13,7 @@ from shared.http.task_progress import (
 )
 from shared.timestamps import utc_now
 
-from lazycloud.terminal import Terminal, TerminalStep, format_elapsed
+from lazycloud.terminal import Terminal, TerminalStep
 
 PendingProgressCallback = Callable[[str, TaskPendingProgress | None], None]
 _callback: ContextVar[PendingProgressCallback | None] = ContextVar("pending_progress", default=None)
@@ -48,17 +48,21 @@ class PendingProgressReporter:
             if callback is not None:
                 callback(task_id, pending)
         if pending is None:
+            if self._displayed is not None:
+                self._report(task_id, None)
             self._displayed = None
             return
         elapsed = (utc_now() - pending.pending_since).total_seconds()
         if elapsed < PENDING_NOTICE_DELAY_SECONDS or key == self._displayed:
             return
         self._displayed = key
-        message = f"{task_id[:8]} {pending.message} Waiting {format_elapsed(elapsed)}."
+        self._report(task_id, pending)
+
+    def _report(self, task_id: str, pending: TaskPendingProgress | None) -> None:
         if self.step is not None:
-            self.step.update(message)
+            self.step.pending_progress(task_id, pending)
         elif self.terminal is not None:
-            self.terminal.detail(message)
+            self.terminal.pending_progress(task_id, pending)
 
 
 __all__ = ["PendingProgressCallback", "TaskPendingProgress", "TaskPendingReason", "progress"]
