@@ -1171,6 +1171,10 @@ class EndpointControlService:
 
 
 def _dispatch_failure(exc: Exception) -> tuple[EndpointDispatchStatus, TaskStatus, int]:
+    if isinstance(exc, PaymentRequiredError):
+        return EndpointDispatchStatus.Failed, TaskStatus.Failed, 402
+    if isinstance(exc, CapacityLimitReachedError):
+        return EndpointDispatchStatus.Failed, TaskStatus.Failed, 409
     if isinstance(exc, EndpointDispatchCancelled):
         return (
             EndpointDispatchStatus.Cancelled,
