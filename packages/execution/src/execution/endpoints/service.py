@@ -897,7 +897,11 @@ class EndpointControlService:
             ):
                 outdated_containers.add(target.container_id)
                 continue
-            record = await repository.claim(task, container_id=target.container_id)
+            record = await repository.claim(
+                task,
+                container_id=target.container_id,
+                max_inflight_per_container=max_inflight_per_container,
+            )
             if record is None:
                 await asyncio.sleep(wait.poll_delay())
                 continue
@@ -1208,11 +1212,19 @@ class AsyncEndpointDispatchStateRepository:
             lambda session: ContainerRolloutRepository(session).closed_for_stub(stub_id)
         )
 
-    async def claim(self, task: Task, *, container_id: str) -> EndpointDispatchRecord | None:
+    async def claim(
+        self, task: Task, *, container_id: str, max_inflight_per_container: int
+    ) -> EndpointDispatchRecord | None:
         def claim_in_session(session: DatabaseSession) -> EndpointDispatchRecord | None:
             if not ContainerRolloutRepository(session).accepting_work(
                 container_id, stub_id=task.stub_id or ""
             ):
+                return None
+            # accepting_work holds the container row lock until this transaction commits.
+            loads = EndpointDispatchRepository(session).inflight_counts(
+                task.stub_id or "", at=utc_now()
+            )
+            if loads.get(container_id, 0) >= max_inflight_per_container:
                 return None
             return _transition_dispatch_in_session(
                 session,
