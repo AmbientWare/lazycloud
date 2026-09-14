@@ -37,11 +37,11 @@ def progress(callback: PendingProgressCallback) -> Iterator[None]:
 class PendingProgressReporter:
     terminal: Terminal | None = None
     step: TerminalStep | None = None
-    _last: tuple[TaskPendingReason, datetime] | None = None
-    _displayed: tuple[TaskPendingReason, datetime] | None = None
+    _last: tuple[TaskPendingReason, datetime, str] | None = None
+    _displayed: tuple[TaskPendingReason, datetime, str] | None = None
 
     def update(self, task_id: str, pending: TaskPendingProgress | None) -> None:
-        key = (pending.reason, pending.since) if pending else None
+        key = (pending.reason, pending.since, pending.message) if pending else None
         if key != self._last:
             self._last = key
             callback = _callback.get()
