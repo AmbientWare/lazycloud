@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
 from shared.bytes_transport import encode_bytes
+from shared.checkpoints import CHECKPOINT_REQUEST_TIMEOUT_SECONDS
 from shared.http.pods import (
     CreatePodRequest,
     CreatePodResponse,
@@ -341,6 +342,7 @@ class PodControlClient:
             self.channel.post(
                 self._scoped(f"/api/v1/pods/{container_id}/snapshot-memory"),
                 request.model_dump(mode="json"),
+                timeout_seconds=CHECKPOINT_REQUEST_TIMEOUT_SECONDS,
             )
         )
 
