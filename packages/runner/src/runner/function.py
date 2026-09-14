@@ -1007,7 +1007,14 @@ def _serialize_function_result(
 ) -> FunctionResultPayload:
     if invocation.result_format is FunctionPayloadEncoding.Json:
         return FunctionJsonResult(value=to_json_value(result))
-    return FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(result))
+    payload = cloudpickle_bytes(result)
+    try:
+        preview = repr(result)
+    except Exception:
+        preview = None
+    if preview is not None and len(preview) > 4096:
+        preview = preview[:4093] + "..."
+    return FunctionCloudpickleResult.from_bytes(payload, preview=preview)
 
 
 if __name__ == "__main__":
