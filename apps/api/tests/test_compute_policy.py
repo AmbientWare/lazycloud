@@ -23,6 +23,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService, TokenIssuer
@@ -60,7 +61,7 @@ from shared.http.compute_policy import (
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeSummaryResponse,
 )
-from shared.identity import TokenKind, WorkspaceRecord
+from shared.identity import TokenKind, WorkspaceRecord, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import owned_workspace, workspace_owner_user_id
@@ -268,6 +269,27 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_summary.instances.total == 0
     assert zero_summary.cost.hourly_micros == 0
     assert zero_inventory.data == []
+
+    with isolated_services.context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        workspace = workspaces.get(workspace_id)
+        assert workspace is not None
+        workspaces.upsert(workspace.model_copy(update={"status": WorkspaceStatus.Deleting}))
+        instances = ComputeProviderInstanceRepository(session)
+        draining = instances.list_for_pool(pool_id)[0]
+        instances.upsert(draining.model_copy(update={"status": "terminating"}))
+
+    draining_response = client.get("/api/v1/compute/instances")
+    assert draining_response.status_code == 200
+    draining_inventory = WorkspaceComputeInstanceListResponse.model_validate_json(
+        draining_response.content
+    )
+    assert [(item.id, item.status) for item in draining_inventory.data] == [
+        (draining.instance_id, "deleting")
+    ]
+    assert (
+        client.get("/api/v1/compute/summary", params={"workspace": workspace_id}).status_code == 404
+    )
 
 
 def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(

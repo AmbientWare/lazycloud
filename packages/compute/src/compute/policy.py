@@ -347,40 +347,49 @@ class WorkspaceComputePolicyService:
         the account's and a customer looking at their own cloud spend should see all
         of it rather than the slice one workspace happens to have provisioned.
         """
-        views = [
-            view for workspace in workspace_ids for view in self.instances(workspace=workspace)
-        ]
+        with self.context.database.session() as session:
+            views = [
+                view
+                for workspace_id in workspace_ids
+                for view in self._instances_in_session(session, workspace_id)
+            ]
         views.sort(key=lambda item: (item.record.status, item.record.id))
         return tuple(views)
 
     def instances(self, *, workspace: str) -> tuple[ComputeInstanceView, ...]:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-            instances = ComputeProviderInstanceRepository(session)
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            if self.worker_state is None:
-                msg = "workspace compute policy service requires scheduler worker state"
-                raise RuntimeError(msg)
-            views = [
-                _compute_instance_view(
-                    record,
-                    region=pool.region,
-                    workspace_id=workspace_id,
-                    pool=pool.pool,
-                    enrollments=enrollments,
-                    worker_state=self.worker_state,
-                )
-                for pool in pools
-                for record in instances.list_for_pool(pool.id)
-                if record.status
-                not in {
-                    ReservationStatus.Deleted.value,
-                    ReservationStatus.Failed.value,
-                }
-            ]
+            views = self._instances_in_session(session, workspace_id)
         views.sort(key=lambda item: (item.record.status, item.record.id))
         return tuple(views)
+
+    def _instances_in_session(
+        self, session: DatabaseSession, workspace_id: str
+    ) -> list[ComputeInstanceView]:
+        # Account inventory includes capacity still draining after workspace deletion.
+        pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
+        instances = ComputeProviderInstanceRepository(session)
+        enrollments = ComputeMachineEnrollmentRepository(session)
+        if self.worker_state is None:
+            msg = "workspace compute policy service requires scheduler worker state"
+            raise RuntimeError(msg)
+        return [
+            _compute_instance_view(
+                record,
+                region=pool.region,
+                workspace_id=workspace_id,
+                pool=pool.pool,
+                enrollments=enrollments,
+                worker_state=self.worker_state,
+            )
+            for pool in pools
+            for record in instances.list_for_pool(pool.id)
+            if record.status
+            not in {
+                ReservationStatus.Deleted.value,
+                ReservationStatus.Failed.value,
+            }
+        ]
 
     def workloads(self, *, workspace: str) -> tuple[ComputeWorkloadView, ...]:
         with self.context.database.session() as session:
