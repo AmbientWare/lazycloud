@@ -801,10 +801,11 @@ class StubRepository:
         return [StubRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
 
     def get_for_update(self, stub_id: str, *, workspace_id: str) -> StubRecord | None:
+        # Serialize admission without blocking concurrent container foreign-key checks.
         row = self.session.scalars(
             select(StubTable)
             .where(StubTable.id == stub_id, StubTable.workspace_id == workspace_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
         ).first()
         return StubRecord.model_validate(row.payload) if row is not None else None
 
