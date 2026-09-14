@@ -218,7 +218,7 @@ class PodControlService:
             )
         tcp_url = (
             tcp_pod_url(stub.id, config.exposed_ports[0], public=stub.public)
-            if stub.config.tcp and config.exposed_ports
+            if request.external_url and stub.config.tcp and config.exposed_ports
             else ""
         )
         checkpoint = requested_checkpoint
