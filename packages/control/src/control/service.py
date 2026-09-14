@@ -82,6 +82,7 @@ from control.models import (
     WorkspaceConfigExport,
     WorkspaceCreateResult,
 )
+from control.tcp_ingress import tcp_pod_url
 
 
 class WorkspaceStorageError(RuntimeError):
@@ -1192,7 +1193,14 @@ class ControlPlaneService:
                     raise NotFoundError("endpoint container not found")
                 url = build_container_url(external_url, container.id, path=target.invoke_path)
             elif stub.kind is StubKind.Pod:
-                url = build_pod_url(external_url, target)
+                if stub.config.tcp:
+                    if deployment is None:
+                        raise InvalidInputError("raw TCP ingress requires Pod.deploy()")
+                    if not ports:
+                        raise InvalidInputError("raw TCP ingress requires an exposed port")
+                    url = tcp_pod_url(stub.id, ports[0], public=stub.public)
+                else:
+                    url = build_pod_url(external_url, target)
             elif stub.kind is StubKind.Sandbox:
                 raise InvalidInputError("sandbox URLs require a container-specific exposure")
             elif deployment is not None:

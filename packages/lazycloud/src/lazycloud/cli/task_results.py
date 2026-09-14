@@ -17,6 +17,8 @@ def task_result_human_value(task: TaskResponse) -> object:
         return task.result
     if payload.encoding is FunctionPayloadEncoding.Json:
         return payload.value
+    if payload.preview is not None:
+        return payload.preview
     return {
         "encoding": FunctionPayloadEncoding.Cloudpickle.value,
         "size_bytes": len(payload.bytes_value()),

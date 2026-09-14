@@ -12,13 +12,15 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 from control.service import ControlPlaneService, StubKind
+from control.tcp_ingress import tcp_pod_url
 from coordination.redis_client import RedisClient
 from database.records.apps import StubRecord
 from database.repositories.execution import PodExecutionRepository
 from database.repositories.images import CheckpointRepository
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.types import DatabaseSession
 from shared.app_identity import POD_IMAGE
+from shared.autoscaler_state import AutoscalerTargetKind
 from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
@@ -211,6 +213,15 @@ class PodControlService:
             raise InvalidInputError("memory checkpoints can only restore Sandbox workloads")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
+        if stub.config.tcp and stub.deployment_id is None:
+            raise InvalidInputError(
+                "raw TCP ingress requires Pod.deploy(); standalone Pod.create() is not supported"
+            )
+        tcp_url = (
+            tcp_pod_url(stub.id, config.exposed_ports[0], public=stub.public)
+            if request.external_url and stub.config.tcp and config.exposed_ports
+            else ""
+        )
         checkpoint = requested_checkpoint
         if checkpoint is None and stub.kind is StubKind.Pod and config.runtime.checkpoint_enabled:
             checkpoint = latest_available_checkpoint(
@@ -224,6 +235,8 @@ class PodControlService:
         timeout_seconds = (
             request.timeout_seconds
             if request.timeout_seconds is not None
+            else -1
+            if stub.deployment_id is not None and config.autoscaler.min_containers > 0
             else config.runtime.keep_warm
         )
         created_at = utc_now()
@@ -427,12 +440,16 @@ class PodControlService:
         )
         url = ""
         if request.external_url and ports and stub.kind is not StubKind.Sandbox:
-            url = pod_proxy_url(
-                request.external_url,
-                resource=stub.kind,
-                stub_id=stub.id,
-                container_id=container.id,
-                port=ports[0],
+            url = (
+                tcp_url
+                if stub.config.tcp
+                else pod_proxy_url(
+                    request.external_url,
+                    resource=stub.kind,
+                    stub_id=stub.id,
+                    container_id=container.id,
+                    port=ports[0],
+                )
             )
         return CreatePodResponse(
             container_id=container.id,
@@ -856,6 +873,13 @@ class PodControlService:
             else:
                 await connections.increment_total_connections(workspace_id, stub_id)
                 demand_recorded = True
+                await self._async_database().run_transaction(
+                    lambda session: AutoscalingTargetRepository(session).activate(
+                        stub_id=stub_id,
+                        workspace_id=workspace_id,
+                        target_kind=AutoscalerTargetKind.Pod,
+                    )
+                )
                 target = await self._wait_for_pod_proxy_target(
                     stub,
                     request,
@@ -871,7 +895,7 @@ class PodControlService:
                 target.container_id,
                 keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
             )
-        except Exception:
+        except BaseException:
             if demand_recorded:
                 await connections.decrement_total_connections(workspace_id, stub_id)
             raise

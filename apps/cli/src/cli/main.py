@@ -91,7 +91,6 @@ _ADMIN_GROUP_ORDER = (
     "maintenance",
     "release",
     "auth",
-    "client",
     "usage",
     "billing",
     "economics",

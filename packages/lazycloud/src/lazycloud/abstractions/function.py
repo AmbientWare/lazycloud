@@ -49,7 +49,7 @@ from shared.http.functions import (
 from shared.http.gateway import DeployStubResponse
 from shared.placement import ProductRegion
 from shared.task_context import current_root_task_id, current_task_id
-from shared.tasks import RetryPolicy, TaskPolicy
+from shared.tasks import RetryPolicy, TaskPolicy, TaskStatus
 
 from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
 from lazycloud.abstractions.image import Image
@@ -494,6 +494,7 @@ class Function(Generic[P, R]):
             exit_code=response.exit_code,
             error=response.output,
             workspace_id=config.workspace,
+            status=TaskStatus(response.status) if response.status else None,
         )
 
     async def async_remote(self, *args: P.args, **kwargs: P.kwargs) -> R:
@@ -607,7 +608,7 @@ class Function(Generic[P, R]):
                         step.update(f"{response.task_id[:8]} {response.status}")
                 if response.status or response.done:
                     pending_reporter.update(response.task_id, response.pending_progress)
-                if response.output:
+                if response.output and not response.done:
                     self._progress(
                         response.output,
                         stream="stderr" if response.exit_code else response.stream,
@@ -620,7 +621,7 @@ class Function(Generic[P, R]):
         if last_response is None:
             msg = "function invocation returned no responses"
             raise FunctionOperationError(msg)
-        return last_response
+        return last_response.model_copy(update={"status": reported_status})
 
     def _progress(self, message: str, *, stream: str) -> None:
         if self.terminal is not None and message:

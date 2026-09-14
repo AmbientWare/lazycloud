@@ -9,6 +9,16 @@ from shared.deployment_subdomains import deployment_host_label
 from shared.deployments import StubKind
 
 
+def tcp_ingress_hostname(stub_id: str, port: int, external_host: str) -> str:
+    normalized_stub = stub_id.strip().lower()
+    normalized_host = external_host.strip(".").lower()
+    if not normalized_stub or not normalized_host:
+        raise ValueError("stub id and TCP ingress external host are required")
+    if not 1 <= port <= 65535:
+        raise ValueError("TCP ingress port must be between 1 and 65535")
+    return f"{normalized_stub}-{port}.{normalized_host}"
+
+
 class StubUrlTarget(ContractModel):
     kind: str
     stub_id: str

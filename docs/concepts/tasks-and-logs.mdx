@@ -56,12 +56,12 @@ result.ok, result.status, result.value, result.error
 handle.logs()
 ```
 
-For a task you only know by id, use `Client`:
+For a task you only know by id, reconnect with `Task.from_id`:
 
 ```python
-from lazycloud import Client
+from lazycloud import Task
 
-task = Client().task_handle("<task-id>")
+task = Task.from_id("<task-id>")
 outcome = task.wait(timeout_seconds=120)     # a TaskResult
 task.logs()
 task.cancel()

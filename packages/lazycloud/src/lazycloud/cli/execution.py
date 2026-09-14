@@ -5,6 +5,7 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 import typer
 from shared.compute_policy import MachinePool
 
+from lazycloud._invocation import prepare_arguments
 from lazycloud.abstractions.app import App, AppDeployResult
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.pod import Pod
@@ -258,6 +259,9 @@ def run(
             response = target.run(*args[1:], workspace=selected_workspace)
         elif isinstance(target, Function):
             _validate_function_overrides(overrides)
+            prepared_args, prepared_kwargs = prepare_arguments(
+                target.func, tuple(payload_args), {}, target.inputs
+            )
             target.configure(
                 image=deployment_image(overrides),
                 cpu=overrides.cpu,
@@ -271,7 +275,7 @@ def run(
                 pool=overrides.pool,
                 preemptible=overrides.preemptible,
             )
-            response = call_handler(target.remote, args=payload_args)
+            response = call_handler(target.remote, args=list(prepared_args), kwargs=prepared_kwargs)
         elif isinstance(target, RunWorkflow):
             _reject_unapplied_overrides(target, overrides)
             response = call_handler(target.run, args=payload_args)

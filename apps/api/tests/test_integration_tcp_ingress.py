@@ -9,18 +9,24 @@ from api.server.tcp_ingress import (
     RedisTcpIngressRouteResolver,
     ReloadingTlsContext,
     TcpIngressRouteNotFound,
-    tcp_ingress_hostname,
 )
 from api.tcp_certificate import ensure_local_tcp_certificate
 from control.service import ControlPlaneService, StubKind
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.urls import tcp_ingress_hostname
 
 
 @pytest.mark.anyio
 async def test_tcp_route_resolver_uses_active_public_pod_hierarchy_and_revalidates_cache(
     async_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("LAZYCLOUD_TCP_INGRESS_ENABLED", "true")
+    monkeypatch.setenv("LAZYCLOUD_TCP_INGRESS_EXTERNAL_HOST", "tcp.example.test")
+    monkeypatch.setenv("LAZYCLOUD_TCP_INGRESS_CERTIFICATE_FILE", str(tmp_path / "tls.crt"))
+    monkeypatch.setenv("LAZYCLOUD_TCP_INGRESS_KEY_FILE", str(tmp_path / "tls.key"))
     async_io = async_services.require_async_io()
     deployment = async_services.deployments.deploy(
         DeploymentSpec(
@@ -38,6 +44,7 @@ async def test_tcp_route_resolver_uses_active_public_pod_hierarchy_and_revalidat
         external_host="tcp.example.test",
     )
     sni = tcp_ingress_hostname(resource.stub.id, 9090, "tcp.example.test")
+    assert resource.invoke_url("https://example.test") == f"tls://{sni}:1995"
 
     route = await resolver.resolve(sni)
 

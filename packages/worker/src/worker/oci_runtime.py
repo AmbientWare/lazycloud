@@ -1102,9 +1102,6 @@ class OciRuntimeCommandController:
                 container_id,
                 cleanup_argv=plan.cleanup_argv,
             )
-        if not result.ok:
-            msg = result.output or f"runtime restore failed for {container_id}"
-            raise RuntimeError(msg)
         return ContainerRuntimeRunResult(
             exit_code=result.exit_code,
             stop_reason=self._consume_stop_reason(container_id),

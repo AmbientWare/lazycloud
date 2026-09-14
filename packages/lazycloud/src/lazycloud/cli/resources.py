@@ -740,12 +740,12 @@ def container_attach(
         payload=terminal.model_dump(mode="json"),
         view=result_card(
             "Container finished",
-            {"exit_code": terminal.exit_code},
+            {"exit_code": terminal.exit_code if terminal.exit_code is not None else "Not reported"},
             tone="success" if terminal.exit_code == 0 else "warning",
         ),
     )
-    if terminal.exit_code:
-        raise typer.Exit(terminal.exit_code)
+    if terminal.exit_code != 0:
+        raise typer.Exit(terminal.exit_code if terminal.exit_code is not None else 1)
 
 
 @container_app.command("checkpoint", help="Create a container checkpoint.")

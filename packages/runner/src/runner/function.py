@@ -31,6 +31,7 @@ from shared.env import (
     WORKSPACE_NAME_ENV,
     truthy_env_value,
 )
+from shared.errors import InvalidInputError
 from shared.function_payloads import (
     FUNCTION_MARKER_MAX_DEPTH,
     FUNCTION_MARKER_MAX_NODES,
@@ -388,7 +389,11 @@ class FunctionRunner:
             )
         except BaseException as exc:
             duration = time.perf_counter() - started
-            formatted = traceback.format_exc()
+            formatted = (
+                f"Invalid input: {exc}\n"
+                if isinstance(exc, InvalidInputError)
+                else traceback.format_exc()
+            )
             try:
                 self.append_task_logs(task.task_id, "stderr", formatted)
             except Exception as log_error:
@@ -474,6 +479,7 @@ class FunctionRunner:
                         task_duration=duration_seconds,
                         task_status=TaskStatus.Failed,
                         error=f"{type(exc).__name__}: {exc}",
+                        retryable=not isinstance(exc, InvalidInputError),
                         container_id=self.container_id,
                         container_hostname=self.container_hostname,
                         result_base64="",
@@ -1005,7 +1011,14 @@ def _serialize_function_result(
 ) -> FunctionResultPayload:
     if invocation.result_format is FunctionPayloadEncoding.Json:
         return FunctionJsonResult(value=to_json_value(result))
-    return FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(result))
+    payload = cloudpickle_bytes(result)
+    try:
+        preview = repr(result)
+    except Exception as exc:
+        preview = f"<result preview unavailable: {type(exc).__name__}>"
+    if len(preview) > 4096:
+        preview = preview[:4093] + "..."
+    return FunctionCloudpickleResult.from_bytes(payload, preview=preview)
 
 
 if __name__ == "__main__":

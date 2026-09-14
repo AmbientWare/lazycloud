@@ -125,6 +125,10 @@ class DeploymentOperationError(RuntimeError):
     pass
 
 
+class ImageBuildError(DeploymentOperationError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentSubmission:
     response: FunctionInvokeResponse
@@ -603,7 +607,7 @@ class DeploymentClient(ControlClientConfigMixin):
             msg = result.error or "image build failed"
             if result.build_id:
                 msg = f"{msg} (build {result.build_id})"
-            raise DeploymentOperationError(msg)
+            raise ImageBuildError(msg)
 
         built_spec = operation.image.spec().model_copy(
             update={

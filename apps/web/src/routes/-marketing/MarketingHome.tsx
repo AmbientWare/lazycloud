@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
 import { MarketingReveal } from "./MarketingReveal";
-import { StubsSection } from "./StubsSection";
 import {
   FinalCta,
   GetStartedButton,
@@ -316,8 +315,6 @@ export function MarketingHome() {
         <ParitySection />
 
         <PlatformStoryRail />
-
-        <StubsSection />
 
         <ComputeSection />
 

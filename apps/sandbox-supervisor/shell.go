@@ -551,7 +551,7 @@ func shellChildEnvironment(term string) []string {
 }
 
 func shellWorkingDirectory() string {
-	for _, candidate := range []string{"/workspace", "/mnt/code", os.Getenv("HOME"), "/"} {
+	for _, candidate := range []string{"/mnt/code", "/workspace", os.Getenv("HOME"), "/"} {
 		if candidate == "" {
 			continue
 		}

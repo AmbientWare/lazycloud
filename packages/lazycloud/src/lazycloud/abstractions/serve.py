@@ -277,7 +277,9 @@ class ServePreviewSession:
                     if response.output:
                         terminal.write(response.output)
                     if response.done:
-                        if response.exit_code:
+                        if response.exit_code is None:
+                            terminal.warn("serve container stopped; its exit code is not reported")
+                        elif response.exit_code:
                             terminal.error(f"serve container exited with code {response.exit_code}")
                         return
             except TimeoutError:
@@ -567,7 +569,7 @@ def print_invocation_details(
     authorized: bool,
     token_configured: bool,
 ) -> None:
-    terminal.header("Invocation details")
+    terminal.header("Preview URL")
     terminal.line("")
     terminal.line(f"curl -X POST '{url}' \\")
     terminal.line("-H 'Accept: */*' \\")
@@ -577,7 +579,7 @@ def print_invocation_details(
     terminal.line("-H 'Content-Type: application/json' \\")
     terminal.line("-d '{}'")
     terminal.line("")
-    terminal.header("Serving")
+    terminal.header("Container output")
 
 
 def sync_local_workspace(

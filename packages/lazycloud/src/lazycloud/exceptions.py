@@ -35,10 +35,6 @@ class WorkspaceNotFoundError(SdkError):
         super().__init__(f"workspace not found: {workspace}")
 
 
-class ClientGenerationError(SdkError):
-    pass
-
-
 class ObjectUploadError(SdkError):
     pass
 
@@ -78,7 +74,6 @@ class SandboxFileSystemError(SdkError):
 
 
 __all__ = [
-    "ClientGenerationError",
     "ConfigurationError",
     "DeploymentNotFoundError",
     "InvalidFunctionArgumentsError",

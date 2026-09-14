@@ -12,9 +12,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from lazycloud.cli.control import resource_client
+from lazycloud.session.task import TaskClient
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
-
-from lazycloud import Client
 
 SOURCE_ROOT = Path(__file__).resolve().parent
 
@@ -31,10 +30,10 @@ def _delete_app(name: str, workspace: str) -> None:
 
 
 def _await_scheduled_task(stub_id: str, *, timeout_seconds: float) -> str:
-    client = Client()
+    client = TaskClient()
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        for task in client.tasks(limit=100):
+        for task in client.list(limit=100):
             if task.stub_id == stub_id and task.status.value == "complete":
                 return task.id
         time.sleep(0.5)

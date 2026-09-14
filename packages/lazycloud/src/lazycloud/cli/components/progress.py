@@ -13,8 +13,11 @@ from rich.spinner import Spinner
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
+from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
+from shared.timestamps import utc_now
 
 from lazycloud.cli.components import output, theme
+from lazycloud.cli.components.cards import notice_card
 from lazycloud.cli.components.errors import debug_errors_enabled
 from lazycloud.terminal import Terminal, TerminalStep, format_elapsed
 
@@ -79,6 +82,12 @@ class CliTerminal(Terminal):
 
     def detail(self, message: str) -> None:
         self.line(message)
+
+    def pending_progress(self, task_id: str, pending: TaskPendingProgress | None) -> None:
+        if self.enabled and pending is not None:
+            self.flush_remote_output()
+            self._flush_pending()
+            output.error_console.print(_pending_card(task_id, pending))
 
     def warn(self, message: str) -> None:
         if not self.enabled:
@@ -167,6 +176,7 @@ class LiveStep(TerminalStep):
     )
     owner: CliTerminal = field(kw_only=True, repr=False)
     _spinner: Spinner = field(default_factory=lambda: Spinner("dots", style=theme.RUNNING))
+    _pending_notice: tuple[str, TaskPendingProgress] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.owner._start_step(self)
@@ -181,6 +191,14 @@ class LiveStep(TerminalStep):
             self.update(
                 f"{self.summary.split('·', 1)[0].strip()} · {min(100, completed * 100 // total)}%"
             )
+
+    def pending_progress(self, task_id: str, pending: TaskPendingProgress | None) -> None:
+        with self.owner._progress_lock:
+            self._pending_notice = (task_id, pending) if pending is not None else None
+            if self.owner._live is None:
+                self.owner.pending_progress(task_id, pending)
+            else:
+                self.owner._refresh_steps()
 
     def log(self, line: str) -> None:
         text = line.rstrip()
@@ -220,15 +238,40 @@ class LiveStep(TerminalStep):
 
     def _render_live(self) -> RenderableType:
         row = _step_row(self._spinner, self.name, self.summary, self.elapsed)
-        if debug_errors_enabled() or not self._recent:
-            return row
-        return Group(
-            row,
-            *(
+        parts: list[RenderableType] = [row]
+        if self._pending_notice is not None:
+            parts.append(_pending_card(*self._pending_notice))
+        if not debug_errors_enabled():
+            parts.extend(
                 Text(f"{_LOG_INDENT}{text}", style=theme.MUTED, no_wrap=True)
                 for text in list(self._recent)[-TAIL_LINES:]
-            ),
-        )
+            )
+        return Group(*parts)
+
+
+def _pending_card(task_id: str, pending: TaskPendingProgress) -> RenderableType:
+    elapsed = format_elapsed((utc_now() - pending.pending_since).total_seconds())
+    hint = {
+        TaskPendingReason.Queued: "Keep this command open to follow execution.",
+        TaskPendingReason.Dependencies: "Check the input tasks if they are not progressing.",
+        TaskPendingReason.Retry: "The next attempt will start automatically.",
+        TaskPendingReason.CapacityBusy: "Queued work can start when a container has room.",
+        TaskPendingReason.CapacityUnavailable: (
+            "Placement will retry automatically. Check compute status for available capacity."
+        ),
+        TaskPendingReason.CapacityLimit: "Check compute policy and the configured capacity limit.",
+        TaskPendingReason.ProvisioningCompute: "Keep this command open to follow compute startup.",
+        TaskPendingReason.StartingContainer: "Check container logs if startup stops progressing.",
+    }[pending.reason]
+    return notice_card(
+        f"Task {task_id[:8]} · pending {elapsed}",
+        pending.message,
+        hint=hint,
+        tone="warning"
+        if pending.reason
+        in {TaskPendingReason.CapacityUnavailable, TaskPendingReason.CapacityLimit}
+        else "info",
+    )
 
 
 def _interactive() -> bool:
@@ -237,7 +280,7 @@ def _interactive() -> bool:
     FORCE_COLOR makes Rich report a terminal even for a pipe, and JSON output
     keeps the human stream on stderr, so neither can stand in for a tty check.
     """
-    if output.json_output_active():
+    if output.json_output_active() or output.error_console.is_dumb_terminal:
         return False
     stream = output.error_console.file
     isatty = getattr(stream, "isatty", None)

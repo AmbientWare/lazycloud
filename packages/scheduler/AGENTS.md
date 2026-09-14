@@ -148,9 +148,10 @@ be, and a handler that is not idempotent would run it twice. Skipping busy
 containers means the count stays above the floor while work is in flight, which
 is the honest answer. Those containers are doing the thing they exist for.
 
-Where there is a window, scale-down does nothing and self-retirement removes the
-excess. Stopping a container early there would throw away the warm container the
-next call was about to reach, which is the whole point of pooling.
+Where there is an idle window, running containers retire themselves. Excess
+pending containers still need scale-down because their idle window has not
+started. Stop them only if they remain pending under the container lock, so a
+concurrent startup keeps its warm window.
 
 The floor is held per stub and every deployed version keeps its own, so a
 redeploy releases the floor the version before it held. An author asking for two

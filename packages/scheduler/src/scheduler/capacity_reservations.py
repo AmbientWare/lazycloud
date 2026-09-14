@@ -29,6 +29,7 @@ from shared.capacity import CapacityAcquisitionResult as ComputeCapacityResult
 from shared.capacity import CapacityAcquisitionShape as ComputeCapacityShape
 from shared.capacity import CapacityAcquisitionStatus as ComputeCapacityStatus
 from shared.capacity import (
+    CapacityFailureCode,
     CapacityFulfillmentRequest,
     CapacityOperationStatus,
     CapacityOwnerKind,
@@ -263,6 +264,7 @@ class CapacityAcquisitionResult(ContractModel):
     owns_capacity: bool = False
     target_machine_id: str = ""
     retry_delay_seconds: float = Field(default=1.0, ge=0)
+    failure_code: CapacityFailureCode | None = None
     reason: str = ""
 
 
@@ -2084,6 +2086,7 @@ def _compute_acquisition_result(
         desired_unit=result.desired_unit,
         owns_capacity=result.owns_capacity,
         target_machine_id=result.target_machine_id or "",
+        failure_code=result.failure_code,
         reason=result.reason,
     )
 

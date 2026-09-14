@@ -231,7 +231,9 @@ class StaticEndpointResponseStream:
 
 def test_unversioned_invoke_rejects_stopped_latest_without_fallback(
     isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
     with ExitStack() as client_stack:
         _v1_deployment, v1_stub = _deploy(isolated_services, "roll", DeploymentKind.Function)
         v2_deployment, _v2_stub = _deploy(isolated_services, "roll", DeploymentKind.Function)
@@ -247,12 +249,25 @@ def test_unversioned_invoke_rejects_stopped_latest_without_fallback(
         latest_response = client.post(
             "/api/v1/functions/roll/latest", headers=headers, json={"args": [1]}
         )
+        host_response = client.post(
+            "/",
+            headers=headers | {"host": f"{v2_deployment.subdomain}.{_base_host(BASE_URL)}"},
+            json={"args": [1]},
+        )
         versioned_response = client.post(
             "/api/v1/functions/roll/v1", headers=headers, json={"args": [1]}
         )
+        unauthorized_response = client.post(
+            "/",
+            headers={"host": f"{v2_deployment.subdomain}.{_base_host(BASE_URL)}"},
+            json={"args": [1]},
+        )
 
-        assert latest_response.status_code == 400
+        assert latest_response.status_code == 503
         assert "not active" in latest_response.json()["detail"]
+        assert host_response.status_code == 503
+        assert host_response.json()["code"] == "upstream_unavailable"
+        assert unauthorized_response.status_code == 401
         assert versioned_response.status_code == 200
         assert [request.stub_id for request in service.requests] == [v1_stub.id]
 
@@ -369,9 +384,9 @@ def test_endpoint_version_routes_follow_deployment_lifecycle(
         stopped_v2 = client.post(v2_path, headers=headers, json={})
         active_v1 = client.post(v1_path, headers=headers, json={})
 
-        assert stopped_latest.status_code == 400
+        assert stopped_latest.status_code == 503
         assert "not active" in stopped_latest.json()["detail"]
-        assert stopped_v2.status_code == 400
+        assert stopped_v2.status_code == 503
         assert active_v1.status_code == 202
         assert service.forward_requests[-1].stub_id == v1_stub.id
 

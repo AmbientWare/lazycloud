@@ -25,8 +25,7 @@ function primitiveType(value: string | undefined): PrimitiveType | null {
  * object of primitives; anything richer (arrays, objects, files, unknown
  * shapes) falls back to the raw JSON editor instead of a fake form.
  *
- * The client contract (what `lazycloud client get` generates typed clients from)
- * is preferred; the SDK `inputs` Schema metadata is the fallback.
+ * The callable contract is preferred; the SDK `inputs` Schema metadata is the fallback.
  */
 export function playgroundFields(manifest: DeploymentManifest): PlaygroundField[] | null {
   const contract = manifest.client_contract;

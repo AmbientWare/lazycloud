@@ -36,7 +36,7 @@ from examples.document_processing.storage import (
     write_bounded_upload,
 )
 from examples.document_processing.worker import ocr_document
-from lazycloud import Client, Task
+from lazycloud import Task
 
 STATIC_ROOT = Path(__file__).with_name("static")
 TERMINAL_STATUSES = frozenset({"complete", "failed", "expired", "timeout", "cancelled"})
@@ -158,7 +158,7 @@ def _task_from_token(token: str) -> tuple[Task, JobClaims]:
         claims = verify_job_token(token, secret=get_job_token_secret())
     except (InvalidJobToken, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail="job not found") from exc
-    return Client().task_handle(claims.task_id), claims
+    return Task.from_id(claims.task_id), claims
 
 
 def _content_length(value: str | None) -> int | None:

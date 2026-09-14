@@ -38,7 +38,6 @@ from lazycloud.progress import (
     TaskPendingReason,
     progress,
 )
-from lazycloud.session import Client
 from lazycloud.session.deployment import Deployment
 from lazycloud.session.task import FunctionCall, Task
 from lazycloud.terminal import output
@@ -46,7 +45,6 @@ from lazycloud.terminal import output
 __all__ = [
     "App",
     "Artifact",
-    "Client",
     "CloudBucket",
     "CloudBucketConfig",
     "Container",

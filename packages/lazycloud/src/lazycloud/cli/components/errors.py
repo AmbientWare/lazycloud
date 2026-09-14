@@ -13,13 +13,18 @@ from pydantic import JsonValue
 from rich.console import Console
 from rich.text import Text
 from shared.app_identity import ENV_PREFIX
+from shared.errors import InvalidInputError
 from shared.http.errors import HttpApiError
+from shared.tasks import TaskStatus
 from typer import _click as click
 
+from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.cli.components import theme
 from lazycloud.cli.components.cards import card
 from lazycloud.cli.components.output import error_console, print_json_line
 from lazycloud.json_contracts import parse_json_value
+from lazycloud.session.deployment import ImageBuildError
+from lazycloud.session.task import TaskOperationError
 
 _TOKEN_PATTERN = re.compile(r"\brt_[A-Za-z0-9_-]{8,}\b")
 _BEARER_PATTERN = re.compile(r"(Bearer\s+)([A-Za-z0-9._~+/=-]{12,})", re.IGNORECASE)
@@ -101,6 +106,18 @@ def normalize_exception(
     messages = [_message_from_exception(item) for item in exception_chain(exc)]
     combined = " ".join(item.lower() for item in messages if item)
     message = _first_message(messages) or _class_title(exc)
+
+    task_error = _task_error_details(exc, message)
+    if task_error is not None:
+        return task_error
+
+    if any(isinstance(item, ImageBuildError) for item in exception_chain(exc)):
+        return ClientErrorDetails(
+            type="image_build_failed",
+            title="Image build failed",
+            message=message,
+            hint="Fix the failing build step shown above, then run the command again.",
+        )
 
     if _is_forbidden_error(exc):
         return ClientErrorDetails(
@@ -365,6 +382,36 @@ def _is_timeout_error(exc: BaseException, message: str) -> bool:
     return isinstance(exc, TimeoutError) or "timed out" in message
 
 
+def _task_error_details(
+    exc: BaseException,
+    message: str,
+) -> ClientErrorDetails | None:
+    for item in exception_chain(exc):
+        if isinstance(item, TaskOperationError):
+            if item.status is TaskStatus.Cancelled:
+                return ClientErrorDetails(
+                    type="task_cancelled",
+                    title="Task cancelled",
+                    message="The task was cancelled before it completed.",
+                    exit_code=130,
+                )
+            if item.status is TaskStatus.Timeout:
+                return ClientErrorDetails(
+                    type="task_timeout",
+                    title="Task timed out",
+                    message=message,
+                    hint="Check the task logs and its execution timeout.",
+                )
+            if item.status is TaskStatus.Failed:
+                return ClientErrorDetails(
+                    type="task_failed",
+                    title="Task failed",
+                    message=message,
+                    hint="Check the task logs for the failing operation.",
+                )
+    return None
+
+
 def _client_operation_classifier(
     exc: BaseException,
     message: str,
@@ -383,6 +430,19 @@ def _client_operation_classifier(
             message=exc.format_message(),
             hint="Run the command with --help to see the available arguments.",
             exit_code=exc.exit_code,
+        )
+    if isinstance(exc, InvalidInputError):
+        return ClientErrorDetails(
+            type="invalid_input",
+            title="Invalid input",
+            message=message,
+            hint="Check the function's argument names and types.",
+        )
+    if isinstance(exc, FunctionOperationError):
+        return ClientErrorDetails(
+            type="function_failed",
+            title="Function failed",
+            message=message,
         )
     if isinstance(exc, ValueError):
         return ClientErrorDetails(
