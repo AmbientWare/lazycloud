@@ -21,6 +21,7 @@ from lazycloud.cli.components import theme
 from lazycloud.cli.components.cards import card
 from lazycloud.cli.components.output import error_console, print_json_line
 from lazycloud.json_contracts import parse_json_value
+from lazycloud.session.deployment import ImageBuildError
 from lazycloud.session.task import TaskOperationError
 
 _TOKEN_PATTERN = re.compile(r"\brt_[A-Za-z0-9_-]{8,}\b")
@@ -107,6 +108,14 @@ def normalize_exception(
     task_error = _task_error_details(exc, message)
     if task_error is not None:
         return task_error
+
+    if any(isinstance(item, ImageBuildError) for item in exception_chain(exc)):
+        return ClientErrorDetails(
+            type="image_build_failed",
+            title="Image build failed",
+            message=message,
+            hint="Fix the failing build step shown above, then run the command again.",
+        )
 
     if _is_forbidden_error(exc):
         return ClientErrorDetails(

@@ -53,6 +53,21 @@ timeouts show Task timed out. Real local CLI checks passed for pending cancellat
 a deliberate handler exception and a three-second timeout. 38 focused SDK cases,
 type checks and Ruff passed. Pending-container cleanup in CLI-16 remains open.
 
+Local fix verification, release generation 63:
+- CLI-12: invalid integer input failed on attempt 1 of 4 in 1.6 seconds of task
+  time. Task 0713a5f6-a670-4234-9c00-928060b8aca0. Retry fix `3cf2c25b6` verified;
+  the heading still says Task failed and the runtime traceback is verbose.
+- SDK-39: the deliberately broken image ran one overlay build and returned its
+  exit-17 step without retrying another storage driver. Fix `38ce1108b` verified.
+  The branch CLI also shows Image build failed with build-step guidance, verified
+  by build db84d710-9c33-44f0-aa65-c40d315a9eb6 in 7.7 seconds.
+- CLI-33: attached to running Pod 832efca9-36a2-40e7-bddf-1f03c0d3dd9e, then
+  stopped it. Attach reported Not reported with nonzero exit while the worker's
+  exit was unknown. A later attach reported the actual code 560. Fix `4ed69fbdb`
+  verified. The Pod is stopped.
+
+Production counts above are unchanged. These fixes have not been released.
+
 Fix verification cleanup: production workspace cli_reporting_fix_20260914 is absent
 after deletion, although the DELETE request timed out. Its stalled build was stopped.
 Local cli_reporting_local_20260914 was deleted because the existing local worker
