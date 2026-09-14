@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Protocol
@@ -8,10 +9,13 @@ from typing import Protocol
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.types import DatabaseSession
 from shared.deployment_subdomains import parse_deployment_host
-from shared.errors import NotFoundError
+from shared.errors import DomainError, NotFoundError
 from shared.urls import handler_prefix
 from starlette.datastructures import Headers
+from starlette.requests import Request
+from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.websockets import WebSocket
 
 from api.server.services import ApiServices
 
@@ -36,9 +40,11 @@ class GeneratedInvokeHostRoutingMiddleware:
         app: ASGIApp,
         *,
         services_provider: ApiServicesProvider,
+        domain_error_handler: Callable[[Request, DomainError], Awaitable[Response]],
     ) -> None:
         self.app = app
         self.services_provider = services_provider
+        self.domain_error_handler = domain_error_handler
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -56,15 +62,23 @@ class GeneratedInvokeHostRoutingMiddleware:
         if not _is_routable_host(host, base_host=base_host):
             await self.app(scope, receive, send)
             return
-        route = await services.require_async_io().database.run_transaction(
-            lambda session: _resolve_handler_route(
-                services,
-                session,
-                host,
-                base_host=base_host,
-                original_path=str(scope.get("path") or "/"),
+        try:
+            route = await services.require_async_io().database.run_transaction(
+                lambda session: _resolve_handler_route(
+                    services,
+                    session,
+                    host,
+                    base_host=base_host,
+                    original_path=str(scope.get("path") or "/"),
+                )
             )
-        )
+        except DomainError as exc:
+            if scope["type"] == "websocket":
+                await WebSocket(scope, receive, send).close(code=1013, reason=exc.message[:120])
+            else:
+                response = await self.domain_error_handler(Request(scope), exc)
+                await response(scope, receive, send)
+            return
         if route is None:
             # A host that names nothing falls through to the platform's own routes,
             # which authorize for themselves. Refusing here by hostname is not

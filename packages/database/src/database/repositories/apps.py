@@ -1154,7 +1154,6 @@ class DeploymentResourceRepository:
                 .join(StubTable, StubTable.id == DeploymentTable.stub_id)
                 .where(AppTable.deleted_at.is_(None))
                 .where(DeploymentTable.deleted_at.is_(None))
-                .where(DeploymentTable.active.is_(True))
                 .where(match)
                 .order_by(DeploymentTable.version.desc())
                 .limit(1)

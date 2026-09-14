@@ -23,6 +23,7 @@ def resolve_deployed_stub_id(
 ) -> StubRecord:
     resolve = _stub_by_id(
         control_plane,
+        services,
         stub_id,
         expected_kind,
         public=public,
@@ -45,6 +46,7 @@ async def resolve_deployed_stub_id_async(
 ) -> StubRecord:
     resolve = _stub_by_id(
         control_plane,
+        services,
         stub_id,
         expected_kind,
         public=public,
@@ -97,6 +99,7 @@ async def resolve_deployed_stub_async(
 
 def _stub_by_id(
     control_plane: ControlPlaneService,
+    services: ApiServices,
     stub_id: str,
     expected_kind: StubKind,
     *,
@@ -112,6 +115,7 @@ def _stub_by_id(
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=f"{name} not found") from exc
         _validate(stub, expected_kind, public=public, resource_name=name)
+        services.deployment_resources.require_stub_active_in_session(session, stub)
         return stub
 
     return resolve

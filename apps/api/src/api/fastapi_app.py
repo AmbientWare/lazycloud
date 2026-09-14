@@ -85,6 +85,26 @@ def _domain_error_status(exc: DomainError) -> int:
     return status.HTTP_400_BAD_REQUEST
 
 
+async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
+    status_code = _domain_error_status(exc)
+    request_id = request.headers.get("x-request-id") or uuid4().hex
+    log = logger.warning if status_code < 500 else logger.error
+    log(
+        "%s serving %s %s (request_id=%s): %s",
+        type(exc).__name__,
+        request.method,
+        request.url.path,
+        request_id,
+        exc.message,
+        exc_info=exc if status_code >= 500 else None,
+    )
+    return JSONResponse(
+        ErrorResponse(detail=exc.message, code=exc.code).model_dump(),
+        status_code=status_code,
+        headers={"X-Request-ID": request_id},
+    )
+
+
 def create_app(
     services: ApiServices,
     *,
@@ -201,6 +221,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
     app.add_middleware(
         GeneratedInvokeHostRoutingMiddleware,
         services_provider=services_provider,
+        domain_error_handler=domain_error_handler,
     )
     app.add_middleware(
         PublicTransferMiddleware,
@@ -239,25 +260,7 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
-    @app.exception_handler(DomainError)
-    async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
-        status_code = _domain_error_status(exc)
-        request_id = request.headers.get("x-request-id") or uuid4().hex
-        log = logger.warning if status_code < 500 else logger.error
-        log(
-            "%s serving %s %s (request_id=%s): %s",
-            type(exc).__name__,
-            request.method,
-            request.url.path,
-            request_id,
-            exc.message,
-            exc_info=exc if status_code >= 500 else None,
-        )
-        return JSONResponse(
-            ErrorResponse(detail=exc.message, code=exc.code).model_dump(),
-            status_code=status_code,
-            headers={"X-Request-ID": request_id},
-        )
+    app.exception_handler(DomainError)(domain_error_handler)
 
     @app.exception_handler(AuthError)
     async def auth_error_handler(_: Request, exc: AuthError) -> JSONResponse:
