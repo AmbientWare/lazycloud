@@ -745,6 +745,7 @@ class GatewayControlService:
                     result=result,
                     error=error,
                     exit_code=0 if request.task_status is TaskStatus.Complete else 1,
+                    retry_allowed=request.retryable,
                 )
             else:
                 task = self.services.tasks.finish(

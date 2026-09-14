@@ -31,6 +31,7 @@ from shared.env import (
     WORKSPACE_NAME_ENV,
     truthy_env_value,
 )
+from shared.errors import InvalidInputError
 from shared.function_payloads import (
     FUNCTION_MARKER_MAX_DEPTH,
     FUNCTION_MARKER_MAX_NODES,
@@ -474,6 +475,7 @@ class FunctionRunner:
                         task_duration=duration_seconds,
                         task_status=TaskStatus.Failed,
                         error=f"{type(exc).__name__}: {exc}",
+                        retryable=not isinstance(exc, InvalidInputError),
                         container_id=self.container_id,
                         container_hostname=self.container_hostname,
                         result_base64="",
