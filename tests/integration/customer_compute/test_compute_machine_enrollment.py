@@ -408,9 +408,11 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
         credential = ComputeJoinCredentialRepository(session).get_by_hash(
             hash_compute_token(first_token.token)
         )
-    assert credential is not None
-    assert credential.status is ComputeCredentialStatus.Revoked
+    assert credential is None
 
+    isolated_services.compute.create_unit(
+        UnitName("cleanup-machines"), provider="agent", workspace=workspace_id
+    )
     second_token = _create_join_token(gateway, MachinePool("cleanup-machines"), workspace_id)
     second = gateway.join_agent(_join_request(second_token.token, fingerprint="second-host"))
     with pytest.raises(ConflictError, match="lazycloud-agent leave"):
