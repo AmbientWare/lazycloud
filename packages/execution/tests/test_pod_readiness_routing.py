@@ -6,8 +6,10 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
+from database.repositories.execution import PodExecutionRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.planning import PodProxyProtocol
+from execution.pods.proxy import PodProxyUnavailable
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.routing import AgentBackendRoute, BackendRouteState
 from shared.scheduling import (
@@ -27,6 +29,7 @@ class _RunningContainers:
 
     workspace_id: str
     stub_id: str
+    route_worker_id: str = "runtime-worker"
 
     def _state(self, container_id: str) -> SchedulerContainerState:
         return SchedulerContainerState(
@@ -44,6 +47,9 @@ class _RunningContainers:
                 AgentBackendRoute(
                     route_id=container_id,
                     container_id=container_id,
+                    workspace_id="capacity-owner-workspace",
+                    machine_id="runtime-machine",
+                    worker_id=self.route_worker_id,
                     port=PORT,
                     state=BackendRouteState.Ready,
                 )
@@ -137,3 +143,61 @@ async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
     )
     assert session.target.container_id == SERVING_CONTAINER
     await service.finish_pod_proxy(session)
+
+
+@pytest.mark.anyio
+async def test_pinned_sandbox_route_uses_durable_runtime_assignment(
+    async_services: ApiServices,
+) -> None:
+    control = ControlPlaneService(async_services.context)
+    stub = control.create_stub(f"sandbox-route-{uuid4().hex[:8]}", kind=StubKind.Sandbox)
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="managed-sandbox",
+        image="image",
+        command=["sleep", "300"],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        runtime_machine_id="runtime-machine",
+        runtime_worker_id="runtime-worker",
+        status=ContainerStatus.Running,
+    )
+    with async_services.context.database.session() as session:
+        ContainerRepository(session).upsert(container)
+        PodExecutionRepository(session).urls.upsert(
+            container_id=container.id, port=PORT, url="https://sandbox.example.test"
+        )
+    service = replace(
+        async_services.pod_service,
+        async_scheduler_containers=_RunningContainers(
+            workspace_id=stub.workspace_id, stub_id=stub.id
+        ),
+    )
+    proxy = await service.prepare_pod_proxy(
+        stub_id=stub.id,
+        container_id=container.id,
+        port=PORT,
+        path="/",
+        query_params={},
+        protocol=PodProxyProtocol.Http,
+    )
+    assert proxy.target.container_id == container.id
+    await service.finish_pod_proxy(proxy)
+
+    service = replace(
+        service,
+        async_scheduler_containers=_RunningContainers(
+            workspace_id=stub.workspace_id,
+            stub_id=stub.id,
+            route_worker_id="other-worker",
+        ),
+    )
+    with pytest.raises(PodProxyUnavailable, match="ownership is invalid"):
+        await service.prepare_pod_proxy(
+            stub_id=stub.id,
+            container_id=container.id,
+            port=PORT,
+            path="/",
+            query_params={},
+            protocol=PodProxyProtocol.Http,
+        )

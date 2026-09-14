@@ -582,13 +582,7 @@ def test_management_stop_and_delete_are_workspace_scoped_and_stop_containers(
 def test_registration_keeps_a_source_stub_that_something_is_using(
     isolated_services: ApiServices,
 ) -> None:
-    """A stub invoked before it was deployed is not swept up by deploying it.
-
-    Registration copies its source stub forward and discards it, because the
-    ordinary one is a staging row nothing refers to. A user who called the
-    function before deploying leaves tasks against that row, and it stops being
-    disposable the moment anything points at it.
-    """
+    """Registration preserves invocations and transfers warm capacity to the deployment."""
 
     control_plane = ControlPlaneService(
         isolated_services.context,
@@ -600,6 +594,12 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
         workspace=workspace.id,
         kind=StubKind.Function,
         handler="pkg:function",
+        config=StubConfig.model_validate(
+            {
+                "runtime": {"keep_warm": -1},
+                "autoscaler": {"min_containers": 2, "max_containers": 4},
+            }
+        ),
     )
     isolated_services.tasks.create(
         "invoked-before-deploy",
@@ -619,4 +619,12 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
 
     assert deployment.stub_id is not None
     assert deployment.stub_id != source_stub.id
-    assert control_plane.get_stub(source_stub.id, workspace=workspace.id).id == source_stub.id
+    retained = control_plane.get_stub(source_stub.id, workspace=workspace.id)
+    assert retained.config.autoscaler.min_containers == 0
+    assert retained.config.runtime.keep_warm == -1
+    assert (
+        control_plane.get_stub(
+            deployment.stub_id, workspace=workspace.id
+        ).config.autoscaler.min_containers
+        == 2
+    )

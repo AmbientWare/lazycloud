@@ -47,6 +47,17 @@ def _live_container_ids(client: ResourceControlClient, app_id: str) -> set[str]:
     cursor: str | None = None
     while True:
         page = client.list_containers(app_id=app_id, limit=100, cursor=cursor)
+        print(
+            json.dumps(
+                {
+                    "case": "warm-floor-containers",
+                    "states": {
+                        item.container.id: item.container.status.value for item in page.data
+                    },
+                }
+            ),
+            flush=True,
+        )
         live.update(
             item.container.id
             for item in page.data

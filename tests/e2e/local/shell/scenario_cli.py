@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -73,9 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         marker = f"shell-cli-{time.time_ns()}"
         result = run_text_process(
             (
-                "uv",
-                "run",
-                "lazycloud",
+                str(Path(sys.executable).parent / "lazycloud"),
                 "shell",
                 "--container-id",
                 container_id,

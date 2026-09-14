@@ -6,9 +6,37 @@ from httpx2 import Response
 from identity.auth import AuthService
 from identity.users import UserService
 from shared.http.errors import ErrorResponse
-from shared.http.system import TokenCreateResponse, TokenListResponse
-from shared.identity import PlatformRole, TokenKind, TokenStatus
-from tests.workspaces import administrator_credential
+from shared.http.system import AuthorizeResponse, TokenCreateResponse, TokenListResponse
+from shared.identity import PlatformRole, TokenKind, TokenStatus, WorkspaceRecord
+from tests.workspaces import administrator_credential, workspace_owner_user_id
+
+
+def test_authorization_diagnostic_uses_the_callers_current_membership(
+    api_runtime: tuple[ApiServices, TestClient], api_workspace: WorkspaceRecord
+) -> None:
+    services, client = api_runtime
+    owner_id = workspace_owner_user_id(services.context, api_workspace.id)
+    owner_token, _ = services.auth.create_account_token(owner_id, "diagnostic-owner")
+    stranger = services.users.create(display_name="diagnostic-stranger")
+    stranger_token, _ = services.auth.create_account_token(stranger.id, "diagnostic-stranger")
+
+    for token, user_id, allowed in (
+        (owner_token, owner_id, True),
+        (stranger_token, stranger.id, False),
+    ):
+        response = client.post(
+            "/auth/authorize",
+            headers=_auth(token),
+            json={"resource_kind": "workspace", "workspace_id": api_workspace.name},
+        )
+        assert response.status_code == 200, response.text
+        result = AuthorizeResponse.model_validate_json(response.content)
+        assert result.decision.allowed is allowed
+        assert result.decision.principal is not None
+        assert result.decision.principal.user_id == user_id
+        assert result.decision.requirement.workspace_id == api_workspace.id
+        assert result.policy_input.workspace_id == api_workspace.id
+        assert (result.decision.requirement.membership is not None) is allowed
 
 
 def test_a_minted_token_names_the_account_rather_than_a_workspace(

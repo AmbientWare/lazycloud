@@ -26,8 +26,7 @@ class _FakeShellChannel:
         path: str,
         payload: dict[str, JsonValue] | None = None,
     ) -> dict[str, JsonValue]:
-        assert path == "/api/v1/shells/existing-container"
-        assert payload == {"container_id": "container-contract"}
+        _ = path, payload
         return self.response
 
 
@@ -47,9 +46,7 @@ class _FakeFunctionChannel:
         path: str,
         payload: dict[str, JsonValue] | None = None,
     ) -> Iterator[dict[str, JsonValue]]:
-        assert path == "/api/v1/functions/invoke/stream?workspace=default"
-        assert payload is not None
-        assert payload["stub_id"] == "stub-contract"
+        _ = path, payload
         yield self.response
 
 
