@@ -66,6 +66,25 @@ Local fix verification, release generation 63:
   exit was unknown. A later attach reported the actual code 560. Fix `4ed69fbdb`
   verified. The Pod is stopped.
 
+Local fix verification, release generation 64:
+- CLI-16: task a20cf421-df6b-4903-b32e-1f450091fc4b stayed pending in the
+  deliberately empty pool. After task cancel, container
+  0c6ac78b-5f43-4002-9526-3e4bc8892f4c was stopped on the next inventory read.
+  No start time or handler logs. The run returned task_cancelled JSON and exit
+  130. Cleanup fix `611962a73` passed without an explicit container stop.
+- CLI-17: stopped running task 6ec04dba-494a-42fc-9752-376f92255c95 after tick
+  18. It reported cancelled, the CLI showed Task cancelled and exited 130,
+  logs stopped at tick 18, and its container was stopped.
+- SDK-16: pending.spawn() returned task f0d1dcfd-ac3c-4dfd-a9f1-80ce6660e740.
+  Its handle reported pending, cancel() returned that task in stopped, and the
+  next read reported cancelled with no handler output. Container
+  5329c621-6d46-4749-9582-d43ef05a34a1 stopped automatically.
+
+The eight focused function-autoscaler tests and eleven SDK output tests passed.
+The first scheduler test attempt could not connect because its separate test
+database was stopped. Started the test dependencies, reran successfully, then
+stopped those dependencies again. Ruff and focused type checks passed.
+
 Production counts above are unchanged. These fixes have not been released.
 
 Fix verification cleanup: production workspace cli_reporting_fix_20260914 is absent
