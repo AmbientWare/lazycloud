@@ -569,7 +569,7 @@ def print_invocation_details(
     authorized: bool,
     token_configured: bool,
 ) -> None:
-    terminal.header("Invocation details")
+    terminal.header("Preview URL")
     terminal.line("")
     terminal.line(f"curl -X POST '{url}' \\")
     terminal.line("-H 'Accept: */*' \\")
@@ -579,7 +579,7 @@ def print_invocation_details(
     terminal.line("-H 'Content-Type: application/json' \\")
     terminal.line("-d '{}'")
     terminal.line("")
-    terminal.header("Serving")
+    terminal.header("Container output")
 
 
 def sync_local_workspace(

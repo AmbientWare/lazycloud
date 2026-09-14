@@ -891,10 +891,8 @@ class EndpointControlService:
             )
             if target is None:
                 if container_id is not None:
-                    if loads.get(container_id, 0) >= max_inflight_per_container:
-                        await asyncio.sleep(wait.poll_delay())
-                        continue
-                    raise EndpointDispatchUnavailable("endpoint container is not ready")
+                    await asyncio.sleep(wait.poll_delay())
+                    continue
                 if not wait.warmup_attempted:
                     await self._request_capacity(stub, task)
                     wait.warmup_attempted = True
@@ -929,7 +927,7 @@ class EndpointControlService:
         if (
             container is None
             or container.stub_id != stub.id
-            or container.status is not ContainerStatus.Running
+            or container.status not in {ContainerStatus.Pending, ContainerStatus.Running}
         ):
             raise EndpointDispatchUnavailable("endpoint container is unavailable")
 
