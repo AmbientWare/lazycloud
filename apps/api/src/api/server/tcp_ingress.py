@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol
 
 from control.service import ControlPlaneService, StubKind, StubRecord
+from control.tcp_ingress import TcpIngressSettings
 from coordination.redis_client import AsyncRedisClient, redis_text
 from execution.pods.config import PodStubConfig
 from execution.pods.planning import PodProxyProtocol
@@ -23,10 +24,10 @@ from observability.usage import UsageService
 from pydantic import Field, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import NotFoundError
+from shared.urls import tcp_ingress_hostname
 from sqlalchemy.orm import Session
 
 from api.server.services import ApiServices
-from api.settings import TcpIngressSettings
 
 logger = logging.getLogger(__name__)
 
@@ -54,16 +55,6 @@ class TcpIngressRoute(ContractModel):
 
 class TcpIngressRouteResolver(Protocol):
     async def resolve(self, sni: str) -> TcpIngressRoute: ...
-
-
-def tcp_ingress_hostname(stub_id: str, port: int, external_host: str) -> str:
-    normalized_stub = stub_id.strip().lower()
-    normalized_host = external_host.strip(".").lower()
-    if not normalized_stub or not normalized_host:
-        raise ValueError("stub id and TCP ingress external host are required")
-    if not 1 <= port <= 65535:
-        raise ValueError("TCP ingress port must be between 1 and 65535")
-    return f"{normalized_stub}-{port}.{normalized_host}"
 
 
 @dataclass(slots=True)
@@ -136,7 +127,7 @@ class RedisTcpIngressRouteResolver:
                 workspace=stub.workspace_id,
                 active=True,
             )
-            if resource.stub.id == stub.id
+            if resource.stub.id == stub.id and resource.app.active
         ]
         if not resources:
             raise TcpIngressRouteNotFound("TCP workload has no active deployment")
@@ -180,7 +171,9 @@ class RedisTcpIngressRouteResolver:
             version=route.deployment_version,
             active=True,
         )
-        if not any(resource.stub.id == route.stub_id for resource in active):
+        if not any(
+            resource.stub.id == route.stub_id and resource.app.active for resource in active
+        ):
             raise TcpIngressRouteNotFound("cached TCP deployment is no longer active")
         return route
 
@@ -503,6 +496,5 @@ __all__ = [
     "TcpIngressRoute",
     "TcpIngressRouteNotFound",
     "TcpIngressServer",
-    "tcp_ingress_hostname",
     "tcp_ingress_server_from_settings",
 ]

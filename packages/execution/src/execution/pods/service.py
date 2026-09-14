@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 from control.service import ControlPlaneService, StubKind
+from control.tcp_ingress import tcp_pod_url
 from coordination.redis_client import RedisClient
 from database.records.apps import StubRecord
 from database.repositories.execution import PodExecutionRepository
@@ -211,6 +212,15 @@ class PodControlService:
             raise InvalidInputError("memory checkpoints can only restore Sandbox workloads")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
+        if stub.config.tcp and stub.deployment_id is None:
+            raise InvalidInputError(
+                "raw TCP ingress requires Pod.deploy(); standalone Pod.create() is not supported"
+            )
+        tcp_url = (
+            tcp_pod_url(stub.id, config.exposed_ports[0], public=stub.public)
+            if stub.config.tcp and config.exposed_ports
+            else ""
+        )
         checkpoint = requested_checkpoint
         if checkpoint is None and stub.kind is StubKind.Pod and config.runtime.checkpoint_enabled:
             checkpoint = latest_available_checkpoint(
@@ -429,12 +439,16 @@ class PodControlService:
         )
         url = ""
         if request.external_url and ports and stub.kind is not StubKind.Sandbox:
-            url = pod_proxy_url(
-                request.external_url,
-                resource=stub.kind,
-                stub_id=stub.id,
-                container_id=container.id,
-                port=ports[0],
+            url = (
+                tcp_url
+                if stub.config.tcp
+                else pod_proxy_url(
+                    request.external_url,
+                    resource=stub.kind,
+                    stub_id=stub.id,
+                    container_id=container.id,
+                    port=ports[0],
+                )
             )
         return CreatePodResponse(
             container_id=container.id,

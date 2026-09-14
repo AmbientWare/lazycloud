@@ -31,6 +31,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.routes import RouteService
 from control.service import ControlPlaneService, WorkspaceBucketClient
+from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.event_bus import RedisEventBus
 from coordination.process_presence import RedisProcessPresence
@@ -251,7 +252,6 @@ from api.settings import (
     AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
     PublicIngressSettings,
-    TcpIngressSettings,
 )
 from billing import BillingAccountService, DatabaseBillingAdmission
 from database import AsyncDatabaseClient, DatabaseClient

@@ -12,6 +12,7 @@ from shared.http.client_manifests import ClientManifestResource, client_manifest
 from shared.urls import StubUrlTarget, build_deployment_url, build_pod_url, deployment_handler_path
 
 from control.context import ControlContext
+from control.tcp_ingress import tcp_pod_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,8 @@ class DeploymentResource:
             if not ports:
                 return ""
             ports = [port if port is not None else ports[0]]
+            if self.stub.config.tcp:
+                return tcp_pod_url(self.stub.id, ports[0], public=self.stub.public)
         target = StubUrlTarget(
             kind=self.stub.kind.value,
             stub_id=self.stub.id,
