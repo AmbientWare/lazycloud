@@ -304,6 +304,8 @@ class WorkerImageStartupLoader:
         mount_path = Path(paths.mount_point)
         if not mount_path.exists() and not mount_path.is_symlink():
             return None
+        if not Path(paths.local_archive_path).is_file():
+            return None
         if self._mount_holds_other_archive(request, mount_path):
             return None
 
