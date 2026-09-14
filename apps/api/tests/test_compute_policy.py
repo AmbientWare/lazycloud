@@ -302,6 +302,8 @@ def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
     other = owned_workspace(control, f"pool-listing-other-{caller.id}")
     caller_owner = workspace_owner_user_id(services.context, caller.id)
     other_owner = workspace_owner_user_id(services.context, other.id)
+    services.compute.create_unit(UnitName("caller-local"), workspace=caller.id, provider="local")
+    services.compute.create_unit(UnitName("other-local"), workspace=other.id, provider="local")
     for name, provenance, owner in (
         ("caller-pool", other.id, caller_owner),
         ("other-pool", caller.id, other_owner),
@@ -369,7 +371,7 @@ def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
 
     assert response.status_code == 200, response.text
     pools = MachinePoolListResponse.model_validate_json(response.content)
-    assert [item.name for item in pools.data] == ["caller-pool", "lazycloud"]
+    assert [item.name for item in pools.data] == ["caller-local", "caller-pool", "lazycloud"]
 
 
 def test_deployment_placement_is_pinned_when_workspace_default_changes(

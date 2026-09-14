@@ -595,6 +595,14 @@ class ComputeUnitRepository:
             select(ComputeUnitTable)
             .where(
                 or_(
+                    and_(
+                        ComputeUnitTable.provider == "local",
+                        exists().where(
+                            WorkspaceMemberTable.workspace_id == ComputeUnitTable.workspace_id,
+                            WorkspaceMemberTable.user_id == user_id,
+                            WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                        ),
+                    ),
                     exists().where(
                         ComputeMachineEnrollmentTable.capacity_owner_id == ComputeUnitTable.id,
                         ComputeMachineEnrollmentTable.user_id == user_id,
