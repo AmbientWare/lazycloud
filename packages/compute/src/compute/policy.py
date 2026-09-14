@@ -301,19 +301,21 @@ class WorkspaceComputePolicyService:
         return self.default_machine_pool(workspace=workspace)
 
     def pools(self, *, workspace: str) -> tuple[MachinePoolView, ...]:
-        """Every pool this workspace can schedule into.
-
-        Derived from the units that feed each pool rather than stored: naming a
-        pool creates it, so there is no separate list to keep in step. A pool a
-        workload names but nothing feeds yet is absent, which is the useful
-        answer — it has no capacity to offer.
-        """
+        """Pools backed by the workspace owner's machines or platform capacity."""
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            units = ComputeUnitRepository(session).list_for_workspace(workspace_id)
+            owner_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
+            repository = ComputeUnitRepository(session)
+            units = {
+                unit.id: unit
+                for unit in (
+                    *repository.list_for_account(owner_id),
+                    *repository.list_platform_internal(),
+                )
+            }
             default_pool = self._policy_in_session(session, workspace_id).default_pool
         grouped: dict[str, list[ComputeUnitRecord]] = {}
-        for unit in units:
+        for unit in units.values():
             if unit.phase is ComputeUnitPhase.Deleted:
                 continue
             grouped.setdefault(unit.pool, []).append(unit)

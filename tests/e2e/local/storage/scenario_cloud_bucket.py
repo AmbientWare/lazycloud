@@ -19,26 +19,11 @@ from pathlib import Path
 
 from lazycloud.cli.control import resource_client
 from lazycloud.clients.volume import VolumeControlClient
-from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
 
 from lazycloud import Secret
 
 SOURCE_ROOT = Path(__file__).resolve().parent
-
-
-def _store() -> S3ObjectStoreClient:
-    return S3ObjectStoreClient.from_settings(
-        S3ObjectStoreSettings(
-            endpoint_url=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT"],
-            bucket=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET"],
-            region_name=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_REGION"],
-            access_key_id=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY"],
-            secret_access_key=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY"],
-            session_token="",
-            force_path_style=True,
-        )
-    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -56,6 +41,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except LivePrerequisiteError as exc:
         return blocked(exc)
+
+    from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
     workspace = profile.workspace
     suffix = secrets.token_hex(6)
@@ -89,7 +76,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         from . import workload_cloud_bucket as workload
 
-        store = _store()
+        store = S3ObjectStoreClient.from_settings(
+            S3ObjectStoreSettings(
+                endpoint_url=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT"],
+                bucket=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET"],
+                region_name=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_REGION"],
+                access_key_id=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY"],
+                secret_access_key=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY"],
+                session_token="",
+                force_path_style=True,
+            )
+        )
         access.set(os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY"])
         access_created = True
         secret.set(os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY"])

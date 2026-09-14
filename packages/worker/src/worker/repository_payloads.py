@@ -521,6 +521,7 @@ class PrepareCheckpointArchiveUploadRequest(ContractModel):
 
 class PrepareCheckpointArchiveUploadResponse(WorkerRepositoryResponse):
     upload_url: str = Field(default="", repr=False)
+    upload_headers: dict[str, str] = Field(repr=False)
 
 
 class PersistCheckpointArchiveRequest(ContractModel):
@@ -528,7 +529,6 @@ class PersistCheckpointArchiveRequest(ContractModel):
     origin_key: str
     cache_hash: str
     cache_size_bytes: int
-    cache_namespace: str
     locality: str = ""
     accelerator: str = ""
 

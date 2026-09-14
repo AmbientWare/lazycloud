@@ -29,7 +29,6 @@ PRESIGNED_DOWNLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 class RemoteCheckpointPersister:
     repository: WorkerRepositoryHttpClient
     internal_http: InternalHttpClient
-    cache_namespace: str
     cache: WorkerContentCache | None = None
 
     def persist_checkpoint(
@@ -61,10 +60,8 @@ class RemoteCheckpointPersister:
                 self.internal_http,
                 prepared.upload_url,
                 archive_path,
-                content_length=size_bytes,
+                headers=prepared.upload_headers,
             )
-            # Also seed the content cache so the next worker to restore this
-            # checkpoint reads it locally instead of downloading it again.
             if self.cache is not None:
                 self.cache.store_content_from_local_file(
                     archive_path,
@@ -77,7 +74,6 @@ class RemoteCheckpointPersister:
                     origin_key=plan.origin_key,
                     cache_hash=cache_hash,
                     cache_size_bytes=size_bytes,
-                    cache_namespace=self.cache_namespace,
                     locality=plan.metadata.locality if plan.metadata is not None else "",
                     accelerator=(plan.metadata.accelerator if plan.metadata is not None else ""),
                 )
@@ -142,7 +138,7 @@ def _put_presigned_checkpoint_archive(
     url: str,
     path: Path,
     *,
-    content_length: int,
+    headers: dict[str, str],
 ) -> None:
     scheme = urlparse(url).scheme
     if scheme not in {"http", "https"}:
@@ -153,10 +149,7 @@ def _put_presigned_checkpoint_archive(
             response = internal_http.request(
                 "PUT",
                 url,
-                headers={
-                    "content-type": "application/x-tar",
-                    "content-length": str(content_length),
-                },
+                headers=headers,
                 content=source,
                 timeout_seconds=300,
             )

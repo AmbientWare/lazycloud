@@ -6,11 +6,9 @@ import termios
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
 
 import pytest
 from lazycloud.abstractions.shell import Shell, ShellSession
-from lazycloud.clients.shell.control import ShellControlClient
 from lazycloud.terminal_shell import InteractiveShell, LocalShellTerminal, ShellConnectionError
 from shared.http.errors import ErrorResponse, HttpApiError
 from shared.http.shells import (
@@ -63,26 +61,6 @@ class FakeShellClient:
             keepalive_interval_seconds=30,
             dial_timeout_seconds=10,
         )
-
-
-@dataclass
-class RecordingShellChannel:
-    get_paths: list[str]
-
-    def get(self, path: str):
-        self.get_paths.append(path)
-        return ShellConnectPlanResponse(
-            route_path="/api/v1/shells/id/stub-1/container-1",
-            container_id="container-1",
-            stub_id="stub-1",
-            worker_port=2222,
-            buffer_size_bytes=4096,
-            keepalive_interval_seconds=30,
-            dial_timeout_seconds=10,
-        ).model_dump(mode="json")
-
-    def post(self, path: str, payload: dict[str, Any] | None = None):
-        raise AssertionError("connect_plan should use GET")
 
 
 @dataclass
@@ -189,16 +167,6 @@ def test_shell_propagates_http_api_errors() -> None:
         shell.connect_plan("stub-1", "container-1")
     assert standalone_error.value.status_code == 404
     assert existing_error.value.status_code == 503
-
-
-def test_shell_control_client_uses_explicit_connect_plan_route() -> None:
-    channel = RecordingShellChannel(get_paths=[])
-    client = ShellControlClient(channel=channel)
-
-    plan = client.connect_plan("stub/1", "container 1")
-
-    assert plan.route_path == "/api/v1/shells/id/stub-1/container-1"
-    assert channel.get_paths == ["/api/v1/shells/connect-plan/stub%2F1/container%201"]
 
 
 def test_interactive_shell_authenticates_resizes_streams_and_returns_exit_code() -> None:

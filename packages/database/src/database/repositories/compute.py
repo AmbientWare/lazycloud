@@ -590,6 +590,30 @@ class ComputeUnitRepository:
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
+    def list_for_account(self, user_id: str) -> list[ComputeUnitRecord]:
+        statement = (
+            select(ComputeUnitTable)
+            .where(
+                or_(
+                    exists().where(
+                        ComputeMachineEnrollmentTable.capacity_owner_id == ComputeUnitTable.id,
+                        ComputeMachineEnrollmentTable.user_id == user_id,
+                    ),
+                    exists().where(
+                        AwsAccountConnectionTable.id == ComputeUnitTable.provider_connection_id,
+                        AwsAccountConnectionTable.user_id == user_id,
+                    ),
+                )
+            )
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
+                )
+            )
+            .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
+        )
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
+
     def list_across_workspaces(
         self, *, capacity_owner_kind: CapacityOwnerKind | None = None
     ) -> list[ComputeUnitRecord]:

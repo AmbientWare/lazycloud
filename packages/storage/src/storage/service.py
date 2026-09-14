@@ -837,23 +837,23 @@ class ObjectStorage:
             expires_seconds=expires_seconds,
         )
 
-    def generate_presigned_put_url_for_workspace(
+    def generate_presigned_upload_for_workspace(
         self,
         *,
         workspace_id: str,
         bucket: str,
         key: str,
         expires_seconds: int,
-        content_length: int,
-        content_type: str,
-    ) -> str:
-        self.get_for_workspace(workspace_id=workspace_id, bucket=bucket, key=key)
-        return self.object_client.generate_presigned_put_url(
+    ) -> S3PresignedUpload:
+        record = self.get_for_workspace(workspace_id=workspace_id, bucket=bucket, key=key)
+        return self.object_client.generate_presigned_put(
             self.physical_key_for_workspace(workspace_id, bucket=bucket, key=key),
             bucket=self.physical_bucket(bucket),
             expires_seconds=expires_seconds,
-            content_length=content_length,
-            content_type=content_type,
+            content_length=record.size,
+            content_type=record.content_type,
+            metadata={**record.metadata, OBJECT_SHA256_METADATA_KEY: record.sha256},
+            checksum_sha256=base64.b64encode(bytes.fromhex(record.sha256)).decode("ascii"),
         )
 
     def list(self, bucket: str | None = None, *, prefix: str = "") -> list[ObjectRecord]:

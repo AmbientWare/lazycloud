@@ -53,7 +53,10 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
             uploaded.append(request.read())
             return httpx.Response(204)
         if request.url.path.endswith("prepare-checkpoint-archive-upload"):
-            return httpx.Response(200, json={"upload_url": "https://storage.test/archive"})
+            return httpx.Response(
+                200,
+                json={"upload_url": "https://storage.test/archive", "upload_headers": {}},
+            )
         return httpx.Response(200, json={"accelerator": "L4"})
 
     http = InternalHttpClient()
@@ -65,7 +68,6 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
                 WorkerRepositoryHttpTransport("https://repository.test", "worker-token", http=http)
             ),
             internal_http=http,
-            cache_namespace="checkpoints",
         ),
         checkpoint_root=str(tmp_path / "checkpoints"),
         content_cache_available=True,
@@ -137,7 +139,6 @@ def test_runtime_checkpoint_creator_records_failed_state_on_runtime_error(
                 WorkerRepositoryHttpTransport("https://repository.test", "worker-token")
             ),
             internal_http=InternalHttpClient(),
-            cache_namespace="checkpoints",
         ),
         checkpoint_root=str(tmp_path / "checkpoints"),
         content_cache_available=True,

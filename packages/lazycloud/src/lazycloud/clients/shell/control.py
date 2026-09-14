@@ -13,6 +13,8 @@ from shared.http.shells import (
 )
 from shared.http_transport import HttpChannel
 
+from lazycloud.control import workspace_path
+
 
 class ShellControlChannel(Protocol):
     def get(self, path: str) -> Any: ...
@@ -51,7 +53,9 @@ class ShellControlClient:
         path = (
             f"/api/v1/shells/connect-plan/{quote(stub_id, safe='')}/{quote(container_id, safe='')}"
         )
-        return ShellConnectPlanResponse.model_validate(self.channel.get(path))
+        return ShellConnectPlanResponse.model_validate(
+            self.channel.get(workspace_path(path, self.workspace))
+        )
 
     def create_standalone_shell(
         self,
@@ -76,7 +80,7 @@ class ShellControlClient:
         )
 
     def _workspace_path(self, suffix: str) -> str:
-        return f"/api/v1/shells/{suffix}"
+        return workspace_path(f"/api/v1/shells/{suffix}", self.workspace)
 
 
 __all__ = [

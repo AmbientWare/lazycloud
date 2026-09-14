@@ -3,7 +3,8 @@ from __future__ import annotations
 import http.client
 import json
 import socket
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from networking.dialer import (
@@ -11,6 +12,7 @@ from networking.dialer import (
 )
 from pydantic import JsonValue, TypeAdapter
 from shared.contracts import ContractModel
+from shared.errors import UpstreamTimeoutError, UpstreamUnavailableError
 from worker.container_client.control import ContainerServiceTransport
 from worker.container_client.models import (
     ContainerClientConnectionOptions,
@@ -85,26 +87,20 @@ class HttpContainerServiceTransport:
             _encode_container_service_wire_value(request.model_dump(mode="python")),
             separators=(",", ":"),
         ).encode("utf-8")
-        connection = self._connection(timeout_seconds)
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
             "content-length": str(len(payload)),
             **self.options.auth_metadata,
         }
-        try:
+        with self._connection(timeout_seconds) as connection:
             connection.request("POST", path, body=payload, headers=headers)
             response = connection.getresponse()
             body = response.read()
             if response.status >= 400:
-                detail = body.decode("utf-8", errors="replace").strip()
                 message = f"container service {method.value} returned HTTP {response.status}"
-                if detail:
-                    message = f"{message}: {detail}"
-                raise RuntimeError(message)
+                raise UpstreamUnavailableError(message)
             return body
-        finally:
-            connection.close()
 
     def _stream(
         self,
@@ -118,23 +114,18 @@ class HttpContainerServiceTransport:
             _encode_container_service_wire_value(request.model_dump(mode="python")),
             separators=(",", ":"),
         ).encode("utf-8")
-        connection = self._connection(timeout_seconds)
         headers = {
             "accept": "application/x-ndjson",
             "content-type": "application/json",
             "content-length": str(len(payload)),
             **self.options.auth_metadata,
         }
-        try:
+        with self._connection(timeout_seconds) as connection:
             connection.request("POST", path, body=payload, headers=headers)
             response = connection.getresponse()
             if response.status >= 400:
-                body = response.read()
-                detail = body.decode("utf-8", errors="replace").strip()
                 message = f"container service {method.value} returned HTTP {response.status}"
-                if detail:
-                    message = f"{message}: {detail}"
-                raise RuntimeError(message)
+                raise UpstreamUnavailableError(message)
             while True:
                 line = response.readline()
                 if not line:
@@ -142,18 +133,28 @@ class HttpContainerServiceTransport:
                 clean = line.strip()
                 if clean:
                     yield _decode_container_service_wire_value(_JSON_VALUE.validate_json(clean))
-        finally:
-            connection.close()
 
-    def _connection(self, timeout_seconds: float | None) -> http.client.HTTPConnection:
-        timeout = timeout_seconds or self.route_dialer.config.timeout_seconds
-        if not self.options.backend_route_id:
-            raise ConnectionError("Container control requires an authorized backend route")
-        connection = self.route_dialer.dial_backend_route(
-            self.options.backend_route_id,
-            timeout_seconds=timeout,
+    @contextmanager
+    def _connection(self, timeout_seconds: float | None) -> Iterator[http.client.HTTPConnection]:
+        timeout = (
+            self.route_dialer.config.timeout_seconds if timeout_seconds is None else timeout_seconds
         )
-        return _ExistingSocketHttpConnection(connection, timeout=timeout)
+        if not self.options.backend_route_id:
+            raise UpstreamUnavailableError("Container control requires an authorized backend route")
+        try:
+            backend_socket = self.route_dialer.dial_backend_route(
+                self.options.backend_route_id,
+                timeout_seconds=timeout,
+            )
+            connection = _ExistingSocketHttpConnection(backend_socket, timeout=timeout)
+            try:
+                yield connection
+            finally:
+                connection.close()
+        except TimeoutError as exc:
+            raise UpstreamTimeoutError("Container service exceeded its request deadline") from exc
+        except (OSError, http.client.HTTPException) as exc:
+            raise UpstreamUnavailableError("Container service connection failed") from exc
 
 
 class _ExistingSocketHttpConnection(http.client.HTTPConnection):

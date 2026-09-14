@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import secrets
 from collections.abc import Sequence
-from urllib.parse import urlparse
 
 from lazycloud.abstractions.pod import Container, PodInstance
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
@@ -19,10 +18,7 @@ from lazycloud import App, Image
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
-        profile = require_live(argv, description=__doc__ or "Pod Docker")
-        hostname = urlparse(profile.resolved_endpoint()).hostname or ""
-        if hostname not in {"localhost", "127.0.0.1"} and not hostname.endswith(".localhost"):
-            raise LivePrerequisiteError("Pod Docker acceptance requires the local stack")
+        require_live(argv, description=__doc__ or "Pod Docker")
     except LivePrerequisiteError as exc:
         return blocked(exc)
     marker = f"pod-docker-{secrets.token_hex(8)}"

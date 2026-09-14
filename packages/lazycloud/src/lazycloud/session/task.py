@@ -29,7 +29,7 @@ from shared.transport_retry import (
 )
 
 from lazycloud.clients.observability.control import ObservabilityClient
-from lazycloud.control import ControlClientConfigMixin
+from lazycloud.control import ControlClientConfigMixin, workspace_path
 from lazycloud.control_clients import (
     control_http_channel,
     observability_control_client,
@@ -511,12 +511,16 @@ class TaskClient(ControlClientConfigMixin):
 
     def subscribe(self, task_id: str) -> TaskSubscription:
         raw = call_with_transient_retry(
-            lambda: self._http_channel().get(f"/api/v1/tasks/{task_id}/subscribe")
+            lambda: self._http_channel().get(
+                workspace_path(f"/api/v1/tasks/{task_id}/subscribe", self._config().workspace)
+            )
         )
         return TaskSubscription(task_id=task_id, events=tuple(_parse_task_events(raw)))
 
     def rerun(self, task_id: str) -> Task:
-        raw = self._http_channel().post(f"/api/v1/tasks/{task_id}/rerun")
+        raw = self._http_channel().post(
+            workspace_path(f"/api/v1/tasks/{task_id}/rerun", self._config().workspace)
+        )
         try:
             rerun_task = TaskResponse.model_validate(raw)
         except ValueError as exc:

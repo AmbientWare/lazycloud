@@ -9,7 +9,6 @@ import json
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from urllib.parse import urlparse
 
 from lazycloud.cli.control import resource_client
 from shared.tasks import is_terminal_task_status
@@ -19,9 +18,6 @@ from tests.e2e._support.process import LivePrerequisiteError, blocked, require_l
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         profile = require_live(argv, description=__doc__ or "Function logs")
-        hostname = urlparse(profile.resolved_endpoint()).hostname or ""
-        if hostname not in {"localhost", "127.0.0.1"} and not hostname.endswith(".localhost"):
-            raise LivePrerequisiteError("Function log acceptance requires the local stack")
     except LivePrerequisiteError as exc:
         return blocked(exc)
     from .workload_logs import APP_NAME, app, emit

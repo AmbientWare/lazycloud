@@ -840,18 +840,7 @@ class ControlPlaneService:
         *,
         workspace: str = "default",
     ) -> bool:
-        """Remove the stub a deployment registration was built from.
-
-        A deploy registers a stub first, to carry the uploaded source and the
-        built image, and the registration then writes the durable stub that the
-        deployment owns. The first one has done its job at that point: its
-        config was copied forward, and nothing refers to it.
-
-        Refused rather than forced if anything does refer to it, or if it turns
-        out to own a deployment of its own. A stub someone invoked directly
-        before deploying is a stub with tasks against it, and that is a stub
-        still in use.
-        """
+        """Discard a preparation or release its floor while references remain."""
 
         with self.context.database.session() as session:
             workspace_record = self.context.workspace(session, workspace)
@@ -862,11 +851,23 @@ class ControlPlaneService:
             if stub.deployment_id:
                 return False
             if repository.registration_is_bound(stub.id):
-                return False
-            if not repository.delete(stub.id, workspace_id=workspace_record.id):
-                return False
-        publish_workload_change(self.workspace_changes, stub, WorkspaceChangeType.Deleted)
-        return True
+                if stub.kind is not StubKind.Function or not stub.config.autoscaler.min_containers:
+                    return False
+                # Registration copied the floor to the deployment. Preserve existing
+                # invocations, but let the autoscaler retire idle preparation containers.
+                stub.config.autoscaler.min_containers = 0
+                stub.updated_at = utc_now()
+                repository.upsert(stub)
+                repository.set_preparation_fingerprint(
+                    stub.id, workspace_id=workspace_record.id, fingerprint=None
+                )
+                change = WorkspaceChangeType.Updated
+            else:
+                if not repository.delete(stub.id, workspace_id=workspace_record.id):
+                    return False
+                change = WorkspaceChangeType.Deleted
+        publish_workload_change(self.workspace_changes, stub, change)
+        return change is WorkspaceChangeType.Deleted
 
     def get_stub_config(
         self,

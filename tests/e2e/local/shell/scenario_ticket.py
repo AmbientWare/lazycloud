@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from lazycloud.cli.control import resource_client
+from lazycloud.control import workspace_path
 from lazycloud.session.task import FunctionCall
 from lazycloud.terminal_shell import shell_websocket_url
 from shared.http.shells import (
@@ -158,7 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         channel = HttpChannel(endpoint=endpoint, token=profile.token)
         session = CreateShellInExistingContainerResponse.model_validate(
             channel.post(
-                "/api/v1/shells/existing-container",
+                workspace_path("/api/v1/shells/existing-container", workspace),
                 CreateShellInExistingContainerRequest(container_id=container_id).model_dump(
                     mode="json"
                 ),
@@ -166,8 +167,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         plan = ShellConnectPlanResponse.model_validate(
             channel.get(
-                f"/api/v1/shells/connect-plan/{quote(hold_ticket_target.stub_id or '', safe='')}/"
-                f"{quote(container_id, safe='')}"
+                workspace_path(
+                    "/api/v1/shells/connect-plan/"
+                    f"{quote(hold_ticket_target.stub_id or '', safe='')}/"
+                    f"{quote(container_id, safe='')}",
+                    workspace,
+                )
             )
         )
         marker = f"shell-ticket-{time.time_ns()}"

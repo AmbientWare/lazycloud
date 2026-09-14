@@ -26,7 +26,7 @@ def test_checkpoint_transfer_errors_never_disclose_capability_query(tmp_path: Pa
                 http,
                 capability,
                 checkpoint,
-                content_length=checkpoint.stat().st_size,
+                headers={"content-length": str(checkpoint.stat().st_size)},
             )
         with pytest.raises(RuntimeError) as download_error:
             checkpoint_transfer._download_presigned_url(

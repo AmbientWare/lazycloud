@@ -25,8 +25,6 @@ from worker.retention import (
 )
 from worker.status import DEFAULT_WORKER_SPINDOWN_SECONDS
 
-DEFAULT_CHECKPOINT_CACHE_NAMESPACE = "checkpoints"
-
 
 class WorkerSettings(BaseSettings):
     """What this worker is, layered over the configuration it was given.
@@ -139,10 +137,6 @@ class WorkerSettings(BaseSettings):
     cache_service_token_file: Path | None = Field(
         default=None,
         validation_alias="LAZYCLOUD_CACHE_SERVICE_TOKEN_FILE",
-    )
-    checkpoint_cache_namespace: str = Field(
-        default=DEFAULT_CHECKPOINT_CACHE_NAMESPACE,
-        validation_alias="WORKER_CHECKPOINT_CACHE_NAMESPACE",
     )
     retention_enabled: bool = Field(
         default=True,

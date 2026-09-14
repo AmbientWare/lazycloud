@@ -262,6 +262,7 @@ class WorkerImageBuildExecutionService:
         )
         instance = self._build_instance(request, payload)
         logs: list[str] = []
+        build: WorkerImageArchiveBuildResult | None = None
         sensitive_values: tuple[str, ...] = ()
         log_lock = threading.Lock()
         self.cancellations.register(request.container_id, resources.stop)
@@ -393,6 +394,8 @@ class WorkerImageBuildExecutionService:
 
         finally:
             self.cancellations.unregister(request.container_id)
+            if build is not None and build.archive_path:
+                Path(build.archive_path).unlink(missing_ok=True)
 
     def _private_inputs(
         self,
@@ -907,7 +910,9 @@ class BuildahWorkerImageBuilder:
                     resources.stop()
                     raise
             resources.require_valid()
-            published_index_path = self.archive_root / f"{payload.image_id}.rclip"
+            # Publication may adopt an existing archive with a different digest.
+            # Unpublished bytes must never replace the worker's authorized image cache.
+            published_index_path = self.archive_root / f"build-{_safe_name(container_id)}.rclip"
             published_index_path.parent.mkdir(parents=True, exist_ok=True)
             temporary_index_path = published_index_path.with_suffix(
                 f".rclip.{_safe_name(container_id)}.tmp"

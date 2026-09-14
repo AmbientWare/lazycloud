@@ -6,7 +6,7 @@ from pydantic import Field
 
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
-from shared.identity import AuthScope, TokenKind, TokenStatus
+from shared.identity import AuthScope, PlatformRole, TokenKind, TokenStatus, WorkspaceRole
 
 
 class HealthStatus(StringEnum):
@@ -95,11 +95,22 @@ class AuthzPrincipalResponse(HttpModel):
     token_id: str
     token_name: str
     token_kind: TokenKind
+    user_id: str = ""
     workspace_id: str
+    platform_role: PlatformRole = PlatformRole.Member
     scopes: list[str] = Field(default_factory=list)
     reusable: bool = True
     disabled_by_admin: bool = False
     status: TokenStatus = TokenStatus.Active
+
+
+class AuthzMembershipResponse(HttpModel):
+    id: str
+    workspace_id: str
+    user_id: str
+    role: WorkspaceRole
+    created_at: datetime
+    updated_at: datetime
 
 
 class AuthzRequirementResponse(HttpModel):
@@ -107,6 +118,8 @@ class AuthzRequirementResponse(HttpModel):
     resource_kind: str
     resource_id: str | None = None
     workspace_id: str | None = None
+    membership: AuthzMembershipResponse | None = None
+    required_role: WorkspaceRole = WorkspaceRole.Member
     allowed_token_kinds: list[TokenKind] | None = None
     strict_workspace: bool = False
     require_admin: bool = False

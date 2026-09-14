@@ -328,10 +328,14 @@ def _logs_stream_params(
 def _events_path(request: EventHistoryRequest) -> str:
     return _with_query(
         "/api/v1/events/history",
-        request.model_dump(
-            mode="json",
-            exclude_none=True,
-        ),
+        {
+            **workspace_query(request.workspace_id),
+            **request.model_dump(
+                mode="json",
+                exclude={"workspace_id"},
+                exclude_none=True,
+            ),
+        },
     )
 
 

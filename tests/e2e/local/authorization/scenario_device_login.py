@@ -1,9 +1,7 @@
 """Complete one CLI device login and revoke the account token it mints.
 
-Prerequisites: an authenticated public lazycloud profile targeting a healthy
-local stack and LAZYCLOUD_E2E_ADMIN_TOKEN. The scenario uses an isolated CLI
-home, approves the announced code through the public admin API, verifies the
-account the credential names, and revokes only the uniquely minted token.
+Requires an authenticated account profile. Uses an isolated CLI home, approves
+the announced code as that account, and revokes only its minted token.
 """
 
 from __future__ import annotations
@@ -13,6 +11,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,7 +20,9 @@ from pathlib import Path
 from typing import TextIO
 from urllib.parse import quote, urlsplit
 
+import yaml
 from lazycloud.cli.identity import device_login_client_name
+from lazycloud.config import ClientConfig
 from pydantic import BaseModel
 from shared.http.device_auth import DeviceCodeResponse
 from shared.http.system import AuthTokenResponse, TokenListResponse
@@ -42,7 +43,7 @@ class LoginOutput(BaseModel):
 
 
 def _tokens(channel: HttpChannel) -> list[AuthTokenResponse]:
-    return TokenListResponse.model_validate(channel.get("/api/v1/tokens/all")).data
+    return TokenListResponse.model_validate(channel.get("/api/v1/tokens")).data
 
 
 def _live_token_ids(channel: HttpChannel) -> set[str]:
@@ -59,7 +60,6 @@ def _approve(
     process: subprocess.Popen[str],
     *,
     admin: HttpChannel,
-    workspace: str,
     timeout_seconds: float,
 ) -> str:
     if process.stderr is None:
@@ -116,14 +116,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         profile = require_live(
             argv,
             description=__doc__ or "CLI device login",
-            required_env=("LAZYCLOUD_E2E_ADMIN_TOKEN",),
         )
     except LivePrerequisiteError as exc:
         return blocked(exc)
 
     endpoint = profile.resolved_endpoint().rstrip("/")
     workspace = profile.workspace
-    admin = HttpChannel(endpoint=endpoint, token=os.environ["LAZYCLOUD_E2E_ADMIN_TOKEN"])
+    admin = HttpChannel(endpoint=endpoint, token=profile.token)
     workspaces = WorkspaceListResponse.model_validate(admin.get("/api/v1/workspaces")).workspaces
     matches = [item for item in workspaces if item.name == workspace]
     if len(matches) != 1:
@@ -131,6 +130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     before = _live_token_ids(admin)
     existing_ids = {token.id for token in _tokens(admin)}
     minted: AuthTokenResponse | None = None
+    claimed_token = ""
     profile = f"e2e-device-{time.time_ns()}"
     try:
         with tempfile.TemporaryDirectory(prefix="lazycloud-device-login-") as home:
@@ -146,9 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tls_flag = "--tls" if urlsplit(endpoint).scheme == "https" else "--no-tls"
             process = subprocess.Popen(
                 (
-                    "uv",
-                    "run",
-                    "lazycloud",
+                    str(Path(sys.executable).parent / "lazycloud"),
                     "--json",
                     "login",
                     "--profile",
@@ -168,12 +166,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             _approve(
                 process,
                 admin=admin,
-                workspace=workspace,
                 timeout_seconds=60,
             )
             stdout = process.stdout.read() if process.stdout is not None else ""
             if process.returncode != 0:
                 raise RuntimeError("public CLI device login failed")
+            configured = ClientConfig.model_validate(
+                yaml.safe_load(Path(home, "config.yaml").read_text())
+            )
+            claimed_token = configured.profiles[profile].token
             result = LoginOutput.model_validate_json(stdout)
             if (
                 result.name != profile
@@ -182,7 +183,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 or result.token_source != "device"
             ):
                 raise RuntimeError("public CLI device login returned an invalid outcome")
-        created = [token for token in _tokens(admin) if token.id not in existing_ids]
+        created = [
+            token
+            for token in _tokens(admin)
+            if token.id not in existing_ids
+            and token.prefix
+            and claimed_token.startswith(token.prefix)
+        ]
         if len(created) != 1:
             raise RuntimeError("device login did not mint exactly one token")
         minted = created[0]
@@ -200,14 +207,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
     finally:
-        if minted is None:
-            candidates = [token for token in _tokens(admin) if token.id not in existing_ids]
+        if minted is None and claimed_token:
+            candidates = [
+                token
+                for token in _tokens(admin)
+                if token.id not in existing_ids
+                and token.prefix
+                and claimed_token.startswith(token.prefix)
+            ]
             if len(candidates) == 1:
                 minted = candidates[0]
         if minted is not None:
             admin.request("POST", f"/api/v1/tokens/{quote(minted.id, safe='')}/revoke")
         # Revocation keeps the row, so the baseline is which credentials still work.
-        if _live_token_ids(admin) != before:
+        after = _live_token_ids(admin)
+        if not before.issubset(after) or (minted is not None and minted.id in after):
             raise RuntimeError("device-login token cleanup left a live credential behind")
     return 0
 

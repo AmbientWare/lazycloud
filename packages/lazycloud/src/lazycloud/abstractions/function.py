@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from functools import update_wrapper
 from pathlib import Path
@@ -430,7 +432,9 @@ class Function(Generic[P, R]):
     def _remote_call(self, *args: P.args, **kwargs: P.kwargs) -> R:
         self._ensure_invokable()
         with self._task_step() as step:
-            response = self._invoke_serialized(detached=False, args=args, kwargs=kwargs, step=step)
+            response = self._invoke_serialized(
+                self.control_client, detached=False, args=args, kwargs=kwargs, step=step
+            )
             if not response.task_id:
                 raise FunctionOperationError(response.output or "function invocation failed")
             if not response.done:
@@ -458,11 +462,19 @@ class Function(Generic[P, R]):
 
     def spawn_map(self, inputs: Sequence[Any]) -> list[FunctionCall[R]]:
         self._reject_import_invocation()
-        return [self._spawn_dynamic(_map_args(input_value)) for input_value in inputs]
-
-    def _spawn_dynamic(self, args: tuple[Any, ...]) -> FunctionCall[R]:
+        if not inputs:
+            return []
         self._ensure_invokable()
-        response = self._invoke_serialized(detached=True, args=args, kwargs={})
+        client = self.control_client
+        with ThreadPoolExecutor(max_workers=min(len(inputs), 8)) as executor:
+            submitted = [
+                executor.submit(copy_context().run, self._spawn_dynamic, _map_args(value), client)
+                for value in inputs
+            ]
+            return [future.result() for future in submitted]
+
+    def _spawn_dynamic(self, args: tuple[Any, ...], client: _FunctionClient) -> FunctionCall[R]:
+        response = self._invoke_serialized(client, detached=True, args=args, kwargs={})
         if not response.task_id:
             raise FunctionOperationError(response.output or "function invocation failed")
         return self._call_from_response(response)
@@ -553,10 +565,13 @@ class Function(Generic[P, R]):
         *args: Any,
         **kwargs: Any,
     ) -> FunctionInvokeResponse:
-        return self._invoke_serialized(detached=detached, args=args, kwargs=kwargs)
+        return self._invoke_serialized(
+            self.control_client, detached=detached, args=args, kwargs=kwargs
+        )
 
     def _invoke_serialized(
         self,
+        client: _FunctionClient,
         *,
         detached: bool,
         args: tuple[Any, ...],
@@ -574,7 +589,7 @@ class Function(Generic[P, R]):
         reported_status = ""
         pending_reporter = PendingProgressReporter(terminal=self.terminal, step=step)
         try:
-            for response in self.control_client.invoke(
+            for response in client.invoke(
                 self.stub_id,
                 serialized.payload,
                 detached=detached,
