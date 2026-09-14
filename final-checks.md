@@ -5,6 +5,11 @@ First pass complete. Only checked PASS items count as passing.
 Published 0.0.93 results: CLI 35/51 PASS, 13 PARTIAL, 3 BLOCKED;
 SDK 55/72 PASS, 14 PARTIAL, 3 BLOCKED. Total 90/123 PASS.
 
+Local follow-up has verified 25 of those 33 non-passing items. This is a forecast
+of 115/123 after release, not a new production pass count or a full local rerun.
+Remaining: TCP cold-start validation, GPU execution, five joined-machine checks,
+and natural artifact retention. PR #281 contains the batch on current main.
+
 Current pass: production `https://lazycloud.dev`, published client 0.0.93,
 Python 3.12.11. Disposable client environment and config are under
 `/tmp/lazycloud-user-checks-20260914/`. Commands below use its `venv/bin/lazycloud`.
@@ -179,9 +184,50 @@ ordering, restored stop reasons, and TCP address/prerequisite fixes. TCP deploy
 returns a TLS address; standalone TCP create rejects before scheduling. Three
 TCP route/TLS cases, changed-file types and Ruff passed. No production release.
 
-Still to prove: the refreshed concurrency and lifecycle fixes, SDK preview and
-version-pinned endpoint controls, TCP ingress, bucket credential error formatting,
-warm startup cleanup, and GPU progress on available hardware.
+Local generation 66, source `cb40fa9ae`, follow-up:
+- SDK-31: all five cold concurrent POSTs returned HTTP 200 with their individual
+  markers in 3.56–3.92 seconds, no retries or hidden exceptions.
+- SDK-32: greet v2 returned its updated response. After stopping v2 by deployment
+  ID, the SDK request returned HTTP 503 naming inactive v2 in 0.46 seconds;
+  pinned v1 still returned its original response. Restart restored v2.
+- SDK-33: first POST to SDK preview 2a2c4493-33f1-4311-91f8-82c8c12827a7 returned
+  HTTP 200 in 0.48 seconds. Ctrl-C exited 0 and stopped the preview.
+- SDK-46/57 stop reporting: restored Pod 8a4bf437-382a-43dd-9be7-2dd7475ad4a4
+  returned the original in-memory instance ID and stopped with exit 560/User.
+- SDK-23: scoped durable history for warm_identity contains only the reused
+  container fbffacc7-4979-4e43-aaab-aa362451dbf7, stopped 560, no startup error.
+- SDK-65: deliberately invalid credentials failed S3 mount startup before the
+  handler ran. Task c339bafa-0fa2-4f2a-9c39-1fdcb7d9ed73 raised TaskOperationError
+  with concise bucket/prefix/credential guidance and a pointer to container logs.
+  No handler logs or external bucket was created. Deleted both test secrets.
+  Three startup attempts are the scheduler's separate startup-failure threshold,
+  not handler retries. Valid-prefix/read-only evidence remains the production pass.
+
+TCP live checks exposed another defect: an idle Pod's autoscaling target was
+removed, and new proxy demand did not reactivate it. Requests counted as demand
+but no container was scheduled. Fixed in `b993cda9`; fourteen Pod routing and
+autoscaling cases and focused types passed. Local refresh is in progress. Earlier
+TLS read timeouts are retained as failures until the cold request succeeds.
+
+PR checks found a discarded result-preview exception and a stale HTTP contract
+corpus. The preview now names the exception type while preserving the saved Python
+value; direct owner execution confirmed the value remains 42. Regenerated the
+corpus from Pydantic; all nineteen browser contract cases passed.
+
+Production GPU retry after owner supplied AWS quota approval:
+- AWS default profile reports All G and VT Spot Instance Requests = 128 vCPUs
+  in us-east-1. The request for 384 is not the applied quota.
+- Task ec4f5b94-282a-4dd1-b0ec-4d7e13ccfbd7 triggered automatic T4 provisioning.
+  AWS rejected g4dn.2xlarge Spot capacity in us-east-1c, then other zones. A pinned
+  us-east-1a retry, a8ed8af6-e41f-40c4-bc32-3a3da4db73ef, also stayed unavailable.
+  ASG launch activities show capacity failures in 1a/1b/1c/1d, not quota errors;
+  the actual launch template specifies Spot. Automatic zone selection did move on.
+- Cancelled both tasks and explicitly stopped their pending containers
+  3e0ba1fc-db2d-4d59-a17a-404cfd2d9429 and 3f7d5011-e950-4e19-85d4-76f54b2221f9.
+  Published 0.0.93 still needs the pending-container cleanup fix in this PR.
+- A fresh A10G request is in progress. No successful GPU execution claimed yet.
+
+Still to prove: refreshed TCP cold start and GPU execution/progress.
 Machine joining and natural artifact retention still require their recorded
 external prerequisites. Do not convert these gaps into passes after deployment.
 
