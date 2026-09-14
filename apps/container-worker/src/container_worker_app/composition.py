@@ -260,7 +260,6 @@ def build_worker_process_services(
         persister=RemoteCheckpointPersister(
             repository,
             internal_http,
-            cache_namespace=config.checkpoint_cache_namespace,
             cache=cache_server,
         ),
         checkpoint_root=paths.checkpoint_root,
