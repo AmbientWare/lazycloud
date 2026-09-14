@@ -27,6 +27,9 @@ Python 3.12.11. Disposable client environment and config are under
 - Keep local and production results separate. Production uses the published client.
 - Finish the first pass, batch related fixes with one commit per fix in the same PR,
   rerun affected items, then do a final pass. Apply `unslop`. No release without approval.
+- Finish related fixes before refreshing the local stack. Refresh every changed-package
+  consumer together, then test the affected CLI and SDK workflows. Use narrow checks
+  while editing; reserve the full validation pass for the completed batch.
 - Reuse healthy infrastructure, refresh all changed-package consumers together,
   and verify cleanup of named test resources. Keep credentials private.
 
@@ -51,7 +54,7 @@ Task outcome reporting fixed locally: cancellation preserves its typed status an
 exits 130 with task_cancelled JSON. Handler failures show Task failed and execution
 timeouts show Task timed out. Real local CLI checks passed for pending cancellation,
 a deliberate handler exception and a three-second timeout. 38 focused SDK cases,
-type checks and Ruff passed. Pending-container cleanup in CLI-16 remains open.
+type checks and Ruff passed. CLI-16 cleanup passed on local generation 64 below.
 
 Local fix verification, release generation 63:
 - CLI-12: invalid integer input failed on attempt 1 of 4 in 1.6 seconds of task
@@ -86,6 +89,51 @@ database was stopped. Started the test dependencies, reran successfully, then
 stopped those dependencies again. Ruff and focused type checks passed.
 
 Production counts above are unchanged. These fixes have not been released.
+
+Current fix batch, awaiting local workflow verification:
+- CLI-22/24 and SDK-32: stopped deployments and paused apps return an unavailable
+  error on generated hostnames and direct routes. The latest route cannot fall
+  back to an older active version. Private resource authorization remains enforced.
+- CLI-25 and SDK-33: a preview request can wait through container startup within
+  its existing request deadline. The CLI prints Preview URL and Container output
+  without claiming the server is ready.
+- CLI-23 and SDK-26: a deployed Pod floor keeps its containers alive; an explicit
+  fixed replica target drains excess idle replicas without the keep-warm delay.
+  Removed documentation that incorrectly scaled an endpoint with the Pod command.
+- CLI-32: terminal working directory prefers the synchronized /mnt/code directory.
+  Terminal latency still needs a real interactive check.
+- CLI-14: Python results carry a bounded text preview produced inside the workload.
+  The CLI displays it without deserializing the saved pickle. SDK results retain
+  their original Python encoding. The web contract accepts the preview field.
+- CLI-12/39 and SDK-65: CLI arguments validate before submission; invalid runtime
+  input has a concise log. Worker HTTP failures preserve structured server errors.
+  Secret and storage startup errors have concise task messages; container logs
+  retain the mount failure details.
+- SDK-41: rejected or unsupported acquisition reports capacity unavailable;
+  typed provider failures reach progress messages and message changes redraw.
+  This does not prove a successful GPU launch.
+- SDK-58: documentation names both Image.with_docker() and docker_enabled=True.
+
+Batch evidence so far: 71 focused backend cases, 33 client/runner cases and 16
+worker/API cases passed. Changed Python type checks and Ruff passed; web schema
+lint and type checks passed. An initial hostname assertion used an unconfigured
+test domain and returned 404; configuring the gateway domain made the intended
+stopped-host request pass. No production result changed.
+
+Local checkpoint blocker: two real starts reached HTTP readiness, then failed
+cache admission. Containers e7f846ed-7cc2-4b34-8661-9db8e5303e25 and
+68277ecb-a5f9-478f-a278-d0aa711509ff are terminal. The host is near the cache's
+90% disk-use ceiling; a 1.2 GB checkpoint exceeds it. Removed only 12 identified
+unused build-cache entries created by this run, reclaiming 2.541 GB, which was
+insufficient. Older cache cleanup requires owner approval under AGENTS.md's
+resource ownership rule. The cache error now identifies the limiting capacity
+and additional bytes required. No checkpoint restore success is claimed.
+
+Still to diagnose or prove: endpoint concurrency latency, warm-function deletion
+races, Pod deletion reporting, TCP ingress, checkpoint restore, Docker/registry/
+Compose, resource enforcement, and runtime cross-workspace denial latency.
+Machine joining and natural artifact retention still require their recorded
+external prerequisites. Do not convert these gaps into passes after deployment.
 
 Fix verification cleanup: production workspace cli_reporting_fix_20260914 is absent
 after deletion, although the DELETE request timed out. Its stalled build was stopped.
