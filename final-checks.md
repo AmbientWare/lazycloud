@@ -90,7 +90,7 @@ stopped those dependencies again. Ruff and focused type checks passed.
 
 Production counts above are unchanged. These fixes have not been released.
 
-Current fix batch, awaiting local workflow verification:
+Current fix batch:
 - CLI-22/24 and SDK-32: stopped deployments and paused apps return an unavailable
   error on generated hostnames and direct routes. The latest route cannot fall
   back to an older active version. Private resource authorization remains enforced.
@@ -120,18 +120,68 @@ lint and type checks passed. An initial hostname assertion used an unconfigured
 test domain and returned 404; configuring the gateway domain made the intended
 stopped-host request pass. No production result changed.
 
-Local checkpoint blocker: two real starts reached HTTP readiness, then failed
+Resolved local checkpoint blocker: two real starts reached HTTP readiness, then failed
 cache admission. Containers e7f846ed-7cc2-4b34-8661-9db8e5303e25 and
 68277ecb-a5f9-478f-a278-d0aa711509ff are terminal. The host is near the cache's
 90% disk-use ceiling; a 1.2 GB checkpoint exceeds it. Removed only 12 identified
 unused build-cache entries created by this run, reclaiming 2.541 GB, which was
-insufficient. Older cache cleanup requires owner approval under AGENTS.md's
-resource ownership rule. The cache error now identifies the limiting capacity
-and additional bytes required. No checkpoint restore success is claimed.
+insufficient. Host free space later increased to about 530 GiB; its cause was
+not verified. No older cache was deleted by this run. The cache error now names
+the limiting capacity and additional bytes required. Restore evidence follows.
 
-Still to diagnose or prove: endpoint concurrency latency, warm-function deletion
-races, Pod deletion reporting, TCP ingress, checkpoint restore, Docker/registry/
-Compose, resource enforcement, and runtime cross-workspace denial latency.
+Local generation 65, source `03901b6f`, branch CLI/SDK:
+- CLI-12: `run functions.py:add invalid 22` rejected the integer before submission
+  in 0.58 seconds, exit 1. JSON mode returned `invalid_input` in 0.55 seconds.
+- CLI-14: `task result 54e0f3c9-2e59-4bbf-bd37-d5261d533627` displayed 42 in
+  0.61 seconds. The SDK handle also returned the original integer 42.
+- CLI-22/24: stop and pause returned HTTP 503 naming the inactive deployment/app
+  in 0.37/0.36 seconds; start and resume restored HTTP 200. App user_checks_web.
+- CLI-23, SDK-26: sdk_web_pod held two replicas beyond its five-second keep-warm,
+  then scaled to one. Pause/resume returned a working HTTP server; deletion left
+  all three observed containers stopped, without failed replacement containers.
+  Deployment de6a3b5d-e66b-4671-9279-f77992e1a41e.
+- CLI-25: the first POST to preview e9d3ea8c-5a09-475f-80f4-6bc5074777c9 returned
+  HTTP 200 in 0.53 seconds without retry. This manual request may have arrived
+  after backend readiness. Ctrl-C stopped the preview.
+- CLI-32: `dev pod.py:web --sync .` opened /mnt/code, read sync-note.txt and
+  immediately echoed typed commands. `exit 7` propagated exit 7. Stopped its Pod.
+- CLI-39: a missing USER_CHECK_VALUE secret failed before handler execution with
+  a concise secret-not-found card, exit 1. Three startup containers failed before
+  the task settled; preserve that observation when reviewing startup retries.
+- SDK-46: original Pod 7ec6016a-2fbf-41f5-8d91-4e0872f7f026 and restored Pod
+  2342aaf4-f369-431d-bb0c-3a9d28939a6a returned the same in-memory instance ID
+  668d3a973a954987983ef171cd3eb502, count 1003 and PID 1. Both terminated.
+  The restored stop recorded exit 1; fix 32ce1d613 still needs live verification.
+- SDK-58/59/60: Docker 29.8.0 in sandbox e69f31f8-dcec-4a55-ac5d-c11edf2b81d7
+  built and ran an image, returned its log marker and stopped the container.
+  Push/remove/pull through a disposable registry:2 succeeded; the pulled image
+  returned the same marker. Registry authentication was not tested. Compose wrote
+  and read its named volume; down --volumes left no volumes. Removed the registry,
+  its volume and nested containers, then terminated the sandbox.
+- SDK-40: task 7fb4a967-12e4-4d8b-88f8-680caa135e98 used explicit self-hosted pool,
+  cpu=0.5, memory=256Mi and the configured environment marker. Actual runtime
+  cgroup had cpu.weight=20, memory.low=268435456, memory.high=1235222528 and
+  memory.max=1342177280. CPU/memory requests permit bursting by production policy;
+  cpu.max was 330900/100000, not a half-core hard limit.
+- SDK-74: foreign sandbox 7ed9f659-c312-44ab-a583-e59c4f6909a9 ran its owner's
+  command successfully. A main-workspace function was denied in 0.02 seconds with
+  container not found, task 6bdee2ef. Foreign sandbox stopped. No timeout recurred.
+- SDK-23: two warm calls reused fbffacc7-4979-4e43-aaab-aa362451dbf7 and PID 1;
+  deletion stopped it. Final scoped startup-history review remains pending.
+- SDK-31: five cold concurrent POSTs produced four HTTP 200 responses and one
+  HTTP 500 from a real PostgreSQL deadlock. Admission's stub lock blocked the
+  container foreign-key check while waiting on the app lock. Fix a9fea36f uses
+  FOR NO KEY UPDATE and prevents raw database exceptions reaching callers.
+  Focused admission checks passed; the five-request live repeat remains pending.
+
+Refresh in progress from `8e3296d7`: includes endpoint admission, authorization
+ordering, restored stop reasons, and TCP address/prerequisite fixes. TCP deploy
+returns a TLS address; standalone TCP create rejects before scheduling. Three
+TCP route/TLS cases, changed-file types and Ruff passed. No production release.
+
+Still to prove: the refreshed concurrency and lifecycle fixes, SDK preview and
+version-pinned endpoint controls, TCP ingress, bucket credential error formatting,
+warm startup cleanup, and GPU progress on available hardware.
 Machine joining and natural artifact retention still require their recorded
 external prerequisites. Do not convert these gaps into passes after deployment.
 
