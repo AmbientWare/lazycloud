@@ -323,7 +323,7 @@ def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=other.id,
                 name=UnitName("platform-pool"),
-                pool=LAZYCLOUD_MACHINE_POOL,
+                pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
                 provider="aws",
                 provider_ref="aws:platform",
                 platform_fleet=True,
