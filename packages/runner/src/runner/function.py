@@ -1014,9 +1014,9 @@ def _serialize_function_result(
     payload = cloudpickle_bytes(result)
     try:
         preview = repr(result)
-    except Exception:
-        preview = None
-    if preview is not None and len(preview) > 4096:
+    except Exception as exc:
+        preview = f"<result preview unavailable: {type(exc).__name__}>"
+    if len(preview) > 4096:
         preview = preview[:4093] + "..."
     return FunctionCloudpickleResult.from_bytes(payload, preview=preview)
 
