@@ -43,7 +43,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     artifacts = ArtifactControlClient.from_endpoint(
         endpoint, token=profile.token, timeout_seconds=30, workspace=workspace
     )
-    saved_id = None
+    saved_artifact: tuple[str, str] | None = None
     try:
         app.deploy(
             workspace=workspace,
@@ -60,7 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             content,
             content_type="text/plain",
         )
-        saved_id = saved.id
+        saved_artifact = saved.id, call.task_id
         stat = artifacts.stat(saved.id, call.task_id, "accepted.txt")
         if stat.stat is None or stat.stat.size != len(content):
             raise RuntimeError("Artifact stat returned the wrong size")
@@ -85,9 +85,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     finally:
         try:
-            if saved_id is not None:
-                artifacts.delete(saved_id)
-                assert not artifacts.list(task_id=call.task_id).data
+            if saved_artifact is not None:
+                artifact_id, task_id = saved_artifact
+                artifacts.delete(artifact_id)
+                assert not artifacts.list(task_id=task_id).data
         finally:
             _delete_app(workspace, APP_NAME)
     return 0
