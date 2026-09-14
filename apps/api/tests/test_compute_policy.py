@@ -23,6 +23,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService, TokenIssuer
@@ -60,7 +61,7 @@ from shared.http.compute_policy import (
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeSummaryResponse,
 )
-from shared.identity import TokenKind, WorkspaceRecord
+from shared.identity import TokenKind, WorkspaceRecord, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import owned_workspace, workspace_owner_user_id
@@ -269,6 +270,27 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_summary.cost.hourly_micros == 0
     assert zero_inventory.data == []
 
+    with isolated_services.context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        workspace = workspaces.get(workspace_id)
+        assert workspace is not None
+        workspaces.upsert(workspace.model_copy(update={"status": WorkspaceStatus.Deleting}))
+        instances = ComputeProviderInstanceRepository(session)
+        draining = instances.list_for_pool(pool_id)[0]
+        instances.upsert(draining.model_copy(update={"status": "terminating"}))
+
+    draining_response = client.get("/api/v1/compute/instances")
+    assert draining_response.status_code == 200
+    draining_inventory = WorkspaceComputeInstanceListResponse.model_validate_json(
+        draining_response.content
+    )
+    assert [(item.id, item.status) for item in draining_inventory.data] == [
+        (draining.instance_id, "deleting")
+    ]
+    assert (
+        client.get("/api/v1/compute/summary", params={"workspace": workspace_id}).status_code == 404
+    )
+
 
 def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
     api_runtime: tuple[ApiServices, TestClient],
@@ -280,6 +302,8 @@ def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
     other = owned_workspace(control, f"pool-listing-other-{caller.id}")
     caller_owner = workspace_owner_user_id(services.context, caller.id)
     other_owner = workspace_owner_user_id(services.context, other.id)
+    services.compute.create_unit(UnitName("caller-local"), workspace=caller.id, provider="local")
+    services.compute.create_unit(UnitName("other-local"), workspace=other.id, provider="local")
     for name, provenance, owner in (
         ("caller-pool", other.id, caller_owner),
         ("other-pool", caller.id, other_owner),
@@ -347,7 +371,7 @@ def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
 
     assert response.status_code == 200, response.text
     pools = MachinePoolListResponse.model_validate_json(response.content)
-    assert [item.name for item in pools.data] == ["caller-pool", "lazycloud"]
+    assert [item.name for item in pools.data] == ["caller-local", "caller-pool", "lazycloud"]
 
 
 def test_deployment_placement_is_pinned_when_workspace_default_changes(

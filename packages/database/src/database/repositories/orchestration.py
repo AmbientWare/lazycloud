@@ -363,6 +363,13 @@ class MachineRepository:
     def list(self, *, workspace_id: str, status: str | None = None) -> list[Machine]:
         return self.records.list(workspace_id=workspace_id, status=status)
 
+    def list_for_capacity_owner(self, workspace_id: str, capacity_owner_id: str) -> list[Machine]:
+        statement = select(MachineTable).where(
+            MachineTable.workspace_id == workspace_id,
+            MachineTable.capacity_owner_id == capacity_owner_id,
+        )
+        return [Machine.model_validate(row.payload) for row in self.session.scalars(statement)]
+
     def list_across_workspaces(self, *, status: str | None = None) -> list[Machine]:
         """System listing over the whole fleet, including unowned pool machines."""
         return self.records.list_across_workspaces(status=status)

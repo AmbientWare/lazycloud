@@ -10,6 +10,7 @@ from threading import Event
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
+from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.projection import PrivateUnitState
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
@@ -1549,6 +1550,14 @@ class Scheduler:
             return []
         self.last_managed_compute_reconcile_at = current_time
         try:
+            for unit in self.runtime_services.compute.empty_joined_units():
+                try:
+                    deleted = self.runtime_services.compute.delete_empty_joined_unit(unit)
+                except CapacityReservationLockContendedError:
+                    continue
+                if deleted:
+                    self.compute_states.delete_unit_state(unit.workspace_id, unit.capacity_owner_id)
+                    self.pool_states.pool_states.delete_unit_state(unit.capacity_owner_id)
             self.runtime_services.compute.reconcile_pooled_capacity(now=current_time)
             return []
         except Exception:
