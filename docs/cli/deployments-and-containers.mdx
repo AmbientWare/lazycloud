@@ -1,6 +1,6 @@
 ---
-title: "app, deployment, container, client"
-description: "Manage deployed apps, deployments, running containers, and generated clients."
+title: "app, deployment, container"
+description: "Manage deployed apps, deployments, and running containers."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
@@ -42,17 +42,5 @@ lazycloud container attach CONTAINER_ID                       # stream output un
 lazycloud container checkpoint CONTAINER_ID [--checkpoint-id <id>]
 lazycloud container stop CONTAINER_IDS...
 ```
-
-## lazycloud client
-
-```bash
-lazycloud client get APP [--output <dir>]
-lazycloud client remove APP [--output <dir>]
-```
-
-`client get` writes a typed Python client for a deployed app's functions,
-endpoints, and ASGI apps into `lazycloud_clients/<app>/`, so another project
-can call them with the app's argument and return types without importing its
-source. `client remove` deletes it.
 
 <WorkspaceFlag />

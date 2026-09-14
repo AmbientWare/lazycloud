@@ -142,6 +142,11 @@ class Task:
     task_id: str
     client: TaskHandleClient
 
+    @classmethod
+    def from_id(cls, task_id: str, *, workspace: str | None = None) -> Task:
+        """Reconnect to a task using the active profile and selected workspace."""
+        return cls(task_id=task_id, client=TaskClient(workspace=workspace))
+
     def get(self) -> shared.tasks.Task:
         return self.client.get_result_task(self.task_id)
 

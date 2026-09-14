@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from lazycloud.json_contracts import JsonValue, parse_json_object, parse_json_value
 
-from lazycloud import App, Client, Image
+from lazycloud import App, Image
 
 APP_NAME = "sandboxed_coding_agent"
 PROVIDER_SECRET_NAMES = (
@@ -255,19 +255,11 @@ def _seed_files() -> dict[str, str]:
 
 
 def _invoke_planner(prompt: str, seed_files: dict[str, str]) -> tuple[str, PatchPlan]:
-    client = Client()
-    target = client.deployment.resolve_target(
-        kind=plan_patch.spec().kind,
-        name=plan_patch.resource_name,
-        app=APP_NAME,
-    )
-    submission = client.submit_deployment(target.deployment_id, prompt, seed_files)
-    if submission.task is None:
-        raise RuntimeError("planner deployment returned no Task")
-    result = submission.task.wait(timeout_seconds=180, poll_interval_seconds=1)
+    handle = plan_patch.spawn(prompt, seed_files)
+    result = handle.result(wait=True, timeout_seconds=180, poll_interval_seconds=1)
     if not result.ok:
         raise RuntimeError(result.error or "planner Task failed")
-    return submission.task_id, validate_patch_plan(result.task.result)
+    return handle.task_id, validate_patch_plan(result.task.result)
 
 
 def _bounded_output(stdout: str, stderr: str) -> str:
