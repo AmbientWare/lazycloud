@@ -19,7 +19,7 @@ from database.repositories.compute import (
 )
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.types import DatabaseSession
-from shared.aws_connections import AwsAccountConnection
+from shared.aws_connections import AWS_CONNECTED_MACHINE_POOL, AwsAccountConnection
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
@@ -27,6 +27,7 @@ from shared.compute_enrollment import (
     MachineServiceState,
 )
 from shared.compute_policy import (
+    LAZYCLOUD_MACHINE_POOL,
     ComputeResourceRequirements,
     ComputeUnitPhase,
     ComputeUnitRecord,
@@ -34,7 +35,7 @@ from shared.compute_policy import (
     WorkspaceComputePolicy,
 )
 from shared.deployment_records import Deployment, DeploymentSpec, request_and_limit
-from shared.errors import ConflictError
+from shared.errors import ConflictError, NotFoundError
 from shared.identity import WorkspaceStatus
 from shared.resources import parse_memory_mib
 from shared.timestamps import utc_now
@@ -295,10 +296,34 @@ class WorkspaceComputePolicyService:
 
     def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str:
         """Pin the pool a deployment runs in for as long as it exists."""
-        named = _deployment_pool_name(spec)
-        if named:
-            return named
-        return self.default_machine_pool(workspace=workspace)
+        return self.resolve_machine_pool(_deployment_pool_name(spec), workspace=workspace)
+
+    def resolve_machine_pool(self, pool: str, *, workspace: str) -> MachinePool:
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            selected = (
+                MachinePool(pool)
+                if pool
+                else self._policy_in_session(session, workspace_id).default_pool
+            )
+            if selected == LAZYCLOUD_MACHINE_POOL:
+                return selected
+            if (
+                selected == AWS_CONNECTED_MACHINE_POOL
+                and AwsAccountConnectionRepository(session).get_for_workspace_owner(workspace_id)
+                is not None
+            ):
+                return selected
+            owner_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
+            if any(
+                unit.pool == selected and unit.phase is not ComputeUnitPhase.Deleted
+                for unit in ComputeUnitRepository(session).list_for_account(owner_id)
+            ):
+                return selected
+        raise NotFoundError(
+            f"compute pool {selected!r} not found; "
+            "join a machine to this pool before running workloads"
+        )
 
     def pools(self, *, workspace: str) -> tuple[MachinePoolView, ...]:
         """Pools backed by the workspace owner's machines or platform capacity."""

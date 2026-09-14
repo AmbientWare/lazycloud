@@ -156,12 +156,10 @@ class ComputeCapacityPlacementService:
         self.compute.prepare_pooled_offer(provider=provider, offer=offer, requirements=requirements)
 
     def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> str:
-        if request.requested_pool:
-            return request.requested_pool
-        deployment_pool = self._deployment_machine_pool(request)
-        if deployment_pool:
-            return deployment_pool
-        return self.policies.default_machine_pool(workspace=request.workspace_id)
+        return self.policies.resolve_machine_pool(
+            request.requested_pool or self._deployment_machine_pool(request),
+            workspace=request.workspace_id,
+        )
 
     def _deployment_machine_pool(self, request: ComputeCapacityPlacementRequest) -> str:
         """The group a deployment was pinned to when it was created.
