@@ -103,7 +103,7 @@ class AttachToContainerRequest(HttpModel):
 class AttachToContainerResponse(HttpModel):
     output: str = ""
     done: bool = False
-    exit_code: int = 0
+    exit_code: int | None = None
     error_msg: str = ""
     input_supported: bool = False
     attach_contract: str = "sse-output-only"

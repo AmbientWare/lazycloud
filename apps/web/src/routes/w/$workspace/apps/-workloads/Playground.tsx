@@ -17,8 +17,7 @@ import { buildBody, exampleBody, playgroundFields, type PlaygroundField } from "
 
 /**
  * In-UI invoke for a deployed function or endpoint. The form is built
- * from the deployment's recorded client contract (the same schema source
- * `lazycloud client get` uses); flat primitive schemas get typed inputs, anything
+ * from the deployment's recorded callable contract; flat primitive schemas get typed inputs, anything
  * richer gets a raw JSON editor. Invoke fires the real invoke URL with the
  * session bearer token.
  */

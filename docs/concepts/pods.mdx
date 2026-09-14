@@ -64,8 +64,8 @@ unless you pass `timeout_seconds`.
 a name to a container port, for example `{"http": 8080}`. `env`, `secrets`,
 and `volumes` inject configuration.
 
-`authorized=True` requires a bearer token on the pod's URL. `tcp=True`
-exposes raw TCP instead of HTTP. `block_network=True` cuts outbound access;
+`authorized=True` requires a bearer token on the pod's HTTP URL.
+`block_network=True` cuts outbound access;
 `allow_list=[...]` restricts outbound access to IP networks in CIDR notation.
 Hostnames are not supported.
 
@@ -82,6 +82,31 @@ compute pool.
 
 `web.configure(...)` returns the pod with changed settings, and `web.shell()`
 opens a shell in a pod container.
+
+## TCP connections
+
+Set `tcp=True`, declare the server's port, and use `pod.deploy()`. TCP ingress
+requires a public Pod with `authorized=False` and a configured TLS ingress on
+the installation. Standalone `pod.create()` rejects TCP before starting a container.
+Your TCP server must authenticate its own clients if it handles private data.
+
+The deployment returns a `tls://hostname:port` address. Connect with TLS and send
+that hostname as SNI; the ingress forwards decrypted bytes to your server.
+
+```python
+import socket
+import ssl
+from urllib.parse import urlsplit
+
+deployment = tcp_server.deploy()
+address = urlsplit(deployment.invoke_url)
+with socket.create_connection((address.hostname, address.port)) as connection:
+    with ssl.create_default_context().wrap_socket(
+        connection, server_hostname=address.hostname
+    ) as stream:
+        stream.sendall(b"hello\n")
+        print(stream.recv(1024))
+```
 
 ## Containers
 

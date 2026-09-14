@@ -24,6 +24,7 @@ from coordination.token_lock import (
     try_acquire_token_lock_async,
 )
 from pydantic import Field, field_validator
+from shared.capacity import CapacityFailureCode, capacity_failure_message
 from shared.container_requests import StopContainerReason, capacity_memory_mib
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts
@@ -2499,7 +2500,12 @@ class RedisSchedulerContainerRepository:
         return redis_serialization.load_model_hash(SchedulerContainerState, raw)
 
     def record_pending_progress(
-        self, container_id: str, reason: TaskPendingReason, *, now: datetime
+        self,
+        container_id: str,
+        reason: TaskPendingReason,
+        *,
+        now: datetime,
+        failure_code: CapacityFailureCode | None = None,
     ) -> bool:
         def write() -> bool:
             state = self.get_container_state(container_id)
@@ -2511,18 +2517,23 @@ class RedisSchedulerContainerRepository:
             ):
                 return False
             previous = state.pending_progress
+            progress = TaskPendingProgress.for_reason(reason, since=now, observed_at=now)
+            if failure_code is not None:
+                progress.message = (
+                    f"{capacity_failure_message(failure_code).capitalize()}. "
+                    "Retrying automatically."
+                )
             same_reason = previous is not None and previous.reason is reason
             if (
                 same_reason
                 and previous is not None
+                and previous.message == progress.message
                 and (now - previous.observed_at).total_seconds() < PENDING_PROGRESS_REFRESH_SECONDS
             ):
                 return False
-            progress = TaskPendingProgress.for_reason(
-                reason,
-                since=previous.since if same_reason and previous is not None else now,
-                observed_at=now,
-            )
+            if same_reason and previous is not None:
+                progress.since = previous.since
+                progress.pending_since = previous.pending_since
             self.redis.hash_set(
                 self.keys.container_state(container_id),
                 mapping={"pending_progress": progress.model_dump_json()},

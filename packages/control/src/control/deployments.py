@@ -41,6 +41,7 @@ from control.deployment_cleanup import (
     delete_deployment_cron_jobs,
 )
 from control.events import ControlEventEmitter
+from control.tcp_ingress import require_tcp_ingress
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +413,10 @@ def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
     metadata = dict(spec.metadata)
     if "authorized" not in metadata:
         metadata["authorized"] = resolve_authorized(spec.kind, None)
+    if metadata.get("tcp") is True:
+        if spec.kind is not DeploymentKind.Pod or not spec.ports:
+            raise InvalidInputError("raw TCP ingress requires a Pod with an exposed port")
+        require_tcp_ingress(public=metadata["authorized"] is False)
     if "max_pending_tasks" not in metadata:
         max_pending_tasks = resolve_max_pending_tasks(spec.kind, None)
         if max_pending_tasks is not None:

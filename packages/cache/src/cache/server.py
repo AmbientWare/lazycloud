@@ -555,8 +555,14 @@ class FileCacheServer:
         if evicted:
             self._delete_metadata_for_hashes(evicted)
         if freed < bytes_to_free:
+            limit = (
+                f"host disk usage limit ({self.disk_max_usage_pct:.0%})"
+                if disk_shortage >= content_shortage
+                else f"content capacity limit ({self.max_content_bytes} bytes)"
+            )
             raise CacheCapacityError(
-                "cache capacity is exhausted and no eligible content can be evicted"
+                f"cache admission exceeds the {limit}; "
+                f"{bytes_to_free - freed} more bytes must be freed after eligible cache eviction"
             )
 
     def _eviction_candidates(self) -> list[tuple[str, Path, datetime, int]]:

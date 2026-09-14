@@ -13,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.http.errors import http_api_error_from_body
 from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
 from shared.http.worker_usage import (
     WorkerUsageWindowRequest,
@@ -219,9 +220,7 @@ class WorkerRepositoryHttpTransport:
             raise WorkerRepositoryClientError(str(exc)) from exc
         raw = response.text
         if response.status_code < 200 or response.status_code >= 300:
-            raise WorkerRepositoryClientError(
-                raw or f"worker repository returned HTTP {response.status_code}"
-            )
+            raise http_api_error_from_body(response.status_code, raw)
         if not raw:
             return {}
         try:
@@ -244,9 +243,7 @@ class WorkerRepositoryHttpTransport:
             ) as response:
                 if response.status_code < 200 or response.status_code >= 300:
                     raw = response.read().decode("utf-8")
-                    raise WorkerRepositoryClientError(
-                        raw or f"worker repository returned HTTP {response.status_code}"
-                    )
+                    raise http_api_error_from_body(response.status_code, raw)
                 yield from _iter_sse_data(response.iter_lines())
         except InternalHttpError as exc:
             raise WorkerRepositoryClientError(str(exc)) from exc

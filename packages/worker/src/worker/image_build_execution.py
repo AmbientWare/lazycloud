@@ -632,7 +632,6 @@ class BuildahWorkerImageBuilder:
     buildah_binary: str = "buildah"
     image_runtime_binary: str = "lazycloud-image-runtime"
     storage_driver: BuildahStorageDriver = BuildahStorageDriver.Overlay
-    fallback_storage_driver: BuildahStorageDriver = BuildahStorageDriver.Vfs
 
     def build_image_archive(
         self,
@@ -665,36 +664,22 @@ class BuildahWorkerImageBuilder:
                 error_message=f"image build architecture unavailable: {exc}",
             )
 
-        attempted: list[str] = []
-        for driver in self._storage_drivers():
-            attempted.append(driver.value)
-            try:
-                return self._build_with_driver(
-                    payload,
-                    container_id=container_id,
-                    driver=driver,
-                    resources=resources,
-                    registry_auth=registry_auth,
-                    build_args=build_args or {},
-                    log=log,
-                )
-            except Exception as exc:
-                log(f"buildah {driver.value} build failed: {type(exc).__name__}: {exc}")
-                if resources.cancellation.is_set() or driver is self._storage_drivers()[-1]:
-                    return WorkerImageArchiveBuildResult(
-                        ok=False,
-                        image_id=payload.image_id,
-                        error_message=(
-                            "image build failed with storage drivers "
-                            f"{', '.join(attempted)}: {type(exc).__name__}: {exc}"
-                        ),
-                    )
-                log(f"retrying image build with {self.fallback_storage_driver.value} storage")
-        return WorkerImageArchiveBuildResult(
-            ok=False,
-            image_id=payload.image_id,
-            error_message="image build did not run",
-        )
+        try:
+            return self._build_with_driver(
+                payload,
+                container_id=container_id,
+                driver=self.storage_driver,
+                resources=resources,
+                registry_auth=registry_auth,
+                build_args=build_args or {},
+                log=log,
+            )
+        except Exception as exc:
+            return WorkerImageArchiveBuildResult(
+                ok=False,
+                image_id=payload.image_id,
+                error_message=f"image build failed: {exc}",
+            )
 
     def _build_with_driver(
         self,
@@ -943,11 +928,6 @@ class BuildahWorkerImageBuilder:
                     log(f"image build scratch peak: {lease.peak_bytes} bytes")
                 finally:
                     self.scratch.release(lease)
-
-    def _storage_drivers(self) -> tuple[BuildahStorageDriver, ...]:
-        if self.storage_driver is self.fallback_storage_driver:
-            return (self.storage_driver,)
-        return (self.storage_driver, self.fallback_storage_driver)
 
     def _workload_registry_credentials(
         self,
@@ -1446,7 +1426,7 @@ def _run_logged_process(
     resources: ImageBuildResources,
     input_file: Path | None = None,
 ) -> str:
-    lines: list[str] = []
+    last_line = ""
     started = time.monotonic()
     last_output = started
     stop_heartbeat = threading.Event()
@@ -1510,7 +1490,7 @@ def _run_logged_process(
         with os.fdopen(read_fd, "r", encoding="utf-8", errors="replace") as output:
             for raw_line in output:
                 for line in _output_lines(raw_line):
-                    lines.append(line)
+                    last_line = line
                     last_output = time.monotonic()
                     log(line)
         return_code = process.wait()
@@ -1526,7 +1506,8 @@ def _run_logged_process(
     if capacity_failures:
         raise capacity_failures[0]
     if return_code != 0:
-        raise RuntimeError(_command_error_message(command, return_code, "\n".join(lines)))
+        detail = f": {last_line}" if last_line else ""
+        raise RuntimeError(f"{command[0]} exited {return_code}{detail}")
     return ""
 
 
@@ -1557,13 +1538,6 @@ def _safe_name(value: str) -> str:
 
 def _output_lines(*values: str) -> list[str]:
     return [line for value in values for line in value.splitlines() if line.strip()]
-
-
-def _command_error_message(command: Sequence[str], return_code: int, output: str) -> str:
-    detail = output.strip()
-    if detail:
-        return f"{command[0]} exited {return_code}: {detail}"
-    return f"{command[0]} exited {return_code}"
 
 
 def _append_unique_log(logs: list[str], message: str) -> list[str]:

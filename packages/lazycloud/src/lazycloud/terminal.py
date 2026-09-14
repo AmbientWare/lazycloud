@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TypeAlias
 
+from shared.http.task_progress import TaskPendingProgress
+from shared.timestamps import utc_now
 from typing_extensions import Self
 
 ProgressCallback: TypeAlias = Callable[[int], None]
@@ -76,6 +78,9 @@ class TerminalStep:
     def log(self, line: str) -> None:
         self.terminal.detail(line)
 
+    def pending_progress(self, task_id: str, pending: TaskPendingProgress | None) -> None:
+        self.terminal.pending_progress(task_id, pending)
+
     def done(self, summary: str = "") -> None:
         self.finished = True
         self.summary = summary or self.summary
@@ -130,6 +135,11 @@ class Terminal:
 
     def detail(self, message: str) -> None:
         self.line(f"   {message}")
+
+    def pending_progress(self, task_id: str, pending: TaskPendingProgress | None) -> None:
+        if pending is not None:
+            elapsed = (utc_now() - pending.pending_since).total_seconds()
+            self.detail(f"{task_id[:8]} {pending.message} Waiting {format_elapsed(elapsed)}.")
 
     def warn(self, message: str) -> None:
         self.line(f"WARNING: {message}")

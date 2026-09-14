@@ -686,6 +686,7 @@ class FunctionControlService:
         result: JsonValue = None,
         error: str | None = None,
         exit_code: int | None = None,
+        retry_allowed: bool = True,
     ) -> Task:
         outcome = self.services.tasks.finish_with_retry(
             task_id,
@@ -694,6 +695,7 @@ class FunctionControlService:
             result=result,
             error=error,
             exit_code=exit_code,
+            retry_allowed=retry_allowed,
         )
         # A retry due immediately is not scheduled from here. Making it runnable
         # means releasing its claim, and that is `schedule_due_retries`, which

@@ -16,6 +16,7 @@ from shared.container_requests import (
 )
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
+from shared.http.errors import HttpApiError
 from shared.image_building.authoring import LinuxArchitecture
 from shared.realtime.contracts import CloudEventRecord
 from shared.scheduling import (
@@ -1234,7 +1235,11 @@ class WorkerContainerExecutionService:
                 ContainerExecutionPhaseResult(
                     phase=phase,
                     ok=False,
-                    error_message=f"{type(exc).__name__}: {exc}",
+                    error_message=(
+                        exc.detail
+                        if isinstance(exc, HttpApiError) and exc.detail is not None
+                        else f"{type(exc).__name__}: {exc}"
+                    ),
                 )
             )
             return False

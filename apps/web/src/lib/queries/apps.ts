@@ -135,8 +135,7 @@ export function deleteDeploymentMutationOptions(workspaceId: string, deploymentI
 
 /**
  * Invoke manifest for one deployment: invoke URL built against this origin,
- * recorded input schema, and the typed client contract (the same data
- * `lazycloud client get` consumes for codegen).
+ * recorded input schema, and the callable contract.
  */
 export function deploymentManifestQueryOptions(workspaceId: string, deploymentId: string) {
   return queryOptions({

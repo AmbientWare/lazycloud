@@ -25,6 +25,7 @@ const functionCloudpickleResultSchema = z
       .min(0)
       .max(16 * 1024 * 1024),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    preview: z.string().max(4096).nullable().default(null),
   })
   .strict();
 

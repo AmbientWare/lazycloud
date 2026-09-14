@@ -23,7 +23,7 @@ from shared.app_identity import FUNCTION_IMAGE
 from shared.containers import ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind, StubKind
-from shared.errors import ConflictError, InvalidInputError, NotFoundError
+from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.workload_config import StubConfig
@@ -345,7 +345,7 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
 
     with (
         isolated_services.context.database.session() as session,
-        pytest.raises(InvalidInputError, match="not active: predict v2"),
+        pytest.raises(UpstreamUnavailableError, match="not active: predict v2"),
     ):
         resources.resolve_invoke_target_in_session(
             session, "predict", DeploymentKind.Function, workspace="default"
@@ -361,7 +361,7 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
     management.set_deployment_active("default", v1.id, active=False)
     with (
         isolated_services.context.database.session() as session,
-        pytest.raises(InvalidInputError, match="not active: predict v1"),
+        pytest.raises(UpstreamUnavailableError, match="not active: predict v1"),
     ):
         resources.resolve_invoke_target_in_session(
             session, "predict", DeploymentKind.Function, workspace="default", version=1

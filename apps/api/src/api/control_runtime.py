@@ -6,6 +6,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from threading import Lock
 
+from control.tcp_ingress import TcpIngressSettings
 from coordination.redis_client import RedisClient, RedisSettings
 from execution.pods.service import PodControlService
 from gateway.service import GatewayControlService
@@ -42,7 +43,6 @@ from api.server.services import (
 from api.settings import (
     AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
-    TcpIngressSettings,
 )
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 

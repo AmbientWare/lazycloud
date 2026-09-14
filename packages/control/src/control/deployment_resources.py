@@ -7,11 +7,12 @@ from database.repositories.apps import DeploymentResourceRepository, DeploymentR
 from database.types import DatabaseSession
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, StubKind
-from shared.errors import InvalidInputError, NotFoundError
+from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.client_manifests import ClientManifestResource, client_manifest_schemas
 from shared.urls import StubUrlTarget, build_deployment_url, build_pod_url, deployment_handler_path
 
 from control.context import ControlContext
+from control.tcp_ingress import tcp_pod_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,8 @@ class DeploymentResource:
             if not ports:
                 return ""
             ports = [port if port is not None else ports[0]]
+            if self.stub.config.tcp:
+                return tcp_pod_url(self.stub.id, ports[0], public=self.stub.public)
         target = StubUrlTarget(
             kind=self.stub.kind.value,
             stub_id=self.stub.id,
@@ -185,10 +188,21 @@ class DeploymentResourceService:
         target = self.resolve_target_in_session(
             session, name, kind, workspace=workspace, version=version, app_id=app_id
         )
-        if not target.deployment.active:
-            msg = f"deployment is not active: {name} v{target.deployment.version}"
-            raise InvalidInputError(msg)
+        _require_active(target)
         return target
+
+    def require_stub_active_in_session(self, session: DatabaseSession, stub: StubRecord) -> None:
+        if stub.deployment_id is None:
+            return
+        resources = self.list_in_session(
+            session,
+            workspace=stub.workspace_id,
+            deployment_id=stub.deployment_id,
+            active=None,
+        )
+        if not resources:
+            raise NotFoundError("deployment not found")
+        _require_active(resources[0])
 
     def resolve_target_in_session(
         self,
@@ -273,6 +287,16 @@ class DeploymentResourceService:
     ) -> DeploymentResource | None:
         row = DeploymentResourceRepository(session).get_by_custom_hostname(hostname)
         return _deployment_resource(row) if row is not None else None
+
+
+def _require_active(resource: DeploymentResource) -> None:
+    if not resource.app.active:
+        raise UpstreamUnavailableError(f"app is not active: {resource.app.name}")
+    if not resource.deployment.active:
+        deployment = resource.deployment
+        raise UpstreamUnavailableError(
+            f"deployment is not active: {deployment.name} v{deployment.version}"
+        )
 
 
 def _deployment_resource(row: DeploymentResourceRow) -> DeploymentResource:

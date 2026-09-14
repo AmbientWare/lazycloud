@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import socket
 import time
 from dataclasses import dataclass, field
@@ -89,6 +90,7 @@ ENDPOINT_BACKPRESSURE_STATUS_CODE = 429
 ENDPOINT_CANCELLED_STATUS_CODE = 499
 ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE = "endpoint request buffer is full"
 ENDPOINT_REQUEST_BUFFER_FULL_REASON = "request_buffer_full"
+LOGGER = logging.getLogger(__name__)
 
 
 def _add_task_headers(headers: HeaderMap, task_id: str) -> None:
@@ -328,7 +330,8 @@ class EndpointControlService:
         except NotFoundError:
             return error_response(404, "endpoint not found")
         except Exception as exc:
-            return error_response(500, str(exc))
+            LOGGER.error("Endpoint %s failed: %s", request.stub_id, type(exc).__name__)
+            return error_response(500, "Endpoint request failed. Check the service logs.")
 
     async def forward_endpoint_health(
         self,
@@ -769,7 +772,7 @@ class EndpointControlService:
             )
         except Exception as exc:
             status_code = await self._record_dispatch_failure(repository, stub, task, exc)
-            response = error_response(status_code, str(exc))
+            response = error_response(status_code, _dispatch_error_message(exc))
             _add_task_headers(response.headers, task.id)
             return response
 
@@ -891,10 +894,8 @@ class EndpointControlService:
             )
             if target is None:
                 if container_id is not None:
-                    if loads.get(container_id, 0) >= max_inflight_per_container:
-                        await asyncio.sleep(wait.poll_delay())
-                        continue
-                    raise EndpointDispatchUnavailable("endpoint container is not ready")
+                    await asyncio.sleep(wait.poll_delay())
+                    continue
                 if not wait.warmup_attempted:
                     await self._request_capacity(stub, task)
                     wait.warmup_attempted = True
@@ -929,7 +930,7 @@ class EndpointControlService:
         if (
             container is None
             or container.stub_id != stub.id
-            or container.status is not ContainerStatus.Running
+            or container.status not in {ContainerStatus.Pending, ContainerStatus.Running}
         ):
             raise EndpointDispatchUnavailable("endpoint container is unavailable")
 
@@ -1062,12 +1063,14 @@ class EndpointControlService:
     ) -> int:
         """Settle both records for a dispatch that raised; returns the HTTP status."""
         dispatch_status, task_status, status_code = _dispatch_failure(exc)
-        record = await repository.transition(task, dispatch_status, error=str(exc))
+        message = _dispatch_error_message(exc)
+        LOGGER.error("Endpoint task %s failed: %s", task.id, type(exc).__name__)
+        record = await repository.transition(task, dispatch_status, error=message)
         await self._emit_dispatch_lifecycle(stub, record)
         await self.services.tasks.transition_async(
             task,
             task_status,
-            error=str(exc),
+            error=message,
             exit_code=1,
         )
         return status_code
@@ -1168,6 +1171,12 @@ class EndpointControlService:
         if self.async_dispatcher is None:
             raise EndpointDispatchUnavailable("endpoint dispatcher is not configured")
         return self.async_dispatcher
+
+
+def _dispatch_error_message(exc: Exception) -> str:
+    if isinstance(exc, DomainError | EndpointDispatchError):
+        return str(exc)
+    return "Endpoint request failed. Check the service logs."
 
 
 def _dispatch_failure(exc: Exception) -> tuple[EndpointDispatchStatus, TaskStatus, int]:
