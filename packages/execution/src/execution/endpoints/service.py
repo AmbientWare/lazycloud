@@ -39,6 +39,7 @@ from shared.env import (
 from shared.errors import (
     CapacityLimitReachedError,
     DomainError,
+    EndpointReplicaLimitReachedError,
     InvalidInputError,
     NotFoundError,
     PaymentRequiredError,
@@ -176,6 +177,14 @@ class EndpointControlService:
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
         with self.services.context.database.session() as session:
+            containers = ContainerRepository(session)
+            containers.lock_stub_capacity(stub.id)
+            live = containers.count_live_for_stub(stub.id)
+            if live >= config.autoscaler.max_containers:
+                raise EndpointReplicaLimitReachedError(
+                    f"endpoint {stub.id} holds {live} containers; "
+                    f"its replica limit is {config.autoscaler.max_containers}"
+                )
             container = self.services.containers.reserve_pending(
                 session,
                 PendingContainerReservation(
@@ -1029,6 +1038,10 @@ class EndpointControlService:
                 self.start_endpoint_serve,
                 StartEndpointServeRequest(stub_id=stub.id),
             )
+        except EndpointReplicaLimitReachedError:
+            if stub.config.autoscaler.max_containers == 0:
+                raise
+            return
         except (PaymentRequiredError, CapacityLimitReachedError):
             # Not converted to 503. Every other reason capacity cannot be had is a
             # transient shortage the caller retries into; these are the platform

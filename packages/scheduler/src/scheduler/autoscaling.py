@@ -34,7 +34,7 @@ from shared.autoscaling import (
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.errors import DomainError, InvalidInputError
+from shared.errors import DomainError, EndpointReplicaLimitReachedError, InvalidInputError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.scheduling import (
@@ -872,7 +872,12 @@ class EndpointAutoscaler:
         )
 
     def start_one(self, stub: AutoscalingStub) -> str | None:
-        response = self.endpoints.start_endpoint_serve(StartEndpointServeRequest(stub_id=stub.id))
+        try:
+            response = self.endpoints.start_endpoint_serve(
+                StartEndpointServeRequest(stub_id=stub.id)
+            )
+        except EndpointReplicaLimitReachedError:
+            return None
         return response.container_id
 
     def handle_failure_threshold(

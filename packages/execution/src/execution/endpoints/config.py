@@ -8,6 +8,7 @@ from shared.deployment_records import (
 )
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import RetryPolicy
+from shared.workload_config import StubAutoscalerConfig
 
 from execution.config import (
     ContainerResourceConfig,
@@ -68,6 +69,7 @@ class EndpointStubConfig(BaseModel):
     retry_policy: RetryPolicy | None = None
     lifecycle_hooks: LifecycleHooks = Field(default_factory=LifecycleHooks)
     max_pending_tasks: int | None = Field(default=None, ge=0)
+    autoscaler: StubAutoscalerConfig = Field(default_factory=StubAutoscalerConfig)
     pool: MachinePool = MachinePool("")
     metadata: EndpointMetadataConfig = Field(default_factory=EndpointMetadataConfig)
 

@@ -41,6 +41,10 @@ class CapacityLimitReachedError(ConflictError):
     """
 
 
+class EndpointReplicaLimitReachedError(CapacityLimitReachedError):
+    """An endpoint already holds its configured maximum number of containers."""
+
+
 class InvalidInputError(DomainError):
     """Request is well-formed but semantically invalid."""
 
@@ -65,6 +69,7 @@ __all__ = [
     "CapacityLimitReachedError",
     "ConflictError",
     "DomainError",
+    "EndpointReplicaLimitReachedError",
     "ExpiredCursorError",
     "InvalidInputError",
     "NotFoundError",
