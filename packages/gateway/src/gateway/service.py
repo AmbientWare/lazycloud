@@ -1505,6 +1505,20 @@ class GatewayControlService:
             enrollment.workspace_id,
             enrollment.machine_id,
         )
+        with self.services.context.database.session() as session:
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
+                enrollment.capacity_owner_id
+            )
+        if unit is None:
+            return
+        try:
+            deleted = self.services.compute.delete_empty_joined_unit(unit)
+        except CapacityReservationLockContendedError:
+            # Periodic reconciliation retries cleanup after the current mutation finishes.
+            return
+        if deleted:
+            self.compute_states.delete_unit_state(unit.workspace_id, unit.capacity_owner_id)
+            self.scheduler_pool_state_repository.delete_unit_state(unit.capacity_owner_id)
 
     def _delete_pool_enrollments(
         self,

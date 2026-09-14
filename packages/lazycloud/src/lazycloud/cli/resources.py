@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 import webbrowser
 from typing import Annotated, Any
@@ -854,10 +855,6 @@ def machine_join(
         str,
         typer.Option("--state-dir", help="Agent state directory."),
     ] = "",
-    print_only: Annotated[
-        bool,
-        typer.Option("--print-only", help="Only print the generated join command."),
-    ] = False,
 ) -> None:
     """Join this machine to your account, in the pool you name.
 
@@ -885,23 +882,10 @@ def machine_join(
         service_name=service_name,
         state_dir=state_dir,
     )
-    if json_output_enabled(ctx):
-        payload = response.model_dump(mode="json")
-        payload["command"] = command
-        print_payload(ctx, payload)
-        return
-    if print_only:
-        console.print(
-            notice_card(
-                "Machine join command",
-                command,
-                hint="This command contains a short-lived credential. Do not share it.",
-                tone="warning",
-            )
-        )
-        return
     try:
-        exit_code = subprocess.call(command, shell=True)
+        exit_code = subprocess.call(
+            command, shell=True, stdout=sys.stderr if json_output_enabled(ctx) else None
+        )
     except KeyboardInterrupt:
         return
     if agent_join_interrupted(exit_code):

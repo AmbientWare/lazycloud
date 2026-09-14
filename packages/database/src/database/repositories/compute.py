@@ -595,9 +595,24 @@ class ComputeUnitRepository:
             select(ComputeUnitTable)
             .where(
                 or_(
+                    and_(
+                        ComputeUnitTable.provider == "local",
+                        exists().where(
+                            WorkspaceMemberTable.workspace_id == ComputeUnitTable.workspace_id,
+                            WorkspaceMemberTable.user_id == user_id,
+                            WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                        ),
+                    ),
                     exists().where(
                         ComputeMachineEnrollmentTable.capacity_owner_id == ComputeUnitTable.id,
                         ComputeMachineEnrollmentTable.user_id == user_id,
+                    ),
+                    exists().where(
+                        ComputeJoinCredentialTable.capacity_owner_id == ComputeUnitTable.id,
+                        ComputeJoinCredentialTable.user_id == user_id,
+                        ComputeJoinCredentialTable.status == ComputeCredentialStatus.Active.value,
+                        ComputeJoinCredentialTable.expires_at > utc_now(),
+                        ComputeJoinCredentialTable.use_count < ComputeJoinCredentialTable.max_uses,
                     ),
                     exists().where(
                         AwsAccountConnectionTable.id == ComputeUnitTable.provider_connection_id,
@@ -611,6 +626,18 @@ class ComputeUnitRepository:
                 )
             )
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
+        )
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
+
+    def empty_joined_units(self) -> list[ComputeUnitRecord]:
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.provider == "agent",
+            exists().where(
+                ComputeJoinCredentialTable.capacity_owner_id == ComputeUnitTable.id,
+            ),
+            ~exists().where(
+                ComputeMachineEnrollmentTable.capacity_owner_id == ComputeUnitTable.id,
+            ),
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 

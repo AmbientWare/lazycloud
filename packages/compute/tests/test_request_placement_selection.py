@@ -41,7 +41,7 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
             UnitName(name),
             workspace=workspace_id,
             pool=MachinePool("shared-pool"),
-            provider="agent",
+            provider="local",
             capacity_owner_id=owner,
             worker_cpu_millicores=4_000,
             worker_memory_mib=8_192,

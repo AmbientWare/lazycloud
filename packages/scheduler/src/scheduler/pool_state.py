@@ -45,6 +45,8 @@ class SchedulerPoolContainerRepository(Protocol):
 
 
 class SchedulerPoolStateRepository(Protocol):
+    def delete_unit_state(self, capacity_owner_id: str) -> bool: ...
+
     def set_state(
         self,
         capacity_owner_id: str,

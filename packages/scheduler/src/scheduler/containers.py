@@ -19,7 +19,7 @@ from shared.capacity import CapacityFailureCode
 from shared.container_requests import capacity_memory_mib
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
-from shared.errors import ConflictError
+from shared.errors import ConflictError, NotFoundError
 from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
 from shared.placement import PlacementRateClass, placement_rate_class
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
@@ -946,6 +946,9 @@ class SchedulerContainerRequestService:
                     acquired += 1
             except CapacityReservationConflictError:
                 continue
+            except NotFoundError as exc:
+                self._fail_request(candidate, str(exc), current_time)
+                acquired += 1
         return acquired
 
     def _acquire_capacity_request(
@@ -959,6 +962,8 @@ class SchedulerContainerRequestService:
                 purchases=partial(self.placement.purchase_candidates, request),
                 now=current_time,
             )
+        except NotFoundError:
+            raise
         except CapacityReservationConflictError as exc:
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.ExistingPending,

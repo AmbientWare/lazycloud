@@ -102,10 +102,14 @@ lazycloud machine join --pool on-prem --gpu a100-80 --max-gpus 4 --max-cpu 32 --
 ```
 
 The command installs the agent as a background service. `--foreground` runs it
-in the terminal instead, and `--print-only` prints the install command so you
-can run it on another host. The command contains a short-lived credential; do
-not share it. The machine joins the pool you name (`self-hosted` if you name
-none) and creates the pool if it is new.
+in the terminal instead. The machine joins the pool you name, or `self-hosted`
+if you name none, and creates the pool if it is new.
+
+A machine pool is removed after its last machine leaves and cleanup finishes.
+An unexpired join credential keeps the pool available for the joining machine.
+Going offline does not remove a machine or its pool. Workloads targeting a
+removed pool fail until you join a machine with that pool name again. Connected
+AWS pools and LazyCloud capacity remain available when they scale to zero.
 
 The dashboard has the same flow under Settings, then Compute, then Join a
 machine, and shows the host checks as they pass.

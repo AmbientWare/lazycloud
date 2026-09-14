@@ -62,7 +62,7 @@ from shared.compute_policy import (
 )
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord
-from shared.errors import UpstreamUnavailableError
+from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerContainerState,
@@ -1075,8 +1075,10 @@ def test_pending_purchase_does_not_pin_dispatch_or_release_shared_demand(
     assert controller.release_calls == []
 
 
-def test_capacity_backoff_preserves_purchase_cooldown_but_admits_new_workers(
+@pytest.mark.parametrize("missing_pool", [False, True])
+def test_capacity_backoff_preserves_purchase_cooldown_but_fails_removed_pools(
     real_redis_actors: RealRedisActors,
+    missing_pool: bool,
 ) -> None:
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
@@ -1089,6 +1091,8 @@ def test_capacity_backoff_preserves_purchase_cooldown_but_admits_new_workers(
             self, request: SchedulerWorkerRequest
         ) -> tuple[ComputeCapacityPurchase, ...]:
             self.purchases += 1
+            if missing_pool:
+                raise NotFoundError("compute pool 'on-prem' not found")
             raise UpstreamUnavailableError("provider capacity unavailable")
 
     placement = UnavailablePlacement()
@@ -1110,6 +1114,12 @@ def test_capacity_backoff_preserves_purchase_cooldown_but_admits_new_workers(
     assert requests.submit(request, ready_at=now).accepted
     [initial] = requests.dispatch_ready(now=now)
     requests.acquire_capacity(now=now)
+    if missing_pool:
+        state = containers.get_container_state(request.container_id)
+        assert state is not None
+        assert state.status is SchedulerContainerStatus.Failed
+        assert state.failure_reason == "compute pool 'on-prem' not found"
+        return
     [cooldown] = requests.dispatch_ready(now=now + timedelta(seconds=1))
     assert initial.status is cooldown.status is SchedulerContainerDispatchStatus.Waiting
     assert placement.purchases == 1

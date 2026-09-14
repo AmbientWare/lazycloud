@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import uuid4
 
+import pytest
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
-from database.repositories.compute import ComputeMachineEnrollmentRepository
+from database.repositories.compute import (
+    ComputeJoinCredentialRepository,
+    ComputeMachineEnrollmentRepository,
+    ComputeUnitRepository,
+)
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
@@ -15,10 +22,12 @@ from gateway.http import JoinAgentRequest, LeaveAgentRequest
 from operations.container_shutdown import DatabaseDurableWorkerAbsence
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import UnitName
+from shared.compute_policy import MachinePool, UnitName
 from shared.container_requests import ContainerShutdownTarget
 from shared.containers import ContainerRecord, ContainerStatus
+from shared.errors import NotFoundError
 from shared.scheduling import SchedulerWorkerRecord
+from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.workspaces import owned_workspace
 
@@ -74,6 +83,7 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
     gateway.delete_machine(agent.machine_id, workspace_id=workspace.id)
 
     with services.context.database.session() as session:
+        assert ComputeUnitRepository(session).get(unit.id) is None
         worker = WorkerRepository(session).get(worker_id, workspace_id=workspace.id)
         machine = MachineRepository(session).get(agent.machine_id, workspace_id=workspace.id)
         assert worker is not None and worker.status is ResourceStatus.Deleted
@@ -111,3 +121,57 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
         [ContainerShutdownTarget(container_id=container_id, worker_id=worker_id)],
         timeout_seconds=0.1,
     )
+
+
+def test_pending_join_preserves_empty_pool_until_credential_expires(
+    isolated_services: ApiServices,
+) -> None:
+    services = isolated_services
+    workspace = owned_workspace(ControlPlaneService(services.context), "pending-machine-join")
+    policies = WorkspaceComputePolicyService(services.context)
+    gateway = services.gateway_service
+    unit = services.compute.create_unit(
+        UnitName("pending-join"),
+        provider="agent",
+        workspace=workspace.id,
+        pool=MachinePool("on-prem"),
+    )
+    credential = gateway.unit_state_coordinator.create_unit_join_token(
+        unit, workspace_id=workspace.id, owner_token_id="pending-join-owner"
+    )
+    agent = gateway.join_agent(
+        JoinAgentRequest(
+            join_token=credential.token,
+            machine_fingerprint="pending-join-host",
+            hostname="pending-join-host",
+            os="linux",
+            arch="amd64",
+            cpu_count=2,
+            memory_mb=4096,
+        )
+    )
+    assert not services.compute.delete_empty_joined_unit(unit)
+    gateway.unit_state_coordinator.create_unit_join_token(
+        unit, workspace_id=workspace.id, owner_token_id="pending-join-owner"
+    )
+    gateway.leave_agent(LeaveAgentRequest(agent_token=agent.agent_token))
+    assert not services.compute.delete_empty_joined_unit(unit)
+    assert policies.resolve_machine_pool("on-prem", workspace=workspace.id) == "on-prem"
+    with services.context.database.session() as session:
+        credentials = ComputeJoinCredentialRepository(session)
+        for issued in credentials.list_for_unit(workspace.id, unit.capacity_owner_id):
+            credentials.save(
+                issued.model_copy(update={"expires_at": utc_now() - timedelta(seconds=1)})
+            )
+    assert unit.id in {candidate.id for candidate in services.compute.empty_joined_units()}
+    assert services.compute.delete_empty_joined_unit(unit)
+    assert not services.compute.delete_empty_joined_unit(unit)
+    with pytest.raises(NotFoundError, match="compute pool 'on-prem' not found"):
+        policies.resolve_machine_pool("on-prem", workspace=workspace.id)
+    replacement = services.compute.create_unit(
+        UnitName("pending-join"),
+        provider="agent",
+        workspace=workspace.id,
+        pool=MachinePool("on-prem"),
+    )
+    assert replacement.id != unit.id
