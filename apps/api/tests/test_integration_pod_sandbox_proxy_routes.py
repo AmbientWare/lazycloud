@@ -413,6 +413,10 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
             kind=StubKind.Sandbox,
         )
         container = _create_container(isolated_services, stub, "route-owner")
+        container.runtime_worker_id = "worker-1"
+        container.runtime_machine_id = "machine-1"
+        with isolated_services.context.database.session() as session:
+            ContainerRepository(session).upsert(container)
         _store_sandbox_exposure(isolated_services, container, port=8080, public=False)
         scheduler = _FakeSchedulerContainers.running(
             container,
@@ -422,6 +426,8 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
             route_id="owned-route",
             workspace_id=container.workspace_id,
             container_id=container.id,
+            worker_id=container.runtime_worker_id,
+            machine_id=container.runtime_machine_id,
             port=8080,
             state=BackendRouteState.Ready,
         )
