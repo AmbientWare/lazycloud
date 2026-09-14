@@ -3124,6 +3124,13 @@ def _container_exit_error(
     """
     if failed_phase is None:
         return f"container {container_id} exited with code {exit_code}"
+    if failed_phase is ContainerExecutionPhase.HydrateCredentials:
+        return f"Could not load workload secrets: {failure_detail or 'credentials unavailable'}"
+    if failed_phase is ContainerExecutionPhase.SetupMounts:
+        return (
+            "Could not mount workload storage. Check the bucket, prefix and credentials. "
+            "See container logs for the mount error."
+        )
     if failure_detail:
         return f"container startup failed during {failed_phase.value}: {failure_detail}"
     return f"container startup failed during {failed_phase.value}"
@@ -3131,9 +3138,12 @@ def _container_exit_error(
 
 def _container_startup_failure_error(payload: ContainerLifecyclePayload) -> str:
     detail = payload.attrs.get("error") or payload.attrs.get("reason") or ""
-    if detail:
-        return f"container startup failed during {payload.id}: {detail}"
-    return f"container startup failed during {payload.id}"
+    return _container_exit_error(
+        payload.container_id,
+        1,
+        failed_phase=ContainerExecutionPhase(payload.id),
+        failure_detail=detail,
+    )
 
 
 def _runtime_container_status_from_scheduler(

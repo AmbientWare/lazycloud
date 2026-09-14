@@ -13,10 +13,12 @@ from pydantic import JsonValue
 from rich.console import Console
 from rich.text import Text
 from shared.app_identity import ENV_PREFIX
+from shared.errors import InvalidInputError
 from shared.http.errors import HttpApiError
 from shared.tasks import TaskStatus
 from typer import _click as click
 
+from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.cli.components import theme
 from lazycloud.cli.components.cards import card
 from lazycloud.cli.components.output import error_console, print_json_line
@@ -428,6 +430,19 @@ def _client_operation_classifier(
             message=exc.format_message(),
             hint="Run the command with --help to see the available arguments.",
             exit_code=exc.exit_code,
+        )
+    if isinstance(exc, InvalidInputError):
+        return ClientErrorDetails(
+            type="invalid_input",
+            title="Invalid input",
+            message=message,
+            hint="Check the function's argument names and types.",
+        )
+    if isinstance(exc, FunctionOperationError):
+        return ClientErrorDetails(
+            type="function_failed",
+            title="Function failed",
+            message=message,
         )
     if isinstance(exc, ValueError):
         return ClientErrorDetails(

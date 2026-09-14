@@ -389,7 +389,11 @@ class FunctionRunner:
             )
         except BaseException as exc:
             duration = time.perf_counter() - started
-            formatted = traceback.format_exc()
+            formatted = (
+                f"Invalid input: {exc}\n"
+                if isinstance(exc, InvalidInputError)
+                else traceback.format_exc()
+            )
             try:
                 self.append_task_logs(task.task_id, "stderr", formatted)
             except Exception as log_error:
