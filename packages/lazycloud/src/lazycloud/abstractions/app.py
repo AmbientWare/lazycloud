@@ -48,6 +48,7 @@ from lazycloud.abstractions.metadata import (
 )
 from lazycloud.abstractions.pod import Pod, PodOptions
 from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
+from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.json_contracts import resource_payload
 
@@ -930,6 +931,7 @@ class App:
         *,
         resource: str | None = None,
         timeout: int = 0,
+        options: ServeOptions | None = None,
     ) -> object:
         """Serve one endpoint or ASGI app resource for preview.
 
@@ -941,7 +943,7 @@ class App:
             timeout: Serve timeout in seconds. `0` keeps serving until stopped.
         """
         selected = self._select_one(resource=resource, method="serve", serveable=True)
-        return _invoke_method(selected.serve, {"timeout": timeout})
+        return _invoke_method(selected.serve, {"timeout": timeout, "options": options})
 
     def _register(self, resource: ResourceT) -> ResourceT:
         if not hasattr(resource, "spec"):

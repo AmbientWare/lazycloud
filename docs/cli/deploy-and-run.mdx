@@ -73,7 +73,25 @@ lazycloud serve HANDLER [--timeout <seconds>] [--resource <selector>] [options]
 Runs an endpoint or ASGI app on LazyCloud with a temporary URL and streams
 its logs. Your working directory is synced into the container as you edit;
 `--sync-dir <dir>` syncs a different one. `--timeout 0`, the default, serves
-until you interrupt it. `--container-port` maps the container port.
+until you interrupt it. Image, environment, secret, resource and placement
+overrides apply to the selected preview. Endpoint and ASGI previews manage their
+HTTP listener; custom container ports, TCP mode, entrypoints and attaching an
+existing container are unsupported.
+
+The SDK accepts the same preview configuration through `ServeOptions`:
+
+```python
+from lazycloud import ServeOptions
+
+app.serve(
+    resource="endpoint:api",
+    options=ServeOptions(cpu=0.5, env={"MODE": "development"}, sync_dir="."),
+)
+```
+
+An Endpoint or ASGI object also accepts `serve(options=...)`. Explicit options
+prepare a fresh preview configuration, including when the object was already
+prepared or deployed.
 
 ## lazycloud shell
 

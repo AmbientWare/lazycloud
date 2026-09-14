@@ -7,7 +7,6 @@ from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.app import App, AppDeployResult
 from lazycloud.abstractions.function import Function
-from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.apps import resolve_app_id
@@ -35,6 +34,7 @@ from lazycloud.cli.handler_workflows import (
 from lazycloud.cli.workflow_options import (
     DeploymentOverrides,
     build_deployment_overrides,
+    deployment_image,
     workflow_kwargs,
 )
 from lazycloud.control import control_workspace_scope, resolve_control_client_config
@@ -117,13 +117,13 @@ def deploy(
         if isinstance(user_object, App) and name is not None and resource is None:
             raise typer.BadParameter("--name requires a handler reference or --resource")
         _attach_workflow_terminal(user_object)
-        deployment_image = _deployment_image(overrides)
+        selected_image = deployment_image(overrides)
         if isinstance(user_object, Pod):
             _configure_pod(user_object, overrides)
         elif isinstance(user_object, Function):
             _validate_function_overrides(overrides)
             user_object.configure(
-                image=deployment_image,
+                image=selected_image,
                 cpu=overrides.cpu,
                 memory=overrides.memory,
                 gpu=overrides.gpu,
@@ -144,7 +144,7 @@ def deploy(
                 name=name,
                 workspace=selected_workspace,
                 source_root=source_root,
-                image=deployment_image,
+                image=selected_image,
                 cpu=overrides.cpu,
                 memory=overrides.memory,
                 gpu=overrides.gpu,
@@ -259,7 +259,7 @@ def run(
         elif isinstance(target, Function):
             _validate_function_overrides(overrides)
             target.configure(
-                image=_deployment_image(overrides),
+                image=deployment_image(overrides),
                 cpu=overrides.cpu,
                 memory=overrides.memory,
                 gpu=overrides.gpu,
@@ -559,7 +559,7 @@ def _load_run_target(reference: str) -> object | None:
 
 
 def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
-    image = _deployment_image(overrides)
+    image = deployment_image(overrides)
     pod.configure(
         image=image,
         command=overrides.entrypoint,
@@ -594,21 +594,6 @@ def _validate_function_overrides(overrides: DeploymentOverrides) -> None:
     if unsupported:
         options = ", ".join(unsupported)
         raise typer.BadParameter(f"Function does not support overrides: {options}")
-
-
-def _deployment_image(overrides: DeploymentOverrides) -> Image | None:
-    if overrides.image and overrides.dockerfile:
-        raise typer.BadParameter("use either --image or --dockerfile, not both")
-    if overrides.context_dir and not overrides.dockerfile:
-        raise typer.BadParameter("--context requires --dockerfile")
-    if overrides.dockerfile:
-        return Image.from_dockerfile(
-            overrides.dockerfile,
-            context_dir=overrides.context_dir,
-        )
-    if overrides.image:
-        return Image.from_registry(overrides.image)
-    return None
 
 
 def _reject_unapplied_overrides(target: object, overrides: DeploymentOverrides) -> None:

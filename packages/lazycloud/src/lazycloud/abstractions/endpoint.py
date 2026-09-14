@@ -64,6 +64,7 @@ from lazycloud.abstractions.metadata import (
 )
 from lazycloud.abstractions.serve import (
     ServeGatewayClient,
+    ServeOptions,
     ServePreviewSession,
     ServeResourceClient,
     resolve_serve_url,
@@ -354,14 +355,16 @@ class Endpoint(Generic[P, R]):
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
+    def serve(
+        self, timeout: int = 0, *, options: ServeOptions | None = None
+    ) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
-            container_id=None,
             label="endpoint",
+            options=options,
         )
 
     def request(
@@ -725,14 +728,16 @@ class ASGI:
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
+    def serve(
+        self, timeout: int = 0, *, options: ServeOptions | None = None
+    ) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
-            container_id=None,
             label="ASGI app",
+            options=options,
         )
 
     def request(
@@ -1200,18 +1205,29 @@ def _serve_endpoint(
     timeout: int,
     workspace: str | None,
     sync_dir: str | None,
-    container_id: str | None,
     label: str,
+    options: ServeOptions | None,
 ) -> StartEndpointServeResponse:
     terminal = owner.terminal or Terminal()
     owner.terminal = terminal
+    if options is not None:
+        options.apply(owner)
+        if options.keep_warm is not None:
+            if isinstance(owner, ASGI):
+                owner.keep_warm_seconds = options.keep_warm
+            else:
+                owner.keep_warm = options.keep_warm
+        if options.sync_dir is not None:
+            sync_dir = options.sync_dir
     source_root = sync_dir or None
-    stub_id = owner.stub_id or _prepare_endpoint(
-        owner,
-        workspace=workspace,
-        label=label,
-        source_root=source_root,
-    )
+    stub_id = owner.stub_id
+    if not stub_id or options is not None:
+        stub_id = _prepare_endpoint(
+            owner,
+            workspace=workspace,
+            label=label,
+            source_root=source_root,
+        )
     config = owner._config()
     gateway_client = owner.gateway_client or GatewayControlClient.from_endpoint(
         config.endpoint,
@@ -1231,7 +1247,7 @@ def _serve_endpoint(
         workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     ).start_serve(stub_id, timeout=timeout)
-    selected_container_id = container_id or response.container_id
+    selected_container_id = response.container_id
     if not selected_container_id:
         raise EndpointOperationError(f"serve did not return a {label} container_id")
     try:
