@@ -257,11 +257,17 @@ def test_unversioned_invoke_rejects_stopped_latest_without_fallback(
         versioned_response = client.post(
             "/api/v1/functions/roll/v1", headers=headers, json={"args": [1]}
         )
+        unauthorized_response = client.post(
+            "/",
+            headers={"host": f"{v2_deployment.subdomain}.{_base_host(BASE_URL)}"},
+            json={"args": [1]},
+        )
 
         assert latest_response.status_code == 503
         assert "not active" in latest_response.json()["detail"]
         assert host_response.status_code == 503
         assert host_response.json()["code"] == "upstream_unavailable"
+        assert unauthorized_response.status_code == 401
         assert versioned_response.status_code == 200
         assert [request.stub_id for request in service.requests] == [v1_stub.id]
 

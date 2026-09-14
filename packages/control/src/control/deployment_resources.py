@@ -264,11 +264,7 @@ class DeploymentResourceService:
             subdomain,
             version=version,
         )
-        if row is None:
-            return None
-        resource = _deployment_resource(row)
-        _require_active(resource)
-        return resource
+        return _deployment_resource(row) if row is not None else None
 
     def get_by_custom_hostname(self, hostname: str) -> DeploymentResource | None:
         """Resolve the resource that claimed a registered hostname.
@@ -287,11 +283,7 @@ class DeploymentResourceService:
         hostname: str,
     ) -> DeploymentResource | None:
         row = DeploymentResourceRepository(session).get_by_custom_hostname(hostname)
-        if row is None:
-            return None
-        resource = _deployment_resource(row)
-        _require_active(resource)
-        return resource
+        return _deployment_resource(row) if row is not None else None
 
 
 def _require_active(resource: DeploymentResource) -> None:
