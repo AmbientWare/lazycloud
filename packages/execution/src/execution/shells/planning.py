@@ -57,7 +57,7 @@ def shell_server_exec_command(
     return shlex.join(
         (
             "/bin/sh",
-            "-lc",
+            "-c",
             shell_server_command(
                 port,
                 log_path=log_path,
@@ -72,7 +72,7 @@ def shell_server_probe_command(port: int, *, timeout_seconds: float) -> str:
     command = (
         f"{shlex.quote(CONTAINER_HELPER_PATH)} shell --probe --port {port} --timeout {timeout:g}s"
     )
-    return shlex.join(("/bin/sh", "-lc", command))
+    return shlex.join(("/bin/sh", "-c", command))
 
 
 class ShellContainerEnvVar(StrEnum):
@@ -105,7 +105,7 @@ class ShellStandaloneRequest(ContractModel):
     container_id_suffix: str = ""
     cpu_millicores: int = 0
     memory_mib: int = 0
-    disk_mib: int = 0
+    disk_mib: int
     gpu: tuple[str, ...] = ()
     gpu_count: int = 0
     requires_gpu: bool = False
@@ -121,7 +121,7 @@ class ShellStandalonePlan(ContractModel):
     idle_timeout_seconds: int
     cpu_millicores: int
     memory_mib: int
-    disk_mib: int = 0
+    disk_mib: int
     gpu: tuple[str, ...]
     gpu_count: int
     env: tuple[str, ...]

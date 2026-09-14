@@ -13,7 +13,12 @@ from observability.stream_state import (
     RedisStreamRecord,
     log_record_from_redis,
 )
-from shared.http.observability import LogObjectType, LogQueryRequest, LogQueryResponse
+from shared.http.observability import (
+    SSE_HEARTBEAT_SECONDS,
+    LogObjectType,
+    LogQueryRequest,
+    LogQueryResponse,
+)
 from shared.realtime.streams import LogStreamQuery
 
 from api.server.auth import read_workspace
@@ -21,7 +26,6 @@ from api.server.dependencies import current_services
 from api.server.routers.resource_api.common import _management, _parsed_time
 from api.server.services import ApiServices
 from api.server.sse import (
-    SSE_HEARTBEAT_SECONDS,
     SseItem,
     sse_response_items,
     sse_response_prepared,

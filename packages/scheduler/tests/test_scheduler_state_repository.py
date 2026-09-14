@@ -581,7 +581,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     assert failed.max_attempts == 2
     assert failed.error == "RuntimeError: final attempt"
     attempts = isolated_services.tasks.attempts(task_id)
-    assert [attempt.status for attempt in attempts] == [TaskStatus.Retry, TaskStatus.Failed]
+    assert [attempt.status for attempt in attempts] == [TaskStatus.Failed, TaskStatus.Failed]
 
 
 def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(

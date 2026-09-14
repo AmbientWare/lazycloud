@@ -82,6 +82,7 @@ from identity.invitations import WorkspaceInvitationService
 from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
 from images.control import ImageControlService
+from images.filesystem import FilesystemImageService
 from images.publication import (
     ArchiveImageBuildPublicationPublisher,
     CacheImageBuildPublicationPublisher,
@@ -389,6 +390,7 @@ class EndpointApiService(Protocol):
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None: ...
 
@@ -1379,7 +1381,6 @@ def _gateway_control_service(
         ),
         object_storage=core.object_storage,
         agent_image=AgentImageConfig(),
-        event_streams=RedisEventStreamRepository(core.redis()),
         connections=RedisAgentConnectionDirectory(core.redis()),
         tunnel_authority=AgentTunnelAuthority(core.context.database, compute_states),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
@@ -1419,6 +1420,7 @@ def _pod_control_service(
     async_io = core.async_io
     return PodControlService(
         core,
+        filesystem_images=FilesystemImageService(core.images),
         gateway_http_url=core.gateway_settings.public_http_url,
         scheduler_containers=scheduler_containers,
         container_clients=container_clients,

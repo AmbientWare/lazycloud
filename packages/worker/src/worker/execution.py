@@ -164,7 +164,7 @@ class ContainerEnvironmentRequest(ContractModel):
     bind_ports: list[int] = Field(default_factory=lambda: [CONTAINER_INNER_PORT])
     storage_available: bool = False
     request_env: list[str] = Field(default_factory=list)
-    initial_spec_env: list[str] = Field(default_factory=list)
+    image_env: list[str] = Field(default_factory=list, repr=False)
 
     @field_validator("bind_ports")
     @classmethod
@@ -523,8 +523,8 @@ def build_container_environment(
         gateway=gateway,
         hostname=hostname,
         env=[
+            *_without_platform_gateway_env(request.image_env),
             *_without_platform_gateway_env(request.request_env),
-            *_without_platform_gateway_env(request.initial_spec_env),
             *container_env,
         ],
     )

@@ -66,7 +66,8 @@ and `volumes` inject configuration.
 
 `authorized=True` requires a bearer token on the pod's URL. `tcp=True`
 exposes raw TCP instead of HTTP. `block_network=True` cuts outbound access;
-`allow_list=[...]` permits named hosts instead.
+`allow_list=[...]` restricts outbound access to IP networks in CIDR notation.
+Hostnames are not supported.
 
 `health_check_path` and `health_check_port` give the proxy an HTTP probe to
 call before routing to a container. Without one, the proxy only checks that

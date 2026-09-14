@@ -71,6 +71,7 @@ class AgentBridgeNetworkOperation(StrEnum):
     EnableForwarding = "enable-forwarding"
     CheckFirewallRule = "check-firewall-rule"
     EnsureBridge = "ensure-bridge"
+    ClearNeighbor = "clear-neighbor"
     CreateVethPair = "create-veth-pair"
     AttachHostVeth = "attach-host-veth"
     CreateNamespace = "create-namespace"
@@ -621,6 +622,25 @@ class AgentBridgeNetworkBackend:
         commands: list[NetworkCommand] = []
         policy_operations: list[str] = []
         commands.extend(self._ensure_bridge_commands())
+        addresses = [ip_address]
+        if self.capabilities.ipv6_enabled:
+            addresses.append(self._container_ipv6(ip_address))
+        # Reusing an IP must not send packets to the previous veth's MAC.
+        for address in addresses:
+            command = NetworkCommand(
+                operation=AgentBridgeNetworkOperation.ClearNeighbor,
+                argv=[
+                    self.config.ip_binary,
+                    "neigh",
+                    "flush",
+                    "to",
+                    address,
+                    "dev",
+                    self.config.bridge_name,
+                ],
+            )
+            self.system.run(command)
+            commands.append(command)
         setup_commands = self._container_setup_commands(
             container_id,
             ip_address,

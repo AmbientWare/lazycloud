@@ -12,7 +12,7 @@ from pathlib import Path
 from shared.app_slug import validate_app_slug
 from shared.deployments import DeploymentKind
 from shared.http.client_manifests import (
-    CLIENT_MANIFEST_DEPLOYMENT_KINDS,
+    INVOKABLE_DEPLOYMENT_KINDS,
     ClientContract,
     ClientManifestRequest,
     ClientManifestResource,
@@ -54,6 +54,7 @@ def write_client_package(
         response = GatewayControlClient.from_endpoint(
             config.endpoint,
             token=config.token,
+            workspace=config.workspace,
             timeout_seconds=config.timeout_seconds,
         ).client_manifest(
             ClientManifestRequest(
@@ -67,9 +68,7 @@ def write_client_package(
             exc.detail or f"failed to fetch client manifest for {slug}"
         ) from exc
 
-    resources = [
-        item for item in response.resources if item.kind in CLIENT_MANIFEST_DEPLOYMENT_KINDS
-    ]
+    resources = [item for item in response.resources if item.kind in INVOKABLE_DEPLOYMENT_KINDS]
     _validate_typed_resources(slug, resources)
     manifest_payload = [validate_json_object(item.model_dump(mode="json")) for item in resources]
     version = _manifest_version(manifest_payload)
@@ -78,7 +77,9 @@ def write_client_package(
     output.mkdir(parents=True, exist_ok=True)
     version_root.mkdir(parents=True, exist_ok=True)
 
-    _write_version_package(version_root, resources)
+    _write_version_package(
+        version_root, resources, endpoint=config.endpoint, workspace=response.workspace
+    )
     _write_app_package(package_root, version=version)
     lock = _read_lock(output)
     lock[slug] = validate_json_object(
@@ -101,7 +102,13 @@ def write_client_package(
     }
 
 
-def _write_version_package(path: Path, resources: list[ClientManifestResource]) -> None:
+def _write_version_package(
+    path: Path,
+    resources: list[ClientManifestResource],
+    *,
+    endpoint: str,
+    workspace: str,
+) -> None:
     symbols = _resource_symbols(resources)
     manifest_json = json.dumps(
         [item.model_dump(mode="json") for item in resources],
@@ -111,32 +118,25 @@ def _write_version_package(path: Path, resources: list[ClientManifestResource]) 
     lines = [
         "from __future__ import annotations",
         "",
-        "from collections.abc import AsyncIterator as _AsyncIterator",
-        "from collections.abc import Iterable as _Iterable",
-        "from collections.abc import Iterator as _Iterator",
         "from json import loads as _json_loads",
         "from typing import Any as _Any",
         "from typing import Literal as _Literal",
         "",
         "from pydantic import BaseModel as _BaseModel",
         "from pydantic import Field as _Field",
+        "from pydantic import JsonValue as _JsonValue",
         "from pydantic import TypeAdapter as _TypeAdapter",
         "from lazycloud.abstractions.endpoint import EndpointResponse as _EndpointResponse",
         "from lazycloud.client_handles import (",
         "    ASGIHandle as _ASGIHandle,",
         "    EndpointHandle as _EndpointHandle,",
+        "    FunctionHandle as _FunctionHandle,",
         "    handle_from_manifest as _handle_from_manifest,",
         ")",
-        "from lazycloud.session.task import Task as _Task",
-        "from lazycloud.session.task import TaskBatch as _TaskBatch",
-        "from lazycloud.session.task import TaskResult as _TaskResult",
-        "from lazycloud.session.task import TaskSubscription as _TaskSubscription",
-        "from shared.http.observability import LogRecord as _LogRecord",
-        "from shared.http.tasks import TaskResponse as _TaskResponse",
-        "from shared.http.tasks import TaskStopResponse as _TaskStopResponse",
-        "from shared.tasks import Task as _TaskRecord",
         "",
         f"_MANIFEST = _json_loads({manifest_json!r})",
+        f"_ENDPOINT = {endpoint!r}",
+        f"_WORKSPACE = {workspace!r}",
         "",
     ]
     for index, resource in enumerate(resources):
@@ -250,7 +250,7 @@ def _resource_wrapper_lines(
             f"        handle = _handle_from_manifest(_MANIFEST[{index}])",
             f"        if not isinstance(handle, {_handle_type(resource.kind)}):",
             "            raise TypeError('client manifest handle kind mismatch')",
-            "        self._handle = handle",
+            "        self._handle = handle._bind_control(endpoint=_ENDPOINT, workspace=_WORKSPACE)",
             "",
         ]
     )
@@ -474,6 +474,30 @@ def _contract_operation_lines(
     operation = contract.operation
     method_name = operation.name.value
     parameters = operation.parameters
+    if resource.kind is DeploymentKind.Function:
+        signature = _contract_signature(parameters, context)
+        annotation = (
+            _annotation_from_json_schema(operation.return_schema, context)
+            if operation.return_schema
+            else "_JsonValue"
+        )
+        lines: list[str] = []
+        for name in ("remote", "remote_json", "async_remote", "async_remote_json"):
+            asynchronous = name.startswith("async_")
+            call = _contract_call(
+                resource, "async_remote_json" if asynchronous else "remote_json", parameters
+            )
+            lines.extend(
+                [
+                    f"    {'async ' if asynchronous else ''}def {name}"
+                    f"(self{signature}) -> {annotation}:",
+                    f"        return _TypeAdapter({annotation}).validate_python(",
+                    f"            {'await ' if asynchronous else ''}{call}",
+                    "        )",
+                    "",
+                ]
+            )
+        return lines
     if any(item.parameter_kind in {"var_positional", "var_keyword"} for item in parameters):
         return _contract_variadic_operation_lines(resource, method_name)
     if resource.kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
@@ -567,7 +591,24 @@ def _contract_signature(
         )
         for parameter in parameters
     ]
-    return ", *, " + ", ".join(rendered)
+    parts: list[str] = []
+    keyword_only = False
+    for index, (parameter, value) in enumerate(zip(parameters, rendered, strict=True)):
+        if parameter.parameter_kind == "keyword_only" and not keyword_only:
+            parts.append("*")
+            keyword_only = True
+        if parameter.parameter_kind in {"var_positional", "var_keyword"}:
+            prefix = "*" if parameter.parameter_kind == "var_positional" else "**"
+            annotation = _annotation_from_json_schema(parameter.json_schema, context)
+            value = f"{prefix}{_python_name(parameter.name)}: {annotation}"
+            keyword_only = True
+        parts.append(value)
+        if parameter.parameter_kind == "positional_only" and (
+            index + 1 == len(parameters)
+            or parameters[index + 1].parameter_kind != "positional_only"
+        ):
+            parts.append("/")
+    return ", " + ", ".join(parts)
 
 
 def _contract_call(
@@ -587,10 +628,22 @@ def _contract_call(
         return f"self._handle.{selected_handle_method}({call_arguments})"
     if not parameters:
         return f"self._handle.{selected_handle_method}()"
-    payload_items = ", ".join(
-        f"{parameter.name!r}: {_python_name(parameter.name)}" for parameter in parameters
-    )
-    return f"self._handle.{selected_handle_method}(**{{{payload_items}}})"
+    positional: list[str] = []
+    keywords: list[str] = []
+    for parameter in parameters:
+        name = _python_name(parameter.name)
+        match parameter.parameter_kind:
+            case "positional_only" | "keyword":
+                positional.append(name)
+            case "var_positional":
+                positional.append(f"*{name}")
+            case "var_keyword":
+                keywords.append(f"**{name}")
+            case _:
+                keywords.append(f"{parameter.name!r}: {name}")
+    if keywords:
+        positional.append(f"**{{{', '.join(keywords)}}}")
+    return f"self._handle.{selected_handle_method}({', '.join(positional)})"
 
 
 def _contract_return_annotation(
@@ -716,6 +769,8 @@ def _python_name(value: str) -> str:
 
 
 def _handle_type(kind: DeploymentKind) -> str:
+    if kind is DeploymentKind.Function:
+        return "_FunctionHandle"
     if kind is DeploymentKind.Endpoint:
         return "_EndpointHandle"
     if kind is DeploymentKind.Asgi:

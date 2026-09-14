@@ -60,6 +60,7 @@ from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.urls import (
     StubUrlTarget,
+    build_container_url,
     build_deployment_url,
     build_pod_url,
     build_stub_url,
@@ -1163,6 +1164,7 @@ class ControlPlaneService:
         external_url: str = "http://127.0.0.1:9000",
         deployment_id: str | None = None,
         port: int | None = None,
+        container_id: str | None = None,
     ) -> StubUrlPlan:
         stub = self.get_stub(stub_id_or_name, workspace=workspace)
         deployment = self._deployment(deployment_id or stub.deployment_id or "")
@@ -1175,9 +1177,20 @@ class ControlPlaneService:
             subdomain=deployment.subdomain if deployment else "",
             public=stub.public,
             ports=ports,
+            route=stub.config.route,
         )
         try:
-            if stub.kind is StubKind.Pod:
+            if container_id is not None:
+                if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
+                    raise InvalidInputError("container URLs require an Endpoint or ASGI workload")
+                with self.context.database.session() as session:
+                    container = ContainerRepository(session).get(
+                        container_id, workspace_id=stub.workspace_id
+                    )
+                if container is None or container.stub_id != stub.id:
+                    raise NotFoundError("endpoint container not found")
+                url = build_container_url(external_url, container.id, path=target.invoke_path)
+            elif stub.kind is StubKind.Pod:
                 url = build_pod_url(external_url, target)
             elif stub.kind is StubKind.Sandbox:
                 raise InvalidInputError("sandbox URLs require a container-specific exposure")

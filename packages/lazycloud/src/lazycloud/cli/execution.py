@@ -7,9 +7,7 @@ from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.app import App, AppDeployResult
 from lazycloud.abstractions.function import Function
-from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
-from lazycloud.abstractions.serve import sync_local_workspace
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.apps import resolve_app_id
 from lazycloud.cli.components.cards import notice_card, result_card
@@ -36,10 +34,10 @@ from lazycloud.cli.handler_workflows import (
 from lazycloud.cli.workflow_options import (
     DeploymentOverrides,
     build_deployment_overrides,
+    deployment_image,
     workflow_kwargs,
 )
 from lazycloud.control import control_workspace_scope, resolve_control_client_config
-from lazycloud.control_clients import gateway_control_client
 from lazycloud.json_contracts import resource_payload
 from lazycloud.session.deployment import DeploymentClient
 
@@ -119,13 +117,13 @@ def deploy(
         if isinstance(user_object, App) and name is not None and resource is None:
             raise typer.BadParameter("--name requires a handler reference or --resource")
         _attach_workflow_terminal(user_object)
-        deployment_image = _deployment_image(overrides)
+        selected_image = deployment_image(overrides)
         if isinstance(user_object, Pod):
             _configure_pod(user_object, overrides)
         elif isinstance(user_object, Function):
             _validate_function_overrides(overrides)
             user_object.configure(
-                image=deployment_image,
+                image=selected_image,
                 cpu=overrides.cpu,
                 memory=overrides.memory,
                 gpu=overrides.gpu,
@@ -146,7 +144,7 @@ def deploy(
                 name=name,
                 workspace=selected_workspace,
                 source_root=source_root,
-                image=deployment_image,
+                image=selected_image,
                 cpu=overrides.cpu,
                 memory=overrides.memory,
                 gpu=overrides.gpu,
@@ -261,7 +259,7 @@ def run(
         elif isinstance(target, Function):
             _validate_function_overrides(overrides)
             target.configure(
-                image=_deployment_image(overrides),
+                image=deployment_image(overrides),
                 cpu=overrides.cpu,
                 memory=overrides.memory,
                 gpu=overrides.gpu,
@@ -379,14 +377,7 @@ def open_existing_shell(
     _require_interactive_output(ctx)
     selected_workspace = current_workspace(workspace)
     shell_client = Shell(workspace=selected_workspace)
-    session = shell_client.create_existing(container_id)
-    if sync_dir:
-        config = resolve_control_client_config(workspace=selected_workspace)
-        sync_local_workspace(
-            container_id=container_id,
-            local_dir=sync_dir,
-            gateway_client=gateway_control_client(config),
-        )
+    session = shell_client.create_existing(container_id, sync_dir=sync_dir)
     _exit_with_shell_status(shell_client.connect(session))
 
 
@@ -568,7 +559,7 @@ def _load_run_target(reference: str) -> object | None:
 
 
 def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
-    image = _deployment_image(overrides)
+    image = deployment_image(overrides)
     pod.configure(
         image=image,
         command=overrides.entrypoint,
@@ -603,21 +594,6 @@ def _validate_function_overrides(overrides: DeploymentOverrides) -> None:
     if unsupported:
         options = ", ".join(unsupported)
         raise typer.BadParameter(f"Function does not support overrides: {options}")
-
-
-def _deployment_image(overrides: DeploymentOverrides) -> Image | None:
-    if overrides.image and overrides.dockerfile:
-        raise typer.BadParameter("use either --image or --dockerfile, not both")
-    if overrides.context_dir and not overrides.dockerfile:
-        raise typer.BadParameter("--context requires --dockerfile")
-    if overrides.dockerfile:
-        return Image.from_dockerfile(
-            overrides.dockerfile,
-            context_dir=overrides.context_dir,
-        )
-    if overrides.image:
-        return Image.from_registry(overrides.image)
-    return None
 
 
 def _reject_unapplied_overrides(target: object, overrides: DeploymentOverrides) -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import tarfile
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,14 +15,10 @@ from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoint_transfer import RemoteCheckpointPersister
 from worker.checkpoints import CheckpointStatePayload, WorkerCheckpointStatus
 from worker.container_checkpoints import (
-    ContainerFilesystemArchiveCreator,
-    ContainerImageArchiveResult,
     RuntimeCheckpointCreator,
 )
-from worker.container_client.models import ContainerArchiveResponse
 from worker.container_service.models import WorkerContainerServiceInstance
 from worker.execution import CHECKPOINT_FILESYSTEM_DIR
-from worker.image_build_execution import WorkerImageArchivePublishResult
 from worker.repository_client import WorkerRepositoryHttpClient, WorkerRepositoryHttpTransport
 
 type JsonObject = dict[str, JsonValue]
@@ -168,49 +163,6 @@ def test_runtime_checkpoint_creator_records_failed_state_on_runtime_error(
     assert not checkpoint_archive.exists()
 
 
-def test_container_filesystem_archive_creator_rejects_non_running_container(
-    tmp_path: Path,
-) -> None:
-    creator = ContainerFilesystemArchiveCreator(
-        runtime=RuntimeStatus(status_value="stopped"),
-        archiver=ImageArchiver(),
-    )
-    instance = WorkerContainerServiceInstance(container_id="ctr-1", root_path=str(tmp_path))
-
-    responses = tuple(creator.archive_container(instance, image_id="image-1"))
-
-    assert responses == (
-        ContainerArchiveResponse(
-            done=True,
-            success=False,
-            error_msg="Container not running",
-        ),
-    )
-
-
-def test_container_filesystem_archive_creator_requires_durable_publication(
-    tmp_path: Path,
-) -> None:
-    archive_path = tmp_path / "image-1.rclip"
-    archive_path.write_bytes(b"archive")
-    creator = ContainerFilesystemArchiveCreator(
-        runtime=RuntimeStatus(status_value="running"),
-        archiver=ImageArchiver(
-            result=ContainerImageArchiveResult(success=True, archive_path=str(archive_path))
-        ),
-        publisher=ImagePublisher(error="object storage unavailable"),
-    )
-    instance = WorkerContainerServiceInstance(container_id="ctr-1", root_path=str(tmp_path))
-
-    responses = tuple(creator.archive_container(instance, image_id="image-1"))
-
-    assert responses[-1] == ContainerArchiveResponse(
-        done=True,
-        success=False,
-        error_msg="object storage unavailable",
-    )
-
-
 @dataclass(slots=True)
 class RuntimeCheckpoint:
     error: str = ""
@@ -247,59 +199,9 @@ class RuntimeCheckpoint:
 
 
 @dataclass(slots=True)
-class RuntimeStatus:
-    status_value: str
-
-    def status(self, container_id: str) -> str:
-        _ = container_id
-        return self.status_value
-
-
-@dataclass(slots=True)
 class CheckpointState:
     payloads: list[CheckpointStatePayload] = field(default_factory=list)
 
     def save_checkpoint_state(self, payload: CheckpointStatePayload) -> CheckpointRecord:
         self.payloads.append(payload)
         return CheckpointRecord(checkpoint_id=payload.checkpoint_id)
-
-
-@dataclass(slots=True)
-class ImageArchiver:
-    progress_values: list[int] = field(default_factory=list)
-    result: ContainerImageArchiveResult = field(
-        default_factory=lambda: ContainerImageArchiveResult(success=True)
-    )
-    calls: list[tuple[Path, str]] = field(default_factory=list)
-
-    def archive_image(
-        self,
-        source_path: Path,
-        image_id: str,
-        progress: Callable[[int], None],
-    ) -> ContainerImageArchiveResult:
-        self.calls.append((source_path, image_id))
-        for value in self.progress_values:
-            progress(value)
-        return self.result
-
-
-@dataclass(slots=True)
-class ImagePublisher:
-    error: str = ""
-    calls: list[tuple[str, Path, str, str]] = field(default_factory=list)
-
-    def publish_image_archive(
-        self,
-        *,
-        image_id: str,
-        archive_path: Path,
-        workspace_id: str = "",
-        stub_id: str = "",
-    ) -> WorkerImageArchivePublishResult:
-        self.calls.append((image_id, archive_path, workspace_id, stub_id))
-        return WorkerImageArchivePublishResult(
-            ok=not self.error,
-            image_id=image_id,
-            error_message=self.error,
-        )

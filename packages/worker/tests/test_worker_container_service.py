@@ -13,25 +13,16 @@ from worker.container_client.models import (
     ContainerExecRequest,
     ContainerExecResponse,
     ContainerKillRequest,
-    ContainerSandboxCreateDirectoryRequest,
-    ContainerSandboxDeleteDirectoryRequest,
-    ContainerSandboxDeleteFileRequest,
-    ContainerSandboxDownloadFileRequest,
     ContainerSandboxExecRequest,
     ContainerSandboxExposePortRequest,
-    ContainerSandboxFindInFilesRequest,
     ContainerSandboxKillRequest,
     ContainerSandboxListExposedPortsRequest,
-    ContainerSandboxListFilesRequest,
     ContainerSandboxListProcessesRequest,
-    ContainerSandboxReplaceInFilesRequest,
-    ContainerSandboxStatFileRequest,
     ContainerSandboxStatusRequest,
     ContainerSandboxStderrRequest,
     ContainerSandboxStdoutRequest,
     ContainerSandboxUnexposePortRequest,
     ContainerSandboxUpdateNetworkPermissionsRequest,
-    ContainerSandboxUploadFileRequest,
     ContainerStatusRequest,
     ContainerStreamLogsRequest,
     ContainerWorkspaceSyncOperation,
@@ -379,141 +370,29 @@ def test_worker_container_service_kill_treats_missing_runtime_container_as_stopp
     assert killed.ok
 
 
-def test_worker_container_service_file_operations_and_workspace_sync(tmp_path: Path) -> None:
-    store = _store(_instance(tmp_path))
-    service = WorkerContainerService(instances=store)
-
-    created = service.sandbox_create_directory(
-        ContainerSandboxCreateDirectoryRequest(
-            container_id="ctr-1",
-            container_path="data",
-            mode=0o700,
-        )
-    )
-    uploaded = service.sandbox_upload_file(
-        ContainerSandboxUploadFileRequest(
-            container_id="ctr-1",
-            container_path="data/app.txt",
-            data=b"hello old",
-            mode=0o600,
-        )
-    )
-    downloaded = service.sandbox_download_file(
-        ContainerSandboxDownloadFileRequest(container_id="ctr-1", container_path="data/app.txt")
-    )
-    stat = service.sandbox_stat_file(
-        ContainerSandboxStatFileRequest(container_id="ctr-1", container_path="data/app.txt")
-    )
-    listed = service.sandbox_list_files(
-        ContainerSandboxListFilesRequest(container_id="ctr-1", container_path="data")
-    )
-    replaced = service.sandbox_replace_in_files(
-        ContainerSandboxReplaceInFilesRequest(
-            container_id="ctr-1",
-            container_path="data",
-            pattern="old",
-            new_string="new",
-        )
-    )
-    found = service.sandbox_find_in_files(
-        ContainerSandboxFindInFilesRequest(
-            container_id="ctr-1",
-            container_path="data",
-            pattern="new",
-        )
-    )
-    sync_write = service.sync_workspace(
+def test_worker_container_service_workspace_sync(tmp_path: Path) -> None:
+    service = WorkerContainerService(instances=_store(_instance(tmp_path)))
+    for request in (
         SyncContainerWorkspaceRequest(
             container_id="ctr-1",
             operation=ContainerWorkspaceSyncOperation.Write,
             path="sync/a.txt",
             data=b"sync",
-        )
-    )
-    sync_move = service.sync_workspace(
+        ),
         SyncContainerWorkspaceRequest(
             container_id="ctr-1",
             operation=ContainerWorkspaceSyncOperation.Move,
             path="sync/a.txt",
             new_path="sync/b.txt",
-        )
-    )
-    sync_delete = service.sync_workspace(
+        ),
         SyncContainerWorkspaceRequest(
             container_id="ctr-1",
             operation=ContainerWorkspaceSyncOperation.Delete,
             path="sync/b.txt",
-        )
-    )
-    deleted_file = service.sandbox_delete_file(
-        ContainerSandboxDeleteFileRequest(container_id="ctr-1", container_path="data/app.txt")
-    )
-    deleted_dir = service.sandbox_delete_directory(
-        ContainerSandboxDeleteDirectoryRequest(container_id="ctr-1", container_path="data")
-    )
-
-    assert created.ok
-    assert uploaded.ok
-    assert downloaded.data == b"hello old"
-    assert stat.file_info.name == "app.txt"
-    assert stat.file_info.permissions == 0o600
-    assert [item.name for item in listed.files] == ["app.txt"]
-    assert replaced.ok
-    assert found.results[0].path == "workspace/data/app.txt"
-    assert found.results[0].line == 1
-    assert sync_write.ok
-    assert sync_move.ok
-    assert sync_delete.ok
+        ),
+    ):
+        assert service.sync_workspace(request).ok
     assert not (tmp_path / "workspace" / "sync" / "b.txt").exists()
-    assert deleted_file.ok
-    assert deleted_dir.ok
-
-
-def test_worker_container_service_sandboxed_download_streams_from_supervisor(
-    tmp_path: Path,
-) -> None:
-    payload = b"compose:\x00payload\n"
-    manager = ProcessManager(
-        events=[
-            SandboxProcessEvent(event_type=SandboxProcessEventType.Started, pid=41),
-            SandboxProcessEvent(
-                event_type=SandboxProcessEventType.Chunk,
-                pid=41,
-                seq=1,
-                stream=SandboxLogStream.Stdout,
-                data=payload,
-            ),
-            SandboxProcessEvent(
-                event_type=SandboxProcessEventType.Exited,
-                pid=41,
-                exit_code=0,
-            ),
-        ]
-    )
-    instance = _instance(
-        tmp_path,
-        runtime=OciRuntimeName.Runsc,
-        sandbox_process_manager_ready=True,
-    )
-    service = WorkerContainerService(
-        instances=_store(instance),
-        process_managers=ProcessManagerFactory(manager),
-    )
-
-    response = service.sandbox_download_file(
-        ContainerSandboxDownloadFileRequest(
-            container_id="ctr-1",
-            container_path="docker-compose.yml",
-        )
-    )
-
-    assert response.ok
-    assert response.data == payload
-    assert manager.stream_calls == [
-        (["cat", "/workspace/docker-compose.yml"], "/workspace", ["BASE=1"])
-    ]
-    assert manager.acknowledgements == [(41, 1, True)]
-    assert manager.cleanup_count == 1
 
 
 def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Path) -> None:
@@ -646,7 +525,7 @@ def _instance(
     root: Path,
     *,
     sandbox_process_manager_ready: bool = False,
-    runtime: OciRuntimeName = OciRuntimeName.Runc,
+    runtime: OciRuntimeName = OciRuntimeName.Runsc,
     ports: list[int] | None = None,
     workspace_id: str = "workspace-1",
     app_id: str = "app-1",

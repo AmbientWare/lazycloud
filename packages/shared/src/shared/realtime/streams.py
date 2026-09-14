@@ -665,7 +665,7 @@ def event_record_headers_skip(
         (query.app_id, "app_id"),
     ):
         header_value = record.headers.get(header_key)
-        if query_value and header_value and header_value != query_value:
+        if query_value and header_value != query_value:
             return True
     return False
 
@@ -687,7 +687,7 @@ def log_record_headers_skip(record: EventSequencedRecord, query: LogStreamQuery)
         (query.worker_id, "worker_id"),
     ):
         header_value = record.headers.get(header_key)
-        if query_value and header_value and header_value != query_value:
+        if query_value and header_value != query_value:
             return True
     return False
 

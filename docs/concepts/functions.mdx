@@ -125,6 +125,11 @@ container as soon as it goes idle.
 in its own process by default, so calls cannot disturb each other and CPU-bound
 work runs in parallel.
 
+With multiple process slots, cancelling a call replaces only its slot. Other
+slots continue in the same container. Cancelling a single-slot function or an
+`in_process=True` function stops the container. Other calls in a shared
+interpreter restart and may repeat partial side effects.
+
 `in_process=True` puts the slots in one interpreter instead. Use it when the
 slots must share something a process cannot duplicate. A model loaded onto a
 GPU by `on_start` is loaded once and served by every slot; with separate

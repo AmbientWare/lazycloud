@@ -42,9 +42,18 @@ def render_uv_project_sync_command(
     args: Iterable[str],
     *,
     mode: ImageInstallCommandMode = ImageInstallCommandMode.Dockerfile,
+    python_executable: str = "python",
 ) -> str:
     project_dir, extras = _uv_project_args(args)
-    command = ["uv", "sync", "--frozen", "--no-dev", "--no-install-project"]
+    command = [
+        "uv",
+        "sync",
+        "--frozen",
+        "--no-dev",
+        "--no-editable",
+        "--python",
+        shlex.quote(python_executable),
+    ]
     for extra in extras:
         command.extend(["--extra", shlex.quote(extra)])
     if mode is ImageInstallCommandMode.Runtime and project_dir not in {"", "."}:
@@ -55,7 +64,7 @@ def render_uv_project_sync_command(
 def render_micromamba_install_command(
     packages: Iterable[str],
     *,
-    environment: str = "",
+    environment: str = "base",
 ) -> str:
     tokens = _install_tokens(packages)
     if not tokens:
@@ -122,7 +131,9 @@ def plan_image_build_commands(
             continue
 
         flush()
-        if command := _render_non_install_step(normalized, mode=mode):
+        if command := _render_non_install_step(
+            normalized, mode=mode, python_executable=python_executable
+        ):
             commands.append(
                 ImageBuildCommand(
                     kind=normalized.kind,
@@ -192,6 +203,7 @@ def _render_non_install_step(
     step: ImageBuildStep,
     *,
     mode: ImageInstallCommandMode,
+    python_executable: str,
 ) -> str:
     if step.kind is ImageBuildStepKind.Shell:
         return step.command or ""
@@ -201,23 +213,24 @@ def _render_non_install_step(
             return ""
         return f"apt-get update && apt-get install -y {args} && rm -rf /var/lib/apt/lists/*"
     if step.kind is ImageBuildStepKind.UvProject:
-        return render_uv_project_sync_command(step.args, mode=mode)
+        return render_uv_project_sync_command(
+            step.args, mode=mode, python_executable=python_executable
+        )
     msg = f"unsupported image build step kind: {step.kind}"
     raise ValueError(msg)
 
 
 def _install_tokens(args: Iterable[str]) -> list[str]:
-    flag_tokens: list[str] = []
-    package_tokens: list[str] = []
+    tokens: list[str] = []
     for value in args:
         item = value.strip()
         if not item:
             continue
         if item.startswith("-"):
-            flag_tokens.extend(_split_flag_tokens(item))
+            tokens.extend(shlex.quote(token) for token in _split_flag_tokens(item))
         else:
-            package_tokens.append(shlex.quote(item))
-    return [*flag_tokens, *package_tokens]
+            tokens.append(shlex.quote(item))
+    return tokens
 
 
 def _split_flag_tokens(value: str) -> list[str]:

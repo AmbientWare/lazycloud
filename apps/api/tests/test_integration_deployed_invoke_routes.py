@@ -18,6 +18,7 @@ from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.function_payloads import FunctionJsonInvocation
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
@@ -187,6 +188,7 @@ class RecordingEndpointService:
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None:
         _ = task_id, status_code, body_size_bytes, cancelled, error
@@ -307,6 +309,37 @@ def test_private_function_deployed_routes_use_token_workspace(
         assert [request.stub_id for request in service.requests] == [stub.id, public_stub.id]
 
 
+def test_private_invoke_hostname_cannot_select_a_same_named_foreign_workload(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
+    deployment, stub = _deploy(
+        isolated_services, "shared-name", DeploymentKind.Function, workspace="host-owner"
+    )
+    _deploy(isolated_services, "shared-name", DeploymentKind.Function, workspace="host-stranger")
+    service = RecordingFunctionService()
+    host = f"{deployment.subdomain}.{_base_host(BASE_URL)}"
+    with TestClient(create_app(isolated_services, function_service=service)) as client:
+        denied = client.post(
+            "/?workspace=host-stranger",
+            headers=_auth_headers(isolated_services, workspace="host-stranger") | {"host": host},
+            json={},
+        )
+        assert denied.status_code == 403
+        assert not service.requests
+        allowed = client.post(
+            "/?workspace=host-stranger",
+            headers=_auth_headers(isolated_services, workspace="host-owner") | {"host": host},
+            json={},
+        )
+        assert allowed.status_code == 200
+        assert [request.stub_id for request in service.requests] == [stub.id]
+        invocation = service.requests[0].invocation
+        assert isinstance(invocation, FunctionJsonInvocation)
+        assert invocation.kwargs == {"workspace": "host-stranger"}
+
+
 def test_endpoint_version_routes_follow_deployment_lifecycle(
     isolated_services: ApiServices,
 ) -> None:
@@ -361,21 +394,33 @@ def test_endpoint_host_routing_preserves_numeric_deployment_suffixes(
     with ExitStack() as client_stack:
         monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
         _deploy(isolated_services, "analytics", DeploymentKind.Endpoint)
-        deployment, stub = _deploy(isolated_services, "analytics-2026", DeploymentKind.Endpoint)
+        deployment, stub = _deploy(
+            isolated_services, "analytics-2026", DeploymentKind.Endpoint, route="/reports"
+        )
         service = RecordingEndpointService()
         client = client_stack.enter_context(
             TestClient(create_app(isolated_services, endpoint_service=service))
         )
         headers = _auth_headers(isolated_services)
 
+        url = (
+            ControlPlaneService(isolated_services.context)
+            .stub_url(stub.id, external_url=BASE_URL)
+            .url
+        )
+        parsed = urlsplit(url)
+        assert parsed.path == "/reports"
+        assert parsed.netloc == f"{deployment.subdomain}.{_base_host(BASE_URL)}"
         latest_response = client.post(
-            "/",
-            headers=headers | {"host": f"{deployment.subdomain}.{_base_host(BASE_URL)}"},
+            parsed.path,
+            params={"subpath": "not-the-route"},
+            headers=headers | {"host": parsed.netloc},
             json={"value": "numeric-suffix"},
         )
 
         assert latest_response.status_code == 202
         assert latest_response.json()["stub_id"] == stub.id
+        assert latest_response.json()["path"] == "/reports"
         assert [request.stub_id for request in service.forward_requests] == [stub.id]
 
 
@@ -514,7 +559,7 @@ def test_generated_asgi_urls_forward_subpaths_and_warmup(
             f"{id_path}/api/items/1",
             headers=headers | {"x-client-header": "asgi-id"},
             content=b"alpha",
-            params={"search": "one"},
+            params={"search": "one", "workspace": "default"},
         )
         deployment_response = client.patch(
             f"{deployment_path}/api/items/2",

@@ -31,7 +31,7 @@ const stubRuntimeConfigSchema = z.object({
   region: productRegionSchema.nullish(),
   availability_zone: z.string().default(""),
   preemptible: z.boolean().default(false),
-  cpu: z.union([cpuRequestSchema, z.string()]).nullish(),
+  cpu: cpuRequestSchema.nullish(),
   memory: memoryRequestSchema.nullish(),
   gpu: z.array(z.string()).default([]),
   gpu_count: z.number().nullish(),

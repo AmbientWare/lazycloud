@@ -62,6 +62,8 @@ class ResourceManifest:
 @dataclass(slots=True)
 class ResourceHandle:
     manifest: ResourceManifest
+    endpoint: str | None = field(default=None, init=False)
+    workspace: str | None = field(default=None, init=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout_seconds: float = field(default=10.0, init=False, repr=False)
 
@@ -99,9 +101,15 @@ class ResourceHandle:
     def _bind_control(
         self,
         *,
+        endpoint: str | None = None,
+        workspace: str | None = None,
         token: str | None = None,
         timeout_seconds: float | None = None,
     ) -> Self:
+        if endpoint is not None:
+            self.endpoint = endpoint
+        if workspace is not None:
+            self.workspace = workspace
         if token is not None:
             self.token = token
         if timeout_seconds is not None:
@@ -157,11 +165,14 @@ class FunctionHandle(ResourceHandle):
         completed = Task(
             task_id=response.task_id,
             client=TaskClient(
-                endpoint=_origin(self.invoke_url),
+                endpoint=self.endpoint or _origin(self.invoke_url),
+                workspace=self.workspace,
                 token=self._token(),
                 timeout_seconds=self.timeout_seconds,
             ),
         ).wait()
+        if not completed.ok:
+            raise ClientHandleError(completed.error or f"function task {completed.status.value}")
         try:
             return decode_function_result(completed.value)
         except FunctionResultDecodeError as exc:
