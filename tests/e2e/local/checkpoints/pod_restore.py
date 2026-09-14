@@ -181,9 +181,7 @@ def _checkpoint(
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
-            "uv",
-            "run",
-            "lazycloud",
+            str(Path(sys.executable).parent / "lazycloud"),
             "--json",
             "container",
             "checkpoint",
