@@ -47,8 +47,19 @@ Provider status accuracy remains open in SDK-41; presentation alone does not fix
 SDK-41 additional evidence: an invalid GPU name is rejected before submission,
 with the supported GPU names in the error. This does not close the capacity gap.
 
-Fix verification uses disposable workspace `cli_reporting_fix_20260914`.
-Delete it after verification and restore the mclean-connor selection.
+Task outcome reporting fixed locally: cancellation preserves its typed status and
+exits 130 with task_cancelled JSON. Handler failures show Task failed and execution
+timeouts show Task timed out. Real local CLI checks passed for pending cancellation,
+a deliberate handler exception and a three-second timeout. 38 focused SDK cases,
+type checks and Ruff passed. Pending-container cleanup in CLI-16 remains open.
+
+Fix verification cleanup: production workspace cli_reporting_fix_20260914 is absent
+after deletion, although the DELETE request timed out. Its stalled build was stopped.
+Local cli_reporting_local_20260914 was deleted because the existing local worker
+belongs to mclean-connor and cannot serve the disposable workspace. Checks then used
+that worker's workspace. The cancelled pending container was stopped explicitly;
+the failure and timeout containers are no longer active. Both private test configs
+select mclean-connor. No production release was changed.
 
 External cleanup complete: S3 bucket
 `lazycloud-sdk-check-5d95d2a0-20260914`, IAM user

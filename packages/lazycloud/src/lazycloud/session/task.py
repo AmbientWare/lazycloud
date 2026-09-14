@@ -64,7 +64,9 @@ class TaskControlClient(Protocol):
 
 
 class TaskOperationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status: TaskStatus | None = None) -> None:
+        self.status = status
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +259,7 @@ class FunctionCall(Generic[R]):
     exit_code: int = 0
     error: str = ""
     workspace_id: str = ""
+    status: TaskStatus | None = None
     __orig_class__: object = field(init=False, repr=False, compare=False)
 
     @property
@@ -293,7 +296,9 @@ class FunctionCall(Generic[R]):
     ) -> R:
         if self.complete:
             if self.exit_code != 0:
-                raise TaskOperationError(self.error or f"function task {self.task_id} failed")
+                raise TaskOperationError(
+                    self.error or f"function task {self.task_id} failed", status=self.status
+                )
             try:
                 return cast(R, decode_function_result(self.result_payload))
             except FunctionResultDecodeError as exc:
@@ -307,7 +312,7 @@ class FunctionCall(Generic[R]):
         )
         if not result.ok:
             msg = result.error or f"function task {self.task_id} failed"
-            raise TaskOperationError(msg)
+            raise TaskOperationError(msg, status=result.status)
         return cast(R, result.value)
 
     def logs(self, *, limit: int = 100, cursor: str | None = None) -> list[LogRecord]:
