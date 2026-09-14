@@ -995,10 +995,14 @@ class PodAutoscaler:
     ) -> list[AutoscaleAction]:
         del scheduler_statuses, signal
         workspace_id = stub.workspace_id
-        # A sandbox is held by its lock rather than by a window, which is the
-        # same distinction `keep_warm_lock_authoritative` states below.
+        # A fixed replica count is an explicit scale target. Its excess replicas
+        # drain connections without retaining an additional idle window.
+        autoscaler = stub.config.autoscaler
         keep_warm_seconds = (
-            0 if stub.kind is StubKind.Sandbox else _pod_autoscaler_config(stub).keep_warm_seconds
+            0
+            if stub.kind is StubKind.Sandbox
+            or autoscaler.min_containers == autoscaler.max_containers
+            else _pod_autoscaler_config(stub).keep_warm_seconds
         )
         states = _pod_container_states(self.redis, workspace_id, stub, containers)
         stop_plan = select_stoppable_pod_containers(

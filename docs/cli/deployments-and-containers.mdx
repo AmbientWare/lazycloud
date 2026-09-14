@@ -19,7 +19,8 @@ lazycloud app delete APP
 
 ## lazycloud deployment
 
-A deployment is addressed by name or id.
+A deployment is addressed by name or id. `scale` sets the replica count for a Pod.
+Functions and endpoints scale from their autoscaler configuration.
 
 ```bash
 lazycloud deployment list [--app <name>] [--limit <n>]
@@ -31,7 +32,7 @@ lazycloud deployment delete ID_OR_NAME
 
 ```bash
 lazycloud deployment list --app api_demo
-lazycloud deployment scale predict --containers 3
+lazycloud deployment scale web --containers 3
 ```
 
 ## lazycloud container

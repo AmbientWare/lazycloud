@@ -224,6 +224,8 @@ class PodControlService:
         timeout_seconds = (
             request.timeout_seconds
             if request.timeout_seconds is not None
+            else -1
+            if stub.deployment_id is not None and config.autoscaler.min_containers > 0
             else config.runtime.keep_warm
         )
         created_at = utc_now()
