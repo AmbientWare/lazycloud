@@ -1202,6 +1202,7 @@ def _effective_presign_expiration(
 ) -> int:
     if requested_seconds <= 0:
         raise ValueError("presigned URL expiration must be positive")
+    requested_seconds = min(requested_seconds, 7 * 24 * 60 * 60)
     if settings.credential_expires_at is None:
         return requested_seconds
     expiration = settings.credential_expires_at.astimezone(UTC)
