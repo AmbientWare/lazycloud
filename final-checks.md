@@ -5,10 +5,12 @@ First pass complete. Only checked PASS items count as passing.
 Published 0.0.93 results: CLI 35/51 PASS, 13 PARTIAL, 3 BLOCKED;
 SDK 55/72 PASS, 14 PARTIAL, 3 BLOCKED. Total 90/123 PASS.
 
-Local follow-up has verified 25 of those 33 non-passing items. This is a forecast
-of 115/123 after release, not a new production pass count or a full local rerun.
-Remaining: TCP cold-start validation, GPU execution, five joined-machine checks,
-and natural artifact retention. PR #281 contains the batch on current main.
+Local follow-up has verified 26 of those 33 non-passing items. This is a forecast
+of 116/123 after release, not a new production pass count or a full local rerun.
+Production GPU execution also passed on On-Demand hardware; SDK-41 stays partial
+until the released client reports Spot capacity failures correctly. Five joined-machine
+checks and natural artifact retention remain unverified. PR #281 contains the batch
+on current main. All five required PR checks passed before this evidence-only update.
 
 Current pass: production `https://lazycloud.dev`, published client 0.0.93,
 Python 3.12.11. Disposable client environment and config are under
@@ -116,7 +118,8 @@ Current fix batch:
   retain the mount failure details.
 - SDK-41: rejected or unsupported acquisition reports capacity unavailable;
   typed provider failures reach progress messages and message changes redraw.
-  This does not prove a successful GPU launch.
+  Successful On-Demand GPU execution is recorded below; release verification of
+  capacity-failure reporting remains open.
 - SDK-58: documentation names both Image.with_docker() and docker_enabled=True.
 
 Batch evidence so far: 71 focused backend cases, 33 client/runner cases and 16
@@ -179,7 +182,7 @@ Local generation 65, source `03901b6f`, branch CLI/SDK:
   FOR NO KEY UPDATE and prevents raw database exceptions reaching callers.
   Focused admission checks passed; the five-request live repeat remains pending.
 
-Refresh in progress from `8e3296d7`: includes endpoint admission, authorization
+Refresh from `8e3296d7` included endpoint admission, authorization
 ordering, restored stop reasons, and TCP address/prerequisite fixes. TCP deploy
 returns a TLS address; standalone TCP create rejects before scheduling. Three
 TCP route/TLS cases, changed-file types and Ruff passed. No production release.
@@ -206,8 +209,13 @@ Local generation 66, source `cb40fa9ae`, follow-up:
 TCP live checks exposed another defect: an idle Pod's autoscaling target was
 removed, and new proxy demand did not reactivate it. Requests counted as demand
 but no container was scheduled. Fixed in `b993cda9`; fourteen Pod routing and
-autoscaling cases and focused types passed. Local refresh is in progress. Earlier
-TLS read timeouts are retained as failures until the cold request succeeds.
+autoscaling cases and focused types passed. On local generation 68, source
+`b993cda9`, an ordinary TLS socket sent `tcp-final-user-check\n` to the deployed
+Pod and received the exact bytes in 2.87 seconds from a cold start, without retry.
+The connection verified the local CA and supplied the generated hostname as SNI.
+SDK-44 passes locally. Deleting the Pod stopped container
+cc952acd-e0e0-4d91-ab21-f28f418d8a16 with exit 560. Earlier TLS timeouts exposed
+the defects fixed in this batch and remain part of this record.
 
 PR checks found a discarded result-preview exception and a stale HTTP contract
 corpus. The preview now names the exception type while preserving the saved Python
@@ -215,8 +223,8 @@ value; direct owner execution confirmed the value remains 42. Regenerated the
 corpus from Pydantic; all nineteen browser contract cases passed.
 
 Production GPU retry after owner supplied AWS quota approval:
-- AWS default profile reports All G and VT Spot Instance Requests = 128 vCPUs
-  in us-east-1. The request for 384 is not the applied quota.
+- AWS default profile reports 128 Spot G/VT vCPUs and 384 On-Demand G/VT vCPUs
+  in us-east-1. The Spot request for 384 is not the applied Spot quota.
 - Task ec4f5b94-282a-4dd1-b0ec-4d7e13ccfbd7 triggered automatic T4 provisioning.
   AWS rejected g4dn.2xlarge Spot capacity in us-east-1c, then other zones. A pinned
   us-east-1a retry, a8ed8af6-e41f-40c4-bc32-3a3da4db73ef, also stayed unavailable.
@@ -225,11 +233,28 @@ Production GPU retry after owner supplied AWS quota approval:
 - Cancelled both tasks and explicitly stopped their pending containers
   3e0ba1fc-db2d-4d59-a17a-404cfd2d9429 and 3f7d5011-e950-4e19-85d4-76f54b2221f9.
   Published 0.0.93 still needs the pending-container cleanup fix in this PR.
-- A fresh A10G request is in progress. No successful GPU execution claimed yet.
+- A fresh A10G request, ace106b0-b023-40d0-a4c8-e28dc72d0288, also hit Spot
+  capacity failures in 1a/1d/1f. Cancelled it and stopped its pending container
+  876a2fae-cad0-4094-9e1b-e2f3369652bf.
+- A fresh T4 definition with `preemptible=False` automatically provisioned
+  g4dn.xlarge instance i-02b3337a785f88367 in us-east-1d. Task
+  bfa3e33b-be64-442b-bb47-fecdab87e114 completed after about 166 seconds of
+  provisioning and startup. Its handler took 0.167 seconds.
+- A second ordinary `spawn().get()` returned `Tesla T4, 15360 MiB` in 5.34
+  seconds, task 654464de-6104-4e5e-9aa1-9f15e09e1928. This proves GPU access
+  from a running workload, not a CUDA training benchmark. Published SDK 0.0.93.
+- After both tasks exited, the platform automatically reduced the test GPU ASG
+  to desired zero and the instance entered shutting-down. No ASG in us-east-1
+  had positive desired capacity at the cleanup read. No manual EC2 launch or
+  default purchase-policy change was needed.
 
-Still to prove: refreshed TCP cold start and GPU execution/progress.
-Machine joining and natural artifact retention still require their recorded
-external prerequisites. Do not convert these gaps into passes after deployment.
+Still to prove after release: GPU capacity-failure progress. Machine joining and
+natural artifact retention require their recorded external prerequisites.
+Do not convert these gaps into passes after deployment.
+
+Final local cleanup deleted the four apps created for these follow-up checks:
+sdk_user_functions, sdk_user_pod, sdk_user_services and user_checks_web. The
+selected workspace's app list is empty. No unrelated workspace was deleted.
 
 Fix verification cleanup: production workspace cli_reporting_fix_20260914 is absent
 after deletion, although the DELETE request timed out. Its stalled build was stopped.
@@ -345,7 +370,7 @@ Use public imports and small examples, one behavior at a time.
 - [x] SDK-38 Use a supported project dependency file to build and run its workload. PASS: created a small pyproject.toml and uv.lock, used Image.add_uv_project("image_project"), then imported six remotely and returned 1.17.0. Total 20.52 seconds with a 15-second frozen dependency build.
 - [ ] SDK-39 Break an image build deliberately and inspect its error and logs. PARTIAL: deliberate exit 17 correctly prevented workload execution and raised FunctionOperationError after 24.32 seconds. The builder unnecessarily reran the same failing command with vfs after overlay failed, then repeated the entire build log in several error layers. Build `4e9cd279-503d-47f2-a3bc-1e5f22137bad`. Stop retrying deterministic Dockerfile failures and report the failed step directly.
 - [ ] SDK-40 Run with explicit CPU, memory, environment and pool settings and inspect them inside the workload. PARTIAL: cpu=0.5, memory=256Mi, pool=lazycloud submitted successfully and returned the configured environment marker. Initial probe incorrectly assumed cgroup v2 files were mounted and failed with FileNotFoundError. Corrected diagnostic shows virtual cgroup v1 membership with no exposed cgroup filesystem; quota enforcement needs host evidence, not that invalid in-container file probe. Latest task `83345884-f386-4d73-8d9d-6efcd9416738`.
-- [ ] SDK-41 Run a GPU workload on matching hardware; check invalid or unavailable GPU requests. PARTIAL: T4 task `b947aefd-f2ca-407a-a556-7a9df27f6bd6` stayed pending while acquisition units degraded. AWS ASG activity names insufficient g4dn.xlarge capacity in us-east-1b. SDK continued saying Starting compute, hiding the rejection. A fresh definition pinned to us-east-1a produced task `7191bbec-9ed7-442a-bac7-68f11927c6a1`, which reported capacity_unavailable; no GPU instance launched. Cancelled tasks and stopped leftover pending containers. Positive GPU execution remains blocked by available platform placement. Test setup briefly reused an already-prepared definition, so its zone override did not apply; cancelled that attempt and recreated the definition before the recorded zone check.
+- [ ] SDK-41 Run a GPU workload on matching hardware; check invalid or unavailable GPU requests. PARTIAL: On-Demand T4 provisioning and two production tasks passed, including an SDK result of `Tesla T4, 15360 MiB`. Spot requests hit AWS capacity shortages across multiple zones. Published SDK 0.0.93 still hides some acquisition failures behind Starting compute; verify the PR's reporting fix after release. Cancelled unsuccessful tasks, stopped their pending containers, and observed automatic GPU worker scale-down. Invalid GPU names are rejected before submission. The first pass briefly reused an already-prepared definition, so its zone override did not apply; subsequent placement checks used fresh definitions.
 - [x] SDK-42 Start a Pod, connect to the running instance and terminate it. PASS: web.create created `18a0e4f6-c73a-4116-8918-a7aa534be347`, inventory confirmed running, its HTTP server responded and SDK shell sessions connected twice. PodInstance.terminate returned True.
 - [x] SDK-43 Run a server in a Pod and call its exposed HTTP port. PASS: ordinary httpx GET to the on-demand Pod URL returned HTTP 200 with the expected directory listing.
 - [ ] SDK-44 Exchange data through an exposed TCP port where ingress is configured. PARTIAL: tcp=True created a healthy TCP echo server, verified by a real socket inside its Pod. SDK returned an HTTPS URL; sending raw bytes over TLS to that advertised host produced an HTTP 400 from the HTTP ingress. No working raw-TCP address was supplied. Fail clearly when TCP ingress is unavailable, or provide the correct TCP connection details. Pod terminated.
