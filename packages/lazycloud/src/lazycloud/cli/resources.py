@@ -837,12 +837,12 @@ def machine_join(
         typer.Option("--gpu-ids", help="Comma-separated GPU device IDs to expose."),
     ] = "",
     background: Annotated[
-        bool | None,
+        bool,
         typer.Option(
             "--background/--foreground",
-            help="Install the agent as a background service or run it in the foreground.",
+            help="Install a background service. Runs in the foreground by default.",
         ),
-    ] = None,
+    ] = False,
     service_manager: Annotated[
         str,
         typer.Option("--service-manager", help="Service manager for background installs."),
