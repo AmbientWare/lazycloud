@@ -95,6 +95,15 @@ export const encodedValueSchema = z.object({
   value_base64: z.string().default(""),
 });
 
-export const mapKeysSchema = z.object({
-  keys: z.array(z.string()).default([]),
+export const mapKeyPageSchema = z.object({
+  data: z.array(z.string()),
+  next: z.string().nullable(),
 });
+
+export const mapEntrySchema = encodedValueSchema.extend({
+  revision: z.string(),
+  expires_at: z.string().datetime({ offset: true }).nullable(),
+});
+export type MapEntry = z.infer<typeof mapEntrySchema>;
+
+export const collectionWriteSchema = z.object({});

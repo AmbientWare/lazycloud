@@ -6,7 +6,7 @@ from execution.collections.redis import (
     RedisMapService,
     RedisSimpleQueueService,
 )
-from shared.errors import InvalidInputError, NotFoundError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.collections import MAX_MAP_TTL_SECONDS
 from tests.real_redis import RealRedisActors
 
@@ -20,7 +20,7 @@ def test_real_redis_map_round_trip_stats_and_workspace_cleanup(
     service.map_set("workspace-a", "cache", "beta", b"second")
     service.map_set("workspace-b", "cache", "other", b"preserved")
 
-    assert service.map_get("workspace-a", "cache", "alpha") == b"first"
+    assert service.map_get("workspace-a", "cache", "alpha").value == b"first"
     assert service.map_keys("workspace-a", "cache") == ("alpha", "beta")
     assert service.map_names("workspace-a") == ("cache",)
     stats = service.map_stats("workspace-a", "cache")
@@ -33,7 +33,7 @@ def test_real_redis_map_round_trip_stats_and_workspace_cleanup(
     service.delete_workspace("workspace-a")
 
     assert service.map_names("workspace-a") == ()
-    assert service.map_get("workspace-b", "cache", "other") == b"preserved"
+    assert service.map_get("workspace-b", "cache", "other").value == b"preserved"
 
 
 def test_real_redis_map_drops_expired_index_entries_and_refuses_oversized_entries(
@@ -96,3 +96,64 @@ def test_real_redis_simple_queue_round_trip_stats_and_workspace_cleanup(
     assert service.simple_queue_names("workspace-a") == ()
     assert service.simple_queue_empty("workspace-a", "jobs")
     assert service.simple_queue_peek("workspace-b", "jobs") == b"preserved"
+
+
+def test_map_conditional_edits_preserve_expiry_and_refuse_stale_writes(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    service = RedisMapService(real_redis_actors.client())
+    other = RedisMapService(real_redis_actors.client())
+    service.map_set("w", "cache", "key", b"first", ttl_seconds=60, if_absent=True)
+    opened = service.map_get("w", "cache", "key")
+    with pytest.raises(ConflictError):
+        other.map_set("w", "cache", "key", b"duplicate", if_absent=True)
+    other.map_set("w", "cache", "key", b"worker", ttl_seconds=120)
+    for operation in ("save", "delete"):
+        with pytest.raises(ConflictError):
+            if operation == "save":
+                service.map_set("w", "cache", "key", b"stale", if_revision=opened.revision)
+            else:
+                service.map_delete("w", "cache", "key", if_revision=opened.revision)
+    current = service.map_get("w", "cache", "key")
+    assert current.value == b"worker"
+    service.map_set("w", "cache", "key", b"edited", ttl_seconds=None, if_revision=current.revision)
+    saved = service.map_get("w", "cache", "key")
+    assert saved.value == b"edited"
+    assert saved.expires_at == current.expires_at
+    other.map_set("w", "cache", "key", b"edited", ttl_seconds=0)
+    with pytest.raises(ConflictError):
+        service.map_set("w", "cache", "key", b"stale expiry", if_revision=saved.revision)
+    persistent = service.map_get("w", "cache", "key")
+    service.map_set(
+        "w", "cache", "key", b"persistent", ttl_seconds=None, if_revision=persistent.revision
+    )
+    assert service.map_get("w", "cache", "key").expires_at is None
+    service.map_delete("w", "cache", "key")
+    with pytest.raises(ConflictError):
+        service.map_set(
+            "w", "cache", "key", b"resurrected", ttl_seconds=None, if_revision=persistent.revision
+        )
+    with pytest.raises(InvalidInputError, match="reserved"):
+        service.map_set("w", "cache", "index", b"clobber index")
+
+
+def test_map_key_pages_cover_live_keys_and_filter_by_literal_prefix(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    service = RedisMapService(real_redis_actors.client())
+    expected = {f"job[*]-{number:04d}" for number in range(600)}
+    for key in expected | {"other"}:
+        service.map_set("w", "cache", key, b"value")
+    service.map_set("other-workspace", "cache", "job[*]-foreign", b"private")
+    cursor = None
+    seen: set[str] = set()
+    pages = 0
+    while True:
+        page = service.map_key_page("w", "cache", cursor=cursor, prefix="job[*]-", limit=50)
+        seen.update(page.data)
+        pages += 1
+        cursor = page.next
+        if cursor is None:
+            break
+    assert pages > 1
+    assert seen == expected

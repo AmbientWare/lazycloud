@@ -47,7 +47,32 @@ del state["cursor"]
 ```
 
 Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
-days is also the maximum.
+days is the maximum timed expiry. Use `ttl=0` to keep a key until you delete it.
+
+## Edit from the dashboard
+
+Open **Storage**, then **Queues** or **Maps**. Keep repeatable setup in your
+Python code; use the dashboard to inspect data or make an ad hoc correction.
+
+For a map, filter keys by prefix and scroll to load more. Select a key to
+view its value and expiry. **Edit value** accepts JSON and keeps the existing
+expiry unless you choose a new one. If a workload changes the value or expiry
+while you edit, saving fails and leaves your draft intact. **Discard draft and
+reload** loads the current value so you can start again. Binary Python values
+can be inspected and deleted, but cannot be edited in the dashboard.
+
+**Add key** creates a key without overwriting an existing one. To create a
+map, choose **New map** and enter its name and first key/value.
+
+For a queue, **Add message** appends JSON to the end. Viewing the head message
+does not remove it. **Remove next message** consumes the next message without
+running it and shows what was removed. Another consumer can take the previewed
+message before you confirm, so the removed message may be different.
+**New queue** creates a named queue with its first message.
+
+Deleting a queue removes its remaining messages. Deleting a map removes all
+its keys. Both actions require confirmation and cannot be undone. Running code
+can recreate a deleted collection with its next write.
 
 ## Remove example state
 
