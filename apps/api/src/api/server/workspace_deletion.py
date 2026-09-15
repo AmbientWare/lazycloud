@@ -170,7 +170,6 @@ class WorkspaceDeletionService:
 
         self.services.map_service.delete_workspace(workspace.id)
         self.services.simple_queue_service.delete_workspace(workspace.id)
-        self.services.signal_service.delete_workspace(workspace.id)
         self.services.workspace_changes.delete_workspace(workspace.id)
         RedisEventStreamRepository(self.services.redis_client).delete_workspace(workspace.id)
 

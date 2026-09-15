@@ -1,5 +1,5 @@
 ---
-title: "Queues, maps, and signals"
+title: "Queues and maps"
 description: "Shared state for coordinating work across containers."
 ---
 
@@ -49,31 +49,3 @@ state.delete()                      # remove the whole map
 
 Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
 days is also the maximum.
-
-## Signal (experimental)
-
-A named flag one container sets and another reacts to. Use it for cache
-invalidation, reload triggers, and similar notifications.
-
-```python
-from lazycloud.abstractions.experimental import Signal
-
-reload_flag = Signal("reload-models")
-
-# Producer
-reload_flag.set(ttl=600)    # 600 seconds is the default
-
-# Consumer: check once
-response = reload_flag.monitor_once()
-
-# Or poll in a background thread
-signal = Signal("reload-models", handler=lambda: print("reloading"))
-signal.start_monitoring(poll_interval_seconds=1.0)
-signal.stop_monitoring()
-
-reload_flag.clear()
-```
-
-<Note>
-  `Signal` is experimental. Its interface may change between releases.
-</Note>

@@ -87,21 +87,6 @@ def test_resource_routes_canonicalize_workspace_name_and_id(
     queue_value = SimpleQueuePopResponse.model_validate_json(queue_pop.content)
     assert decode_bytes(queue_value.value_base64) == b"queue-value"
 
-    signal_set = client.post(
-        f"/api/v1/signals/demo-signal/set?workspace={workspace.name}",
-        headers=headers,
-        json={},
-    )
-    assert signal_set.status_code == 200
-    assert signal_set.json() == {}
-
-    signal_monitor = client.get(
-        f"/api/v1/signals/demo-signal/monitor?workspace={workspace.id}",
-        headers=headers,
-    )
-    assert signal_monitor.status_code == 200
-    assert signal_monitor.json() == {"set": True}
-
     volume_create = client.post(
         f"/api/v1/volumes?workspace={workspace.name}",
         headers=headers,

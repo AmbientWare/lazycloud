@@ -72,7 +72,7 @@
         "pages": [
           "concepts/volumes",
           "concepts/secrets",
-          "concepts/queues-maps-signals",
+          "concepts/queues-maps",
           "concepts/artifacts",
           "concepts/tasks-and-logs"
         ]

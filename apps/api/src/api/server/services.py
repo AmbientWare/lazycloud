@@ -58,7 +58,6 @@ from execution.pods.service import PodControlService
 from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
-from execution.signals.redis import RedisSignalRepository, RedisSignalService
 from execution.task_progress import TaskProgressService
 from execution.task_rerun import TaskRerunService
 from execution.tasks import TaskService
@@ -515,7 +514,6 @@ class ApiServiceCore:
 
 @dataclass(frozen=True, slots=True)
 class ApiServices(ApiServiceCore):
-    signal_service: RedisSignalService
     map_service: RedisMapService
     simple_queue_service: RedisSimpleQueueService
     artifact_service: ArtifactStorageService
@@ -1054,7 +1052,6 @@ class ApiServices(ApiServiceCore):
     ) -> ApiServices:
         return _compose_api_services(
             self,
-            signal_service=self.signal_service,
             map_service=self.map_service,
             simple_queue_service=self.simple_queue_service,
             artifact_service=self.artifact_service,
@@ -1097,7 +1094,6 @@ class ApiServices(ApiServiceCore):
 def _compose_api_services(
     core: ApiServiceCore,
     *,
-    signal_service: RedisSignalService | None = None,
     map_service: RedisMapService | None = None,
     simple_queue_service: RedisSimpleQueueService | None = None,
     artifact_service: ArtifactStorageService | None = None,
@@ -1329,7 +1325,6 @@ def _compose_api_services(
         owns_redis_client=core.owns_redis_client,
         owns_binary_redis_client=core.owns_binary_redis_client,
         owned_resources=core.owned_resources,
-        signal_service=signal_service or RedisSignalService(RedisSignalRepository(redis)),
         map_service=map_service or RedisMapService(core.binary_redis()),
         simple_queue_service=(simple_queue_service or RedisSimpleQueueService(core.binary_redis())),
         artifact_service=artifact_service

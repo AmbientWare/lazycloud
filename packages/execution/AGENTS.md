@@ -1,8 +1,8 @@
 # Execution package
 
 User execution resources: task, artifact, volume, and secret workflows, the
-deterministic planners behind them, and the collections and signals they
-coordinate through.
+deterministic planners behind them, and the queues and maps they coordinate
+through.
 
 Planners stay pure: same inputs, same plan, no I/O. What they decide can then be
 reasoned about without running it. Services take explicit protocols and explicit

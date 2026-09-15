@@ -12,7 +12,6 @@ from execution.collections.redis import (
 )
 from execution.pods.service import PodControlService
 from execution.shells.service import ShellControlService
-from execution.signals.redis import RedisSignalService
 from execution.task_rerun import TaskRerunService
 from execution.volumes.control import VolumeControlService
 from fastapi import Depends
@@ -128,12 +127,6 @@ def pod_service(
     services: Annotated[ApiServices, Depends(api_services)],
 ) -> PodControlService:
     return services.pod_service
-
-
-def signal_service(
-    services: Annotated[ApiServices, Depends(api_services)],
-) -> RedisSignalService:
-    return services.signal_service
 
 
 def map_service(
