@@ -1,4 +1,4 @@
-# This module owns three records' worth of a zone, and nothing else.
+# This module owns named platform records, not the zone.
 #
 # The zone carries live Google Workspace mail — five MX, an SPF TXT, and a
 # site-verification TXT — which survive alongside a proxied apex CNAME only
@@ -76,6 +76,23 @@ resource "cloudflare_dns_record" "agent_tunnels" {
   proxied = false
   ttl     = 60
   comment = "LazyCloud agent TLS -> connection gateway NLB"
+
+  lifecycle {
+    precondition {
+      condition     = var.confirm_zone_records
+      error_message = "Refusing to write zone records until confirm_zone_records is true."
+    }
+  }
+}
+
+resource "cloudflare_dns_record" "tcp_workloads" {
+  zone_id = var.zone_id
+  name    = "*.tcp.${var.public_hostname}"
+  type    = "CNAME"
+  content = var.tcp_ingress_endpoint
+  proxied = false
+  ttl     = 60
+  comment = "LazyCloud public TCP workloads -> TCP ingress NLB"
 
   lifecycle {
     precondition {
