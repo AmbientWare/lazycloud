@@ -101,9 +101,9 @@ Run the join on the machine itself:
 lazycloud machine join --pool on-prem --gpu a100-80 --max-gpus 4 --max-cpu 32 --max-memory 128Gi
 ```
 
-The command installs the agent as a background service. `--foreground` runs it
-in the terminal instead. The machine joins the pool you name, or `self-hosted`
-if you name none, and creates the pool if it is new.
+The command runs the agent in the foreground. Add `--background` to install a
+service that keeps running after the terminal closes. The machine joins the pool
+you name, or `self-hosted` if you name none, and creates the pool if it is new.
 
 A machine pool is removed after its last machine leaves and cleanup finishes.
 An unexpired join credential keeps the pool available for the joining machine.
