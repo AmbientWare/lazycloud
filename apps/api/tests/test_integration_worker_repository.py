@@ -2001,6 +2001,8 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
         ),
         principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
     )
+    assert cancelled_start.plan is not None
+    assert cancelled_start.state is not None
     assert cancelled_start.plan.next_status is SchedulerContainerStatus.Stopping
     assert cancelled_start.state.started_at is None
     service.set_container_exit_code(
