@@ -169,6 +169,10 @@ def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
     assert stubs_by_deployment[first_function.id].id == first_function.stub_id
     assert stubs_by_deployment[endpoint.id].id == endpoint.stub_id
     assert stubs_by_deployment[second_function.id].id == second_function.stub_id
+    control = ControlPlaneService(isolated_services.context)
+    for deployment in (first_function, endpoint, second_function):
+        resolved = control.get_deployment_stub(deployment.id, workspace="default")
+        assert resolved is not None and resolved.id == deployment.stub_id
 
     latest_resources = isolated_services.deployment_resources.list(
         kinds={DeploymentKind.Function, DeploymentKind.Endpoint},
