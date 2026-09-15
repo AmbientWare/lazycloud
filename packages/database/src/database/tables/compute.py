@@ -246,6 +246,7 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "compute_provider_instances"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_compute_provider_instances_pool", "pool_id"),
+        Index("ix_compute_provider_instances_pool_status", "pool_id", "status"),
         Index("ix_compute_provider_instances_renewal", "billing_renewal_at"),
         Index(
             "uq_compute_provider_instances_pool_instance",

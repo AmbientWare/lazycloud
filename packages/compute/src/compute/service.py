@@ -1154,24 +1154,15 @@ class ComputeService:
     def list_units(self, *, workspace: str = "default") -> list[ComputeUnitRecord]:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            records = ComputeUnitRepository(session).list_for_workspace(workspace_id)
-        return sorted(
-            (
-                item
-                for item in records
-                if not (
-                    item.platform_fleet
-                    and item.visibility is ComputeUnitVisibility.Internal
-                    and item.phase is ComputeUnitPhase.Deleted
-                )
-            ),
-            key=lambda item: item.name,
-        )
+            records = ComputeUnitRepository(session).list_for_workspace(
+                workspace_id, include_retired_platform=False
+            )
+        return sorted(records, key=lambda item: item.name)
 
     def list_units_across_workspaces(
         self, *, capacity_owner_kind: CapacityOwnerKind | None = None
     ) -> list[ComputeUnitRecord]:
-        """Every provisioning unit, for scheduler controller construction.
+        """Current provisioning units for scheduler controller construction.
 
         A unit carries its own workspace, so the caller does not pair it with
         one; two units in the same group are distinguished by capacity owner.
@@ -1851,16 +1842,14 @@ class ComputeService:
                     preemptible=requirements.preemptible, gpu=False
                 )
                 fleet_units = repository.list_platform_internal(gpu=False)
-                committed = repository.platform_capacity_usage(gpu=False)
+                commitments = repository.platform_capacity_by_unit(gpu=False)
+                committed = sum(commitments.values())
                 plan = plan_warm_capacity(
                     tuple(
                         WarmCapacityUnit(
                             unit_id=item.id,
                             desired=item.desired_machines,
-                            committed=committed
-                            - repository.platform_capacity_usage(
-                                gpu=False, excluding_unit_id=item.id
-                            ),
+                            committed=commitments.get(item.id, 0),
                             ready=self._warm_unit_ready_count(item),
                             floor=item.min_machines,
                             eligible=item.id in baseline.warm_eligible_owners,
@@ -1888,7 +1877,9 @@ class ComputeService:
                 for item in market_units:
                     if item.id == unit_id:
                         continue
-                    repository.upsert(_with_warm_floor(item, plan.floors[item.id]))
+                    adjusted = _with_warm_floor(item, plan.floors[item.id])
+                    if adjusted != item:
+                        repository.upsert(adjusted)
                 baseline = _PooledCapacityBaseline(
                     initial_machines=plan.floors[unit_id],
                     min_machines=plan.floors[unit_id],
@@ -2526,7 +2517,14 @@ class ComputeService:
     ) -> set[str]:
         unit = self.get_internal_unit(workspace_id, capacity_owner_id)
         with self.context.database.session() as session:
-            records = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+            records = ComputeProviderInstanceRepository(session).list_for_pool(
+                unit.id,
+                excluded_statuses=(
+                    ReservationStatus.Deleted.value,
+                    ReservationStatus.Failed.value,
+                    ReservationStatus.Terminating.value,
+                ),
+            )
         return {
             record.machine_id
             for record in records
@@ -2586,7 +2584,10 @@ class ComputeService:
         if self.scheduler_hooks is None:
             raise UpstreamUnavailableError("capacity maintenance requires scheduler worker state")
         for candidate in candidates:
-            for record in ComputeProviderInstanceRepository(session).list_for_pool(candidate.id):
+            for record in ComputeProviderInstanceRepository(session).list_for_pool(
+                candidate.id,
+                excluded_statuses=(ReservationStatus.Deleted.value, ReservationStatus.Failed.value),
+            ):
                 if (
                     record.machine_id is not None
                     and record.machine_id != excluding_machine_id
@@ -3142,7 +3143,9 @@ class ComputeService:
         if self.scheduler_hooks is None:
             raise UpstreamUnavailableError("warm capacity requires scheduler worker state")
         with self.context.database.session() as session:
-            records = ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+            records = ComputeProviderInstanceRepository(session).list_for_pool(
+                unit.id, status=ReservationStatus.Active.value
+            )
             enrollments = ComputeMachineEnrollmentRepository(session)
             serving = sum(
                 machine_serves_workloads(
