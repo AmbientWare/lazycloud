@@ -16,6 +16,7 @@ from cache.protocol import (
     CacheContentCompletenessStatus,
     CacheContentReadRequest,
     CacheContentReadStatus,
+    CacheContentStoreResult,
     CacheContentStoreStatus,
 )
 from cache.server import (
@@ -81,22 +82,32 @@ def test_cache_http_exposes_only_authenticated_health_head_get_put_and_metadata(
 
 
 def test_cache_http_put_validates_hash_and_streams_standard_ranges(tmp_path: Path) -> None:
-    payload = b"0123456789"
+    payload = b"0123456789" * 1_000_000
     digest = hashlib.sha256(payload).hexdigest()
     source = tmp_path / "source.bin"
     source.write_bytes(payload)
-    with _running_cache(tmp_path / "cache") as service:
+    with _running_cache(
+        tmp_path / "cache", max_content_bytes=2 * len(payload), max_object_bytes=len(payload)
+    ) as service:
         client = WorkerCacheHttpClient(service.endpoint, service_token=TOKEN)
         rejected = client.store_content_from_local_file(
             source,
             expected_hash="f" * 64,
             cache_path="/images/bad.rclip",
         )
-        stored = client.store_content_from_local_file(
-            source,
-            expected_hash=digest,
-            cache_path="/images/good.rclip",
+        upload = _connection(service)
+        upload.request(
+            "PUT",
+            f"/content?expected_hash={digest}&cache_path=/images/good.rclip",
+            body=(payload[offset : offset + 32768] for offset in range(0, len(payload), 32768)),
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            encode_chunked=True,
         )
+        uploaded = upload.getresponse()
+        stored = CacheContentStoreResult.model_validate_json(uploaded.read())
+        upload.close()
+        assert uploaded.status == HTTPStatus.CREATED
+        assert stored.size_bytes == len(payload)
         read = client.read_content(CacheContentReadRequest(content_hash=digest, offset=3, length=4))
         metadata = client.content_metadata("/images/good.rclip")
 
@@ -118,7 +129,7 @@ def test_cache_http_put_validates_hash_and_streams_standard_ranges(tmp_path: Pat
         body = response.read()
         connection.close()
         assert response.status == HTTPStatus.PARTIAL_CONTENT
-        assert response.getheader("Content-Range") == "bytes 2-5/10"
+        assert response.getheader("Content-Range") == f"bytes 2-5/{len(payload)}"
         assert body == b"2345"
 
 

@@ -454,7 +454,7 @@ class AgentStateStore:
     def load(self, gateway_url: str) -> AgentState | None:
         if not self.path.exists():
             return None
-        state = AgentState.model_validate_json(self.path.read_text(encoding="utf-8"))
+        state = AgentState.from_saved_json(self.path.read_text(encoding="utf-8"))
         if agent_state_matches_gateway(state, gateway_url):
             return state
         return None

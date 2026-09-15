@@ -1218,25 +1218,28 @@ class _ChunkedReader:
         self.finished = False
 
     def read(self, size: int | None = -1, /) -> bytes:
-        if self.finished:
-            return b""
-        if self.chunk_remaining == 0:
-            self._read_chunk_header()
-            if self.finished:
-                return b""
-        read_size = (
-            self.chunk_remaining if size is None or size < 0 else min(size, self.chunk_remaining)
-        )
-        data = self.source.read(read_size)
-        if not data:
-            raise CacheUploadIncompleteError("cache chunk ended before its declared size")
-        self.chunk_remaining -= len(data)
-        self.total_bytes += len(data)
-        if self.total_bytes > self.max_bytes:
-            raise CacheObjectTooLargeError(f"cache object exceeds {self.max_bytes} bytes")
-        if self.chunk_remaining == 0 and self.source.read(2) != b"\r\n":
-            raise CacheUploadIncompleteError("cache chunk is missing its trailing delimiter")
-        return data
+        data = bytearray()
+        while not self.finished and (size is None or size < 0 or len(data) < size):
+            if self.chunk_remaining == 0:
+                self._read_chunk_header()
+                if self.finished:
+                    break
+            read_size = (
+                self.chunk_remaining
+                if size is None or size < 0
+                else min(size - len(data), self.chunk_remaining)
+            )
+            chunk = self.source.read(read_size)
+            if not chunk:
+                raise CacheUploadIncompleteError("cache chunk ended before its declared size")
+            self.chunk_remaining -= len(chunk)
+            self.total_bytes += len(chunk)
+            if self.total_bytes > self.max_bytes:
+                raise CacheObjectTooLargeError(f"cache object exceeds {self.max_bytes} bytes")
+            data.extend(chunk)
+            if self.chunk_remaining == 0 and self.source.read(2) != b"\r\n":
+                raise CacheUploadIncompleteError("cache chunk is missing its trailing delimiter")
+        return bytes(data)
 
     def _read_chunk_header(self) -> None:
         line = _read_http_line(self.source, max_bytes=128)
