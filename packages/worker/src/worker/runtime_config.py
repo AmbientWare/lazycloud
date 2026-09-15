@@ -926,7 +926,9 @@ def _runsc_base_args(
     docker_enabled: bool = False,
     nvproxy: bool = False,
 ) -> list[str]:
-    args = [config.runsc_path, "--root", config.runsc_root]
+    # runsc passes this error-log descriptor to the sandbox and gofer children.
+    # Without it, a child fatal error is lost behind the parent's startup EOF.
+    args = [config.runsc_path, "--root", config.runsc_root, "--log=/dev/stderr"]
     if config.debug:
         args.extend(["--debug", "--debug-log", posixpath.join(config.runsc_root, "debug.log")])
     if config.runsc_platform:
