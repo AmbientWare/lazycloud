@@ -8,6 +8,10 @@ import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 Use volumes for files your workloads share and artifacts for downloadable task
 output. Both belong to the selected workspace.
 
+For repeatable workflows, [declare volumes](/concepts/volumes) and
+[secret dependencies](/concepts/secrets) in Python. Mounted volumes are created
+on first use. These commands are useful for ad hoc storage work and inspection.
+
 ## lazycloud volume
 
 ```bash
@@ -17,6 +21,9 @@ lazycloud volume delete NAME [-y]     # deletes the files too; -y skips the prom
 ```
 
 ## Files
+
+The example below creates standalone storage before any workload uses it.
+Skip creation when a running workload has already created its declared volume.
 
 Volume paths are `lazycloud://<volume>/<path>`. The scheme is optional except
 on the source of a download, where it marks the path as remote.

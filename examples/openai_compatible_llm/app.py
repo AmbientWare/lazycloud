@@ -1,8 +1,7 @@
 """Serve a small instruction model through vLLM's OpenAI-compatible API.
 
-Create the model cache, then deploy from the repository root:
+Deploy from the repository root. The pod creates or reuses its declared cache:
 
-    lazycloud volume create vllm-model-cache
     lazycloud deploy examples.openai_compatible_llm.app:app \
         --resource pod:openai-server
 

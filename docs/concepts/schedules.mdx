@@ -27,14 +27,14 @@ def count_files() -> dict[str, int]:
     return {"files": count}
 ```
 
-Create the volume, then deploy the function:
+Deploy the function to register its schedule:
 
 ```bash
-lazycloud volume create report-inputs
 lazycloud deploy daily_report:count_files
 ```
 
-An empty volume produces `{"files": 0}`. Upload your files to
+The first invocation creates or reuses the declared volume. An empty volume
+produces `{"files": 0}`. Upload your files to
 `report-inputs` to count them on the next run.
 
 ## Choose a schedule

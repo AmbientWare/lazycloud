@@ -1,84 +1,121 @@
 ---
 title: "Volumes and cloud buckets"
-description: "Durable shared filesystems mounted into workloads, and S3-compatible buckets you own mounted in place."
+description: "Declare persistent storage beside your workloads and share files between runs."
 ---
 
-## Volumes
+A volume keeps files after your container stops. Declare it in Python and
+attach it to each workload that needs it. LazyCloud creates a missing volume
+when preparing the first container's mounts and reuses it on later runs.
 
-A volume keeps files after your container stops. Mount the same workspace
-volume in several workloads to share datasets, checkpoints, or reports.
+## Declare and use a volume
 
-Save this as `models.py`:
+Save this as `reports.py`:
 
 ```python
+import json
 from pathlib import Path
 
 from lazycloud import App, Volume
 
-app = App("training")
-models = Volume("models", "/models")
+app = App("reports")
+reports = Volume("sales-reports", "/reports")
 
 
-@app.function(volumes=[models])
-def model_size() -> int:
-    return Path("/models/weights.pt").stat().st_size
+@app.function(volumes=[reports])
+def save_report(amounts_cents: list[int]) -> dict[str, int]:
+    summary = {"sales": len(amounts_cents), "total_cents": sum(amounts_cents)}
+    Path("/reports/latest.json").write_text(json.dumps(summary))
+    return summary
+
+
+if __name__ == "__main__":
+    print(save_report.remote([1200, 3500, 800]))
+    reports.get("latest.json", "latest.json")
 ```
 
-Create the volume, upload a local `weights.pt` file, then read its size remotely:
+Run it with the SDK installed and signed in:
 
 ```bash
-lazycloud volume create models
-lazycloud cp ./weights.pt lazycloud://models/weights.pt
-lazycloud run models:model_size
+python reports.py
 ```
 
-The result is the uploaded file's size in bytes. From Python, create the
-volume only if it does not exist:
+The function returns three sales totaling 5500 cents. The script downloads
+`latest.json` to your current directory. No separate volume-creation command
+is needed. Repeating the run replaces that file.
 
-```python
-models.get_or_create()
-```
+`Volume(...)` declares the name and mount path; constructing the object alone
+makes no API call. Attaching it with `volumes=[reports]` tells LazyCloud to
+mount it. The same name in the same workspace refers to the same stored files,
+even when used by another app. Choose a different name for separate data.
+
+Changing the mount path changes where a container sees the files. Changing the
+volume name selects another volume; it does not move or delete the old data.
+Removing a mount or deleting a deployment also leaves stored files intact.
 
 Volume storage is billed per GiB-month. See [Plans and limits](/platform/plans).
 
-## Move files
+## Upload inputs before the first run
 
-Inside a container, a mounted volume is a directory. From outside, the `Volume`
-object reads and writes it:
+If a workload needs files before it starts, create or reuse its declared
+volume from your local setup script, then upload them:
 
 ```python
-models.put("weights.pt", "llama/weights.pt")     # upload
-models.get("llama/weights.pt", "weights.pt")     # download
-models.list("llama")                              # names under a prefix
-models.list_path("llama")                         # entries with size and time
-models.stat("llama/weights.pt")
-models.move("llama/weights.pt", "archive/weights.pt")
+from lazycloud import Volume
 
-models.write_text("notes.txt", "hello")
-models.read_text("notes.txt")
-models.write_bytes("blob.bin", b"\x00")
-models.read_bytes("blob.bin")
+models = Volume("models", "/models")
+models.create()
+models.put("weights.pt", "weights.pt")
 ```
 
-The CLI does the same with `lazycloud://<volume>/<path>` paths. The scheme is
-optional except on the source of a download, where it marks the path as
-remote:
+This needs a local `weights.pt`. Attach the same `models` object to your
+function with `volumes=[models]` to read `/models/weights.pt` remotely.
+`create()` returns the existing volume when its name already exists.
+`get_or_create()` performs the same operation and returns a boolean.
 
-```bash
-lazycloud cp weights.pt lazycloud://models/llama/weights.pt
-lazycloud ls models/llama
-lazycloud cp lazycloud://models/llama/weights.pt ./weights.pt
-lazycloud mv models/llama/weights.pt models/archive/weights.pt
+Keep provisioning and uploads in an explicit setup function or an
+`if __name__ == "__main__":` block. Workload imports should declare resources
+without uploading data or changing stored values.
+
+## Read and write from Python
+
+Inside a container, a mounted volume is a directory. From your local script,
+use the `Volume` object:
+
+```python
+from reports import reports
+
+print(reports.read_text("latest.json"))
+print(reports.list())
+print(reports.stat("latest.json"))
+reports.get("latest.json", "downloaded-report.json")
 ```
+
+`put(source, destination)` uploads a local file or directory.
+`write_text()` and `write_bytes()` write content directly.
+`read_text()` and `read_bytes()` retrieve it.
+`list_path()` returns entries with size and time, and `move()` renames a path.
 
 For multi-gigabyte uploads, `presigned_url(...)`,
 `create_multipart_upload(...)`, `complete_multipart_upload(...)`, and
 `abort_multipart_upload(...)` let you upload in parts.
 
-## Cloud buckets
+## Ad hoc file operations
 
-`CloudBucket` mounts an S3-compatible bucket you own into workloads. Reads and
-writes go to the bucket in place; nothing is copied into LazyCloud storage.
+Use the CLI to inspect or copy files outside your workflow:
+
+```bash
+lazycloud ls sales-reports
+lazycloud cp lazycloud://sales-reports/latest.json ./latest.json
+```
+
+Paths use `lazycloud://<volume>/<path>`. The scheme is optional except on
+the source of a download, where it marks the path as remote. See
+[storage commands](/cli/storage) for standalone volume creation and file commands.
+
+## Mount an existing cloud bucket
+
+`CloudBucket` mounts an S3-compatible bucket you own. Reads and writes go
+to the bucket in place; nothing is copied into LazyCloud storage.
 
 ```python
 from pathlib import Path
@@ -86,7 +123,6 @@ from pathlib import Path
 from lazycloud import App, CloudBucket, CloudBucketConfig
 
 app = App("etl")
-
 bucket = CloudBucket(
     "my-data-bucket",
     "/data",
@@ -99,30 +135,35 @@ bucket = CloudBucket(
 
 
 @app.function(volumes=[bucket])
-def process(key: str) -> str:
+def read_text_file(key: str) -> str:
     return (Path("/data") / key).read_text()
 ```
 
-`access_key` and `secret_key` are the names of [workspace secrets](/concepts/secrets)
-holding your credentials, never the values. Set both or neither. With neither,
-the mount uses the credentials of the compute it runs on, for example the
-instance role on your [connected AWS account](/platform/compute).
+`access_key` and `secret_key` name [workspace secrets](/concepts/secrets).
+Provision their values before running the workload. Set both names or neither.
+With neither, the mount uses the compute's credentials, such as the instance role
+on your [connected AWS account](/platform/compute).
 
-`CloudBucketConfig` also takes `bucket` when the bucket name differs from the
-mount name, `prefix` to mount only part of the bucket, `endpoint` for a
-non-AWS S3-compatible store, `force_path_style` for stores that need
-path-style addressing, and `read_only`. The bucket must already exist; a
-mount never creates one.
+`CloudBucketConfig` also accepts `bucket` when the bucket name differs from the
+mount name, `prefix` to mount part of the bucket, `endpoint` for another
+S3-compatible store, `force_path_style`, and `read_only`.
 
-## Delete files you no longer need
+The bucket must already exist; declaring a mount never creates it. See
+[parallel Parquet processing](/examples/parallel-parquet-s3) for a complete workflow.
 
-Deleting a deployment leaves its volumes intact. Check a path before removing it:
+## Delete stored data deliberately
+
+After saving a local copy, remove an individual report with
+`reports.remove("latest.json")`. `reports.delete()` deletes the whole volume
+and every file in it.
+
+For one-off cleanup, inspect the target before deleting:
 
 ```bash
-lazycloud ls models/archive
-lazycloud rm models/archive/weights.pt
+lazycloud ls sales-reports
+lazycloud rm sales-reports/latest.json
 ```
 
-`lazycloud volume delete models` deletes the entire volume and all its files.
-Download anything you need first. From Python, use `models.remove(path)` for
-one path or `models.delete()` for the volume.
+Use `lazycloud volume delete sales-reports` only when you no longer need
+any of its files. Stop workloads that use the volume first; another invocation
+can create an empty volume with the same name.

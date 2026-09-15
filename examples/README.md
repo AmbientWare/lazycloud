@@ -32,6 +32,11 @@ If you use several workspaces, choose one with
   bucket with parallel function calls.
 
 Each guide names required credentials, expected output, and cleanup steps.
+Workload code defines images, compute, volumes, schedules, and secret names.
+Mounted volumes are created on first use and reused by name within the workspace.
+The credential examples include Python setup modules; values stay out of source
+control. Deploy or run the app to use its definitions.
+
 `lazycloud run` shows function progress, logs, and results. Use task and log
 commands separately when investigating earlier runs or background work.
 
@@ -41,11 +46,11 @@ commands separately when investigating earlier runs or background work.
 to the task as an artifact:
 
 ```bash
-lazycloud volume create artifact-reports
 lazycloud run examples.artifacts.app:create_report
 ```
 
-The result includes the artifact ID and filename. Open Storage, then Artifacts
+The function's volume declaration handles storage creation. The result includes
+the artifact ID and filename. Open Storage, then Artifacts
 in the dashboard to download it. The volume copy stays at `report.txt`:
 
 ```bash

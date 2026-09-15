@@ -30,6 +30,10 @@ lazycloud app delete APP
 A deployment is addressed by name or id. `scale` sets the replica count for a Pod.
 Functions and endpoints scale from their autoscaler configuration.
 
+Use these commands for inspection and operational changes. Keep workload
+resources and autoscaler settings in Python so a later deploy uses your intended
+configuration.
+
 ```bash
 lazycloud deployment list [--app <name>] [--limit <n>]
 lazycloud deployment stop IDS_OR_NAMES...        # stop serving; keep the definition

@@ -45,14 +45,19 @@ lazycloud compute workloads
 
 Every workload runs in a pool. The default pool is LazyCloud's own compute.
 Connecting an AWS account or joining a machine adds capacity you own, and a
-workload reaches it by naming the pool:
+workload reaches it by naming the pool in its definition. For the GPU example,
+add `pool="aws"` to the decorator:
 
-```bash
-lazycloud run compute_demo:gpu_name --pool aws
+```python
+@app.function(cpu=2.0, memory="4Gi", gpu="l4", gpu_count=1, pool="aws")
+def gpu_name() -> str:
+    return subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True
+    ).strip()
 ```
 
-The CLI equivalent is `--pool` on `deploy`, `run`, `serve`, `shell`, and
-`dev`. To send every workload in a workspace to a pool without naming it each
+Use `--pool` on `deploy`, `run`, `serve`, `shell`, or `dev` for an ad hoc override.
+To send every workload in a workspace to a pool without naming it each
 time, set the workspace default:
 
 ```bash

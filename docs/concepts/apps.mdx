@@ -6,6 +6,11 @@ description: "Group related functions, APIs, and containers so you can deploy an
 An `App` groups workloads under a name in your workspace. Use one app for
 resources you want to deploy, pause, or inspect together.
 
+Keep resource configuration in Python with the app: images, CPU and GPU
+requests, volume mounts, secret names, schedules, and scaling settings.
+Run or deploy those definitions from the CLI or Python. Use CLI overrides for
+one-off experiments; put lasting changes back in the source.
+
 ## Define an app
 
 Save this as `text_tools.py`:
@@ -45,6 +50,11 @@ Use `text_tools:app` to select the app explicitly when a module has several.
 `@app.function`, `@app.endpoint`, `@app.asgi`, `@app.realtime`, and
 `app.pod(...)` register deployable workloads. Sandboxes created with
 `app.sandbox(...)` run on demand and are not started by a deploy.
+
+Mounted [volumes](/concepts/volumes) are created on first use and reused by
+name in the workspace. [Secret values](/concepts/secrets) need explicit
+provisioning. Removing a resource from the code does not delete its stored data;
+review and remove unused resources separately.
 
 ## Deploy or preview one workload
 

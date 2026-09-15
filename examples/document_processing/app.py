@@ -1,12 +1,13 @@
 """Upload a PDF or image in a browser and extract its text with background OCR.
 
-Create the signing secret and volume using the guide at
+Provision the signing secret using the guide at
 ``docs/examples/document-processing-asgi.mdx``, then deploy both workloads:
 
     lazycloud deploy examples.document_processing.app:app
 
 Open the printed document-api URL. Uploads are public in this example; use test
-documents and delete the deployment when finished.
+documents and delete the deployment when finished. Both workloads mount the
+volume declared in resources.py; LazyCloud creates it on first use.
 """
 
 from __future__ import annotations

@@ -21,7 +21,7 @@ You need access to an L4 and a positive credit balance. Training and prediction
 both use GPU compute. Check [Ultralytics licensing](https://www.ultralytics.com/license)
 before adapting the example for commercial use.
 
-## Prepare storage
+## Define shared storage
 
 Both functions use the pinned Ultralytics image in
 `examples/yolo_training/app.py`. Training writes a checkpoint and metrics;
@@ -29,9 +29,15 @@ prediction reads that checkpoint from the same volume. The code rejects paths
 outside the volume and refuses to overwrite an existing run directory.
 
 
-```bash
-lazycloud volume create yolo-artifacts
+```python
+from lazycloud import Volume
+
+artifact_volume = Volume("yolo-artifacts", "/artifacts")
 ```
+
+Both decorators include `volumes=[artifact_volume]`. The first invocation
+creates the volume if needed; later calls reuse it. Importing the Python
+module alone creates no remote resources.
 
 Torch, CUDA, and Ultralytics stay inside the image; nothing is installed
 locally.
@@ -75,8 +81,18 @@ predictions in a product.
 Upload the dataset and its Ultralytics YAML to the volume. Paths inside the
 YAML must point at files under `/artifacts` too.
 
+Provision and upload from Python first. This also works before running the sample:
+
+```python
+from examples.yolo_training.app import artifact_volume
+
+artifact_volume.create()
+artifact_volume.put("datasets/my-detector", "datasets/my-detector")
+```
+
+`create()` reuses an existing volume. Once the files are uploaded:
+
 ```bash
-lazycloud cp ./datasets/my-detector lazycloud://yolo-artifacts/datasets/my-detector
 lazycloud run examples.yolo_training.app:train_yolo custom-run 50 datasets/my-detector/data.yaml
 ```
 

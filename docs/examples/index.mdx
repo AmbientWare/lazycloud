@@ -7,6 +7,11 @@ Choose the result you want, then follow the guide through setup, a first run,
 and cleanup. Each guide uses source under `examples/` in the
 [LazyCloud repository](https://github.com/AmbientWare/lazycloud/tree/main/examples).
 
+Each app defines its images, compute, and storage mounts in Python. Run or
+deploy it to use those definitions; mounted volumes need no separate CLI
+creation step. Examples that need credentials include an explicit Python setup
+step. CLI storage commands are for inspecting, downloading, and cleaning up data.
+
 <CardGroup cols={2}>
   <Card
     title="OpenAI-compatible LLM service"

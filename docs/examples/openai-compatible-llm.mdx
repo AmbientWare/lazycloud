@@ -67,10 +67,13 @@ server = app.pod(
 `authorized=True` makes LazyCloud require a bearer token before a request
 reaches vLLM. The example sets no separate vLLM API key.
 
+`volumes=[model_cache]` creates or reuses `vllm-model-cache` in your workspace
+when the pod starts. Keep the volume name and mount path in this definition;
+no separate storage setup is needed.
+
 ## Deploy
 
 ```bash
-lazycloud volume create vllm-model-cache
 lazycloud deploy examples.openai_compatible_llm.app:app --resource pod:openai-server
 ```
 

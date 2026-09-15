@@ -40,7 +40,10 @@ for a model server you can call from your application.
 lazycloud deploy tools:app --resource pod:web
 ```
 
-Manage it through the deployment, from Python with `web.scale(containers)`,
+Keep the pod's image, command, resources, and mounts in this Python definition.
+Edit it and deploy again to change the service configuration.
+
+For operational changes, manage the deployment from Python with `web.scale(containers)`,
 `web.pause()`, `web.resume()`, and `web.delete()`, or from the CLI:
 
 ```bash

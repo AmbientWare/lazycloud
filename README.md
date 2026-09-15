@@ -23,6 +23,11 @@ The command shows progress and remote logs, then prints `hello LazyCloud`.
 For Python scripts, install the SDK in your project with `uv add lazycloud-client`.
 See [installation](docs/getting-started/installation.mdx) for environment details.
 
+Define images, compute, volume mounts, secret names, and schedules in Python.
+Mounted volumes are created on first use and reused across runs. Provision secret
+values separately from source control. Use CLI resource commands for inspection
+and one-off changes.
+
 ## Work on this repository
 
 Use Python 3.12 and uv from the repository root:

@@ -41,15 +41,16 @@ API key. The example appends
 export CODING_AGENT_BASE_URL="https://provider.example/v1"
 export CODING_AGENT_MODEL="provider-model-name"
 read -rsp "Provider API key: " CODING_AGENT_API_KEY && echo
+export CODING_AGENT_API_KEY
 
-lazycloud secret create CODING_AGENT_BASE_URL "$CODING_AGENT_BASE_URL"
-lazycloud secret create CODING_AGENT_MODEL "$CODING_AGENT_MODEL"
-lazycloud secret create CODING_AGENT_API_KEY "$CODING_AGENT_API_KEY"
+python -m examples.sandboxed_coding_agent.configure
 unset CODING_AGENT_BASE_URL CODING_AGENT_MODEL CODING_AGENT_API_KEY
 ```
 
-Shell history records the variable names, not the values. Do not paste the
-key into the prompt, a URL, or a source file.
+`configure.py` reads the names from the app's `PROVIDER_SECRET_NAMES` and stores
+their environment values with `Secret(name).set(value)`. Running it again replaces
+the stored values. The planner declares `secrets=list(PROVIDER_SECRET_NAMES)`;
+the sandbox declares none. Keep the key out of the prompt, URLs, and source files.
 
 <Warning>
   The planner sends the prompt and the seed source files to the provider you

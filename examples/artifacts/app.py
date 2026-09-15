@@ -2,10 +2,10 @@
 
 From the repository root with the SDK installed and signed in:
 
-    lazycloud volume create artifact-reports
     lazycloud run examples.artifacts.app:create_report
 
-Download the returned artifact from Storage in the dashboard. The volume copy
+The function creates or reuses its declared volume. Download the returned
+artifact from Storage in the dashboard. The volume copy
 stays at ``artifact-reports/report.txt`` until you delete it.
 """
 

@@ -22,17 +22,27 @@ application. Tesseract and Poppler install only in the remote image.
 uv pip install fastapi==0.139.2
 ```
 
-Create a signing secret and the volume:
+The app declares its shared volume in `resources.py`:
 
-```bash
-DOCUMENT_JOB_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
-lazycloud secret create DOCUMENT_JOB_TOKEN_SECRET "$DOCUMENT_JOB_TOKEN_SECRET"
-unset DOCUMENT_JOB_TOKEN_SECRET
-lazycloud volume create document-processing-data
+```python
+from lazycloud import Volume
+
+data_volume = Volume("document-processing-data", "/document-processing")
 ```
 
-The signing secret protects access to individual results. Only the HTTP
-service receives it.
+Both workloads include `volumes=[data_volume]`; LazyCloud creates or reuses
+the volume when they start. The secret needs an initial value. Run the
+example's Python setup module once:
+
+```bash
+python -m examples.document_processing.configure
+```
+
+`configure.py` uses `Secret(JOB_TOKEN_SECRET_NAME).create(...)` with a random
+value and never prints it. It refuses to replace an existing secret. If you
+already configured this workspace, go straight to deployment; rerunning setup
+is unnecessary. The signing secret protects individual results, and only the
+HTTP service receives it.
 
 <Warning>
   This example's upload URL is public. Anyone with the URL can submit work
