@@ -16,6 +16,8 @@ from shared.client_version import (
     client_version,
     report_client_version,
 )
+from shared.deployment_records import resolve_http_wait_timeout_seconds, resolve_timeout_seconds
+from shared.deployments import DeploymentKind
 from shared.http.errors import HttpTransportError
 from shared.http_transport import build_http_ssl_context
 from shared.serialization import to_json_value
@@ -48,6 +50,10 @@ class RawHttpResponse:
 
 
 _SSL_CONTEXT = build_http_ssl_context()
+
+
+def workload_http_timeout_seconds(kind: DeploymentKind, timeout_seconds: int | None) -> float:
+    return resolve_http_wait_timeout_seconds(resolve_timeout_seconds(kind, timeout_seconds)) + 5.0
 
 
 @runtime_checkable
