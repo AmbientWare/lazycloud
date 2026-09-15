@@ -4,10 +4,12 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from coordination.redis_client import RedisClient, RedisWireResponse, RedisWireScalar
-from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 
+from execution.collections import map_scripts
 from execution.collections.planning import (
     MapSetStatus,
     map_entry_key,
@@ -24,6 +26,19 @@ from execution.collections.planning import (
 )
 
 SIMPLE_QUEUE_ACTIVITY_RETENTION_SECONDS = 60 * 60
+
+
+@dataclass(frozen=True, slots=True)
+class MapEntry:
+    value: bytes
+    revision: str
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class MapKeyPage:
+    data: tuple[str, ...]
+    next: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,41 +69,101 @@ class RedisMapService:
         key: str,
         value: bytes,
         *,
-        ttl_seconds: int = 0,
+        ttl_seconds: int | None = 0,
+        if_revision: str | None = None,
+        if_absent: bool = False,
     ) -> None:
-        plan = plan_map_set(workspace_id, name, key, value, ttl_seconds=ttl_seconds)
+        plan = plan_map_set(workspace_id, name, key, value, ttl_seconds=ttl_seconds or 0)
         if plan.status is not MapSetStatus.Accepted:
             raise InvalidInputError(plan.error_message)
+        if plan.entry_key.rstrip(":") == plan.index_key:
+            raise InvalidInputError("The map key 'index' is reserved")
+        if if_absent and if_revision is not None:
+            raise InvalidInputError("Choose if_absent or if_revision, not both")
 
         try:
-            entry_key = self._key(plan.entry_key)
-            index_key = self._key(plan.index_key)
-            pipeline = self.redis.pipeline(transaction=True)
-            pipeline.set(entry_key, value, ex=ttl_seconds or None)
-            pipeline.set_add(index_key, key)
-            pipeline.set_add(self._key(map_registry_key(workspace_id)), name)
-            pipeline.execute()
+            written = self.redis.eval_int(
+                map_scripts.WRITE,
+                3,
+                self._key(plan.entry_key),
+                self._key(plan.index_key),
+                self._key(map_registry_key(workspace_id)),
+                key,
+                name,
+                value,
+                "keep" if ttl_seconds is None else str(ttl_seconds),
+                "absent" if if_absent else "revision" if if_revision is not None else "any",
+                if_revision or "",
+            )
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
+        if not written:
+            raise ConflictError("Map key changed or expired. Reload it before saving.")
 
-    def map_get(self, workspace_id: str, name: str, key: str) -> bytes:
+    def map_get(self, workspace_id: str, name: str, key: str) -> MapEntry:
         try:
-            value = self.redis.get(self._key(map_entry_key(workspace_id, name, key)))
+            result = self.redis.eval_scalars(
+                map_scripts.READ, 1, self._key(map_entry_key(workspace_id, name, key))
+            )
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
-        if value is None:
+        if not result:
             raise NotFoundError(f"map key not found: {key}")
-        return _to_bytes(value)
+        expiry = _redis_integer(result[2], operation="PEXPIRETIME")
+        return MapEntry(
+            value=_to_bytes(result[0]),
+            revision=_to_text(result[1]),
+            expires_at=datetime.fromtimestamp(expiry / 1000, UTC) if expiry >= 0 else None,
+        )
 
-    def map_delete(self, workspace_id: str, name: str, key: str) -> None:
+    def map_delete(
+        self, workspace_id: str, name: str, key: str, *, if_revision: str | None = None
+    ) -> None:
         plan = plan_map_delete(workspace_id, name, key)
+        if plan.entry_key.rstrip(":") == plan.index_key:
+            raise InvalidInputError("The map key 'index' is reserved")
         try:
-            pipeline = self.redis.pipeline(transaction=True)
-            pipeline.delete(self._key(plan.entry_key))
-            pipeline.set_remove(self._key(plan.index_key), key)
-            pipeline.execute()
+            deleted = self.redis.eval_int(
+                map_scripts.DELETE,
+                2,
+                self._key(plan.entry_key),
+                self._key(plan.index_key),
+                key,
+                if_revision or "",
+            )
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
+        if not deleted:
+            raise ConflictError("Map key changed or expired. Reload it before deleting.")
+
+    def map_key_page(
+        self,
+        workspace_id: str,
+        name: str,
+        *,
+        cursor: str | None = None,
+        prefix: str = "",
+        limit: int = 100,
+    ) -> MapKeyPage:
+        if not 1 <= limit <= 500 or (cursor is not None and not cursor.isdecimal()):
+            raise InvalidInputError("Invalid map key cursor or page size")
+        try:
+            result = self.redis.eval_scalars(
+                map_scripts.KEY_PAGE,
+                1,
+                self._key(map_index_key(workspace_id, name)),
+                cursor or "0",
+                limit,
+                self._entry_prefix(workspace_id, name),
+                prefix,
+            )
+        except Exception as exc:
+            raise UpstreamUnavailableError(str(exc)) from exc
+        next_cursor = _to_text(result[0])
+        return MapKeyPage(
+            data=tuple(_to_text(value) for value in result[1:]),
+            next=None if next_cursor == "0" else next_cursor,
+        )
 
     def map_keys(self, workspace_id: str, name: str) -> tuple[str, ...]:
         index_key = self._key(map_index_key(workspace_id, name))
@@ -152,16 +227,21 @@ class RedisMapService:
         return tuple(live)
 
     def delete_map(self, workspace_id: str, name: str) -> None:
-        keys = self.map_keys(workspace_id, name)
         try:
-            pipeline = self.redis.pipeline(transaction=True)
-            for key in keys:
-                pipeline.delete(self._key(map_entry_key(workspace_id, name, key)))
-            pipeline.delete(self._key(map_index_key(workspace_id, name)))
-            pipeline.set_remove(self._key(map_registry_key(workspace_id)), name)
-            pipeline.execute()
+            self.redis.eval_int(
+                map_scripts.DELETE_MAP,
+                2,
+                self._key(map_index_key(workspace_id, name)),
+                self._key(map_registry_key(workspace_id)),
+                self._entry_prefix(workspace_id, name),
+                name,
+            )
         except Exception as exc:
             raise UpstreamUnavailableError(str(exc)) from exc
+
+    def _entry_prefix(self, workspace_id: str, name: str) -> str:
+        # Scripts append the logical key before applying RedisClient.key's trailing-colon trim.
+        return f"{self.redis.key_prefix}:{map_entry_key(workspace_id, name, '')}"
 
     def delete_workspace(self, workspace_id: str) -> None:
         for name in self.map_names(workspace_id):
