@@ -317,7 +317,9 @@ class WorkerSchedulerRequestProcessor:
             result = WorkerSchedulerRequestResult(
                 worker_id=self.worker_id,
                 status=(
-                    WorkerSchedulerRequestStatus.Executed
+                    WorkerSchedulerRequestStatus.Dropped
+                    if execution.cancelled and execution.failed_phase is None
+                    else WorkerSchedulerRequestStatus.Executed
                     if execution.ok
                     else WorkerSchedulerRequestStatus.Error
                 ),
@@ -327,7 +329,7 @@ class WorkerSchedulerRequestProcessor:
                 execution=execution,
                 error_message=(
                     ""
-                    if execution.ok
+                    if execution.ok or (execution.cancelled and execution.failed_phase is None)
                     else f"worker execution failed at {execution.failed_phase.value}"
                     if execution.failed_phase is not None
                     else "worker execution failed"
@@ -574,7 +576,9 @@ class WorkerSchedulerRequestProcessor:
             result = WorkerSchedulerRequestResult(
                 worker_id=self.worker_id,
                 status=(
-                    WorkerSchedulerRequestStatus.Executed
+                    WorkerSchedulerRequestStatus.Dropped
+                    if execution.cancelled and execution.failed_phase is None
+                    else WorkerSchedulerRequestStatus.Executed
                     if execution.ok
                     else WorkerSchedulerRequestStatus.Error
                 ),
@@ -585,7 +589,7 @@ class WorkerSchedulerRequestProcessor:
                 background=True,
                 error_message=(
                     ""
-                    if execution.ok
+                    if execution.ok or (execution.cancelled and execution.failed_phase is None)
                     else f"worker execution failed at {execution.failed_phase.value}"
                     if execution.failed_phase is not None
                     else "worker execution failed"
