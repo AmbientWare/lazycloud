@@ -150,6 +150,7 @@ class WorkerImageMountResult(ContractModel):
     status: WorkerImageMountStatus
     mount_point: str
     reason: str = ""
+    env: list[str] = Field(default_factory=list, repr=False)
 
     @property
     def mounted(self) -> bool:
@@ -293,7 +294,7 @@ class WorkerImageStartupLoader:
                 reason=reason,
             )
         )
-        return ContainerImageLoadResult(loaded=True, reason=reason)
+        return ContainerImageLoadResult(loaded=True, reason=reason, env=mount.env)
 
     def _load_mounted_image_hit(
         self,
@@ -302,6 +303,8 @@ class WorkerImageStartupLoader:
     ) -> ContainerImageLoadResult | None:
         mount_path = Path(paths.mount_point)
         if not mount_path.exists() and not mount_path.is_symlink():
+            return None
+        if not Path(paths.local_archive_path).is_file():
             return None
         if self._mount_holds_other_archive(request, mount_path):
             return None
@@ -336,7 +339,7 @@ class WorkerImageStartupLoader:
                 reason=reason,
             )
         )
-        return ContainerImageLoadResult(loaded=True, reason=reason)
+        return ContainerImageLoadResult(loaded=True, reason=reason, env=mount.env)
 
     def _materialized_archive_sha256(
         self,

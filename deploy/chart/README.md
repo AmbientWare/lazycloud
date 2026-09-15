@@ -94,6 +94,45 @@ ordinal. PostgreSQL owns enrollment and authorization, while Redis holds expirin
 connection ownership. See [connection gateway deployment](../connection-gateway.md)
 for initial credentials, DNS, rollout, drain limits, and acceptance.
 
+## Public TCP ingress
+
+Public TCP workloads share a Network Load Balancer on port 1995. It passes TLS
+through to the control plane, where the SNI hostname selects the workload and
+port. Clients must support TLS and send SNI. The load balancer preserves client
+addresses for transfer attribution.
+
+Terraform in `deploy/cloudflare` owns the DNS-only `*.tcp.<apex>` CNAME. Creating
+or deleting a workload changes no DNS records, certificates, or load balancers.
+After the Service is provisioned, set Terraform's `tcp_ingress_endpoint` to its
+exact NLB hostname and review the plan before applying it.
+
+The shared `cert-manager` Argo application installs the certificate controller.
+The namespace's `tcp-ingress` Issuer obtains a Let's Encrypt wildcard certificate
+using Cloudflare DNS validation and renews it automatically. Only this controller
+uses `tcp-ingress-dns`. The control plane mounts `tcp-ingress-tls` and reloads the
+certificate without restarting.
+
+Before releasing this chart, save the existing deploy Cloudflare token as
+`LAZYCLOUD_TCP_DNS_API_TOKEN` in the deployment's operator secret document,
+preserving all other fields. This reuses the same credential; it does not create
+another Cloudflare token. It needs Zone Read and DNS Edit for the installation's
+zone. External Secrets reads this property into the certificate controller's
+Secret; it is not an application environment variable. Renewal uses the token's
+existing permissions.
+
+Merge the cert-manager Application and verify its controller, webhook, and CRDs
+before deploying the chart. Verify the DNS ExternalSecret, Issuer, and Certificate
+conditions during rollout. A missing token or certificate prevents new API pods
+from starting; existing replicas keep serving during the rolling update.
+
+Acceptance uses public Pods with `tcp=True`, `authorized=False`, and named ports.
+Connect to their returned `tls://` URLs with standard certificate verification,
+check each workload's response, and verify that deleting a deployment rejects
+new connections. Check certificate renewal and reload, then replace a serving
+replica and verify new connections through the remaining replica. Remove only
+the acceptance workloads. Monitor certificate expiry and renewal failures; if
+the NLB is replaced, update its Terraform input and apply the reviewed DNS change.
+
 ## Secrets
 
 The chart maps named properties to the platform or operator secret document.

@@ -11,12 +11,6 @@ import {
   useTypedClientClock,
 } from "./TypedClientPreview";
 
-/* Define the workload, generate the client package, then import and call it
-   from another codebase. The definition stays a code block because the deployed
-   source really is the contract; the other phases show the generated package
-   and the editor that consumes it. Every symbol mirrors what the SDK decorators
-   accept, what `client get` writes, and what the generated methods return. */
-
 const defineExample = `from lazycloud import App
 from pydantic import BaseModel
 
@@ -41,7 +35,6 @@ def run_checks(commit_sha: str) -> dict[str, bool]:
 const phaseLabel =
   "font-mono text-sm leading-none font-semibold transition-colors duration-500 motion-reduce:transition-none sm:text-base";
 
-/* The active phase brightens so the eye follows the sequence in order. */
 function PhaseHeader({
   title,
   caption,
@@ -63,7 +56,7 @@ function PhaseHeader({
   );
 }
 
-function StubsStory({ active }: { active: boolean }) {
+function TypedExportStory({ active }: { active: boolean }) {
   const clock = useTypedClientClock(active);
   const phase = typedClientPhase(clock);
 
@@ -73,10 +66,10 @@ function StubsStory({ active }: { active: boolean }) {
         <SectionHeading
           title={
             <>
-              Generate a typed client <em>for your app.</em>
+              Export a typed package <em>for your app.</em>
             </>
           }
-          body="Give your app and your coding agent a typed Python client for deployed functions and endpoints. Get autocomplete and type checking in your editor."
+          body="Call deployed functions, endpoints, and ASGI routes from Python with autocomplete and type checking. ASGI route types come from OpenAPI."
         />
       </div>
 
@@ -112,7 +105,7 @@ function StubsStory({ active }: { active: boolean }) {
 
         <div className="flex min-w-0 flex-col gap-4 sm:gap-5 lg:gap-7">
           <MarketingReveal className="relative flex min-w-0 flex-col" delay={80}>
-            <PhaseHeader active={phase === "generate"} caption="a pinned client" title="Generate" />
+            <PhaseHeader active={phase === "generate"} caption="a typed package" title="Generate" />
             <GeneratedPackagePanel active={phase === "generate"} clock={clock} />
           </MarketingReveal>
 
@@ -130,7 +123,7 @@ function StubsStory({ active }: { active: boolean }) {
   );
 }
 
-export function StubsSection() {
+export function TypedExportSection() {
   const sectionRef = useRef<HTMLElement>(null);
   const [active, setActive] = useState(false);
 
@@ -139,8 +132,6 @@ export function StubsSection() {
     if (!section) return;
 
     const observer = new IntersectionObserver(([entry]) => setActive(entry.isIntersecting), {
-      /* Begin once the section has clearly entered the reading area, not
-           while it is still below the fold during initial page load. */
       rootMargin: "0px 0px -15% 0px",
       threshold: 0.1,
     });
@@ -150,11 +141,12 @@ export function StubsSection() {
 
   return (
     <section
+      id="typed-export"
       className="border-t border-input bg-background-subtle py-14 sm:py-20 lg:py-28"
       data-animation-state={active ? "running" : "paused"}
       ref={sectionRef}
     >
-      <StubsStory active={active} />
+      <TypedExportStory active={active} />
     </section>
   );
 }

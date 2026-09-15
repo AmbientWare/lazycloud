@@ -5,15 +5,18 @@ from typing import Annotated
 import typer
 from shared.compute_policy import MachinePool
 
+from lazycloud.abstractions.app import App
+from lazycloud.abstractions.endpoint import ASGI, Endpoint
+from lazycloud.abstractions.function import Function
+from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.cli.components.output import json_output_enabled
 from lazycloud.cli.components.progress import attach_terminal
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
     apply_handler_reference,
-    invoke_handler_method,
     load_handler_object,
 )
-from lazycloud.cli.workflow_options import build_deployment_overrides, workflow_kwargs
+from lazycloud.cli.workflow_options import build_deployment_overrides, deployment_image
 
 
 def serve(
@@ -46,6 +49,18 @@ def serve(
 ) -> None:
     if json_output_enabled(ctx):
         raise typer.BadParameter("--json cannot be used with the live serve stream")
+    unsupported = [
+        name
+        for name, supplied in (
+            ("--container-port", container_ports is not None),
+            ("--tcp/--no-tcp", tcp is not None),
+            ("--entrypoint", entrypoint is not None),
+            ("--container-id", container_id is not None),
+        )
+        if supplied
+    ]
+    if unsupported:
+        raise typer.BadParameter("serve previews do not support " + ", ".join(unsupported))
     overrides = build_deployment_overrides(
         resource=resource,
         cpu=cpu,
@@ -71,8 +86,24 @@ def serve(
     except HandlerLoadError as exc:
         raise typer.BadParameter(str(exc)) from exc
     attach_terminal(user_object)
-    invoke_handler_method(
-        user_object,
-        "serve",
-        kwargs=workflow_kwargs(overrides, timeout=timeout),
+    if not isinstance(user_object, (App, Function, Endpoint, ASGI)):
+        raise typer.BadParameter("serve requires an App, Function, Endpoint, or ASGI handler")
+    if resource is not None and not isinstance(user_object, App):
+        raise typer.BadParameter("--resource requires an App handler")
+    options = ServeOptions(
+        image=deployment_image(overrides),
+        cpu=overrides.cpu,
+        memory=overrides.memory,
+        gpu=overrides.gpu,
+        gpu_count=overrides.gpu_count,
+        env=overrides.env,
+        secrets=overrides.secrets,
+        keep_warm=overrides.keep_warm,
+        region=overrides.region,
+        pool=overrides.pool,
+        sync_dir=overrides.sync_dir,
     )
+    if isinstance(user_object, App):
+        user_object.serve(resource=resource, timeout=timeout, options=options)
+    else:
+        user_object.serve(timeout=timeout, options=options)

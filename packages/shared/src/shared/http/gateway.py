@@ -103,7 +103,7 @@ class AttachToContainerRequest(HttpModel):
 class AttachToContainerResponse(HttpModel):
     output: str = ""
     done: bool = False
-    exit_code: int = 0
+    exit_code: int | None = None
     error_msg: str = ""
     input_supported: bool = False
     attach_contract: str = "sse-output-only"
@@ -267,6 +267,7 @@ class DeployStubResponse(HttpModel):
 
 class GetUrlRequest(HttpModel):
     stub_id: str
+    container_id: str | None = None
     deployment_id: str = ""
     url_type: GatewayUrlKind = GatewayUrlKind.Stub
     is_shell: bool = False

@@ -12,6 +12,7 @@ from database.repositories.compute import (
     AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
+    ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
@@ -44,6 +45,7 @@ from shared.capacity import (
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
+    ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
@@ -703,13 +705,14 @@ class ComputeService:
                     and to_utc(snapshot.last_capacity_failure_at) >= to_utc(operation.created_at)
                     and snapshot.observed_machines < requested_provider_units
                 ):
-                    reason = "provider rejected capacity acquisition"
+                    failure_code = snapshot.last_capacity_failure_code
+                    reason = capacity_failure_message(failure_code)
                     operations.upsert(
                         operation.model_copy(
                             update={
                                 "status": CapacityOperationStatus.Rejected,
                                 "last_error": reason,
-                                "failure_code": CapacityFailureCode.ProviderLaunchFailed,
+                                "failure_code": failure_code,
                                 "updated_at": utc_now(),
                             }
                         )
@@ -730,7 +733,7 @@ class ComputeService:
                         operation,
                         CapacityAcquisitionStatus.Rejected,
                         reason=reason,
-                        failure_code=CapacityFailureCode.ProviderLaunchFailed,
+                        failure_code=failure_code,
                     )
                 if not operation.owns_capacity:
                     return _operation_result(
@@ -2812,6 +2815,70 @@ class ComputeService:
         ):
             raise UpstreamUnavailableError("provider machine ownership is inconsistent")
         self.release_internal_unit_machine(workspace_id, pool.capacity_owner_id, machine_id)
+        return True
+
+    def empty_joined_units(self) -> list[ComputeUnitRecord]:
+        with self.context.database.session() as session:
+            return ComputeUnitRepository(session).empty_joined_units()
+
+    def delete_empty_joined_unit(self, unit: ComputeUnitRecord) -> bool:
+        leases = self._required_capacity_owner_mutations()
+        with (
+            leases.mutation_lock(unit.capacity_owner_id),
+            leases.dispatch_lock(unit.capacity_owner_id),
+            self.context.database.session() as session,
+        ):
+            workspace = WorkspaceRepository(session).get(unit.workspace_id)
+            if workspace is None:
+                return False
+            if workspace.status is not WorkspaceStatus.Active:
+                return False
+            WorkspaceRepository(session).lock_active_owner(unit.workspace_id)
+            units = ComputeUnitRepository(session)
+            current = units.get_by_capacity_owner_id(unit.capacity_owner_id, for_update=True)
+            if (
+                current is None
+                or current.workspace_id != unit.workspace_id
+                or current.provider != "agent"
+                or current.platform_fleet
+                or current.capacity_owner_kind is not CapacityOwnerKind.WorkspaceAgent
+                or leases.has_open_reservations(current.capacity_owner_id)
+            ):
+                return False
+            if ComputeMachineEnrollmentRepository(session).list_for_unit(
+                current.workspace_id, current.capacity_owner_id
+            ):
+                return False
+            credentials = ComputeJoinCredentialRepository(session)
+            issued = credentials.list_for_unit(
+                current.workspace_id, current.capacity_owner_id, for_update=True
+            )
+            now = utc_now()
+            if not issued or any(
+                credential.status is ComputeCredentialStatus.Active
+                and credential.expires_at > now
+                and credential.use_count < credential.max_uses
+                for credential in issued
+            ):
+                return False
+            containers = ContainerRepository(session)
+            machines = MachineRepository(session).list_for_capacity_owner(
+                current.workspace_id, current.capacity_owner_id
+            )
+            if any(
+                machine.status is not ResourceStatus.Deleted
+                or containers.count_live_for_machine(machine.id)
+                for machine in machines
+            ):
+                return False
+            credentials.delete_for_unit(current.workspace_id, current.capacity_owner_id)
+            units.delete(current.id, workspace_id=current.workspace_id)
+        self._publish_change(
+            workspace_id=unit.workspace_id,
+            topic=WorkspaceChangeTopic.ComputeUnits,
+            change=WorkspaceChangeType.Deleted,
+            resource_id=unit.capacity_owner_id,
+        )
         return True
 
     def reconcile_pooled_capacity(

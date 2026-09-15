@@ -3,11 +3,8 @@
 Requires an authenticated public lazycloud profile targeting the healthy local
 stack. The scenario owns and publicly deletes one unique app.
 
-Cancellation is a statement about one invocation. A pooled container serves
-several at once, so honouring a cancel means stopping a container that other
-callers are still waiting on: what happens to them is the contract this proves.
-Their call is still wanted, so it may be re-run elsewhere, but it may never come
-back cancelled — nobody asked for that, and cancelled is terminal.
+Process slots isolate cancellation. The unselected invocation must finish in
+its original container, and the cancelled call can be rerun as new work.
 """
 
 from __future__ import annotations
@@ -57,6 +54,16 @@ def _await_co_resident(
         if terminal:
             raise RuntimeError(f"a call reached {terminal[0]} before cancellation")
         containers = {view.container_id or "" for view in views}
+        print(
+            json.dumps(
+                {
+                    "case": "co-resident-calls",
+                    "statuses": statuses,
+                    "containers": sorted(containers),
+                }
+            ),
+            flush=True,
+        )
         if all(status == "running" for status in statuses) and len(containers) == 1:
             serving = containers.pop()
             if serving:
@@ -87,16 +94,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         neighbour_result = neighbour.get(timeout_seconds=300, poll_interval_seconds=0.5)
         if neighbour_result != 36:
             raise RuntimeError(f"neighbouring invocation returned {neighbour_result}")
-        # Where it finished is what separates "survived the stop" from "was never
-        # interrupted": the container it shared with the cancelled call is gone,
-        # so an answer from that same container would mean the cancel never
-        # reached the work it was supposed to stop.
         neighbour_container = neighbour.task.view().container_id or ""
-        if neighbour_container == serving:
-            raise RuntimeError(
-                "the neighbouring invocation finished on the container the cancel "
-                "stopped, so the cancelled handler was never interrupted"
-            )
+        if neighbour_container != serving:
+            raise RuntimeError("cancellation restarted the neighbouring invocation")
 
         rerun = cancelled.rerun()
         result = rerun.get(timeout_seconds=300, poll_interval_seconds=0.5)

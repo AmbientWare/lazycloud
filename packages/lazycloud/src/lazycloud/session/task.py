@@ -29,7 +29,7 @@ from shared.transport_retry import (
 )
 
 from lazycloud.clients.observability.control import ObservabilityClient
-from lazycloud.control import ControlClientConfigMixin
+from lazycloud.control import ControlClientConfigMixin, workspace_path
 from lazycloud.control_clients import (
     control_http_channel,
     observability_control_client,
@@ -64,7 +64,9 @@ class TaskControlClient(Protocol):
 
 
 class TaskOperationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status: TaskStatus | None = None) -> None:
+        self.status = status
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +104,7 @@ class TaskResult:
 class TaskLifecycleEvent:
     event: str
     data: dict[str, JsonValue]
-    task: shared.tasks.Task | None = None
+    task: TaskResponse | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +143,11 @@ class TaskHandleClient(Protocol):
 class Task:
     task_id: str
     client: TaskHandleClient
+
+    @classmethod
+    def from_id(cls, task_id: str, *, workspace: str | None = None) -> Task:
+        """Reconnect to a task using the active profile and selected workspace."""
+        return cls(task_id=task_id, client=TaskClient(workspace=workspace))
 
     def get(self) -> shared.tasks.Task:
         return self.client.get_result_task(self.task_id)
@@ -252,6 +259,7 @@ class FunctionCall(Generic[R]):
     exit_code: int = 0
     error: str = ""
     workspace_id: str = ""
+    status: TaskStatus | None = None
     __orig_class__: object = field(init=False, repr=False, compare=False)
 
     @property
@@ -288,7 +296,9 @@ class FunctionCall(Generic[R]):
     ) -> R:
         if self.complete:
             if self.exit_code != 0:
-                raise TaskOperationError(self.error or f"function task {self.task_id} failed")
+                raise TaskOperationError(
+                    self.error or f"function task {self.task_id} failed", status=self.status
+                )
             try:
                 return cast(R, decode_function_result(self.result_payload))
             except FunctionResultDecodeError as exc:
@@ -302,7 +312,7 @@ class FunctionCall(Generic[R]):
         )
         if not result.ok:
             msg = result.error or f"function task {self.task_id} failed"
-            raise TaskOperationError(msg)
+            raise TaskOperationError(msg, status=result.status)
         return cast(R, result.value)
 
     def logs(self, *, limit: int = 100, cursor: str | None = None) -> list[LogRecord]:
@@ -511,12 +521,16 @@ class TaskClient(ControlClientConfigMixin):
 
     def subscribe(self, task_id: str) -> TaskSubscription:
         raw = call_with_transient_retry(
-            lambda: self._http_channel().get(f"/api/v1/tasks/{task_id}/subscribe")
+            lambda: self._http_channel().get(
+                workspace_path(f"/api/v1/tasks/{task_id}/subscribe", self._config().workspace)
+            )
         )
         return TaskSubscription(task_id=task_id, events=tuple(_parse_task_events(raw)))
 
     def rerun(self, task_id: str) -> Task:
-        raw = self._http_channel().post(f"/api/v1/tasks/{task_id}/rerun")
+        raw = self._http_channel().post(
+            workspace_path(f"/api/v1/tasks/{task_id}/rerun", self._config().workspace)
+        )
         try:
             rerun_task = TaskResponse.model_validate(raw)
         except ValueError as exc:
@@ -581,12 +595,11 @@ def _parse_task_events(raw: object) -> list[TaskLifecycleEvent]:
 
 def _task_event_from_data(event: str, data: Mapping[str, JsonValue]) -> TaskLifecycleEvent:
     task = None
-    task_value = data.get("task")
-    if isinstance(task_value, dict):
+    if event == "status":
         try:
-            task = shared.tasks.Task.model_validate(task_value)
-        except ValueError:
-            task = None
+            task = TaskResponse.model_validate(data)
+        except ValueError as exc:
+            raise HttpResponseDecodeError("task subscription returned an invalid task") from exc
     return TaskLifecycleEvent(event=event, data=dict(data), task=task)
 
 

@@ -5,14 +5,16 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from shared.bytes_transport import encode_bytes
 from shared.containers import ContainerStatus
+from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
+from shared.gpu import GpuInput
 from shared.http.compute import ContainerResponse, ContainerWithAppPageResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
@@ -30,6 +32,8 @@ from shared.transport_retry import (
     is_transient_transport_error,
 )
 
+from lazycloud.abstractions.image import Image
+from lazycloud.abstractions.metadata import PoolInput
 from lazycloud.json_contracts import parse_json_object
 from lazycloud.terminal import Terminal
 
@@ -40,6 +44,51 @@ DEFAULT_SYNC_POLL_SECONDS = 0.5
 DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS = 30.0
 DEFAULT_PREVIEW_RECORD_TTL_SECONDS = 24 * 60 * 60
 ACTIVE_PREVIEW_CONTAINER_STATUSES = {ContainerStatus.Pending, ContainerStatus.Running}
+
+
+class PreviewRuntime(Protocol):
+    image: Image
+    cpu: CpuRequest | None
+    memory: MemoryRequest | None
+    gpu: GpuInput
+    gpu_count: int
+    env: dict[str, str]
+    secrets: list[str]
+    region: str | None
+    pool: PoolInput
+
+
+@dataclass(frozen=True, slots=True)
+class ServeOptions:
+    image: Image | None = None
+    cpu: CpuRequest | None = None
+    memory: MemoryRequest | None = None
+    gpu: GpuInput = None
+    gpu_count: int | None = None
+    env: Mapping[str, str] = field(default_factory=dict[str, str], repr=False)
+    secrets: Sequence[str] = ()
+    keep_warm: int | None = None
+    region: str | None = None
+    pool: PoolInput = None
+    sync_dir: str | None = None
+
+    def apply(self, owner: PreviewRuntime) -> None:
+        if self.image is not None:
+            owner.image = self.image
+        if self.cpu is not None:
+            owner.cpu = self.cpu
+        if self.memory is not None:
+            owner.memory = self.memory
+        if self.gpu is not None:
+            owner.gpu = self.gpu
+        if self.gpu_count is not None:
+            owner.gpu_count = self.gpu_count
+        owner.env.update(self.env)
+        owner.secrets.extend(secret for secret in self.secrets if secret not in owner.secrets)
+        if self.region is not None:
+            owner.region = self.region
+        if self.pool is not None:
+            owner.pool = self.pool
 
 
 class ServeUrlClient(Protocol):
@@ -178,6 +227,9 @@ class ServePreviewSession:
             self._syncer.start()
         try:
             self._attach_foreground(terminal)
+            if self._syncer is not None:
+                self._syncer.stop()
+                self._syncer.raise_if_failed()
         except KeyboardInterrupt:
             terminal.header("Stopping serve container")
             self._stop_with_warning(terminal)
@@ -208,11 +260,15 @@ class ServePreviewSession:
         attach_timeout_reported = False
         reconnect_reported = False
         while True:
+            if self._syncer is not None:
+                self._syncer.raise_if_failed()
             try:
                 for response in self.gateway_client.attach_to_container_events(
                     self.container_id,
                     poll_interval_seconds=self.attach_poll_seconds,
                 ):
+                    if self._syncer is not None:
+                        self._syncer.raise_if_failed()
                     retry.reset()
                     attach_timeout_reported = False
                     reconnect_reported = False
@@ -221,7 +277,9 @@ class ServePreviewSession:
                     if response.output:
                         terminal.write(response.output)
                     if response.done:
-                        if response.exit_code:
+                        if response.exit_code is None:
+                            terminal.warn("serve container stopped; its exit code is not reported")
+                        elif response.exit_code:
                             terminal.error(f"serve container exited with code {response.exit_code}")
                         return
             except TimeoutError:
@@ -258,6 +316,8 @@ class ContainerWorkspaceSyncer:
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _thread: threading.Thread | None = field(default=None, init=False, repr=False)
     _snapshot: dict[str, FileState] = field(default_factory=dict, init=False, repr=False)
+    _initialized: bool = field(default=False, init=False, repr=False)
+    _failure: Exception | None = field(default=None, init=False, repr=False)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -268,13 +328,17 @@ class ContainerWorkspaceSyncer:
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=2)
+            self._thread.join()
+
+    def raise_if_failed(self) -> None:
+        if self._failure is not None:
+            raise RuntimeError(f"directory sync failed: {self._failure}") from self._failure
 
     def _run(self) -> None:
         try:
             self._sync_initial_with_retries()
         except Exception as exc:
-            self._warn(f"serve sync disabled: {exc}")
+            self._failure = exc
             return
         while not self._stop_event.wait(self.poll_seconds):
             try:
@@ -282,9 +346,12 @@ class ContainerWorkspaceSyncer:
                 self._sync_delta(next_snapshot)
                 self._snapshot = next_snapshot
             except Exception as exc:
-                self._warn(f"serve sync failed: {exc}")
+                self._failure = exc
+                return
 
     def _sync_initial_with_retries(self) -> None:
+        if self._initialized:
+            return
         if not self.full_initial_sync:
             self.record_seed_snapshot()
             return
@@ -310,14 +377,18 @@ class ContainerWorkspaceSyncer:
     def sync_once(self) -> None:
         self._snapshot = _snapshot(self.local_dir)
         self._sync_initial(self._snapshot)
+        self._initialized = True
         self._detail(f"Synced {len(self._snapshot)} files")
 
     def record_seed_snapshot(self) -> None:
         self._snapshot = _snapshot(self.local_dir)
+        self._initialized = True
         self._detail(f"Watching {len(self._snapshot)} files")
 
     def _sync_initial(self, snapshot: dict[str, FileState]) -> None:
         for relative in sorted(snapshot):
+            if self._stop_event.is_set():
+                return
             self._write_file(relative)
 
     def _sync_delta(self, next_snapshot: dict[str, FileState]) -> None:
@@ -328,11 +399,15 @@ class ContainerWorkspaceSyncer:
             if self._snapshot.get(relative) != state
         ]
         for relative in removed:
+            if self._stop_event.is_set():
+                return
             self._sync(
                 operation=ContainerWorkspaceSyncOperation.Delete,
                 path=relative,
             )
         for relative in changed:
+            if self._stop_event.is_set():
+                return
             self._write_file(relative)
         if removed or changed:
             self._detail(f"Synced {len(changed)} changed, {len(removed)} removed")
@@ -369,10 +444,6 @@ class ContainerWorkspaceSyncer:
         if self.terminal is not None:
             self.terminal.detail(message)
 
-    def _warn(self, message: str) -> None:
-        if self.terminal is not None:
-            self.terminal.warn(message)
-
 
 @dataclass(frozen=True, slots=True)
 class FileState:
@@ -384,12 +455,14 @@ def resolve_serve_url(
     client: ServeUrlClient,
     *,
     stub_id: str,
+    container_id: str,
     workspace: str | None = None,
     external_url: str,
 ) -> ServePreviewUrl:
     response = client.get_url(
         GetUrlRequest(
             stub_id=stub_id,
+            container_id=container_id,
             url_type=GatewayUrlKind.Stub,
             workspace=workspace,
             external_url=external_url,
@@ -496,7 +569,7 @@ def print_invocation_details(
     authorized: bool,
     token_configured: bool,
 ) -> None:
-    terminal.header("Invocation details")
+    terminal.header("Preview URL")
     terminal.line("")
     terminal.line(f"curl -X POST '{url}' \\")
     terminal.line("-H 'Accept: */*' \\")
@@ -506,7 +579,7 @@ def print_invocation_details(
     terminal.line("-H 'Content-Type: application/json' \\")
     terminal.line("-d '{}'")
     terminal.line("")
-    terminal.header("Serving")
+    terminal.header("Container output")
 
 
 def sync_local_workspace(
@@ -525,7 +598,7 @@ def sync_local_workspace(
 
 
 def _snapshot(local_dir: str) -> dict[str, FileState]:
-    from lazycloud.session.source_sync import collect_source_files
+    from lazycloud.source_sync import collect_source_files
 
     root = Path(local_dir).expanduser().resolve()
     files: dict[str, FileState] = {}
@@ -604,6 +677,7 @@ __all__ = [
     "ContainerWorkspaceSyncer",
     "PreviewContainerClient",
     "ServeGatewayClient",
+    "ServeOptions",
     "ServePreviewRecord",
     "ServePreviewSession",
     "ServePreviewUrl",

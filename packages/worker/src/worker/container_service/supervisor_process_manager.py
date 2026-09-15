@@ -128,7 +128,7 @@ class SupervisorSandboxProcessManager:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def ready(self) -> bool:
-        response = self._request(SupervisorRequest(op="ready"))
+        response = self._request(SupervisorRequest(op="ready"), wait_ready=True)
         return response.type == "ready"
 
     def start_workload(self) -> None:
@@ -303,7 +303,9 @@ class _SupervisorTransport:
         while True:
             coordinator.wait_until_active(host)
             try:
-                connection = socket.create_connection((host, port), timeout=1.0)
+                connection = socket.create_connection(
+                    (host, port), timeout=max(deadline - time.monotonic(), 0.1)
+                )
                 connection.settimeout(max(timeout_seconds, 0.1))
                 if not coordinator.register(host, connection):
                     connection.close()

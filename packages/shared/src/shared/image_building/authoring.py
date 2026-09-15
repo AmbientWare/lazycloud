@@ -33,6 +33,11 @@ class ImageBuildStep(ContractModel):
     command: str | None = None
 
 
+class ImageFilesystemSource(ContractModel):
+    container_id: str
+    worker_id: str
+
+
 class ImageSpec(ContractModel):
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
     base: str = "python:3.12-slim"
@@ -53,11 +58,13 @@ class ImageSpec(ContractModel):
     gpu: str | None = None
     image_id: str | None = None
     ignore_python: bool = False
+    filesystem_source: ImageFilesystemSource | None = None
 
 
 __all__ = [
     "ImageBuildStep",
     "ImageBuildStepKind",
+    "ImageFilesystemSource",
     "ImageSpec",
     "LinuxArchitecture",
     "PythonVersion",

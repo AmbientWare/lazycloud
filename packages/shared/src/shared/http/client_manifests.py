@@ -33,13 +33,6 @@ class ClientContract(HttpModel):
     operation: ClientOperation
 
 
-CLIENT_MANIFEST_DEPLOYMENT_KINDS = frozenset(
-    {
-        DeploymentKind.Endpoint,
-        DeploymentKind.Asgi,
-    }
-)
-
 INVOKABLE_DEPLOYMENT_KINDS = frozenset(
     {
         DeploymentKind.Function,
@@ -86,6 +79,7 @@ class ClientManifestResource(HttpModel):
     """
 
     route: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=0)
     methods: list[str] = Field(default_factory=list)
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
     outputs: dict[str, JsonValue] = Field(default_factory=dict)
@@ -115,7 +109,6 @@ class ClientManifestResponse(HttpModel):
 
 
 __all__ = [
-    "CLIENT_MANIFEST_DEPLOYMENT_KINDS",
     "INVOKABLE_DEPLOYMENT_KINDS",
     "ClientContract",
     "ClientManifestRequest",

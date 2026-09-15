@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,7 +30,13 @@ VOLUME_LIST = TypeAdapter(list[VolumeInstance])
 
 def _cli(workspace: str, *arguments: str) -> str:
     return run_text_process(
-        ("uv", "run", "lazycloud", "--json", *arguments, "--workspace", workspace),
+        (
+            str(Path(sys.executable).parent / "lazycloud"),
+            "--json",
+            *arguments,
+            "--workspace",
+            workspace,
+        ),
         cwd=ROOT,
         environment=os.environ,
         timeout=120,

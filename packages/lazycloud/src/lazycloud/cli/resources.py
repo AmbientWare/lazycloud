@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 import webbrowser
 from typing import Annotated, Any
@@ -740,12 +741,12 @@ def container_attach(
         payload=terminal.model_dump(mode="json"),
         view=result_card(
             "Container finished",
-            {"exit_code": terminal.exit_code},
+            {"exit_code": terminal.exit_code if terminal.exit_code is not None else "Not reported"},
             tone="success" if terminal.exit_code == 0 else "warning",
         ),
     )
-    if terminal.exit_code:
-        raise typer.Exit(terminal.exit_code)
+    if terminal.exit_code != 0:
+        raise typer.Exit(terminal.exit_code if terminal.exit_code is not None else 1)
 
 
 @container_app.command("checkpoint", help="Create a container checkpoint.")
@@ -836,12 +837,12 @@ def machine_join(
         typer.Option("--gpu-ids", help="Comma-separated GPU device IDs to expose."),
     ] = "",
     background: Annotated[
-        bool | None,
+        bool,
         typer.Option(
             "--background/--foreground",
-            help="Install the agent as a background service or run it in the foreground.",
+            help="Install a background service. Runs in the foreground by default.",
         ),
-    ] = None,
+    ] = False,
     service_manager: Annotated[
         str,
         typer.Option("--service-manager", help="Service manager for background installs."),
@@ -854,10 +855,6 @@ def machine_join(
         str,
         typer.Option("--state-dir", help="Agent state directory."),
     ] = "",
-    print_only: Annotated[
-        bool,
-        typer.Option("--print-only", help="Only print the generated join command."),
-    ] = False,
 ) -> None:
     """Join this machine to your account, in the pool you name.
 
@@ -885,23 +882,10 @@ def machine_join(
         service_name=service_name,
         state_dir=state_dir,
     )
-    if json_output_enabled(ctx):
-        payload = response.model_dump(mode="json")
-        payload["command"] = command
-        print_payload(ctx, payload)
-        return
-    if print_only:
-        console.print(
-            notice_card(
-                "Machine join command",
-                command,
-                hint="This command contains a short-lived credential. Do not share it.",
-                tone="warning",
-            )
-        )
-        return
     try:
-        exit_code = subprocess.call(command, shell=True)
+        exit_code = subprocess.call(
+            command, shell=True, stdout=sys.stderr if json_output_enabled(ctx) else None
+        )
     except KeyboardInterrupt:
         return
     if agent_join_interrupted(exit_code):

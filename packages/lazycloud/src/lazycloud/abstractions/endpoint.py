@@ -31,10 +31,8 @@ from shared.deployment_records import (
     MemoryRequest,
     Resources,
     VolumeMount,
-    resolve_http_wait_timeout_seconds,
-    resolve_timeout_seconds,
 )
-from shared.deployments import DeploymentKind
+from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.errors import HttpTransportError
@@ -43,6 +41,7 @@ from shared.placement import ProductRegion
 from shared.serialization import to_json_value
 from shared.tasks import RetryPolicy, TaskPolicy
 
+from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
 from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.invocation import (
@@ -63,10 +62,10 @@ from lazycloud.abstractions.metadata import (
 )
 from lazycloud.abstractions.serve import (
     ServeGatewayClient,
+    ServeOptions,
     ServePreviewSession,
     ServeResourceClient,
     resolve_serve_url,
-    sync_local_workspace,
     write_serve_preview,
 )
 from lazycloud.abstractions.shell import Shell, ShellSession
@@ -109,7 +108,6 @@ ENDPOINT_DIRECT_CALL_ERROR = (
     "direct calls to endpoints are not supported outside worker containers; "
     "use .local(...) for local execution"
 )
-ENDPOINT_TRANSPORT_OVERHEAD_SECONDS = 5.0
 
 
 class EndpointOperationError(FunctionOperationError):
@@ -207,7 +205,7 @@ class Endpoint(Generic[P, R]):
     name: str | None = None
     route: str = "/"
     domain: str | None = None
-    methods: list[str] = field(default_factory=lambda: ["GET", "POST"])
+    methods: list[str] = field(default_factory=lambda: list(DEFAULT_ENDPOINT_METHODS))
     cpu: CpuRequest | None = DEFAULT_HTTP_CPU
     memory: MemoryRequest | None = DEFAULT_HTTP_MEMORY
     disk: str | None = None
@@ -266,7 +264,15 @@ class Endpoint(Generic[P, R]):
         raise EndpointOperationError(ENDPOINT_DIRECT_CALL_ERROR)
 
     def local(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        return self.func(*args, **kwargs)
+        if self.inputs is None:
+            return serialize_result(self.func, self.func(*args, **kwargs), self.outputs)
+        return self.invoke_arguments(args, kwargs)
+
+    def invoke_arguments(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> R:
+        prepared_args, prepared_kwargs = prepare_arguments(self.func, args, kwargs, self.inputs)
+        return serialize_result(
+            self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
+        )
 
     def spec(self, *, kind: DeploymentKind = DeploymentKind.Endpoint) -> DeploymentSpec:
         client_contract = build_client_contract(
@@ -346,14 +352,16 @@ class Endpoint(Generic[P, R]):
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
+    def serve(
+        self, timeout: int = 0, *, options: ServeOptions | None = None
+    ) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
-            container_id=None,
             label="endpoint",
+            options=options,
         )
 
     def request(
@@ -591,7 +599,7 @@ def _endpoint(
             metadata=metadata or {},
             route=route,
             domain=domain,
-            methods=methods or ["GET", "POST"],
+            methods=methods or list(DEFAULT_ENDPOINT_METHODS),
         )
 
     if func is None:
@@ -717,14 +725,16 @@ class ASGI:
             source_root=source_root,
         )
 
-    def serve(self, timeout: int = 0) -> StartEndpointServeResponse:
+    def serve(
+        self, timeout: int = 0, *, options: ServeOptions | None = None
+    ) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
             workspace=None,
             sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
-            container_id=None,
             label="ASGI app",
+            options=options,
         )
 
     def request(
@@ -1014,13 +1024,14 @@ def _callable_accepts_args(value: Callable[..., Any], count: int) -> bool:
 
 
 def _request_function_endpoint(
-    owner: Endpoint[..., Any] | ASGI,
+    owner: Endpoint[..., Any],
     *,
     args: tuple[Any, ...],
     kwargs: Mapping[str, Any],
     options: InvocationOptions,
 ) -> EndpointResponse:
-    payload = _endpoint_request_payload(args=args, kwargs=kwargs)
+    encoded_args, encoded_kwargs = encode_arguments(owner.func, args, kwargs, owner.inputs)
+    payload = _endpoint_request_payload(args=encoded_args, kwargs=encoded_kwargs)
     return _request_http_endpoint(
         owner,
         method=_endpoint_request_method(owner),
@@ -1044,7 +1055,7 @@ def _request_http_endpoint(
     params: Mapping[str, object] | Iterable[tuple[str, object]] | None,
     options: InvocationOptions,
 ) -> EndpointResponse:
-    from lazycloud.http_transport import request_raw
+    from lazycloud.http_transport import request_raw, workload_http_timeout_seconds
 
     config = owner._config()
     spec = owner.spec()
@@ -1064,7 +1075,9 @@ def _request_http_endpoint(
             headers=headers,
             params=params,
             token=config.token,
-            timeout_seconds=_endpoint_transport_timeout_seconds(spec),
+            timeout_seconds=workload_http_timeout_seconds(
+                spec.kind, spec.resources.timeout_seconds
+            ),
         )
     except (HttpTransportError, ValueError) as exc:
         raise EndpointOperationError(str(exc)) from exc
@@ -1191,18 +1204,29 @@ def _serve_endpoint(
     timeout: int,
     workspace: str | None,
     sync_dir: str | None,
-    container_id: str | None,
     label: str,
+    options: ServeOptions | None,
 ) -> StartEndpointServeResponse:
     terminal = owner.terminal or Terminal()
     owner.terminal = terminal
+    if options is not None:
+        options.apply(owner)
+        if options.keep_warm is not None:
+            if isinstance(owner, ASGI):
+                owner.keep_warm_seconds = options.keep_warm
+            else:
+                owner.keep_warm = options.keep_warm
+        if options.sync_dir is not None:
+            sync_dir = options.sync_dir
     source_root = sync_dir or None
-    stub_id = owner.stub_id or _prepare_endpoint(
-        owner,
-        workspace=workspace,
-        label=label,
-        source_root=source_root,
-    )
+    stub_id = owner.stub_id
+    if not stub_id or options is not None:
+        stub_id = _prepare_endpoint(
+            owner,
+            workspace=workspace,
+            label=label,
+            source_root=source_root,
+        )
     config = owner._config()
     gateway_client = owner.gateway_client or GatewayControlClient.from_endpoint(
         config.endpoint,
@@ -1216,32 +1240,37 @@ def _serve_endpoint(
         workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     )
-    serve_url = resolve_serve_url(
-        gateway_client,
-        stub_id=stub_id,
-        workspace=workspace,
-        external_url=config.endpoint,
-    )
     response = EndpointControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
         workspace=config.workspace,
         timeout_seconds=config.timeout_seconds,
     ).start_serve(stub_id, timeout=timeout)
-    selected_container_id = container_id or response.container_id
+    selected_container_id = response.container_id
     if not selected_container_id:
         raise EndpointOperationError(f"serve did not return a {label} container_id")
-    spec = owner.spec()
-    preview_record = write_serve_preview(
-        kind=spec.kind,
-        name=spec.name,
-        app=owner._app_slug,
-        workspace=config.workspace,
-        endpoint=config.endpoint,
-        stub_id=stub_id,
-        container_id=selected_container_id,
-        url=serve_url.url,
-    )
+    try:
+        serve_url = resolve_serve_url(
+            gateway_client,
+            stub_id=stub_id,
+            container_id=selected_container_id,
+            workspace=workspace,
+            external_url=config.endpoint,
+        )
+        spec = owner.spec()
+        preview_record = write_serve_preview(
+            kind=spec.kind,
+            name=spec.name,
+            app=owner._app_slug,
+            workspace=config.workspace,
+            endpoint=config.endpoint,
+            stub_id=stub_id,
+            container_id=selected_container_id,
+            url=serve_url.url,
+        )
+    except BaseException:
+        resource_client.stop_container(response.container_id)
+        raise
     ServePreviewSession(
         stub_id=stub_id,
         container_id=selected_container_id,
@@ -1272,18 +1301,11 @@ def _shell_endpoint(
         timeout_seconds=owner.timeout,
     )
     if container_id:
-        session = shell.create_existing(container_id)
-    else:
-        session = shell.create_standalone(
-            owner.stub_id or _prepare_endpoint(owner, workspace=workspace, label=label)
-        )
-    if sync_dir:
-        _sync_shell_dir(
-            session.container_id,
-            sync_dir,
-            owner=owner,
-        )
-    return session
+        return shell.create_existing(container_id, sync_dir=sync_dir)
+    return shell.create_standalone(
+        owner.stub_id or _prepare_endpoint(owner, workspace=workspace, label=label),
+        sync_dir=sync_dir,
+    )
 
 
 def _effective_timeout_seconds(
@@ -1297,38 +1319,6 @@ def _effective_timeout_seconds(
         if isinstance(value, int):
             return value
     return timeout_seconds
-
-
-def _endpoint_transport_timeout_seconds(spec: DeploymentSpec) -> float:
-    return (
-        resolve_http_wait_timeout_seconds(
-            resolve_timeout_seconds(spec.kind, spec.resources.timeout_seconds)
-        )
-        + ENDPOINT_TRANSPORT_OVERHEAD_SECONDS
-    )
-
-
-def _sync_shell_dir(
-    container_id: str,
-    sync_dir: str | None,
-    *,
-    owner: Endpoint[..., Any] | ASGI,
-) -> None:
-    if not sync_dir or not container_id:
-        return
-    config = owner._config()
-    gateway_client = owner.gateway_client or GatewayControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
-    sync_local_workspace(
-        container_id=container_id,
-        local_dir=sync_dir,
-        gateway_client=gateway_client,
-        terminal=owner.terminal,
-    )
 
 
 __all__ = [

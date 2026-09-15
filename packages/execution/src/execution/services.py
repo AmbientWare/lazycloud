@@ -24,6 +24,9 @@ from execution.tasks import TaskService
 
 class SchedulerSubmissionResult(Protocol):
     @property
+    def container_id(self) -> str: ...
+
+    @property
     def accepted(self) -> bool: ...
 
     @property
@@ -79,6 +82,7 @@ class ExecutionContainerService(Protocol):
         container_id: str,
         *,
         reason: StopContainerReason = StopContainerReason.User,
+        force: bool = False,
     ) -> ContainerRecord: ...
 
     def delete(self, container_id: str) -> None: ...

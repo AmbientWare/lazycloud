@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -46,13 +47,17 @@ def main() -> int:
     primary_error: BaseException | None = None
     evidence: dict[str, object] = {}
     try:
+        app.deploy(workspace=workspace, source_root=Path(__file__).resolve().parent)
         call = usage_function.spawn(21)
         task_id = call.task_id
         result = call.get(timeout_seconds=180, poll_interval_seconds=0.25)
         if result != {"value": 42}:
             raise RuntimeError("Function returned an unexpected result")
         app_id = _owned_app(resources).id
-        record = _await_task_usage(usage, task_id, started_at)
+        stub_id = resources.task(task_id).stub_id
+        if stub_id is None:
+            raise RuntimeError("completed Function task has no Function resource")
+        record = _await_task_usage(usage, task_id, stub_id, started_at)
         evidence = {
             "app_id": app_id,
             "task_id": task_id,
@@ -99,36 +104,47 @@ def _prerequisites() -> tuple[str, str, str]:
 
 
 def _owned_app(client: ResourceControlClient):
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        matches = [item for item in client.list_apps().data if item.name == APP_NAME]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise RuntimeError(f"multiple apps matched unique name {APP_NAME}")
-        time.sleep(0.25)
-    raise RuntimeError(f"app {APP_NAME} was not publicly observable")
+    matches = [item for item in client.list_apps().data if item.name == APP_NAME]
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one owned app {APP_NAME}, found {len(matches)}")
+    return matches[0]
 
 
 def _await_task_usage(
     client: ObservabilityControlClient,
     task_id: str,
+    stub_id: str,
     started_at: datetime,
 ):
-    deadline = time.monotonic() + 120
-    while time.monotonic() < deadline:
+    for cycle in range(10):
         records = client.usage_records(
             metric=UsageMetric.TaskCount,
-            resource_type="task",
-            resource_id=task_id,
+            resource_type="function",
+            resource_id=stub_id,
             start=started_at,
         ).data
-        positive = [record for record in records if record.quantity > 0]
+        positive = [
+            record
+            for record in records
+            if record.metadata.get("task_id") == task_id and record.quantity > 0
+        ]
+        print(
+            json.dumps(
+                {
+                    "case": "task-usage",
+                    "cycle": cycle,
+                    "task_id": task_id,
+                    "records": len(records),
+                    "matching": len(positive),
+                }
+            ),
+            flush=True,
+        )
         if len(positive) == 1:
             return positive[0]
         if len(positive) > 1:
             raise RuntimeError("Function task produced duplicate task-count usage")
-        time.sleep(1)
+        time.sleep(0.25)
     raise RuntimeError("Function task usage did not become publicly observable")
 
 

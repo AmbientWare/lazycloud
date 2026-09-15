@@ -15,7 +15,6 @@ from database.repositories.common import (
     WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.tables.apps import StubTable
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import (
@@ -364,6 +363,13 @@ class MachineRepository:
     def list(self, *, workspace_id: str, status: str | None = None) -> list[Machine]:
         return self.records.list(workspace_id=workspace_id, status=status)
 
+    def list_for_capacity_owner(self, workspace_id: str, capacity_owner_id: str) -> list[Machine]:
+        statement = select(MachineTable).where(
+            MachineTable.workspace_id == workspace_id,
+            MachineTable.capacity_owner_id == capacity_owner_id,
+        )
+        return [Machine.model_validate(row.payload) for row in self.session.scalars(statement)]
+
     def list_across_workspaces(self, *, status: str | None = None) -> list[Machine]:
         """System listing over the whole fleet, including unowned pool machines."""
         return self.records.list_across_workspaces(status=status)
@@ -533,6 +539,14 @@ class ContainerRepository:
     def get_across_workspaces(self, container_id: str) -> ContainerRecord | None:
         """System lookup for scheduler/worker/reconciler container control."""
         return self.records.get_across_workspaces(container_id)
+
+    def lock(self, container_id: str, *, workspace_id: str) -> ContainerRecord | None:
+        row = self.session.scalar(
+            select(ContainerTable)
+            .where(ContainerTable.id == container_id, ContainerTable.workspace_id == workspace_id)
+            .with_for_update()
+        )
+        return ContainerRecord.model_validate(row.payload) if row is not None else None
 
     def lock_across_workspaces(self, container_id: str) -> ContainerRecord | None:
         row = self.session.scalar(
@@ -905,19 +919,13 @@ class ContainerRepository:
         self,
         *,
         now: datetime,
-        stub_types: Sequence[str] = (),
     ) -> list[ContainerRecord]:
-        """System reaper input: expired live containers of the requested kinds."""
+        """System reaper input: live containers past their durable expiry."""
         statement = select(ContainerTable).where(
             ContainerTable.expires_at.is_not(None),
             ContainerTable.expires_at <= now,
             ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
         )
-        if stub_types:
-            statement = statement.join(
-                StubTable,
-                StubTable.id == ContainerTable.stub_id,
-            ).where(StubTable.type.in_(stub_types))
         statement = statement.order_by(ContainerTable.expires_at.asc(), ContainerTable.id.asc())
         return [
             ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)

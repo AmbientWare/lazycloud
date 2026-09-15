@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import socket
 import time
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
+from networking.async_http import AsyncBackendTimeoutError
 from pydantic import JsonValue
 from shared.app_identity import ENDPOINT_IMAGE
 from shared.container_requests import (
@@ -24,11 +26,10 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerStatus
+from shared.deployments import DEFAULT_ENDPOINT_METHODS
 from shared.env import (
     APP_ID_ENV,
     CHECKPOINT_ENABLED_ENV,
-    ENDPOINT_INSTANCE_LOCK_ENV,
-    ENDPOINT_SERVE_LOCK_ENV,
     ENDPOINT_WORKERS_ENV,
     HOT_RELOAD_DIR_ENV,
     HOT_RELOAD_ENV,
@@ -39,9 +40,11 @@ from shared.env import (
 from shared.errors import (
     CapacityLimitReachedError,
     DomainError,
+    EndpointReplicaLimitReachedError,
     InvalidInputError,
     NotFoundError,
     PaymentRequiredError,
+    UpstreamTimeoutError,
     UpstreamUnavailableError,
 )
 from shared.events import EventLevel
@@ -56,6 +59,7 @@ from shared.http.task_payload import serialize_http_task_payload
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
+from shared.urls import endpoint_route_path
 
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
@@ -74,8 +78,6 @@ from execution.endpoints.dispatch import (
     EndpointDispatchTarget,
     EndpointDispatchUnavailable,
 )
-from execution.endpoints.keys import DEFAULT_ENDPOINT_SERVE_TIMEOUT_SECONDS
-from execution.endpoints.serve import EndpointServeRequest, plan_endpoint_serve
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
@@ -88,6 +90,7 @@ ENDPOINT_BACKPRESSURE_STATUS_CODE = 429
 ENDPOINT_CANCELLED_STATUS_CODE = 499
 ENDPOINT_REQUEST_BUFFER_FULL_MESSAGE = "endpoint request buffer is full"
 ENDPOINT_REQUEST_BUFFER_FULL_REASON = "request_buffer_full"
+LOGGER = logging.getLogger(__name__)
 
 
 def _add_task_headers(headers: HeaderMap, task_id: str) -> None:
@@ -151,24 +154,16 @@ class EndpointControlService:
     def start_endpoint_serve(
         self,
         request: StartEndpointServeRequest,
+        *,
+        hot_reload: bool = False,
     ) -> StartEndpointServeResponse:
         stub = self.control_plane.get_stub(request.stub_id)
         if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
             raise InvalidInputError(f"stub is not an endpoint: {stub.id}")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
-        timeout_seconds = request.timeout or DEFAULT_ENDPOINT_SERVE_TIMEOUT_SECONDS
-        plan = plan_endpoint_serve(
-            EndpointServeRequest(
-                stub_id=stub.id,
-                workspace_name=workspace.name,
-                workspace_id=workspace.id,
-                timeout_seconds=timeout_seconds,
-                python_executable=config.image.python_executable,
-            )
-        )
-        if not plan.authorized:
-            raise InvalidInputError("Unauthorized")
+        created_at = utc_now()
+        entrypoint = [config.image.python_executable, "-m", "runner.serve"]
         image_id = config.effective_image_id or ENDPOINT_IMAGE
         startup_kind = (
             WorkerStartupKind.Asgi if stub.kind is StubKind.Asgi else WorkerStartupKind.Endpoint
@@ -180,20 +175,26 @@ class EndpointControlService:
             STUB_ID_ENV: stub.id,
             STUB_TYPE_ENV: stub.kind.value,
             "HANDLER": stub.handler or "",
-            ENDPOINT_SERVE_LOCK_ENV: plan.serve_lock_key,
-            ENDPOINT_INSTANCE_LOCK_ENV: plan.instance_lock_key,
             ENDPOINT_WORKERS_ENV: str(config.workers),
             LIFECYCLE_HOOKS_ENV: config.lifecycle_hooks.model_dump_json(),
-            HOT_RELOAD_ENV: "true",
+            HOT_RELOAD_ENV: str(hot_reload).lower(),
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
         with self.services.context.database.session() as session:
+            containers = ContainerRepository(session)
+            containers.lock_stub_capacity(stub.id)
+            live = containers.count_live_for_stub(stub.id)
+            if live >= config.autoscaler.max_containers:
+                raise EndpointReplicaLimitReachedError(
+                    f"endpoint {stub.id} holds {live} containers; "
+                    f"its replica limit is {config.autoscaler.max_containers}"
+                )
             container = self.services.containers.reserve_pending(
                 session,
                 PendingContainerReservation(
                     name=f"endpoint-{stub.name}",
                     image=image_id,
-                    command=list(plan.entrypoint),
+                    command=entrypoint,
                     workspace_id=stub.workspace_id,
                     stub_id=stub.id,
                     app_id=stub.app_id,
@@ -202,6 +203,13 @@ class EndpointControlService:
                     gpu_count=config.runtime.gpu_count,
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
+                    timeout_seconds=request.timeout,
+                    expires_at=(
+                        created_at + timedelta(seconds=request.timeout)
+                        if request.timeout > 0
+                        else None
+                    ),
+                    created_at=created_at,
                 ),
             )
         self.services.containers.publish_lifecycle_change(
@@ -233,7 +241,7 @@ class EndpointControlService:
                 workspace_name=workspace.name,
                 stub_type=stub.kind.value,
                 startup_kind=startup_kind,
-                entrypoint=plan.entrypoint,
+                entrypoint=entrypoint,
                 cwd=WORKER_USER_CODE_VOLUME,
                 env_list=[f"{key}={value}" for key, value in env.items()],
                 image_id=image_id,
@@ -299,9 +307,7 @@ class EndpointControlService:
             message=f"started endpoint serve container for {stub.name}",
             data={
                 "stub_id": stub.id,
-                "serve_lock_key": plan.serve_lock_key,
-                "instance_lock_key": plan.instance_lock_key,
-                "timeout_seconds": plan.wait_timeout_seconds,
+                "timeout_seconds": request.timeout,
             },
             workspace_id=stub.workspace_id,
         )
@@ -326,7 +332,8 @@ class EndpointControlService:
         except NotFoundError:
             return error_response(404, "endpoint not found")
         except Exception as exc:
-            return error_response(500, str(exc))
+            LOGGER.error("Endpoint %s failed: %s", request.stub_id, type(exc).__name__)
+            return error_response(500, "Endpoint request failed. Check the service logs.")
 
     async def forward_endpoint_health(
         self,
@@ -375,7 +382,9 @@ class EndpointControlService:
             dispatcher = self.async_dispatcher
             if dispatcher is None:
                 return error_response(503, "endpoint dispatcher is not configured")
-            target = await dispatcher.unprobed_target(stub.id)
+            if request.container_id is not None:
+                await self._require_container_target(stub, request.container_id)
+            target = await dispatcher.unprobed_target(stub.id, container_id=request.container_id)
             if target is None:
                 return error_response(503, "no running endpoint containers")
             stream = await dispatcher.open_http_stream(
@@ -384,6 +393,8 @@ class EndpointControlService:
             return await _read_forward_response(stream)
         except NotFoundError:
             return error_response(404, "endpoint not found")
+        except EndpointDispatchUnavailable as exc:
+            return error_response(503, str(exc))
         except Exception as exc:
             return error_response(502, str(exc))
 
@@ -445,6 +456,7 @@ class EndpointControlService:
                 task,
                 wait,
                 max_inflight_per_container=settings.max_inflight_per_container,
+                container_id=request.container_id,
             )
             self._observe_dispatch_latencies(stub, record)
         except Exception as exc:
@@ -482,11 +494,14 @@ class EndpointControlService:
         session: EndpointIngressDispatchSession,
         request: EndpointForwardRequest,
     ) -> AsyncEndpointResponseStream:
-        return await self._dispatcher().open_http_stream(
-            session.target,
-            request.model_copy(update={"headers": session.headers}),
-            timeout_seconds=session.wait_timeout_seconds,
-        )
+        try:
+            return await self._dispatcher().open_http_stream(
+                session.target,
+                request.model_copy(update={"headers": session.headers}),
+                timeout_seconds=session.wait_timeout_seconds,
+            )
+        except AsyncBackendTimeoutError as exc:
+            raise EndpointDispatchTimedOut(str(exc)) from exc
 
     async def finish_asgi_http(
         self,
@@ -495,6 +510,7 @@ class EndpointControlService:
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None:
         if error is None and status_code is not None and not 200 <= status_code < 400:
@@ -507,6 +523,7 @@ class EndpointControlService:
             },
             cancelled=cancelled,
             error=error,
+            timed_out=timed_out,
         )
 
     async def finish_asgi_websocket(
@@ -530,6 +547,7 @@ class EndpointControlService:
         result: dict[str, JsonValue],
         cancelled: bool,
         error: str | None,
+        timed_out: bool = False,
     ) -> None:
         try:
             task = await self.services.tasks.get_async(task_id)
@@ -538,7 +556,9 @@ class EndpointControlService:
         try:
             record = await AsyncEndpointDispatchStateRepository(self._async_database()).transition(
                 task,
-                _websocket_terminal_status(cancelled=cancelled, error=error),
+                EndpointDispatchStatus.Timeout
+                if timed_out
+                else _websocket_terminal_status(cancelled=cancelled, error=error),
                 error=error,
             )
             stub = await self._async_database().run_transaction(
@@ -550,6 +570,8 @@ class EndpointControlService:
         task_status = TaskStatus.Complete
         if cancelled:
             task_status = TaskStatus.Cancelled
+        elif timed_out:
+            task_status = TaskStatus.Timeout
         elif error:
             task_status = TaskStatus.Failed
         await self.services.tasks.transition_async(
@@ -565,6 +587,13 @@ class EndpointControlService:
         stub: StubRecord,
         request: EndpointForwardRequest,
     ) -> EndpointForwardResponse:
+        if request.path != endpoint_route_path(stub.config.route):
+            return error_response(404, "endpoint route not found")
+        methods = stub.config.methods or DEFAULT_ENDPOINT_METHODS
+        if request.method not in methods:
+            response = error_response(405, "endpoint method not allowed")
+            response.headers["Allow"] = [", ".join(methods)]
+            return response
         try:
             payload = serialize_http_task_payload(request.body, query_params=request.query_params)
         except ValueError as exc:
@@ -745,7 +774,7 @@ class EndpointControlService:
             )
         except Exception as exc:
             status_code = await self._record_dispatch_failure(repository, stub, task, exc)
-            response = error_response(status_code, str(exc))
+            response = error_response(status_code, _dispatch_error_message(exc))
             _add_task_headers(response.headers, task.id)
             return response
 
@@ -801,6 +830,7 @@ class EndpointControlService:
                 task,
                 wait,
                 max_inflight_per_container=max_inflight_per_container,
+                container_id=request.container_id,
             )
             started = time.monotonic()
             try:
@@ -809,15 +839,21 @@ class EndpointControlService:
                     request,
                     timeout_seconds=max(wait.remaining(), 0.01),
                 )
-            except EndpointBackendUnreachable:
+            except EndpointBackendUnreachable as exc:
+                if request.container_id is not None:
+                    raise EndpointDispatchUnavailable("endpoint container is unavailable") from exc
                 # Nothing was written, so the target was stale rather than the
                 # endpoint broken: a container can register a route and die before
                 # anyone dials it. Selecting again replays nothing, and the next
                 # pass decides whether capacity can still arrive.
                 await asyncio.sleep(wait.poll_delay())
                 continue
+            except AsyncBackendTimeoutError as exc:
+                raise EndpointDispatchTimedOut(str(exc)) from exc
             try:
                 response = await _read_forward_response(stream)
+            except AsyncBackendTimeoutError as exc:
+                raise EndpointDispatchTimedOut(str(exc)) from exc
             except Exception as exc:
                 # The request left this process, so this attempt is final whatever
                 # went wrong and whatever the application already did with it.
@@ -835,10 +871,13 @@ class EndpointControlService:
         wait: _CapacityWait,
         *,
         max_inflight_per_container: int,
+        container_id: str | None,
     ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
         outdated_containers: set[str] = set()
         while True:
             await self._raise_if_cancelled(task.id)
+            if container_id is not None:
+                await self._require_container_target(stub, container_id)
             if wait.warmup_attempted:
                 await self._raise_if_capacity_is_dead(dispatcher, stub)
             if wait.remaining() <= 0:
@@ -853,8 +892,12 @@ class EndpointControlService:
                 max_inflight_per_container=max_inflight_per_container,
                 excluded_container_ids=(await repository.closed_containers(stub.id))
                 | outdated_containers,
+                container_id=container_id,
             )
             if target is None:
+                if container_id is not None:
+                    await asyncio.sleep(wait.poll_delay())
+                    continue
                 if not wait.warmup_attempted:
                     await self._request_capacity(stub, task)
                     wait.warmup_attempted = True
@@ -866,7 +909,11 @@ class EndpointControlService:
             ):
                 outdated_containers.add(target.container_id)
                 continue
-            record = await repository.claim(task, container_id=target.container_id)
+            record = await repository.claim(
+                task,
+                container_id=target.container_id,
+                max_inflight_per_container=max_inflight_per_container,
+            )
             if record is None:
                 await asyncio.sleep(wait.poll_delay())
                 continue
@@ -875,6 +922,19 @@ class EndpointControlService:
             # carries the same attribution every other workload kind has.
             await self.services.tasks.assign_async(task, container_id=target.container_id)
             return target, record
+
+    async def _require_container_target(self, stub: StubRecord, container_id: str) -> None:
+        container = await self._async_database().run_transaction(
+            lambda session: ContainerRepository(session).get(
+                container_id, workspace_id=stub.workspace_id
+            )
+        )
+        if (
+            container is None
+            or container.stub_id != stub.id
+            or container.status not in {ContainerStatus.Pending, ContainerStatus.Running}
+        ):
+            raise EndpointDispatchUnavailable("endpoint container is unavailable")
 
     async def _forward_failed(
         self,
@@ -981,6 +1041,10 @@ class EndpointControlService:
                 self.start_endpoint_serve,
                 StartEndpointServeRequest(stub_id=stub.id),
             )
+        except EndpointReplicaLimitReachedError:
+            if stub.config.autoscaler.max_containers == 0:
+                raise
+            return
         except (PaymentRequiredError, CapacityLimitReachedError):
             # Not converted to 503. Every other reason capacity cannot be had is a
             # transient shortage the caller retries into; these are the platform
@@ -1001,12 +1065,14 @@ class EndpointControlService:
     ) -> int:
         """Settle both records for a dispatch that raised; returns the HTTP status."""
         dispatch_status, task_status, status_code = _dispatch_failure(exc)
-        record = await repository.transition(task, dispatch_status, error=str(exc))
+        message = _dispatch_error_message(exc)
+        LOGGER.error("Endpoint task %s failed: %s", task.id, type(exc).__name__)
+        record = await repository.transition(task, dispatch_status, error=message)
         await self._emit_dispatch_lifecycle(stub, record)
         await self.services.tasks.transition_async(
             task,
             task_status,
-            error=str(exc),
+            error=message,
             exit_code=1,
         )
         return status_code
@@ -1109,7 +1175,17 @@ class EndpointControlService:
         return self.async_dispatcher
 
 
+def _dispatch_error_message(exc: Exception) -> str:
+    if isinstance(exc, DomainError | EndpointDispatchError):
+        return str(exc)
+    return "Endpoint request failed. Check the service logs."
+
+
 def _dispatch_failure(exc: Exception) -> tuple[EndpointDispatchStatus, TaskStatus, int]:
+    if isinstance(exc, PaymentRequiredError):
+        return EndpointDispatchStatus.Failed, TaskStatus.Failed, 402
+    if isinstance(exc, CapacityLimitReachedError):
+        return EndpointDispatchStatus.Failed, TaskStatus.Failed, 409
     if isinstance(exc, EndpointDispatchCancelled):
         return (
             EndpointDispatchStatus.Cancelled,
@@ -1141,7 +1217,7 @@ def _headers_with_task_id(
     *,
     content_type: str | None = None,
 ) -> dict[str, list[str]]:
-    forwarded = {key: list(values) for key, values in headers.items()}
+    forwarded = {key: list(values) for key, values in headers.items() if key.lower() != "x-task-id"}
     forwarded["X-Task-Id"] = [task_id]
     if content_type is not None:
         forwarded["Content-Type"] = [content_type]
@@ -1164,11 +1240,19 @@ class AsyncEndpointDispatchStateRepository:
             lambda session: ContainerRolloutRepository(session).closed_for_stub(stub_id)
         )
 
-    async def claim(self, task: Task, *, container_id: str) -> EndpointDispatchRecord | None:
+    async def claim(
+        self, task: Task, *, container_id: str, max_inflight_per_container: int
+    ) -> EndpointDispatchRecord | None:
         def claim_in_session(session: DatabaseSession) -> EndpointDispatchRecord | None:
             if not ContainerRolloutRepository(session).accepting_work(
                 container_id, stub_id=task.stub_id or ""
             ):
+                return None
+            # accepting_work holds the container row lock until this transaction commits.
+            loads = EndpointDispatchRepository(session).inflight_counts(
+                task.stub_id or "", at=utc_now()
+            )
+            if loads.get(container_id, 0) >= max_inflight_per_container:
                 return None
             return _transition_dispatch_in_session(
                 session,
@@ -1323,7 +1407,7 @@ class EndpointDispatchCancelled(RuntimeError):
     pass
 
 
-class EndpointDispatchTimedOut(RuntimeError):
+class EndpointDispatchTimedOut(UpstreamTimeoutError):
     pass
 
 

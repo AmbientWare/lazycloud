@@ -23,6 +23,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService, TokenIssuer
@@ -60,7 +61,7 @@ from shared.http.compute_policy import (
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeSummaryResponse,
 )
-from shared.identity import TokenKind, WorkspaceRecord
+from shared.identity import TokenKind, WorkspaceRecord, WorkspaceStatus
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import owned_workspace, workspace_owner_user_id
@@ -269,33 +270,94 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert zero_summary.cost.hourly_micros == 0
     assert zero_inventory.data == []
 
+    with isolated_services.context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        workspace = workspaces.get(workspace_id)
+        assert workspace is not None
+        workspaces.upsert(workspace.model_copy(update={"status": WorkspaceStatus.Deleting}))
+        instances = ComputeProviderInstanceRepository(session)
+        draining = instances.list_for_pool(pool_id)[0]
+        instances.upsert(draining.model_copy(update={"status": "terminating"}))
 
-def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
+    draining_response = client.get("/api/v1/compute/instances")
+    assert draining_response.status_code == 200
+    draining_inventory = WorkspaceComputeInstanceListResponse.model_validate_json(
+        draining_response.content
+    )
+    assert [(item.id, item.status) for item in draining_inventory.data] == [
+        (draining.instance_id, "deleting")
+    ]
+    assert (
+        client.get("/api/v1/compute/summary", params={"workspace": workspace_id}).status_code == 404
+    )
+
+
+def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
     api_runtime: tuple[ApiServices, TestClient],
     api_workspace: WorkspaceRecord,
 ) -> None:
-    """A caller only sees the pools its own workspace's units feed.
-
-    A pool is derived from the units feeding it rather than stored, so this
-    listing is only as scoped as the query behind it: a read across workspaces
-    would hand one tenant the names of another tenant's capacity.
-    """
     services, client = api_runtime
     control = ControlPlaneService(services.context)
     caller = api_workspace
     other = owned_workspace(control, f"pool-listing-other-{caller.id}")
-    services.compute.create_unit(
-        UnitName("caller-unit"),
-        workspace=caller.id,
-        pool=MachinePool("caller-pool"),
-        provider="agent",
-    )
-    services.compute.create_unit(
-        UnitName("other-unit"),
-        workspace=other.id,
-        pool=MachinePool("other-pool"),
-        provider="agent",
-    )
+    caller_owner = workspace_owner_user_id(services.context, caller.id)
+    other_owner = workspace_owner_user_id(services.context, other.id)
+    services.compute.create_unit(UnitName("caller-local"), workspace=caller.id, provider="local")
+    services.compute.create_unit(UnitName("other-local"), workspace=other.id, provider="local")
+    for name, provenance, owner in (
+        ("caller-pool", other.id, caller_owner),
+        ("other-pool", caller.id, other_owner),
+    ):
+        unit = services.compute.create_unit(
+            UnitName(name), workspace=provenance, pool=MachinePool(name), provider="agent"
+        )
+        now = datetime.now(UTC)
+        machine_id = str(uuid4())
+        with services.context.database.session() as session:
+            MachineRepository(session).upsert(
+                Machine(
+                    id=machine_id,
+                    pool=MachinePool(name),
+                    provider="agent",
+                    status=ResourceStatus.Running,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                workspace_id=provenance,
+            )
+            ComputeMachineEnrollmentRepository(session).create(
+                ComputeMachineEnrollmentCreate(
+                    user_id=owner,
+                    workspace_id=provenance,
+                    capacity_owner_id=unit.id,
+                    pool=MachinePool(name),
+                    machine_id=machine_id,
+                    machine_fingerprint_hash="f" * 64,
+                    credential_hash=uuid4().hex + uuid4().hex,
+                    last_join_at=now,
+                )
+            )
+    platform_id = str(uuid4())
+    with services.context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=platform_id,
+                capacity_owner_id=platform_id,
+                capacity_owner_kind=CapacityOwnerKind.PooledProvider,
+                capacity_owner_source=CapacityOwnerSource.Provider,
+                workspace_id=other.id,
+                name=UnitName("platform-pool"),
+                pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
+                provider="aws",
+                provider_ref="aws:platform",
+                platform_fleet=True,
+                visibility=ComputeUnitVisibility.Internal,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                region="us-east-1",
+                offer_id="us-east-1:m7i.xlarge",
+                capability_key="aws:platform:amd64:runsc",
+            )
+        )
     token, _record = AuthService(services.context).create_token(
         "pool-listing-token",
         kind=TokenKind.Workspace,
@@ -309,7 +371,7 @@ def test_machine_pool_listing_is_scoped_to_the_caller_workspace(
 
     assert response.status_code == 200, response.text
     pools = MachinePoolListResponse.model_validate_json(response.content)
-    assert [item.name for item in pools.data] == ["caller-pool"]
+    assert [item.name for item in pools.data] == ["caller-local", "caller-pool", "lazycloud"]
 
 
 def test_deployment_placement_is_pinned_when_workspace_default_changes(

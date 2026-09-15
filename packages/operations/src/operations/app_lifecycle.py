@@ -9,7 +9,6 @@ from database.records.apps import StubRecord
 from database.repositories.apps import StubRepository
 from database.repositories.execution import TaskRepository
 from execution.containers.service import ContainerService
-from execution.endpoints.keys import endpoint_instance_lock_key, endpoint_serve_lock_key
 from execution.pods.planning import pod_instance_lock_key
 from execution.tasks import TaskService
 from shared.container_requests import ContainerShutdownTarget
@@ -76,8 +75,6 @@ class ProductionAppExecutionLifecycleEffects:
         for stub in stubs:
             if stub.kind in {StubKind.Endpoint, StubKind.Asgi}:
                 keys.update(self._stub_root_keys(f"endpoint:{workspace_id}:{stub.id}"))
-                keys.add(self.redis.key(endpoint_instance_lock_key(workspace_id, stub.id)))
-                keys.add(self.redis.key(endpoint_serve_lock_key(workspace_id, stub.id)))
                 keys.add(
                     self.redis.key(
                         "autoscaling",

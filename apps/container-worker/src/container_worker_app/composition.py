@@ -22,9 +22,7 @@ from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoint_restore import RuntimeCheckpointRestorer
 from worker.checkpoint_transfer import RemoteCheckpointPersister, RemoteCheckpointRestoreSource
 from worker.container_checkpoints import (
-    ContainerFilesystemArchiveCreator,
     RuntimeCheckpointCreator,
-    TarContainerImageArchiver,
 )
 from worker.container_logs import WorkerContainerLogCaptureService
 from worker.container_metrics import (
@@ -51,6 +49,7 @@ from worker.execution import (
     GatewayEndpointSettings,
     GatewayServiceSettings,
 )
+from worker.filesystem_images import ContainerFilesystemExporter
 from worker.gpu import (
     DynamicGpuAllocationManager,
     GpuAllocationManager,
@@ -261,7 +260,6 @@ def build_worker_process_services(
         persister=RemoteCheckpointPersister(
             repository,
             internal_http,
-            cache_namespace=config.checkpoint_cache_namespace,
             cache=cache_server,
         ),
         checkpoint_root=paths.checkpoint_root,
@@ -324,10 +322,6 @@ def build_worker_process_services(
                 worker_memory_mib=execution.capacity.memory_mib,
             ),
         ),
-    )
-    image_archiver = TarContainerImageArchiver(
-        target_root=Path(paths.image_cache_path),
-        extension=config.image_archive_extension,
     )
     image_archive_publisher = RepositoryWorkerImageArchivePublisher(repository, internal_http)
     request_mounts = mountpoint_backend or WorkerRequestMountManager(
@@ -395,11 +389,6 @@ def build_worker_process_services(
         sandbox_docker=sandbox_docker,
         logs=log_sink,
         checkpoints=checkpoints,
-        archives=ContainerFilesystemArchiveCreator(
-            runtime=runtime,
-            archiver=image_archiver,
-            publisher=image_archive_publisher,
-        ),
         network_policy=network_backend,
     )
     finalization_dependencies = WorkerProcessFinalizationDependencies(
@@ -418,6 +407,7 @@ def build_worker_process_services(
             index_cache_root=image_content_cache_root,
             content_cache=image_cache_connection,
             context_loader=RepositoryImageBuildContextLoader(repository, internal_http),
+            filesystem_exporter=ContainerFilesystemExporter(instance_store, runtime),
         ),
         image_archive_publisher=image_archive_publisher,
         image_build_credential_loader=image_build_credential_loader,

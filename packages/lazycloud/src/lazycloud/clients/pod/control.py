@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
 from shared.bytes_transport import encode_bytes
+from shared.checkpoints import CHECKPOINT_REQUEST_TIMEOUT_SECONDS
 from shared.http.pods import (
     CreatePodRequest,
     CreatePodResponse,
@@ -54,7 +55,13 @@ from lazycloud.control import workspace_path
 
 
 class PodControlChannel(Protocol):
-    def post(self, path: str, payload: dict[str, Any] | None = None) -> Any: ...
+    def post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Any: ...
 
     def get(self, path: str) -> Any: ...
 
@@ -322,6 +329,7 @@ class PodControlClient:
             self.channel.post(
                 self._scoped(f"/api/v1/pods/{container_id}/create-image-from-filesystem"),
                 request.model_dump(mode="json"),
+                timeout_seconds=3600,
             )
         )
 
@@ -334,6 +342,7 @@ class PodControlClient:
             self.channel.post(
                 self._scoped(f"/api/v1/pods/{container_id}/snapshot-memory"),
                 request.model_dump(mode="json"),
+                timeout_seconds=CHECKPOINT_REQUEST_TIMEOUT_SECONDS,
             )
         )
 

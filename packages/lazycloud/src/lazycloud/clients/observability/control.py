@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from urllib.parse import quote, urlencode
 
 from pydantic import JsonValue
+from shared.http.errors import HttpResponseDecodeError
 from shared.http.observability import (
+    SSE_HEARTBEAT_SECONDS,
     EventHistoryRequest,
     EventQueryResponse,
     LogQueryRequest,
@@ -16,6 +19,7 @@ from shared.http.observability import (
 )
 from shared.http.usage import UsageCostGroupKey, UsageCostListResponse, UsageRecordListResponse
 from shared.http_transport import HttpChannel
+from shared.realtime.contracts import CloudEventRecord
 from shared.transport_retry import TRANSIENT_TRANSPORT_ERRORS, TransientRetry
 from shared.usage import UsageMetric
 
@@ -26,7 +30,9 @@ from lazycloud.json_contracts import parse_json_value, validate_json_object
 class ObservabilityControlChannel(Protocol):
     def get(self, path: str) -> JsonValue: ...
 
-    def stream_get(self, path: str) -> Iterator[str]: ...
+    def stream_get(
+        self, path: str, *, timeout_seconds: float | None = None
+    ) -> Generator[str, None, None]: ...
 
 
 class ObservabilityClient(Protocol):
@@ -68,7 +74,7 @@ class ObservabilityClient(Protocol):
         wait: int | None = None,
         wait_seconds: float = 1.0,
         clamp: bool | None = None,
-    ) -> Iterator[LogRecord]: ...
+    ) -> Generator[LogRecord, None, None]: ...
 
     def stream_events(
         self,
@@ -77,7 +83,7 @@ class ObservabilityClient(Protocol):
         max_events: int = 0,
         cursor: str | None = None,
         clamp: bool | None = None,
-    ) -> JsonValue: ...
+    ) -> Generator[CloudEventRecord, None, None]: ...
 
 
 @dataclass
@@ -181,7 +187,7 @@ class ObservabilityControlClient:
         wait: int | None = None,
         wait_seconds: float = 1.0,
         clamp: bool | None = None,
-    ) -> Iterator[LogRecord]:
+    ) -> Generator[LogRecord, None, None]:
         selected = request or LogQueryRequest(workspace_id=self.workspace)
         if cursor is not None or seq_num is not None or wait is not None or clamp is not None:
             updates: dict[str, str | int | bool] = {}
@@ -245,16 +251,25 @@ class ObservabilityControlClient:
         max_events: int = 0,
         cursor: str | None = None,
         clamp: bool | None = None,
-    ) -> JsonValue:
+    ) -> Generator[CloudEventRecord, None, None]:
+        """Yield live CloudEvents; closing the generator releases its connection."""
         selected = request or EventHistoryRequest(workspace_id=self.workspace)
-        return self.channel.get(
-            _events_stream_path(
-                selected,
-                max_events=max_events,
-                cursor=cursor,
-                clamp=clamp,
+        with closing(
+            self.channel.stream_get(
+                _events_stream_path(
+                    selected,
+                    max_events=max_events,
+                    cursor=cursor if cursor is not None else selected.cursor,
+                    clamp=clamp,
+                ),
+                timeout_seconds=2 * SSE_HEARTBEAT_SECONDS,
             )
-        )
+        ) as lines:
+            for _, payload in _sse_json_events(lines):
+                try:
+                    yield CloudEventRecord.from_envelope(validate_json_object(payload))
+                except ValueError as exc:
+                    raise HttpResponseDecodeError("event stream returned an invalid event") from exc
 
 
 def _logs_path(request: LogQueryRequest) -> str:
@@ -313,10 +328,14 @@ def _logs_stream_params(
 def _events_path(request: EventHistoryRequest) -> str:
     return _with_query(
         "/api/v1/events/history",
-        request.model_dump(
-            mode="json",
-            exclude_none=True,
-        ),
+        {
+            **workspace_query(request.workspace_id),
+            **request.model_dump(
+                mode="json",
+                exclude={"workspace_id"},
+                exclude_none=True,
+            ),
+        },
     )
 
 
@@ -337,6 +356,7 @@ def _events_stream_path(
     elif request.resource_type == "stub" and request.resource_id:
         base = f"/api/v1/events/stubs/{quote(request.resource_id, safe='')}/stream"
     params: dict[str, JsonValue] = {
+        **workspace_query(request.workspace_id),
         "follow": True,
         "max_events": max_events,
     }

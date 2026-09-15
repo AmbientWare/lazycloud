@@ -15,10 +15,11 @@ from control.releases import DeploymentReleaseService
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
 from shared.billing_quotes import ContainerShape
+from shared.capacity import CapacityFailureCode
 from shared.container_requests import capacity_memory_mib
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
-from shared.errors import ConflictError
+from shared.errors import ConflictError, NotFoundError
 from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
 from shared.placement import PlacementRateClass, placement_rate_class
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
@@ -101,7 +102,12 @@ class SchedulerContainerStateRepository(Protocol):
     def dispatch_lock(self, container_id: str) -> AbstractContextManager[None]: ...
 
     def record_pending_progress(
-        self, container_id: str, reason: TaskPendingReason, *, now: datetime
+        self,
+        container_id: str,
+        reason: TaskPendingReason,
+        *,
+        now: datetime,
+        failure_code: CapacityFailureCode | None = None,
     ) -> bool: ...
 
     def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
@@ -940,6 +946,9 @@ class SchedulerContainerRequestService:
                     acquired += 1
             except CapacityReservationConflictError:
                 continue
+            except NotFoundError as exc:
+                self._fail_request(candidate, str(exc), current_time)
+                acquired += 1
         return acquired
 
     def _acquire_capacity_request(
@@ -953,6 +962,8 @@ class SchedulerContainerRequestService:
                 purchases=partial(self.placement.purchase_candidates, request),
                 now=current_time,
             )
+        except NotFoundError:
+            raise
         except CapacityReservationConflictError as exc:
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.ExistingPending,
@@ -984,16 +995,30 @@ class SchedulerContainerRequestService:
             else TaskPendingReason.CapacityLimit
             if result.status is CapacityAcquisitionStatus.AtLimit
             else TaskPendingReason.CapacityUnavailable
-            if result.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+            if result.status
+            in {
+                CapacityAcquisitionStatus.TemporarilyUnavailable,
+                CapacityAcquisitionStatus.Rejected,
+                CapacityAcquisitionStatus.Unsupported,
+            }
             else TaskPendingReason.Queued
         )
-        self._record_pending_progress(request.container_id, reason, current_time)
+        self._record_pending_progress(
+            request.container_id, reason, current_time, failure_code=result.failure_code
+        )
         return result
 
     def _record_pending_progress(
-        self, container_id: str, reason: TaskPendingReason, now: datetime
+        self,
+        container_id: str,
+        reason: TaskPendingReason,
+        now: datetime,
+        *,
+        failure_code: CapacityFailureCode | None = None,
     ) -> None:
-        if self.containers.record_pending_progress(container_id, reason, now=now):
+        if self.containers.record_pending_progress(
+            container_id, reason, now=now, failure_code=failure_code
+        ):
             self.assignments.publish_pending_progress(container_id)
 
     def _reserve_quota(self, request: SchedulerWorkerRequest, now: datetime) -> tuple[bool, str]:
@@ -1547,7 +1572,8 @@ def _scheduling_request(
         runtime_class=request.runtime_class,
         docker_enabled=request.docker_enabled,
         preemptible=request.preemptible,
-        provisionable=provisionable,
+        provisionable=provisionable and not request.required_worker_id,
+        required_worker_id=request.required_worker_id,
         retry_count=request.retry_count,
         created_at=request.timestamp,
     )

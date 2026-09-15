@@ -127,9 +127,7 @@ def _running_container(
 def _checkpoint(container_id: str, workspace: str) -> None:
     completed = subprocess.run(
         [
-            "uv",
-            "run",
-            "lazycloud",
+            str(Path(sys.executable).parent / "lazycloud"),
             "--json",
             "container",
             "checkpoint",

@@ -84,9 +84,10 @@ unless you pass `timeout_seconds`.
 a name to a container port, for example `{"http": 8080}`. `env`, `secrets`,
 and `volumes` inject configuration.
 
-`authorized=True` requires a bearer token on the pod's URL. `tcp=True`
-exposes raw TCP instead of HTTP. `block_network=True` cuts outbound access;
-`allow_list=[...]` permits named hosts instead.
+`authorized=True` requires a bearer token on the pod's HTTP URL.
+`block_network=True` cuts outbound access;
+`allow_list=[...]` restricts outbound access to IP networks in CIDR notation.
+Hostnames are not supported.
 
 `health_check_path` and `health_check_port` give the proxy an HTTP probe to
 call before routing to a container. Without one, the proxy only checks that
@@ -101,6 +102,46 @@ compute pool.
 
 `web.configure(...)` returns the pod with changed settings, and `web.shell()`
 opens a shell in a pod container.
+
+## TCP connections
+
+Set `tcp=True`, declare the server's port, and use `pod.deploy()`. TCP ingress
+requires a public Pod with `authorized=False` and a configured TLS ingress on
+the installation. Standalone `pod.create()` rejects TCP before starting a container.
+Your TCP server must authenticate its own clients if it handles private data.
+
+The deployment returns a `tls://hostname:port` address. Connect with TLS and send
+that hostname as SNI; the ingress forwards decrypted bytes to your server.
+
+```python
+import socket
+import ssl
+from urllib.parse import urlsplit
+
+from lazycloud import App, Image
+
+app = App("tcp_example")
+tcp_server = app.pod(
+    name="tcp-web",
+    image=Image(python_version="3.12"),
+    command=["python", "-m", "http.server", "8080"],
+    ports={"http": 8080},
+    tcp=True,
+    authorized=False,
+)
+
+deployment = tcp_server.deploy()
+address = urlsplit(deployment.invoke_url)
+with socket.create_connection((address.hostname, address.port)) as connection:
+    with ssl.create_default_context().wrap_socket(
+        connection, server_hostname=address.hostname
+    ) as stream:
+        stream.sendall(b"GET / HTTP/1.0\r\n\r\n")
+        print(stream.recv(1024))
+```
+
+This public example serves the container's directory over TLS. Stop it when
+finished with `lazycloud deployment stop tcp-web`.
 
 ## Containers
 

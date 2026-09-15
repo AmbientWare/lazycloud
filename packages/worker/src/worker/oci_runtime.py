@@ -31,10 +31,12 @@ import worker.oci_spec
 from worker.container_client.models import ContainerExecResponse
 from worker.container_execution import (
     ContainerExecutionContext,
+    ContainerImageLoadResult,
     ContainerMountSetupResult,
     ContainerNetworkSetupResult,
     ContainerRuntimeRunResult,
     ContainerRuntimeStartError,
+    ContainerStartupCancelled,
     container_resource_request,
 )
 from worker.container_rootfs import ContainerRootfsSetupResult
@@ -289,6 +291,7 @@ class OciRuntimeSpecBuilder:
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
+        image_result: ContainerImageLoadResult | None = None,
     ) -> worker.oci_spec.OciRuntimeContainerSpec:
         _ = bind_ports
         runtime_config = _select_runtime_config(context.runtime, self.runtime_configs)
@@ -298,6 +301,7 @@ class OciRuntimeSpecBuilder:
             context,
             bind_ports=bind_ports,
             network_result=network_result,
+            image_result=image_result,
         )
         original_command = context.entrypoint or self.command
         managed_command = original_command or []
@@ -355,6 +359,7 @@ class OciRuntimeSpecBuilder:
             sandbox_supervisor_token_path=supervisor_token_path,
             spec=spec,
             docker_enabled=context.docker_enabled or self.docker_enabled,
+            image_env=image_result.env if image_result is not None else [],
         )
 
     def _managed_runtime_catalog(
@@ -413,13 +418,10 @@ class OciRuntimeSpecBuilder:
         process = spec.get("process")
         if not isinstance(process, dict):
             raise RuntimeError("sandbox OCI process configuration is missing")
-        if context.request.stub_type == "sandbox":
-            process["args"] = [self.sandbox_supervisor_path]
-        else:
-            command = process.get("args")
-            if not isinstance(command, list) or not command:
-                raise RuntimeError("Docker-enabled workload command is missing")
-            process["args"] = [self.sandbox_supervisor_path, "--", *command]
+        command = process.get("args")
+        if not isinstance(command, list) or not command:
+            raise RuntimeError("supervised workload command is missing")
+        process["args"] = [self.sandbox_supervisor_path, "--", *command]
         token_path = (
             bundle_path / SANDBOX_SUPERVISOR_CONTROL_DIR_NAME / SANDBOX_SUPERVISOR_TOKEN_FILE_NAME
         )
@@ -493,6 +495,7 @@ class OciRuntimeSpecBuilder:
         *,
         bind_ports: list[int],
         network_result: ContainerNetworkSetupResult | None,
+        image_result: ContainerImageLoadResult | None,
     ) -> dict[str, str]:
         identity = network_result.identity if network_result is not None else None
         env_plan = build_container_environment(
@@ -508,6 +511,7 @@ class OciRuntimeSpecBuilder:
                 bind_ports=bind_ports or [CONTAINER_INNER_PORT],
                 storage_available=context.request.workspace_storage_available,
                 request_env=list(context.request.env),
+                image_env=image_result.env if image_result is not None else [],
             ),
             self.gateway_settings,
         )
@@ -871,6 +875,15 @@ class OciRuntimeCommandController:
                     cleanup_argv=plan.cleanup_argv,
                     callback_error=callback_error,
                 )
+                if isinstance(callback_error, ContainerStartupCancelled):
+                    stopped = command.wait()
+                    return ContainerRuntimeRunResult(
+                        exit_code=stopped.exit_code,
+                        stop_reason=self._consume_stop_reason(spec.container_id),
+                        started_pid=started_pid,
+                        output=stopped.output,
+                        cancelled=True,
+                    )
                 if completed_during_callback is not None:
                     raise ContainerRuntimeStartError(
                         spec.container_id,
@@ -1086,6 +1099,15 @@ class OciRuntimeCommandController:
                 cleanup_argv=plan.cleanup_argv,
                 callback_error=callback_error,
             )
+            if isinstance(callback_error, ContainerStartupCancelled):
+                stopped = command.wait()
+                return ContainerRuntimeRunResult(
+                    exit_code=stopped.exit_code,
+                    stop_reason=self._consume_stop_reason(container_id),
+                    started_pid=started_pid,
+                    output=stopped.output,
+                    cancelled=True,
+                )
             if completed_during_callback is not None:
                 raise ContainerRuntimeStartError(
                     container_id,
@@ -1099,9 +1121,6 @@ class OciRuntimeCommandController:
                 container_id,
                 cleanup_argv=plan.cleanup_argv,
             )
-        if not result.ok:
-            msg = result.output or f"runtime restore failed for {container_id}"
-            raise RuntimeError(msg)
         return ContainerRuntimeRunResult(
             exit_code=result.exit_code,
             stop_reason=self._consume_stop_reason(container_id),

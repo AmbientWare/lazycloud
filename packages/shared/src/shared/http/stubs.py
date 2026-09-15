@@ -5,7 +5,7 @@ from datetime import datetime
 from pydantic import ConfigDict, Field, JsonValue, field_serializer, field_validator
 
 from shared.contracts import ContractModel
-from shared.deployment_records import DEFAULT_WORKLOAD_PREEMPTIBLE
+from shared.deployment_records import DEFAULT_WORKLOAD_PREEMPTIBLE, CpuRequest, MemoryRequest
 from shared.deployments import StubKind
 from shared.http.base import HttpModel
 from shared.placement import AvailabilityZone, ProductRegion
@@ -39,8 +39,8 @@ class StubRuntimeConfigResponse(HttpModel):
     availability_zone: AvailabilityZone = ""
     preemptible: bool = False
 
-    cpu: int | float | None = None
-    memory: int | str | None = None
+    cpu: CpuRequest | None = None
+    memory: MemoryRequest | None = None
     disk: int | str | None = None
     gpu: list[str] = Field(default_factory=list)
     gpu_count: int | None = None

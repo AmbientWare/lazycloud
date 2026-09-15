@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import logging
-import tempfile
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -61,8 +59,6 @@ from scheduler.state import (
     SchedulerRepositoryError,
 )
 from scheduler.worker_inventory import WorkerCapacityRecovery
-from shared.app_identity import NAME
-from shared.cache_records import CacheEntry
 from shared.compute_enrollment import AgentCapacityState, ComputeMachineEnrollmentStatus
 from shared.compute_policy import ComputeUnitRecord
 from shared.container_requests import StopContainerReason
@@ -104,7 +100,7 @@ from shared.usage import (
     UsageBillingOwner,
     UsageRecord,
 )
-from storage.service import CacheStorage
+from storage_client.s3 import S3PresignedUpload
 from worker.event_bridge import worker_stream_event_from_bus_event
 from worker.events import (
     WORKER_EVENT_HEARTBEAT_ID,
@@ -333,20 +329,16 @@ class WorkerRepositoryObjectStorage(Protocol):
         expires_seconds: int = 3600,
     ) -> str: ...
 
-    def generate_presigned_put_url_for_workspace(
+    def object_is_complete(self, record: ObjectRecord) -> bool: ...
+
+    def generate_presigned_upload_for_workspace(
         self,
         *,
         workspace_id: str,
         bucket: str,
         key: str,
         expires_seconds: int,
-        content_length: int,
-        content_type: str,
-    ) -> str: ...
-
-
-class WorkerRepositoryCacheStorage(Protocol):
-    def put(self, namespace: str, key: str, source: str | Path) -> CacheEntry: ...
+    ) -> S3PresignedUpload: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,7 +407,6 @@ class WorkerRepositoryService:
     redis: RedisClient | None = None
     runtime_state: ContainerRuntimeStateRepository | None = None
     object_storage: WorkerRepositoryObjectStorage | None = None
-    cache_storage: WorkerRepositoryCacheStorage | None = None
     source_cache: WorkerSourceCacheService | None = None
 
     @property
@@ -1366,13 +1357,13 @@ class WorkerRepositoryService:
             worker_id=principal.worker_id,
             operation="container status update",
         )
-        self._sync_runtime_container_status(
+        status = self._sync_runtime_container_status(
             request.container_id, request.status, worker_id=principal.worker_id
         )
         try:
             plan = self.containers.update_container_status(
                 request.container_id,
-                request.status,
+                status,
                 ttl_seconds=request.ttl_seconds,
             )
         except SchedulerRepositoryError as exc:
@@ -2167,29 +2158,22 @@ class WorkerRepositoryService:
         checkpoint = self.services.checkpoints.get(request.checkpoint_id)
         if checkpoint is None or not checkpoint.workspace_id:
             raise NotFoundError(f"checkpoint not found: {request.checkpoint_id}")
-        with tempfile.NamedTemporaryFile(prefix=f"{NAME}-checkpoint-", suffix=".tar") as temp:
-            source = Path(temp.name)
-            object_storage.download_file_for_workspace(
-                workspace_id=checkpoint.workspace_id,
-                bucket=object_storage.default_bucket,
-                key=request.origin_key,
-                target=source,
-            )
-            actual_hash, actual_size = _sha256_file(source)
-            if request.cache_hash and actual_hash != request.cache_hash:
-                raise InvalidInputError("checkpoint archive hash does not match uploaded object")
-            if request.cache_size_bytes and actual_size != request.cache_size_bytes:
-                raise InvalidInputError("checkpoint archive size does not match uploaded object")
-            (self.cache_storage or CacheStorage(self.services.context)).put(
-                request.cache_namespace,
-                actual_hash or request.origin_key,
-                source,
-            )
+        record = object_storage.get_for_workspace(
+            workspace_id=checkpoint.workspace_id,
+            bucket=object_storage.default_bucket,
+            key=request.origin_key,
+        )
+        if record.metadata.get("checkpoint_id") != request.checkpoint_id:
+            raise InvalidInputError("checkpoint archive belongs to another checkpoint")
+        if record.sha256 != request.cache_hash or record.size != request.cache_size_bytes:
+            raise InvalidInputError("checkpoint archive metadata does not match its reservation")
+        if not object_storage.object_is_complete(record):
+            raise InvalidInputError("checkpoint archive upload is incomplete")
         return PersistCheckpointArchiveResponse(
             checkpoint_id=request.checkpoint_id,
             origin_key=request.origin_key,
-            cache_hash=actual_hash,
-            cache_size_bytes=actual_size,
+            cache_hash=record.sha256,
+            cache_size_bytes=record.size,
             locality=request.locality,
             accelerator=request.accelerator,
         )
@@ -2218,15 +2202,15 @@ class WorkerRepositoryService:
             metadata={"checkpoint_id": request.checkpoint_id},
             overwrite=True,
         )
+        upload = object_storage.generate_presigned_upload_for_workspace(
+            workspace_id=checkpoint.workspace_id,
+            bucket=object_storage.default_bucket,
+            key=request.origin_key,
+            expires_seconds=900,
+        )
         return PrepareCheckpointArchiveUploadResponse(
-            upload_url=object_storage.generate_presigned_put_url_for_workspace(
-                workspace_id=checkpoint.workspace_id,
-                bucket=object_storage.default_bucket,
-                key=request.origin_key,
-                expires_seconds=900,
-                content_length=request.cache_size_bytes,
-                content_type="application/x-tar",
-            ),
+            upload_url=upload.url,
+            upload_headers=upload.headers,
         )
 
     def publish_worker_event(
@@ -2765,20 +2749,25 @@ class WorkerRepositoryService:
         status: SchedulerContainerStatus,
         *,
         worker_id: str,
-    ) -> None:
+    ) -> SchedulerContainerStatus:
         if self.services is None:
-            return
+            return status
         container_status = _runtime_container_status_from_scheduler(status)
         if container_status is None:
-            return
+            return status
         now = utc_now()
         updated_task: Task | None = None
         with self.services.context.database.session() as session:
             container = ContainerRepository(session).lock_across_workspaces(container_id)
             if container is None:
-                return
+                return status
             if container.runtime_worker_id != worker_id:
                 raise AuthorizationDeniedError("container status assignment changed")
+            if (
+                container.status is ContainerStatus.Stopped
+                and container_status not in TERMINAL_CONTAINER_STATUSES
+            ):
+                return SchedulerContainerStatus.Stopping
             if (
                 container.status in TERMINAL_CONTAINER_STATUSES
                 and container_status not in TERMINAL_CONTAINER_STATUSES
@@ -2826,6 +2815,7 @@ class WorkerRepositoryService:
             self._publish_runtime_container_change(container)
         if updated_task is not None:
             self._publish_runtime_task_change(container, updated_task)
+        return status
 
     def _sync_runtime_container_exit(
         self,
@@ -2884,14 +2874,12 @@ class WorkerRepositoryService:
                 container.termination_reason = termination_reason
             if container.status in TERMINAL_CONTAINER_STATUSES:
                 container.exit_code = exit_code
-                container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
             else:
                 container.exit_code = exit_code
                 container.status = (
                     ContainerStatus.Exited if exit_code == 0 else ContainerStatus.Failed
                 )
-                container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
                 release_container_runtime_state(self.runtime_state, container)
                 if not preempted:
@@ -3140,6 +3128,13 @@ def _container_exit_error(
     """
     if failed_phase is None:
         return f"container {container_id} exited with code {exit_code}"
+    if failed_phase is ContainerExecutionPhase.HydrateCredentials:
+        return f"Could not load workload secrets: {failure_detail or 'credentials unavailable'}"
+    if failed_phase is ContainerExecutionPhase.SetupMounts:
+        return (
+            "Could not mount workload storage. Check the bucket, prefix and credentials. "
+            "See container logs for the mount error."
+        )
     if failure_detail:
         return f"container startup failed during {failed_phase.value}: {failure_detail}"
     return f"container startup failed during {failed_phase.value}"
@@ -3147,9 +3142,12 @@ def _container_exit_error(
 
 def _container_startup_failure_error(payload: ContainerLifecyclePayload) -> str:
     detail = payload.attrs.get("error") or payload.attrs.get("reason") or ""
-    if detail:
-        return f"container startup failed during {payload.id}: {detail}"
-    return f"container startup failed during {payload.id}"
+    return _container_exit_error(
+        payload.container_id,
+        1,
+        failed_phase=ContainerExecutionPhase(payload.id),
+        failure_detail=detail,
+    )
 
 
 def _runtime_container_status_from_scheduler(
@@ -3166,16 +3164,6 @@ def _runtime_container_status_from_scheduler(
             return ContainerStatus.Failed
         case SchedulerContainerStatus.Stopping:
             return None
-
-
-def _sha256_file(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as source:
-        while chunk := source.read(8 * 1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
 
 
 def _pending_event_key(redis: AsyncRedisClient, worker_id: str) -> str:

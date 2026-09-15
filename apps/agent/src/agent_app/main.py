@@ -189,19 +189,27 @@ def run_agent_daemon(
         resource_detector=resource_detector,
         provider_identity=provider_identity,
     )
-    previous = None
-    if current_thread() is main_thread():
-        previous = signal.signal(signal.SIGTERM, _terminate_daemon)
+    previous = (
+        {
+            signum: signal.signal(signum, _terminate_daemon)
+            for signum in (signal.SIGINT, signal.SIGTERM)
+        }
+        if current_thread() is main_thread()
+        else {}
+    )
     try:
         with AgentProcessLock.acquire(Path(options.state_dir)):
             return service.run()
     finally:
-        if previous is not None:
-            signal.signal(signal.SIGTERM, previous)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def _terminate_daemon(signum: int, frame: FrameType | None) -> None:
     del signum, frame
+    # A second terminal signal must not interrupt tunnel and worker cleanup.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     raise SystemExit(0)
 
 
@@ -651,7 +659,7 @@ def _load_agent_state_for_removal(state_dir: Path, *, service_path: Path) -> Age
             raise RuntimeError(msg)
         return None
     try:
-        state = AgentState.model_validate_json(state_path.read_text(encoding="utf-8"))
+        state = AgentState.from_saved_json(state_path.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as exc:
         msg = f"saved agent identity is unreadable or invalid: {state_path}"
         raise RuntimeError(msg) from exc
@@ -781,7 +789,7 @@ def _status_payload(
     state: AgentState | None = None
     if state_path.exists():
         try:
-            state = AgentState.model_validate_json(state_path.read_text(encoding="utf-8"))
+            state = AgentState.from_saved_json(state_path.read_text(encoding="utf-8"))
         except (OSError, ValidationError) as exc:
             msg = f"agent state is unreadable or invalid: {state_path}"
             raise RuntimeError(msg) from exc

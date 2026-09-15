@@ -4,37 +4,9 @@ import { useEffect, useState } from "react";
 import { MarketingCard, StatusDot } from "./MarketingPrimitives";
 import { useReducedMotion } from "./useReducedMotion";
 
-/* Typed-client visuals for the "Deployments you can import." section.
-
-   One clock drives all three phases so the section reads as a single story:
-   the app is defined, `lazycloud client get review_app` writes the package, and
-   only once the symbols exist does the consuming editor start typing against
-   them. The whole sequence is one module-scope timeline (TIMELINE below), so
-   causality is tunable in one place and phase 03 can never reference a symbol
-   phase 02 has not emitted yet.
-
-   GeneratedPackagePanel replays what the generator writes: the content-hash
-   version directory, the lock file, the `py.typed` markers, and the exported
-   symbols for an endpoint and a function.
-
-   TypedImportPanel replays the consuming side in an editor: a member popup on
-   the generated handle, the accepted completion, and the resolved return type.
-
-   Every symbol, signature, filename, and version format is taken from
-   `lazycloud.client_codegen`: the version directory is `v_` + the first 12 hex
-   characters of a sha256 over the manifest, each package writes `py.typed`,
-   the root writes `lazycloud-clients.lock.json`, endpoints export
-   `request`/`async_request` plus public aliases for their response models, and
-   functions export `remote`/`async_remote` returning the decoded result.
-
-   The section owns activation. Each entry mounts a clock at zero, each exit
-   discards it, and reduced-motion viewers receive the completed static frame.
-   No randomness, no dates. */
-
 const TICK_MS = 90;
 const CHARS_PER_TICK = 3;
 
-/* Ticks needed to type `count` characters at the shared typing speed. */
 function typingTicks(count: number): number {
   return Math.ceil(count / CHARS_PER_TICK);
 }
@@ -57,9 +29,7 @@ function segmentLength(segments: Seg[]): number {
   return segments.reduce((total, [, text]) => total + text.length, 0);
 }
 
-/* ---- the exact text the editor types, and nothing else ---- */
-
-const GENERATE_COMMAND = "lazycloud client get review_app";
+const GENERATE_COMMAND = "lazycloud app export review_app";
 
 const IMPORT_LINE: Seg[] = [
   ["kw", "from"],
@@ -68,7 +38,6 @@ const IMPORT_LINE: Seg[] = [
   ["id", " review_app"],
 ];
 
-/* Typing stops on the trailing dot: that dot is the completion trigger. */
 const CALL_TRIGGER_SEGMENTS: Seg[] = [
   ["id", "review"],
   ["punc", " = "],
@@ -78,7 +47,6 @@ const CALL_TRIGGER_SEGMENTS: Seg[] = [
   ["punc", "."],
 ];
 
-/* Inserted only once a member is accepted from the popup. */
 const CALL_ACCEPTED_SEGMENTS: Seg[] = [
   ["id", "request"],
   ["punc", "("],
@@ -90,8 +58,6 @@ const CALL_ACCEPTED_SEGMENTS: Seg[] = [
 
 const CALL_LINE: Seg[] = [...CALL_TRIGGER_SEGMENTS, ...CALL_ACCEPTED_SEGMENTS];
 
-/* Reading a field off the returned model: this is what proves the result is
-   typed, and it is the only place `Review`'s fields are invoked by name. */
 const ACCESSED_FIELD = "risks";
 
 const FIELD_LINE: Seg[] = [
@@ -102,14 +68,14 @@ const FIELD_LINE: Seg[] = [
   ["attr", ACCESSED_FIELD],
 ];
 
-const TASK_LINE: Seg[] = [
-  ["id", "task"],
+const CHECKS_LINE: Seg[] = [
+  ["id", "checks"],
   ["punc", " = "],
   ["id", "review_app"],
   ["punc", "."],
   ["id", "run_checks"],
   ["punc", "."],
-  ["id", "put"],
+  ["id", "remote"],
   ["punc", "("],
   ["attr", "commit_sha"],
   ["punc", "="],
@@ -118,32 +84,27 @@ const TASK_LINE: Seg[] = [
 ];
 
 const VALUE_LINE: Seg[] = [
-  ["id", "checks"],
+  ["id", "passed"],
   ["punc", " = "],
-  ["id", "task"],
+  ["id", "all"],
+  ["punc", "("],
+  ["id", "checks"],
   ["punc", "."],
-  ["id", "wait"],
-  ["punc", "()."],
-  ["id", "value"],
-  ["note", "  # dict[str, bool]"],
+  ["id", "values"],
+  ["punc", "())"],
 ];
 
-/* Every phase-03 boundary below is derived from these lengths, so a boundary
-   can never land before the text it depends on has actually been typed. */
 const CALL_TRIGGER_CHARS = segmentLength(CALL_TRIGGER_SEGMENTS);
 const CALL_ACCEPTED_CHARS = segmentLength(CALL_ACCEPTED_SEGMENTS);
 
-/* Beats between steps, in ticks, so pacing is tunable without arithmetic. */
 const BEAT = 3;
 const HANDOFF = 5;
-/* How long the completion popup stays open before a member is accepted. */
+
 const POPUP_READ_TICKS = 20;
 
-/* 01 Define holds the eye first, then hands off to the generator. */
 const DEFINE_START = 0;
 const GENERATE_START = DEFINE_START + 10;
 
-/* 02 Generate: command, content hash, written files, exported symbols. */
 const COMMAND_AT = GENERATE_START;
 const COMMAND_DONE_AT = COMMAND_AT + typingTicks(GENERATE_COMMAND.length);
 const VERSION_AT = COMMAND_DONE_AT + 4;
@@ -151,32 +112,26 @@ const FILES_AT = [VERSION_AT + 4, VERSION_AT + 7, VERSION_AT + 10];
 const SYMBOLS_AT = [FILES_AT[2] + 4, FILES_AT[2] + 9, FILES_AT[2] + 14, FILES_AT[2] + 19];
 const GENERATE_DONE_AT = SYMBOLS_AT[3] + 2;
 
-/* 03 Import: cannot start until every symbol above exists. Each boundary is
-   the previous one plus the text it must type, in strict editor order:
-   line types -> trigger typed -> popup opens -> member accepted -> call
-   finishes typing -> return type resolves -> a field is read off it -> task
-   call -> resolved value. */
 const IMPORT_START = GENERATE_DONE_AT + HANDOFF;
 const IMPORT_LINE_AT = IMPORT_START;
 const IMPORT_LINE_DONE_AT = IMPORT_LINE_AT + typingTicks(segmentLength(IMPORT_LINE));
 const CALL_LINE_AT = IMPORT_LINE_DONE_AT + 1;
-/* The popup opens on the frame the trigger dot lands, and not one tick before. */
+
 const POPUP_OPEN_AT = CALL_LINE_AT + typingTicks(CALL_TRIGGER_CHARS);
-/* Accepting the member closes the popup and starts inserting the call. */
+
 const POPUP_CLOSE_AT = POPUP_OPEN_AT + POPUP_READ_TICKS;
 const CALL_DONE_AT = POPUP_CLOSE_AT + typingTicks(CALL_ACCEPTED_CHARS);
-/* The return type only resolves once the call is fully typed. */
+
 const RETURN_TYPE_AT = CALL_DONE_AT + BEAT;
-/* Only then can a field be read off the result. */
+
 const FIELD_LINE_AT = RETURN_TYPE_AT + BEAT;
 const FIELD_LINE_DONE_AT = FIELD_LINE_AT + typingTicks(segmentLength(FIELD_LINE));
-const TASK_LINE_AT = FIELD_LINE_DONE_AT + BEAT;
-const TASK_LINE_DONE_AT = TASK_LINE_AT + typingTicks(segmentLength(TASK_LINE));
-/* Reading the resolved value is the last thing that happens. */
-const VALUE_LINE_AT = TASK_LINE_DONE_AT + BEAT;
+const CHECKS_LINE_AT = FIELD_LINE_DONE_AT + BEAT;
+const CHECKS_LINE_DONE_AT = CHECKS_LINE_AT + typingTicks(segmentLength(CHECKS_LINE));
+
+const VALUE_LINE_AT = CHECKS_LINE_DONE_AT + BEAT;
 const VALUE_LINE_DONE_AT = VALUE_LINE_AT + typingTicks(segmentLength(VALUE_LINE));
 
-/* One timeline for the whole section, in ticks. */
 const TIMELINE = {
   defineStart: DEFINE_START,
   generateStart: GENERATE_START,
@@ -196,11 +151,11 @@ const TIMELINE = {
   returnTypeAt: RETURN_TYPE_AT,
   fieldLineAt: FIELD_LINE_AT,
   fieldLineDoneAt: FIELD_LINE_DONE_AT,
-  taskLineAt: TASK_LINE_AT,
-  taskLineDoneAt: TASK_LINE_DONE_AT,
+  checksLineAt: CHECKS_LINE_AT,
+  checksLineDoneAt: CHECKS_LINE_DONE_AT,
   valueLineAt: VALUE_LINE_AT,
   valueLineDoneAt: VALUE_LINE_DONE_AT,
-  /* Full sequence, then a ~2s beat before it replays. */
+
   total: VALUE_LINE_DONE_AT + 2,
   hold: 22,
 } as const;
@@ -213,7 +168,6 @@ export function typedClientPhase(clock: number): TypedClientPhase {
   return "define";
 }
 
-/* One activation-owned interval for all three phases. */
 export function useTypedClientClock(active: boolean): number {
   const reducedMotion = useReducedMotion();
   const [documentVisible, setDocumentVisible] = useState(true);
@@ -263,14 +217,12 @@ function Caret() {
   return <span className="animate-pulse text-brand">▍</span>;
 }
 
-/* Panels share one sheet; the active phase picks up the brand border. */
 function panelState(active: boolean): string {
   return `marketing-typed-visual flex min-w-0 flex-col font-mono text-card-foreground transition-colors duration-500 motion-reduce:transition-none ${
     active ? "border-brand/45" : "border-input"
   }`;
 }
 
-/* Placeholder bar so a card keeps its shape while its content is pending. */
 function SkeletonBar({ width }: { width: string }) {
   return (
     <span
@@ -284,15 +236,12 @@ function typedFrom(clock: number, at: number): number {
   return Math.max(0, Math.floor((clock - at) * CHARS_PER_TICK));
 }
 
-/* ------------------------------------------------------------------ 02 */
-
 type GeneratedSymbol = {
   symbol: string;
   kind: string;
   signature: Seg[];
 };
 
-/* Exactly what the generator emits for the two deployed resources. */
 const GENERATED_SYMBOLS: GeneratedSymbol[] = [
   {
     symbol: "review_patch.Review",
@@ -416,7 +365,7 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
 
         <div className="flex min-w-0 flex-col">
           <div className="mb-1.5 flex items-center justify-between text-[9px] tracking-[0.12em] text-muted-foreground">
-            <span>__all__</span>
+            <span>Methods and models</span>
             <span className="uppercase">{done ? "4 symbols" : "generating"}</span>
           </div>
           <div className="flex min-w-0 flex-col gap-1">
@@ -457,8 +406,6 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
   );
 }
 
-/* ------------------------------------------------------------------ 03 */
-
 type EditorLine = {
   at: number;
   segments: Seg[];
@@ -475,7 +422,7 @@ const EDITOR_LINES: EditorLine[] = [
     holdUntil: TIMELINE.popupCloseAt,
   },
   { at: TIMELINE.fieldLineAt, segments: FIELD_LINE },
-  { at: TIMELINE.taskLineAt, segments: TASK_LINE },
+  { at: TIMELINE.checksLineAt, segments: CHECKS_LINE },
   { at: TIMELINE.valueLineAt, segments: VALUE_LINE },
 ];
 
@@ -485,10 +432,6 @@ type Member = {
   detail: Seg[];
 };
 
-/* Only what you can actually CALL on the generated endpoint handle. The
-   handle also re-exports the `Review` model as a public alias, but that is a
-   type, not something you invoke, so it belongs on the result below and not
-   in a completion list of callables. */
 const MEMBERS: Member[] = [
   {
     name: "request",
@@ -514,7 +457,6 @@ const MEMBERS: Member[] = [
   },
 ];
 
-/* The fields on the returned model, shown as the RESULT of the call. */
 const REVIEW_FIELDS: { name: string; annotation: Seg[] }[] = [
   { name: "summary", annotation: [["type", "str"]] },
   { name: "risks", annotation: [["type", "list[str]"]] },
@@ -531,10 +473,6 @@ function typedChars(clock: number, line: EditorLine): number {
 }
 
 export function TypedImportPanel({ clock, active }: { clock: number; active: boolean }) {
-  /* Strictly ordered against the shared clock: the popup of callable members
-     only exists between the frame the trigger dot is typed and the frame a
-     member is accepted; the returned type only exists once the accepted call
-     is fully typed; the read field only highlights once it has been typed. */
   const popupOpen = clock >= TIMELINE.popupOpenAt && clock < TIMELINE.popupCloseAt;
   const returnReady = clock >= TIMELINE.returnTypeAt && clock >= TIMELINE.callDoneAt;
   const fieldRead = clock >= TIMELINE.fieldLineDoneAt;
@@ -575,7 +513,6 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
           })}
         </div>
 
-        {/* Sized to the popup, the tallest frame, so nothing shifts or clips. */}
         <div className="flex min-h-[80px] min-w-0 flex-col justify-start">
           {popupOpen ? (
             <div
@@ -610,10 +547,6 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
               ))}
             </div>
           ) : returnReady ? (
-            /* The result of the call: what you get back, and that it is typed.
-               Rendered only once the call is fully typed -- and keyed apart
-               from the popup so React mounts a new node instead of reusing
-               the popup's, which would leak the popup's visible state here. */
             <div
               className="typed-editor-inspector ml-6 min-w-0 overflow-hidden rounded-md border border-border bg-background/50"
               key="result"

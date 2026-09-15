@@ -48,6 +48,7 @@ from lazycloud.abstractions.metadata import (
 )
 from lazycloud.abstractions.pod import Pod, PodOptions
 from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
+from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.json_contracts import resource_payload
 
@@ -916,7 +917,13 @@ class App:
                 "external_url": external_url,
                 "source_root": source_root,
             }
-            results.append(_invoke_method(method, method_kwargs))
+            try:
+                results.append(_invoke_method(method, method_kwargs))
+            except RuntimeError as exc:
+                spec = item.spec()
+                raise AppOperationError(
+                    f"failed to deploy {spec.kind.value}:{spec.name}: {exc}"
+                ) from exc
         return AppDeployResult(app=self.slug, resources=tuple(results))
 
     def serve(
@@ -924,8 +931,9 @@ class App:
         *,
         resource: str | None = None,
         timeout: int = 0,
+        options: ServeOptions | None = None,
     ) -> object:
-        """Serve one endpoint or ASGI app resource for preview.
+        """Serve one function, endpoint, or ASGI app resource for preview.
 
         Use `resource` when an app contains more than one serveable resource.
         Select by name or by `"kind:name"`, such as `"endpoint:summarize"`.
@@ -935,7 +943,7 @@ class App:
             timeout: Serve timeout in seconds. `0` keeps serving until stopped.
         """
         selected = self._select_one(resource=resource, method="serve", serveable=True)
-        return _invoke_method(selected.serve, {"timeout": timeout})
+        return _invoke_method(selected.serve, {"timeout": timeout, "options": options})
 
     def _register(self, resource: ResourceT) -> ResourceT:
         if not hasattr(resource, "spec"):
@@ -1180,6 +1188,7 @@ def _raise_unsupported_overrides(spec: DeploymentSpec, unsupported: list[str]) -
 
 def _is_serveable(resource: AppResource) -> bool:
     return resource.spec().kind in {
+        DeploymentKind.Function,
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
     }

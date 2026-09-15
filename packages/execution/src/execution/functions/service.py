@@ -5,10 +5,12 @@ import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from control.apps import DatabaseAppExecutionAdmission
 from control.service import ControlPlaneService, StubKind, StubRecord
+from database.repositories.apps import DeploymentRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import (
     LogPage,
@@ -29,14 +31,13 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.env import parse_environment
+from shared.env import HOT_RELOAD_DIR_ENV, HOT_RELOAD_ENV, parse_environment
 from shared.errors import (
     CapacityLimitReachedError,
     ConflictError,
     DomainError,
     InvalidInputError,
     NotFoundError,
-    PaymentRequiredError,
 )
 from shared.events import EventLevel
 from shared.function_payloads import (
@@ -59,6 +60,8 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionRetireRequest,
     FunctionRetireResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -108,12 +111,7 @@ class FunctionControlService:
         try:
             stub = self.control_plane.get_stub(request.stub_id)
             if stub.kind is not StubKind.Function:
-                return FunctionInvokeResponse.from_result(
-                    task_id="",
-                    output=f"stub is not a function: {stub.id}",
-                    done=True,
-                    exit_code=1,
-                )
+                raise InvalidInputError(f"stub is not a function: {stub.id}")
             config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
             # Before the task row, because everything after this commits: a
             # refusal taken later leaves a task queued forever for an account
@@ -140,20 +138,36 @@ class FunctionControlService:
             )
             parent_task_id, root_task_id = self._task_graph_context(request, stub.workspace_id)
             task_args, task_kwargs = _persisted_invocation_arguments(invoke_plan.invocation)
-            task = self.services.tasks.create(
-                f"function-{stub.name}",
-                workspace_id=stub.workspace_id,
-                app_id=stub.app_id,
-                stub_id=stub.id,
-                deployment_id=stub.deployment_id,
-                parent_task_id=parent_task_id or None,
-                root_task_id=root_task_id or None,
-                handler=stub.handler,
-                args=task_args,
-                kwargs=task_kwargs,
-                invocation=invoke_plan.invocation,
-                retry_policy=retry_policy,
-            )
+            deployment_id = stub.deployment_id
+            with self.services.context.database.session() as session:
+                if stub.app_id:
+                    DatabaseAppExecutionAdmission().assert_active(
+                        session, app_id=stub.app_id, workspace_id=stub.workspace_id
+                    )
+                if deployment_id:
+                    deployment = DeploymentRepository(session).get_for_update(
+                        deployment_id, workspace_id=stub.workspace_id
+                    )
+                    if deployment is None or deployment.stub_id != stub.id:
+                        raise NotFoundError(f"deployment not found for function: {deployment_id}")
+                    if not deployment.active:
+                        raise ConflictError(f"deployment is not active: {deployment_id}")
+                task = self.services.tasks.create_in_transaction(
+                    session,
+                    f"function-{stub.name}",
+                    workspace_id=stub.workspace_id,
+                    app_id=stub.app_id,
+                    stub_id=stub.id,
+                    deployment_id=deployment_id,
+                    parent_task_id=parent_task_id or None,
+                    root_task_id=root_task_id or None,
+                    handler=stub.handler,
+                    args=task_args,
+                    kwargs=task_kwargs,
+                    invocation=invoke_plan.invocation,
+                    retry_policy=retry_policy,
+                )
+            self.services.tasks.publish_created(task)
             if not task.root_task_id:
                 task.root_task_id = task.id
                 task = self.services.tasks.save(task)
@@ -168,7 +182,7 @@ class FunctionControlService:
                 task_id=task.id,
                 kind=stub.kind.value,
                 app_id=stub.app_id or "",
-                deployment_id=stub.deployment_id or "",
+                deployment_id=task.deployment_id or "",
             )
             dependencies = self._create_task_dependencies(task, request)
             scheduled = self._try_schedule_waiting_task(task.id)
@@ -195,13 +209,7 @@ class FunctionControlService:
                 workspace_id=stub.workspace_id,
             )
             return FunctionInvokeResponse.from_result(task_id=task.id)
-        except (PaymentRequiredError, CapacityLimitReachedError):
-            # Told to the caller as a refusal rather than folded into a result.
-            # Everything else here is something that went wrong while running
-            # their code, which a failed task describes; these are the platform
-            # declining to run it at all, and there is no task to describe them.
-            # Reported as a failed invocation, an account at its container limit
-            # reads as a bug in the code it never ran.
+        except DomainError:
             raise
         except Exception as exc:
             return FunctionInvokeResponse.from_result(
@@ -376,6 +384,25 @@ class FunctionControlService:
         with self.services.context.database.session() as session:
             return TaskRepository(session).containers_with_inflight_work(container_ids)
 
+    def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse:
+        stub = self.control_plane.get_stub(request.stub_id)
+        if stub.kind is not StubKind.Function:
+            raise InvalidInputError("serve requires a function")
+        if stub.deployment_id is not None:
+            raise InvalidInputError("serve requires a prepared preview, not a deployed function")
+        result = self._launch_function_container(
+            stub,
+            task=None,
+            eligible_at=None,
+            authority=FunctionContainerStartAuthority.Preview,
+            preview_timeout=request.timeout,
+        )
+        if result is None:
+            raise CapacityLimitReachedError("this function already has a live container")
+        if not result.accepted:
+            raise CapacityLimitReachedError(result.reason or "function preview could not start")
+        return FunctionServeResponse(container_id=result.container_id)
+
     def start_function_container(self, stub_id: str) -> bool:
         """Start one more container for this stub, because the autoscaler said so.
 
@@ -446,6 +473,7 @@ class FunctionControlService:
         task: Task | None,
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
+        preview_timeout: int | None = None,
     ) -> SchedulerSubmissionResult | None:
         """Plan, reserve and submit one container for this stub.
 
@@ -477,7 +505,7 @@ class FunctionControlService:
                 stub_id=stub.id,
                 handler=stub.handler or "",
                 container_id=container_id,
-                keep_warm_seconds=config.runtime.keep_warm,
+                keep_warm_seconds=-1 if preview_timeout is not None else config.runtime.keep_warm,
                 concurrency=config.runtime.concurrency,
                 in_process=config.runtime.in_process,
                 python_executable=config.image.python_executable,
@@ -491,7 +519,17 @@ class FunctionControlService:
                 gpu=list(config.runtime.gpu),
                 image_id=config.effective_image_id,
                 checkpoint_enabled=config.runtime.checkpoint_enabled,
-                env=config.env_list,
+                env=[
+                    *config.env_list,
+                    *(
+                        [
+                            f"{HOT_RELOAD_ENV}=true",
+                            f"{HOT_RELOAD_DIR_ENV}={WORKER_USER_CODE_VOLUME}",
+                        ]
+                        if preview_timeout is not None
+                        else []
+                    ),
+                ],
                 secret_env=[],
                 lifecycle_hooks=config.lifecycle_hooks,
             )
@@ -509,6 +547,7 @@ class FunctionControlService:
             preemptible=config.runtime.preemptible,
             authority=authority,
             max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
+            preview_timeout=preview_timeout,
         )
         if container is None:
             return None
@@ -680,6 +719,7 @@ class FunctionControlService:
         result: JsonValue = None,
         error: str | None = None,
         exit_code: int | None = None,
+        retry_allowed: bool = True,
     ) -> Task:
         outcome = self.services.tasks.finish_with_retry(
             task_id,
@@ -688,6 +728,7 @@ class FunctionControlService:
             result=result,
             error=error,
             exit_code=exit_code,
+            retry_allowed=retry_allowed,
         )
         # A retry due immediately is not scheduled from here. Making it runnable
         # means releasing its claim, and that is `schedule_due_retries`, which
@@ -719,17 +760,14 @@ class FunctionControlService:
             exit_code=1,
         )
         if decision.should_stop_container and current.container_id:
-            # Stopping the container is the only way to reach the handler, and a
-            # pooled one is also serving calls nobody cancelled. `User` would
-            # settle their claims the way it settles this one — cancelled, which
-            # is terminal and carries no retry — so the reason says the platform
-            # stopped it. Their claims are released instead and run again
-            # elsewhere; the cancelled task is already terminal, and a released
-            # claim never resurrects one.
-            self.services.containers.stop(
-                current.container_id,
-                reason=StopContainerReason.Scheduler,
-            )
+            if not current.stub_id:
+                raise InvalidInputError("running function task has no stub")
+            runtime = self.control_plane.get_stub(current.stub_id).config.runtime
+            if runtime.in_process or runtime.concurrency <= 1:
+                self.services.containers.stop(
+                    current.container_id,
+                    reason=StopContainerReason.Scheduler,
+                )
         self.release_dependents(updated)
         return updated
 
@@ -772,6 +810,39 @@ class FunctionControlService:
                 scheduled.append(self.services.tasks.get(task.id))
         return scheduled
 
+    def expire_timed_out_tasks(self, *, now: datetime, limit: int = 100) -> None:
+        with self.services.context.database.session() as session:
+            attempts = TaskAttemptRepository(session).expired_function_attempts(
+                now=now, limit=limit
+            )
+        for attempt in attempts:
+            try:
+                outcome = self.services.tasks.finish_with_retry(
+                    attempt.task_id,
+                    TaskStatus.Timeout,
+                    container_id=attempt.container_id,
+                    attempt_number=attempt.attempt_number,
+                    error="function execution timed out",
+                    exit_code=124,
+                )
+                if outcome.state_changed and is_terminal_task_status(outcome.task.status):
+                    self.release_dependents(outcome.task)
+            except DomainError:
+                LOGGER.exception("expiring function task %s failed", attempt.task_id)
+        # Attempts retain the container after a retry releases its claim. Read
+        # them again so a scheduler restart cannot lose the stop obligation.
+        with self.services.context.database.session() as session:
+            containers = TaskAttemptRepository(session).containers_with_timed_out_attempts(
+                limit=limit
+            )
+        for container_id in containers:
+            try:
+                self.services.containers.stop(
+                    container_id, reason=StopContainerReason.Scheduler, force=True
+                )
+            except DomainError:
+                LOGGER.exception("stopping timed-out function container %s failed", container_id)
+
     def fail_unclaimed_tasks(
         self,
         stub_id: str,
@@ -803,6 +874,7 @@ class FunctionControlService:
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
         max_containers: int,
+        preview_timeout: int | None = None,
     ) -> ContainerRecord | None:
         """Reserve a container for this stub, prompted by `task` but not bound to it.
 
@@ -859,6 +931,12 @@ class FunctionControlService:
                         gpu_count=container_plan.gpu_count,
                         region=region,
                         availability_zone=availability_zone,
+                        timeout_seconds=preview_timeout or 0,
+                        expires_at=(
+                            datetime.now(UTC) + timedelta(seconds=preview_timeout)
+                            if preview_timeout
+                            else None
+                        ),
                     ),
                 )
             except ConflictError:

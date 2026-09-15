@@ -573,7 +573,7 @@ class AsyncRedisEventStreamRepository:
         clamp: bool | None = None,
         max_events: int = 0,
         heartbeat_seconds: float,
-    ) -> AsyncIterator[RedisStreamRecord | None]:
+    ) -> AsyncGenerator[RedisStreamRecord | None, None]:
         plan = self.planner.plan_event_history_read(query)
         if last_event_id is not None:
             await self._raise_if_cursor_expired(
@@ -652,7 +652,7 @@ class AsyncRedisEventStreamRepository:
         max_events: int,
         heartbeat_seconds: float,
         skip: Callable[[RedisStreamRecord], bool],
-    ) -> AsyncIterator[RedisStreamRecord | None]:
+    ) -> AsyncGenerator[RedisStreamRecord | None, None]:
         stream_names = tuple(stream for stream in streams if stream)
         if not stream_names:
             return _no_records()
@@ -728,6 +728,7 @@ async def _followed_records(
     initial: tuple[RedisStreamRecord, ...] = (),
 ) -> AsyncGenerator[RedisStreamRecord | None, None]:
     emitted = 0
+    next_heartbeat = time.monotonic() + heartbeat_seconds
     try:
         for record in initial:
             yield record
@@ -737,12 +738,17 @@ async def _followed_records(
         async for item in subscription.items(heartbeat_seconds=heartbeat_seconds):
             if item is None:
                 yield None
+                next_heartbeat = time.monotonic() + heartbeat_seconds
                 continue
             stream, entry = item
             record = _record_from_entry(stream, entry)
             if record is None or skip(record):
+                if time.monotonic() >= next_heartbeat:
+                    yield None
+                    next_heartbeat = time.monotonic() + heartbeat_seconds
                 continue
             yield record
+            next_heartbeat = time.monotonic() + heartbeat_seconds
             emitted += 1
             if max_events > 0 and emitted >= max_events:
                 return

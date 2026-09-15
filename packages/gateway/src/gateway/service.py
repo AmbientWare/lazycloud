@@ -98,7 +98,7 @@ from identity.signatures import sign_payload
 from observability.events import EventService
 from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
-from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
+from observability.stream_state import AsyncRedisEventStreamRepository
 from observability.usage import UsageService
 from operations.management import ManagementService
 from pydantic import JsonValue, SecretStr
@@ -144,7 +144,7 @@ from shared.errors import (
 from shared.events import EventLevel
 from shared.http.agent_identity import AgentTunnelIdentity
 from shared.http.client_manifests import (
-    CLIENT_MANIFEST_DEPLOYMENT_KINDS,
+    INVOKABLE_DEPLOYMENT_KINDS,
     ClientManifestRequest,
     ClientManifestResponse,
 )
@@ -194,7 +194,6 @@ from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
 from shared.logs import LogEntry
 from shared.objects import ObjectRecord
-from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import LogStreamQuery
 from shared.releases import ActiveRelease
 from shared.routing import AgentBackendRoute
@@ -381,7 +380,6 @@ class GatewayControlService:
     object_storage: ObjectStorage
     gateway_endpoint: GatewayEndpointConfig
     agent_image: AgentImageConfig
-    event_streams: RedisEventStreamRepository
     container_stopper: GatewayContainerStopper
     container_client_factory: SchedulerContainerClientFactory
     connections: RedisAgentConnectionDirectory
@@ -640,7 +638,7 @@ class GatewayControlService:
         return AttachToContainerResponse(
             output=output,
             done=done,
-            exit_code=container.exit_code or 0,
+            exit_code=container.exit_code,
         )
 
     @staticmethod
@@ -732,7 +730,9 @@ class GatewayControlService:
             pending = self._task_for_workspace(request.task_id, workspace_id)
             result = task_result_value(request)
             error = (
-                None if request.task_status is TaskStatus.Complete else request.task_status.value
+                None
+                if request.task_status is TaskStatus.Complete
+                else request.error or request.task_status.value
             )
             stub = stub_for_task(self.control_plane, pending)
             if stub is not None and stub.kind is StubKind.Function:
@@ -745,6 +745,7 @@ class GatewayControlService:
                     result=result,
                     error=error,
                     exit_code=0 if request.task_status is TaskStatus.Complete else 1,
+                    retry_allowed=request.retryable,
                 )
             else:
                 task = self.services.tasks.finish(
@@ -822,7 +823,6 @@ class GatewayControlService:
             data=data,
             workspace_id=workspace_id or None,
         )
-        self.event_streams.append_event(EventRecordType.TaskUpdated, data)
 
     def get_or_create_stub(self, request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
         try:
@@ -867,23 +867,7 @@ class GatewayControlService:
             if resource is None:
                 msg = f"deployment resource not found after deploy: {deployment.id}"
                 raise ValueError(msg)
-            if resource.stub.kind is StubKind.Pod:
-                pod_ports = list(resource.stub.config.ports.values()) or list(
-                    resource.stub.config.runtime.ports.values()
-                )
-                invoke_url = (
-                    self.control_plane.stub_url(
-                        resource.stub.id,
-                        workspace=workspace,
-                        external_url=request.external_url,
-                        deployment_id=deployment.id,
-                        port=pod_ports[0],
-                    ).url
-                    if pod_ports
-                    else ""
-                )
-            else:
-                invoke_url = resource.invoke_url(request.external_url)
+            invoke_url = resource.invoke_url(request.external_url)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return DeployStubResponse(
@@ -901,6 +885,7 @@ class GatewayControlService:
                     request.deployment_id,
                     workspace=request.workspace,
                     external_url=request.external_url,
+                    port=request.port,
                 ).url
             else:
                 url = self.control_plane.stub_url(
@@ -909,6 +894,7 @@ class GatewayControlService:
                     deployment_id=request.deployment_id or None,
                     external_url=request.external_url,
                     port=request.port,
+                    container_id=request.container_id,
                 ).url
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
@@ -954,7 +940,7 @@ class GatewayControlService:
             deployed_resources = self.services.deployment_resources.list(
                 workspace=request.workspace,
                 app=app.name,
-                kinds=CLIENT_MANIFEST_DEPLOYMENT_KINDS,
+                kinds=INVOKABLE_DEPLOYMENT_KINDS,
                 active=True,
                 latest_per_resource=True,
             )
@@ -1519,6 +1505,20 @@ class GatewayControlService:
             enrollment.workspace_id,
             enrollment.machine_id,
         )
+        with self.services.context.database.session() as session:
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
+                enrollment.capacity_owner_id
+            )
+        if unit is None:
+            return
+        try:
+            deleted = self.services.compute.delete_empty_joined_unit(unit)
+        except CapacityReservationLockContendedError:
+            # Periodic reconciliation retries cleanup after the current mutation finishes.
+            return
+        if deleted:
+            self.compute_states.delete_unit_state(unit.workspace_id, unit.capacity_owner_id)
+            self.scheduler_pool_state_repository.delete_unit_state(unit.capacity_owner_id)
 
     def _delete_pool_enrollments(
         self,

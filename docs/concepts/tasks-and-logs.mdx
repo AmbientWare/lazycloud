@@ -64,12 +64,12 @@ This uses `reports.py` from the [functions guide](/concepts/functions).
 `handle.get(timeout_seconds=120)` returns the value or raises on failure.
 `handle.logs()` reads stored logs.
 
-For a task you only know by id, use `Client`:
+For a task you only know by id, reconnect with `Task.from_id`:
 
 ```python
-from lazycloud import Client
+from lazycloud import Task
 
-task = Client().task_handle("<task-id>")
+task = Task.from_id("<task-id>")
 outcome = task.wait(timeout_seconds=120)
 print(outcome.status, outcome.value)
 ```

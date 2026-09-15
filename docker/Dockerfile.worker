@@ -274,7 +274,7 @@ RUN PYTHONPATH="/app/packages/shared/src" \
 FROM debian:bookworm-slim AS container-worker-tools
 ARG TARGETARCH
 ARG GEESEFS_VERSION=0.43.8
-ARG MOUNT_S3_VERSION=1.8.0
+ARG MOUNT_S3_VERSION=1.22.0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl gpg \
@@ -291,12 +291,12 @@ RUN apt-get update \
         amd64) \
             GEESEFS_SHA256="81dd5a9035669ec4bdecf1f54bf6368ecad66258700e2f99e722770c71e5e7f4"; \
             MOUNT_S3_ARCH="x86_64"; \
-            MOUNT_S3_SHA256="1d39dcff33839ad3ae65299176cb127da1a1e785ee01e303a025eec2457c2700" \
+            MOUNT_S3_SHA256="97040cc8620fd002afd16205ce7cc13837d243322ee32db63af03891cf197c7c" \
             ;; \
         arm64) \
             GEESEFS_SHA256="b39810e6fa10149794c295bc6816ab14f532a44f6e179911bf041dcf158e41cb"; \
             MOUNT_S3_ARCH="arm64"; \
-            MOUNT_S3_SHA256="807f3a244d6f6c60086ea03b2e4d788fd1cebaf26baa332c7514a029ce00bdec" \
+            MOUNT_S3_SHA256="b6e4f0dc94c3595e42152e31431c3e5cdf0bcfbb5d4cfbe39e5ae7efcfd7fe43" \
             ;; \
         *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac \

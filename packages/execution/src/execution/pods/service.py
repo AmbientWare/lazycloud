@@ -12,13 +12,15 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 from control.service import ControlPlaneService, StubKind
+from control.tcp_ingress import tcp_pod_url
 from coordination.redis_client import RedisClient
 from database.records.apps import StubRecord
 from database.repositories.execution import PodExecutionRepository
 from database.repositories.images import CheckpointRepository
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.types import DatabaseSession
 from shared.app_identity import POD_IMAGE
+from shared.autoscaler_state import AutoscalerTargetKind
 from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
@@ -121,7 +123,7 @@ from execution.pods.planning import (
 )
 from execution.pods.proxy import (
     DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
-    PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
+    PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS,
     AsyncPodProxyForwardClient,
     PodProxyConnectionRepository,
     PodProxyHttpRequest,
@@ -133,6 +135,10 @@ from execution.pods.proxy import (
     PodProxyUnavailable,
 )
 from execution.services import ExecutionServices
+
+
+class SandboxFilesystemImages(Protocol):
+    def create(self, container: ContainerRecord) -> str: ...
 
 
 class AsyncPodSchedulerContainerDirectory(Protocol):
@@ -158,6 +164,7 @@ class PodControlService:
     gateway_http_url: str = "http://127.0.0.1:9000"
     scheduler_containers: ContainerSchedulingDirectory | None = None
     container_clients: SchedulerContainerClientFactory[PodContainerControlClient] | None = None
+    filesystem_images: SandboxFilesystemImages | None = None
     async_database: AsyncDatabaseClient | None = None
     async_scheduler_containers: AsyncPodSchedulerContainerDirectory | None = None
     async_pod_proxy_http_client: AsyncPodProxyForwardClient | None = None
@@ -206,6 +213,15 @@ class PodControlService:
             raise InvalidInputError("memory checkpoints can only restore Sandbox workloads")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
+        if stub.config.tcp and stub.deployment_id is None:
+            raise InvalidInputError(
+                "raw TCP ingress requires Pod.deploy(); standalone Pod.create() is not supported"
+            )
+        tcp_url = (
+            tcp_pod_url(stub.id, config.exposed_ports[0], public=stub.public)
+            if request.external_url and stub.config.tcp and config.exposed_ports
+            else ""
+        )
         checkpoint = requested_checkpoint
         if checkpoint is None and stub.kind is StubKind.Pod and config.runtime.checkpoint_enabled:
             checkpoint = latest_available_checkpoint(
@@ -219,6 +235,8 @@ class PodControlService:
         timeout_seconds = (
             request.timeout_seconds
             if request.timeout_seconds is not None
+            else -1
+            if stub.deployment_id is not None and config.autoscaler.min_containers > 0
             else config.runtime.keep_warm
         )
         created_at = utc_now()
@@ -422,12 +440,17 @@ class PodControlService:
         )
         url = ""
         if request.external_url and ports and stub.kind is not StubKind.Sandbox:
-            url = self.control_plane.stub_url(
-                stub.id,
-                workspace=stub.workspace_id,
-                external_url=request.external_url,
-                port=ports[0],
-            ).url
+            url = (
+                tcp_url
+                if stub.config.tcp
+                else pod_proxy_url(
+                    request.external_url,
+                    resource=stub.kind,
+                    stub_id=stub.id,
+                    container_id=container.id,
+                    port=ports[0],
+                )
+            )
         return CreatePodResponse(
             container_id=container.id,
             stub_id=stub.id,
@@ -460,44 +483,6 @@ class PodControlService:
         if not checkpoint.stub_id:
             raise ConflictError("checkpoint does not identify its source sandbox stub")
         return checkpoint
-
-    def expire_pods(self, *, now: datetime | None = None) -> list[ContainerRecord]:
-        current_time = now or utc_now()
-        with self.services.context.database.session() as session:
-            expired = ContainerRepository(session).expired_containers_across_workspaces(
-                now=current_time,
-                stub_types=(StubKind.Pod.value,),
-            )
-        stopped: list[ContainerRecord] = []
-        for container in expired:
-            if not container.stub_id:
-                continue
-            stub = self.control_plane.get_stub(container.stub_id)
-            # Named, because the default is `User` and settles the invocations this
-            # container held as cancellations: the caller is told they stopped work
-            # they did not stop, and charged the attempt. A TTL is the platform's
-            # own deadline, so the work is released and runs somewhere else.
-            record = self.services.containers.stop(container.id, reason=StopContainerReason.Ttl)
-            self._delete_keep_warm_lock(
-                pod_keep_warm_lock_key(container.workspace_id, stub.id, container.id)
-            )
-            stopped.append(record)
-            self.services.events.emit(
-                "pod.expired",
-                level=EventLevel.Info,
-                resource_type="container",
-                resource_id=record.id,
-                message=f"expired pod container {record.name}",
-                data={
-                    "stub_id": record.stub_id or "",
-                    "timeout_seconds": record.timeout_seconds,
-                    "expires_at": (
-                        record.expires_at.isoformat() if record.expires_at is not None else None
-                    ),
-                },
-                workspace_id=record.workspace_id,
-            )
-        return stopped
 
     def sandbox_exec(
         self, container_id: str, request: PodSandboxExecRequest
@@ -765,19 +750,28 @@ class PodControlService:
         request: PodSandboxUpdateTTLRequest,
     ) -> PodSandboxUpdateTTLResponse:
         container, _stub = self._sandbox_container(container_id)
-        container.timeout_seconds = request.ttl
-        container.expires_at = (
-            utc_now() + timedelta(seconds=request.ttl) if request.ttl > 0 else None
-        )
         with self.services.context.database.session() as session:
-            ContainerRepository(session).upsert(container)
+            repository = ContainerRepository(session)
+            current = repository.lock(container.id, workspace_id=container.workspace_id)
+            if current is None or current.status not in {
+                ContainerStatus.Pending,
+                ContainerStatus.Running,
+            }:
+                raise ConflictError("sandbox is no longer active")
+            current.timeout_seconds = request.ttl
+            current.expires_at = (
+                utc_now() + timedelta(seconds=request.ttl) if request.ttl > 0 else None
+            )
+            container = repository.upsert(current)
+            self._set_keep_warm_lock(
+                pod_keep_warm_lock_key(
+                    container.workspace_id, container.stub_id or "", container.id
+                ),
+                ttl_seconds=request.ttl if request.ttl > 0 else None,
+            )
         self.services.containers.publish_lifecycle_change(
             container,
             WorkspaceChangeType.Updated,
-        )
-        self._set_keep_warm_lock(
-            pod_keep_warm_lock_key(container.workspace_id, container.stub_id or "", container.id),
-            ttl_seconds=request.ttl if request.ttl > 0 else None,
         )
         return PodSandboxUpdateTTLResponse(
             ttl=container.timeout_seconds,
@@ -809,15 +803,10 @@ class PodControlService:
         request: PodSandboxCreateImageFromFilesystemRequest,
     ) -> PodSandboxCreateImageFromFilesystemResponse:
         _ = request
-        container = self._container(container_id)
-        if not container.stub_id:
-            raise InvalidInputError(f"container has no owning stub: {container_id}")
-        image_id = f"image-{container.stub_id}-{uuid4().hex[:8]}"
-        self._client(container_id).archive(
-            container_id,
-            image_id,
-            lambda _: None,
-        )
+        container, _stub = self._sandbox_container(container_id)
+        if self.filesystem_images is None:
+            raise UpstreamUnavailableError("filesystem image builds are not configured")
+        image_id = self.filesystem_images.create(container)
         return PodSandboxCreateImageFromFilesystemResponse(image_id=image_id)
 
     def sandbox_snapshot_memory(
@@ -880,10 +869,17 @@ class PodControlService:
         demand_recorded = False
         try:
             if container_id is not None:
-                target = await self._pinned_sandbox_proxy_target(stub, request)
+                target = await self._pinned_container_proxy_target(stub, request, config)
             else:
                 await connections.increment_total_connections(workspace_id, stub_id)
                 demand_recorded = True
+                await self._async_database().run_transaction(
+                    lambda session: AutoscalingTargetRepository(session).activate(
+                        stub_id=stub_id,
+                        workspace_id=workspace_id,
+                        target_kind=AutoscalerTargetKind.Pod,
+                    )
+                )
                 target = await self._wait_for_pod_proxy_target(
                     stub,
                     request,
@@ -899,7 +895,7 @@ class PodControlService:
                 target.container_id,
                 keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
             )
-        except Exception:
+        except BaseException:
             if demand_recorded:
                 await connections.decrement_total_connections(workspace_id, stub_id)
             raise
@@ -921,7 +917,7 @@ class PodControlService:
             request,
             timeout_seconds=self.pod_proxy_start_timeout_seconds,
             connect_timeout_seconds=(
-                PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS if session.pinned else None
+                PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS if session.pinned else None
             ),
         )
 
@@ -931,14 +927,14 @@ class PodControlService:
                 self._pod_proxy_socket_client().open_socket,
                 session.target,
                 timeout_seconds=(
-                    PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS
+                    PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS
                     if session.pinned
                     else self.pod_proxy_start_timeout_seconds
                 ),
             )
         except (OSError, RuntimeError) as exc:
             if session.pinned:
-                raise PodProxyUnavailable("sandbox backend is unavailable") from exc
+                raise PodProxyUnavailable("container backend is unavailable") from exc
             raise
 
     async def finish_pod_proxy(self, session: PodProxySession) -> None:
@@ -1041,7 +1037,10 @@ class PodControlService:
         while True:
             container = self._container(container.id)
             if container.status in TERMINAL_CONTAINER_STATUSES:
-                raise ConflictError(f"container {container.id} is {container.status.value}")
+                reason = container.startup_error or (
+                    f"container {container.id} is {container.status.value}"
+                )
+                raise ConflictError(reason)
             state = self.scheduler_containers.get_container_state(container.id)
             if state is None:
                 last_reason = f"scheduler state not found for container {container.id}"
@@ -1162,20 +1161,22 @@ class PodControlService:
             raise PodProxyUnavailable(msg)
         return target
 
-    async def _pinned_sandbox_proxy_target(
+    async def _pinned_container_proxy_target(
         self,
         stub: StubRecord,
         request: PodProxyRequest,
+        config: PodStubConfig,
     ) -> PodProxyTarget:
         container_id = request.container_id
-        if stub.kind is not StubKind.Sandbox or container_id is None:
-            raise PodProxyUnavailable("sandbox container is unavailable")
+        if stub.kind not in {StubKind.Pod, StubKind.Sandbox} or container_id is None:
+            raise PodProxyUnavailable("container is unavailable")
         container, port_is_exposed = await self._async_database().run_transaction(
-            lambda session: self._pinned_sandbox_in_session(
+            lambda session: self._pinned_container_in_session(
                 session,
                 container_id=container_id,
                 workspace_id=stub.workspace_id,
                 port=request.port,
+                kind=stub.kind,
             )
         )
         if (
@@ -1184,9 +1185,9 @@ class PodControlService:
             or container.stub_id != stub.id
             or container.status is not ContainerStatus.Running
         ):
-            raise PodProxyUnavailable("sandbox container is unavailable")
+            raise PodProxyUnavailable(f"{stub.kind.value} container is unavailable")
         if not port_is_exposed:
-            raise PodProxyPortUnavailable("sandbox port is not exposed")
+            raise PodProxyPortUnavailable(f"{stub.kind.value} port is not exposed")
         scheduler = self._async_scheduler_container_directory()
         state, address_map = await asyncio.gather(
             scheduler.get_container_state(container.id),
@@ -1198,19 +1199,35 @@ class PodControlService:
             or state.stub_id != stub.id
             or state.status is not SchedulerContainerStatus.Running
         ):
-            raise PodProxyUnavailable("sandbox container is unavailable")
+            raise PodProxyUnavailable(f"{stub.kind.value} container is unavailable")
         if address_map.container_id != container.id:
-            raise PodProxyUnavailable("sandbox address ownership is invalid")
+            raise PodProxyUnavailable("container address ownership is invalid")
         address = address_map.address_map.get(request.port, "")
         if not address:
-            raise PodProxyPortUnavailable("sandbox port is not exposed")
+            raise PodProxyPortUnavailable(f"{stub.kind.value} port is not exposed")
         route_id = _owned_route_id_for_port(
             address_map.routes,
             address=address,
             port=request.port,
-            container_id=container.id,
-            workspace_id=container.workspace_id,
+            container=container,
         )
+        if stub.kind is StubKind.Pod:
+            probe_port = config.runtime.health_check_port or request.port
+            probe_address = address_map.address_map.get(probe_port, "")
+            if not probe_address or not await self._container_readiness().is_ready(
+                container_id=container.id,
+                stub_id=stub.id,
+                address=probe_address,
+                route_id=_owned_route_id_for_port(
+                    address_map.routes,
+                    address=probe_address,
+                    port=probe_port,
+                    container=container,
+                ),
+                port=probe_port,
+                health_path=config.runtime.health_check_path,
+            ):
+                raise PodProxyUnavailable("pod container is not ready")
         return PodProxyTarget(
             container_id=container.id,
             address=address,
@@ -1376,14 +1393,17 @@ class PodControlService:
         return self.async_pod_proxy_http_client
 
     @staticmethod
-    def _pinned_sandbox_in_session(
+    def _pinned_container_in_session(
         session: DatabaseSession,
         *,
         container_id: str,
         workspace_id: str,
         port: int,
+        kind: StubKind,
     ) -> tuple[ContainerRecord | None, bool]:
         container = ContainerRepository(session).get(container_id, workspace_id=workspace_id)
+        if kind is StubKind.Pod:
+            return container, container is not None and port in container.ports.values()
         exposure = PodExecutionRepository(session).urls.get(
             container_id=container_id,
             port=port,
@@ -1500,8 +1520,7 @@ def _owned_route_id_for_port(
     *,
     address: str,
     port: int,
-    container_id: str,
-    workspace_id: str,
+    container: ContainerRecord,
 ) -> str:
     address_route_id, address_is_route = parse_backend_route_address(address)
     matching = [route for route in routes if route.port == port]
@@ -1512,7 +1531,13 @@ def _owned_route_id_for_port(
     if len(matching) != 1:
         raise PodProxyUnavailable("sandbox address ownership is ambiguous")
     route = matching[0]
-    if route.container_id != container_id or route.workspace_id != workspace_id:
+    if (
+        route.container_id != container.id
+        or not container.runtime_worker_id
+        or route.worker_id != container.runtime_worker_id
+        or not container.runtime_machine_id
+        or route.machine_id != container.runtime_machine_id
+    ):
         raise PodProxyUnavailable("sandbox address ownership is invalid")
     if not route.route_id or route.state != BackendRouteState.Ready.value or bool(route.error):
         raise PodProxyUnavailable("sandbox backend route is unavailable")

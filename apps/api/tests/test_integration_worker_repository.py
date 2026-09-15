@@ -35,7 +35,6 @@ from database.repositories.compute import (
 )
 from database.repositories.execution import TaskRepository
 from database.repositories.images import (
-    CheckpointRepository,
     ImageArchiveRepository,
     ImageBuildRepository,
     ImageRepository,
@@ -72,7 +71,6 @@ from scheduler.state import (
 from shared.agent_connections import AgentConnectionRecord
 from shared.app_identity import FUNCTION_IMAGE
 from shared.billing_quotes import ContainerShape
-from shared.cache_records import CacheEntry
 from shared.compute_enrollment import (
     ComputePreflightCheck,
     PreflightSeverity,
@@ -113,11 +111,6 @@ from tests.real_redis import RealRedisActors
 from tests.releases import select_worker_release
 from tests.scheduler_composition import scheduler_request_service_for_redis
 from tests.workspaces import owned_workspace, workspace_owner_user_id
-from worker.checkpoints import (
-    CheckpointStateOperation,
-    CheckpointStatePayload,
-    WorkerCheckpointStatus,
-)
 from worker.events import (
     ContainerExecutionPhase,
     ContainerLifecyclePayload,
@@ -134,18 +127,14 @@ from worker.repository_payloads import (
     AddWorkerRequest,
     DeleteContainerStateRequest,
     GetCacheOriginCredentialsResponse,
-    GetCheckpointRestoreRequest,
     GetContainerCredentialsResponse,
     GetImageBuildCredentialsRequest,
     GetNextContainerRequestRequest,
     GetNextContainerRequestResponse,
-    PersistCheckpointArchiveRequest,
-    PrepareCheckpointArchiveUploadRequest,
     PrepareImageBuildContextDownloadRequest,
     PublishContainerLifecycleRequest,
     ReleaseAutomaticCheckpointLeaseRequest,
     ReportImageBuildResultRequest,
-    SaveCheckpointStateRequest,
     SetContainerAddressMapRequest,
     SetContainerAddressRequest,
     SetContainerExitCodeRequest,
@@ -454,7 +443,7 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
 ) -> None:
     redis = real_redis_actors.client()
     archive_storage = _FakeObjectStorage()
-    service = replace(isolated_services.worker_repository_service, object_storage=archive_storage)
+    service = isolated_services.worker_repository_service
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     build = _pending_image_build(
@@ -1754,96 +1743,6 @@ async def test_worker_event_stream_excludes_foreign_and_unassigned_stop_events(
     assert [event.event_id for event in delivered] == [event_ids[-1]]
 
 
-def test_worker_repository_service_persists_checkpoint_archive_and_state(
-    isolated_services: ApiServices,
-) -> None:
-    object_storage = _FakeObjectStorage()
-    cache_storage = _FakeCacheStorage()
-    service = replace(
-        isolated_services.worker_repository_service,
-        object_storage=object_storage,
-        cache_storage=cache_storage,
-    )
-    archive = b"checkpoint-archive"
-    archive_hash = hashlib.sha256(archive).hexdigest()
-    control = ControlPlaneService(isolated_services.context)
-    workspace = owned_workspace(control, "default")
-    stub = control.create_stub("checkpoint-archive", workspace=workspace.id)
-    service.save_checkpoint_state(
-        SaveCheckpointStateRequest(
-            payload=CheckpointStatePayload(
-                operation=CheckpointStateOperation.Create,
-                checkpoint_id="checkpoint-1",
-                status=WorkerCheckpointStatus.Pending,
-                workspace_id=workspace.id,
-                stub_id=stub.id,
-                stub_type="sandbox",
-            )
-        )
-    )
-
-    prepared = service.prepare_checkpoint_archive_upload(
-        PrepareCheckpointArchiveUploadRequest(
-            checkpoint_id="checkpoint-1",
-            origin_key="checkpoints/checkpoint-1.tar",
-            cache_hash=archive_hash,
-            cache_size_bytes=len(archive),
-        )
-    )
-    object_storage.files[("checkpoint-bucket", "checkpoints/checkpoint-1.tar")] = archive
-    persisted = service.persist_checkpoint_archive(
-        PersistCheckpointArchiveRequest(
-            checkpoint_id="checkpoint-1",
-            origin_key="checkpoints/checkpoint-1.tar",
-            cache_hash=archive_hash,
-            cache_size_bytes=len(archive),
-            cache_namespace="checkpoints",
-            locality="pool-a",
-            accelerator="gpu-a",
-        )
-    )
-    saved = service.save_checkpoint_state(
-        SaveCheckpointStateRequest(
-            payload=CheckpointStatePayload(
-                operation=CheckpointStateOperation.Create,
-                checkpoint_id="checkpoint-1",
-                status=WorkerCheckpointStatus.Available,
-                workspace_id=workspace.id,
-                stub_id=stub.id,
-                stub_type="sandbox",
-                cache_hash=persisted.cache_hash,
-                cache_size_bytes=persisted.cache_size_bytes,
-                origin_key=persisted.origin_key,
-                locality=persisted.locality,
-                accelerator=persisted.accelerator,
-            )
-        )
-    )
-    restore = service.get_checkpoint_restore(
-        GetCheckpointRestoreRequest(
-            checkpoint_id="checkpoint-1",
-            workspace_id=workspace.id,
-        )
-    )
-
-    with isolated_services.context.database.session() as session:
-        checkpoint = CheckpointRepository(session).get_across_workspaces("checkpoint-1")
-    assert persisted.cache_hash == archive_hash
-    assert prepared.upload_url.startswith(
-        f"memory://checkpoint-bucket/workspaces/{workspace.id}/checkpoint-bucket/"
-    )
-    assert object_storage.files[("checkpoint-bucket", "checkpoints/checkpoint-1.tar")] == archive
-    assert cache_storage.files[("checkpoints", archive_hash)] == archive
-    assert saved.checkpoint is not None
-    assert checkpoint is not None
-    assert checkpoint.status.value == WorkerCheckpointStatus.Available.value
-    assert checkpoint.origin_key == "checkpoints/checkpoint-1.tar"
-    assert restore.checkpoint == checkpoint
-    assert restore.download_url.startswith(
-        f"memory://checkpoint-bucket/workspaces/{workspace.id}/checkpoint-bucket/"
-    )
-
-
 def test_worker_repository_lifecycle_failure_marks_container_and_task_failed(
     isolated_services: ApiServices,
     real_redis_actors: RealRedisActors,
@@ -1959,6 +1858,8 @@ def test_worker_exit_retains_pooled_startup_failure_when_detail_arrives_after_ex
     assert saved is not None
     assert saved.task_id is None
     assert saved.status is ContainerStatus.Failed
+    assert saved.started_at is None
+    assert saved.finished_at is not None
     assert saved.startup_error == (
         "container startup failed during prepare-rootfs: not enough free space"
     )
@@ -2093,6 +1994,17 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
     )
 
     stopped = container_service.stop(container.id)
+    cancelled_start = service.update_container_status(
+        UpdateContainerStatusRequest(
+            container_id=container.id,
+            status=SchedulerContainerStatus.Running,
+        ),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
+    )
+    assert cancelled_start.plan is not None
+    assert cancelled_start.state is not None
+    assert cancelled_start.plan.next_status is SchedulerContainerStatus.Stopping
+    assert cancelled_start.state.started_at is None
     service.set_container_exit_code(
         SetContainerExitCodeRequest(
             exited_at=utc_now(),
@@ -3017,7 +2929,6 @@ class _FakeObjectStorage:
     def __init__(self) -> None:
         self.files: dict[tuple[str, str], bytes] = {}
         self.workspace_get_urls: list[tuple[str, str, str]] = []
-        self.workspace_put_urls: list[tuple[str, str, str]] = []
 
     @property
     def object_client(self) -> _FakeObjectStorage:
@@ -3156,25 +3067,6 @@ class _FakeObjectStorage:
             },
         )
 
-    def generate_presigned_put_url_for_workspace(
-        self,
-        *,
-        workspace_id: str,
-        bucket: str,
-        key: str,
-        expires_seconds: int,
-        content_length: int,
-        content_type: str,
-    ) -> str:
-        self.workspace_put_urls.append((workspace_id, bucket, key))
-        return self.generate_presigned_put(
-            f"workspaces/{workspace_id}/{bucket}/{key}",
-            bucket=bucket,
-            expires_seconds=expires_seconds,
-            content_length=content_length,
-            content_type=content_type,
-        ).url
-
     def download_file(
         self,
         bucket: str,
@@ -3195,22 +3087,6 @@ class _FakeObjectStorage:
     ) -> ObjectRecord:
         _ = workspace_id
         return self.download_file(bucket, key, target)
-
-
-class _FakeCacheStorage:
-    def __init__(self) -> None:
-        self.files: dict[tuple[str, str], bytes] = {}
-
-    def put(self, namespace: str, key: str, source: str | Path) -> CacheEntry:
-        payload = Path(source).read_bytes()
-        path = f"{namespace}/{key}"
-        self.files[(namespace, key)] = payload
-        return CacheEntry(
-            key=f"{namespace}:{key}",
-            path=path,
-            size=len(payload),
-            sha256=hashlib.sha256(payload).hexdigest(),
-        )
 
 
 def _fake_object_record(

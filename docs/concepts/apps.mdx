@@ -63,6 +63,37 @@ The preview prints a temporary URL and logs. Ctrl+C ends it.
 
 From Python, use `app.deploy()` or `app.deploy(resource="endpoint:count")`.
 
+## Export a typed Python package
+
+```bash
+lazycloud app export text_tools
+```
+
+This writes `lazycloud_clients/text_tools`. Import a deployed function or endpoint
+by its resource name and call its typed methods. Function methods include
+`remote()` and `async_remote()`; endpoint methods include `request()` and
+`async_request()`. Sign in with `lazycloud login` before calling them. Generated
+files contain deployment references and schemas, never credentials.
+
+Function and endpoint types come from their deployed callable contracts. ASGI
+route methods come from OpenAPI 3, discovered at `/openapi.json`. Choose another
+path or supply a JSON file when needed. For example, for the `service` ASGI
+app from the [ASGI guide](/concepts/endpoints#asgi-applications):
+
+```bash
+lazycloud app export web_app --openapi-path service=/schema/openapi.json
+lazycloud app export web_app --openapi service=./openapi.json
+```
+
+ASGI methods use the schema's operation IDs and include async equivalents.
+They support JSON bodies and path, query, and header parameters. Unsupported
+parameter locations or body formats fail generation with an explanation.
+An ASGI app without a schema keeps `request()` and `async_request()` for raw
+HTTP calls; the command reports that its route types are unavailable.
+
+Export again after deploying contract changes. Packages include functions,
+endpoints, and ASGI apps. Pods and sandboxes are excluded.
+
 ## Manage the app
 
 ```bash

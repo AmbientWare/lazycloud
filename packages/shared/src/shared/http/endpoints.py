@@ -25,6 +25,7 @@ class StartEndpointServeResponse(HttpModel):
 
 class EndpointForwardRequest(HttpModel):
     stub_id: str
+    container_id: str | None = None
     method: str = "GET"
     path: str = "/"
     query_params: dict[str, list[str]] = Field(default_factory=dict)

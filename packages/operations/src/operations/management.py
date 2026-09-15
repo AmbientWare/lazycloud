@@ -25,6 +25,7 @@ from database.repositories.apps import (
     AppRepository,
     AppSummaryRepository,
     DeploymentRepository,
+    StubRepository,
 )
 from database.repositories.billing_costs import BillingLedgerCostRepository
 from database.repositories.execution import (
@@ -37,6 +38,7 @@ from database.repositories.execution import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
+    AutoscalingTargetRepository,
     ContainerRepository,
 )
 from database.repositories.storage import ObjectRepository
@@ -49,6 +51,7 @@ from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
 from observability.usage import UsageService
 from pydantic import Field
+from shared.autoscaler_state import autoscaler_target_kind
 from shared.billing_quotes import LedgerComponent
 from shared.container_requests import (
     ContainerShutdownTarget,
@@ -829,6 +832,18 @@ class ManagementService:
                 name=deployment.name,
                 status="active" if deployment.active else "inactive",
             )
+            if active:
+                targets = AutoscalingTargetRepository(session)
+                for stub in StubRepository(session).list_for_deployments(
+                    [updated.id], workspace_id=workspace_id
+                ):
+                    target_kind = autoscaler_target_kind(stub.kind)
+                    if target_kind is not None:
+                        targets.activate(
+                            stub_id=stub.id,
+                            workspace_id=workspace_id,
+                            target_kind=target_kind,
+                        )
         self._publish_deployment_change(updated, workspace_id=workspace_id)
         # Unconditional: the call matches on deployment id, so a deployment with
         # no schedule has nothing to toggle and asking is cheaper than knowing.
@@ -1036,6 +1051,7 @@ class ManagementService:
         *,
         workspace: str | None = None,
         external_url: str = "http://127.0.0.1:9000",
+        port: int | None = None,
     ) -> DeploymentUrlResult:
         deployment = (
             self.retrieve_deployment(workspace, deployment_id_or_name)
@@ -1052,7 +1068,7 @@ class ManagementService:
         return DeploymentUrlResult(
             deployment=resource.deployment,
             stub=resource.stub,
-            url=resource.invoke_url(external_url),
+            url=resource.invoke_url(external_url, port=port),
         )
 
     def deployment_manifest(
@@ -1091,7 +1107,7 @@ class ManagementService:
         except ValueError as exc:
             msg = f"deployment kind is not invokable: {stub_type}"
             raise InvalidInputError(msg) from exc
-        resource = self.services.deployment_resources.resolve_invoke_target(
+        resource = self.services.deployment_resources.resolve_target(
             deployment_name,
             deployment_kind,
             workspace=workspace,
@@ -1522,19 +1538,7 @@ class ManagementService:
         return TaskStopResult(stopped=tuple(stopped), skipped=tuple(skipped))
 
     def _cancel_task(self, task: Task) -> None:
-        """Cancel one task through whatever owns stopping its kind of work.
-
-        Nothing inside a container watches the task row, so writing `cancelled`
-        on it stops no work. Reaching the handler means going through the service
-        that knows what stopping this workload does to the invocations beside
-        it.
-
-        Built here the way this service builds its control plane, and safe to
-        build without a gateway origin because cancelling only settles work: it
-        stops a container and fails what was waiting on the cancelled call.
-        Nothing on this path starts a container, which is the one thing that
-        would need to tell a container where to call back.
-        """
+        """Let the workload owner cancel execution and settle its dependents."""
 
         stub = self._stub_for_task(task)
         if stub is not None and stub.kind is StubKind.Function:

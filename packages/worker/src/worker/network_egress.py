@@ -12,6 +12,7 @@ from uuid import uuid4
 from foundation.process import ProcessResult, run_process
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.http.errors import HttpApiError
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -132,7 +133,7 @@ class _EgressPolicyCache:
             except Exception as refresh_error:
                 try:
                     self.record_failure(refresh_error)
-                except WorkerRepositoryClientError:
+                except (WorkerRepositoryClientError, HttpApiError):
                     LOGGER.warning(
                         "worker egress route evidence refresh and failure reporting are unavailable"
                     )

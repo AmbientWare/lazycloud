@@ -31,6 +31,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.routes import RouteService
 from control.service import ControlPlaneService, WorkspaceBucketClient
+from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.event_bus import RedisEventBus
 from coordination.process_presence import RedisProcessPresence
@@ -82,6 +83,7 @@ from identity.invitations import WorkspaceInvitationService
 from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
 from images.control import ImageControlService
+from images.filesystem import FilesystemImageService
 from images.publication import (
     ArchiveImageBuildPublicationPublisher,
     CacheImageBuildPublicationPublisher,
@@ -195,6 +197,8 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionRetireRequest,
     FunctionRetireResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -250,7 +254,6 @@ from api.settings import (
     AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
     PublicIngressSettings,
-    TcpIngressSettings,
 )
 from billing import BillingAccountService, DatabaseBillingAdmission
 from database import AsyncDatabaseClient, DatabaseClient
@@ -305,6 +308,8 @@ class ApiOwnedResource(Protocol):
 
 
 class FunctionApiService(Protocol):
+    def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse: ...
+
     def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
 
     def function_invoke_stream(
@@ -347,6 +352,8 @@ class EndpointApiService(Protocol):
     def start_endpoint_serve(
         self,
         request: StartEndpointServeRequest,
+        *,
+        hot_reload: bool = False,
     ) -> StartEndpointServeResponse: ...
 
     async def forward_endpoint_request(
@@ -389,6 +396,7 @@ class EndpointApiService(Protocol):
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None: ...
 
@@ -1379,7 +1387,6 @@ def _gateway_control_service(
         ),
         object_storage=core.object_storage,
         agent_image=AgentImageConfig(),
-        event_streams=RedisEventStreamRepository(core.redis()),
         connections=RedisAgentConnectionDirectory(core.redis()),
         tunnel_authority=AgentTunnelAuthority(core.context.database, compute_states),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
@@ -1419,6 +1426,7 @@ def _pod_control_service(
     async_io = core.async_io
     return PodControlService(
         core,
+        filesystem_images=FilesystemImageService(core.images),
         gateway_http_url=core.gateway_settings.public_http_url,
         scheduler_containers=scheduler_containers,
         container_clients=container_clients,

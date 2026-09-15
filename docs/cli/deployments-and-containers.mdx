@@ -1,6 +1,6 @@
 ---
-title: "app, deployment, container, client"
-description: "Manage deployed apps, deployments, running containers, and generated clients."
+title: "app, deployment, container"
+description: "Manage deployed apps, deployments, and running containers."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
@@ -19,6 +19,7 @@ square brackets when supplying an optional flag.
 ```bash
 lazycloud app list [--active | --inactive | --all]
 lazycloud app show APP
+lazycloud app export APP    # write a typed Python package for its deployed workloads
 lazycloud app pause APP      # stop every workload in the app
 lazycloud app resume APP
 lazycloud app delete APP
@@ -26,7 +27,8 @@ lazycloud app delete APP
 
 ## lazycloud deployment
 
-A deployment is addressed by name or id.
+A deployment is addressed by name or id. `scale` sets the replica count for a Pod.
+Functions and endpoints scale from their autoscaler configuration.
 
 ```bash
 lazycloud deployment list [--app <name>] [--limit <n>]
@@ -37,8 +39,8 @@ lazycloud deployment delete ID_OR_NAME
 ```
 
 ```bash
-lazycloud deployment list --app api_demo
-lazycloud deployment scale count_words --containers 3
+lazycloud deployment list --app tools
+lazycloud deployment scale web --containers 3
 ```
 
 ## lazycloud container
@@ -49,20 +51,5 @@ lazycloud container attach CONTAINER_ID                       # stream output un
 lazycloud container checkpoint CONTAINER_ID [--checkpoint-id <id>]
 lazycloud container stop CONTAINER_IDS...
 ```
-
-## lazycloud client
-
-```bash
-lazycloud client get APP [--output <dir>]
-lazycloud client remove APP [--output <dir>]
-```
-
-`client get` writes a typed Python client for a deployed app's functions,
-endpoints, and ASGI apps into `lazycloud_clients/<app>/`, so another project
-can call them with the app's argument and return types without importing its
-source. `client remove` deletes it.
-
-Run `client get` again after deploying API changes to update the generated
-client in the consuming project.
 
 <WorkspaceFlag />

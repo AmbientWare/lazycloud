@@ -8,14 +8,13 @@ from typing import Protocol, TypeVar
 from foundation.io_utils import OutputMessage
 from shared.checkpoints import CHECKPOINT_OPERATION_TIMEOUT_SECONDS
 from shared.contracts import ContractModel
+from shared.errors import UpstreamUnavailableError
 
 from .models import (
     CONTAINER_CLIENT_LOG_KEEPALIVE_SECONDS,
     CONTAINER_CLIENT_MAX_MESSAGE_SIZE_BYTES,
     CONTAINER_CLIENT_SANDBOX_EXEC_TIMEOUT_SECONDS,
     CONTAINER_CLIENT_SANDBOX_STATUS_TIMEOUT_SECONDS,
-    ContainerArchiveRequest,
-    ContainerArchiveResponse,
     ContainerCheckpointRequest,
     ContainerCheckpointResponse,
     ContainerClientConnectionOptions,
@@ -95,11 +94,7 @@ class ContainerServiceTransport(Protocol):
     ) -> Iterable[ContainerServicePayload]: ...
 
 
-class ContainerClientStreamError(RuntimeError):
-    pass
-
-
-class ContainerArchiveError(RuntimeError):
+class ContainerClientStreamError(UpstreamUnavailableError):
     pass
 
 
@@ -428,36 +423,6 @@ class ContainerServiceClient:
             timeout_seconds=CHECKPOINT_OPERATION_TIMEOUT_SECONDS,
         )
 
-    def archive(self, container_id: str, image_id: str, output: OutputCallback) -> None:
-        output(
-            OutputMessage(
-                archiving=True,
-                msg="\nSaving image, this may take a few minutes...\n",
-            )
-        )
-        request = ContainerArchiveRequest(container_id=container_id, image_id=image_id)
-        stream = self._stream(ContainerServiceMethod.ContainerArchive, request)
-        try:
-            for raw in stream:
-                response = ContainerArchiveResponse.model_validate(raw)
-                if response.error_msg:
-                    output(OutputMessage(msg=f"{response.error_msg}\n", archiving=True))
-                if not response.done and not response.error_msg:
-                    message = (
-                        "."
-                        if response.progress == 0
-                        else generate_progress_bar(response.progress, 100)
-                    )
-                    output(OutputMessage(msg=message, archiving=True))
-                if response.done:
-                    if response.success:
-                        return
-                    raise ContainerArchiveError("image archiving failed")
-        except ContainerArchiveError:
-            raise
-        except Exception as exc:
-            raise ContainerClientStreamError("error receiving from archive stream") from exc
-
     def sync_workspace(
         self,
         request: SyncContainerWorkspaceRequest,
@@ -517,22 +482,6 @@ def plan_container_client_connection_options(
         unary_interceptors=((ContainerClientInterceptor.Auth,) if has_token else ()),
         existing_connection=existing_connection,
     )
-
-
-def generate_progress_bar(progress: int, total: int) -> str:
-    if total <= 0:
-        msg = "total must be greater than zero"
-        raise ValueError(msg)
-    if progress < 0:
-        msg = "progress cannot be negative"
-        raise ValueError(msg)
-    bar_width = 50
-    progress_width = (progress * bar_width) // total
-    remaining_width = max(0, bar_width - progress_width)
-    progress_bar = f"[{'=' * progress_width}{' ' * remaining_width}]"
-    percent = (progress * 100) // total
-    up = "\033[A" if percent > 0 else ""
-    return f"{up}\r{progress_bar} {percent}%\n"
 
 
 def _start_keepalive_thread(

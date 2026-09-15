@@ -125,6 +125,10 @@ class DeploymentOperationError(RuntimeError):
     pass
 
 
+class ImageBuildError(DeploymentOperationError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentSubmission:
     response: FunctionInvokeResponse
@@ -149,6 +153,11 @@ class DeploymentSubmission:
     def result(self, *, wait: bool = False) -> object:
         if self.task is not None:
             result = self.task.result(wait=wait)
+            if not result.ok:
+                detail = f": {result.error}" if result.error else ""
+                raise DeploymentOperationError(
+                    f"deployment task {result.id} is {result.status.value}{detail}"
+                )
             if result.value is None:
                 return None
             try:
@@ -598,7 +607,7 @@ class DeploymentClient(ControlClientConfigMixin):
             msg = result.error or "image build failed"
             if result.build_id:
                 msg = f"{msg} (build {result.build_id})"
-            raise DeploymentOperationError(msg)
+            raise ImageBuildError(msg)
 
         built_spec = operation.image.spec().model_copy(
             update={
@@ -642,7 +651,7 @@ class DeploymentClient(ControlClientConfigMixin):
         if self.client is not None and self.object_client is None and selected_root is None:
             return metadata_object_id
 
-        from lazycloud.session.source_sync import SourcePackageSyncer
+        from lazycloud.source_sync import SourcePackageSyncer
 
         result = SourcePackageSyncer(
             self._object_client(),

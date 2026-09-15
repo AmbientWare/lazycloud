@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from shared.workload_config import absolute_health_check_path
+from shared.workload_config import StubAutoscalerConfig, absolute_health_check_path
 
 from execution.config import (
     ContainerResourceConfig,
@@ -55,6 +55,7 @@ class PodStubConfig(BaseModel):
     object_id: str = ""
     image: PodImageConfig = Field(default_factory=PodImageConfig)
     runtime: PodRuntimeConfig = Field(default_factory=PodRuntimeConfig)
+    autoscaler: StubAutoscalerConfig = Field(default_factory=StubAutoscalerConfig)
     env: dict[str, str | None] = Field(default_factory=dict)
     secrets: list[str] = Field(default_factory=list)
     command: list[str] = Field(default_factory=list)

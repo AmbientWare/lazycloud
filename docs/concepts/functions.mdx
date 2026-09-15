@@ -60,6 +60,24 @@ already be deployed. Deploy the app containing both before running the parent:
 lazycloud deploy reports.py:app
 ```
 
+## Preview while you edit
+
+Keep a preview running in one terminal:
+
+```bash
+lazycloud serve reports.py:summarize_sales
+```
+
+Call it from a second terminal:
+
+```bash
+lazycloud run reports.py:summarize_sales '[1200, 3500, 800]'
+```
+
+Calls from the same local configuration use the preview while it is active.
+Source edits reload after active calls finish. The preview keeps its container
+warm until you press Ctrl+C in the first terminal.
+
 ## Process several inputs
 
 `.map()` submits one task per input and yields results in input order:
@@ -161,6 +179,11 @@ continue to incur compute charges.
 each slot uses its own process. `in_process=True` shares one interpreter,
 which can avoid loading a GPU model once per process. CPU-bound Python code
 in those slots contends for the GIL.
+
+With multiple process slots, cancelling a call replaces only its slot. Other
+slots continue in the same container. Cancelling a single-slot function or an
+`in_process=True` function stops the container. Other calls in a shared
+interpreter restart and may repeat partial side effects.
 
 To add containers as calls queue up:
 

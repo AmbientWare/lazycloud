@@ -34,7 +34,8 @@ from shared.autoscaling import (
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.errors import DomainError, InvalidInputError
+from shared.env import HOT_RELOAD_ENV, truthy_env_value
+from shared.errors import DomainError, EndpointReplicaLimitReachedError, InvalidInputError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.scheduling import (
@@ -75,7 +76,6 @@ CONTAINER_START_DEADLINE_SECONDS = 600
 Both begin at assignment. The global backlog owns the separate wait for capacity.
 """
 FUNCTION_AUTOSCALER_SOURCE = "function.autoscaler"
-ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS = 600
 ENDPOINT_AUTOSCALER_SOURCE = "endpoint.autoscaler"
 POD_AUTOSCALER_SOURCE = "pod.autoscaler"
 _LIVE_CONTAINER_STATUSES = frozenset({ContainerStatus.Pending, ContainerStatus.Running})
@@ -83,8 +83,6 @@ _LIVE_CONTAINER_STATUSES = frozenset({ContainerStatus.Pending, ContainerStatus.R
 
 class PodControl(Protocol):
     def create_pod(self, request: CreatePodRequest) -> CreatePodResponse: ...
-
-    def expire_pods(self, *, now: datetime | None = None) -> list[ContainerRecord]: ...
 
 
 class SchedulerContainerStateReader(Protocol):
@@ -787,41 +785,38 @@ class FunctionAutoscaler:
         signal: AutoscalingSignal,
         now: datetime,
     ) -> list[AutoscaleAction]:
-        """Remove containers only where nothing else will.
+        """Release excess pending capacity and idle containers without an expiry.
 
-        A function container ends itself when its idle window passes, so where
-        there is a window the way to have fewer is to stop giving them work —
-        stopping one early would throw away exactly the warm container the next
-        call was going to reach. A stub with a warm floor has no window to wait
-        for, and then this is the only thing that can bring the count down.
-
-        Busy containers are left alone. Stopping one settles what it holds by
-        releasing it, so no invocation is lost, but the part that had already
-        run is, and a handler that is not idempotent would run it twice.
+        Running containers with an idle window retire themselves. Pending
+        containers cannot retire themselves, and cancelled work may leave them
+        waiting for capacity indefinitely.
         """
 
         del scheduler_statuses, active_instance, signal, now
-        if stub.config.runtime.keep_warm >= 0:
-            return []
-        # Every container the excess was counted from, starting ones included.
-        # Two schedulers provisioning the same floor leave the newest half still
-        # pending, and considering only the running ones would answer an excess
-        # of two by stopping the two that are warm and keeping the two that are
-        # not — reclaiming the floor by discarding exactly what it is for.
+        pending_only = stub.config.runtime.keep_warm >= 0
         busy = self.functions.containers_holding_work([item.id for item in containers])
-        idle = [container for container in containers if container.id not in busy]
+        idle = [
+            container
+            for container in containers
+            if container.id not in busy
+            and (not pending_only or container.status is ContainerStatus.Pending)
+            and not truthy_env_value(container.env.get(HOT_RELOAD_ENV))
+        ]
         idle.sort(key=lambda container: container.created_at, reverse=True)
         actions: list[AutoscaleAction] = []
         for container in idle[:count]:
             stopped = self.services.containers.stop(
                 container.id,
                 reason=StopContainerReason.Scheduler,
+                only_if_pending=pending_only,
             )
+            if stopped.status in {ContainerStatus.Pending, ContainerStatus.Running}:
+                continue
             actions.append(
                 AutoscaleAction(
                     container_id=stopped.id,
                     action="stop",
-                    reason="held container count is above the warm floor",
+                    reason="container count exceeds workload demand and warm floor",
                 )
             )
         return actions
@@ -875,12 +870,12 @@ class EndpointAutoscaler:
         )
 
     def start_one(self, stub: AutoscalingStub) -> str | None:
-        response = self.endpoints.start_endpoint_serve(
-            StartEndpointServeRequest(
-                stub_id=stub.id,
-                timeout=_endpoint_timeout_seconds(stub.config),
+        try:
+            response = self.endpoints.start_endpoint_serve(
+                StartEndpointServeRequest(stub_id=stub.id)
             )
-        )
+        except EndpointReplicaLimitReachedError:
+            return None
         return response.container_id
 
     def handle_failure_threshold(
@@ -1002,10 +997,14 @@ class PodAutoscaler:
     ) -> list[AutoscaleAction]:
         del scheduler_statuses, signal
         workspace_id = stub.workspace_id
-        # A sandbox is held by its lock rather than by a window, which is the
-        # same distinction `keep_warm_lock_authoritative` states below.
+        # A fixed replica count is an explicit scale target. Its excess replicas
+        # drain connections without retaining an additional idle window.
+        autoscaler = stub.config.autoscaler
         keep_warm_seconds = (
-            0 if stub.kind is StubKind.Sandbox else _pod_autoscaler_config(stub).keep_warm_seconds
+            0
+            if stub.kind is StubKind.Sandbox
+            or autoscaler.min_containers == autoscaler.max_containers
+            else _pod_autoscaler_config(stub).keep_warm_seconds
         )
         states = _pod_container_states(self.redis, workspace_id, stub, containers)
         stop_plan = select_stoppable_pod_containers(
@@ -1621,15 +1620,6 @@ def _failed_container_window_seconds(config: AutoscalingConfig) -> int:
         config.autoscaler.failed_container_window_seconds,
         config.autoscaler.failure_window_seconds,
         default=AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
-    )
-
-
-def _endpoint_timeout_seconds(config: AutoscalingConfig) -> int:
-    return (
-        int(config.task_policy.timeout_seconds)
-        or int(config.task_policy.timeout)
-        or int(config.runtime.timeout_seconds or 0)
-        or ENDPOINT_AUTOSCALER_DEFAULT_TIMEOUT_SECONDS
     )
 
 

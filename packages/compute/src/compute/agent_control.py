@@ -826,11 +826,11 @@ def agent_install_command(
     if arm64_sha256:
         artifact_args += f" --agent-arm64-sha256 {shell_quote(arm64_sha256)}"
     args += artifact_args
-    return (
+    installer = (
         'if [ "$(uname -s)" = "Darwin" ] || [ "$(id -u)" -eq 0 ]; '
-        f"then curl -fsSL {install_url} | sh -s -- {args}; "
-        f"else curl -fsSL {install_url} | sudo sh -s -- {args}; fi"
+        'then exec sh -s -- "$@"; else exec sudo sh -s -- "$@"; fi'
     )
+    return f"curl -fsSL {install_url} | sh -c {shell_quote(installer)} -- {args}"
 
 
 def host_is_unreachable_from_a_remote_machine(host: str) -> bool:

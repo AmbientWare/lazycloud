@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -49,9 +50,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         result = run_text_process(
             (
-                "uv",
-                "run",
-                "lazycloud",
+                str(Path(sys.executable).parent / "lazycloud"),
                 "--json",
                 "container",
                 "attach",

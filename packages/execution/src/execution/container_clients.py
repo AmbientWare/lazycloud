@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Protocol, TypeVar
 
-from foundation.io_utils import OutputMessage
 from shared.containers import ContainerRecord
 from shared.scheduling import (
     SchedulerContainerAddress,
@@ -181,9 +180,6 @@ class PodContainerControlClient(Protocol):
     def sandbox_update_network_permissions(
         self, container_id: str, *, block_network: bool, allow_list: Sequence[str] = ()
     ) -> ContainerOperationResponse: ...
-    def archive(
-        self, container_id: str, image_id: str, output: Callable[[OutputMessage], None]
-    ) -> None: ...
     def status(self, container_id: str) -> ContainerStatusResponse: ...
     def kill(self, container_id: str) -> ContainerOperationResponse: ...
     def checkpoint(

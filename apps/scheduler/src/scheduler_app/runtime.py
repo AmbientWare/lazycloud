@@ -255,7 +255,6 @@ class SchedulerRuntime:
                     container_states=container_states,
                     container_requests=worker_states,
                 ),
-                pod_control=pod_control,
                 functions=function_control,
                 preemption_recovery=preemption_recovery,
             ),

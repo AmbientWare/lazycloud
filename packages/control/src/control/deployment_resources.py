@@ -6,12 +6,13 @@ from database.records.apps import AppRecord, StubRecord
 from database.repositories.apps import DeploymentResourceRepository, DeploymentResourceRow
 from database.types import DatabaseSession
 from shared.deployment_records import Deployment
-from shared.deployments import DeploymentKind
-from shared.errors import InvalidInputError, NotFoundError
+from shared.deployments import DeploymentKind, StubKind
+from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.client_manifests import ClientManifestResource, client_manifest_schemas
-from shared.urls import StubUrlTarget, build_deployment_url, deployment_handler_path
+from shared.urls import StubUrlTarget, build_deployment_url, build_pod_url, deployment_handler_path
 
 from control.context import ControlContext
+from control.tcp_ingress import tcp_pod_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +21,20 @@ class DeploymentResource:
     deployment: Deployment
     stub: StubRecord
 
-    def invoke_url(self, external_url: str, *, pin_version: bool = False) -> str:
+    def invoke_url(
+        self, external_url: str, *, pin_version: bool = False, port: int | None = None
+    ) -> str:
+        ports = list(self.stub.config.ports.values()) or list(
+            self.stub.config.runtime.ports.values()
+        )
+        if self.stub.kind is StubKind.Pod:
+            if port is not None and port not in ports:
+                raise InvalidInputError(f"port {port} is not declared by the Pod")
+            if not ports:
+                return ""
+            ports = [port if port is not None else ports[0]]
+            if self.stub.config.tcp:
+                return tcp_pod_url(self.stub.id, ports[0], public=self.stub.public)
         target = StubUrlTarget(
             kind=self.stub.kind.value,
             stub_id=self.stub.id,
@@ -28,8 +42,12 @@ class DeploymentResource:
             deployment_version=self.deployment.version,
             subdomain=self.deployment.subdomain,
             public=self.stub.public,
+            ports=ports,
+            route=self.stub.config.route,
         )
         try:
+            if self.stub.kind is StubKind.Pod:
+                return build_pod_url(external_url, target)
             return build_deployment_url(external_url, target, pin_version=pin_version)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
@@ -50,12 +68,15 @@ def client_manifest_resource(
         stub_id=resource.stub.id,
         deployment_id=resource.deployment.id,
         deployment_version=resource.deployment.version,
-        invoke_url=resource.invoke_url(external_url),
+        invoke_url=resource.invoke_url(external_url, pin_version=True),
         invoke_path=deployment_handler_path(
             resource.deployment.kind.value,
             resource.deployment.name,
+            version=resource.deployment.version,
+            route=spec.route,
         ),
         route=spec.route,
+        timeout_seconds=spec.resources.timeout_seconds,
         methods=list(spec.methods),
         inputs=inputs,
         outputs=outputs,
@@ -135,7 +156,7 @@ class DeploymentResourceService:
         )
         return resources
 
-    def resolve_invoke_target(
+    def resolve_target(
         self,
         name: str,
         kind: DeploymentKind,
@@ -144,15 +165,9 @@ class DeploymentResourceService:
         version: int | None = None,
         app_id: str | None = None,
     ) -> DeploymentResource:
-        """Resolve the deployment version an invoke URL targets.
-
-        An unversioned invoke always targets the newest non-deleted version,
-        even when that version has been stopped; a versioned invoke targets
-        exactly that version. A stopped target is a client error, never a
-        silent fallback to an older active version.
-        """
+        """Resolve the selected non-deleted version, including stopped deployments."""
         with self.context.database.session() as session:
-            return self.resolve_invoke_target_in_session(
+            return self.resolve_target_in_session(
                 session,
                 name,
                 kind,
@@ -162,6 +177,35 @@ class DeploymentResourceService:
             )
 
     def resolve_invoke_target_in_session(
+        self,
+        session: DatabaseSession,
+        name: str,
+        kind: DeploymentKind,
+        *,
+        workspace: str,
+        version: int | None = None,
+        app_id: str | None = None,
+    ) -> DeploymentResource:
+        target = self.resolve_target_in_session(
+            session, name, kind, workspace=workspace, version=version, app_id=app_id
+        )
+        _require_active(target)
+        return target
+
+    def require_stub_active_in_session(self, session: DatabaseSession, stub: StubRecord) -> None:
+        if stub.deployment_id is None:
+            return
+        resources = self.list_in_session(
+            session,
+            workspace=stub.workspace_id,
+            deployment_id=stub.deployment_id,
+            active=None,
+        )
+        if not resources:
+            raise NotFoundError("deployment not found")
+        _require_active(resources[0])
+
+    def resolve_target_in_session(
         self,
         session: DatabaseSession,
         name: str,
@@ -182,11 +226,7 @@ class DeploymentResourceService:
         )
         if not candidates:
             raise NotFoundError(f"deployment not found: {name}")
-        target = max(candidates, key=lambda item: item.deployment.version)
-        if not target.deployment.active:
-            msg = f"deployment is not active: {name} v{target.deployment.version}"
-            raise InvalidInputError(msg)
-        return target
+        return max(candidates, key=lambda item: item.deployment.version)
 
     def get_by_deployment_id(
         self,
@@ -248,6 +288,16 @@ class DeploymentResourceService:
     ) -> DeploymentResource | None:
         row = DeploymentResourceRepository(session).get_by_custom_hostname(hostname)
         return _deployment_resource(row) if row is not None else None
+
+
+def _require_active(resource: DeploymentResource) -> None:
+    if not resource.app.active:
+        raise UpstreamUnavailableError(f"app is not active: {resource.app.name}")
+    if not resource.deployment.active:
+        deployment = resource.deployment
+        raise UpstreamUnavailableError(
+            f"deployment is not active: {deployment.name} v{deployment.version}"
+        )
 
 
 def _deployment_resource(row: DeploymentResourceRow) -> DeploymentResource:

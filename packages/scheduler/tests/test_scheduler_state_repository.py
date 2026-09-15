@@ -50,7 +50,6 @@ from scheduler.fleet import (
     SchedulerContainerStatus,
     SchedulerRetryReason,
     SchedulerWorkerStatus,
-    WorkerPoolStateSnapshot,
 )
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.service import Scheduler, SchedulerStateStores, SchedulerWorkloadControls
@@ -581,7 +580,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     assert failed.max_attempts == 2
     assert failed.error == "RuntimeError: final attempt"
     attempts = isolated_services.tasks.attempts(task_id)
-    assert [attempt.status for attempt in attempts] == [TaskStatus.Retry, TaskStatus.Failed]
+    assert [attempt.status for attempt in attempts] == [TaskStatus.Failed, TaskStatus.Failed]
 
 
 def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
@@ -1798,7 +1797,7 @@ def test_durable_request_recovers_queue_publication_and_capacity_after_redis_los
         workspace_id=workspace_id,
         stub_id="container",
         container_id=container.id,
-        pool_selector="default",
+        pool_selector="lazycloud",
         cpu_millicores=1000,
         memory_mib=256,
         timestamp=now,
@@ -2477,7 +2476,7 @@ async def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
     assert service.submit(request, ready_at=now).accepted
     scheduler = Scheduler(
         workloads=SchedulerWorkloadControls(containers=service),
-        states=SchedulerStateStores(pools=_failing_pool_state_service()),
+        states=SchedulerStateStores(pools=_failing_pool_state_service(redis)),
         reconcile_agent_pools_enabled=False,
     )
 
@@ -3436,11 +3435,11 @@ def _seed_hash(redis: RedisClient, key: str, model: ContractModel) -> None:
     )
 
 
-def _failing_pool_state_service() -> SchedulerPoolStateService:
+def _failing_pool_state_service(redis: RedisClient) -> SchedulerPoolStateService:
     return SchedulerPoolStateService(
         _FailingPoolWorkerRepository(),
         _UnusedPoolContainerRepository(),
-        _UnusedPoolStateRepository(),
+        RedisWorkerPoolStateRepository(redis),
     )
 
 
@@ -3464,16 +3463,6 @@ class _UnusedPoolContainerRepository:
     def list_by_worker(self, worker_id: str) -> list[SchedulerContainerState]:
         _ = worker_id
         return []
-
-
-class _UnusedPoolStateRepository:
-    def set_state(
-        self,
-        capacity_owner_id: str,
-        state: WorkerPoolStateSnapshot,
-    ) -> WorkerPoolStateSnapshot:
-        _ = capacity_owner_id
-        return state
 
 
 class _FailureHandler:

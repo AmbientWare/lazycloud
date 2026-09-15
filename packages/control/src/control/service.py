@@ -60,6 +60,7 @@ from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.urls import (
     StubUrlTarget,
+    build_container_url,
     build_deployment_url,
     build_pod_url,
     build_stub_url,
@@ -81,6 +82,7 @@ from control.models import (
     WorkspaceConfigExport,
     WorkspaceCreateResult,
 )
+from control.tcp_ingress import tcp_pod_url
 
 
 class WorkspaceStorageError(RuntimeError):
@@ -839,18 +841,7 @@ class ControlPlaneService:
         *,
         workspace: str = "default",
     ) -> bool:
-        """Remove the stub a deployment registration was built from.
-
-        A deploy registers a stub first, to carry the uploaded source and the
-        built image, and the registration then writes the durable stub that the
-        deployment owns. The first one has done its job at that point: its
-        config was copied forward, and nothing refers to it.
-
-        Refused rather than forced if anything does refer to it, or if it turns
-        out to own a deployment of its own. A stub someone invoked directly
-        before deploying is a stub with tasks against it, and that is a stub
-        still in use.
-        """
+        """Discard a preparation or release its floor while references remain."""
 
         with self.context.database.session() as session:
             workspace_record = self.context.workspace(session, workspace)
@@ -861,11 +852,23 @@ class ControlPlaneService:
             if stub.deployment_id:
                 return False
             if repository.registration_is_bound(stub.id):
-                return False
-            if not repository.delete(stub.id, workspace_id=workspace_record.id):
-                return False
-        publish_workload_change(self.workspace_changes, stub, WorkspaceChangeType.Deleted)
-        return True
+                if stub.kind is not StubKind.Function or not stub.config.autoscaler.min_containers:
+                    return False
+                # Registration copied the floor to the deployment. Preserve existing
+                # invocations, but let the autoscaler retire idle preparation containers.
+                stub.config.autoscaler.min_containers = 0
+                stub.updated_at = utc_now()
+                repository.upsert(stub)
+                repository.set_preparation_fingerprint(
+                    stub.id, workspace_id=workspace_record.id, fingerprint=None
+                )
+                change = WorkspaceChangeType.Updated
+            else:
+                if not repository.delete(stub.id, workspace_id=workspace_record.id):
+                    return False
+                change = WorkspaceChangeType.Deleted
+        publish_workload_change(self.workspace_changes, stub, change)
+        return change is WorkspaceChangeType.Deleted
 
     def get_stub_config(
         self,
@@ -1163,6 +1166,7 @@ class ControlPlaneService:
         external_url: str = "http://127.0.0.1:9000",
         deployment_id: str | None = None,
         port: int | None = None,
+        container_id: str | None = None,
     ) -> StubUrlPlan:
         stub = self.get_stub(stub_id_or_name, workspace=workspace)
         deployment = self._deployment(deployment_id or stub.deployment_id or "")
@@ -1175,10 +1179,28 @@ class ControlPlaneService:
             subdomain=deployment.subdomain if deployment else "",
             public=stub.public,
             ports=ports,
+            route=stub.config.route,
         )
         try:
-            if stub.kind is StubKind.Pod:
-                url = build_pod_url(external_url, target)
+            if container_id is not None:
+                if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
+                    raise InvalidInputError("container URLs require an Endpoint or ASGI workload")
+                with self.context.database.session() as session:
+                    container = ContainerRepository(session).get(
+                        container_id, workspace_id=stub.workspace_id
+                    )
+                if container is None or container.stub_id != stub.id:
+                    raise NotFoundError("endpoint container not found")
+                url = build_container_url(external_url, container.id, path=target.invoke_path)
+            elif stub.kind is StubKind.Pod:
+                if stub.config.tcp:
+                    if deployment is None:
+                        raise InvalidInputError("raw TCP ingress requires Pod.deploy()")
+                    if not ports:
+                        raise InvalidInputError("raw TCP ingress requires an exposed port")
+                    url = tcp_pod_url(stub.id, ports[0], public=stub.public)
+                else:
+                    url = build_pod_url(external_url, target)
             elif stub.kind is StubKind.Sandbox:
                 raise InvalidInputError("sandbox URLs require a container-specific exposure")
             elif deployment is not None:

@@ -18,26 +18,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from lazycloud.cli.control import resource_client
-from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
+from lazycloud.clients.volume import VolumeControlClient
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
 
 from lazycloud import Secret
 
 SOURCE_ROOT = Path(__file__).resolve().parent
-
-
-def _store() -> S3ObjectStoreClient:
-    return S3ObjectStoreClient.from_settings(
-        S3ObjectStoreSettings(
-            endpoint_url=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT"],
-            bucket=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET"],
-            region_name=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_REGION"],
-            access_key_id=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY"],
-            secret_access_key=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY"],
-            session_token="",
-            force_path_style=True,
-        )
-    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -56,6 +42,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except LivePrerequisiteError as exc:
         return blocked(exc)
 
+    from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
+
     workspace = profile.workspace
     suffix = secrets.token_hex(6)
     app_name = f"cloud_bucket_{suffix}"
@@ -63,6 +51,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     access_secret_name = f"CLOUD_BUCKET_ACCESS_{suffix.upper()}"
     key_secret_name = f"CLOUD_BUCKET_SECRET_{suffix.upper()}"
     bucket_name = os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET"]
+    volumes = VolumeControlClient.from_endpoint(
+        profile.endpoint, token=profile.token, workspace=workspace
+    )
+    existing_volume_names = {volume.name for volume in volumes.list_volumes().volumes}
     deployment_environment = {
         "LAZYCLOUD_E2E_ACCESS_SECRET": access_secret_name,
         "LAZYCLOUD_E2E_APP": app_name,
@@ -84,7 +76,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         from . import workload_cloud_bucket as workload
 
-        store = _store()
+        store = S3ObjectStoreClient.from_settings(
+            S3ObjectStoreSettings(
+                endpoint_url=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ENDPOINT"],
+                bucket=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_BUCKET"],
+                region_name=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_REGION"],
+                access_key_id=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY"],
+                secret_access_key=os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY"],
+                session_token="",
+                force_path_style=True,
+            )
+        )
         access.set(os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_ACCESS_KEY"])
         access_created = True
         secret.set(os.environ["LAZYCLOUD_E2E_STORAGE_OBJECT_SECRET_KEY"])
@@ -121,6 +123,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             access.delete()
         if secret_created:
             secret.delete()
+        if bucket_name not in existing_volume_names:
+            assert volumes.delete(bucket_name).deleted
         if store is not None:
             store.delete_prefix(f"{prefix}/")
             if store.list_prefix(f"{prefix}/"):

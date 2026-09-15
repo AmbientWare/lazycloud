@@ -21,7 +21,7 @@ from observability.workspace_changes import (
     AsyncWorkspaceChangeReader,
     WorkspaceChangeRecord,
 )
-from shared.http.observability import EventListResponse, EventQueryResponse
+from shared.http.observability import SSE_HEARTBEAT_SECONDS, EventListResponse, EventQueryResponse
 from shared.realtime.streams import EventHistoryQuery
 
 from api.server.auth import read_workspace
@@ -29,7 +29,6 @@ from api.server.dependencies import current_services
 from api.server.routers.resource_api.common import _management
 from api.server.services import ApiServices
 from api.server.sse import (
-    SSE_HEARTBEAT_SECONDS,
     SseItem,
     sse_response_items,
     sse_response_prepared,

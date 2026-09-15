@@ -37,9 +37,11 @@ def _await_marker(url: str, marker: str, token: str) -> None:
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=5,
             )
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            print(json.dumps({"case": "exposed-port", "error": type(exc).__name__}), flush=True)
             time.sleep(0.25)
             continue
+        print(json.dumps({"case": "exposed-port", "status": response.status_code}), flush=True)
         if response.status_code == 200 and response.text == marker:
             return
         time.sleep(0.25)
@@ -57,7 +59,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         name="exposed-port",
         image=Image(python_version="3.12"),
         authorized=True,
-        keep_warm_seconds=180,
+        keep_warm_seconds=600,
         memory="256Mi",
     )
     instance: SandboxInstance | None = None
@@ -91,11 +93,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             ("docker", "compose", "restart", "control-plane"),
             cwd=ROOT,
             environment=os.environ,
-            timeout=120,
+            timeout=200,
         )
+        _await_marker(url, marker, profile.token)
         if instance.list_urls() != {PORT: url}:
             raise RuntimeError("Sandbox exposed-port route changed after restart")
-        _await_marker(url, marker, profile.token)
         print(
             json.dumps(
                 {

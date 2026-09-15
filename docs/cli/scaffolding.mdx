@@ -18,12 +18,13 @@ and expected output.
 ## lazycloud create-app
 
 ```bash
-lazycloud create-app quickstart --output my-project
+lazycloud create-app text_tools --output my-project
 ```
 
-Writes the `quickstart` template and its README into `my-project`. The name
-selects an available template, not an arbitrary app name. Edit `App("quickstart")`
-in the generated file to rename your app.
+Writes `quickstart.py` and a README into `my-project`, with the app named
+`text_tools`. Choose a name that starts with a lowercase letter and contains
+lowercase letters, digits, or underscores. Omit `--output` to use the app
+name as the directory.
 
 ## lazycloud example
 

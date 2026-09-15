@@ -18,6 +18,7 @@ from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
+from shared.function_payloads import FunctionJsonInvocation
 from shared.http.endpoints import (
     EndpointForwardRequest,
     EndpointForwardResponse,
@@ -33,6 +34,8 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionRetireRequest,
     FunctionRetireResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -79,6 +82,9 @@ class RecordingFunctionService:
 
     def start_function_container(self, stub_id: str) -> bool:
         raise AssertionError(f"unexpected start_function_container call: {stub_id}")
+
+    def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse:
+        raise AssertionError(f"unexpected start_function_serve call: {request}")
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]:
         raise AssertionError(f"unexpected containers_holding_work call: {container_ids}")
@@ -147,7 +153,11 @@ class RecordingEndpointService:
     def start_endpoint_serve(
         self,
         request: StartEndpointServeRequest,
+        *,
+        hot_reload: bool = False,
     ) -> StartEndpointServeResponse:
+        if hot_reload:
+            raise AssertionError("deployment warmup must not enable source reload")
         self.serve_requests.append(request)
         return StartEndpointServeResponse(
             container_id=f"endpoint-{len(self.serve_requests)}",
@@ -187,6 +197,7 @@ class RecordingEndpointService:
         status_code: int | None = None,
         body_size_bytes: int = 0,
         cancelled: bool = False,
+        timed_out: bool = False,
         error: str | None = None,
     ) -> None:
         _ = task_id, status_code, body_size_bytes, cancelled, error
@@ -229,7 +240,9 @@ class StaticEndpointResponseStream:
 
 def test_unversioned_invoke_rejects_stopped_latest_without_fallback(
     isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
     with ExitStack() as client_stack:
         _v1_deployment, v1_stub = _deploy(isolated_services, "roll", DeploymentKind.Function)
         v2_deployment, _v2_stub = _deploy(isolated_services, "roll", DeploymentKind.Function)
@@ -245,12 +258,25 @@ def test_unversioned_invoke_rejects_stopped_latest_without_fallback(
         latest_response = client.post(
             "/api/v1/functions/roll/latest", headers=headers, json={"args": [1]}
         )
+        host_response = client.post(
+            "/",
+            headers=headers | {"host": f"{v2_deployment.subdomain}.{_base_host(BASE_URL)}"},
+            json={"args": [1]},
+        )
         versioned_response = client.post(
             "/api/v1/functions/roll/v1", headers=headers, json={"args": [1]}
         )
+        unauthorized_response = client.post(
+            "/",
+            headers={"host": f"{v2_deployment.subdomain}.{_base_host(BASE_URL)}"},
+            json={"args": [1]},
+        )
 
-        assert latest_response.status_code == 400
+        assert latest_response.status_code == 503
         assert "not active" in latest_response.json()["detail"]
+        assert host_response.status_code == 503
+        assert host_response.json()["code"] == "upstream_unavailable"
+        assert unauthorized_response.status_code == 401
         assert versioned_response.status_code == 200
         assert [request.stub_id for request in service.requests] == [v1_stub.id]
 
@@ -307,6 +333,37 @@ def test_private_function_deployed_routes_use_token_workspace(
         assert [request.stub_id for request in service.requests] == [stub.id, public_stub.id]
 
 
+def test_private_invoke_hostname_cannot_select_a_same_named_foreign_workload(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
+    deployment, stub = _deploy(
+        isolated_services, "shared-name", DeploymentKind.Function, workspace="host-owner"
+    )
+    _deploy(isolated_services, "shared-name", DeploymentKind.Function, workspace="host-stranger")
+    service = RecordingFunctionService()
+    host = f"{deployment.subdomain}.{_base_host(BASE_URL)}"
+    with TestClient(create_app(isolated_services, function_service=service)) as client:
+        denied = client.post(
+            "/?workspace=host-stranger",
+            headers=_auth_headers(isolated_services, workspace="host-stranger") | {"host": host},
+            json={},
+        )
+        assert denied.status_code == 403
+        assert not service.requests
+        allowed = client.post(
+            "/?workspace=host-stranger",
+            headers=_auth_headers(isolated_services, workspace="host-owner") | {"host": host},
+            json={},
+        )
+        assert allowed.status_code == 200
+        assert [request.stub_id for request in service.requests] == [stub.id]
+        invocation = service.requests[0].invocation
+        assert isinstance(invocation, FunctionJsonInvocation)
+        assert invocation.kwargs == {"workspace": "host-stranger"}
+
+
 def test_endpoint_version_routes_follow_deployment_lifecycle(
     isolated_services: ApiServices,
 ) -> None:
@@ -336,9 +393,9 @@ def test_endpoint_version_routes_follow_deployment_lifecycle(
         stopped_v2 = client.post(v2_path, headers=headers, json={})
         active_v1 = client.post(v1_path, headers=headers, json={})
 
-        assert stopped_latest.status_code == 400
+        assert stopped_latest.status_code == 503
         assert "not active" in stopped_latest.json()["detail"]
-        assert stopped_v2.status_code == 400
+        assert stopped_v2.status_code == 503
         assert active_v1.status_code == 202
         assert service.forward_requests[-1].stub_id == v1_stub.id
 
@@ -361,21 +418,33 @@ def test_endpoint_host_routing_preserves_numeric_deployment_suffixes(
     with ExitStack() as client_stack:
         monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
         _deploy(isolated_services, "analytics", DeploymentKind.Endpoint)
-        deployment, stub = _deploy(isolated_services, "analytics-2026", DeploymentKind.Endpoint)
+        deployment, stub = _deploy(
+            isolated_services, "analytics-2026", DeploymentKind.Endpoint, route="/reports"
+        )
         service = RecordingEndpointService()
         client = client_stack.enter_context(
             TestClient(create_app(isolated_services, endpoint_service=service))
         )
         headers = _auth_headers(isolated_services)
 
+        url = (
+            ControlPlaneService(isolated_services.context)
+            .stub_url(stub.id, external_url=BASE_URL)
+            .url
+        )
+        parsed = urlsplit(url)
+        assert parsed.path == "/reports"
+        assert parsed.netloc == f"{deployment.subdomain}.{_base_host(BASE_URL)}"
         latest_response = client.post(
-            "/",
-            headers=headers | {"host": f"{deployment.subdomain}.{_base_host(BASE_URL)}"},
+            parsed.path,
+            params={"subpath": "not-the-route"},
+            headers=headers | {"host": parsed.netloc},
             json={"value": "numeric-suffix"},
         )
 
         assert latest_response.status_code == 202
         assert latest_response.json()["stub_id"] == stub.id
+        assert latest_response.json()["path"] == "/reports"
         assert [request.stub_id for request in service.forward_requests] == [stub.id]
 
 
@@ -514,7 +583,7 @@ def test_generated_asgi_urls_forward_subpaths_and_warmup(
             f"{id_path}/api/items/1",
             headers=headers | {"x-client-header": "asgi-id"},
             content=b"alpha",
-            params={"search": "one"},
+            params={"search": "one", "workspace": "default"},
         )
         deployment_response = client.patch(
             f"{deployment_path}/api/items/2",

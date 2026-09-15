@@ -590,6 +590,57 @@ class ComputeUnitRepository:
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
+    def list_for_account(self, user_id: str) -> list[ComputeUnitRecord]:
+        statement = (
+            select(ComputeUnitTable)
+            .where(
+                or_(
+                    and_(
+                        ComputeUnitTable.provider == "local",
+                        exists().where(
+                            WorkspaceMemberTable.workspace_id == ComputeUnitTable.workspace_id,
+                            WorkspaceMemberTable.user_id == user_id,
+                            WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                        ),
+                    ),
+                    exists().where(
+                        ComputeMachineEnrollmentTable.capacity_owner_id == ComputeUnitTable.id,
+                        ComputeMachineEnrollmentTable.user_id == user_id,
+                    ),
+                    exists().where(
+                        ComputeJoinCredentialTable.capacity_owner_id == ComputeUnitTable.id,
+                        ComputeJoinCredentialTable.user_id == user_id,
+                        ComputeJoinCredentialTable.status == ComputeCredentialStatus.Active.value,
+                        ComputeJoinCredentialTable.expires_at > utc_now(),
+                        ComputeJoinCredentialTable.use_count < ComputeJoinCredentialTable.max_uses,
+                    ),
+                    exists().where(
+                        AwsAccountConnectionTable.id == ComputeUnitTable.provider_connection_id,
+                        AwsAccountConnectionTable.user_id == user_id,
+                    ),
+                )
+            )
+            .options(
+                load_only(
+                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
+                )
+            )
+            .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
+        )
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
+
+    def empty_joined_units(self) -> list[ComputeUnitRecord]:
+        statement = select(ComputeUnitTable).where(
+            ComputeUnitTable.provider == "agent",
+            exists().where(
+                ComputeJoinCredentialTable.capacity_owner_id == ComputeUnitTable.id,
+            ),
+            ~exists().where(
+                ComputeMachineEnrollmentTable.capacity_owner_id == ComputeUnitTable.id,
+            ),
+        )
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
+
     def list_across_workspaces(
         self, *, capacity_owner_kind: CapacityOwnerKind | None = None
     ) -> list[ComputeUnitRecord]:
@@ -987,6 +1038,34 @@ def _capacity_operation_record(
 @dataclass(slots=True)
 class ComputeCapacityOperationRepository:
     session: Session
+
+    def latest_failures_for_containers(
+        self, container_ids: Collection[str]
+    ) -> dict[str, CapacityFailureCode]:
+        if not container_ids:
+            return {}
+        table = ComputeCapacityOperationTable
+        failures = (
+            select(
+                table.demand_container_id.label("container_id"),
+                table.payload["failure_code"].as_string().label("failure_code"),
+                func.row_number()
+                .over(
+                    partition_by=table.demand_container_id,
+                    order_by=(table.created_at.desc(), table.id.desc()),
+                )
+                .label("rank"),
+            )
+            .where(
+                table.demand_container_id.in_(container_ids),
+                table.payload["failure_code"].as_string().is_not(None),
+            )
+            .subquery()
+        )
+        rows = self.session.execute(
+            select(failures.c.container_id, failures.c.failure_code).where(failures.c.rank == 1)
+        ).tuples()
+        return {container_id: CapacityFailureCode(code) for container_id, code in rows}
 
     def get(
         self,

@@ -117,14 +117,16 @@ class FunctionCloudpickleResult(EncodedBytesBody):
     value_base64: str = Field(default="", max_length=FUNCTION_PAYLOAD_BASE64_MAX_CHARS)
     size_bytes: int = Field(ge=0, le=FUNCTION_PAYLOAD_MAX_BYTES)
     sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    preview: str | None = Field(default=None, max_length=4096)
 
     @classmethod
-    def from_bytes(cls, value: bytes) -> FunctionCloudpickleResult:
+    def from_bytes(cls, value: bytes, *, preview: str | None = None) -> FunctionCloudpickleResult:
         _validate_binary_size(value, kind="result")
         return cls(
             value_base64=encode_bytes(value),
             size_bytes=len(value),
             sha256=hashlib.sha256(value).hexdigest(),
+            preview=preview,
         )
 
     @model_validator(mode="after")

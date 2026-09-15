@@ -24,6 +24,7 @@ output "records" {
     apex          = cloudflare_dns_record.apex.name
     wildcard      = cloudflare_dns_record.wildcard.name
     agent_tunnels = cloudflare_dns_record.agent_tunnels.name
+    tcp_workloads = cloudflare_dns_record.tcp_workloads.name
   }
 }
 output "zone_id" {

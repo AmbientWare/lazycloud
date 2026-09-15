@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydantic import Field, JsonValue, field_validator
+from pydantic import Field, JsonValue, TypeAdapter, field_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import (
     ADMIN_CLI_NAME,
@@ -880,6 +880,15 @@ class AgentState(ContractModel):
     bootstrap: AgentBootstrap
     updated_at: datetime = Field(default_factory=utc_now)
 
+    @classmethod
+    def from_saved_json(cls, value: str) -> AgentState:
+        data = TypeAdapter(dict[str, JsonValue]).validate_json(value)
+        if isinstance(bootstrap := data.get("bootstrap"), dict):
+            # Saved identities outlive the routing configuration that enrolled them.
+            bootstrap.pop("gateway_runtime_http_url", None)
+            bootstrap.pop("transport", None)
+        return cls.model_validate(data)
+
     @property
     def sanitized_gateway_url(self) -> str:
         return normalize_gateway_url(self.gateway_url)
@@ -1620,7 +1629,8 @@ def _worker_docker_args(
     if slot.memory_mb > 0:
         args.extend(["--memory", f"{slot.memory_mb}m"])
     if slot.gpu_count > 0:
-        args.extend(["--gpus", f"device={slot.gpu_assignment}" if slot.gpu_assignment else "all"])
+        # Docker parses --gpus as CSV, so the device list must remain one field.
+        args.extend(["--gpus", f'"device={slot.gpu_assignment}"' if slot.gpu_assignment else "all"])
     for volume in volumes:
         args.extend(["-v", volume])
     for key, value in sorted(env.items()):

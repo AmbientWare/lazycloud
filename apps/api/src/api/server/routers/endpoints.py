@@ -5,13 +5,16 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import websockets.asyncio.client
+from anyio import CancelScope
 from control.service import ControlPlaneService, StubKind, StubRecord
 from execution.endpoints.dispatch import (
     AsyncEndpointResponseStream,
     EndpointBackendProtocol,
+    EndpointDispatchUnavailable,
     endpoint_backend_url,
 )
 from execution.endpoints.service import (
+    EndpointDispatchTimedOut,
     EndpointIngressDispatchSession,
     EndpointWebSocketDispatchRejected,
 )
@@ -23,6 +26,7 @@ from fastapi import (
     WebSocket,
     status,
 )
+from networking.async_http import AsyncBackendTimeoutError
 from shared.container_requests import CONTAINER_HEALTH_PATH
 from shared.http.endpoints import (
     EndpointForwardRequest,
@@ -47,6 +51,7 @@ from api.server.deployed_stubs import (
     resolve_deployed_stub_id,
     resolve_deployed_stub_id_async,
 )
+from api.server.host_routing import invoke_host_container_id
 from api.server.http import (
     HOP_BY_HOP_RESPONSE_HEADERS,
     backend_websocket_headers,
@@ -56,7 +61,6 @@ from api.server.http import (
     request_headers,
     request_query_params,
     websocket_headers,
-    websocket_query_params,
     websocket_subprotocols,
 )
 from api.server.ownership import require_endpoint_stub_workspace
@@ -80,7 +84,7 @@ def start_endpoint_serve(
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StartEndpointServeResponse:
     require_endpoint_stub_workspace(control_plane, request.stub_id, workspace_id)
-    return service.start_endpoint_serve(request)
+    return service.start_endpoint_serve(request, hot_reload=True)
 
 
 @endpoint_router.api_route("/id/{stub_id}", methods=ENDPOINT_METHODS, include_in_schema=False)
@@ -246,6 +250,17 @@ async def deployed_endpoint_request_by_version(
         stub,
         service,
         request,
+    )
+
+
+for endpoint_path, endpoint_handler in (
+    ("/id/{stub_id}/{subpath:path}", deployed_endpoint_request_by_id),
+    ("/public/{stub_id}/{subpath:path}", deployed_public_endpoint_request_by_id),
+    ("/{deployment_name}/latest/{subpath:path}", deployed_endpoint_request_by_latest_path),
+    ("/{deployment_name}/v{version}/{subpath:path}", deployed_endpoint_request_by_version),
+):
+    endpoint_router.add_api_route(
+        endpoint_path, endpoint_handler, methods=ENDPOINT_METHODS, include_in_schema=False
     )
 
 
@@ -558,6 +573,7 @@ async def _forwarded_request(
 ) -> EndpointForwardRequest:
     return EndpointForwardRequest(
         stub_id=stub.id,
+        container_id=invoke_host_container_id(request.scope),
         method=request.method,
         path=forwarded_path(subpath),
         query_params=request_query_params(request),
@@ -570,13 +586,7 @@ async def _health_probe_response(
     service: EndpointApiService,
     forwarded: EndpointForwardRequest,
 ) -> Response | None:
-    """The probe path, which answers without opening an invocation.
-
-    ASGI only, because only ASGI routes a subpath: a function endpoint is invoked
-    at `/` with a payload and has nowhere to put `/health`. Its runner serves the
-    route all the same, so reaching it is a matter of publishing a URL rather than
-    of the probe working.
-    """
+    """Read ASGI runner health without opening an invocation."""
 
     if forwarded.path != CONTAINER_HEALTH_PATH:
         return None
@@ -590,10 +600,8 @@ async def _forward_endpoint_request(
     stub: StubRecord,
     service: EndpointApiService,
     request: Request,
-    *,
-    subpath: str = "",
 ) -> Response:
-    forwarded = await _forwarded_request(stub, request, subpath)
+    forwarded = await _forwarded_request(stub, request, request.path_params.get("subpath", ""))
     result = await service.forward_endpoint_request(forwarded)
     attribute_public_transfer(
         request,
@@ -624,6 +632,12 @@ async def _forward_asgi_http_request(
         stream = await service.open_asgi_http_stream(session, forwarded)
     except EndpointWebSocketDispatchRejected as exc:
         return Response(content=str(exc), status_code=exc.status_code)
+    except EndpointDispatchTimedOut as exc:
+        if session is not None:
+            await service.finish_asgi_http(session.task_id, error=str(exc), timed_out=True)
+        raise
+    except EndpointDispatchUnavailable:
+        raise
     except Exception as exc:
         if session is not None:
             await service.finish_asgi_http(
@@ -673,24 +687,37 @@ async def _stream_asgi_response_body(
 ) -> AsyncIterator[bytes]:
     body_size_bytes = 0
     completed = False
+    timed_out = False
     error: str | None = None
+    lengths = stream.headers.get("content-length", [])
+    content_length = int(lengths[0]) if lengths else None
     try:
         async for chunk in stream.iter_chunks():
             body_size_bytes += len(chunk)
+            if content_length is not None and body_size_bytes == content_length:
+                completed = True
             yield chunk
         completed = True
+    except AsyncBackendTimeoutError as exc:
+        timed_out = True
+        error = str(exc)
+        raise
     except Exception as exc:
         error = str(exc)
         raise
     finally:
-        await stream.close()
-        await service.finish_asgi_http(
-            session.task_id,
-            status_code=stream.status_code,
-            body_size_bytes=body_size_bytes,
-            cancelled=not completed and error is None,
-            error=error,
-        )
+        # A client may close after receiving Content-Length bytes, cancelling
+        # Starlette's response task before dispatch capacity has been released.
+        with CancelScope(shield=True):
+            await stream.close()
+            await service.finish_asgi_http(
+                session.task_id,
+                status_code=stream.status_code,
+                body_size_bytes=body_size_bytes,
+                cancelled=not completed and error is None,
+                timed_out=timed_out,
+                error=error,
+            )
 
 
 def _start_deployed_endpoint_serve(
@@ -709,9 +736,10 @@ async def _forward_asgi_websocket(
 ) -> None:
     forwarded = EndpointForwardRequest(
         stub_id=stub.id,
+        container_id=invoke_host_container_id(websocket.scope),
         method="GET",
         path=forwarded_path(subpath),
-        query_params=websocket_query_params(websocket),
+        query_params=request_query_params(websocket),
         headers=websocket_headers(websocket),
     )
     session: EndpointIngressDispatchSession | None = None

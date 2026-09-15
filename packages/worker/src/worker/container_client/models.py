@@ -51,7 +51,6 @@ class ContainerServiceMethod(StrEnum):
     ContainerKill = "ContainerKill"
     ContainerStreamLogs = "ContainerStreamLogs"
     ContainerCheckpoint = "ContainerCheckpoint"
-    ContainerArchive = "ContainerArchive"
     ContainerSyncWorkspace = "ContainerSyncWorkspace"
 
 
@@ -372,18 +371,6 @@ class ContainerCheckpointResponse(ContractModel):
     ok: bool = True
     error_msg: str = ""
     checkpoint_id: str = ""
-
-
-class ContainerArchiveRequest(ContractModel):
-    container_id: str
-    image_id: str
-
-
-class ContainerArchiveResponse(ContractModel):
-    progress: int = Field(default=0, ge=0, le=100)
-    done: bool = False
-    success: bool = False
-    error_msg: str = ""
 
 
 class SyncContainerWorkspaceRequest(ContractModel):

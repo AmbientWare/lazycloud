@@ -801,10 +801,11 @@ class StubRepository:
         return [StubRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
 
     def get_for_update(self, stub_id: str, *, workspace_id: str) -> StubRecord | None:
+        # Serialize admission without blocking concurrent container foreign-key checks.
         row = self.session.scalars(
             select(StubTable)
             .where(StubTable.id == stub_id, StubTable.workspace_id == workspace_id)
-            .with_for_update()
+            .with_for_update(key_share=True)
         ).first()
         return StubRecord.model_validate(row.payload) if row is not None else None
 
@@ -840,6 +841,18 @@ class StubRepository:
 @dataclass(slots=True)
 class DeploymentRepository:
     session: Session
+
+    def get_for_update(self, deployment_id: str, *, workspace_id: str) -> Deployment | None:
+        row = self.session.scalars(
+            select(DeploymentTable)
+            .where(
+                DeploymentTable.id == deployment_id,
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .with_for_update()
+        ).first()
+        return Deployment.model_validate(row.payload) if row is not None else None
 
     @property
     def records(self) -> WorkspaceTableRepository[Deployment]:
@@ -1142,7 +1155,6 @@ class DeploymentResourceRepository:
                 .join(StubTable, StubTable.id == DeploymentTable.stub_id)
                 .where(AppTable.deleted_at.is_(None))
                 .where(DeploymentTable.deleted_at.is_(None))
-                .where(DeploymentTable.active.is_(True))
                 .where(match)
                 .order_by(DeploymentTable.version.desc())
                 .limit(1)

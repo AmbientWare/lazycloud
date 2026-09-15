@@ -23,7 +23,7 @@ from typing import Required, TypedDict
 
 from lazycloud.json_contracts import JsonValue
 
-from lazycloud import App, Artifact, Client, Image
+from lazycloud import App, Artifact, Image
 
 APP_NAME_ENV = "LAZYCLOUD_ALL_WORKLOADS_APP_NAME"
 APP_NAME = os.getenv(APP_NAME_ENV, "all_workloads")
@@ -270,40 +270,20 @@ sandbox = app.sandbox(
 
 
 def run_function(value: int = 7) -> dict[str, JsonValue]:
-    client = Client()
-    target = client.deployment.resolve_target(
-        kind=calculate.spec().kind,
-        name=calculate.resource_name,
-        app=APP_NAME,
-    )
-    submission = client.submit_deployment(target.deployment_id, value)
-    if submission.task is None:
-        raise RuntimeError("function deployment did not return a task handle")
-    result = submission.task.wait(timeout_seconds=120, poll_interval_seconds=0.5)
+    handle = calculate.spawn(value)
+    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
     if not result.ok:
         raise RuntimeError(result.error or "function example failed")
-    return {"task_id": submission.task_id, "result": result.task.result}
+    return {"task_id": handle.task_id, "result": result.task.result}
 
 
 def run_function_failure(value: int = 13) -> dict[str, JsonValue]:
-    client = Client()
-    target = client.deployment.resolve_target(
-        kind=calculate.spec().kind,
-        name=calculate.resource_name,
-        app=APP_NAME,
-    )
-    submission = client.submit_deployment(
-        target.deployment_id,
-        value,
-        kwargs={"fail": True},
-    )
-    if submission.task is None:
-        raise RuntimeError("function deployment did not return a task handle")
-    result = submission.task.wait(timeout_seconds=120, poll_interval_seconds=0.5)
+    handle = calculate.spawn(value, fail=True)
+    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
     if result.ok:
         raise RuntimeError("intentional failure example completed successfully")
     return {
-        "task_id": submission.task_id,
+        "task_id": handle.task_id,
         "status": result.status.value,
         "error": result.error,
         "expected_failure": True,
@@ -311,19 +291,11 @@ def run_function_failure(value: int = 13) -> dict[str, JsonValue]:
 
 
 def run_nested_function(value: int = 6) -> dict[str, JsonValue]:
-    client = Client()
-    target = client.deployment.resolve_target(
-        kind=nested_calculation.spec().kind,
-        name=nested_calculation.resource_name,
-        app=APP_NAME,
-    )
-    submission = client.submit_deployment(target.deployment_id, value)
-    if submission.task is None:
-        raise RuntimeError("nested function deployment did not return a task handle")
-    result = submission.task.wait(timeout_seconds=120, poll_interval_seconds=0.5)
+    handle = nested_calculation.spawn(value)
+    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
     if not result.ok:
         raise RuntimeError(result.error or "nested function example failed")
-    return {"task_id": submission.task_id, "result": result.task.result}
+    return {"task_id": handle.task_id, "result": result.task.result}
 
 
 def run_background_job(value: int = 5, delay_seconds: float = 0) -> dict[str, JsonValue]:
@@ -351,19 +323,11 @@ def run_background_job_failure(value: int = 17) -> dict[str, JsonValue]:
 
 
 def run_artifacts(label: str = "all workloads") -> dict[str, JsonValue]:
-    client = Client()
-    target = client.deployment.resolve_target(
-        kind=create_artifacts.spec().kind,
-        name=create_artifacts.resource_name,
-        app=APP_NAME,
-    )
-    submission = client.submit_deployment(target.deployment_id, label)
-    if submission.task is None:
-        raise RuntimeError("artifacts deployment did not return a task handle")
-    result = submission.task.wait(timeout_seconds=120, poll_interval_seconds=0.5)
+    handle = create_artifacts.spawn(label)
+    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
     if not result.ok:
         raise RuntimeError(result.error or "artifacts example failed")
-    return {"task_id": submission.task_id, "result": result.task.result}
+    return {"task_id": handle.task_id, "result": result.task.result}
 
 
 def exercise_runs(value: int = 7) -> dict[str, JsonValue]:

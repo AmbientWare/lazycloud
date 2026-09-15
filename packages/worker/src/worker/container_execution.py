@@ -16,6 +16,7 @@ from shared.container_requests import (
 )
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
+from shared.http.errors import HttpApiError
 from shared.image_building.authoring import LinuxArchitecture
 from shared.realtime.contracts import CloudEventRecord
 from shared.scheduling import (
@@ -26,6 +27,7 @@ from shared.timestamps import utc_now
 from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
 
+from worker.checkpoint_readiness import CheckpointReadinessProbe
 from worker.container_logs import ContainerLogCaptureResult
 from worker.container_rootfs import (
     ContainerRootfsReleaseResult,
@@ -173,6 +175,7 @@ class ContainerSpecBuilder(Protocol):
         network_result: ContainerNetworkSetupResult | None = None,
         gpu_result: ContainerGpuAssignmentResult | None = None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
+        image_result: ContainerImageLoadResult | None = None,
     ) -> OciRuntimeContainerSpec: ...
 
 
@@ -241,8 +244,8 @@ class ContainerInstanceRecorder(Protocol):
     ) -> None: ...
 
 
-class ContainerSandboxDockerPreparer(Protocol):
-    def prepare(self, container_id: str) -> None: ...
+class ContainerWorkloadPreparer(Protocol):
+    def prepare_workload(self, container_id: str) -> None: ...
 
 
 class ContainerExitEventPublisher(Protocol):
@@ -262,6 +265,7 @@ class ContainerLifecyclePublisher(Protocol):
 class ContainerImageLoadResult(ContractModel):
     loaded: bool = True
     reason: str = ""
+    env: list[str] = Field(default_factory=list, repr=False)
 
 
 class ContainerMountSetupResult(ContractModel):
@@ -285,10 +289,15 @@ class ContainerNetworkSetupResult(ContractModel):
 
 class ContainerRuntimeRunResult(ContractModel):
     exit_code: int
+    cancelled: bool = False
     stop_reason: StopContainerReason = StopContainerReason.Unknown
     oom_killed: bool = False
     started_pid: int | None = None
     output: str = ""
+
+
+class ContainerStartupCancelled(RuntimeError):
+    pass
 
 
 class ContainerRuntimeStartError(RuntimeError):
@@ -336,6 +345,19 @@ class ContainerExecutionContext(ContractModel):
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = False
 
+    @property
+    def checkpoint_readiness_probe(self) -> CheckpointReadinessProbe | None:
+        if not self.checkpoint_enabled or self.startup_kind not in {
+            WorkerStartupKind.Pod,
+            WorkerStartupKind.PodRun,
+        }:
+            return None
+        return CheckpointReadinessProbe(
+            path=self.checkpoint_readiness_path,
+            port=self.checkpoint_readiness_port,
+            timeout_seconds=min(self.checkpoint_readiness_interval_seconds, 5.0),
+        )
+
 
 class ContainerExecutionPhaseResult(ContractModel):
     phase: ContainerExecutionPhase
@@ -345,6 +367,7 @@ class ContainerExecutionPhaseResult(ContractModel):
 
 
 class ContainerExecutionResult(ContractModel):
+    cancelled: bool = False
     phases: list[ContainerExecutionPhaseResult] = Field(default_factory=list)
     image_result: ContainerImageLoadResult | None = None
     image_loaded: bool = False
@@ -368,7 +391,7 @@ class ContainerExecutionResult(ContractModel):
 
     @property
     def ok(self) -> bool:
-        return all(phase.ok for phase in self.phases)
+        return not self.cancelled and all(phase.ok for phase in self.phases)
 
     @property
     def failed_phase(self) -> ContainerExecutionPhase | None:
@@ -428,7 +451,7 @@ class WorkerContainerExecutionService:
     workspace_storage_mounter: ContainerWorkspaceStorageMounter | None = None
     gpu_assigner: ContainerGpuAssigner | None = None
     instance_recorder: ContainerInstanceRecorder | None = None
-    sandbox_docker_preparer: ContainerSandboxDockerPreparer | None = None
+    workload_preparer: ContainerWorkloadPreparer | None = None
     credential_hydrator: ContainerCredentialHydrator | None = None
     oom_supervisor: WorkerSupervisionService | None = None
     exit_events: ContainerExitEventPublisher | None = None
@@ -611,9 +634,9 @@ class WorkerContainerExecutionService:
             self._apply_deferred_cgroup_parameters(context)
             if not self._phase(
                 result,
-                ContainerExecutionPhase.PrepareSandboxDocker,
-                lambda: self._prepare_sandbox_docker(context),
-                skip=not context.docker_enabled,
+                ContainerExecutionPhase.PrepareWorkload,
+                lambda: self._prepare_workload(context),
+                skip=context.request.stub_type != "sandbox" and not context.docker_enabled,
                 request=context.request,
             ):
                 msg = result.phases[-1].error_message
@@ -670,6 +693,7 @@ class WorkerContainerExecutionService:
             )
             return result
         run_result = run_result_holder["run_result"]
+        result.cancelled = run_result.cancelled
         if run_result.output:
             result.runtime_output = run_result.output
         if started_pid is None and run_result.started_pid is not None:
@@ -851,6 +875,7 @@ class WorkerContainerExecutionService:
             network_result=network_result,
             gpu_result=gpu_result,
             rootfs_result=rootfs_result,
+            image_result=result.image_result,
         )
 
     def _set_rootfs_result(
@@ -944,8 +969,16 @@ class WorkerContainerExecutionService:
                 on_started=monitored_started,
                 output_sink=output_sink,
             )
-        except ContainerRuntimeStartError as exc:
-            result.runtime_output = _redact_runtime_output(exc.output, context.request)
+        except Exception as exc:
+            if isinstance(exc, ContainerRuntimeStartError):
+                result.runtime_output = _redact_runtime_output(exc.output, context.request)
+            if log_capture is not None:
+                failed_phase, detail = _first_phase_failure(result)
+                phase = failed_phase or ContainerExecutionPhase.RunRuntime
+                safe_detail = _redact_runtime_output(detail or str(exc), context.request)
+                log_capture.record_diagnostic(
+                    f"container startup failed during {phase.value}: {safe_detail}"
+                )
             raise
         finally:
             result.monitoring = monitor.stop()
@@ -982,11 +1015,11 @@ class WorkerContainerExecutionService:
             container_hostname=self._container_hostname(context, result),
         )
 
-    def _prepare_sandbox_docker(self, context: ContainerExecutionContext) -> None:
-        if self.sandbox_docker_preparer is None:
-            msg = "Docker-enabled sandbox lifecycle is not configured"
+    def _prepare_workload(self, context: ContainerExecutionContext) -> None:
+        if self.workload_preparer is None:
+            msg = "supervised workload startup is not configured"
             raise RuntimeError(msg)
-        self.sandbox_docker_preparer.prepare(context.request.container_id)
+        self.workload_preparer.prepare_workload(context.request.container_id)
 
     def _update_running_status(self, context: ContainerExecutionContext) -> None:
         if self.status_repository is None:
@@ -996,6 +1029,8 @@ class WorkerContainerExecutionService:
             SchedulerContainerStatus.Running,
             ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
         )
+        if plan.next_status is SchedulerContainerStatus.Stopping:
+            raise ContainerStartupCancelled(f"container {context.request.container_id} was stopped")
         if plan.next_status is not SchedulerContainerStatus.Running:
             msg = (
                 f"container {context.request.container_id} remained "
@@ -1192,6 +1227,9 @@ class WorkerContainerExecutionService:
         started_at = datetime.now(UTC)
         try:
             action()
+        except ContainerStartupCancelled:
+            result.phases.append(ContainerExecutionPhaseResult(phase=phase, skipped=True))
+            raise
         except Exception as exc:  # pragma: no cover - defensive boundary capture
             self._publish_phase_lifecycle(
                 result,
@@ -1209,7 +1247,11 @@ class WorkerContainerExecutionService:
                 ContainerExecutionPhaseResult(
                     phase=phase,
                     ok=False,
-                    error_message=f"{type(exc).__name__}: {exc}",
+                    error_message=(
+                        exc.detail
+                        if isinstance(exc, HttpApiError) and exc.detail is not None
+                        else f"{type(exc).__name__}: {exc}"
+                    ),
                 )
             )
             return False

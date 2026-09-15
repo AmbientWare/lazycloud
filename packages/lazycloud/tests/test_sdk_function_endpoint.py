@@ -54,6 +54,7 @@ from shared.http.gateway import (
     SyncContainerWorkspaceResponse,
 )
 from shared.paths import HOME_ENV
+from shared.task_context import task_context
 from shared.tasks import TaskPolicy
 from tests.fakes import FakeDeploymentClient
 
@@ -413,6 +414,15 @@ def test_function_spawn_serializes_call_dependencies(
             edge_type="argument",
         )
     ]
+    parent = "11111111-1111-4111-8111-111111111111"
+    root = "22222222-2222-4222-8222-222222222222"
+    with task_context(parent, root):
+        downstream.spawn_map([(upstream_call, 8), (upstream_call, 9)])
+    assert len(client.contexts[3:]) == 2
+    assert all(
+        context_parent == parent and context_root == root and dependencies == client.contexts[2][2]
+        for context_parent, context_root, dependencies in client.contexts[3:]
+    )
 
 
 def test_a_function_declares_its_own_schedule(

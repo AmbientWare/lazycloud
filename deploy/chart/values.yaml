@@ -14,6 +14,9 @@ runtime: {}
 aws:
   region: ""
 
+tcpIngress:
+  port: 1995
+
 secrets:
   name: lazycloud-secrets
   documents: {}

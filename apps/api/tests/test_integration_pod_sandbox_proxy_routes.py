@@ -17,7 +17,7 @@ from database.repositories.apps import AppRepository, StubRepository
 from database.repositories.execution import PodExecutionRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.proxy import (
-    PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
+    PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS,
     PodProxyBackendError,
     PodProxyHttpRequest,
     PodProxyResponseStream,
@@ -137,6 +137,7 @@ def test_pod_proxy_records_demand_before_waiting_for_scale_from_zero(
     ("stub_kind", "route_mode"),
     [
         (StubKind.Pod, "private"),
+        (StubKind.Pod, "host"),
         (StubKind.Sandbox, "private"),
         (StubKind.Sandbox, "public"),
         (StubKind.Sandbox, "host"),
@@ -260,8 +261,8 @@ def test_pod_websocket_proxies_subprotocol_text_binary_and_balances_demand(
         assert socket_client.targets[0].container_id == container.id
         assert socket_client.timeouts == [
             (
-                PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS
-                if stub_kind is StubKind.Sandbox
+                PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS
+                if stub_kind is StubKind.Sandbox or route_mode == "host"
                 else service.pod_proxy_start_timeout_seconds
             )
         ]
@@ -375,8 +376,8 @@ def test_pinned_sandbox_routes_never_wait_or_fall_through_to_a_sibling(
         assert first_response.headers["x-target-container"] == first.id
         assert second_response.headers["x-target-container"] == second.id
         assert proxy_client.connect_timeouts == [
-            PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
-            PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS,
+            PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS,
+            PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS,
         ]
         connection_counts = (dict(connections.total), dict(connections.active))
         foreign = client.get(
@@ -412,6 +413,10 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
             kind=StubKind.Sandbox,
         )
         container = _create_container(isolated_services, stub, "route-owner")
+        container.runtime_worker_id = "worker-1"
+        container.runtime_machine_id = "machine-1"
+        with isolated_services.context.database.session() as session:
+            ContainerRepository(session).upsert(container)
         _store_sandbox_exposure(isolated_services, container, port=8080, public=False)
         scheduler = _FakeSchedulerContainers.running(
             container,
@@ -421,6 +426,8 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
             route_id="owned-route",
             workspace_id=container.workspace_id,
             container_id=container.id,
+            worker_id=container.runtime_worker_id,
+            machine_id=container.runtime_machine_id,
             port=8080,
             state=BackendRouteState.Ready,
         )
@@ -511,7 +518,7 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
         # Bounded by the one-second connect timeout, not the request timeout; the
         # slack is for a loaded runner, and the request timeout is minutes away.
         assert time.monotonic() - started < 10.0
-        assert proxy_client.connect_timeouts == [PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS]
+        assert proxy_client.connect_timeouts == [PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS]
 
         with (
             client.websocket_connect(
@@ -522,7 +529,7 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
         ):
             websocket.receive_text()
         assert closed.value.code == 1013
-        assert socket_client.timeouts == [PINNED_SANDBOX_CONNECT_TIMEOUT_SECONDS]
+        assert socket_client.timeouts == [PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS]
 
 
 def test_sandbox_proxy_supports_id_deployment_and_public_path_forms(
@@ -993,6 +1000,7 @@ def _create_container(
         workspace_id=stub.workspace_id,
         stub_id=stub.id,
         status=ContainerStatus.Running,
+        ports={"http": 8080},
     )
     with services.context.database.session() as session:
         ContainerRepository(session).records.upsert(

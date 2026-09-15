@@ -31,6 +31,7 @@ from shared.http.volumes import (
     StatPathResponse,
 )
 from shared.identity import AuthScope
+from starlette.requests import HTTPConnection
 
 from api.server.auth import (
     read_access,
@@ -52,13 +53,16 @@ router = APIRouter(prefix="/api/v1/volumes", tags=["volume"])
 
 async def _presigned_url_workspace(
     request: CreatePresignedUrlRequest,
+    connection: HTTPConnection,
     services: ApiServices = Depends(current_services),
     credentials: AuthorizationCredentials = None,
     workspace: str | None = None,
 ) -> str:
     continuing_upload = request.method is PresignedUrlMethod.UploadPart
     scope = AuthScope.Write if continuing_upload else AuthScope.Read
-    workspace_id = await require_workspace_scope(scope)(services, credentials, workspace)
+    workspace_id = await require_workspace_scope(scope)(
+        services=services, connection=connection, credentials=credentials, workspace=workspace
+    )
     if continuing_upload:
         return workspace_id
     return await require_transfer_scope(scope)(services, workspace_id)

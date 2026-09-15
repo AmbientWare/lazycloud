@@ -16,7 +16,7 @@ from typing_extensions import Self
 from lazycloud.abstractions.endpoint import EndpointResponse
 from lazycloud.config import get_profile
 from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
-from lazycloud.http_transport import request_raw
+from lazycloud.http_transport import request_raw, workload_http_timeout_seconds
 from lazycloud.json_contracts import (
     JsonValue,
     parse_json_object,
@@ -37,6 +37,7 @@ class ResourceManifest:
     deployment_id: str
     deployment_version: int
     invoke_url: str
+    timeout_seconds: int | None = None
     route: str | None = None
     methods: tuple[str, ...] = ()
     inputs: dict[str, JsonValue] = field(default_factory=dict)
@@ -52,6 +53,11 @@ class ResourceManifest:
             deployment_id=str(data["deployment_id"]),
             deployment_version=_manifest_int(data, "deployment_version"),
             invoke_url=str(data["invoke_url"]),
+            timeout_seconds=(
+                _manifest_int(data, "timeout_seconds")
+                if data.get("timeout_seconds") is not None
+                else None
+            ),
             route=str(data["route"]) if data.get("route") is not None else None,
             methods=_manifest_methods(data),
             inputs=_manifest_object(data, "inputs"),
@@ -62,8 +68,15 @@ class ResourceManifest:
 @dataclass(slots=True)
 class ResourceHandle:
     manifest: ResourceManifest
+    endpoint: str | None = field(default=None, init=False)
+    workspace: str | None = field(default=None, init=False)
     token: str | None = field(default=None, init=False, repr=False)
-    timeout_seconds: float = field(default=10.0, init=False, repr=False)
+    timeout_seconds: float = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.timeout_seconds = workload_http_timeout_seconds(
+            self.manifest.kind, self.manifest.timeout_seconds
+        )
 
     @property
     def app(self) -> str:
@@ -99,9 +112,15 @@ class ResourceHandle:
     def _bind_control(
         self,
         *,
+        endpoint: str | None = None,
+        workspace: str | None = None,
         token: str | None = None,
         timeout_seconds: float | None = None,
     ) -> Self:
+        if endpoint is not None:
+            self.endpoint = endpoint
+        if workspace is not None:
+            self.workspace = workspace
         if token is not None:
             self.token = token
         if timeout_seconds is not None:
@@ -157,11 +176,14 @@ class FunctionHandle(ResourceHandle):
         completed = Task(
             task_id=response.task_id,
             client=TaskClient(
-                endpoint=_origin(self.invoke_url),
+                endpoint=self.endpoint or _origin(self.invoke_url),
+                workspace=self.workspace,
                 token=self._token(),
                 timeout_seconds=self.timeout_seconds,
             ),
         ).wait()
+        if not completed.ok:
+            raise ClientHandleError(completed.error or f"function task {completed.status.value}")
         try:
             return decode_function_result(completed.value)
         except FunctionResultDecodeError as exc:

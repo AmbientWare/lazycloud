@@ -23,7 +23,7 @@ from shared.app_identity import FUNCTION_IMAGE
 from shared.containers import ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind, StubKind
-from shared.errors import ConflictError, InvalidInputError, NotFoundError
+from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.objects import ObjectRecord
 from shared.timestamps import utc_now
 from shared.workload_config import StubConfig
@@ -320,12 +320,10 @@ def test_new_deployment_version_keeps_prior_versions_invokable(
     assert isolated_services.deployments.get(v1.id).active
     assert isolated_services.deployments.get(v2.id).active
 
-    latest = resources.resolve_invoke_target(
-        "predict", DeploymentKind.Function, workspace="default"
-    )
+    latest = resources.resolve_target("predict", DeploymentKind.Function, workspace="default")
     assert latest.deployment.id == v2.id
 
-    versioned = resources.resolve_invoke_target(
+    versioned = resources.resolve_target(
         "predict", DeploymentKind.Function, workspace="default", version=1
     )
     assert versioned.deployment.id == v1.id
@@ -345,30 +343,36 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
 
     management.set_deployment_active("default", v2.id, active=False)
 
-    with pytest.raises(InvalidInputError, match="not active: predict v2"):
-        resources.resolve_invoke_target("predict", DeploymentKind.Function, workspace="default")
-    with pytest.raises(InvalidInputError, match="not active: predict v2"):
-        management.deployment_url_by_name("default", StubKind.Function, "predict")
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(UpstreamUnavailableError, match="not active: predict v2"),
+    ):
+        resources.resolve_invoke_target_in_session(
+            session, "predict", DeploymentKind.Function, workspace="default"
+        )
+    stopped = management.deployment_url_by_name("default", StubKind.Function, "predict")
+    assert stopped.deployment.id == v2.id and not stopped.deployment.active
 
-    still_versioned = resources.resolve_invoke_target(
+    still_versioned = resources.resolve_target(
         "predict", DeploymentKind.Function, workspace="default", version=1
     )
     assert still_versioned.deployment.id == v1.id
 
     management.set_deployment_active("default", v1.id, active=False)
-    with pytest.raises(InvalidInputError, match="not active: predict v1"):
-        resources.resolve_invoke_target(
-            "predict", DeploymentKind.Function, workspace="default", version=1
+    with (
+        isolated_services.context.database.session() as session,
+        pytest.raises(UpstreamUnavailableError, match="not active: predict v1"),
+    ):
+        resources.resolve_invoke_target_in_session(
+            session, "predict", DeploymentKind.Function, workspace="default", version=1
         )
 
     management.set_deployment_active("default", v2.id, active=True)
-    restarted = resources.resolve_invoke_target(
-        "predict", DeploymentKind.Function, workspace="default"
-    )
+    restarted = resources.resolve_target("predict", DeploymentKind.Function, workspace="default")
     assert restarted.deployment.id == v2.id
 
     with pytest.raises(NotFoundError, match="deployment not found"):
-        resources.resolve_invoke_target("missing", DeploymentKind.Function, workspace="default")
+        resources.resolve_target("missing", DeploymentKind.Function, workspace="default")
 
 
 def test_cron_schedule_follows_deployment_lifecycle(
@@ -578,13 +582,7 @@ def test_management_stop_and_delete_are_workspace_scoped_and_stop_containers(
 def test_registration_keeps_a_source_stub_that_something_is_using(
     isolated_services: ApiServices,
 ) -> None:
-    """A stub invoked before it was deployed is not swept up by deploying it.
-
-    Registration copies its source stub forward and discards it, because the
-    ordinary one is a staging row nothing refers to. A user who called the
-    function before deploying leaves tasks against that row, and it stops being
-    disposable the moment anything points at it.
-    """
+    """Registration preserves invocations and transfers warm capacity to the deployment."""
 
     control_plane = ControlPlaneService(
         isolated_services.context,
@@ -596,6 +594,12 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
         workspace=workspace.id,
         kind=StubKind.Function,
         handler="pkg:function",
+        config=StubConfig.model_validate(
+            {
+                "runtime": {"keep_warm": -1},
+                "autoscaler": {"min_containers": 2, "max_containers": 4},
+            }
+        ),
     )
     isolated_services.tasks.create(
         "invoked-before-deploy",
@@ -615,4 +619,12 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
 
     assert deployment.stub_id is not None
     assert deployment.stub_id != source_stub.id
-    assert control_plane.get_stub(source_stub.id, workspace=workspace.id).id == source_stub.id
+    retained = control_plane.get_stub(source_stub.id, workspace=workspace.id)
+    assert retained.config.autoscaler.min_containers == 0
+    assert retained.config.runtime.keep_warm == -1
+    assert (
+        control_plane.get_stub(
+            deployment.stub_id, workspace=workspace.id
+        ).config.autoscaler.min_containers
+        == 2
+    )
