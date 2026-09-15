@@ -31,6 +31,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from shared.capacity import CapacityFailureCode
 from shared.compute_policy import UnitName
 from shared.urls import normalize_http_origin
 
@@ -194,7 +195,7 @@ class AwsManagedPoolSnapshot(AwsManagedPoolModel):
     max_nodes: int = Field(ge=0)
     instances: tuple[AwsManagedPoolInstance, ...] = ()
     last_capacity_failure_at: datetime | None = None
-    last_capacity_failure_reason: str = ""
+    last_capacity_failure_code: CapacityFailureCode = CapacityFailureCode.ProviderLaunchFailed
     current_host_revision: str = ""
 
 
@@ -645,6 +646,15 @@ class _ScalingActivity(_Response):
     status: str = Field(alias="StatusCode")
     message: str = Field(default="", alias="StatusMessage")
 
+    @property
+    def failure_code(self) -> CapacityFailureCode:
+        message = self.message.casefold()
+        if "no spot capacity available" in message or (
+            "do not have sufficient" in message and "capacity" in message
+        ):
+            return CapacityFailureCode.CapacityUnavailable
+        return CapacityFailureCode.ProviderLaunchFailed
+
 
 class _ScalingActivities(_Response):
     values: tuple[_ScalingActivity, ...] = Field(alias="Activities")
@@ -807,7 +817,7 @@ class AwsManagedPoolProvisioner:
             return snapshot.model_copy(
                 update={
                     "last_capacity_failure_at": latest.started_at,
-                    "last_capacity_failure_reason": latest.message,
+                    "last_capacity_failure_code": latest.failure_code,
                 }
             )
         return snapshot

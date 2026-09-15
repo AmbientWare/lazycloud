@@ -412,7 +412,7 @@ def _snapshot(
         max_machines=snapshot.max_nodes,
         observed_machines=len(instances),
         last_capacity_failure_at=snapshot.last_capacity_failure_at,
-        last_capacity_failure_reason=snapshot.last_capacity_failure_reason,
+        last_capacity_failure_code=snapshot.last_capacity_failure_code,
         instances=instances,
         current_template_version=snapshot.current_host_revision,
         provider_state=ComputeUnitProviderState(

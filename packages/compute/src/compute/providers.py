@@ -9,6 +9,7 @@ from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
+from shared.capacity import CapacityFailureCode
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
@@ -178,7 +179,7 @@ class ProviderUnitSnapshot(ContractModel):
     max_machines: int = 0
     observed_machines: int = 0
     last_capacity_failure_at: datetime | None = None
-    last_capacity_failure_reason: str = ""
+    last_capacity_failure_code: CapacityFailureCode = CapacityFailureCode.ProviderLaunchFailed
     instances: list[ProviderUnitInstance] = Field(default_factory=list)
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
     current_template_version: str = ""
