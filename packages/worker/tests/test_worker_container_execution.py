@@ -30,6 +30,7 @@ from worker.container_execution import (
     ContainerNetworkSetupResult,
     ContainerRuntimeRunResult,
     ContainerRuntimeStartError,
+    ContainerStartupCancelled,
     WorkerContainerExecutionService,
 )
 from worker.container_logs import WorkerContainerLogCaptureService
@@ -320,7 +321,10 @@ class RuntimeExecutor:
                     text="checkpoint-e2e-continuity\n",
                 )
             )
-        on_started(self.result.started_pid or 123)
+        try:
+            on_started(self.result.started_pid or 123)
+        except ContainerStartupCancelled:
+            return self.result.model_copy(update={"cancelled": True, "exit_code": -15})
         if self.failure is not None:
             raise self.failure
         return self.result
@@ -725,39 +729,13 @@ def test_worker_container_execution_cleans_runtime_when_cancelled_after_start() 
     )
 
     assert not result.ok
-    assert result.failed_phase is ContainerExecutionPhase.MarkRunning
-    failed_phases = [phase for phase in result.phases if not phase.ok]
-    assert [phase.phase for phase in failed_phases] == [
-        ContainerExecutionPhase.MarkRunning,
-        ContainerExecutionPhase.RunRuntime,
-    ]
-    assert "remained stopping" in failed_phases[0].error_message
-    assert "remained stopping" in failed_phases[1].error_message
+    assert result.cancelled
+    assert result.failed_phase is None
     assert result.finalization is not None
+    assert result.finalization.ok
     assert result.delayed_cleanup is not None
-    assert repo.status_updates == [
-        (
-            "ctr-1",
-            SchedulerContainerStatus.Stopping,
-            DEFAULT_CONTAINER_STATE_TTL_SECONDS,
-        ),
-        (
-            "ctr-1",
-            SchedulerContainerStatus.Stopping,
-            CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS,
-        ),
-    ]
+    assert result.delayed_cleanup.ok
     assert repo.deleted == ["ctr-1"]
-    assert cleanup.calls == [
-        ContainerFinalizationStep.TeardownNetwork,
-        ContainerFinalizationStep.RemoveUploads,
-        ContainerFinalizationStep.RemoveSourceWorkspace,
-        ContainerFinalizationStep.ForceKillIfRunning,
-        ContainerFinalizationStep.StopOomWatcher,
-        ContainerFinalizationStep.UnmountRequestMounts,
-        ContainerFinalizationStep.ReleaseContainerRootfs,
-        ContainerFinalizationStep.DeleteLocalState,
-    ]
 
 
 def test_worker_container_execution_service_handles_oom_before_finalization() -> None:

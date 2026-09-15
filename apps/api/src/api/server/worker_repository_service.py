@@ -1357,13 +1357,13 @@ class WorkerRepositoryService:
             worker_id=principal.worker_id,
             operation="container status update",
         )
-        self._sync_runtime_container_status(
+        status = self._sync_runtime_container_status(
             request.container_id, request.status, worker_id=principal.worker_id
         )
         try:
             plan = self.containers.update_container_status(
                 request.container_id,
-                request.status,
+                status,
                 ttl_seconds=request.ttl_seconds,
             )
         except SchedulerRepositoryError as exc:
@@ -2749,20 +2749,25 @@ class WorkerRepositoryService:
         status: SchedulerContainerStatus,
         *,
         worker_id: str,
-    ) -> None:
+    ) -> SchedulerContainerStatus:
         if self.services is None:
-            return
+            return status
         container_status = _runtime_container_status_from_scheduler(status)
         if container_status is None:
-            return
+            return status
         now = utc_now()
         updated_task: Task | None = None
         with self.services.context.database.session() as session:
             container = ContainerRepository(session).lock_across_workspaces(container_id)
             if container is None:
-                return
+                return status
             if container.runtime_worker_id != worker_id:
                 raise AuthorizationDeniedError("container status assignment changed")
+            if (
+                container.status is ContainerStatus.Stopped
+                and container_status not in TERMINAL_CONTAINER_STATUSES
+            ):
+                return SchedulerContainerStatus.Stopping
             if (
                 container.status in TERMINAL_CONTAINER_STATUSES
                 and container_status not in TERMINAL_CONTAINER_STATUSES
@@ -2810,6 +2815,7 @@ class WorkerRepositoryService:
             self._publish_runtime_container_change(container)
         if updated_task is not None:
             self._publish_runtime_task_change(container, updated_task)
+        return status
 
     def _sync_runtime_container_exit(
         self,
@@ -2868,14 +2874,12 @@ class WorkerRepositoryService:
                 container.termination_reason = termination_reason
             if container.status in TERMINAL_CONTAINER_STATUSES:
                 container.exit_code = exit_code
-                container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
             else:
                 container.exit_code = exit_code
                 container.status = (
                     ContainerStatus.Exited if exit_code == 0 else ContainerStatus.Failed
                 )
-                container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
                 release_container_runtime_state(self.runtime_state, container)
                 if not preempted:
