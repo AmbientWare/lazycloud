@@ -14,7 +14,6 @@ from api.server.routers import (
     pods,
     resource_api,
     shells,
-    signals,
     system,
     volumes,
     webhooks,
@@ -36,7 +35,6 @@ def include_api_routers(app: FastAPI) -> None:
     app.include_router(pods.router)
     app.include_router(artifacts.router)
     app.include_router(shells.router)
-    app.include_router(signals.router)
     app.include_router(collections.router)
     app.include_router(worker_repository.router)
 
