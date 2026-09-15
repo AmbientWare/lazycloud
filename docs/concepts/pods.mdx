@@ -3,8 +3,12 @@ title: "Pods"
 description: "Run a long-lived container command under your app."
 ---
 
-A pod runs a container command: a web server, a worker process, a model
-server. It is not tied to a Python callable, so it can run any image.
+A pod runs a container command, such as a web server or a model server.
+Use one when you already have a command or image to run.
+
+## Define a web server
+
+Save this as `tools.py`:
 
 ```python
 from lazycloud import App, Image
@@ -18,6 +22,7 @@ web = app.pod(
     ports={"http": 8080},
     cpu=0.5,
     memory="256Mi",
+    authorized=True,
 )
 ```
 
@@ -27,34 +32,52 @@ Pods default to `cpu=1.0`, `memory="128Mi"`, `keep_warm=600`, and
 ## Deploy it
 
 Deploying a pod keeps it running under a deployment. The deploy output prints
-its URL.
+its URL. This example serves the container's current directory and requires
+a LazyCloud bearer token. Use the [vLLM example](/examples/openai-compatible-llm)
+for a model server you can call from your application.
 
 ```bash
-lazycloud deploy tools.py:app --resource pod:web
+uv run lazycloud deploy tools:app --resource pod:web
 ```
 
-Manage it through the deployment, from Python with `web.scale(containers)`,
+Keep the pod's image, command, resources, and mounts in this Python definition.
+Edit it and deploy again to change the service configuration.
+
+For operational changes, manage the deployment from Python with `web.scale(containers)`,
 `web.pause()`, `web.resume()`, and `web.delete()`, or from the CLI:
 
 ```bash
-lazycloud deployment list --app tools
-lazycloud deployment scale web --containers 2
-lazycloud deployment stop web
+uv run lazycloud deployment list --app tools
+uv run lazycloud deployment scale web --containers 2
+uv run lazycloud deployment stop web
 ```
 
 ## Or create an instance on demand
 
-A pod can also run once without a deployment:
+A pod can also run once without a deployment. Set `LAZYCLOUD_TOKEN` to a
+workspace access token, then fetch the directory listing and stop the instance:
 
 ```python
-instance = web.create()                                   # runs the configured command
-print(instance.container_id, instance.url)
+import os
+import urllib.request
 
-instance = web.run("python", "-m", "http.server", "9090")  # a different command
-instance.terminate()
+from tools import web
+
+instance = web.create()
+try:
+    request = urllib.request.Request(
+        instance.url,
+        headers={"Authorization": f"Bearer {os.environ['LAZYCLOUD_TOKEN']}"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        print(response.read().decode())
+finally:
+    instance.terminate()
 ```
 
-Both return a `PodInstance` with `container_id`, `url`, `timeout_seconds`,
+`create()` uses the configured command. `web.run("python", "--version")`
+starts an instance with a different command. Both return a `PodInstance`
+with `container_id`, `url`, `timeout_seconds`,
 `expires_at`, and `terminate()`. The instance lives for `keep_warm` seconds
 unless you pass `timeout_seconds`.
 
@@ -98,21 +121,40 @@ import socket
 import ssl
 from urllib.parse import urlsplit
 
+from lazycloud import App, Image
+
+app = App("tcp_example")
+tcp_server = app.pod(
+    name="tcp-web",
+    image=Image(python_version="3.12"),
+    command=["python", "-m", "http.server", "8080"],
+    ports={"http": 8080},
+    tcp=True,
+    authorized=False,
+)
+
 deployment = tcp_server.deploy()
 address = urlsplit(deployment.invoke_url)
 with socket.create_connection((address.hostname, address.port)) as connection:
     with ssl.create_default_context().wrap_socket(
         connection, server_hostname=address.hostname
     ) as stream:
-        stream.sendall(b"hello\n")
+        stream.sendall(b"GET / HTTP/1.0\r\n\r\n")
         print(stream.recv(1024))
 ```
 
+This public example serves the container's directory over TLS. Stop it when
+finished with `uv run lazycloud deployment stop tcp-web`.
+
 ## Containers
 
+Use container commands to investigate a running instance. Stop the deployment
+when you want the service to remain stopped; stopping just its container can
+cause the deployment to replace it. Pods incur compute charges while running.
+
 ```bash
-lazycloud container list
-lazycloud container attach <container-id>      # stream output until it exits
-lazycloud container checkpoint <container-id>
-lazycloud container stop <container-id>
+uv run lazycloud container list
+uv run lazycloud container attach <container-id>      # stream output until it exits
+uv run lazycloud container checkpoint <container-id>
+uv run lazycloud container stop <container-id>
 ```

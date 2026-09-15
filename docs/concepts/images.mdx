@@ -3,24 +3,37 @@ title: "Images"
 description: "Describe a workload's container image in Python."
 ---
 
-Every workload runs in an image described by an `Image`. Builds are cached by
-content: the same definition reuses the built image, and a change rebuilds
-only what changed.
+An `Image` defines the Python version, packages, and system tools available
+inside your remote container. Add dependencies here when your function needs
+packages that are not part of Python.
 
-New image builds use preemptible capacity. If a worker is interrupted, the build
-fails and reports an error. Rerun the command to submit a new build; interrupted
-builds do not restart automatically. An incomplete archive is never reused as a
-completed image.
+## Install remote dependencies
 
 ```python
-from lazycloud import Image
+from lazycloud import App, Image
+
+app = App("audio")
 
 image = (
     Image(python_version="3.12")
-    .add_python_packages(["torch", "transformers"])
     .add_commands(["apt-get update && apt-get install -y ffmpeg"])
 )
+
+
+@app.function(image=image)
+def ffmpeg_version() -> str:
+    import subprocess
+
+    return subprocess.check_output(["ffmpeg", "-version"], text=True).splitlines()[0]
 ```
+
+Save this as `audio.py` and run `uv run lazycloud run audio:ffmpeg_version`.
+The result reports the remote ffmpeg version. Your machine does not need ffmpeg.
+Use `.add_python_packages(["httpx"])` to install a Python dependency.
+
+Images are cached by content. Keep dependency versions pinned when you need
+reproducible builds. If an image-build worker is interrupted, rerun the command;
+interrupted builds do not restart automatically.
 
 `Image()` with no arguments is the managed Python 3.12 image. Python 3.10
 through 3.14 are available.
@@ -30,8 +43,8 @@ through 3.14 are available.
 ```python
 Image(
     python_version="3.12",         # "3.10" through "3.14"
-    python_packages=[...],         # package specs, or a path to requirements.txt
-    commands=[...],                # shell commands run during the build
+    python_packages=["httpx"],     # package specs, or a path to requirements.txt
+    commands=["python --version"], # shell commands run during the build
     base_image=None,               # start from a registry image instead
     base_image_creds=None,         # registry credentials, see below
     env_vars=None,                 # environment variables baked into the image
@@ -63,9 +76,11 @@ Each returns the image, so they chain.
 
 ```python
 gpu_image = Image.from_registry("nvcr.io/nvidia/pytorch:24.05-py3")
-legacy = Image.from_dockerfile("./Dockerfile", context_dir=".")
-snapshot = Image.from_id(image_id)   # an id from a sandbox filesystem snapshot
+custom_image = Image.from_dockerfile("./Dockerfile", context_dir=".")
 ```
+
+Use `Image.from_id(image_id)` with the ID returned by a sandbox filesystem
+snapshot to reuse that filesystem.
 
 ### Private registries
 
@@ -81,6 +96,6 @@ image = Image.from_registry(
 
 ## From the CLI
 
-`lazycloud deploy`, `run`, `serve`, `shell`, and `dev` accept `--image <ref>`
+`uv run lazycloud deploy`, `run`, `serve`, `shell`, and `dev` accept `--image <ref>`
 for a registry image, or `--dockerfile <path>` with `--context <dir>` to build
 from a Dockerfile, without changing Python code.

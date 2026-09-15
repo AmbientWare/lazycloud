@@ -1,6 +1,7 @@
 # Terraform state on S3
 
-All four Terraform roots use one private AWS S3 bucket. Each root retains its
+Configure the private S3 backend before applying any Terraform root.
+The four roots use one private AWS S3 bucket. Each root retains its
 own key and a `.tflock` object. State contains credentials and must never be
 printed, committed, published or accessible to application and deployment roles.
 
@@ -44,8 +45,9 @@ terraform -chdir=deploy/stripe init \
 Use a different deployment key per deployment and Stripe key per Stripe account.
 These roots do not use Terraform workspaces.
 
-## Migrate existing R2 state
+## Move an existing R2 backend to S3
 
+Use this section only if the installation still has R2 state.
 Stop all concurrent Terraform operations. Inventory every source state key,
 including retired roots that still own resources. Keep the source backend JSON
 and its `lazycloud-object-storage` credential profile available for migration.

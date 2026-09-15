@@ -1,0 +1,6 @@
+{
+  "name": "sandboxed-coding-agent",
+  "description": "Plan a code change and test it in an isolated sandbox.",
+  "python_version": "3.12",
+  "dependencies": []
+}

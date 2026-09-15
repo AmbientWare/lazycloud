@@ -35,15 +35,18 @@ class Review(BaseModel):
 
 @app.endpoint(route="/review")
 def review_patch(diff: str) -> Review:
-    return analyze(diff)`;
+    added = [line[1:] for line in diff.splitlines()
+             if line.startswith("+") and not line.startswith("+++")]
+    risks = ["Review added TODOs"] if any("TODO" in line for line in added) else []
+    return Review(summary=f"{len(added)} added lines", risks=risks)`;
 
 const functionExample = `from lazycloud import App
 
-app = App("test_suite")
+app = App("sales")
 
-@app.function(cpu=4.0, memory="4Gi")
-def run_test_shard(shard: int, total: int) -> dict:
-    return run_tests(shard=shard, total=total)`;
+@app.function(cpu=1.0, memory="256Mi")
+def summarize_sales(amounts_cents: list[int]) -> dict[str, int]:
+    return {"sales": len(amounts_cents), "total_cents": sum(amounts_cents)}`;
 
 const sandboxExample = `from lazycloud import App
 
@@ -54,64 +57,69 @@ workspace = app.sandbox(
 )
 
 instance = workspace.create()
-result = instance.run("pytest -q")
-print(result.exit_code)`;
+try:
+    result = instance.run("python --version")
+    print(result.stdout)
+finally:
+    instance.terminate()`;
 
 const podExample = `from lazycloud import App, Image
 
 app = App("preview")
 preview = app.pod(
     name="web",
-    image=Image.from_dockerfile(
-        "Dockerfile",
-        context_dir=".",
-    ),
-    command=["npm", "run", "preview", "--", "--host", "0.0.0.0"],
-    ports={"http": 4173},
+    image=Image(python_version="3.12"),
+    command=["python", "-m", "http.server", "8080"],
+    ports={"http": 8080},
+    authorized=True,
 )`;
 
-const cronExample = `from lazycloud import App
+const cronExample = `from datetime import datetime, timezone
+
+from lazycloud import App
 
 app = App("maintenance")
 
 @app.function(cron="0 2 * * *", retries=2)
-def nightly_evals() -> dict:
-    return evaluate_latest_release()`;
+def heartbeat() -> str:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    print(f"Scheduled run at {timestamp}", flush=True)
+    return timestamp`;
 
 const heroStories = [
   {
     key: "apps",
     label: "APIs",
     code: endpointExample,
-    command: "lazycloud deploy application.py:app",
+    command: "uv run lazycloud deploy application:app",
     status: "deployed",
   },
   {
     key: "functions",
     label: "Functions",
     code: functionExample,
-    command: "lazycloud deploy application.py:app",
-    status: "deployed",
+    command: "uv run lazycloud run application:summarize_sales '[1200, 3500, 800]'",
+    status: "complete",
   },
   {
     key: "sandboxes",
     label: "Sandboxes",
     code: sandboxExample,
-    command: "python application.py",
-    status: "sandbox ready",
+    command: "uv run python application.py",
+    status: "sandbox stopped",
   },
   {
     key: "services",
     label: "Services",
     code: podExample,
-    command: "lazycloud deploy application.py:app",
+    command: "uv run lazycloud deploy application:app",
     status: "deployed",
   },
   {
     key: "schedules",
     label: "Schedules",
     code: cronExample,
-    command: "lazycloud deploy application.py:app",
+    command: "uv run lazycloud deploy application:app",
     status: "deployed",
   },
 ] as const;
@@ -178,7 +186,7 @@ const parityModes = [
     key: "production",
     Plate: ProductionPlate,
     title: "Deploy your app",
-    call: "lazycloud deploy app.py:app",
+    call: "uv run lazycloud deploy app:app",
     body: "Publish the function so your services can call it.",
   },
 ];

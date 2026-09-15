@@ -1,59 +1,81 @@
 ---
 title: "Schedules"
-description: "Run a function on a schedule with a cron expression, an alias, or an interval."
+description: "Run a Python function automatically at a set time or interval."
 ---
 
-A schedule is a property of a function, not a separate workload. Pass `cron`
-to `@app.function` and each run is an ordinary invocation.
+Set `cron` on a function and deploy it to schedule recurring work. Each
+scheduled call has its own task record, result, and logs.
+
+## Schedule a daily report
+
+This function counts files in a volume every day at 03:00 UTC. Save it as
+`daily_report.py`:
 
 ```python
-from lazycloud import App, Image
+from pathlib import Path
 
-app = App("maintenance")
-image = Image(python_version="3.12")
+from lazycloud import App, Volume
+
+app = App("daily_report")
+uploads = Volume("report-inputs", "/inputs")
 
 
-@app.function(cron="0 3 * * *", name="nightly_cleanup", image=image)
-def cleanup() -> dict[str, str]:
-    return {"status": "clean"}
+@app.function(name="count-files", cron="0 3 * * *", volumes=[uploads])
+def count_files() -> dict[str, int]:
+    count = sum(1 for path in Path("/inputs").rglob("*") if path.is_file())
+    print(f"Stored files: {count}", flush=True)
+    return {"files": count}
 ```
+
+Deploy the function to register its schedule:
 
 ```bash
-lazycloud deploy maintenance.py:cleanup
+uv run lazycloud deploy daily_report:count_files
 ```
 
-## Schedule syntax
+The first invocation creates or reuses the declared volume. An empty volume
+produces `{"files": 0}`. Upload your files to
+`report-inputs` to count them on the next run.
 
-Three forms work:
+## Choose a schedule
 
-- A five-field cron expression: `"*/15 * * * *"`, `"0 3 * * 1"`.
-- An alias: `"@hourly"`, `"@daily"`, `"@midnight"`, `"@weekly"`,
-  `"@monthly"`, `"@yearly"`, `"@annually"`.
-- An interval: `"every 5m"` (up to 59m), `"every 2h"` (up to 23h),
-  `"every 3d"` (up to 31d).
+All schedules use UTC.
 
-Schedules run in UTC. An invalid expression is rejected at deploy time.
+| When | Value |
+| --- | --- |
+| Every 15 minutes | `"*/15 * * * *"` |
+| Mondays at 03:00 UTC | `"0 3 * * 1"` |
+| Once an hour | `"@hourly"` |
+| Every five minutes | `"every 5m"` |
 
-## Behavior
+Other aliases are `@daily`, `@midnight`, `@weekly`, `@monthly`,
+`@yearly`, and `@annually`. Intervals support minutes up to 59, hours up
+to 23, and days up to 31. Invalid expressions fail at deploy time.
 
-A scheduled function takes every option a function does: resources, image,
-timeout, retries, secrets, volumes, hooks, and pool. Each run is a durable
-task, so a failing run retries per its retry settings and shows up in
-[task history](/concepts/tasks-and-logs) and the dashboard.
-
-Calling it directly or through `.local()` runs it in the current process.
-`.remote()` or `.spawn()` submit a remote task outside the schedule.
-
-`keep_warm` defaults to `0` for a scheduled function, since the next run is
-usually further away than a warm window is worth. Set it if runs are close
-together.
-
-Deploying again replaces the schedule; one fires per resource. Removing `cron`
-and deploying again removes the schedule while keeping the function deployed
-and callable. To stop the runs entirely, stop or delete the deployment:
+## Try it now
 
 ```bash
-lazycloud deployment list --app maintenance
-lazycloud deployment stop nightly_cleanup
-lazycloud deployment delete nightly_cleanup
+uv run lazycloud run daily_report:count_files
 ```
+
+This runs once immediately and shows its logs and result. It does not wait
+for the schedule. Review automatic runs in the dashboard or with
+`uv run lazycloud task list --app daily_report`.
+
+Functions keep their normal timeout and retry settings. Scheduled functions
+default to `keep_warm=0`, so a container shuts down when idle.
+
+## Change or stop the schedule
+
+Edit `cron` and deploy again to replace the schedule. Remove `cron` and
+redeploy to keep the function callable without automatic runs.
+
+To stop it now:
+
+```bash
+uv run lazycloud deployment stop count-files
+```
+
+To remove the example entirely, delete the deployment with
+`uv run lazycloud deployment delete count-files`. Delete `report-inputs` only
+after downloading any files you need.

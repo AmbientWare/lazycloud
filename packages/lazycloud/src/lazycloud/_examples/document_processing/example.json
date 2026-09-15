@@ -1,0 +1,8 @@
+{
+  "name": "document-processing",
+  "description": "Upload PDFs and images and extract their text with OCR.",
+  "python_version": "3.12",
+  "dependencies": [
+    "fastapi==0.139.2"
+  ]
+}

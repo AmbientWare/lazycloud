@@ -5,34 +5,35 @@ description: "Inspect compute, connect an AWS account, join your own machines, a
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-See [Compute](/platform/compute) for what pools are and when you need any of
-this. Workloads run on LazyCloud's compute with no setup.
+Workloads use LazyCloud compute by default. Use these commands to inspect
+capacity or connect compute you own. Follow [Compute](/platform/compute)
+for setup and host requirements.
 
 ## lazycloud compute
 
 ```bash
-lazycloud compute status       # capacity and the workspace's default pool
-lazycloud compute instances    # running instances
-lazycloud compute pools        # pools this workspace can use
-lazycloud compute workloads    # which pool each workload runs in
-lazycloud compute policy show
-lazycloud compute policy update --default-pool <pool>
+uv run lazycloud compute status       # capacity and the workspace's default pool
+uv run lazycloud compute instances    # running instances
+uv run lazycloud compute pools        # pools this workspace can use
+uv run lazycloud compute workloads    # which pool each workload runs in
+uv run lazycloud compute policy show
+uv run lazycloud compute policy update --default-pool <pool>
 ```
 
 ## lazycloud cloud
 
-Connecting an AWS account needs the Team plan. The connection belongs to your
+Connecting an AWS account needs the Business plan. The connection belongs to your
 account and backs every workspace you own.
 
 ```bash
-lazycloud cloud connect aws --account-id <id> [--role-arn <arn>]
-lazycloud cloud authorize [--profile <aws-profile>]
-lazycloud cloud status [--watch] [--until <phase>] [--interval <s>] [--timeout <s>]
-lazycloud cloud validate            # recheck the current authorization
-lazycloud cloud reconnect  # start a replacement authorization
-lazycloud cloud cancel-reconnect
-lazycloud cloud retry               # retry the connection's pending action
-lazycloud cloud disconnect [--wait]
+uv run lazycloud cloud connect aws --account-id <id> [--role-arn <arn>]
+uv run lazycloud cloud authorize [--profile <aws-profile>]
+uv run lazycloud cloud status [--watch] [--until <phase>] [--interval <s>] [--timeout <s>]
+uv run lazycloud cloud validate            # recheck the current authorization
+uv run lazycloud cloud reconnect  # start a replacement authorization
+uv run lazycloud cloud cancel-reconnect
+uv run lazycloud cloud retry               # retry the connection's pending action
+uv run lazycloud cloud disconnect [--wait]
 ```
 
 For a managed connection, run `cloud authorize` with your AWS CLI profile after
@@ -52,9 +53,9 @@ select their CPU, memory, GPU, and pool.
 ## lazycloud machine
 
 ```bash
-lazycloud machine list
-lazycloud machine join [options]     # run on the machine you are joining
-lazycloud machine remove MACHINE_ID
+uv run lazycloud machine list
+uv run lazycloud machine join [options]     # run on the machine you are joining
+uv run lazycloud machine remove MACHINE_ID
 ```
 
 `machine join` options:
@@ -73,13 +74,13 @@ Read the [host requirements](/platform/compute#your-own-machines) first.
 
 ## lazycloud domain
 
-Custom domains need the Team plan.
+Custom domains are available on Team and Business plans.
 
 ```bash
-lazycloud domain add HOSTNAME       # prints the DNS records to create
-lazycloud domain status HOSTNAME
-lazycloud domain list
-lazycloud domain remove HOSTNAME
+uv run lazycloud domain add HOSTNAME       # prints the DNS records to create
+uv run lazycloud domain status HOSTNAME
+uv run lazycloud domain list
+uv run lazycloud domain remove HOSTNAME
 ```
 
 See [Custom domains](/platform/domains).

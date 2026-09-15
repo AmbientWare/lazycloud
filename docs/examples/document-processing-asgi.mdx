@@ -1,173 +1,146 @@
 ---
-title: "Document processing with FastAPI"
-description: "A FastAPI upload service with background OCR on a function, polling over durable tasks, and results in a volume."
+title: "Extract text from PDFs and images"
+description: "Deploy a browser upload app that runs OCR in the background and returns extracted text."
 ---
 
-This example is a complete FastAPI application. It accepts a raw upload, runs
-OCR on a function in the background, lets the client poll the task through a
-signed job token, and keeps files in a volume. The included browser UI uses
-the same HTTP routes shown below.
+import ExampleSetup from '/snippets/example-setup.mdx';
 
-The source is `examples/document_processing/` in the LazyCloud repository:
-resource declarations, the API, the worker, validation and token helpers, and
-the static UI.
+Upload a PDF, JPEG, or PNG and read its text in a browser. This example runs
+FastAPI as an HTTP service and Tesseract in a separate background function.
+Files pass between them through a volume.
 
-## How it works
+Source is in `document_processing/`.
 
-The public ASGI app and the private OCR function share one volume.
-
-1. `PUT /api/documents/{filename}` streams a PDF, JPEG, or PNG to a temporary
-   file, with a 10 MiB limit.
-2. The API submits the document id and validated suffix to the deployed
-   `ocr-worker` function.
-3. The response carries an HMAC-signed job token that expires after 24 hours.
-   The browser keeps it in memory and sends it in `X-Job-Token`; it never
-   appears in a URL.
-4. Status comes from the task record. The API only accepts a verified token,
-   so a client cannot read an arbitrary task.
-5. The worker renders PDFs with Poppler, runs Tesseract, writes JSON to the
-   volume, and removes the raw upload whether OCR succeeded or failed.
-6. The client deletes the result after reading it.
-
-There is no in-memory job table and no workspace credential in the browser.
-
-## Prerequisites
-
-Sign in with `lazycloud login`, have `curl` and a PDF, JPEG, or PNG at hand,
-and create the volume and a fresh signing secret. Do not reuse an API key:
+<ExampleSetup />
 
 ```bash
-export DOCUMENT_JOB_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
-lazycloud secret create DOCUMENT_JOB_TOKEN_SECRET "$DOCUMENT_JOB_TOKEN_SECRET"
-unset DOCUMENT_JOB_TOKEN_SECRET
-lazycloud volume create document-processing-data
+lazycloud example download document-processing
+cd document-processing
+uv sync
+uv run lazycloud login
 ```
 
-Only the ASGI workload receives the secret. The OCR worker does not.
+## Prepare the app
 
-## The resources
+`uv sync` installs FastAPI from `pyproject.toml` so the CLI can import the
+application. Tesseract and Poppler install only in the remote image.
 
-The image pins FastAPI and installs Tesseract and Poppler. Your machine needs
-neither.
+The app declares its shared volume in `resources.py`:
 
 ```python
-from lazycloud import App, Image, Volume
+from lazycloud import Volume
 
-app = App("document_processing")
-data = Volume("document-processing-data", "/document-processing")
-image = (
-    Image(python_version="3.12")
-    .add_python_packages(["fastapi==0.139.2"])
-    .add_commands([
-        "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
-        "--no-install-recommends poppler-utils tesseract-ocr && "
-        "rm -rf /var/lib/apt/lists/*"
-    ])
-)
-
-
-@app.function(name="ocr-worker", image=image, timeout_seconds=600, retries=0, volumes=[data])
-def ocr_document(document_id: str, suffix: str) -> dict[str, object]:
-    ...
-
-
-web = app.asgi(
-    name="document-api",
-    image=image,
-    route="/",
-    authorized=False,
-    secrets=["DOCUMENT_JOB_TOKEN_SECRET"],
-    volumes=[data],
-)(api)
+data_volume = Volume("document-processing-data", "/document-processing")
 ```
 
-The worker calls `subprocess.run` with argument lists, caps PDFs at 20 pages,
-times out each command, and caps results at 200,000 characters. A filename is
-never evaluated as a shell command.
-
-## Deploy
+Both workloads include `volumes=[data_volume]`; LazyCloud creates or reuses
+the volume when they start. The secret needs an initial value. Run the
+example's Python setup module once:
 
 ```bash
-lazycloud deploy examples.document_processing.app:app
+uv run python -m document_processing.configure
 ```
 
-Copy the `document-api` URL from the deploy output, without a trailing slash:
+`configure.py` uses `Secret(JOB_TOKEN_SECRET_NAME).create(...)` with a random
+value and never prints it. It refuses to replace an existing secret. If you
+already configured this workspace, go straight to deployment; rerunning setup
+is unnecessary. The signing secret protects individual results, and only the
+HTTP service receives it.
+
+<Warning>
+  This example's upload URL is public. Anyone with the URL can submit work
+  that uses your compute. Use test documents, stop the app when finished, and
+  add user authentication and upload rate limits before offering it to users.
+</Warning>
+
+## Deploy and upload
+
+```bash
+uv run lazycloud deploy document_processing.app:app
+```
+
+Open the `document-api` URL from the deploy output. Select a document in the
+upload form. The page submits it, shows job progress, and displays the extracted
+text. PDFs can contain up to 20 pages; uploads are limited to 10 MiB and text
+results to 200,000 characters.
+
+The worker removes the raw upload after processing, including on failure.
+Click Delete result in the browser when you no longer need it. Results from abandoned jobs
+remain in the volume until you delete them.
+
+## Call the API from a script
+
+Set the URL without a trailing slash. These commands need curl and jq:
 
 ```bash
 export DOCUMENT_API_URL="<document-api-url>"
-curl --fail --show-error "$DOCUMENT_API_URL/health"
+JOB_TOKEN="$(
+  curl --fail --show-error \
+    -X PUT "$DOCUMENT_API_URL/api/documents/sample.pdf" \
+    -H "Content-Type: application/pdf" \
+    --data-binary @sample.pdf |
+  jq -er '.job_token'
+)"
 ```
 
-Opening `$DOCUMENT_API_URL` in a browser loads the upload UI.
-
-## Upload a document
-
-The body is the raw file, so no multipart parser is needed:
-
-```bash
-curl --fail --show-error \
-  -X PUT "$DOCUMENT_API_URL/api/documents/sample.pdf" \
-  -H "Content-Type: application/pdf" \
-  --data-binary @sample.pdf
-```
-
-Keep the returned `job_token` in a shell variable rather than printing it.
-The commands below use `<job-token>` as a placeholder.
-
-## Poll and read the result
+This uploads a local `sample.pdf` and saves the returned job token without
+printing it. Read the status:
 
 ```bash
 curl --fail --show-error "$DOCUMENT_API_URL/api/jobs/status" \
-  -H "X-Job-Token: <job-token>"
+  -H "X-Job-Token: $JOB_TOKEN"
+```
 
+Once status is `complete`, fetch the text:
+
+```bash
 curl --fail --show-error "$DOCUMENT_API_URL/api/jobs/result" \
-  -H "X-Job-Token: <job-token>"
+  -H "X-Job-Token: $JOB_TOKEN"
 ```
 
-Status is `pending`, `running`, `retry`, or a terminal task state. The result
-route returns `409` until the task is complete.
+The result route returns HTTP 409 while the task is unfinished. If the task
+fails, inspect its error before retrying the upload. The token expires after
+24 hours and permits reading or deleting that job. Keep it out of logs and URLs.
 
-The job token is a bearer capability. Anyone holding it can read or delete
-that job until it expires, so do not log it, put it in a query string, or
-store it in browser local storage.
-
-## Delete a result
+Delete the result when your script has saved it:
 
 ```bash
-curl --fail --show-error \
-  -X DELETE "$DOCUMENT_API_URL/api/jobs" \
-  -H "X-Job-Token: <job-token>"
+curl --fail --show-error -X DELETE "$DOCUMENT_API_URL/api/jobs" \
+  -H "X-Job-Token: $JOB_TOKEN"
+unset JOB_TOKEN
 ```
 
-Deletion returns `409` while the task is still running. The worker removes raw
-uploads itself; result files stay in the volume until deleted, so add a
-retention job if clients may abandon results.
+Deletion returns HTTP 409 if work is still running.
 
-## Inspect
+## Diagnose a failed upload or job
+
+For an HTTP error, inspect `uv run lazycloud logs --deployment document-api -n 100`.
+For OCR failures, use:
 
 ```bash
-lazycloud deployment list --app document_processing
-lazycloud task list --limit 20
-lazycloud logs --deployment ocr-worker --follow --show-timestamp
-lazycloud ls document-processing-data/results
+uv run lazycloud task list --app document_processing --limit 20
+uv run lazycloud task logs <task-id>
 ```
 
-## What this does not protect
-
-`document-api` sets `authorized=False` so the browser UI can upload and poll
-without a LazyCloud token. Job tokens give per-job access; they are not user
-authentication. Before exposing this pattern to the internet, put it behind
-your own authentication and tenant checks, add edge rate and body limits,
-malware scanning, retention, and monitoring, and rotate
-`DOCUMENT_JOB_TOKEN_SECRET` on a schedule. Rotation invalidates outstanding
-tokens.
+The API and worker definitions live in `app.py` and `worker.py`.
+Change resource sizes and upload limits there and in `resources.py` when
+adapting the app. Add a retention job for abandoned results.
+Rotating `DOCUMENT_JOB_TOKEN_SECRET` invalidates outstanding job tokens.
 
 ## Clean up
 
+Delete the two deployments to stop accepting work:
+
 ```bash
-lazycloud deployment delete document-api
-lazycloud deployment delete ocr-worker
-lazycloud volume delete document-processing-data --yes
-lazycloud secret delete DOCUMENT_JOB_TOKEN_SECRET
+uv run lazycloud deployment delete document-api
+uv run lazycloud deployment delete ocr-worker
+```
+
+If you created the volume and secret for this example, download any results
+you need before removing them:
+
+```bash
+uv run lazycloud volume delete document-processing-data
+uv run lazycloud secret delete DOCUMENT_JOB_TOKEN_SECRET
 unset DOCUMENT_API_URL
 ```

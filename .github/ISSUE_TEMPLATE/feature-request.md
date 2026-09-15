@@ -8,12 +8,12 @@ assignees: ""
 
 ## Goal
 
-Describe the workflow or production capability this should enable.
+Describe the task you want to complete and where the current workflow stops.
 
 ## Scope
 
-List the SDK, CLI, API, provider, or deployment surfaces that should change.
+Show the command, code, or result you would like to use, if you have one.
 
-## Non-goals
+## Current workaround
 
-List anything that should stay out of this request.
+Describe how you handle this today and what makes it difficult.

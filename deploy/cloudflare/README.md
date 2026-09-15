@@ -1,4 +1,7 @@
-# Cloudflare deployment
+# Configure Cloudflare ingress
+
+Use the existing state and operator identity to update HTTP ingress or agent
+tunnel DNS. Start with a saved plan; verify both routes after applying it.
 
 This module owns the public HTTP tunnel, its apex and wildcard DNS records, the
 DNS-only agent tunnel and TCP workload records, and the configured SaaS fallback

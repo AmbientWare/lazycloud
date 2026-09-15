@@ -5,75 +5,82 @@ description: "Deploy, invoke, preview, and iterate on workloads from the CLI."
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
+Use `run` for a remote function call, `deploy` to publish workloads, and
+`serve` to preview an HTTP service while editing. `shell` and `dev` open
+remote development environments.
+
 ## lazycloud deploy
 
 ```bash
-lazycloud deploy HANDLER [options]
+uv run lazycloud deploy HANDLER [options]
 ```
 
 Deploys one decorated object or every deployable resource registered with an `App`.
 Omit `:object` when the file or module contains exactly one app:
 
 ```bash
-lazycloud deploy quickstart.py:hello
-lazycloud deploy quickstart.py
-lazycloud deploy quickstart.py:app
-lazycloud deploy myproject.api:app
-lazycloud deploy myproject.api:app --resource endpoint:predict
+uv run lazycloud deploy quickstart:hello
+uv run lazycloud deploy quickstart
+uv run lazycloud deploy quickstart:app
+uv run lazycloud deploy myproject.api:app
+uv run lazycloud deploy myproject.api:app --resource endpoint:predict
 ```
 
 `--name` overrides the deployment name when you select a handler or use `--resource`.
 `--source-root <dir>` packages a different directory as the code root.
 
-`quickstart.py` and `quickstart.py:app` deploy the same app, including its functions,
+`quickstart` and `quickstart:app` deploy the same app, including its functions,
 endpoints, pods, and other deployable resources. App references imported into the
 module count too; aliases for the same app count once. Resources belong to the
 selected app even when their definitions live in other files.
 
-If the module contains multiple apps, choose one with `file.py:app_name`. If it
+If the module contains multiple apps, choose one with `module:app_name`. If it
 contains no app, supply an explicit handler reference. A decorated handler such as
-`quickstart.py:hello` deploys only that handler.
+`quickstart:hello` deploys only that handler.
 
-`--resource` also works with a bare file. With `--json`, a successful app deployment
+`--resource` also works with a module name. With `--json`, a successful app deployment
 returns one object containing the app name and its resource results. A deployment
 failure stops the command without undoing resources already deployed.
 
 ## lazycloud run
 
 ```bash
-lazycloud run HANDLER [ARGS]... [options]
+uv run lazycloud run HANDLER [ARGS]... [options]
 ```
 
-Calls a decorated function through `.remote()` with the given arguments and prints
-the result. This submits a remote task even though calling the same function
-directly in Python runs it in the current process.
-An argument that parses as JSON (a number, `true` or `false`, a list, an
-object) is passed as that value; anything else is passed as a string:
+Prepares and calls a decorated function remotely, shows its progress and logs,
+and prints the result. A separate deploy is not required for a local function
+call. JSON arguments become Python values; other arguments stay strings:
 
 ```bash
-lazycloud run quickstart.py:hello LazyCloud
-lazycloud run pipeline.py:process 42 '["a", "b"]' '{"dry_run": true}'
+uv run lazycloud run quickstart:hello LazyCloud
+uv run lazycloud run reports:summarize_sales '[1200, 3500, 800]'
 ```
 
-Pass a pod to run it once with a command; pass a plain function with a
-`.run()` or `.remote()` method to call that.
+The second command uses the [functions example](/concepts/functions).
+Arguments are positional. Quote lists and objects so your shell passes them
+as one argument.
+
+Pass a pod to start an instance with a command. A plain Python callable runs
+locally, which lets an example coordinate remote calls. Objects with `.run()`
+or `.remote()` use those methods.
 
 Workflow progress and replayed remote logs go to stderr, leaving stdout for
 results. The CLI shows them even when redirected, including with `--json`.
 Build logs remain in terminal history instead of disappearing from the live
-display. Python `.remote()` calls are quiet unless you enable output; see
+display. Local Python `.remote()` calls also show output by default; see
 [Progress and logs](/concepts/functions#progress-and-logs).
 
 ## lazycloud serve
 
 ```bash
-lazycloud serve HANDLER [--timeout <seconds>] [--resource <selector>] [options]
+uv run lazycloud serve HANDLER [--timeout <seconds>] [--resource <selector>] [options]
 ```
 
 Runs a function, endpoint, or ASGI app on LazyCloud with a temporary URL and streams
 its logs. Your working directory is synced into the container as you edit;
 `--sync-dir <dir>` syncs a different one. `--timeout 0`, the default, serves
-until you interrupt it. Image, environment, secret, resource and placement
+until you interrupt it. Send requests from a second terminal; Ctrl+C ends the preview. Image, environment, secret, resource and placement
 overrides apply to the selected preview. Endpoint and ASGI previews manage their
 HTTP listener; custom container ports, TCP mode, entrypoints and attaching an
 existing container are unsupported.
@@ -82,31 +89,33 @@ The SDK accepts the same preview configuration through `ServeOptions`:
 
 ```python
 from lazycloud import ServeOptions
+from text_tools import app
 
 app.serve(
-    resource="endpoint:api",
+    resource="endpoint:count",
     options=ServeOptions(cpu=0.5, env={"MODE": "development"}, sync_dir="."),
 )
 ```
 
+This uses `text_tools.py` from the [apps guide](/concepts/apps).
 Function, endpoint, and ASGI objects also accept `serve(options=...)`. Supplying options
 prepares a fresh preview configuration even if the object is already deployed.
 
-For a function preview, invoke it from another terminal with `lazycloud run`
+For a function preview, invoke it from another terminal with `uv run lazycloud run`
 or call its `.remote()` method. Calls from the same local configuration use
 the preview while it is active. The container stays warm until the preview
 stops. Source reload waits for active calls to finish before accepting new work;
 import errors appear in the serve logs and recover after the next source edit.
 ASGI previews use one HTTP worker so source changes restart the application.
 
-Use [`lazycloud app export`](/concepts/apps#export-a-typed-python-package) to
+Use [`uv run lazycloud app export`](/concepts/apps#export-a-typed-python-package) to
 generate a typed Python package for deployed functions, endpoints, and ASGI apps.
 
 ## lazycloud shell
 
 ```bash
-lazycloud shell HANDLER [--sync-dir <dir>] [options]
-lazycloud shell --container-id <id>
+uv run lazycloud shell HANDLER [--sync-dir <dir>] [options]
+uv run lazycloud shell --container-id <id>
 ```
 
 Opens an interactive shell in the handler's image, or attaches a shell to a
@@ -115,7 +124,7 @@ running container.
 ## lazycloud dev
 
 ```bash
-lazycloud dev [HANDLER] [--sync <dir>] [options]
+uv run lazycloud dev [HANDLER] [--sync <dir>] [options]
 ```
 
 Opens a shell in a remote container with your working directory synced in
@@ -124,8 +133,11 @@ it uses the managed Python image, or `--image` or `--dockerfile` if given.
 
 ## Workload options
 
-`deploy`, `run`, `serve`, `shell`, and `dev` accept these overrides. An option
-you leave out keeps what the decorator says.
+Define persistent settings in the app's Python code. Use these flags for an
+ad hoc override, such as trying another GPU or debugging with extra memory.
+
+These flags vary by command and workload. Run `lazycloud COMMAND --help`
+for the flags that command accepts. An omitted option keeps the definition's value.
 
 | Option | What it does |
 | --- | --- |
@@ -135,11 +147,16 @@ you leave out keeps what the decorator says.
 | `--dockerfile <path>`, `--context <dir>` | Build from a Dockerfile instead. |
 | `--env KEY=VALUE` | Environment variable. Repeatable. |
 | `--secret <name>` | Workspace secret to inject. Repeatable. |
-| `--port <spec>` | Port to expose, as `8080` or `name=8080`. Repeatable. |
+| `--port <spec>` | Port to expose, as `8080` or `name=8080`. Repeatable. `serve` uses `--container-port`. |
 | `--keep-warm <seconds>` | Idle seconds a container stays up. |
 | `--tcp`, `--no-tcp` | Raw TCP ingress instead of HTTP. |
 | `--pool <name>` | Compute pool to run in. |
+| `--region <name>`, `--availability-zone <id>` | Placement overrides where supported. Availability-zone selection is available on `deploy`, `run`, and `shell`. |
 | `--preemptible`, `--no-preemptible` | Allow reclaimable capacity or require non-preemptible capacity (`deploy` and `run`). Workloads are preemptible by default. |
 | `--entrypoint <cmd>` | Container entrypoint override. |
+
+A direct function target rejects port, keep-warm, TCP, entrypoint, and resource
+overrides. Set function keep-warm on its decorator. To select a resource, pass
+an app to `deploy --resource`.
 
 <WorkspaceFlag />

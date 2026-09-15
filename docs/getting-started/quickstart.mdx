@@ -1,32 +1,42 @@
 ---
-title: "Quickstart"
-description: "Sign in, deploy a function, call it, and read its result and logs."
+title: "Run your first function"
+description: "Write a Python function, run it on LazyCloud, and see its result in your terminal."
 ---
 
-## 1. Sign in
+You'll run a Python function on remote compute and get `hello LazyCloud` back
+in your terminal. Start with the [client installed](/getting-started/installation).
+
+## Download the project
+
+With the CLI [installed through uv](/getting-started/installation):
 
 ```bash
-lazycloud login
+lazycloud example download quickstart
+cd quickstart
+uv sync
 ```
 
-The CLI prints a link and a code. Open the link, check that the code matches,
-and approve. The CLI is now signed in as you and can reach every workspace you
-belong to. If you have more than one workspace, pick one:
+This gives you `quickstart.py`, a README, and a project pinned to your SDK
+version. `uv sync` creates the environment and `uv.lock`. Keep the lockfile
+with your source so another machine can install the same dependencies.
+
+## Sign in
 
 ```bash
-lazycloud workspace list
-lazycloud workspace use <name>
+uv run lazycloud login
 ```
 
-## 2. Write a function
-
-Generate the starter file:
+Open the link, check that the code matches your terminal, and approve the
+sign-in. If you belong to several workspaces, choose where to run:
 
 ```bash
-lazycloud quickstart
+uv run lazycloud workspace list
+uv run lazycloud workspace use <name>
 ```
 
-This writes `quickstart.py`:
+## Read the function
+
+The downloaded `quickstart.py` contains:
 
 ```python
 from __future__ import annotations
@@ -39,64 +49,45 @@ image = Image(python_version="3.12")
 
 @app.function(name="hello", image=image, cpu=1.0, memory="256Mi")
 def hello(name: str = "world") -> str:
-    print(f"quickstart greeting for {name}", flush=True)
+    print(f"Greeting {name} from LazyCloud", flush=True)
     return f"hello {name}"
 
 
 if __name__ == "__main__":
-    print(hello.local("lazycloud"))
+    print(hello.remote("LazyCloud"))
 ```
 
-Run it on your own machine first. `.local()` calls the plain Python function in
-your process:
+`Image` selects the remote Python environment. `cpu` and `memory` reserve
+resources for the container. Your machine only needs the LazyCloud client.
+Change these settings in the file so your next run uses the same configuration.
+
+## Run it
 
 ```bash
-python quickstart.py
+uv run lazycloud run quickstart:hello LazyCloud
 ```
 
-## 3. Deploy it
+LazyCloud prepares the image, uploads your code, and runs `hello` remotely.
+The command shows progress and the function's logs, then prints `hello LazyCloud`.
+The first run can take longer while the image builds.
 
-```bash
-lazycloud deploy quickstart.py:hello
-```
+Run the command from the directory containing `quickstart.py`.
+`quickstart:hello` selects `hello` from that module; omit the `.py` extension.
+Arguments follow it. Change `LazyCloud` to your name and run it again.
 
-The handler reference is `<file-or-module>:<object>`: a path to a Python file
-or an importable module, then the decorated object. Pass the `App` instead to
-deploy everything it registers. The first deploy builds the image, so it takes
-longer than the ones after it.
+You can also run `uv run python quickstart.py` when the SDK is installed in your Python
+environment. The `.remote()` call in the file submits the same remote work.
+Use `.local()` instead when you want to call the function on your own machine.
 
-## 4. Call it
+## What happens after the run
 
-```bash
-lazycloud run quickstart.py:hello LazyCloud
-```
+The container shuts down after its idle window. Your task's status, result,
+and logs remain in the [dashboard](https://lazycloud.dev/dashboard).
+Use [Tasks and logs](/concepts/tasks-and-logs) to revisit a run later or
+inspect work submitted in the background.
 
-`lazycloud run` submits the call as a task on the deployed function and prints
-the result. An argument that parses as JSON (a number, `true`, a list, an
-object) is passed as that value; anything else is passed as a string.
+## Keep going
 
-## 5. Read the result and logs
-
-Every call is a durable task:
-
-```bash
-lazycloud task list
-lazycloud task show <task-id>
-lazycloud task result <task-id>
-lazycloud task logs <task-id>
-```
-
-`task result` waits for the task to finish. To follow logs as they arrive:
-
-```bash
-lazycloud logs --task-id <task-id> --follow
-```
-
-The same task appears in the dashboard under Tasks, with its status, result,
-and logs.
-
-## Next steps
-
-- Serve HTTP traffic in [Your first endpoint](/getting-started/first-endpoint)
-- Read about [Apps](/concepts/apps) and [Functions](/concepts/functions)
-- Browse the [CLI reference](/cli/overview)
+- [Serve an HTTP endpoint](/getting-started/first-endpoint) for calls from another app.
+- [Run functions in parallel](/concepts/functions#process-several-inputs) for a batch of inputs.
+- [Choose an example](/examples/index) to train a model, process documents, or run a coding agent.

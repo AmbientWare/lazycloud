@@ -3,28 +3,39 @@ title: "Artifacts"
 description: "Save files a task produces and share them with expiring public URLs."
 ---
 
-An `Artifact` saves a file a task produced, such as an image, an archive, or a
-report, into workspace storage. It stays attached to the task after the
-container is gone.
+Save a task's output as an artifact when you want to download or share it
+after the container stops. Use a volume for files you need to keep beyond
+your plan's artifact retention period.
 
 ## Save one
 
-Inside a running task, the task id is picked up automatically:
+Save this as `report.py`. The task writes a CSV and returns a download URL:
 
 ```python
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from lazycloud import App, Artifact
 
-app = App("renders")
+app = App("reports")
 
 
 @app.function()
-def render(frame: int) -> str:
-    path = f"/tmp/frame-{frame}.png"
-    ...  # write the file
-    artifact = Artifact.file(path)
-    artifact.save()
-    return artifact.public_url(expires=3600)
+def create_report(amounts_cents: list[int]) -> str:
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "sales.csv"
+        path.write_text(f"sales,total_cents\n{len(amounts_cents)},{sum(amounts_cents)}\n")
+        artifact = Artifact.file(path)
+        artifact.save()
+        return artifact.public_url(expires=3600)
 ```
+
+```bash
+uv run lazycloud run report:create_report '[1200, 3500, 800]'
+```
+
+Open the returned URL to download `sales.csv`. Anyone with that URL can read
+the file until it expires. The task ID is attached automatically.
 
 `save()` uploads the file, zipping it first if the path is a directory, and
 returns a `SavedArtifact` with `artifact_id`, `task_id`, and `filename`.
@@ -37,7 +48,7 @@ Other ways to construct one:
 Artifact.file(path, content_type=None, task_id=None)   # an existing file
 Artifact.from_file(file_handle, suffix="")              # an open binary handle
 Artifact.from_pil_image(image, format="png")            # a PIL image
-Artifact(path=..., content_type=..., task_id=...)       # full control
+Artifact(path=path, content_type="text/csv")            # explicit metadata
 ```
 
 `artifact.zip_dir(dir_path)` zips a directory so a folder can be saved as one
@@ -49,7 +60,7 @@ artifact.
 authentication until it expires. Hand it to a browser or a webhook.
 `artifact.exists()` and `artifact.stat()` check and describe the saved file.
 
-Browse all workspace artifacts under **Storage → Artifacts** in the
+Browse workspace artifacts under Storage, then Artifacts in the
 [dashboard](/platform/dashboard), or open a task's Artifacts tab. Search filenames,
 filter by app, task, type, or date, and preview or download files. Artifacts remain
 accessible after the originating task is deleted. To save from outside the
@@ -57,8 +68,8 @@ producing container, pass `task_id=...` explicitly.
 
 ## Storage charges
 
-Artifacts count toward **Volume storage**, at the same published storage rate as
-volumes. Usage appears as **Artifacts**. Charges depend on the stored file's size
+Artifacts count toward volume storage, at the same published storage rate as
+volumes. Usage appears as Artifacts. Charges depend on the stored file's size
 and how long it is retained, including files deleted between metering scans.
 Directories are billed at their uploaded archive size.
 
@@ -87,16 +98,14 @@ removes their stored bytes. Newly issued public URLs cannot outlive the artifact
 expiration. Previously issued URLs may remain usable until their own expiry or
 physical deletion. Files can be deleted earlier with `artifact.delete()`.
 
-Artifacts saved before automatic retention was introduced receive at most one
-plan retention window from rollout. An earlier scheduled deletion is preserved.
 For durable files, use a Volume or download a copy before expiration.
 
 ## CLI
 
 ```bash
-lazycloud artifact list --search report
-lazycloud artifact usage
-lazycloud artifact delete ARTIFACT_ID
+uv run lazycloud artifact list --search report
+uv run lazycloud artifact usage
+uv run lazycloud artifact delete ARTIFACT_ID
 ```
 
 Lists return a `next` cursor; pass it with `--cursor` to continue. Use `--workspace`
