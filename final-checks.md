@@ -1,17 +1,29 @@
 # CLI and SDK user checks
 
-PR #281 shipped as production 0.0.94. Shipping a fix does not count as passing.
+PR #282 shipped as production 0.0.95. Shipping a fix does not count as passing.
 
-**108 of 122 current checks passed; 14 remain unresolved below.**
-Passed checks have been removed. Of those passes, 90 retain 0.0.93 evidence and
-18 were verified on 0.0.94. This is not a full rerun on 0.0.94.
+**111 of 122 current checks passed; 11 remain unresolved below.**
+Passed checks have been removed. Of those passes, 90 retain 0.0.93 evidence,
+18 were verified on 0.0.94, and 3 were verified on 0.0.95.
+Earlier passes retain their prior-release evidence.
 The print-only join check was removed from scope, not counted as a pass.
 
-Unreleased fixes on `fix/remaining-user-checks`: Compute settings inventory during
+Released fixes in 0.0.95: Compute settings inventory during
 workspace deletion, empty joined-pool cleanup, and removal of `machine join --print-only`.
 Pool cleanup preserves pending joins and offline machines, excludes platform/AWS
 capacity, and rejects work targeting a removed pool. Seven focused local owner
-checks pass; joined-host production acceptance remains open.
+checks pass. Production acceptance used published client 0.0.95.
+Argo is healthy and synced at deployment ca648a61, release generation 26.
+
+Removed CLI-44, CLI-48 and SDK-40 after production acceptance and cleanup.
+The disposable host was removed and every test container is terminal.
+
+Two small fixes are committed on `fix/machine-join-options`, not released:
+forward CLI options into the installer and send SIGTERM when stopping the agent.
+The join command parses with the options under POSIX sh. On the actual joined
+host, the supervisor fix reduced restart from a 30-second forced kill to a clean
+0.35-second restart; a subsequent invocation returned the expected result.
+The shipped supervisor was restored before production removal acceptance.
 
 Remaining known problems: warm-function preparation race, intermittent endpoint
 dispatch delay, unavailable production TCP ingress, and Docker image-cache publication.
@@ -39,10 +51,8 @@ Rules:
 
 Commands below start with `lazycloud`.
 
-- [ ] CLI-44 Use `machine list` and match its entries to machines owned by the account. PARTIAL: empty inventory returned in 0.90 seconds. Joined-machine visibility awaits CLI-46; machine ownership spans the account's workspaces.
-- [ ] CLI-46 Join a disposable machine in foreground mode and run work on it. BLOCKED: current host UID 1000; `sudo -n -l` requires a password. No privileged disposable host is prepared. No install attempted.
-- [ ] CLI-47 Join a disposable machine in service mode and run work after a service restart. BLOCKED: same host-privilege prerequisite as CLI-46.
-- [ ] CLI-48 Remove the test machine and verify host cleanup and stopped scheduling. BLOCKED: no machine joined in this pass. Do not remove platform or pre-existing machines.
+- [ ] CLI-46 Join a disposable machine in foreground mode and run work on it. PARTIAL, 0.0.95: appending `--foreground` or resource options after the generated command's final `fi` causes a shell syntax error before installation. Fix committed; ordinary foreground join still needs a released retest.
+- [ ] CLI-47 Join a disposable machine in service mode and run work after a service restart. PARTIAL, 0.0.95: default service join and workloads succeeded. Restart required systemd to kill the process after 30 seconds because the supervisor sent SIGINT to a child that ignores it. The SIGTERM fix passed on the test host, but remains unreleased.
 
 ## SDK
 
@@ -51,10 +61,9 @@ Use public imports and small examples, one behavior at a time.
 - [ ] SDK-23 Set a warm replica count and verify reuse and cleanup after deletion. PARTIAL, 0.0.94: calls reused container dd7680c5 and PID 1; deletion stopped it. Preparatory container 2a5ad142 still hit a terminal container cannot restart during mark-running. Startup race remains.
 - [ ] SDK-31 Send concurrent endpoint requests and inspect every response and elapsed time. PARTIAL, 0.0.94: five concurrent requests returned exact HTTP 200 responses in 11.33–13.25 seconds, but a later warm request took 27.45 seconds. Latest eight warm repeats passed in 1.01–1.69 seconds. Intermittent delay remains; speed investigation paused at the owner's request.
 - [ ] SDK-32 Request a starting or stopped endpoint and inspect the actual failure or recovery. PARTIAL, 0.0.94: stopped deployment now returns a clear 503 and start restores service. Intermittent warm routing delay remains with SDK-31; investigation paused at the owner's request.
-- [ ] SDK-40 Run with explicit CPU, memory, environment and pool settings and inspect them inside the workload. IN PROGRESS, 0.0.94: task e48feadb uses cpu=0.5, memory=256Mi, pool=lazycloud and SDK_MARKER=configured. Host enforcement evidence pending.
 - [ ] SDK-41 Run a GPU workload on matching hardware; check invalid or unavailable GPU requests. PARTIAL, 0.0.94: GPU execution previously passed on an actual T4. Retest task 767b5e2e never reached a worker: repeated acquisitions ended with provider_launch_failed, while public Task.pending_progress kept saying "Starting compute for this function." No provider error detail was retained in the sampled operations. Cancelled the task; its container is stopped and all its acquisition operations are released. This is an acquisition/reporting failure, not a workload execution failure.
 - [ ] SDK-44 Exchange data through an exposed TCP port where ingress is configured. PARTIAL, 0.0.94: deploy correctly reports TCP ingress is not configured on this installation. Production TCP exchange remains unavailable; local TCP passed.
-- [ ] SDK-58 Build and run a Docker container inside a sandbox; inspect logs and stop it. PARTIAL, 0.0.94: retest build 3904924b failed after 62.3 seconds while publishing image layers to the cache. The failed request was PUT; the client discards the transport error, so the cause remains unproven. No Docker sandbox was created. SDK-59 and SDK-60 remain blocked by this build failure.
+- [ ] SDK-58 Build and run a Docker container inside a sandbox; inspect logs and stop it. PARTIAL, 0.0.95: build fdd988bf failed after 60.1 seconds with "image layer cache population failed: content cache unavailable". Its execution container is terminal and execution cleanup is complete. No Docker sandbox was created. SDK-59 and SDK-60 remain blocked by this build failure.
 - [ ] SDK-59 Push and pull a test image through an authorized registry and remove test objects. BLOCKED, 0.0.94: SDK-58 prevents creating the Docker sandbox. No registry objects created.
 - [ ] SDK-60 Run a small Docker Compose app inside a sandbox and remove its containers and volumes. BLOCKED, 0.0.94: SDK-58 prevents creating the Docker sandbox. No nested containers or volumes created.
 - [ ] SDK-68 Observe natural artifact retention expiry before claiming retention works. BLOCKED by the actual retention window. This account's newly uploaded artifact expires on 2026-12-13. No clock/row edits or shortened policy used; metadata alone does not prove natural expiry. Signed-URL expiry is separate in SDK-67.
