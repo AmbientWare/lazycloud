@@ -19,6 +19,7 @@ from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
 from coordination.redis_client import RedisClient
 from database.repositories.compute import ComputeMachineEnrollmentRepository
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository, WorkerRepository
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -50,7 +51,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import ConflictError, InvalidInputError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.releases import AGENT_RELEASE_GENERATION_HEADER, AgentReleaseRequest
 from shared.releases import AgentArtifact
 from shared.scheduling import (
@@ -235,6 +236,34 @@ def _install_recording_scale(
         )
 
     monkeypatch.setattr(ComputeService, "scale_internal_unit", scale_internal_unit)
+
+
+def test_unit_lookups_preserve_workspace_scope_and_missing_ids(
+    isolated_services: ApiServices,
+) -> None:
+    workspace_id = _default_workspace_id(isolated_services)
+    unit = isolated_services.compute.create_unit(
+        UnitName("lookup"), workspace=workspace_id, provider="agent", max_machines=1
+    )
+    with isolated_services.context.database.session() as session:
+        other = WorkspaceRepository(session).create(name="other-lookup-workspace")
+    coordinator = isolated_services.gateway_service.unit_state_coordinator
+    assert coordinator.unit_by_id(unit.id, workspace_id=workspace_id).id == unit.id
+    assert (
+        coordinator.unit_by_capacity_owner(unit.capacity_owner_id, workspace_id=workspace_id).id
+        == unit.id
+    )
+    assert coordinator.unit_by_name(unit.name, workspace_id=workspace_id).id == unit.id
+    with pytest.raises(NotFoundError):
+        coordinator.unit_by_id(unit.id, workspace_id=other.id)
+    with pytest.raises(NotFoundError):
+        coordinator.unit_by_capacity_owner(unit.capacity_owner_id, workspace_id=other.id)
+    with pytest.raises(NotFoundError):
+        coordinator.unit_by_name(unit.name, workspace_id=other.id)
+    with pytest.raises(NotFoundError):
+        coordinator.unit_by_id("missing", workspace_id=workspace_id)
+    with pytest.raises(NotFoundError):
+        coordinator.unit_by_capacity_owner("missing", workspace_id=workspace_id)
 
 
 def test_pool_scale_delegates_to_compute_while_capacity_owner_lock_is_held(

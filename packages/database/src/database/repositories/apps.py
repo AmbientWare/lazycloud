@@ -623,6 +623,31 @@ class StubRepository:
         """System lookup for scheduler/worker/runner paths resolving placed work."""
         return self.records.get_across_workspaces(stub_id)
 
+    def get_by_name(self, name: str, *, workspace_id: str | None) -> StubRecord | None:
+        statement = select(StubTable.payload).where(StubTable.name == name).limit(2)
+        if workspace_id is not None:
+            statement = statement.where(StubTable.workspace_id == workspace_id)
+        payloads = list(self.session.scalars(statement))
+        if len(payloads) > 1:
+            raise ConflictError(f"stub name is ambiguous; use a stub ID: {name}")
+        return StubRecord.model_validate(payloads[0]) if payloads else None
+
+    def get_for_deployment(
+        self, deployment_id: str, *, workspace_id: str | None
+    ) -> StubRecord | None:
+        statement = (
+            select(StubTable.payload)
+            .join(DeploymentTable, DeploymentTable.stub_id == StubTable.id)
+            .where(
+                DeploymentTable.id == deployment_id,
+                DeploymentTable.workspace_id == StubTable.workspace_id,
+            )
+        )
+        if workspace_id is not None:
+            statement = statement.where(StubTable.workspace_id == workspace_id)
+        payload = self.session.scalar(statement)
+        return StubRecord.model_validate(payload) if payload is not None else None
+
     def list(self, *, workspace_id: str) -> list[StubRecord]:
         return self.records.list(workspace_id=workspace_id)
 

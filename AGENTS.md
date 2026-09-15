@@ -74,6 +74,22 @@ Answer condensed. This is a must-follow rule, not a preference.
   mounted filesystems own object/file data. Do not add duplicate stores or
   backend switches.
 
+## Database cost
+
+- Filter and aggregate in SQL. An ID or name lookup must not load a collection.
+  Read only the columns needed; do not fetch JSON histories to count or select
+  current resources.
+- Recurring work scales with live resources and due work, not retained history.
+  Keep terminal records out of active scans while preserving pending cleanup,
+  retries and fencing. Batch shared reads and reuse the snapshot within a pass.
+- Budget recurring database work across every replica and its actual cadence.
+  A lock prevents duplicate mutations, not repeated reads after it is released.
+  Keep idle passes cheap without slowing admission, billing enforcement or recovery.
+- For changed polling, reconciliation or lookup paths, record before/after query
+  counts and returned bytes using the production owner with representative history.
+  Check both idle and active behavior. Fast queries and passing tests alone do not
+  establish acceptable database cost. Verify the deployed rate in query insights.
+
 ## Style and tooling
 
 Keep dependencies explicit and owner-directed. Use Python 3.12 types, Pydantic
@@ -136,6 +152,9 @@ piping a long run to `tail`, and prefer fail-fast (`pytest -x`) with narrow owne
 scopes so the first real failure shows up immediately.
 
 ### Never wait on a state, always poll
+
+This section applies to bounded acceptance and incident diagnosis. It does not
+authorize adding fast database polling to production loops.
 
 Waiting for a state to be reached is not allowed. A wait keyed on the outcome
 is keyed on exactly the thing that does not happen when something is wrong: a

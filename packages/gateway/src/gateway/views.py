@@ -256,28 +256,12 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
 def stub_for_task(control_plane: ControlPlaneService, task: Task) -> StubRecord | None:
     if task.stub_id:
         try:
-            return control_plane.get_stub(task.stub_id)
+            return control_plane.get_stub(task.stub_id, workspace=task.workspace_id)
         except NotFoundError:
             pass
     if task.deployment_id is None:
         return None
-    return stub_for_deployment(control_plane, task.deployment_id, workspace=None)
-
-
-def stub_for_deployment(
-    control_plane: ControlPlaneService,
-    deployment_id: str,
-    *,
-    workspace: str | None,
-) -> StubRecord | None:
-    return next(
-        (
-            item
-            for item in control_plane.list_stubs(workspace=workspace)
-            if item.deployment_id == deployment_id
-        ),
-        None,
-    )
+    return control_plane.get_deployment_stub(task.deployment_id, workspace=task.workspace_id)
 
 
 def _memory_mb(value: str | None) -> int:

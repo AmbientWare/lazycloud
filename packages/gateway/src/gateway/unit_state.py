@@ -17,6 +17,7 @@ from compute.state import (
 from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.identity import WorkspaceMemberRepository
 from foundation.ids import try_uuid
@@ -24,6 +25,7 @@ from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import ComputeCredentialStatus
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
+    ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
     MachinePool,
@@ -63,8 +65,6 @@ def billing_owner_for_unit(unit: ComputeUnitRecord) -> UsageBillingOwner:
 
 
 class GatewayComputeService(Protocol):
-    def list_units(self, *, workspace: str = "default") -> Iterable[ComputeUnitRecord]: ...
-
     def list_machines(self, *, workspace: str = "default") -> Iterable[Machine]: ...
 
     def create_unit(
@@ -90,11 +90,10 @@ class GatewayUnitStateCoordinator:
     compute_states: RedisComputeStateRepository
 
     def unit_by_name(self, name: UnitName, *, workspace_id: str) -> ComputeUnitRecord:
-        for unit in self.compute.list_units(workspace=workspace_id):
-            if unit.name == name:
-                return unit
-        msg = f"unit not found: {name}"
-        raise NotFoundError(msg)
+        with self.context.database.session() as session:
+            workspace = self.context.workspace(session, workspace_id)
+            unit = ComputeUnitRepository(session).get_by_name(workspace.id, name)
+        return self._visible_unit(unit, reference=name)
 
     def unit_by_id(self, unit_id: str, *, workspace_id: str) -> ComputeUnitRecord:
         """Resolve the unit a public route addressed.
@@ -102,11 +101,23 @@ class GatewayUnitStateCoordinator:
         Units are addressed by id so a request can never resolve a unit through
         a value that names a pool: the two share no shape.
         """
-        for unit in self.compute.list_units(workspace=workspace_id):
-            if unit.id == unit_id:
-                return unit
-        msg = f"unit not found: {unit_id}"
-        raise NotFoundError(msg)
+        parsed_id = try_uuid(unit_id)
+        if parsed_id is None:
+            raise NotFoundError(f"unit not found: {unit_id}")
+        with self.context.database.session() as session:
+            workspace = self.context.workspace(session, workspace_id)
+            unit = ComputeUnitRepository(session).get(parsed_id, workspace_id=workspace.id)
+        return self._visible_unit(unit, reference=unit_id)
+
+    @staticmethod
+    def _visible_unit(unit: ComputeUnitRecord | None, *, reference: str) -> ComputeUnitRecord:
+        if unit is None or (
+            unit.platform_fleet
+            and unit.visibility is ComputeUnitVisibility.Internal
+            and unit.phase is ComputeUnitPhase.Deleted
+        ):
+            raise NotFoundError(f"unit not found: {reference}")
+        return unit
 
     def create_or_update_pool(
         self,
@@ -193,11 +204,15 @@ class GatewayUnitStateCoordinator:
         *,
         workspace_id: str,
     ) -> ComputeUnitRecord:
-        for unit in self.compute.list_units(workspace=workspace_id):
-            if unit.capacity_owner_id == capacity_owner_id:
-                return unit
-        msg = f"capacity owner not found: {capacity_owner_id}"
-        raise NotFoundError(msg)
+        parsed_id = try_uuid(capacity_owner_id)
+        if parsed_id is None:
+            raise NotFoundError(f"capacity owner not found: {capacity_owner_id}")
+        with self.context.database.session() as session:
+            workspace = self.context.workspace(session, workspace_id)
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(
+                parsed_id, workspace_id=workspace.id
+            )
+        return self._visible_unit(unit, reference=capacity_owner_id)
 
     def private_unit_state(
         self,

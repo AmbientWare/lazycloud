@@ -472,18 +472,19 @@ class ComputeUnitRepository:
         self,
         capacity_owner_id: str,
         *,
+        workspace_id: str | None = None,
         for_update: bool = False,
     ) -> ComputeUnitRecord | None:
         """Resolve one unit by its owner.
 
-        Unscoped because the owner id is globally unique
-        (`uq_compute_units_capacity_owner_id`) and the scheduler plane resolves
-        units without a workspace in hand. Tenant-scoped callers check
-        `workspace_id` on the row they get back.
+        System callers may omit workspace scope for a globally unique owner.
+        Tenant callers supply it so the predicate enforces the boundary.
         """
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.capacity_owner_id == capacity_owner_id
         )
+        if workspace_id is not None:
+            statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         if for_update:
             statement = statement.with_for_update()
         statement = statement.options(
@@ -525,9 +526,12 @@ class ComputeUnitRepository:
         self.session.flush()
         return isinstance(result, CursorResult) and result.rowcount > 0
 
-    def get(self, pool_id: str, *, for_update: bool = False) -> ComputeUnitRecord | None:
-        """System lookup by pool id for placement/capacity reconciliation."""
+    def get(
+        self, pool_id: str, *, workspace_id: str | None = None, for_update: bool = False
+    ) -> ComputeUnitRecord | None:
         statement = select(ComputeUnitTable).where(ComputeUnitTable.id == pool_id)
+        if workspace_id is not None:
+            statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         if for_update:
             statement = statement.with_for_update()
         statement = statement.options(
@@ -577,7 +581,9 @@ class ComputeUnitRepository:
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
-    def list_for_workspace(self, workspace_id: str) -> list[ComputeUnitRecord]:
+    def list_for_workspace(
+        self, workspace_id: str, *, include_retired_platform: bool = True
+    ) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
             .options(
@@ -588,6 +594,14 @@ class ComputeUnitRepository:
             .where(ComputeUnitTable.workspace_id == workspace_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
+        if not include_retired_platform:
+            statement = statement.where(
+                ~and_(
+                    ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+                    ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
+                    ComputeUnitTable.phase == ComputeUnitPhase.Deleted.value,
+                )
+            )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_account(self, user_id: str) -> list[ComputeUnitRecord]:
@@ -644,10 +658,11 @@ class ComputeUnitRepository:
     def list_across_workspaces(
         self, *, capacity_owner_kind: CapacityOwnerKind | None = None
     ) -> list[ComputeUnitRecord]:
-        """System listing every unit, for scheduler controller construction."""
-        statement = select(ComputeUnitTable).order_by(
-            ComputeUnitTable.workspace_id,
-            ComputeUnitTable.id,
+        """Current units for scheduler controller construction."""
+        statement = (
+            select(ComputeUnitTable)
+            .where(ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value)
+            .order_by(ComputeUnitTable.workspace_id, ComputeUnitTable.id)
         )
         if capacity_owner_kind is not None:
             statement = statement.where(
@@ -723,6 +738,7 @@ class ComputeUnitRepository:
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
             ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+            ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value,
         )
         if preemptible is not None:
             statement = statement.where(ComputeUnitTable.worker_preemptible.is_(preemptible))
@@ -779,6 +795,24 @@ class ComputeUnitRepository:
         )
 
     def platform_capacity_usage(self, *, gpu: bool, excluding_unit_id: str | None = None) -> int:
+        statement = self._platform_capacity_commitments(gpu=gpu)
+        if excluding_unit_id is not None:
+            statement = statement.where(ComputeUnitTable.id != excluding_unit_id)
+        commitments = statement.subquery()
+        return int(
+            self.session.scalar(select(func.coalesce(func.sum(commitments.c.committed), 0))) or 0
+        )
+
+    def platform_capacity_by_unit(self, *, gpu: bool) -> dict[str, int]:
+        return {
+            str(unit_id): committed
+            for unit_id, committed in self.session.execute(
+                self._platform_capacity_commitments(gpu=gpu)
+            ).tuples()
+        }
+
+    @staticmethod
+    def _platform_capacity_commitments(*, gpu: bool) -> Select[tuple[str, int]]:
         # Retiring nodes still bill after desired capacity is reduced or replaced.
         # An explicitly paired replacement already occupies the unit's surge slot.
         live_instances = (
@@ -811,25 +845,27 @@ class ComputeUnitRepository:
             ),
             else_=0,
         )
-        statement = (
+        return (
             select(
-                func.coalesce(
-                    func.sum(
-                        func.greatest(
-                            ComputeUnitTable.desired_machines
-                            + surge
-                            + func.coalesce(live_instances.c.retiring_count, 0),
-                            ComputeUnitTable.observed_machines,
-                            func.coalesce(live_instances.c.count, 0),
-                        )
-                    ),
-                    0,
-                )
+                ComputeUnitTable.id,
+                func.greatest(
+                    ComputeUnitTable.desired_machines
+                    + surge
+                    + func.coalesce(live_instances.c.retiring_count, 0),
+                    ComputeUnitTable.observed_machines,
+                    func.coalesce(live_instances.c.count, 0),
+                ).label("committed"),
             )
             .outerjoin(live_instances, live_instances.c.pool_id == ComputeUnitTable.id)
             .where(
                 ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
                 ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+                or_(
+                    ComputeUnitTable.desired_machines > 0,
+                    ComputeUnitTable.observed_machines > 0,
+                    live_instances.c.count > 0,
+                    surge > 0,
+                ),
                 (
                     ComputeUnitTable.worker_gpu_count > 0
                     if gpu
@@ -837,9 +873,6 @@ class ComputeUnitRepository:
                 ),
             )
         )
-        if excluding_unit_id is not None:
-            statement = statement.where(ComputeUnitTable.id != excluding_unit_id)
-        return int(self.session.scalar(statement) or 0)
 
     def update_capacity(
         self,

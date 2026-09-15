@@ -3641,6 +3641,9 @@ def test_failed_empty_market_retires_and_only_new_demand_reopens_it(
     retired = compute.reconcile_unit_capacity(pool.id, now=now)
     assert retired is not None and retired.phase is ComputeUnitPhase.Deleted
     assert retired.provider_state.degraded_at == failed_at
+    assert all(unit.id != retired.id for unit in compute.list_units_across_workspaces())
+    with service_context.database.session() as session:
+        assert ComputeUnitRepository(session).get(retired.id) is not None
     assert compute.reconcile_unit_capacity(pool.id, now=now + timedelta(hours=1)) is None
     assert provider.desired == 0
     revived = compute.prepare_pooled_capacity(
@@ -3653,6 +3656,7 @@ def test_failed_empty_market_retires_and_only_new_demand_reopens_it(
     assert revived.generation == retired.generation + 1
     assert revived.provider_state.degraded_reason is None
     assert revived.desired_machines == 1
+    assert revived.id in {unit.id for unit in compute.list_units_across_workspaces()}
 
 
 def test_warm_handoff_keeps_one_surge_until_retiring_assets_are_gone() -> None:
