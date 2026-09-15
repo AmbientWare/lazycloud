@@ -33,6 +33,7 @@ class CapacityFailureCode(StringEnum):
     """Typed diagnosis for a capacity acquisition or sizing failure."""
 
     ProviderLaunchFailed = "provider_launch_failed"
+    CapacityUnavailable = "capacity_unavailable"
     ProviderReconciliationFailed = "provider_reconciliation_failed"
     ProviderUnavailable = "provider_unavailable"
     CapacityPlanningFailed = "capacity_planning_failed"
@@ -43,6 +44,7 @@ class CapacityFailureCode(StringEnum):
 
 _CAPACITY_FAILURE_DESCRIPTIONS: dict[CapacityFailureCode, str] = {
     CapacityFailureCode.ProviderLaunchFailed: "provider launch failed",
+    CapacityFailureCode.CapacityUnavailable: "provider has no matching capacity available",
     CapacityFailureCode.ProviderReconciliationFailed: "provider reconciliation failed",
     CapacityFailureCode.ProviderUnavailable: "provider is unavailable",
     CapacityFailureCode.CapacityPlanningFailed: "capacity planning failed",

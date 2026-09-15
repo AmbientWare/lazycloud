@@ -1858,6 +1858,8 @@ def test_worker_exit_retains_pooled_startup_failure_when_detail_arrives_after_ex
     assert saved is not None
     assert saved.task_id is None
     assert saved.status is ContainerStatus.Failed
+    assert saved.started_at is None
+    assert saved.finished_at is not None
     assert saved.startup_error == (
         "container startup failed during prepare-rootfs: not enough free space"
     )
@@ -1992,6 +1994,17 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
     )
 
     stopped = container_service.stop(container.id)
+    cancelled_start = service.update_container_status(
+        UpdateContainerStatusRequest(
+            container_id=container.id,
+            status=SchedulerContainerStatus.Running,
+        ),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
+    )
+    assert cancelled_start.plan is not None
+    assert cancelled_start.state is not None
+    assert cancelled_start.plan.next_status is SchedulerContainerStatus.Stopping
+    assert cancelled_start.state.started_at is None
     service.set_container_exit_code(
         SetContainerExitCodeRequest(
             exited_at=utc_now(),

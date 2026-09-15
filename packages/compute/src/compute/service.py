@@ -705,13 +705,14 @@ class ComputeService:
                     and to_utc(snapshot.last_capacity_failure_at) >= to_utc(operation.created_at)
                     and snapshot.observed_machines < requested_provider_units
                 ):
-                    reason = "provider rejected capacity acquisition"
+                    failure_code = snapshot.last_capacity_failure_code
+                    reason = capacity_failure_message(failure_code)
                     operations.upsert(
                         operation.model_copy(
                             update={
                                 "status": CapacityOperationStatus.Rejected,
                                 "last_error": reason,
-                                "failure_code": CapacityFailureCode.ProviderLaunchFailed,
+                                "failure_code": failure_code,
                                 "updated_at": utc_now(),
                             }
                         )
@@ -732,7 +733,7 @@ class ComputeService:
                         operation,
                         CapacityAcquisitionStatus.Rejected,
                         reason=reason,
-                        failure_code=CapacityFailureCode.ProviderLaunchFailed,
+                        failure_code=failure_code,
                     )
                 if not operation.owns_capacity:
                     return _operation_result(

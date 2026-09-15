@@ -18,7 +18,7 @@ Argo is healthy and synced at deployment ca648a61, release generation 26.
 Removed CLI-44, CLI-48 and SDK-40 after production acceptance and cleanup.
 The disposable host was removed and every test container is terminal.
 
-Two small fixes are committed on `fix/machine-join-options`, not released:
+PR #283 is merged into main at `7175e0d2`, not released:
 forward CLI options into the installer and send SIGTERM when stopping the agent.
 The join command parses with the options under POSIX sh. On the actual joined
 host, the supervisor fix reduced restart from a 30-second forced kill to a clean
@@ -28,7 +28,37 @@ The shipped supervisor was restored before production removal acceptance.
 Remaining known problems: warm-function preparation race, intermittent endpoint
 dispatch delay, unavailable production TCP ingress, and Docker image-cache publication.
 Docker registry and Compose checks are blocked by the image-cache failure.
-The owner paused database and speed investigation; continue the remaining checklist.
+The current batch is PR #284 on `fix/sdk-failure-batch`, based on that merge.
+Keep speed work limited to the unresolved endpoint checks.
+
+Local progress, 2026-09-15:
+- Restored the local agent after reboot. Docker had recreated its missing worker
+  configuration file as an empty directory. The worker is healthy again.
+- Committed typed capacity-shortage reporting, agent retry diagnostics, correction of
+  invented container start times, and cancellation handling during startup.
+- Twenty worker checks and the focused API/compute checks passed. Changed
+  production Python files pass Ruff and type checking.
+- A public function returned 2. Warm calls reused one container and PID 1.
+- Docker ran Alpine and returned `docker-ok`. A fresh Docker-enabled image with
+  a 256 MiB layer built and published. This does not resolve the production PUT
+  failure; the image-cache error now retains its transport cause.
+- Compose returned `compose-ok`; its containers and volume were removed and the
+  sandbox terminated.
+- A disposable authenticated registry accepted login, push, and pull. The pulled
+  image returned `registry-ok`. The registry, sandbox, and temporary credentials
+  were removed.
+- All 11 local endpoint responses matched. Five concurrent calls took
+  2.15–2.21 seconds; five later warm calls took 0.49–0.65 seconds.
+- The patched API and rebuilt worker passed warm reuse. Pausing the test app
+  returned HTTP 503 in 0.47 seconds; resuming restored HTTP 200 in 2.14 seconds.
+- AWS retained the failed GPU launch history after its groups were deleted.
+  The group tied to the SDK acquisition reported insufficient g4dn.8xlarge
+  capacity in us-east-1d. The new adapter classified that actual record as
+  `capacity_unavailable`; the compute owner preserved the typed diagnosis.
+  Provider messages are reduced to safe diagnoses before persistence.
+- Deleted the disposable app and its four deployments. Its containers and every
+  registry/Compose sandbox are terminal; image-build cleanup is complete.
+  No additional production passes are claimed.
 
 Rules:
 - Use account mclean-connor. Record target and published client version.

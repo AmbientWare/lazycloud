@@ -19,6 +19,7 @@ from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT
 from worker.container_execution import (
     ContainerExecutionContext,
     ContainerMountSetupResult,
+    ContainerStartupCancelled,
 )
 from worker.container_rootfs import (
     ContainerRootfsSetupResult,
@@ -268,8 +269,10 @@ class _AbortRunner(_Runner):
         )
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
 def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
     tmp_path: Path,
+    cancelled: bool,
 ) -> None:
     runner = _AbortRunner()
     starter = _Starter()
@@ -306,10 +309,16 @@ def test_oci_runtime_aborts_inflight_run_when_started_callback_rejects(
     controller.prepare(spec)
 
     def reject_started(_pid: int) -> None:
+        if cancelled:
+            raise ContainerStartupCancelled("container ctr-1 was stopped")
         raise RuntimeError("container ctr-1 is stopping")
 
-    with pytest.raises(RuntimeError, match="container ctr-1 is stopping"):
-        controller.run(spec, on_started=reject_started)
+    if cancelled:
+        result = controller.run(spec, on_started=reject_started)
+        assert result.cancelled
+    else:
+        with pytest.raises(RuntimeError, match="container ctr-1 is stopping"):
+            controller.run(spec, on_started=reject_started)
 
     assert starter.managed[0].terminated
     assert any(command[-3:] == ["delete", "--force", "ctr-1"] for command in runner.commands)

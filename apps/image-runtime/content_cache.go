@@ -69,8 +69,12 @@ func (c *httpContentCache) request(method, path string, body io.Reader, size int
 	}
 	response, err := c.client.Do(req)
 	if err != nil {
-		slog.Error("image content cache request failed", "method", method)
-		return nil, clipstorage.ErrContentCacheUnavailable
+		var requestError *url.Error
+		if errors.As(err, &requestError) {
+			err = requestError.Err
+		}
+		slog.Error("image content cache request failed", "method", method, "error", err)
+		return nil, fmt.Errorf("%w: %s: %w", clipstorage.ErrContentCacheUnavailable, method, err)
 	}
 	return response, nil
 }

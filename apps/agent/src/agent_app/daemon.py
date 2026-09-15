@@ -1096,6 +1096,7 @@ class AgentDaemonService:
                         raise
                     if self.options.once or not _recoverable_stream_error(exc):
                         raise
+                    LOGGER.warning("Agent stream failed; retrying", exc_info=True)
                     iterations = next_iteration
                     self.telemetry.enqueue_event(
                         event_type=AgentTelemetryEventType.Agent,

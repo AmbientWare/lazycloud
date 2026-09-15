@@ -36,6 +36,7 @@ from worker.container_execution import (
     ContainerNetworkSetupResult,
     ContainerRuntimeRunResult,
     ContainerRuntimeStartError,
+    ContainerStartupCancelled,
     container_resource_request,
 )
 from worker.container_rootfs import ContainerRootfsSetupResult
@@ -874,6 +875,15 @@ class OciRuntimeCommandController:
                     cleanup_argv=plan.cleanup_argv,
                     callback_error=callback_error,
                 )
+                if isinstance(callback_error, ContainerStartupCancelled):
+                    stopped = command.wait()
+                    return ContainerRuntimeRunResult(
+                        exit_code=stopped.exit_code,
+                        stop_reason=self._consume_stop_reason(spec.container_id),
+                        started_pid=started_pid,
+                        output=stopped.output,
+                        cancelled=True,
+                    )
                 if completed_during_callback is not None:
                     raise ContainerRuntimeStartError(
                         spec.container_id,
@@ -1089,6 +1099,15 @@ class OciRuntimeCommandController:
                 cleanup_argv=plan.cleanup_argv,
                 callback_error=callback_error,
             )
+            if isinstance(callback_error, ContainerStartupCancelled):
+                stopped = command.wait()
+                return ContainerRuntimeRunResult(
+                    exit_code=stopped.exit_code,
+                    stop_reason=self._consume_stop_reason(container_id),
+                    started_pid=started_pid,
+                    output=stopped.output,
+                    cancelled=True,
+                )
             if completed_during_callback is not None:
                 raise ContainerRuntimeStartError(
                     container_id,

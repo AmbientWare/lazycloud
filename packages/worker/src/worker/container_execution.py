@@ -289,10 +289,15 @@ class ContainerNetworkSetupResult(ContractModel):
 
 class ContainerRuntimeRunResult(ContractModel):
     exit_code: int
+    cancelled: bool = False
     stop_reason: StopContainerReason = StopContainerReason.Unknown
     oom_killed: bool = False
     started_pid: int | None = None
     output: str = ""
+
+
+class ContainerStartupCancelled(RuntimeError):
+    pass
 
 
 class ContainerRuntimeStartError(RuntimeError):
@@ -362,6 +367,7 @@ class ContainerExecutionPhaseResult(ContractModel):
 
 
 class ContainerExecutionResult(ContractModel):
+    cancelled: bool = False
     phases: list[ContainerExecutionPhaseResult] = Field(default_factory=list)
     image_result: ContainerImageLoadResult | None = None
     image_loaded: bool = False
@@ -385,7 +391,7 @@ class ContainerExecutionResult(ContractModel):
 
     @property
     def ok(self) -> bool:
-        return all(phase.ok for phase in self.phases)
+        return not self.cancelled and all(phase.ok for phase in self.phases)
 
     @property
     def failed_phase(self) -> ContainerExecutionPhase | None:
@@ -687,6 +693,7 @@ class WorkerContainerExecutionService:
             )
             return result
         run_result = run_result_holder["run_result"]
+        result.cancelled = run_result.cancelled
         if run_result.output:
             result.runtime_output = run_result.output
         if started_pid is None and run_result.started_pid is not None:
@@ -1022,6 +1029,8 @@ class WorkerContainerExecutionService:
             SchedulerContainerStatus.Running,
             ttl_seconds=DEFAULT_CONTAINER_STATE_TTL_SECONDS,
         )
+        if plan.next_status is SchedulerContainerStatus.Stopping:
+            raise ContainerStartupCancelled(f"container {context.request.container_id} was stopped")
         if plan.next_status is not SchedulerContainerStatus.Running:
             msg = (
                 f"container {context.request.container_id} remained "
@@ -1218,6 +1227,9 @@ class WorkerContainerExecutionService:
         started_at = datetime.now(UTC)
         try:
             action()
+        except ContainerStartupCancelled:
+            result.phases.append(ContainerExecutionPhaseResult(phase=phase, skipped=True))
+            raise
         except Exception as exc:  # pragma: no cover - defensive boundary capture
             self._publish_phase_lifecycle(
                 result,
