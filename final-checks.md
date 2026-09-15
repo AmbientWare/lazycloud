@@ -1,7 +1,9 @@
 # CLI and SDK user checks
 
-**114 of 122 checks passed; 8 remain unresolved below.**
-Passed checks have been removed. Of those passes, 90 retain 0.0.93 evidence,
+**115 of 122 checks accepted; 7 remain unresolved below.**
+114 have production workflow evidence. SDK-68 was accepted on focused owner evidence
+with the owner's approval; natural expiry of the production artifact was not observed.
+Accepted checks have been removed. Of those passes, 90 retain 0.0.93 evidence,
 18 retain 0.0.94 evidence, 3 retain 0.0.95 evidence, and 3 passed on 0.0.96.
 The print-only join check was removed from scope, not counted as a pass.
 
@@ -33,6 +35,22 @@ The joined machine left through the owning host and no longer appears in the CLI
 EC2 instance `i-0900a583ceb005b2f` is terminated; its disk, security group, AWS key
 pair, and local SSH credentials are removed.
 
+Current fix batch, `fix/join-and-cache-failures`, not deployed:
+- Foreground join is the default; `--background` explicitly installs a service.
+- Saved agent identities migrate the obsolete bootstrap routing fields without
+  discarding credentials or machine identity. Unknown fields still fail validation.
+- SIGINT and SIGTERM use graceful shutdown; repeated signals cannot interrupt cleanup.
+- Cache uploads retain their 120-second total budget instead of a two-second response
+  header deadline. Reads retain a two-second budget. Chunked uploads fill bounded
+  read buffers before cache admission, avoiding a capacity scan per small HTTP chunk.
+- The old cache client failed the delayed-response check with the production error;
+  the patched client passed. A fresh local image with a 256 MiB layer built and
+  published. Docker execution, Compose, and authenticated registry push/pull passed.
+  Their containers, volume, sandbox, and temporary credentials are removed.
+- SDK-68 passed the four existing plan-retention cases: expiry blocks reads and URLs,
+  cleanup deletes expired artifacts, and later uploads survive. No production dates
+  or retention settings were changed.
+
 Rules:
 - Use account mclean-connor. Record target and published client version.
 - Test ordinary CLI commands and short public SDK examples with intended workloads.
@@ -46,7 +64,8 @@ Rules:
   Reuse healthy infrastructure. Use narrow checks while editing; reserve broad
   validation for a release or an explicit broad quality claim.
 - Apply unslop. Keep only unresolved checks here. Remove a check after its
-  production outcome and scoped cleanup pass; do not remove partial results.
+  production outcome and scoped cleanup pass, or explicitly approved owner evidence
+  supports acceptance. Record that distinction; do not remove partial results.
 - Preserve user workloads. Clean up only resources created for these checks.
 - Do not deploy another change without approval.
 
@@ -66,4 +85,3 @@ Use public imports and small examples, one behavior at a time.
 - [ ] SDK-58 Build and run a Docker container inside a sandbox; inspect logs and stop it. FAILED, 0.0.96: build `7796ffd5-1a68-4a3f-b557-bf89101626f8` failed after 58.3 seconds. The new diagnostic reports `content cache unavailable: PUT: net/http: timeout awaiting response headers`. This is a cache-upload response timeout, not unavailable compute. The execution container is terminal and execution cleanup is complete. No Docker sandbox was created.
 - [ ] SDK-59 Push and pull a test image through an authorized registry and remove test objects. BLOCKED, 0.0.96: SDK-58 prevents creating the Docker sandbox. No registry objects created. The ordinary workflow passed locally before release.
 - [ ] SDK-60 Run a small Docker Compose app inside a sandbox and remove its containers and volumes. BLOCKED, 0.0.96: SDK-58 prevents creating the Docker sandbox. No nested containers or volumes created. The ordinary workflow passed locally before release.
-- [ ] SDK-68 Observe natural artifact retention expiry before claiming retention works. BLOCKED by the actual retention window. This account's artifact expires on 2026-12-13. No clock/row edits or shortened policy used; metadata alone does not prove natural expiry. Signed-URL expiry is separate in SDK-67.
