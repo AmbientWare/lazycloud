@@ -70,7 +70,7 @@ display. Python `.remote()` calls are quiet unless you enable output; see
 lazycloud serve HANDLER [--timeout <seconds>] [--resource <selector>] [options]
 ```
 
-Runs an endpoint or ASGI app on LazyCloud with a temporary URL and streams
+Runs a function, endpoint, or ASGI app on LazyCloud with a temporary URL and streams
 its logs. Your working directory is synced into the container as you edit;
 `--sync-dir <dir>` syncs a different one. `--timeout 0`, the default, serves
 until you interrupt it. Image, environment, secret, resource and placement
@@ -89,8 +89,18 @@ app.serve(
 )
 ```
 
-Endpoint and ASGI objects also accept `serve(options=...)`. Supplying options
+Function, endpoint, and ASGI objects also accept `serve(options=...)`. Supplying options
 prepares a fresh preview configuration even if the object is already deployed.
+
+For a function preview, invoke it from another terminal with `lazycloud run`
+or call its `.remote()` method. Calls from the same local configuration use
+the preview while it is active. The container stays warm until the preview
+stops. Source reload waits for active calls to finish before accepting new work;
+import errors appear in the serve logs and recover after the next source edit.
+ASGI previews use one HTTP worker so source changes restart the application.
+
+Use [`lazycloud app export`](/concepts/apps#export-a-typed-python-package) to
+generate a typed Python package for deployed functions, endpoints, and ASGI apps.
 
 ## lazycloud shell
 

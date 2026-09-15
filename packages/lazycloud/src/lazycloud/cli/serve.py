@@ -7,6 +7,7 @@ from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
+from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.cli.components.output import json_output_enabled
 from lazycloud.cli.components.progress import attach_terminal
@@ -85,8 +86,8 @@ def serve(
     except HandlerLoadError as exc:
         raise typer.BadParameter(str(exc)) from exc
     attach_terminal(user_object)
-    if not isinstance(user_object, (App, Endpoint, ASGI)):
-        raise typer.BadParameter("serve requires an App, Endpoint, or ASGI handler")
+    if not isinstance(user_object, (App, Function, Endpoint, ASGI)):
+        raise typer.BadParameter("serve requires an App, Function, Endpoint, or ASGI handler")
     if resource is not None and not isinstance(user_object, App):
         raise typer.BadParameter("--resource requires an App handler")
     options = ServeOptions(

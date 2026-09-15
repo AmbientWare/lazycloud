@@ -197,6 +197,8 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionRetireRequest,
     FunctionRetireResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -306,6 +308,8 @@ class ApiOwnedResource(Protocol):
 
 
 class FunctionApiService(Protocol):
+    def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse: ...
+
     def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
 
     def function_invoke_stream(
@@ -348,6 +352,8 @@ class EndpointApiService(Protocol):
     def start_endpoint_serve(
         self,
         request: StartEndpointServeRequest,
+        *,
+        hot_reload: bool = False,
     ) -> StartEndpointServeResponse: ...
 
     async def forward_endpoint_request(

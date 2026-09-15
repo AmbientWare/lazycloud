@@ -1,71 +1,70 @@
 # CLI and SDK user checks
 
-**118 of 122 checks accepted; 4 remain unresolved below.**
-117 have production workflow evidence. SDK-68 was accepted on focused owner evidence
-with the owner's approval; natural expiry of the production artifact was not observed.
-Accepted checks have been removed. The print-only join check was removed from scope,
-not counted as a pass.
+**121 of 122 checks accepted. One production capacity-reporting check remains.**
 
-Production **0.0.97** is active at generation **28**. Argo is healthy and synced at
-`526773aa`. PR #285 merged at `2416135e` after all five checks passed.
-[Ship run 34925939579](https://github.com/AmbientWare/lazycloud/actions/runs/34925939579)
-published the client, agent, worker, and platform images and selected the release.
+120 checks have production workflow evidence. SDK-68 was accepted on focused
+owner evidence with the owner's approval; natural artifact expiry was not
+observed. The print-only join check was removed from scope, not counted as a pass.
+Accepted checks are removed from this list.
 
-Acceptance used published `lazycloud-client==0.0.97` against https://lazycloud.dev,
-account/workspace mclean-connor. Only affected unresolved workflows ran.
-
-Removed after production acceptance and cleanup:
-- CLI-46: plain `machine join` ran in the foreground with no service installed.
-  The machine advertised the requested 1 CPU and 2 GiB. Its function returned
-  value 97 in 11.521 seconds. Ctrl+C exited with code 0 and no traceback.
-- SDK-59: authenticated registry login, push, removal of the local tag, pull, and
-  execution passed. The pulled image returned `registry-ok`. The registry
-  container, anonymous data volume, and temporary credentials were removed.
-- SDK-60: Compose started the app and logs contained `compose-ok`.
-  `compose_down(volumes=True)` removed its container and named volume.
-  Docker subsequently listed no containers or volumes.
-
-SDK-58 improved but remains partial. The fresh image build with a 256 MiB layer
-completed and published, proving the cache-upload fix in production. The first
-sandbox then failed at runtime startup. A retry on the same worker became ready
-in 5.656 seconds. Docker image build, execution, logs, stop, and removal worked
-there. A successful retry does not explain or erase the first failure.
-
-Cleanup: sandbox `a037358a-e4c0-40dc-baf9-eef94bbeb799` is stopped. The failed
-sandbox and both execution containers are terminal. Image build
-`90f48ed4-6d5f-48dc-910e-f4b60ba0a58c` is complete with no pending execution
-cleanup. No deployed acceptance app remains. The joined machine left through
-its owning host and the CLI machine list is empty. Disposable EC2 instance
-`i-0ccb64817e97e8e10` is terminated; its disk, security group, AWS key pair,
-and local SSH credentials are removed. User workloads were preserved.
-
-Rules:
-- Use account mclean-connor. Record target and published client version.
-- Test ordinary CLI commands and short public SDK examples with intended workloads.
-  Internal clients may diagnose problems; they do not count as user acceptance.
-- Verify prerequisites. Separate cold startup, warm execution, capacity shortages,
-  incorrect output and actual execution failures.
-- Record the actual response, time and cleanup. PARTIAL is not PASS.
-- Batch related fixes, commit each fix separately, and verify affected workflows.
-  Do not rerun the previously passed checklist as routine acceptance.
-- Finish related changes before refreshing all affected package consumers together.
-  Reuse healthy infrastructure. Use narrow checks while editing; reserve broad
-  validation for a release or an explicit broad quality claim.
-- Apply unslop. Keep only unresolved checks here. Remove a check after its
-  production outcome and scoped cleanup pass, or explicitly approved owner evidence
-  supports acceptance. Record that distinction; do not remove partial results.
-- Preserve user workloads. Clean up only resources created for these checks.
-- Do not deploy another change without approval.
+Production is on **0.0.99**, generation **30**, from
+[PR #287](https://github.com/AmbientWare/lazycloud/pull/287).
+[PR #288](https://github.com/AmbientWare/lazycloud/pull/288) contains the pending
+fixes and the additional serve/export work. It has not been deployed.
 
 ## CLI
 
-No unresolved checks.
+No unresolved checks from the original checklist.
 
 ## SDK
 
-Use public imports and small examples, one behavior at a time.
+- [ ] SDK-41 Report provider capacity failures accurately during GPU retries.
+  **PARTIAL.** A production T4 function returned the expected GPU result.
+  A separate Spot attempt encountered recorded AWS shortages and a quota
+  rejection while public progress showed generic starting/queued messages.
+  PR #288 distinguishes quota rejections and retains the latest capacity failure
+  through retries until worker assignment. Migration 0048 indexes that lookup.
+  Local capacity/progress acceptance passed. A real provider rejection must still
+  be checked through the public client after an approved deployment.
 
-- [ ] SDK-31 Send concurrent endpoint requests and inspect every response and elapsed time. PARTIAL: the earlier 27.45-second warm delay has not been reproduced or explained. On 0.0.96, all 11 responses matched: cold 7.443 seconds, five concurrent calls 2.387–3.444 seconds, five warm calls 1.318–1.771 seconds. This successful sample does not establish that the intermittent delay is fixed. Not rerun in 0.0.97.
-- [ ] SDK-41 Run a GPU workload on matching hardware; check invalid or unavailable GPU requests. PARTIAL: GPU execution previously passed on an actual T4. The failed 0.0.94 acquisition was traced to AWS reporting insufficient g4dn.8xlarge capacity in us-east-1d. Release 0.0.96 classifies that real AWS message as `capacity_unavailable` and retains a safe diagnosis. The classification passed against the actual AWS record and the compute owner preserved it. Public production progress during a new capacity rejection remains unverified; no new GPU request ran in this batch.
-- [ ] SDK-44 Exchange data through an exposed TCP port where ingress is configured. PARTIAL: PR #286 adds a shared TCP NLB, a cert-manager wildcard certificate, and Terraform-owned DNS-only `*.tcp.lazycloud.dev`. Helm, certificate schemas, Kubernetes server dry run, and all three focused TCP owner checks passed. The owner approved reusing the existing deploy Cloudflare token; it is configured in `lazycloud-prod/operator` for certificate renewal, with all other properties preserved. No new Cloudflare token was created. Remaining: merge and deploy, set Terraform's target to the provisioned TCP NLB, review/apply the DNS plan, then test real TLS connections, workload isolation/deletion, certificate renewal/reload, and replica replacement. ExternalDNS is removed. No TCP infrastructure has been deployed yet.
-- [ ] SDK-58 Build and run a Docker container inside a sandbox; inspect logs and stop it. PARTIAL, 0.0.97: the cache upload and image build passed. First sandbox `a15b3960-25f8-4792-9b9f-7e53455be0f0` failed with `cannot read client sync file: waiting for sandbox to start: EOF`. Retry `a037358a-e4c0-40dc-baf9-eef94bbeb799` on the same generation-28 worker passed Docker build, execution, logs, stop, and removal. Host kernel logs showed no OOM kill and the worker had not restarted. The first runtime startup failure is unexplained; do not mark it passed based on the retry.
+## Additional work in PR #288
+
+Local acceptance passed using ordinary CLI commands and public SDK calls against
+the local Compose stack, account/workspace mclean-connor.
+
+- Function serve: invocation from another terminal, concurrent call draining,
+  source reload in the same container, import-error reporting and recovery.
+- Endpoint and ASGI serve: public requests, ASGI source reload, and Ctrl+C cleanup.
+- Typed app export: sync/async calls for functions, endpoints, and ASGI; default
+  and custom OpenAPI discovery; supplied JSON schema; raw HTTP without a schema;
+  HTTP errors and empty 204 responses.
+- Generated route methods also called real FastAPI, Litestar, and Quart-Schema
+  apps. Django Ninja has not been exercised.
+- ASGI response cleanup: repeated requests complete their durable tasks and
+  release dispatch capacity even when the caller closes after receiving the body.
+
+Pods and sandboxes are excluded from serve/export scope. This added work does
+not change the original 121/122 count.
+
+Focused runner, scheduler, API, SDK, and capacity checks passed. The two stale
+test fixtures found by CI were updated; all eight affected API tests and local
+web type checking pass. See the PR for current CI results.
+
+Cleanup: local acceptance app `db87362b-9dc1-4088-bedb-ee469309f0e9` is deleted.
+Its 12 deployment containers are stopped/exited, and all serve previews are
+stopped. The two standalone framework servers and test database services are
+stopped. The main local stack remains healthy. Production was not changed.
+
+## Working rules
+
+- Use account mclean-connor. Record the target and client version.
+- Test ordinary CLI commands and short public SDK examples with intended
+  workloads. Verify prerequisites and distinguish startup/capacity delays from
+  execution failures and incorrect output. PARTIAL is not PASS.
+- Batch related fixes and refresh affected consumers together. Commit each fix
+  separately. Reuse healthy infrastructure and run narrow checks per completed
+  slice; do not rerun accepted checks as routine feature validation.
+- Record actual responses and scoped cleanup. Preserve user workloads.
+- Apply unslop. Keep unresolved checks here and remove them only after production
+  acceptance or explicitly approved owner evidence.
+- Do not deploy another change without approval.

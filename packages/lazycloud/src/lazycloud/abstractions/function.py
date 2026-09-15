@@ -35,6 +35,7 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DeploymentKind
+from shared.env import HOT_RELOAD_ENV
 from shared.function_payloads import (
     FunctionCloudpickleInvocation,
     FunctionInvocationArguments,
@@ -45,6 +46,7 @@ from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
     FunctionInvokeResponse,
+    FunctionServeResponse,
 )
 from shared.http.gateway import DeployStubResponse
 from shared.placement import ProductRegion
@@ -62,6 +64,12 @@ from lazycloud.abstractions.metadata import (
     lifecycle_hooks,
     retry_policy_config,
 )
+from lazycloud.abstractions.serve import (
+    ServeOptions,
+    ServePreviewSession,
+    read_serve_preview,
+    write_serve_preview,
+)
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
@@ -71,7 +79,9 @@ from lazycloud.client_contracts import (
     schema_from_contract_return,
 )
 from lazycloud.clients.function.control import FunctionControlClient
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.clients.gateway.control import GatewayControlClient
+from lazycloud.clients.resource.control import ResourceControlClient
+from lazycloud.control import ControlClientConfig, resolve_control_client_config, workspace_path
 from lazycloud.env import called_on_import, is_local
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
@@ -406,6 +416,77 @@ class Function(Generic[P, R]):
         self.stub_id = response.stub_id or self.stub_id
         return response
 
+    def serve(
+        self,
+        *,
+        timeout: int = 0,
+        workspace: str | None = None,
+        sync_dir: str = ".",
+        options: ServeOptions | None = None,
+    ) -> FunctionServeResponse:
+        if options is not None:
+            options.apply(self)
+            sync_dir = options.sync_dir or sync_dir
+        self.env[HOT_RELOAD_ENV] = "true"
+        self.keep_warm = 0
+        self.autoscaler = QueueDepthAutoscaler(min_containers=0, max_containers=1)
+        self.terminal = self.terminal or Terminal()
+        stub_id = self.prepare(workspace=workspace, source_root=sync_dir)
+        config = self._config()
+        if workspace is not None:
+            config = resolve_control_client_config(
+                endpoint=config.endpoint,
+                token=config.token,
+                workspace=workspace,
+                timeout_seconds=config.timeout_seconds,
+            )
+        resource_client = ResourceControlClient.from_endpoint(
+            config.endpoint,
+            token=config.token,
+            workspace=config.workspace,
+            timeout_seconds=config.timeout_seconds,
+        )
+        gateway_client = GatewayControlClient.from_endpoint(
+            config.endpoint,
+            token=config.token,
+            workspace=config.workspace,
+            timeout_seconds=config.timeout_seconds,
+        )
+        response = FunctionControlClient.from_endpoint(
+            config.endpoint,
+            token=config.token,
+            workspace=config.workspace,
+            timeout_seconds=config.timeout_seconds,
+        ).start_serve(stub_id, timeout=timeout)
+        try:
+            record = write_serve_preview(
+                kind=DeploymentKind.Function,
+                name=self.resource_name,
+                app=self._app_slug,
+                workspace=config.workspace,
+                endpoint=config.endpoint,
+                stub_id=stub_id,
+                container_id=response.container_id,
+                url=config.endpoint.rstrip("/")
+                + workspace_path(f"/api/v1/functions/id/{stub_id}", config.workspace),
+            )
+        except BaseException:
+            resource_client.stop_container(response.container_id)
+            raise
+        ServePreviewSession(
+            stub_id=stub_id,
+            container_id=response.container_id,
+            url=record.url,
+            gateway_client=gateway_client,
+            resource_client=resource_client,
+            terminal=self.terminal,
+            sync_dir=sync_dir,
+            token=config.token,
+            authorized=True,
+            preview_record=record,
+        ).run()
+        return response
+
     def shell(
         self,
         *,
@@ -536,6 +617,23 @@ class Function(Generic[P, R]):
         if self.stub_id:
             return
         if is_local():
+            config = self._config()
+            preview = read_serve_preview(
+                kind=DeploymentKind.Function,
+                name=self.resource_name,
+                app=self._app_slug,
+                workspace=config.workspace,
+                endpoint=config.endpoint,
+                client=ResourceControlClient.from_endpoint(
+                    config.endpoint,
+                    token=config.token,
+                    workspace=config.workspace,
+                    timeout_seconds=config.timeout_seconds,
+                ),
+            )
+            if preview is not None:
+                self.stub_id = preview.stub_id
+                return
             self._ensure_prepared()
             return
         self._resolve_deployed_stub_id()

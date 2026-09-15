@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import websockets.asyncio.client
+from anyio import CancelScope
 from control.service import ControlPlaneService, StubKind, StubRecord
 from execution.endpoints.dispatch import (
     AsyncEndpointResponseStream,
@@ -83,7 +84,7 @@ def start_endpoint_serve(
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StartEndpointServeResponse:
     require_endpoint_stub_workspace(control_plane, request.stub_id, workspace_id)
-    return service.start_endpoint_serve(request)
+    return service.start_endpoint_serve(request, hot_reload=True)
 
 
 @endpoint_router.api_route("/id/{stub_id}", methods=ENDPOINT_METHODS, include_in_schema=False)
@@ -688,9 +689,13 @@ async def _stream_asgi_response_body(
     completed = False
     timed_out = False
     error: str | None = None
+    lengths = stream.headers.get("content-length", [])
+    content_length = int(lengths[0]) if lengths else None
     try:
         async for chunk in stream.iter_chunks():
             body_size_bytes += len(chunk)
+            if content_length is not None and body_size_bytes == content_length:
+                completed = True
             yield chunk
         completed = True
     except AsyncBackendTimeoutError as exc:
@@ -701,15 +706,18 @@ async def _stream_asgi_response_body(
         error = str(exc)
         raise
     finally:
-        await stream.close()
-        await service.finish_asgi_http(
-            session.task_id,
-            status_code=stream.status_code,
-            body_size_bytes=body_size_bytes,
-            cancelled=not completed and error is None,
-            timed_out=timed_out,
-            error=error,
-        )
+        # A client may close after receiving Content-Length bytes, cancelling
+        # Starlette's response task before dispatch capacity has been released.
+        with CancelScope(shield=True):
+            await stream.close()
+            await service.finish_asgi_http(
+                session.task_id,
+                status_code=stream.status_code,
+                body_size_bytes=body_size_bytes,
+                cancelled=not completed and error is None,
+                timed_out=timed_out,
+                error=error,
+            )
 
 
 def _start_deployed_endpoint_serve(

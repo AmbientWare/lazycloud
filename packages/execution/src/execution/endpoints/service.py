@@ -154,6 +154,8 @@ class EndpointControlService:
     def start_endpoint_serve(
         self,
         request: StartEndpointServeRequest,
+        *,
+        hot_reload: bool = False,
     ) -> StartEndpointServeResponse:
         stub = self.control_plane.get_stub(request.stub_id)
         if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
@@ -175,7 +177,7 @@ class EndpointControlService:
             "HANDLER": stub.handler or "",
             ENDPOINT_WORKERS_ENV: str(config.workers),
             LIFECYCLE_HOOKS_ENV: config.lifecycle_hooks.model_dump_json(),
-            HOT_RELOAD_ENV: "true",
+            HOT_RELOAD_ENV: str(hot_reload).lower(),
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
         with self.services.context.database.session() as session:
