@@ -352,6 +352,8 @@ class EndpointApiService(Protocol):
     def start_endpoint_serve(
         self,
         request: StartEndpointServeRequest,
+        *,
+        hot_reload: bool = False,
     ) -> StartEndpointServeResponse: ...
 
     async def forward_endpoint_request(
