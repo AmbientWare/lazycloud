@@ -2868,14 +2868,12 @@ class WorkerRepositoryService:
                 container.termination_reason = termination_reason
             if container.status in TERMINAL_CONTAINER_STATUSES:
                 container.exit_code = exit_code
-                container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
             else:
                 container.exit_code = exit_code
                 container.status = (
                     ContainerStatus.Exited if exit_code == 0 else ContainerStatus.Failed
                 )
-                container.started_at = container.started_at or now
                 container.finished_at = container.finished_at or now
                 release_container_runtime_state(self.runtime_state, container)
                 if not preempted:

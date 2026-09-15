@@ -1858,6 +1858,8 @@ def test_worker_exit_retains_pooled_startup_failure_when_detail_arrives_after_ex
     assert saved is not None
     assert saved.task_id is None
     assert saved.status is ContainerStatus.Failed
+    assert saved.started_at is None
+    assert saved.finished_at is not None
     assert saved.startup_error == (
         "container startup failed during prepare-rootfs: not enough free space"
     )
