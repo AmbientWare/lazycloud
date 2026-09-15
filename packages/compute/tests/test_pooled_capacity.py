@@ -139,6 +139,7 @@ class _PooledProvider:
     catalog_failure: Exception | None = None
     storage_failure: Exception | None = None
     last_capacity_failure_at: datetime | None = None
+    last_capacity_failure_reason: str = ""
     max_observed_machines: int | None = None
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
@@ -233,6 +234,7 @@ class _PooledProvider:
             observed_machines=len(instances),
             instances=instances,
             last_capacity_failure_at=self.last_capacity_failure_at,
+            last_capacity_failure_reason=self.last_capacity_failure_reason,
             provider_state=ComputeUnitProviderState(resource_id="asg-hidden"),
         )
 
@@ -2306,6 +2308,7 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
     provider.last_capacity_failure_at = operation.created_at + timedelta(
         seconds=1 if failure_after_operation else -1
     )
+    provider.last_capacity_failure_reason = "Insufficient instance capacity in the selected zone"
 
     observed = compute.ensure_capacity(request)
     retained = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
@@ -2318,6 +2321,13 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
 
     assert observed.status is CapacityAcquisitionStatus.Rejected
     assert observed.owns_capacity
+    assert observed.reason == provider.last_capacity_failure_reason
+    with service_context.database.session() as session:
+        failed_operation = ComputeCapacityOperationRepository(session).get(
+            request.capacity_owner_id, request.operation_id
+        )
+    assert failed_operation is not None
+    assert failed_operation.last_error == provider.last_capacity_failure_reason
     assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
     assert compute.ensure_capacity(request).status is CapacityAcquisitionStatus.Rejected
     release = CapacityReleaseRequest(

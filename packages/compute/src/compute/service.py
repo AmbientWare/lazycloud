@@ -705,7 +705,10 @@ class ComputeService:
                     and to_utc(snapshot.last_capacity_failure_at) >= to_utc(operation.created_at)
                     and snapshot.observed_machines < requested_provider_units
                 ):
-                    reason = "provider rejected capacity acquisition"
+                    reason = (
+                        snapshot.last_capacity_failure_reason
+                        or "provider rejected capacity acquisition"
+                    )
                     operations.upsert(
                         operation.model_copy(
                             update={

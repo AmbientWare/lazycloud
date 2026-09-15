@@ -194,6 +194,7 @@ class AwsManagedPoolSnapshot(AwsManagedPoolModel):
     max_nodes: int = Field(ge=0)
     instances: tuple[AwsManagedPoolInstance, ...] = ()
     last_capacity_failure_at: datetime | None = None
+    last_capacity_failure_reason: str = ""
     current_host_revision: str = ""
 
 
@@ -642,6 +643,7 @@ class _Groups(_Response):
 class _ScalingActivity(_Response):
     started_at: AwareDatetime = Field(alias="StartTime")
     status: str = Field(alias="StatusCode")
+    message: str = Field(default="", alias="StatusMessage")
 
 
 class _ScalingActivities(_Response):
@@ -802,7 +804,12 @@ class AwsManagedPoolProvisioner:
             return snapshot
         latest = max(activities, key=lambda item: item.started_at, default=None)
         if latest is not None and latest.status in {"Failed", "Cancelled"}:
-            return snapshot.model_copy(update={"last_capacity_failure_at": latest.started_at})
+            return snapshot.model_copy(
+                update={
+                    "last_capacity_failure_at": latest.started_at,
+                    "last_capacity_failure_reason": latest.message,
+                }
+            )
         return snapshot
 
     def discover(
