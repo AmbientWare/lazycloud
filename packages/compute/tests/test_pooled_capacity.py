@@ -2272,10 +2272,14 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     assert [operation.status for operation in operations] == ["released", "requested"]
 
 
-@pytest.mark.parametrize("failure_after_operation", [True, False])
+@pytest.mark.parametrize(
+    ("failure_after_operation", "reconciliation_first"),
+    [(True, False), (False, False), (True, True)],
+)
 def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_owned_capacity(
     service_context: ServiceContext,
     failure_after_operation: bool,
+    reconciliation_first: bool,
 ) -> None:
     _seed_connection(service_context)
     provider = _PooledProvider(max_observed_machines=0)
@@ -2292,10 +2296,12 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
         desired_machines=0,
         root_volume_gib=200,
     )
+    container_id = str(uuid4())
     request = CapacityAcquisitionRequest(
         capacity_owner_id=pool.capacity_owner_id,
         reservation_id=str(uuid4()),
         operation_id=str(uuid4()),
+        demand_container_id=container_id,
         shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
     )
     requested = compute.ensure_capacity(request)
@@ -2310,6 +2316,11 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
         seconds=1 if failure_after_operation else -1
     )
     provider.last_capacity_failure_code = CapacityFailureCode.CapacityUnavailable
+
+    if reconciliation_first:
+        compute.reconcile_pooled_capacity()
+        # Once the provider stops launches, later observations omit the failure.
+        provider.last_capacity_failure_at = None
 
     observed = compute.ensure_capacity(request)
     retained = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
@@ -2350,6 +2361,10 @@ def test_provider_acquisition_failure_is_scoped_to_its_operation_and_releases_ow
         )
     assert released is not None
     assert released.status == "released"
+    with service_context.database.session() as session:
+        assert ComputeCapacityOperationRepository(session).latest_failures_for_containers(
+            [container_id]
+        ) == {container_id: CapacityFailureCode.CapacityUnavailable}
 
 
 def test_named_retirement_ignores_absent_machines_and_preserves_retry_intent(

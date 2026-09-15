@@ -7,10 +7,12 @@ owner evidence with the owner's approval; natural artifact expiry was not
 observed. The print-only join check was removed from scope, not counted as a pass.
 Accepted checks are removed from this list.
 
-Production is on **0.0.99**, generation **30**, from
-[PR #287](https://github.com/AmbientWare/lazycloud/pull/287).
-[PR #288](https://github.com/AmbientWare/lazycloud/pull/288) contains the pending
-fixes and the additional serve/export work. It has not been deployed.
+Production is on **0.0.100**, generation **31**, from
+[PR #288](https://github.com/AmbientWare/lazycloud/pull/288), merged at `73a625863`.
+[Ship 35011652434](https://github.com/AmbientWare/lazycloud/actions/runs/35011652434)
+published the SDK, platform images, agent, and worker. Argo is synced and healthy
+at `61b8a22d`; migration `0048_capacity_progress` completed. Both managed workers
+are admitted at generation 31.
 
 ## CLI
 
@@ -24,8 +26,23 @@ No unresolved checks from the original checklist.
   rejection while public progress showed generic starting/queued messages.
   PR #288 distinguishes quota rejections and retains the latest capacity failure
   through retries until worker assignment. Migration 0048 indexes that lookup.
-  Local capacity/progress acceptance passed. A real provider rejection must still
-  be checked through the public client after an approved deployment.
+  Local capacity/progress acceptance passed, but the production 0.0.100 retest
+  failed. Task `08bb4dfb-4577-48c6-90d4-3fd51138037f` requested one T4 on Spot.
+  AWS rejected g4dn.2xlarge launches in us-east-1f twice for insufficient capacity.
+  Public SDK progress still said "Starting compute for this function" through
+  19:44:34 UTC on September 15. The capacity operation remained `requested` with
+  no failure code despite the scheduler reporting `provider_acquisition_rejected`.
+  The diagnosis is not reaching the operation record consumed by public progress.
+  The task was cancelled and its container stopped. The test capacity group has
+  zero desired instances and no instances; the two platform workers remain.
+  Follow-up fix records provider-neutral failure codes on affected acquisition
+  operations in the same transaction as pool reconciliation, before launches
+  stop. The production ordering fails on the old code and passes with the fix.
+  Local compute, request reassignment, cleanup, and progress checks pass.
+  The user request stays pending while acquisition attempts retry, until capacity
+  arrives, cancellation, or the capacity-wait timeout. The current scheduler
+  capacity-wait limit is 15 minutes, separate from workload execution timeout.
+  Production verification remains open until this follow-up is deployed.
 
 ## Additional work in PR #288
 
@@ -46,6 +63,12 @@ the local Compose stack, account/workspace mclean-connor.
 Pods and sandboxes are excluded from serve/export scope. This added work does
 not change the original 121/122 count.
 
+Production verification passed using published `lazycloud-client==0.0.100` and
+workspace mclean-connor. The restored landing section appears below compute.
+Typed export discovered the ASGI schema; function, endpoint, ASGI, and async ASGI
+calls returned the expected values. Their durable tasks completed. Function serve
+returned value 100 and stopped cleanly with Ctrl+C.
+
 Focused runner, scheduler, API, SDK, and capacity checks passed. The two stale
 test fixtures found by CI were updated; all eight affected API tests and local
 web type checking pass. See the PR for current CI results.
@@ -53,7 +76,11 @@ web type checking pass. See the PR for current CI results.
 Cleanup: local acceptance app `db87362b-9dc1-4088-bedb-ee469309f0e9` is deleted.
 Its 12 deployment containers are stopped/exited, and all serve previews are
 stopped. The two standalone framework servers and test database services are
-stopped. The main local stack remains healthy. Production was not changed.
+stopped. The main local stack remains healthy.
+
+Production cleanup: acceptance app `d40503b8-2abb-48c0-a20e-9fd1302e1f26` is
+deleted, with no active deployments. All five execution containers, including
+the function preview, are stopped. User workloads were preserved.
 
 ## Working rules
 
