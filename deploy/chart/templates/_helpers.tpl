@@ -33,6 +33,10 @@
 {{/* The chart writes this profile and names it for every consumer. */}}
 {{- define "lazycloud.awsProfile" -}}control{{- end -}}
 
+{{- define "lazycloud.tcpHost" -}}
+{{- printf "tcp.%s" (required "cloudflared.apex is required" .Values.cloudflared.apex) -}}
+{{- end -}}
+
 {{/*
 Count the whole workload across revisions so a rollout retains fault isolation.
 minDomains keeps the second replica Pending when only one domain exists, giving
