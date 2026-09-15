@@ -933,7 +933,7 @@ class App:
         timeout: int = 0,
         options: ServeOptions | None = None,
     ) -> object:
-        """Serve one endpoint or ASGI app resource for preview.
+        """Serve one function, endpoint, or ASGI app resource for preview.
 
         Use `resource` when an app contains more than one serveable resource.
         Select by name or by `"kind:name"`, such as `"endpoint:summarize"`.
@@ -1188,6 +1188,7 @@ def _raise_unsupported_overrides(spec: DeploymentSpec, unsupported: list[str]) -
 
 def _is_serveable(resource: AppResource) -> bool:
     return resource.spec().kind in {
+        DeploymentKind.Function,
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
     }

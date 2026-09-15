@@ -31,8 +31,6 @@ from shared.deployment_records import (
     MemoryRequest,
     Resources,
     VolumeMount,
-    resolve_http_wait_timeout_seconds,
-    resolve_timeout_seconds,
 )
 from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from shared.gpu import GpuInput, gpu_preference
@@ -110,7 +108,6 @@ ENDPOINT_DIRECT_CALL_ERROR = (
     "direct calls to endpoints are not supported outside worker containers; "
     "use .local(...) for local execution"
 )
-ENDPOINT_TRANSPORT_OVERHEAD_SECONDS = 5.0
 
 
 class EndpointOperationError(FunctionOperationError):
@@ -1058,7 +1055,7 @@ def _request_http_endpoint(
     params: Mapping[str, object] | Iterable[tuple[str, object]] | None,
     options: InvocationOptions,
 ) -> EndpointResponse:
-    from lazycloud.http_transport import request_raw
+    from lazycloud.http_transport import request_raw, workload_http_timeout_seconds
 
     config = owner._config()
     spec = owner.spec()
@@ -1078,7 +1075,9 @@ def _request_http_endpoint(
             headers=headers,
             params=params,
             token=config.token,
-            timeout_seconds=_endpoint_transport_timeout_seconds(spec),
+            timeout_seconds=workload_http_timeout_seconds(
+                spec.kind, spec.resources.timeout_seconds
+            ),
         )
     except (HttpTransportError, ValueError) as exc:
         raise EndpointOperationError(str(exc)) from exc
@@ -1320,15 +1319,6 @@ def _effective_timeout_seconds(
         if isinstance(value, int):
             return value
     return timeout_seconds
-
-
-def _endpoint_transport_timeout_seconds(spec: DeploymentSpec) -> float:
-    return (
-        resolve_http_wait_timeout_seconds(
-            resolve_timeout_seconds(spec.kind, spec.resources.timeout_seconds)
-        )
-        + ENDPOINT_TRANSPORT_OVERHEAD_SECONDS
-    )
 
 
 __all__ = [

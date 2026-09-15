@@ -155,6 +155,7 @@ class FunctionContainerStartAuthority(StrEnum):
 
     ColdStart = "cold-start"
     Autoscaler = "autoscaler"
+    Preview = "preview"
 
 
 def function_container_start_allowed(

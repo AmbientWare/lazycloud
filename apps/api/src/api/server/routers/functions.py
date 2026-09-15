@@ -15,6 +15,8 @@ from shared.http.functions import (
     FunctionInvokeResponse,
     FunctionMonitorRequest,
     FunctionMonitorResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -33,6 +35,17 @@ from api.server.service_dependencies import control_plane_service, function_serv
 from api.server.services import ApiServices, FunctionApiService
 
 router = APIRouter(prefix="/api/v1/functions", tags=["function"])
+
+
+@router.post("/serve", response_model=FunctionServeResponse)
+def function_serve(
+    request: FunctionServeRequest,
+    workspace_id: write_workspace,
+    service: FunctionApiService = Depends(function_service),
+    control_plane: ControlPlaneService = Depends(control_plane_service),
+) -> FunctionServeResponse:
+    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
+    return service.start_function_serve(request)
 
 
 async def _http_invocation(request: Request) -> FunctionJsonInvocation:

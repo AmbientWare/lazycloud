@@ -341,12 +341,15 @@ def run_endpoint_serve_forever(
     effective_host = host if host is not None else os.getenv(ENDPOINT_SERVE_HOST_ENV, "0.0.0.0")
     effective_port = port if port is not None else _env_port()
     if effective_stub_type.strip().lower() == ASGI_STUB_TYPE:
+        reload = hot_reload_enabled()
         uvicorn.run(
             "runner.serve:create_asgi_application",
             factory=True,
             host=effective_host,
             port=effective_port,
-            workers=_env_workers(),
+            workers=1 if reload else _env_workers(),
+            reload=reload,
+            reload_dirs=[str(hot_reload_root())] if reload else None,
             log_level="info",
         )
         return

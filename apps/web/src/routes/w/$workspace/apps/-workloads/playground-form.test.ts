@@ -12,6 +12,7 @@ function manifest(overrides: Partial<DeploymentManifest> = {}): DeploymentManife
     stub_id: "stub-1",
     deployment_id: "deployment-1",
     deployment_version: 1,
+    timeout_seconds: null,
     invoke_url: "https://square-a1b2c3d4.lazycloud.dev",
     invoke_path: "/api/v1/functions/square/latest",
     methods: [],

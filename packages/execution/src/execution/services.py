@@ -24,6 +24,9 @@ from execution.tasks import TaskService
 
 class SchedulerSubmissionResult(Protocol):
     @property
+    def container_id(self) -> str: ...
+
+    @property
     def accepted(self) -> bool: ...
 
     @property

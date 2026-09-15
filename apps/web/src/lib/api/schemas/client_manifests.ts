@@ -47,6 +47,7 @@ export const deploymentManifestSchema = z.object({
   deployment_version: z.number(),
   invoke_url: z.string(),
   invoke_path: z.string(),
+  timeout_seconds: z.number().int().nonnegative().nullable().default(null),
   methods: z.array(z.string()).default([]),
   inputs: manifestSchemaSchema.default({ fields: {} }),
   client_contract: clientContractSchema.nullish(),

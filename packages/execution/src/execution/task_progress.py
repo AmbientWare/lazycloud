@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from database.repositories.compute import ComputeCapacityOperationRepository
 from database.repositories.execution import TaskAttemptRepository
 from database.repositories.orchestration import ContainerRepository
+from shared.capacity import CapacityFailureCode, capacity_failure_message
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.http.task_progress import (
     PENDING_PROGRESS_FRESH_SECONDS,
@@ -93,12 +95,24 @@ class TaskProgressService:
             and delivery.workspace_id == state.workspace_id
             and delivery.stub_id == state.stub_id
         }
+        pending_container_ids = {
+            container.id
+            for group in containers.values()
+            for container in group
+            if container.status is ContainerStatus.Pending and not container.worker_id
+        }
+        failures: dict[str, CapacityFailureCode] = {}
+        if pending_container_ids:
+            with self.context.database.session() as session:
+                operations = ComputeCapacityOperationRepository(session)
+                failures = operations.latest_failures_for_containers(pending_container_ids)
         return {
             task.id: task_pending_progress(
                 task,
                 containers=containers.get((task.workspace_id or "", task.stub_id or ""), ()),
                 states=states,
                 deliveries=deliveries,
+                capacity_failures=failures,
                 now=now,
                 since=pending_since.get(task.id, task.claimable_at or task.created_at),
             )
@@ -112,6 +126,7 @@ def task_pending_progress(
     containers: Sequence[ContainerRecord],
     states: dict[str, SchedulerContainerState],
     deliveries: dict[str, datetime],
+    capacity_failures: dict[str, CapacityFailureCode],
     now: datetime,
     since: datetime,
 ) -> TaskPendingProgress | None:
@@ -157,10 +172,26 @@ def task_pending_progress(
             candidates.append(progress)
             continue
         progress = state.pending_progress
-        if (
-            progress is not None
-            and 0 <= (now - progress.observed_at).total_seconds() <= PENDING_PROGRESS_FRESH_SECONDS
+        if progress is not None and not (
+            0 <= (now - progress.observed_at).total_seconds() <= PENDING_PROGRESS_FRESH_SECONDS
         ):
+            progress = None
+        failure = capacity_failures.get(container.id)
+        if failure is not None:
+            fresh = progress is not None
+            reason = (
+                progress.reason if progress is not None else TaskPendingReason.CapacityUnavailable
+            )
+            if reason is TaskPendingReason.Queued:
+                reason = TaskPendingReason.CapacityUnavailable
+            progress = TaskPendingProgress.for_reason(
+                reason, since=progress.since if progress is not None else since, observed_at=now
+            )
+            progress.message = (
+                f"Previous compute attempt: {capacity_failure_message(failure)}. "
+                + (progress.message if fresh else "Waiting for a compute update.")
+            )
+        if progress is not None:
             candidates.append(progress)
     if candidates:
         # A container already starting can serve the queue before a new node arrives.

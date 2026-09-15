@@ -72,6 +72,15 @@ class FunctionInvokeResponse(HttpModel):
         )
 
 
+class FunctionServeRequest(HttpModel):
+    stub_id: str = Field(min_length=1)
+    timeout: int = Field(default=0, ge=0)
+
+
+class FunctionServeResponse(HttpModel):
+    container_id: str
+
+
 class FunctionClaimRequest(HttpModel):
     """A container asking its stub for one invocation to run.
 
@@ -183,6 +192,8 @@ __all__ = [
     "FunctionMonitorResponse",
     "FunctionRetireRequest",
     "FunctionRetireResponse",
+    "FunctionServeRequest",
+    "FunctionServeResponse",
     "FunctionSetResultBody",
     "FunctionSetResultResponse",
 ]

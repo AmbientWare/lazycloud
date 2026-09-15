@@ -79,6 +79,7 @@ class ClientManifestResource(HttpModel):
     """
 
     route: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=0)
     methods: list[str] = Field(default_factory=list)
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
     outputs: dict[str, JsonValue] = Field(default_factory=dict)

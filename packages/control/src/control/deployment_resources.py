@@ -76,6 +76,7 @@ def client_manifest_resource(
             route=spec.route,
         ),
         route=spec.route,
+        timeout_seconds=spec.resources.timeout_seconds,
         methods=list(spec.methods),
         inputs=inputs,
         outputs=outputs,

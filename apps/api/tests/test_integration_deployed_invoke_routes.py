@@ -34,6 +34,8 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionRetireRequest,
     FunctionRetireResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -80,6 +82,9 @@ class RecordingFunctionService:
 
     def start_function_container(self, stub_id: str) -> bool:
         raise AssertionError(f"unexpected start_function_container call: {stub_id}")
+
+    def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse:
+        raise AssertionError(f"unexpected start_function_serve call: {request}")
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]:
         raise AssertionError(f"unexpected containers_holding_work call: {container_ids}")
@@ -148,7 +153,11 @@ class RecordingEndpointService:
     def start_endpoint_serve(
         self,
         request: StartEndpointServeRequest,
+        *,
+        hot_reload: bool = False,
     ) -> StartEndpointServeResponse:
+        if hot_reload:
+            raise AssertionError("deployment warmup must not enable source reload")
         self.serve_requests.append(request)
         return StartEndpointServeResponse(
             container_id=f"endpoint-{len(self.serve_requests)}",

@@ -13,6 +13,8 @@ from shared.http.functions import (
     FunctionInvokeResponse,
     FunctionMonitorRequest,
     FunctionMonitorResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -58,6 +60,15 @@ class FunctionControlClient:
 
     def _scoped(self, path: str) -> str:
         return workspace_path(path, self.workspace)
+
+    def start_serve(self, stub_id: str, *, timeout: int = 0) -> FunctionServeResponse:
+        return _validate_response(
+            FunctionServeResponse,
+            self.channel.post(
+                self._scoped("/api/v1/functions/serve"),
+                FunctionServeRequest(stub_id=stub_id, timeout=timeout).model_dump(mode="json"),
+            ),
+        )
 
     def invoke(
         self,

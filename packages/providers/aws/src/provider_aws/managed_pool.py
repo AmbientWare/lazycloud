@@ -649,6 +649,8 @@ class _ScalingActivity(_Response):
     @property
     def failure_code(self) -> CapacityFailureCode:
         message = self.message.casefold()
+        if "max spot instance count exceeded" in message or "vcpu limit" in message:
+            return CapacityFailureCode.ProviderQuotaExceeded
         if "no spot capacity available" in message or (
             "do not have sufficient" in message and "capacity" in message
         ):

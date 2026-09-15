@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import TypedDict
 
 import pytest
@@ -29,9 +30,11 @@ from provider_aws import (
     AwsProviderControlErrorCode,
     AwsRegionalPrices,
 )
+from provider_aws.managed_pool import _ScalingActivity
 from provider_aws.network_egress import NetworkFilter
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
+from shared.capacity import CapacityFailureCode
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
@@ -55,6 +58,35 @@ class _Filter(TypedDict):
 
 
 _STRINGS = TypeAdapter(list[str])
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("Max spot instance count exceeded.", CapacityFailureCode.ProviderQuotaExceeded),
+        (
+            "You have requested more vCPU capacity than your current vCPU limit of 128 allows.",
+            CapacityFailureCode.ProviderQuotaExceeded,
+        ),
+        (
+            "We currently do not have sufficient g4dn.xlarge capacity in the Availability Zone.",
+            CapacityFailureCode.CapacityUnavailable,
+        ),
+        ("The requested configuration is not supported.", CapacityFailureCode.ProviderLaunchFailed),
+    ],
+)
+def test_scaling_failure_distinguishes_quota_from_capacity(
+    message: str,
+    expected: CapacityFailureCode,
+) -> None:
+    activity = _ScalingActivity.model_validate(
+        {
+            "StartTime": datetime(2026, 9, 15, tzinfo=UTC),
+            "StatusCode": "Failed",
+            "StatusMessage": message,
+        }
+    )
+    assert activity.failure_code is expected
 
 
 class _Ec2:

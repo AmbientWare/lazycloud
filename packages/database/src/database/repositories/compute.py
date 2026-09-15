@@ -1039,6 +1039,34 @@ def _capacity_operation_record(
 class ComputeCapacityOperationRepository:
     session: Session
 
+    def latest_failures_for_containers(
+        self, container_ids: Collection[str]
+    ) -> dict[str, CapacityFailureCode]:
+        if not container_ids:
+            return {}
+        table = ComputeCapacityOperationTable
+        failures = (
+            select(
+                table.demand_container_id.label("container_id"),
+                table.payload["failure_code"].as_string().label("failure_code"),
+                func.row_number()
+                .over(
+                    partition_by=table.demand_container_id,
+                    order_by=(table.created_at.desc(), table.id.desc()),
+                )
+                .label("rank"),
+            )
+            .where(
+                table.demand_container_id.in_(container_ids),
+                table.payload["failure_code"].as_string().is_not(None),
+            )
+            .subquery()
+        )
+        rows = self.session.execute(
+            select(failures.c.container_id, failures.c.failure_code).where(failures.c.rank == 1)
+        ).tuples()
+        return {container_id: CapacityFailureCode(code) for container_id, code in rows}
+
     def get(
         self,
         capacity_owner_id: str,

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
 import { MarketingReveal } from "./MarketingReveal";
+import { TypedExportSection } from "./TypedExportSection";
 import {
   FinalCta,
   GetStartedButton,
@@ -317,6 +318,8 @@ export function MarketingHome() {
         <PlatformStoryRail />
 
         <ComputeSection />
+
+        <TypedExportSection />
 
         <section className="border-t border-input bg-background-subtle py-18 sm:py-22 lg:py-28">
           <div className={shell}>

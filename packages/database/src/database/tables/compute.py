@@ -180,6 +180,7 @@ class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
         ),
         UniqueConstraint("reservation_id", name="uq_compute_capacity_operations_reservation"),
         Index("ix_compute_capacity_operations_owner_status", "capacity_owner_id", "status"),
+        Index("ix_compute_capacity_operations_demand", "demand_container_id", "created_at"),
         CheckConstraint("desired_unit > 0", name="ck_compute_capacity_operations_desired_unit"),
         CheckConstraint(
             "status IN ('intent', 'existing_pending', 'requested', 'at_limit', "
