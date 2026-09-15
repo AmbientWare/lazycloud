@@ -1629,7 +1629,8 @@ def _worker_docker_args(
     if slot.memory_mb > 0:
         args.extend(["--memory", f"{slot.memory_mb}m"])
     if slot.gpu_count > 0:
-        args.extend(["--gpus", f"device={slot.gpu_assignment}" if slot.gpu_assignment else "all"])
+        # Docker parses --gpus as CSV, so the device list must remain one field.
+        args.extend(["--gpus", f'"device={slot.gpu_assignment}"' if slot.gpu_assignment else "all"])
     for volume in volumes:
         args.extend(["-v", volume])
     for key, value in sorted(env.items()):
