@@ -428,7 +428,8 @@ class Function(Generic[P, R]):
             options.apply(self)
             sync_dir = options.sync_dir or sync_dir
         self.env[HOT_RELOAD_ENV] = "true"
-        self.keep_warm = -1
+        self.keep_warm = 0
+        self.autoscaler = QueueDepthAutoscaler(min_containers=0, max_containers=1)
         self.terminal = self.terminal or Terminal()
         stub_id = self.prepare(workspace=workspace, source_root=sync_dir)
         config = self._config()

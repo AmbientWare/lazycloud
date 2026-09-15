@@ -34,6 +34,7 @@ from shared.autoscaling import (
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
+from shared.env import HOT_RELOAD_ENV, truthy_env_value
 from shared.errors import DomainError, EndpointReplicaLimitReachedError, InvalidInputError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
@@ -799,6 +800,7 @@ class FunctionAutoscaler:
             for container in containers
             if container.id not in busy
             and (not pending_only or container.status is ContainerStatus.Pending)
+            and not truthy_env_value(container.env.get(HOT_RELOAD_ENV))
         ]
         idle.sort(key=lambda container: container.created_at, reverse=True)
         actions: list[AutoscaleAction] = []
