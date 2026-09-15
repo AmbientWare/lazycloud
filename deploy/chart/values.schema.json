@@ -149,6 +149,14 @@
         }
       }
     },
+    "tcpIngress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
     "cloudflared": {
       "type": "object",
       "properties": {

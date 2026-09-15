@@ -4,6 +4,8 @@ public_hostname = "lazycloud.dev"
 environment     = "production"
 # Copy the real hostname from the connection-gateway LoadBalancer Service.
 connection_gateway_endpoint = "provisioned-nlb-hostname-required"
+# Copy the real hostname of the load balancer serving public TCP workloads.
+tcp_ingress_endpoint = "provisioned-tcp-nlb-hostname-required"
 
 # Both default to false. Turn them on only after importing the existing tunnel
 # and records and reviewing a plan that shows nothing else in the zone moves.

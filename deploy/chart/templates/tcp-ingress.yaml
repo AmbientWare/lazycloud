@@ -1,0 +1,75 @@
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: tcp-ingress-dns
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  refreshInterval: {{ .Values.secrets.refreshInterval }}
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: SecretStore
+  target:
+    name: tcp-ingress-dns
+    creationPolicy: Owner
+  data:
+    - secretKey: api-token
+      remoteRef:
+        key: {{ .Values.secrets.documents.operator }}
+        property: LAZYCLOUD_TCP_DNS_API_TOKEN
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: tcp-ingress
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: tcp-ingress-acme
+    solvers:
+      - selector:
+          dnsNames: [{{ printf "*.%s" (include "lazycloud.tcpHost" .) | quote }}]
+        dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: tcp-ingress-dns
+              key: api-token
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tcp-ingress
+spec:
+  secretName: tcp-ingress-tls
+  issuerRef:
+    name: tcp-ingress
+    kind: Issuer
+  dnsNames: [{{ printf "*.%s" (include "lazycloud.tcpHost" .) | quote }}]
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tcp-ingress
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "9000"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /health
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: preserve_client_ip.enabled=true,deregistration_delay.timeout_seconds=120,deregistration_delay.connection_termination.enabled=false
+spec:
+  type: LoadBalancer
+  loadBalancerClass: eks.amazonaws.com/nlb
+  selector:
+    app: control-plane
+  ports:
+    - name: tcp-ingress
+      port: {{ .Values.tcpIngress.port }}
+      targetPort: tcp-ingress
+      protocol: TCP

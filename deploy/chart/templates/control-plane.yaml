@@ -26,6 +26,10 @@ spec:
       topologySpreadConstraints:
         {{- include "lazycloud.spreadAcrossNodes" "control-plane" | nindent 8 }}
       volumes:
+        - name: tcp-certificate
+          secret:
+            secretName: tcp-ingress-tls
+            defaultMode: 0600
         - name: active-release
           configMap:
             name: active-release
@@ -74,9 +78,21 @@ spec:
           ports:
             - name: http
               containerPort: 9000
+            - name: tcp-ingress
+              containerPort: {{ .Values.tcpIngress.port }}
           env:
             {{- include "lazycloud.env" (list . "controlPlane") | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
+            - name: LAZYCLOUD_TCP_INGRESS_ENABLED
+              value: "true"
+            - name: LAZYCLOUD_TCP_INGRESS_PORT
+              value: {{ .Values.tcpIngress.port | quote }}
+            - name: LAZYCLOUD_TCP_INGRESS_EXTERNAL_HOST
+              value: {{ include "lazycloud.tcpHost" . | quote }}
+            - name: LAZYCLOUD_TCP_INGRESS_CERTIFICATE_FILE
+              value: /run/lazycloud/tcp-ingress/tls.crt
+            - name: LAZYCLOUD_TCP_INGRESS_KEY_FILE
+              value: /run/lazycloud/tcp-ingress/tls.key
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
             - name: LAZYCLOUD_TUNNEL_ISSUER_CERTIFICATE_FILE
@@ -93,6 +109,9 @@ spec:
           volumeMounts:
             - name: tunnel-issuer
               mountPath: /run/lazycloud/tunnel-issuer
+              readOnly: true
+            - name: tcp-certificate
+              mountPath: /run/lazycloud/tcp-ingress
               readOnly: true
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys

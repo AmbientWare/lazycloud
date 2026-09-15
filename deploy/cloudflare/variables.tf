@@ -49,6 +49,16 @@ variable "connection_gateway_endpoint" {
   }
 }
 
+variable "tcp_ingress_endpoint" {
+  description = "Provisioned TCP NLB hostname serving public workload TLS connections."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9.-]+\\.elb\\.[a-z0-9-]+\\.amazonaws\\.com$", var.tcp_ingress_endpoint))
+    error_message = "tcp_ingress_endpoint must be the provisioned AWS NLB hostname."
+  }
+}
+
 variable "manage_fallback_origin" {
   description = <<-EOT
     Whether to declare the Cloudflare for SaaS fallback origin. Off by default:
