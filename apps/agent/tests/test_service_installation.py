@@ -84,7 +84,11 @@ def test_status_validates_state_and_never_outputs_agent_token(
         credential_generation=TEST_AGENT_CREDENTIAL_GENERATION,
         bootstrap=AgentBootstrap(gateway_public_http_url=EXAMPLE_URL),
     )
-    (tmp_path / "agent-state.json").write_text(state.model_dump_json(), encoding="utf-8")
+    saved = state.model_dump(mode="json")
+    saved["bootstrap"]["gateway_runtime_http_url"] = "http://100.96.0.1:9000"
+    saved["bootstrap"]["transport"] = "private_network"
+    (tmp_path / "agent-state.json").write_text(json.dumps(saved), encoding="utf-8")
+    assert AgentState.from_saved_json(json.dumps(saved)) == state
     slots = [
         AgentWorkerSlot(
             worker_id="worker-one",

@@ -651,7 +651,7 @@ def _load_agent_state_for_removal(state_dir: Path, *, service_path: Path) -> Age
             raise RuntimeError(msg)
         return None
     try:
-        state = AgentState.model_validate_json(state_path.read_text(encoding="utf-8"))
+        state = AgentState.from_saved_json(state_path.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as exc:
         msg = f"saved agent identity is unreadable or invalid: {state_path}"
         raise RuntimeError(msg) from exc
@@ -781,7 +781,7 @@ def _status_payload(
     state: AgentState | None = None
     if state_path.exists():
         try:
-            state = AgentState.model_validate_json(state_path.read_text(encoding="utf-8"))
+            state = AgentState.from_saved_json(state_path.read_text(encoding="utf-8"))
         except (OSError, ValidationError) as exc:
             msg = f"agent state is unreadable or invalid: {state_path}"
             raise RuntimeError(msg) from exc
