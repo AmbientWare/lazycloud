@@ -1,51 +1,48 @@
-# Object storage
+# Operate object storage
 
-AWS S3 stores platform-owned data through the shared S3-compatible client.
-The application bucket holds images, source packages, artifacts and checkpoints.
-Each workspace has its own bucket for files and mounted volumes. Customer-owned
-buckets keep their own credentials and endpoints.
+AWS S3 holds platform-owned objects through the shared S3-compatible client.
+Local development uses Garage. Customer-owned bucket mounts retain their own
+endpoints and credentials.
 
-Terraform exports `LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL`,
-`LAZYCLOUD_OBJECT_STORE_REGION_NAME`, `LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE`,
-`LAZYCLOUD_OBJECT_STORE_BUCKET`, `LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX`
-and `LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN`. API and scheduler pods use Pod
-Identity for platform storage. Workers receive renewable STS grants scoped to
-one workspace bucket. Image transfers use signed requests. Local development
-uses Garage.
+## Configure a deployment
 
-Buckets are private. CORS permits dashboard requests without granting access.
-S3 gateway endpoints attach to cluster and fleet route tables. Same-region
-traffic uses those routes; public downloads, cross-region traffic and workers
-outside AWS can still incur transfer charges.
+Terraform exports the endpoint, signing region, application bucket, workspace
+bucket prefix, and workspace grant role in the infrastructure descriptor.
+Publish that descriptor and select it through the normal
+[deployment workflow](../CONFIGURATION.md#deploy-sequence).
 
-## Hard cut to S3
+API and scheduler pods use Pod Identity. Workers receive renewable STS grants
+scoped to one workspace bucket. Do not distribute permanent platform keys to
+workers.
 
-Existing platform-owned R2 data will be deleted. There is no copy, migration
-command or fallback storage path.
+The application bucket holds image archives, source packages, and checkpoints.
+Workspace buckets hold workspace files, volumes, and artifacts. Buckets are
+private; CORS permits browser requests but grants no object access.
 
-1. Provision the S3 resources and publish fresh release assets. Preserve the
-   release hostname and update deployment pins to the new manifest.
-2. Stop admission, drain work and delete old managed volumes through the normal
-   cleanup owner. Retire old workers and stop application writers before changing
-   storage credentials or applying the new schema. Old workers use removed
-   usage-reporting routes and must be replaced.
-3. Switch to the S3 descriptor and matching application release. Before reopening
-   admission, manually clear references to discarded platform objects, images,
-   source packages and checkpoints. Clear each managed workspace's persisted
-   storage configuration and reprovision its bucket through the workspace storage
-   owner so it records the S3 endpoint, region and bucket. Preserve customer-owned
-   storage configurations, accounts, workspace identities, billing history and
-   cloud connections.
-4. Recreate workers, rebuild images and upload source again. Check a cold build,
-   volume writes and artifact upload/download.
-5. Empty the exact old R2 application, deployment, release and managed workspace
-   buckets. Apply reviewed Terraform plans removing their former resources and
-   bindings. Runtime-created workspace buckets are outside Terraform and must be
-   deleted directly. If an earlier apply already removed a bucket from state,
-   delete that bucket directly too.
+## Check reads and writes
 
-Review the bucket inventory and Terraform destruction list before deletion.
-Do not run `terraform destroy` against an entire platform root to remove storage.
-Terraform state records infrastructure ownership; move its backend with
-Terraform's normal state migration and preserve it. Unrelated Cloudflare DNS,
-ingress and customer-owned buckets remain.
+After a storage configuration change, run a cold image build, write a volume
+file, and upload and download an artifact through the public SDK. Use
+`uv run --group workspace lazycloud example download artifacts` to get the
+standalone project, then follow its README with the target workspace selected. Inspect the
+API, worker, and object-store errors if any step fails.
+
+Signed downloads must be reachable from the browser as well as the workload.
+S3 gateway endpoints serve same-region traffic from attached cluster and fleet
+route tables. Cross-region requests and workers outside AWS may incur transfer
+charges.
+
+## Preserve stored data
+
+Changing an endpoint or bucket does not move existing objects. Before a storage
+migration, inventory object ownership and persisted references, verify backups,
+and prepare a reviewed migration for that installation. Preserve customer-owned
+buckets and all unrelated workspace data.
+
+Delete files through the owning volume or artifact API. Runtime-created
+workspace buckets are outside Terraform, so a Terraform destroy does not prove
+their cleanup. Inventory exact bucket names before any authorized teardown.
+Never destroy an entire platform root to remove a storage resource.
+
+Terraform state has a separate [backend migration procedure](../terraform-state/README.md).
+It is infrastructure ownership data and must be preserved.

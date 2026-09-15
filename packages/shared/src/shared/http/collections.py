@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import Field
+from datetime import datetime
+
+from pydantic import Field, model_validator
 
 from shared.bytes_transport import EncodedBytesBody, decode_bytes, encode_bytes
 from shared.http.base import HttpModel
@@ -10,11 +12,20 @@ MAX_MAP_TTL_SECONDS = 7 * 24 * 60 * 60
 
 class MapSetBody(EncodedBytesBody):
     key: str
-    ttl_seconds: int = Field(default=MAX_MAP_TTL_SECONDS, ge=0)
+    ttl_seconds: int | None = Field(default=MAX_MAP_TTL_SECONDS, ge=0, le=MAX_MAP_TTL_SECONDS)
+    if_revision: str | None = Field(default=None, min_length=1)
+    if_absent: bool = False
+
+    @model_validator(mode="after")
+    def validate_condition(self) -> MapSetBody:
+        if self.if_absent and self.if_revision is not None:
+            raise ValueError("Choose if_absent or if_revision, not both")
+        return self
 
 
 class MapKeyBody(HttpModel):
     key: str
+    if_revision: str | None = Field(default=None, min_length=1)
 
 
 class MapSetResponse(HttpModel):
@@ -23,6 +34,11 @@ class MapSetResponse(HttpModel):
 
 class MapGetResponse(EncodedBytesBody):
     pass
+
+
+class MapEntryResponse(EncodedBytesBody):
+    revision: str
+    expires_at: datetime | None
 
 
 class MapDeleteResponse(HttpModel):
@@ -35,6 +51,11 @@ class MapCountResponse(HttpModel):
 
 class MapKeysResponse(HttpModel):
     keys: list[str] = Field(default_factory=list)
+
+
+class MapKeyPageResponse(HttpModel):
+    data: list[str]
+    next: str | None
 
 
 class SimpleQueuePutBody(EncodedBytesBody):
@@ -91,8 +112,10 @@ __all__ = [
     "MapCollectionListResponse",
     "MapCountResponse",
     "MapDeleteResponse",
+    "MapEntryResponse",
     "MapGetResponse",
     "MapKeyBody",
+    "MapKeyPageResponse",
     "MapKeysResponse",
     "MapSetBody",
     "MapSetResponse",

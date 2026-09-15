@@ -1,31 +1,65 @@
 ---
-title: "quickstart, create-app, example"
-description: "Generate starter files."
+title: "example"
+description: "List and download standalone uv projects bundled with the SDK."
 ---
 
-## lazycloud quickstart
-
-```bash
-lazycloud quickstart [-o <path>] [--force]
-```
-
-Writes the starter function app, `quickstart.py` by default. `--force`
-overwrites an existing file. The [Quickstart](/getting-started/quickstart)
-walks through it.
-
-## lazycloud create-app
-
-```bash
-lazycloud create-app NAME [-o <path>] [--force]
-```
-
-Writes the starter app into a directory named `NAME`.
-
-## lazycloud example
+## List examples
 
 ```bash
 lazycloud example list
-lazycloud example download NAME [-o <path>] [--force]
 ```
 
-Lists and downloads starter templates. `quickstart` is the one available.
+The catalog includes quickstart, YOLO training, a vLLM service, document
+processing, a coding agent, parallel Parquet processing, artifacts, and a
+workload tour. These projects ship inside the client package. Downloading
+needs no repository access, GitHub token, or LazyCloud login.
+
+## Download a project
+
+```bash
+lazycloud example download yolo-training
+cd yolo-training
+uv sync
+uv run lazycloud login
+uv run lazycloud run app:train_yolo
+```
+
+This example uses a GPU and incurs compute and storage charges when run.
+Downloading files and running `uv sync` create no cloud resources.
+
+Each project includes its source, assets, README, `.python-version`,
+`.gitignore`, and `pyproject.toml`. The manifest pins the SDK to the
+installed release; `uv sync` creates the lockfile. Commit `uv.lock` and use
+`uv sync --locked` in CI.
+
+Choose another directory with `--output`:
+
+```bash
+lazycloud example download quickstart --output my-project
+```
+
+Edit the `App("quickstart")` name in `quickstart.py` for your own app.
+The directory name does not rename resources.
+
+## Download all examples
+
+```bash
+lazycloud example download all --output lazycloud-examples
+```
+
+Each example has its own directory and dependencies. Run `uv sync` inside
+the project you want to use.
+
+## Existing files
+
+The command checks every destination before writing. If any example file
+already exists, it stops without writing other files. Download to a new directory
+to compare a newer release with your work.
+
+`--force` replaces files supplied by the example. It leaves unrelated files,
+including an existing `uv.lock`, in place. Review the changes and run `uv sync`
+to update that lockfile. The command refuses to write through symlinks inside
+the destination.
+
+Use `lazycloud --json example list` or
+`lazycloud --json example download NAME` for machine-readable output.

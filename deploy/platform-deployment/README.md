@@ -1,7 +1,6 @@
 # Platform deployment
 
-One deployment of the platform: `lazycloud-prod`, and later `lazycloud-staging`
-beside it on the same cluster. This module owns what a deployment cannot share:
+Use this module once per deployment, with its own state and namespace. This module owns what a deployment cannot share:
 the managed Redis, the S3 buckets, the Secrets Manager documents, the
 PlanetScale branch, the fleet network and connection role, the Cloudflare
 tunnel it reads, and every AWS identity its workloads hold. The cluster, the
@@ -14,20 +13,20 @@ deployment, from the branch named for it, and the values file Deploy writes
 there.
 
 [Object storage](OBJECT_STORAGE.md) describes workload identity, scoped workspace
-access and the application data cutover. Infrastructure descriptor version 7 names
+access and storage verification. Infrastructure descriptor version 7 names
 the S3 endpoint, bucket identities, workspace grant role and regional fleet networks.
 
 Use the shared [S3 Terraform backend](../terraform-state/README.md):
 
 ```sh
 export TF_VAR_terraform_backend_config="$HOME/.lazycloud/operator/terraform-backend.json"
-terraform init -backend-config="$TF_VAR_terraform_backend_config" \
+terraform -chdir=deploy/platform-deployment init -backend-config="$TF_VAR_terraform_backend_config" \
   -backend-config="key=platform-deployment/lazycloud-prod.tfstate"
 ```
 
 [Provider provisioning](../PROVIDERS.md) covers worker capacity. `capacity.tf`
-declares the verified image input; Helm owns the Ashburn warm default and node
-sizes. Supply the
+declares verified image inputs. Provider definitions own node catalogs;
+`compute.fleet_policy` owns warm targets. Supply the
 `hetzner-images.tfvars.json` image-workflow artifact to Terraform and add
 `LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` to the existing operator secret.
 Only credentials are operator-owned; capacity policy is deployment-owned.
@@ -38,12 +37,9 @@ connection role and node identity are shared across regions. Adding a region
 or subnets preserves every existing network; removing or replacing one is
 rejected while registering the fleet.
 
-For this rollout, apply and publish the version-7 infrastructure descriptor,
-publish CPU and GPU images through Connected AWS Node Images, then publish a
-host release containing both regional image catalogs. Deploy the application
-with that host release pinned. Migration `0033_aws_regional_networks` preserves
-existing connection networks before fleet registration adds West. Existing
-customer-managed authorization stacks retain their own region.
+When adding a region, publish its infrastructure descriptor and matching CPU
+and GPU image catalogs before selecting the release. Preserve existing
+connection networks and customer-managed authorization stacks.
 
 Image baking selects tagged public fleet subnets with an active internet route
 and their fleet security group. Apply the release-assets stack's EC2 inventory
@@ -125,7 +121,9 @@ Terraform exports `infrastructure_configuration`. Publish that JSON with
 that URI as the GitHub environment variable `INFRASTRUCTURE_CONFIG_URI`.
 Deploy downloads this descriptor from S3 with its OIDC role and records its snapshot in Git.
 
-Prices, Stripe account selection, fleet limits and credential property bindings
-live in Helm. Change them in Git and deploy without applying Terraform.
+Rate history lives in `shared.billing_rate_card`, provider costs and approved
+locations in provider definitions, and fleet limits in `compute.fleet_policy`.
+Helm owns Stripe account selection and credential property bindings. Change
+the relevant owner in Git and deploy without applying Terraform.
 The database server ceiling remains `database_max_connections` here and is
 exported to Helm for pool budgeting. See [the transition checklist](../CONFIGURATION.md).

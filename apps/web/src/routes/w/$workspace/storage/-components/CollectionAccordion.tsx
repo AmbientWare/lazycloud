@@ -11,13 +11,18 @@ import { resourceQueryOptions } from "@/lib/queries/resources";
 import { cn } from "@/lib/utils";
 
 import { MapInspector, QueueInspector } from "./CollectionInspectors";
+import { CollectionValueForm } from "./CollectionValueForm";
 
 export function CollectionAccordion({
   config,
   workspaceId,
+  creating,
+  onCreatingChange,
 }: {
   config: ResourceConfig;
   workspaceId: string;
+  creating: boolean;
+  onCreatingChange: (open: boolean) => void;
 }) {
   const query = useQuery(resourceQueryOptions(config, workspaceId));
   const rows = query.data ?? [];
@@ -35,9 +40,22 @@ export function CollectionAccordion({
           <h2 className="text-sm font-medium">{config.title}</h2>
           <span className="mono text-xs text-muted-foreground">{rows.length}</span>
         </div>
+        {creating ? (
+          <div className="p-4">
+            <CollectionValueForm
+              workspaceId={workspaceId}
+              kind={config.key === "queues" ? "queues" : "maps"}
+              onCancel={() => onCreatingChange(false)}
+              onDone={(name) => {
+                setOpenId(name);
+                onCreatingChange(false);
+              }}
+            />
+          </div>
+        ) : null}
         {query.isPending ? (
           <CollectionSkeleton />
-        ) : query.isError ? (
+        ) : query.isError && !query.data ? (
           <PanelError message={query.error.message} />
         ) : rows.length === 0 ? (
           <PanelEmpty message={`No ${config.title.toLowerCase()}`} className="p-8" />

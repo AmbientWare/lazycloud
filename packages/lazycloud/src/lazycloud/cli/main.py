@@ -22,7 +22,7 @@ from lazycloud.cli.components.output import (
 from lazycloud.cli.components.runner import run_cli
 from lazycloud.cli.development import dev
 from lazycloud.cli.domains import domain_app
-from lazycloud.cli.examples import create_app, example_app, quickstart
+from lazycloud.cli.examples import example_app
 from lazycloud.cli.execution import deploy, deployment_app, run, shell
 from lazycloud.cli.identity import login, profile_app, token_app
 from lazycloud.cli.logs import logs
@@ -215,8 +215,6 @@ def _register_public_commands(registry: PublicCliRegistry) -> None:
     registry.add_root_command("login", _register_login)
     registry.add_root_command("dev", _register_dev)
     registry.add_root_command("logs", _register_logs)
-    registry.add_root_command("quickstart", _register_quickstart)
-    registry.add_root_command("create-app", _register_create_app)
     registry.add_root_command("update", _register_update)
     registry.add_root_command("ls", _register_volume_ls)
     registry.add_root_command("cp", _register_volume_cp)
@@ -264,14 +262,6 @@ def _register_dev(application: typer.Typer) -> None:
 
 def _register_logs(application: typer.Typer) -> None:
     application.command("logs", help="Inspect task and container logs.")(logs)
-
-
-def _register_quickstart(application: typer.Typer) -> None:
-    application.command("quickstart", help="Write a starter app file.")(quickstart)
-
-
-def _register_create_app(application: typer.Typer) -> None:
-    application.command("create-app", help="Create a new app scaffold.")(create_app)
 
 
 def _register_volume_ls(application: typer.Typer) -> None:

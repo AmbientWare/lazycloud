@@ -1,0 +1,6 @@
+{
+  "name": "parallel-parquet",
+  "description": "Process Parquet partitions in an existing S3 bucket.",
+  "python_version": "3.12",
+  "dependencies": []
+}

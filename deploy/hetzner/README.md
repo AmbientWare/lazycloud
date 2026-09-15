@@ -4,8 +4,8 @@ Use the shared [provider provisioning guide](../PROVIDERS.md) for deployment,
 scaling, verification, and cleanup. This file covers Hetzner's inputs and image
 build. It is not a separate application deployment procedure.
 
-Live workload acceptance is outstanding. The owner approved performing it on
-production with the intended warm/cold configuration after release checks pass.
+Select an authorized project before starting. A bake creates paid resources;
+record their IDs so cleanup can be checked independently of build success.
 
 ## Project credentials
 
@@ -45,10 +45,10 @@ A local build uses the same Packer recipe. Supply `HCLOUD_TOKEN` through the
 environment, then run:
 
 ```sh
-uv run python -m deploy.hetzner.bake \
+uv run --group workspace python -m deploy.hetzner.bake \
   --base-image-id BASE_IMAGE_ID --location ash \
   --manifest /absolute/path/to/new-image-manifest.json
-uv run python -m deploy.hetzner.catalog \
+uv run --group workspace python -m deploy.hetzner.catalog \
   --manifest /absolute/path/to/new-image-manifest.json \
   --output /absolute/path/to/hetzner-images.tfvars.json
 ```
@@ -78,10 +78,9 @@ not prove that a node can enroll or run a workload.
 
 ## Deployment defaults and differences
 
-`deploy/chart/environments/prod.yaml` declares Ashburn, `ash`, with CCX13,
-CCX23, CCX33, CCX43, CCX53, and CCX63. The cheapest compatible CPU shape holds
-an adaptive warm floor starting at one node. Larger shapes are acquired on demand.
-Other platform pools remain cold. Users request container CPU, memory, and GPUs;
+The provider package owns approved locations and server shapes.
+`compute.fleet_policy` owns warm capacity. Check those definitions before a
+rollout; Helm's production environment file does not select server sizes. Users request container CPU, memory, and GPUs;
 they do not select a server size.
 
 Hetzner's node policy requires at least 80 GiB of included disk. AWS keeps its
@@ -91,13 +90,12 @@ The adapter supports dedicated x86 Cloud servers, not shared CPU, Robot,
 attached volumes, or GPUs. AWS supplies GPU capacity. Additional locations
 need their images and deployment policy before they can supply capacity.
 
-Server prices come from the provider API. Helm declares the USD conversion
-and IPv4 cost added to those prices. The defaults match the selected USD-billed
+Server prices come from the provider API. The provider package owns the USD
+conversion and IPv4 cost added to those prices. The defaults match the selected USD-billed
 project; review them for another billing currency or changed supplier charges.
 There are no added supplier purchase ceilings or Hetzner node caps.
 
 Hetzner has no AWS-style instance identity proof. Each launch therefore receives
-a unique, short-lived bootstrap token in that node's user-data, as approved by
-the owner. The control plane binds it to the launch and consumes it once; the
+a unique, short-lived bootstrap token in that node's user-data, for enrollment. The control plane binds it to the launch and consumes it once; the
 node generates its own continuing credential. Project API tokens never reach
 workers. The common agent owns runtime installation, reporting, and execution.

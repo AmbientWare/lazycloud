@@ -1,4 +1,4 @@
-# Agent Artifacts
+# Build agent executables
 
 This build produces standalone Linux `amd64` and `arm64` agent executables.
 It uses uv-managed Python 3.12 on AlmaLinux 8 with glibc 2.28 so the artifacts
@@ -12,7 +12,7 @@ uv run --no-project python deploy/agent-binary/build.py build \
   --output dist/agent-binarys
 ```
 
-The output is immutable publication input, not an external publication:
+The command writes a local bundle for release publication:
 
 ```text
 dist/agent-binarys/
@@ -37,8 +37,9 @@ version serves nothing. Attached hosts select and
 verify the digest for their architecture; a connected-AWS release publishes
 `linux/amd64`, which is what AWS node classes consume.
 
-The release workflow uploads this directory as a GitHub Actions artifact. It
-does not publish the executables to a package index, object store, or release.
+The build workflow uploads this directory as a GitHub Actions artifact.
+The [release-assets workflow](../aws-release-assets/README.md) publishes the
+selected executable for customer nodes.
 
 The same Dockerfile also owns the `agent-runtime` image used by the canonical
 local Compose stack. That image runs the standalone production agent with the

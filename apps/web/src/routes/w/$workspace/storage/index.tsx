@@ -48,9 +48,16 @@ function StoragePage() {
   const secrets = useQuery(secretsQueryOptions(workspace.id));
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const [creating, setCreating] = useState<"volumes" | "secrets" | null>(null);
-  const createView = search.view === "volumes" || search.view === "secrets" ? search.view : null;
-  const createLabel = createView === "volumes" ? "New volume" : "New secret";
+  const [creating, setCreating] = useState<Exclude<StorageTab, "artifacts"> | null>(null);
+  const createView = search.view === "artifacts" ? null : search.view;
+  const createLabel =
+    createView === "volumes"
+      ? "New volume"
+      : createView === "secrets"
+        ? "New secret"
+        : createView === "maps"
+          ? "New map"
+          : "New queue";
 
   return (
     <WorkspacePage
@@ -133,7 +140,15 @@ function StoragePage() {
               value={config.key}
               className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
             >
-              <CollectionAccordion config={config} workspaceId={workspace.id} />
+              <CollectionAccordion
+                key={`${workspace.id}:${config.key}`}
+                config={config}
+                workspaceId={workspace.id}
+                creating={creating === config.key}
+                onCreatingChange={(open) =>
+                  setCreating(open ? (config.key === "queues" ? "queues" : "maps") : null)
+                }
+              />
             </TabsContent>
           ))}
           <TabsContent value="artifacts" className="min-h-0 flex-1 overflow-hidden">

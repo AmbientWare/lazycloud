@@ -1,0 +1,6 @@
+{
+  "name": "openai-compatible-llm",
+  "description": "Serve an instruction model through a vLLM API.",
+  "python_version": "3.12",
+  "dependencies": []
+}

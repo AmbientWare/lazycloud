@@ -3,9 +3,13 @@ title: "Tasks and logs"
 description: "Every invocation is a durable task with a status, a result, and logs."
 ---
 
-Every function call, endpoint request, scheduled run, and `lazycloud run` is
-recorded as a task. A task keeps its status, timing, result or error, retry
-history, and logs.
+Remote function calls, endpoint requests, and scheduled runs create tasks.
+Use task history to revisit a result, investigate a failure, or follow work
+you submitted in the background.
+
+`uv run lazycloud run` already shows progress, remote logs, and the result for a
+function. You only need the commands here to inspect it separately.
+Local Python calls do not create remote tasks.
 
 ## Lifecycle
 
@@ -16,12 +20,12 @@ attempt fails and retries remain it is `retry`. It ends as `complete`,
 ## From the CLI
 
 ```bash
-lazycloud task list                 # recent tasks, --app to filter by app
-lazycloud task show <task-id>       # status, timing, deployment, container
-lazycloud task result <task-id>     # waits for completion and prints the result
-lazycloud task logs <task-id>       # recent log lines
-lazycloud task stop <task-id> ...   # stop running tasks
-lazycloud task cancel <task-id>     # cancel a pending task
+uv run lazycloud task list                 # recent tasks, --app to filter by app
+uv run lazycloud task show <task-id>       # status, timing, deployment, container
+uv run lazycloud task result <task-id>     # waits for completion and prints the result
+uv run lazycloud task logs <task-id>       # recent log lines
+uv run lazycloud task stop <task-id> ...   # stop running tasks
+uv run lazycloud task cancel <task-id>     # cancel a pending task
 ```
 
 `task result --no-wait` returns the current state without waiting;
@@ -29,13 +33,13 @@ lazycloud task cancel <task-id>     # cancel a pending task
 
 ## Logs
 
-`lazycloud logs` reads logs by deployment, task, or container, and `--follow`
+`uv run lazycloud logs` reads logs by deployment, task, or container, and `--follow`
 streams them:
 
 ```bash
-lazycloud logs --task-id <task-id> --follow
-lazycloud logs --deployment predict -n 500 --show-timestamp
-lazycloud logs --container-id <container-id>
+uv run lazycloud logs --task-id <task-id> --follow
+uv run lazycloud logs --deployment predict -n 500 --show-timestamp
+uv run lazycloud logs --container-id <container-id>
 ```
 
 `--deployment` takes a deployment name or id. Anything your code prints to
@@ -47,14 +51,18 @@ unbuffered, so lines show up promptly.
 `spawn` returns a `FunctionCall`:
 
 ```python
-handle = my_function.spawn(42)
-handle.task_id
-handle.get(timeout_seconds=120)              # waits and returns the value, or raises
+from reports import summarize_sales
+
+handle = summarize_sales.spawn([1200, 3500, 800])
+print(handle.task_id)
 
 result = handle.result(wait=True, timeout_seconds=120)
-result.ok, result.status, result.value, result.error
-handle.logs()
+print(result.ok, result.status, result.value, result.error)
 ```
+
+This uses `reports.py` from the [functions guide](/concepts/functions).
+`handle.get(timeout_seconds=120)` returns the value or raises on failure.
+`handle.logs()` reads stored logs.
 
 For a task you only know by id, reconnect with `Task.from_id`:
 
@@ -62,10 +70,12 @@ For a task you only know by id, reconnect with `Task.from_id`:
 from lazycloud import Task
 
 task = Task.from_id("<task-id>")
-outcome = task.wait(timeout_seconds=120)     # a TaskResult
-task.logs()
-task.cancel()
+outcome = task.wait(timeout_seconds=120)
+print(outcome.status, outcome.value)
 ```
+
+Use `task.cancel()` to cancel pending work, or `uv run lazycloud task stop <task-id>`
+to stop a running task.
 
 Failed tasks keep the error message and the full logs.
 

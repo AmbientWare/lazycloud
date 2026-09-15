@@ -8,14 +8,14 @@ assignees: ""
 
 ## Summary
 
-Describe the problem and the expected behavior.
+Describe what you were trying to do, what happened, and what you expected.
 
 ## Reproduction
 
 1. Command or code used:
 2. Execution environment:
-3. Observed output:
+3. Observed output, with tokens and private data removed:
 
 ## Impact
 
-Describe the affected workflow, provider, or deployment target.
+Say whether the issue blocks your work, loses output, or has a workaround.

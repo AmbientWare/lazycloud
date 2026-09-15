@@ -1,10 +1,11 @@
-# Realized economics
+# Report realized revenue and costs
 
+Use this report to reconcile a closed period against supplier statements.
 Run against the installation's database after the period closes. The command
 reads a consistent database snapshot and makes no provider calls or writes.
 
 ```bash
-uv run lazycloud-admin economics report \
+uv run --group workspace lazycloud-admin economics report \
   --from 2026-08-01T00:00:00Z --to 2026-09-01T00:00:00Z \
   --statement /private/august-financials.json \
   --operations /private/august-fleet.json
@@ -14,6 +15,8 @@ Omit either file to see which evidence is missing. Exit `2` means incomplete
 financial evidence, `1` means contribution or operating loss, and `0` means
 break-even or profit. Missing fleet observations appear separately and do not
 turn a reconciled financial result into an estimate.
+
+## Prepare financial evidence
 
 The report follows existing billing attribution. It includes each whole ledger
 segment whose start is in `[from, to)`, including its credit allocations, and
@@ -71,6 +74,8 @@ reduce usage revenue. Historical records without local settlement remain a
 reconciliation gap. Retain payment delivery records as financial evidence; their
 absence cannot establish successful delivery.
 
+## Add observed fleet usage
+
 The optional fleet file uses the same scope and exact period, with a `reference`.
 `capacity`, `reserved_capacity` and `stranded_capacity` each contain observed
 `cpu_core_seconds`, `memory_gib_seconds` and `gpu_card_seconds`. The other fields
@@ -83,6 +88,8 @@ boundary. Recovery time already overlaps purchased node time and adds no expense
 Current fleet snapshots and catalog prices remain estimates in the fleet cost
 report. They are never accepted as realized supplier invoices here. Keep statement
 files outside the repository.
+
+## Read storage observations
 
 `storage_access` reports deduplicated S3 requests and actual response bytes from
 access logs. These logs can arrive late, contain duplicates, or omit requests.

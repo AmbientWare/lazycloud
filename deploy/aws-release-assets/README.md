@@ -1,6 +1,6 @@
-# Connected AWS release assets
+# Publish release assets
 
-Connected AWS capacity has four immutable release inputs:
+A release makes these immutable artifacts available to customer nodes:
 
 - a standalone Linux `amd64` agent served by the control plane;
 - the exact bundled account-authorization CloudFormation template at an HTTPS
@@ -59,7 +59,7 @@ cannot delete its objects or administer it.
 
 Customer authorization uses `lazycloud cloud authorize --profile CUSTOMER_PROFILE`.
 The CLI checks the caller account and submits the API's exact template body and
-named IAM parameters through CloudFormation `CreateStack`. It does not pass an
+named IAM parameters through CloudFormation `CreateStack`. It does not pass a
 release URL to CloudFormation. The dashboard keeps the setup instructions visible;
 validate the connection after the stack completes.
 
@@ -120,10 +120,8 @@ platform image digests, the worker image, agent executable, authorization templa
 and host AMIs. Ship selects the complete release automatically. Argo activates it
 after the platform is healthy; see `deploy/RUNBOOK.md`.
 
-The manifest's `deployment_environment` object is a self-check the release
-carries, not settings to transcribe: the schema validates it against the
-release's own facts and rejects a manifest whose block disagrees. Published
-manifests are immutable, so it stays in the document.
+Do not copy `deployment_environment` into operator settings. The manifest
+schema validates it against the selected artifacts.
 
 The local agent-binary mount (`LAZYCLOUD_COMPOSE_AGENT_BINARY_DIR`) and connected-AWS
 control principal (`LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN`) stay in deployment
@@ -133,9 +131,12 @@ are defined by region in `provider_aws.supplier_prices`.
 `capacity_cpu_ami_ids` and `capacity_gpu_ami_ids` come from the current host-image
 catalog in Actions. See `deploy/ami/README.md` for the catalog workflow.
 
-## Focused acceptance
+## Validate and publish a staged bundle
 
-With release AWS identity and Docker registry login already configured:
+Configure the release AWS identity and Docker registry login first. Set
+`VERSION`, the bucket, and the exact worker image digest for the release you
+intend to publish. Publication is immutable; inspect the staged bundle before
+the `publish` command:
 
 ```sh
 uv run --no-project python deploy/agent-binary/build.py build \

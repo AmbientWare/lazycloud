@@ -1,79 +1,68 @@
-# Examples
+# Download an example
 
-Run examples from the repository root with the public `lazycloud` command.
-Authenticate with `lazycloud login`; for non-interactive use, configure the
-documented `LAZYCLOUD_ENDPOINT`, `LAZYCLOUD_TOKEN`, and `LAZYCLOUD_WORKSPACE`
-settings instead.
+Users get complete projects through the public CLI:
 
-## Guided examples
-
-Each directory below is paired with a complete Mintlify guide. The guide is
-the canonical entry point for prerequisites, deployment, inspection, costs or
-security boundaries, and cleanup:
-
-- [OpenAI-compatible LLM service](../docs/examples/openai-compatible-llm.mdx)
-  — an authenticated vLLM Pod with one GPU and a durable model cache.
-- [Train a YOLO object detector](../docs/examples/train-yolo-object-detector.mdx)
-  — separate GPU training and prediction Functions sharing a Volume.
-- [Document processing with FastAPI](../docs/examples/document-processing-asgi.mdx)
-  — an ASGI upload UI backed by durable OCR Tasks.
-- [Sandboxed coding agent](../docs/examples/sandboxed-coding-agent.mdx)
-  — a trusted planner Function and a network-blocked execution Sandbox.
-- [Parallel Parquet processing on S3](../docs/examples/parallel-parquet-s3.mdx)
-  — Function fan-out over CloudBucket-mounted partitions.
-
-Run the deployment and invocation commands in a guide from the repository
-root. Examples use importable module targets such as
-`examples.openai_compatible_llm.app:app`; they do not require changing into the
-example directory.
-
-## All workloads
-
-`examples.all_workloads` is one app that makes every currently deployable
-workload kind visible in the dashboard: function, endpoint, ASGI, and
-pod. It also creates an on-demand sandbox through the public SDK;
-sandboxes are not deployments.
-
-Deploy all workload kinds:
-
-```sh
-uv run lazycloud deploy examples.all_workloads:app --workspace default
+```bash
+uv tool install lazycloud-client
+lazycloud example list
+lazycloud example download yolo-training
+cd yolo-training
+uv sync
+uv run lazycloud login
+uv run lazycloud run app:train_yolo
 ```
 
-Create successful, failed, nested, artifact-producing, and spawned Tasks:
+No repository access is required. Each project's README covers setup, expected
+results, and cleanup. The [public guides](https://docs.lazycloud.dev/examples)
+show the full workflows.
 
-```sh
-uv run lazycloud run examples.all_workloads:exercise_runs 7
+## Maintain the catalog
+
+Canonical sources live under
+[the SDK's example assets](../packages/lazycloud/src/lazycloud/_examples).
+Each directory contains `example.json` and a `project/` directory.
+The CLI reads these directories through Python package resources; it has no
+per-example registry.
+
+To add an example, create one directory with metadata:
+
+```json
+{
+  "name": "my-example",
+  "description": "Describe the result users get.",
+  "python_version": "3.12",
+  "dependencies": []
+}
 ```
 
-Each Task-producing path is also callable independently:
+Put all source, assets, and a README under `project/`. Declare only local
+dependencies in the metadata. Remote dependencies belong in the workload's
+image. Use relative imports within a multi-file app package so it can run from
+any downloaded directory.
 
-```sh
-uv run lazycloud run examples.all_workloads:run_function 7
-uv run lazycloud run examples.all_workloads:run_function_failure 13
-uv run lazycloud run examples.all_workloads:run_nested_function 6
-uv run lazycloud run examples.all_workloads:run_artifacts "dashboard sample"
-uv run lazycloud run examples.all_workloads:run_background_job 5
-uv run lazycloud run examples.all_workloads:run_background_job_failure 17
+The CLI generates `pyproject.toml`, `.python-version`, and `.gitignore`.
+It pins `lazycloud-client` to the installed SDK version. Do not add generated
+files, credentials, environments, or lockfiles to the asset directory.
+Users generate and commit their own `uv.lock` after downloading.
+
+Update an example in place. Remove its catalog directory to remove it from
+future SDK releases. No CLI code change is needed. Update the corresponding
+guide in the same change; existing user downloads are independent copies.
+
+## Check a change
+
+From the repository root, download the real project into a temporary directory:
+
+```bash
+uv run --group workspace lazycloud example download my-example --output /tmp/my-example
 ```
 
-Exercise inbound HTTP workloads:
+Verify its imports and documented commands from that directory with the current
+client wheels installed. Build both an sdist and wheel for the client and verify
+the catalog from the wheel built from that sdist; source-checkout success alone
+does not prove that users receive the assets.
 
-```sh
-uv run lazycloud run examples.all_workloads:run_endpoint 7
-uv run lazycloud run examples.all_workloads:run_endpoint 7 true
-uv run lazycloud run examples.all_workloads:run_asgi
-```
-
-The scheduled function runs once per minute after deployment. The pod is maintained by its
-deployment. The following commands create additional on-demand pod and sandbox
-containers when those inventory states are useful:
-
-```sh
-uv run lazycloud run examples.all_workloads:create_pod
-uv run lazycloud run examples.all_workloads:create_sandbox
-```
-
-Endpoint, ASGI, and exposed sandbox-port calls require routable inbound
-container networking. A deployment can succeed while those calls remain
-unavailable when it publishes only private container bridge addresses.
+Example behavior tests live under
+[the SDK owner tests](../packages/lazycloud/tests/examples).
+Run the tests for the example you changed, plus relevant SDK checks. Clean up
+temporary downloads and any resources a live run creates.

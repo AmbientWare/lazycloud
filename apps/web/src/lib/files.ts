@@ -14,7 +14,7 @@ export function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
 
-export async function fileBase64(file: File): Promise<string> {
+export async function fileBase64(file: Blob): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
   const chunkSize = 32_768;

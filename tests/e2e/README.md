@@ -1,7 +1,7 @@
-# Scoped End-to-End Acceptance
+# Run a live acceptance scenario
 
-This directory contains opt-in production scenarios. It is not part of ordinary
-`pytest`.
+Choose the exact scenario for the behavior you changed. These live scenarios
+run against an already-prepared installation and stay outside ordinary pytest.
 
 Each scenario proves one user-visible capability through the public SDK, CLI,
 API, or browser path against an already-prepared environment. It may create only
@@ -23,14 +23,14 @@ authorization or prerequisites return exit code `77`.
 Run Python scenarios as modules from the repository root:
 
 ```sh
-uv run python -m tests.e2e.local.function.scenario_invoke --live
+uv run --group workspace python -m tests.e2e.local.function.scenario_invoke --live
 ```
 
 `local/` scenarios that build an image need a Linux host and one thing the stack
 does not arrange on its own:
 
 - Give the agent state directory (`LAZYCLOUD_COMPOSE_AGENT_STATE_DIR`) at least
-  21 GiB free — an image build reserves `per_build_max_bytes` plus
+  21 GiB free. An image build reserves `per_build_max_bytes` plus
   `minimum_free_bytes` before it starts. The agent passes that path to the
   Docker daemon as the bind source for worker slots, so it must resolve
   identically for the agent process and the daemon: keep it on daemon-local
@@ -41,15 +41,17 @@ additional prerequisites in their modules.
 
 ## Connected AWS
 
-Connected AWS is split into three independent paid scenarios. The ambient AWS
+Connected AWS has four scenarios covering connection, readiness, a paid function,
+and cleanup. The ambient AWS
 CLI identity is the customer identity; the only product target supplied to
 connection and cleanup is its 12-digit account ID.
 
-For a local platform, expose a refreshable platform profile only to the control
-plane and scheduler:
+For a local platform, configure the refreshable test role chain only for the control
+plane and scheduler. Use the dedicated Compose AWS directory from
+[local deployment](../../deploy/README.md#activation), not your general AWS directory:
 
 ```sh
-LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR=/absolute/path/to/.aws \
+LAZYCLOUD_COMPOSE_AWS_CONFIG_DIR="$HOME/.lazycloud/compose-aws" \
 LAZYCLOUD_COMPOSE_AWS_PROFILE=control \
 docker compose up -d
 ```
@@ -65,7 +67,7 @@ release digest and checks the explicit platform principal before submitting
 the stack. Read the principal from the deployment environment:
 
 ```sh
-uv run python -m tests.e2e.external.aws.account_connection \
+uv run --group workspace python -m tests.e2e.external.aws.account_connection \
   --account-id <12-digit-account-id> \
   --platform-principal-arn "$LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN" \
   --execution-role-arn "$LAZYCLOUD_E2E_AWS_CUSTOMER_STACK_EXECUTION_ROLE_ARN"
@@ -75,7 +77,7 @@ Select AWS and prove the same one-ready-machine baseline that the platform keeps
 for fast starts:
 
 ```sh
-uv run python -m tests.e2e.external.aws.one_machine_readiness
+uv run --group workspace python -m tests.e2e.external.aws.one_machine_readiness
 ```
 
 Run one paid Function on that warm baseline to prove the complete data plane. It
@@ -83,16 +85,16 @@ must return the exact result, retain the log marker in public task logs, and run
 on the exact warm-baseline machine:
 
 ```sh
-uv run python -m tests.e2e.external.aws.connected_aws_function \
+uv run --group workspace python -m tests.e2e.external.aws.connected_aws_function \
   --run-id <id> --app-slug <slug>
 ```
 
-Finally, disable the warm floor, disconnect through the public owner, wait for
-public zero capacity and cost, and perform one workspace-scoped AWS
+Finally, disable the warm floor, disconnect through the public owner, poll
+public capacity and cost until zero, and perform one workspace-scoped AWS
 corroboration:
 
 ```sh
-uv run python -m tests.e2e.external.aws.cleanup \
+uv run --group workspace python -m tests.e2e.external.aws.cleanup \
   --account-id <12-digit-account-id>
 ```
 

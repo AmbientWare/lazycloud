@@ -1,0 +1,6 @@
+{
+  "name": "artifacts",
+  "description": "Save a report in a volume and as a downloadable task artifact.",
+  "python_version": "3.12",
+  "dependencies": []
+}

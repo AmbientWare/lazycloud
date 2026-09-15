@@ -58,6 +58,49 @@ def test_resource_routes_canonicalize_workspace_name_and_id(
     assert map_get.status_code == 200
     map_value = MapGetResponse.model_validate_json(map_get.content)
     assert decode_bytes(map_value.value_base64) == b"map-value"
+    entry = client.get(
+        f"/api/v1/maps/demo-map/entry?workspace={workspace.id}&key=result",
+        headers=headers,
+    )
+
+    revised = client.post(
+        f"/api/v1/maps/demo-map/set?workspace={workspace.id}",
+        headers=headers,
+        json={
+            "key": "result",
+            "value_base64": encode_bytes(b"edited"),
+            "if_revision": entry.json()["revision"],
+            "ttl_seconds": None,
+        },
+    )
+    assert revised.status_code == 200
+    edited = client.get(
+        f"/api/v1/maps/demo-map/entry?workspace={workspace.id}&key=result",
+        headers=headers,
+    )
+    assert edited.json()["expires_at"] == entry.json()["expires_at"]
+    stale_delete = client.post(
+        f"/api/v1/maps/demo-map/delete?workspace={workspace.id}",
+        headers=headers,
+        json={"key": "result", "if_revision": entry.json()["revision"]},
+    )
+    assert stale_delete.status_code == 409
+    keys = client.get(
+        f"/api/v1/maps/demo-map/entries?workspace={workspace.id}&prefix=res",
+        headers=headers,
+    )
+    assert keys.json() == {"data": ["result"], "next": None}
+    reader_token, _ = AuthService(services.context).create_token(
+        "collection-reader",
+        workspace_id=workspace.id,
+        scopes=[AuthScope.Read.value],
+    )
+    denied = client.post(
+        f"/api/v1/maps/demo-map/set?workspace={workspace.id}",
+        headers={"Authorization": f"Bearer {reader_token}"},
+        json={"key": "result", "value_base64": encode_bytes(b"unauthorized")},
+    )
+    assert denied.status_code == 403
 
     queue_put = client.post(
         f"/api/v1/simplequeues/demo-queue/put?workspace={workspace.name}",

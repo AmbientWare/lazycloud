@@ -51,8 +51,6 @@ _ADMIN_ROOT_ORDER = (
     "serve",
     "login",
     "logs",
-    "quickstart",
-    "create-app",
     "ls",
     "cp",
     "rm",

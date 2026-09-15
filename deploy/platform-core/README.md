@@ -1,6 +1,7 @@
 # Platform core
 
-The cluster every deployment runs on. This module owns the VPC, the EKS Auto
+Create this shared cluster once, then attach each deployment through
+`deploy/platform-deployment`. This module owns the VPC, the EKS Auto
 Mode cluster and its identities, the image repositories, the cluster's OIDC
 provider, the EBS storage class, and Argo CD with its root Application. It is
 applied once and rarely.
@@ -17,8 +18,11 @@ Redis the cluster's VPC may reach. Bring-up and teardown of the pair are in
 terraform -chdir=deploy/platform-core init \
   -backend-config="$TF_VAR_terraform_backend_config" \
   -backend-config="key=platform-core/lazycloud.tfstate"
-terraform -chdir=deploy/platform-core apply
+terraform -chdir=deploy/platform-core plan -out=core.tfplan
 ```
+
+Review `core.tfplan`, then apply with
+`terraform -chdir=deploy/platform-core apply core.tfplan`.
 
 Use the shared [S3 state configuration](../terraform-state/README.md). An existing
 installation transfers its current state with `init -migrate-state` before apply.
@@ -38,10 +42,9 @@ The Kubernetes and Helm providers run `aws eks get-token` with the ambient
 operator identity. Install the AWS CLI before applying. Generating tokens when
 needed keeps authentication valid during a cluster update or a long apply.
 
-**A failed apply is not proof that nothing was created.** EKS has returned a
-400 on `CreateCluster` and created the cluster anyway, leaving it ACTIVE and
-absent from state, where `terraform destroy` will never find it. After any
-failed apply, check `aws eks list-clusters` before retrying.
+After a failed apply, inspect the provider's resources and compare their IDs
+with state before retrying. An API error can leave a created cluster outside
+Terraform state; destroying the state alone will not remove it.
 
 ## What Argo runs
 
@@ -77,14 +80,14 @@ The NodeClass still uses the same role; Terraform owns its explicit node access.
 ## Images
 
 One repository per control-plane image, `lazycloud/<name>`, tagged by the
-commit that built it and immutable. Deploy builds a commit once; a deployment
-names the tag it runs in its values file, and promotion names the same tag for
-another deployment.
+commit that built it and immutable. Ship publishes images for a commit and records their executable digests in
+the release. Deploy selects that release; promotion reuses it without rebuilding.
 
 ## Taking it down
 
-Destroy every deployment first, with the sequence in
-`../platform-deployment/LIFECYCLE.md`. Then:
+Only after an explicitly authorized teardown, retire every deployment using
+[the lifecycle guide](../platform-deployment/LIFECYCLE.md). Review a destroy
+plan against the exact remaining shared resources before running:
 
 ```sh
 terraform -chdir=deploy/platform-core destroy

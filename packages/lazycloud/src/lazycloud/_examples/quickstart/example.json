@@ -1,0 +1,6 @@
+{
+  "name": "quickstart",
+  "description": "Run a Python function on remote compute.",
+  "python_version": "3.12",
+  "dependencies": []
+}

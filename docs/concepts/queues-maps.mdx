@@ -3,9 +3,9 @@ title: "Queues and maps"
 description: "Shared state for coordinating work across containers."
 ---
 
-These objects share state between workloads and your local process. They are
-addressed by name: two objects with the same name in the same workspace share
-the same data. Inspect them under Storage in the dashboard.
+Use a queue to pass work items between processes and a map for temporary shared
+values. Objects with the same name in the same workspace share data.
+Sign in before running these Python examples.
 
 ## Queue
 
@@ -17,16 +17,16 @@ from lazycloud import Queue
 q = Queue("work-items")
 
 q.put({"path": "a.wav"})
-len(q)          # 1
-q.empty()       # False
-q.peek()        # read the head without removing it
+print(len(q))
+print(q.peek())
 item = q.pop()
-q.delete()      # remove the queue and its contents
+print(item)
 ```
 
-Pair a queue with a function whose `autoscaler` is a
-[`QueueDepthAutoscaler`](/concepts/functions#warm-containers-and-concurrency)
-to scale consumers with backlog.
+`pop()` removes the item. Your consumer must decide what to do if processing
+fails afterward. For work that needs task results and retries, submit a
+[function](/concepts/functions#submit-work-in-the-background) instead.
+`QueueDepthAutoscaler` scales a function's pending calls, not this named queue.
 
 ## Map
 
@@ -44,8 +44,37 @@ state.set("cursor", 43, ttl=3600)   # per-key TTL in seconds
 list(state.keys())
 len(state)
 del state["cursor"]
-state.delete()                      # remove the whole map
 ```
 
 Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
-days is also the maximum.
+days is the maximum timed expiry. Use `ttl=0` to keep a key until you delete it.
+
+## Edit from the dashboard
+
+Open **Storage**, then **Queues** or **Maps**. Keep repeatable setup in your
+Python code; use the dashboard to inspect data or make an ad hoc correction.
+
+For a map, filter keys by prefix and scroll to load more. Select a key to
+view its value and expiry. **Edit value** accepts JSON and keeps the existing
+expiry unless you choose a new one. If a workload changes the value or expiry
+while you edit, saving fails and leaves your draft intact. **Discard draft and
+reload** loads the current value so you can start again. Binary Python values
+can be inspected and deleted, but cannot be edited in the dashboard.
+
+**Add key** creates a key without overwriting an existing one. To create a
+map, choose **New map** and enter its name and first key/value.
+
+For a queue, **Add message** appends JSON to the end. Viewing the head message
+does not remove it. **Remove next message** consumes the next message without
+running it and shows what was removed. Another consumer can take the previewed
+message before you confirm, so the removed message may be different.
+**New queue** creates a named queue with its first message.
+
+Deleting a queue removes its remaining messages. Deleting a map removes all
+its keys. Both actions require confirmation and cannot be undone. Running code
+can recreate a deleted collection with its next write.
+
+## Remove example state
+
+When you no longer need the example data, `q.delete()` removes the queue and
+its remaining items, and `state.delete()` removes the map and all its keys.

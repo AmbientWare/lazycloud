@@ -1,77 +1,85 @@
 ---
 title: "Apps"
-description: "An App groups the workloads you deploy together under one name."
+description: "Group related functions, APIs, and containers so you can deploy and manage them together."
 ---
 
-An `App` is the unit you deploy. Every workload registers under an app slug,
-and the slug is how the dashboard and CLI refer to it.
+An `App` groups workloads under a name in your workspace. Use one app for
+resources you want to deploy, pause, or inspect together.
+
+Keep resource configuration in Python with the app: images, CPU and GPU
+requests, volume mounts, secret names, schedules, and scaling settings.
+Run or deploy those definitions from the CLI or Python. Use CLI overrides for
+one-off experiments; put lasting changes back in the source.
+
+## Define an app
+
+Save this as `text_tools.py`:
 
 ```python
 from lazycloud import App
 
-app = App("billing")
+app = App("text_tools")
+
+
+@app.function()
+def count_words(text: str) -> int:
+    return len(text.split())
+
+
+@app.endpoint(name="count", methods=["POST"])
+def count(text: str) -> dict[str, int]:
+    return {"words": count_words.local(text)}
 ```
 
-A slug starts with a lowercase letter and contains only lowercase letters,
-digits, and underscores, up to 63 characters: `"billing"`, `"reporting_api"`.
+The endpoint calls the counting function locally in its container. It needs
+no second remote task for this small calculation.
 
-## Register workloads
+App names start with a lowercase letter and contain lowercase letters,
+digits, or underscores, up to 63 characters. Workload names must be unique
+within each kind in the app.
 
-```python
-@app.function(...)      # a remote function
-@app.endpoint(...)      # an HTTP endpoint
-@app.asgi(...)          # a FastAPI, Starlette, or raw ASGI app
-@app.realtime(...)      # a WebSocket-style handler
-web = app.pod(...)      # a long-running container command
-box = app.sandbox(...)  # an on-demand container
-```
-
-Names must be unique per kind within an app. Registering the same name twice
-raises an error.
-
-## Deploy
-
-Deploy everything the app registers:
+## Deploy together
 
 ```bash
-lazycloud deploy billing_app.py:app
+uv run lazycloud deploy text_tools
 ```
 
-Or from Python:
+This deploys both workloads. A module name selects its only app.
+Use `text_tools:app` to select the app explicitly when a module has several.
 
-```python
-app.deploy()
-```
+`@app.function`, `@app.endpoint`, `@app.asgi`, `@app.realtime`, and
+`app.pod(...)` register deployable workloads. Sandboxes created with
+`app.sandbox(...)` run on demand and are not started by a deploy.
 
-Deploy one resource with a selector. Pass its name, or `"kind:name"` when the
-name exists in more than one kind:
+Mounted [volumes](/concepts/volumes) are created on first use and reused by
+name in the workspace. [Secret values](/concepts/secrets) need explicit
+provisioning. Removing a resource from the code does not delete its stored data;
+review and remove unused resources separately.
+
+## Deploy or preview one workload
 
 ```bash
-lazycloud deploy billing_app.py:app --resource endpoint:api
+uv run lazycloud deploy text_tools:app --resource endpoint:count
 ```
 
-```python
-app.deploy(resource="endpoint:api")
-```
-
-Sandboxes are created on demand and are not deployed.
-
-## Preview
-
-`lazycloud serve` runs one function, endpoint, or ASGI app on LazyCloud with a temporary
-URL and live logs. When an app has more than one, pick one:
+A selector is the resource name, or `kind:name` if the name is shared by
+several kinds. You can also pass the decorated object directly:
 
 ```bash
-lazycloud serve billing_app.py:app --resource endpoint:api
+uv run lazycloud serve text_tools:count
 ```
+
+The preview prints a temporary URL and logs. Ctrl+C ends it.
+
+From Python, use `app.deploy()` or `app.deploy(resource="endpoint:count")`.
 
 ## Export a typed Python package
 
 ```bash
-lazycloud app export billing
+uv run lazycloud app export text_tools
 ```
 
-This writes `lazycloud_clients/billing`. Import a deployed function or endpoint
+This writes `lazycloud_clients/text_tools`. Import a deployed function or endpoint
 by its resource name and call its typed methods. Function methods include
 `remote()` and `async_remote()`; endpoint methods include `request()` and
 `async_request()`. Sign in with `lazycloud login` before calling them. Generated
@@ -79,11 +87,12 @@ files contain deployment references and schemas, never credentials.
 
 Function and endpoint types come from their deployed callable contracts. ASGI
 route methods come from OpenAPI 3, discovered at `/openapi.json`. Choose another
-path or supply a JSON file when needed:
+path or supply a JSON file when needed. For example, for the `service` ASGI
+app from the [ASGI guide](/concepts/endpoints#asgi-applications):
 
 ```bash
-lazycloud app export billing --openapi-path api=/schema/openapi.json
-lazycloud app export billing --openapi api=./openapi.json
+uv run lazycloud app export web_app --openapi-path service=/schema/openapi.json
+uv run lazycloud app export web_app --openapi service=./openapi.json
 ```
 
 ASGI methods use the schema's operation IDs and include async equivalents.
@@ -95,14 +104,18 @@ HTTP calls; the command reports that its route types are unavailable.
 Export again after deploying contract changes. Packages include functions,
 endpoints, and ASGI apps. Pods and sandboxes are excluded.
 
-## Manage a deployed app
+## Manage the app
 
 ```bash
-lazycloud app list
-lazycloud app show billing
-lazycloud app pause billing     # stop every workload in the app
-lazycloud app resume billing
-lazycloud app delete billing
+uv run lazycloud app show text_tools
 ```
 
-The same actions are on the app's page in the dashboard.
+To stop its workloads while keeping their definitions:
+
+```bash
+uv run lazycloud app pause text_tools
+```
+
+Use `uv run lazycloud app resume text_tools` to resume. When you no longer need
+the app, `uv run lazycloud app delete text_tools` removes it. Check separately for
+[stored files](/concepts/volumes) you want to retain or delete.

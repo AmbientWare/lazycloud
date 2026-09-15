@@ -1,7 +1,7 @@
-# Connected AWS node images
+# Build AWS node images
 
-Node images contain host dependencies that are too slow or risky to install on
-every scale-up. They do not contain a LazyCloud release, agent binary, or worker
+Rebuild node images when their host recipe changes. They contain the system
+dependencies needed before an agent can start. They do not contain a LazyCloud release, agent binary, or worker
 image.
 
 The `Connected AWS Node Images` workflow runs only by explicit dispatch from
@@ -44,8 +44,8 @@ The release workflow reads `current.json` before building application artifacts.
 It fails if the catalog is missing or its recipe digest differs from the checked
 out revision. Ship never starts an EC2 image bake.
 
-Run a bake locally from the repository root with an AWS identity that can use the
-release bake role:
+For a local bake, use the authorized platform AWS `default` profile and run
+from the repository root. These commands create paid temporary EC2 resources:
 
 ```sh
 uv run --group workspace python -m deploy.ami.bake \

@@ -8,10 +8,13 @@ change it, and add a payment method in the dashboard under Settings > Billing. C
 prices and per-plan limits are on the
 [pricing page](https://lazycloud.dev/pricing).
 
+Before starting a long job, check your balance and monthly usage limit in
+Billing. A saved card unlocks your plan's GPU access but does not itself add credit.
+
 ## What you pay for
 
-Compute is metered per second for each running container: a base rate per
-container, plus rates per CPU, per GiB of memory, and per GPU. Volumes
+Compute charges include a base rate per running container, plus CPU, memory,
+and GPU rates. Startup, model loading, and warm idle time count toward runtime. Volumes
 are billed by the GiB-month stored. Compute, storage, and transfer charges all
 deduct from one prepaid credit balance. Trial credit, subscription credit, and
 purchased credit fund that same balance. Subscription fees are separate.
@@ -23,6 +26,10 @@ The Usage page shows spend over time, broken down by app and workload. Add
 credit in Settings > Billing, or save an automatic reload threshold and amount. Purchased
 credit does not expire. Trial and subscription credit expire on their stated
 dates.
+
+To reduce idle charges, stop pods you no longer need and set shorter
+`keep_warm` windows on functions and endpoints. Downloading an output does not
+delete the stored copy; remove unused files separately.
 
 ## Automatic reload
 
@@ -47,11 +54,8 @@ can add credit beyond that limit; unused purchased credit stays in your balance.
 
 The pricing page lists base rates for automatic placement. LazyCloud chooses
 where the workload runs, and workloads allow interruptions. These rates have
-no regional surcharge. The hour/second toggle changes the displayed unit;
-compute is always metered per second. Hourly GPU prices show two decimals;
-CPU and memory prices show up to four.
-Per-second prices show up to six decimals for GPUs and eight for CPU and memory.
-Billing uses the full rate before display rounding.
+no regional surcharge. Compute is metered per second even when the pricing
+page displays hourly rates. Billing uses the full rate before display rounding.
 
 One CPU is one vCPU and matches `cpu=1` in a workload definition. CPU and memory
 are each billed at the greater of the reserved amount and measured usage.

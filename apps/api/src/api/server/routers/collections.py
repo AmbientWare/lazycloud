@@ -10,8 +10,10 @@ from shared.http.collections import (
     MapCollectionListResponse,
     MapCountResponse,
     MapDeleteResponse,
+    MapEntryResponse,
     MapGetResponse,
     MapKeyBody,
+    MapKeyPageResponse,
     MapKeysResponse,
     MapSetBody,
     MapSetResponse,
@@ -96,6 +98,8 @@ def map_set(
         request.key,
         request.bytes_value(),
         ttl_seconds=request.ttl_seconds,
+        if_revision=request.if_revision,
+        if_absent=request.if_absent,
     )
     return MapSetResponse()
 
@@ -112,8 +116,28 @@ def map_get(
     workspace_id: read_workspace,
     service: RedisMapService = Depends(map_service),
 ) -> MapGetResponse:
-    value = service.map_get(workspace_id, name, key)
-    return MapGetResponse(value_base64=encode_bytes(value))
+    entry = service.map_get(workspace_id, name, key)
+    return MapGetResponse(value_base64=encode_bytes(entry.value))
+
+
+@router.get(
+    "/api/v1/maps/{name:path}/entry",
+    response_model=MapEntryResponse,
+    operation_id="get_map_entry",
+)
+def map_entry(
+    name: str,
+    key: str = Query(),
+    *,
+    workspace_id: read_workspace,
+    service: RedisMapService = Depends(map_service),
+) -> MapEntryResponse:
+    entry = service.map_get(workspace_id, name, key)
+    return MapEntryResponse(
+        value_base64=encode_bytes(entry.value),
+        revision=entry.revision,
+        expires_at=entry.expires_at,
+    )
 
 
 @router.post(
@@ -127,7 +151,7 @@ def map_delete(
     workspace_id: write_workspace,
     service: RedisMapService = Depends(map_service),
 ) -> MapDeleteResponse:
-    service.map_delete(workspace_id, name, request.key)
+    service.map_delete(workspace_id, name, request.key, if_revision=request.if_revision)
     return MapDeleteResponse()
 
 
@@ -155,6 +179,23 @@ def map_keys(
     service: RedisMapService = Depends(map_service),
 ) -> MapKeysResponse:
     return MapKeysResponse(keys=list(service.map_keys(workspace_id, name)))
+
+
+@router.get(
+    "/api/v1/maps/{name:path}/entries",
+    response_model=MapKeyPageResponse,
+    operation_id="list_map_entries",
+)
+def map_entries(
+    name: str,
+    workspace_id: read_workspace,
+    service: RedisMapService = Depends(map_service),
+    cursor: str | None = Query(default=None, pattern=r"^[0-9]+$", max_length=20),
+    prefix: str = Query(default="", max_length=512),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> MapKeyPageResponse:
+    page = service.map_key_page(workspace_id, name, cursor=cursor, prefix=prefix, limit=limit)
+    return MapKeyPageResponse(data=list(page.data), next=page.next)
 
 
 @router.delete(

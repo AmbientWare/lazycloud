@@ -1,0 +1,6 @@
+{
+  "name": "all-workloads",
+  "description": "Explore functions, APIs, schedules, pods, and sandboxes.",
+  "python_version": "3.12",
+  "dependencies": []
+}

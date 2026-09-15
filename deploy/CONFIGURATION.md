@@ -1,4 +1,8 @@
-# Deployment configuration
+# Change deployment configuration
+
+Find the setting's owner below, edit it there, then use the normal deploy
+workflow. For credential rotation, follow [Credential changes](#credential-changes).
+For an interrupted rollout, see [Pause and resume](#pause-and-resume).
 
 Terraform owns resource identities, networks, IAM, secret documents and the
 database server ceiling. It exports a non-secret infrastructure descriptor.
@@ -50,8 +54,8 @@ image and agent binary before accepting new work. Existing registration and drai
 state provide rollout status. No release tables or service observer are required.
 
 Rollback selects an earlier complete manifest with a newer activation generation.
-Managed hosts follow the launch-template replacement controller. Supervised joined
-agents update after their workloads drain. Long-running pods can hold that drain.
+Application updates run in place on supervised managed and joined agents
+after their workloads drain. Host changes use launch-template replacement. Long-running pods can hold that drain.
 
 Cloudflared configuration and the AWS role-chain ConfigMaps have pod-template
 checksums. A change to a mounted configuration therefore rolls its consumers.
@@ -81,7 +85,7 @@ replicas, two bootstrap connections and three reserved connections, the normal
 backend budget is 29 against a server ceiling of 40. Application client pools
 are separate from this backend budget.
 
-For the first migration from direct application connections, start from a stable
+Only for an installation still using direct application connections, start from a stable
 deployment with no rollout in progress:
 
 1. Review and apply Terraform with `database_pooler_max_connections=3`, retaining
@@ -121,7 +125,7 @@ See [connection gateway deployment](connection-gateway.md).
 
 ## Pause and resume
 
-After the core ownership change has been applied, pause the child Application:
+To pause automatic sync for the existing production Application:
 
 ```sh
 kubectl -n argocd patch application lazycloud-prod --type merge \

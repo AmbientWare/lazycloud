@@ -1,4 +1,8 @@
-# Connection gateway deployment
+# Deploy and operate connection gateways
+
+Use this guide to bootstrap gateway credentials, configure the agent endpoint,
+and inspect gateway updates. For routine application releases, follow the
+[runbook](RUNBOOK.md#shipping-from-actions).
 
 Agents connect to `tunnels.<public API hostname>:443`. The public NLB forwards TCP
 to gateway port 8443 and preserves TLS end to end. The gateway verifies client
@@ -50,10 +54,12 @@ secret system. Its one-year validity needs a planned trust migration before expi
 rerunning bootstrap never rotates it. Rotate the bootstrap credential by refreshing
 External Secrets, then rolling the API and gateways through their secret revisions.
 
-## Clean cutover
+## Migrate an installation using the old transport
 
-The approved cutover permits a brief interruption. Do not run old and new agent
-protocols against mixed API replicas.
+Use this procedure only for an installation that still runs the retired
+transport. It interrupts service and retires resources, so confirm the exact
+inventory and obtain authorization before beginning. Current installations
+use ordinary release updates.
 
 1. Inventory current agents, workloads, gateway resources, secret versions, DNS,
    registry images, and Terraform resource addresses. Preserve the current release
@@ -102,7 +108,7 @@ HTTP development origin; certificate issuance and tunnel authentication use the
 same contracts as production.
 
 ```sh
-uv run python -m deploy.release
+uv run --group workspace python -m deploy.release
 docker compose ps control-plane connection-gateway connection-gateway-1 connection-ingress agent
 ```
 

@@ -1,58 +1,53 @@
 ---
-title: "Welcome to LazyCloud"
-description: "Write plain Python, decorate it, and run it on LazyCloud as functions, HTTP endpoints, scheduled jobs, pods, and sandboxes."
+title: "Run Python on LazyCloud"
+description: "Run Python functions, serve APIs, and execute code in remote containers."
 ---
 
-LazyCloud runs your Python on remote compute. You decorate a function, deploy
-it from your terminal, and every call becomes a durable task with a result and
-logs. Sign in at [lazycloud.dev](https://lazycloud.dev), install the client, and
-deploy.
+LazyCloud runs your code on remote CPUs and GPUs. Define the environment and
+resources in Python, then run your function from a terminal or another Python
+program. The client shows progress, logs, and the result.
+
+Save this as `hello.py`:
 
 ```python
-from lazycloud import App, Image
+from lazycloud import App
 
-app = App("quickstart")
-image = Image(python_version="3.12").add_python_packages(["httpx"])
-
-
-@app.function(image=image, cpu=1.0, memory="512Mi")
-def hello(name: str = "world") -> str:
-    return f"hello {name}"
+app = App("hello")
 
 
-if __name__ == "__main__":
-    print(hello.local("lazycloud"))
+@app.function()
+def square(number: int) -> int:
+    return number * number
 ```
+
+With the [client installed](/getting-started/installation), sign in and run it:
 
 ```bash
-lazycloud deploy quickstart.py:hello
-lazycloud run quickstart.py:hello LazyCloud
+uv run lazycloud login
+uv run lazycloud run hello:square 12
 ```
 
-## What you can run
+The result is `144`. Follow the [quickstart](/getting-started/quickstart)
+for the full walkthrough.
 
-| Workload | Decorator | Use it for |
-| --- | --- | --- |
-| [Function](/concepts/functions) | `@app.function` | Remote Python calls, fan-out maps, background jobs |
-| [Endpoint](/concepts/endpoints) | `@app.endpoint` | An HTTP route backed by a typed Python callable |
-| [ASGI and realtime](/concepts/endpoints) | `@app.asgi`, `@app.realtime` | FastAPI and Starlette apps, WebSocket-style handlers |
-| [Schedule](/concepts/schedules) | `@app.function(cron=...)` | A function that runs on a schedule |
-| [Pod](/concepts/pods) | `app.pod(...)` | A long-running container command |
-| [Sandbox](/concepts/sandboxes) | `app.sandbox(...)` | An on-demand container with process, file, and Docker control |
+## What do you want to build?
 
-Workloads share [volumes](/concepts/volumes), [secrets](/concepts/secrets), and
-[queues and maps](/concepts/queues-maps). Every run shows up in the
-[dashboard](/platform/dashboard) with its status, result, and logs.
+| Goal | Start here |
+| --- | --- |
+| Run a batch job or call Python remotely | [Functions](/concepts/functions) |
+| Serve an HTTP API or a FastAPI app | [Endpoints](/concepts/endpoints) |
+| Run a job on a schedule | [Schedules](/concepts/schedules) |
+| Host a container command or model server | [Pods](/concepts/pods) |
+| Execute generated code in a disposable container | [Sandboxes](/concepts/sandboxes) |
+| Keep datasets and model weights between runs | [Volumes](/concepts/volumes) |
+| Pass work items or share temporary state | [Queues and maps](/concepts/queues-maps) |
 
-## Where it runs
+The [examples](/examples/index) walk through GPU inference, training,
+document processing, a coding agent, and parallel data processing.
 
-Your workloads run on LazyCloud's compute by default, and you pay per second
-for what they use. On the Business plan you can also connect your own AWS account.
-You can join your own machines on every plan. See [Compute](/platform/compute) and
-[Plans and limits](/platform/plans).
+## Choose where it runs
 
-## Start here
-
-1. [Install the client](/getting-started/installation)
-2. [Deploy your first function](/getting-started/quickstart)
-3. [Serve your first endpoint](/getting-started/first-endpoint)
+LazyCloud supplies compute by default and charges per second while your
+containers run. You can also [join your own machines](/platform/compute#your-own-machines)
+or, on the Business plan, connect your AWS account. See
+[Plans and limits](/platform/plans) for billing and account limits.

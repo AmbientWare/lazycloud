@@ -163,6 +163,8 @@ export const workspaceQueryKeys = {
       ] as const,
   },
   collections: {
+    resource: (workspaceId: string, kind: "map" | "queue", name: string) =>
+      [...workspaceRoot(workspaceId), "collections", kind, name] as const,
     queueSize: (workspaceId: string, name: string) =>
       [...workspaceRoot(workspaceId), "collections", "queue", name, "size"] as const,
     queuePeek: (workspaceId: string, name: string) =>
