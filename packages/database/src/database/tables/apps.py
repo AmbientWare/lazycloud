@@ -204,6 +204,7 @@ class StubTable(IdPayloadTable, DatabaseBase):
             "workspace_id", "preparation_fingerprint", name="uq_stubs_preparation_fingerprint"
         ),
         Index("ix_stubs_workspace", "workspace_id"),
+        Index("ix_stubs_name_workspace", "name", "workspace_id"),
         Index(
             "ix_stubs_reusable_identity",
             "workspace_id",

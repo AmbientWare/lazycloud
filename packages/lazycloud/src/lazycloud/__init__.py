@@ -5,7 +5,6 @@ from shared.task_context import current_root_task_id, current_task_id
 from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
 
 from lazycloud import env, schema
-from lazycloud.abstractions import experimental
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.artifact import Artifact
 from lazycloud.abstractions.image import Image
@@ -85,7 +84,6 @@ __all__ = [
     "current_root_task_id",
     "current_task_id",
     "env",
-    "experimental",
     "output",
     "progress",
     "schema",

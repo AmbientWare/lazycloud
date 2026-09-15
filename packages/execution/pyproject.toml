@@ -1,7 +1,7 @@
 [project]
 name = "execution"
 version = "0.1.0"
-description = "Execution tasks, resource services, Redis maps/queues/signals, outputs, volumes, and planners."
+description = "Execution tasks, resource services, Redis maps/queues, outputs, volumes, and planners."
 requires-python = ">=3.12"
 dependencies = [
     "billing",

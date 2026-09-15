@@ -775,16 +775,22 @@ class ControlPlaneService:
             )
             if record is not None:
                 return record
-        records = (
-            repository.list(workspace_id=workspace_id)
-            if workspace_id is not None
-            else repository.list_across_workspaces()
-        )
-        record = _stub_by_name(records, stub_id_or_name)
+        record = StubRepository(session).get_by_name(stub_id_or_name, workspace_id=workspace_id)
         if record is None:
             msg = f"stub not found: {stub_id_or_name}"
             raise NotFoundError(msg)
         return record
+
+    def get_deployment_stub(
+        self, deployment_id: str, *, workspace: str | None
+    ) -> StubRecord | None:
+        with self.context.database.session() as session:
+            workspace_id = (
+                self.context.workspace(session, workspace).id if workspace is not None else None
+            )
+            return StubRepository(session).get_for_deployment(
+                deployment_id, workspace_id=workspace_id
+            )
 
     def list_stubs(
         self,
@@ -1596,13 +1602,6 @@ def _workspace_name_from(preferred: str) -> str:
 
 def _workspace_storage_available(storage: WorkspaceStorageConfig) -> bool:
     return bool(storage.bucket and storage.backend != "local")
-
-
-def _stub_by_name(records: list[StubRecord], name: str) -> StubRecord | None:
-    matching = [item for item in records if item.name == name]
-    if len(matching) > 1:
-        raise ConflictError(f"stub name is ambiguous; use a stub ID: {name}")
-    return matching[0] if matching else None
 
 
 def _limit_by_name(

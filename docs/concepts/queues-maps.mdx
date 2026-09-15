@@ -1,11 +1,11 @@
 ---
-title: "Queues, maps, and signals"
+title: "Queues and maps"
 description: "Shared state for coordinating work across containers."
 ---
 
-Use a queue to pass work items between processes, a map for temporary shared
-values, and a signal for notifications. Objects with the same name in the
-same workspace share data. Sign in before running these Python examples.
+Use a queue to pass work items between processes and a map for temporary shared
+values. Objects with the same name in the same workspace share data.
+Sign in before running these Python examples.
 
 ## Queue
 
@@ -48,29 +48,6 @@ del state["cursor"]
 
 Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
 days is also the maximum.
-
-## Send a signal
-
-A signal is a named flag one container sets and another checks. Use it to
-request a cache reload. The API is experimental and may change between releases.
-
-```python
-from lazycloud.abstractions.experimental import Signal
-
-reload_flag = Signal("reload-models")
-
-# Producer
-reload_flag.set(ttl=600)    # 600 seconds is the default
-
-# Consumer: check once
-response = reload_flag.monitor_once()
-
-reload_flag.clear()
-```
-
-For a long-running consumer, pass a `handler` and call
-`start_monitoring(poll_interval_seconds=1.0)`. Call `stop_monitoring()` when
-your consumer shuts down.
 
 ## Remove example state
 
