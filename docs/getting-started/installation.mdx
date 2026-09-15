@@ -3,24 +3,44 @@ title: "Installation"
 description: "Install the lazycloud Python SDK and CLI."
 ---
 
-The `lazycloud-client` package installs both the Python SDK (`import lazycloud`)
-and the `lazycloud` command. It needs Python 3.10 or newer.
+Install `lazycloud-client` in the environment where you write your code. It
+provides `import lazycloud` and the `lazycloud` command, and needs Python 3.10
+or newer.
+
+## Install in a project
+
+For a uv project:
+
+```bash
+uv add lazycloud-client
+```
+
+Run commands with `uv run lazycloud` and scripts with `uv run python`.
+The examples in these docs use `lazycloud` and `python` directly; add `uv run`
+when using a uv project.
+
+For an activated Python virtual environment:
+
+```bash
+python -m pip install lazycloud-client
+```
+
+## Install only the CLI
 
 ```bash
 uv tool install lazycloud-client
 ```
 
-or
-
-```bash
-pip install lazycloud-client
-```
+This makes `lazycloud` available in your shell. It does not install the SDK
+into the Python environment used by `python your_script.py`.
 
 Check the install:
 
 ```bash
 lazycloud --help
 ```
+
+## Upgrade
 
 Upgrade the installation you are running:
 
@@ -43,11 +63,10 @@ installer's pip command. The output identifies the installation and its environm
 path. `lazycloud update --check` reports the installed and latest versions without
 changing anything; use `uv run lazycloud update --check` to check a uv project.
 
-API responses tell the CLI which client version the server recommends. If yours
-is older, the CLI prints a `lazycloud update` hint once per command. The hint goes
-to stderr, including when you use `--json`. Requests continue normally.
+If the CLI recommends an update, run it in the same environment as the command
+you were using.
 
 The CLI keeps its sign-in state under `~/.lazycloud`. Set `LAZYCLOUD_HOME` to
 put it somewhere else.
 
-Next: [sign in and deploy a function](/getting-started/quickstart).
+Next, [sign in and run a function](/getting-started/quickstart).

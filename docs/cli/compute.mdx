@@ -5,8 +5,9 @@ description: "Inspect compute, connect an AWS account, join your own machines, a
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-See [Compute](/platform/compute) for what pools are and when you need any of
-this. Workloads run on LazyCloud's compute with no setup.
+Workloads use LazyCloud compute by default. Use these commands to inspect
+capacity or connect compute you own. Follow [Compute](/platform/compute)
+for setup and host requirements.
 
 ## lazycloud compute
 
@@ -21,7 +22,7 @@ lazycloud compute policy update --default-pool <pool>
 
 ## lazycloud cloud
 
-Connecting an AWS account needs the Team plan. The connection belongs to your
+Connecting an AWS account needs the Business plan. The connection belongs to your
 account and backs every workspace you own.
 
 ```bash
@@ -74,7 +75,7 @@ Read the [host requirements](/platform/compute#your-own-machines) first.
 
 ## lazycloud domain
 
-Custom domains need the Team plan.
+Custom domains are available on Team and Business plans.
 
 ```bash
 lazycloud domain add HOSTNAME       # prints the DNS records to create

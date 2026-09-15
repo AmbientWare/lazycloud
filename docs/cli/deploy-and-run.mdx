@@ -5,6 +5,10 @@ description: "Deploy, invoke, preview, and iterate on workloads from the CLI."
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
+Use `run` for a remote function call, `deploy` to publish workloads, and
+`serve` to preview an HTTP service while editing. `shell` and `dev` open
+remote development environments.
+
 ## lazycloud deploy
 
 ```bash
@@ -44,24 +48,27 @@ failure stops the command without undoing resources already deployed.
 lazycloud run HANDLER [ARGS]... [options]
 ```
 
-Calls a decorated function through `.remote()` with the given arguments and prints
-the result. This submits a remote task even though calling the same function
-directly in Python runs it in the current process.
-An argument that parses as JSON (a number, `true` or `false`, a list, an
-object) is passed as that value; anything else is passed as a string:
+Prepares and calls a decorated function remotely, shows its progress and logs,
+and prints the result. A separate deploy is not required for a local function
+call. JSON arguments become Python values; other arguments stay strings:
 
 ```bash
 lazycloud run quickstart.py:hello LazyCloud
-lazycloud run pipeline.py:process 42 '["a", "b"]' '{"dry_run": true}'
+lazycloud run reports.py:summarize_sales '[1200, 3500, 800]'
 ```
 
-Pass a pod to run it once with a command; pass a plain function with a
-`.run()` or `.remote()` method to call that.
+The second command uses the [functions example](/concepts/functions).
+Arguments are positional. Quote lists and objects so your shell passes them
+as one argument.
+
+Pass a pod to start an instance with a command. A plain Python callable runs
+locally, which lets an example coordinate remote calls. Objects with `.run()`
+or `.remote()` use those methods.
 
 Workflow progress and replayed remote logs go to stderr, leaving stdout for
 results. The CLI shows them even when redirected, including with `--json`.
 Build logs remain in terminal history instead of disappearing from the live
-display. Python `.remote()` calls are quiet unless you enable output; see
+display. Local Python `.remote()` calls also show output by default; see
 [Progress and logs](/concepts/functions#progress-and-logs).
 
 ## lazycloud serve
@@ -73,7 +80,8 @@ lazycloud serve HANDLER [--timeout <seconds>] [--resource <selector>] [options]
 Runs an endpoint or ASGI app on LazyCloud with a temporary URL and streams
 its logs. Your working directory is synced into the container as you edit;
 `--sync-dir <dir>` syncs a different one. `--timeout 0`, the default, serves
-until you interrupt it. `--container-port` maps the container port.
+until you interrupt it. `--container-port` maps the container port. Send
+requests from a second terminal and press Ctrl+C here to end the preview.
 
 ## lazycloud shell
 
@@ -97,8 +105,8 @@ it uses the managed Python image, or `--image` or `--dockerfile` if given.
 
 ## Workload options
 
-`deploy`, `run`, `serve`, `shell`, and `dev` accept these overrides. An option
-you leave out keeps what the decorator says.
+These flags vary by command and workload. Run `lazycloud COMMAND --help`
+for the flags that command accepts. An omitted option keeps the definition's value.
 
 | Option | What it does |
 | --- | --- |
@@ -108,11 +116,16 @@ you leave out keeps what the decorator says.
 | `--dockerfile <path>`, `--context <dir>` | Build from a Dockerfile instead. |
 | `--env KEY=VALUE` | Environment variable. Repeatable. |
 | `--secret <name>` | Workspace secret to inject. Repeatable. |
-| `--port <spec>` | Port to expose, as `8080` or `name=8080`. Repeatable. |
+| `--port <spec>` | Port to expose, as `8080` or `name=8080`. Repeatable. `serve` uses `--container-port`. |
 | `--keep-warm <seconds>` | Idle seconds a container stays up. |
 | `--tcp`, `--no-tcp` | Raw TCP ingress instead of HTTP. |
 | `--pool <name>` | Compute pool to run in. |
+| `--region <name>`, `--availability-zone <id>` | Placement overrides where supported. Availability-zone selection is available on `deploy`, `run`, and `shell`. |
 | `--preemptible`, `--no-preemptible` | Allow reclaimable capacity or require non-preemptible capacity (`deploy` and `run`). Workloads are preemptible by default. |
 | `--entrypoint <cmd>` | Container entrypoint override. |
+
+A direct function target rejects port, keep-warm, TCP, entrypoint, and resource
+overrides. Set function keep-warm on its decorator. To select a resource, pass
+an app to `deploy --resource`.
 
 <WorkspaceFlag />

@@ -7,8 +7,8 @@ import WorkloadOptions from '/snippets/workload-options.mdx';
 
 ## Endpoints
 
-`@app.endpoint` gives a Python callable an HTTP route. Arguments come from the
-request body and the return value is serialized as the response.
+Use `@app.endpoint` when another application needs to call your Python over
+HTTP. Save this as `api_demo.py`. It counts words in a JSON request:
 
 ```python
 from lazycloud import App, Image
@@ -17,9 +17,9 @@ app = App("api_demo")
 image = Image(python_version="3.12")
 
 
-@app.endpoint(name="predict", route="/predict", methods=["POST"], image=image)
-def predict(value: int = 7) -> dict[str, int]:
-    return {"input": value, "prediction": value + 1}
+@app.endpoint(name="count_words", route="/word-count", methods=["POST"], image=image)
+def count_words(text: str) -> dict[str, int]:
+    return {"words": len(text.split())}
 ```
 
 `route` defaults to `/` and `methods` to `GET` and `POST`. Endpoints default
@@ -29,27 +29,40 @@ with `concurrency=1`, `keep_warm=180`, `max_pending_tasks=100`, and
 
 ### Calling an endpoint
 
-`lazycloud deploy` prints the endpoint's URL. Send a bearer token for the
+Deploy it:
+
+```bash
+lazycloud deploy api_demo.py:count_words
+```
+
+The command prints the endpoint's URL. Send a bearer token for the
 workspace unless the endpoint sets `authorized=False`:
 
 ```bash
-curl -X POST "<endpoint-url>" \
+curl --fail --show-error "<endpoint-url>" \
   -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"value": 41}'
+  -d '{"text": "Run Python on LazyCloud"}'
 ```
+
+The response is `{"words": 4}`. Set `LAZYCLOUD_TOKEN` to an access token from
+Settings, then Tokens. See [the endpoint walkthrough](/getting-started/first-endpoint)
+for the complete sign-in and request steps. `authorized=False` allows anyone
+who has the URL to call the endpoint.
 
 The decorated object is a typed client too:
 
 ```python
-response = predict.request(41)                      # served preview if one is running, else deployed
-response = predict.target("deployed").request(41)
+from api_demo import count_words
+
+response = count_words.target("deployed").request("Run Python on LazyCloud")
 print(response.status_code, response.json())
 ```
 
 `target()` takes `"auto"`, `"served"`, or `"deployed"`, plus
 `deployment_name` and `deployment_version` to pin one deployment.
-`predict.local(41)` calls the plain function in your process.
+`count_words.request(...)` uses a served preview when one exists, otherwise the
+deployment. `count_words.local("some text")` calls the function in your process.
 
 ### Scaling
 
@@ -65,10 +78,11 @@ from lazycloud import QueueDepthAutoscaler
 
 
 @app.endpoint(
-    name="infer",
+    name="word-count-scaled",
     autoscaler=QueueDepthAutoscaler(min_containers=0, max_containers=8, tasks_per_container=2),
 )
-def infer(prompt: str) -> str: ...
+def count_words_scaled(text: str) -> dict[str, int]:
+    return {"words": len(text.split())}
 ```
 
 `checkpoint_enabled=True` snapshots a warmed worker so replacements restore
@@ -76,23 +90,31 @@ from it instead of cold-starting.
 
 ## ASGI applications
 
-`@app.asgi` deploys any ASGI callable. A FastAPI or Starlette instance is one,
-so apply the decorator to it directly:
+Use `@app.asgi` for an existing FastAPI or Starlette application with several
+routes. Save this complete example as `web_app.py`. Install FastAPI locally
+with `python -m pip install fastapi` so the CLI can import the file:
 
 ```python
 from fastapi import FastAPI
+from lazycloud import App, Image
 
+app = App("web_app")
 api = FastAPI()
-service = app.asgi(name="service", route="/")(api)
+
+
+@api.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+service = app.asgi(
+    name="service",
+    image=Image().add_python_packages(["fastapi"]),
+)(api)
 ```
 
-A raw `scope, receive, send` callable works the same way:
-
-```python
-@app.asgi(name="ping")
-async def ping(scope, receive, send) -> None:
-    await send({"type": "http.response.start", "status": 200, "headers": []})
-    await send({"type": "http.response.body", "body": b"ok"})
+```bash
+lazycloud deploy web_app.py:service
 ```
 
 ASGI apps take the endpoint options with two renamed: `concurrent_requests`
@@ -102,6 +124,7 @@ Call a deployed ASGI app with a full request:
 
 ```python
 response = service.request(method="GET", path="/health", target="deployed")
+print(response.json())
 ```
 
 `request()` accepts `method`, `path`, `json`, `data`, `headers`, `params`,
@@ -130,16 +153,19 @@ URL and streams logs, syncing your working directory into the container as you
 edit:
 
 ```bash
-lazycloud serve api_demo.py:predict
+lazycloud serve api_demo.py:count_words
 ```
 
 ## Custom domains
 
-On the Team plan, `domain="app.acme.com"` on an endpoint, ASGI app, or
+On Team and Business plans, `domain="app.example.com"` on an endpoint, ASGI app, or
 realtime handler serves it from a hostname you own. See
 [Custom domains](/platform/domains).
 
 ## Shared options
+
+To stop an endpoint, use `lazycloud deployment stop <name>`. Warm containers
+incur compute charges while they remain running.
 
 Endpoints, ASGI apps, and realtime handlers also accept `env`, `secrets`,
 `volumes`, an `on_start` hook that runs once per worker boot, `task_policy`,

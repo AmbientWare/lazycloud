@@ -1,8 +1,11 @@
 # Deployment runbook
 
-Commands for starting, inspecting, and recovering a deployment.
+Start with [local setup](README.md#local-environment) for Compose or
+[deployment creation](platform-deployment/LIFECYCLE.md) for a new hosted
+installation. The procedures here operate an existing deployment. Run commands
+from the repository root and confirm the selected environment before mutations.
 
-## Bring-up
+## Start a local deployment
 
 ```bash
 cd /path/to/lazycloud
@@ -14,13 +17,9 @@ release after the platform is healthy.
 
 ### Billing, before the first sign-in
 
-An installation that will charge anybody needs both of these before its first
-customer arrives. Signing in provisions a subscription and fails closed if it
-cannot, and a subscription resolves its prices by lookup key, so an account whose
-catalog is unpublished refuses **every** sign-in it receives, not only the ones
-that would have been billed. Usage is priced as it is recorded, so a window
-metered before the rates exist is written down as unpriced and charged nothing,
-and the deployment says so several times a second in `billing.span.unpriced`.
+Publish the billing catalog and rate history before admitting users. Missing
+catalog entries can block account provisioning. Usage recorded before rate
+publication remains unpriced until an operator prices that interval.
 
 A cluster deployment runs both from the chart on every sync, as the
 `billing-catalog` and `billing-rates` Jobs in
@@ -28,22 +27,15 @@ A cluster deployment runs both from the chart on every sync, as the
 work for the Compose stack, which has no Argo to run them.
 
 ```bash
-# Which account, and which kind of account. Dry run first: without --confirm
-# this only reads, and reports `live_mode` alongside what is missing.
-uv run lazycloud-admin billing publish-catalog --confirm-account acct_...
-uv run lazycloud-admin billing publish-catalog --confirm-account acct_... --confirm
+uv run --group workspace lazycloud-admin billing publish-catalog --confirm-account acct_...
+uv run --group workspace lazycloud-admin billing publish-catalog --confirm-account acct_... --confirm
 
-# Rates, at or before the first billable second. The dry run attempts the write
-# and rolls it back, so it answers whether the boundary would be accepted.
-uv run lazycloud-admin billing publish-rates
-uv run lazycloud-admin billing publish-rates --confirm
+uv run --group workspace lazycloud-admin billing publish-rates
+uv run --group workspace lazycloud-admin billing publish-rates --confirm
 ```
 
-Both are additive and idempotent, and both refuse rather than edit when what is
-already published disagrees. Running the rates twice at the same instant writes
-nothing the second time and says `already_published` for each rate, which is what
-lets the Job repeat. There is no un-publish for either, because a rate boundary
-is a figure customers are charged either side of.
+Preview both commands without `--confirm`, then publish after checking the
+target account and rates. They preserve published values and reject conflicts.
 `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` must be set before the first card is saved. The
 endpoint refuses every delivery without it, and Stripe disables endpoints that
 keep failing.
@@ -52,8 +44,8 @@ Usage metered before the rates were published stays unpriced. Nothing revisits
 it, so charge it with a window you name:
 
 ```bash
-uv run lazycloud-admin billing price-unpriced --from <iso> --to <iso>
-uv run lazycloud-admin billing price-unpriced --from <iso> --to <iso> --confirm
+uv run --group workspace lazycloud-admin billing price-unpriced --from <iso> --to <iso>
+uv run --group workspace lazycloud-admin billing price-unpriced --from <iso> --to <iso> --confirm
 ```
 
 The start cannot be older than the 35 days Stripe accepts meter events for; the
@@ -121,28 +113,10 @@ created once by hand, because PyPI allows one pending publisher per workflow and
 the two packages share one; ordinary publishers on existing projects have no
 such limit.
 
-`--arch` defaults to `amd64`, which is what AWS node classes consume. Building
-`arm64` needs binfmt registered first (`docker run --privileged tonistiigi/binfmt
---install arm64`), or the cross-architecture stage fails with `exec format
-error`.
-
-### Checking the deployment
-
-The command checks that `control-plane` and `scheduler` loaded the selected
-control, worker and host URLs and agree on `LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL`.
-Disagreement fails the check.
-
-It then prints each host's booted launch-template version beside the pool's
-recorded target, polling for a post-restart observation. Missing or stale host
-versions fail the report. This is host inventory, not proof that workers switched
-images or that workloads survived. Verify the target worker image on enrolled
-slots and run the public workload acceptance before declaring rollout complete.
-
-`--skip-restart` publishes and writes the pins without restarting the local
-stack. It skips the running-process and host checks.
-
-The API answers on host port **8000** (container port 9000). `docker compose port
-control-plane 9000` prints the mapping if it changes.
+See [release assets](aws-release-assets/README.md) for artifact validation
+and [agent builds](agent-binary/README.md) for architecture selection.
+The local API normally listens on port 8000; inspect the mapping with
+`docker compose port control-plane 9000`.
 
 ### Recreating the control plane
 
@@ -159,24 +133,21 @@ request stalls. See [connection gateway deployment](connection-gateway.md).
 
 In this order. Stop at the first step that answers the question.
 
-**1. The durable reason.** Always start here; it named every failure this
-platform has had.
+### Read the recorded failure
 
 ```bash
 docker compose exec -T postgres psql -U lazycloud -d lazycloud -x -c "
 select instance_id, status,
        payload->>'bootstrap_phase'          as phase,
-       payload->>'bootstrap_failure_reason' as reason,
-       payload->>'bootstrap_failure_detail' as detail
+       payload->>'bootstrap_failure_reason' as reason
 from compute_provider_instances
 order by created_at desc limit 5;"
 ```
 
-`reason` is a closed enum; `detail` is the excerpt the node sent with it. Treat
-`detail` as sensitive — a bootstrap log can carry a credential.
+The reason identifies the failure category. Read detailed bootstrap logs only
+in a private operator session; they may include sensitive data.
 
-**2. The durable event**, which carries the same excerpt and survives the
-instance row:
+### Read recent events
 
 ```bash
 docker compose exec -T postgres psql -U lazycloud -d lazycloud -x -c "
@@ -186,8 +157,10 @@ where resource_type = 'provider-instance'
 order by created_at desc limit 10;"
 ```
 
-**3. Console output.** The only diagnostic that survives a node which never
-reached userland — and it works on terminated instances.
+### Read EC2 console output
+
+Console output can explain a failure before the agent starts. Use the
+customer diagnostics role only for the designated acceptance account:
 
 ```bash
 CREDS=$(AWS_PROFILE=default-test-source aws sts assume-role \
@@ -200,8 +173,9 @@ export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)
 aws ec2 get-console-output --region us-east-1 --instance-id <i-...> --output text
 ```
 
-**4. A shell on the node**, via SSM. Requires the node to be running and its
-agent healthy enough to have registered with SSM.
+### Inspect the running node through SSM
+
+The node must be running and registered with SSM. Select its exact instance ID:
 
 ```bash
 aws ssm describe-instance-information --region us-east-1 \
@@ -227,12 +201,12 @@ directly; the control plane can replace them.
 To remove a customer's connected AWS capacity, disconnect the account:
 
 ```bash
-uv run lazycloud cloud disconnect --wait
+uv run --group workspace lazycloud cloud disconnect --wait
 ```
 
 This drains capacity across every workspace the account backs and removes its
 AWS authorization. Provisioning policy is defined in code; it has no customer
-CLI override. Inspect current instances with `uv run lazycloud compute instances`.
+CLI override. Inspect current instances with `uv run --group workspace lazycloud compute instances`.
 
 ## Public ingress
 
@@ -240,8 +214,7 @@ CLI override. Inspect current instances with `uv run lazycloud compute instances
 connector. Routes are in `deploy/public-ingress/cloudflared.yml`, not the
 dashboard; `deploy/public-ingress/README.md` owns mint and rotation.
 
-Separate connector health from edge routing before anything else — the two
-fail identically from outside:
+Check connector health before changing edge routing or DNS:
 
 ```bash
 docker compose exec -T control-plane python -c \
@@ -251,7 +224,7 @@ docker compose exec -T control-plane python -c \
 `readyConnections` above zero means the connector is fine and the problem is at
 the edge or in DNS. A `530`/`1033` with a healthy connector is DNS: the
 hostname's record is not a proxied CNAME to this tunnel. Read the zone through
-the API — `dig` cannot distinguish a flattened apex CNAME from an unrelated
+the API. `dig` cannot distinguish a flattened apex CNAME from an unrelated
 proxied A record.
 
 Repeated `control stream encountered a failure while serving` with every
@@ -313,7 +286,7 @@ tunnel, secrets and database are rendered from prod's own infrastructure descrip
 
 CI runs Helm validation and rendering, but only Argo installs workloads.
 
-Worker-image releases use the in-place worker-agent rollout introduced in #134.
+Worker-image releases update agents and workers in place.
 Host AMI changes still require node replacement. Verify running workload survival
 and placement latency during a release; Kubernetes readiness alone does not prove
 either. Do not assume every image release should replace every managed node.
@@ -336,7 +309,7 @@ passes, not that the process died.
 Which one is the first thing to establish:
 
 ```sh
-kubectl exec -n lazycloud deploy/scheduler -- \
+kubectl exec -n lazycloud-prod deploy/scheduler -- \
   sh -c 'for f in /tmp/lazycloud-scheduler.heartbeat.*; do echo "$f $(stat -c %Y "$f")"; done'
 ```
 
@@ -358,10 +331,9 @@ where started_at is not null and claimable_at is not null
 group by name order by avg_s desc;
 ```
 
-Before the loops were split this averaged 30s with a 918s worst case, because
-placement ran behind a synchronous Stripe drain in the same tick. A warm
-container answers in about 0.1s; anything in seconds is a cold start, and
-anything in tens of seconds is a loop that is not running.
+Compare placement delay with the same workload's baseline. Read the pending
+reason and scheduler loop timings to distinguish compute startup from a
+stalled scheduler.
 
 ### Spot capacity and replica placement
 
@@ -400,41 +372,32 @@ kubectl get --raw "/api/v1/nodes/<node>/proxy/metrics/resource" \
 ```
 
 `container_cpu_usage_seconds_total` is a counter. Sample it twice and divide by
-the wall time between the samples; a single reading is a lifetime average and
-hides everything that matters.
+the wall time between the samples; a single reading is cumulative CPU time, not current utilization.
 
-The failure this guards against does not look like a resource problem from
-outside. A starved node reports its requests at 75% while its CPU sits at 85%,
-every process keeps running, and what the user sees is Cloudflare returning 502
-because `cloudflared` could not run for long enough to answer a QUIC keepalive.
-Liveness probes timing out with `context deadline exceeded` across unrelated
-pods at once is the signal. One workload failing its own probe is that
-workload's problem; four failing together is the node.
+Probe timeouts across unrelated pods can indicate node contention. Compare
+CPU, memory, scheduling events, and connector logs before changing one
+workload's probes.
 
-### What a deployment runs, and what it does not
+### Hosted service dependencies
 
-`deploy/chart` is what a deployment runs, and it is not the local `compose.yaml`
-with pieces removed -- it is the same processes declared for a cluster. Images
-carry the tag of the commit that built them, which is safe because every ECR
-repository is created with immutable tags.
+`deploy/chart` defines the hosted processes. Images have immutable commit
+tags and the release selects their executable digests.
 
 | Not started | Served instead by |
 | --- | --- |
 | `postgres` | PlanetScale, through `LAZYCLOUD_DATABASE_URL` |
 | `otel-collector` | whatever `LAZYCLOUD_TELEMETRY_ENDPOINT` names |
-| `container-worker` | the connected-AWS pool the scheduler launches |
+| `container-worker` | enrolled agents on managed or joined compute |
 | `agent`, `agent-join-token` | a real joined machine |
 | `platform-unit`, `worker-token` | not needed; those feed the Compose fleet |
 | `redis` | ElastiCache, through `LAZYCLOUD_REDIS_URL`; a primary and a standby with automatic failover |
 
 ### The database connection string
 
-Use the **direct endpoint on 5432**, never PgBouncer. PlanetScale's managed
-PgBouncer is transaction-pooling only, and `ControlPlaneRecoveryFence` holds
-`pg_advisory_lock_shared` for the lifetime of a serving process. Behind a
-transaction pooler that lock is released when the backend is recycled, the fence
-stops fencing **without erroring**, and offline recovery can mint an
-administrator credential while replicas are still serving.
+Use `LAZYCLOUD_DATABASE_URL` on the transaction pooler at port 6432 for
+application queries. Set `LAZYCLOUD_DATABASE_DIRECT_URL` to port 5432 for
+migrations, administrator operations, and session advisory locks. Do not send
+session locks through transaction pooling. See [connection budgets](CONFIGURATION.md#postgresql-connections).
 
 ### Database query and egress watch
 
@@ -489,19 +452,11 @@ so a staging store cannot read prod's documents. No credential is ever in the
 chart or on the deployment branch: both are git, and a value committed there
 outlives every rotation.
 
-To rotate one, write the new value. Nothing else is needed -- the operator
-refreshes on its interval and the pods pick it up:
-
-```sh
-aws secretsmanager put-secret-value --secret-id lazycloud-prod/<name> --secret-string '<value>'
-```
-
-A workload that caches a credential at startup needs a restart to notice, which
-is a property of that process rather than of the rotation:
-
-```sh
-kubectl -n lazycloud-prod rollout restart statefulset/control-plane
-```
+For rotation, preserve unrelated JSON properties in the operator document.
+Refresh External Secrets and inspect its Ready condition and resource version.
+Then bump the affected `secretRevisions` in the chart and deploy. Environment
+variables and subPath mounts do not refresh in an existing pod. Verify an
+authenticated operation before retiring the predecessor credential.
 
 ### Connecting the platform account to its own fleet
 
@@ -509,14 +464,10 @@ See [Provider provisioning](PROVIDERS.md) for the common AWS/Hetzner flow and
 capacity lifecycle. The AWS-specific account registration below remains part
 of normal deployment; it is not a separate scheduler path.
 
-Shared capacity is a connected-AWS pool in the platform's own account, using the
-same managed flow a customer uses, which is what the control stack anticipates
-when it says a customer account can be this account. `deploy/platform-deployment`
-declares the fleet VPC, a subnet in each available standard AZ, the security group and the connection
-role, one set per deployment, and the `fleet-ensure` Job registers them through
-the public API after the control plane is serving. The connection role's policy
-is never hand-written: it is rendered from `provider_aws.connection_policy` into
-`connection-role-policy.json`, and CI fails on a stale copy.
+The `fleet-ensure` Job registers platform AWS networks and the connection
+role through the API after the control plane starts. Terraform owns those
+persistent resources. The scheduler owns the capacity launched through them.
+Generate the connection-role policy from `provider_aws.connection_policy`.
 
 Review the Terraform plan before expanding an existing fleet network. Existing
 subnets and their CIDRs must remain unchanged; new AZs add subnets and route table
@@ -532,48 +483,31 @@ for additions without replacing existing subnets.
 | Secret | Where it lives | Rotate by |
 | --- | --- | --- |
 | Tunnel issuer and gateway bootstrap credential | Local CA volume/private environment or production operator secret document | Bootstrap once with `deploy.tunnel_identity`; plan CA trust rotation separately. Leaf certificates renew automatically. |
-| Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel — see `deploy/public-ingress/README.md` |
-| Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. **Not a deployment value** — nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
+| Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel. see `deploy/public-ingress/README.md` |
+| Cloudflare API token (operator) | operator shell only, `CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Tunnel:Edit, DNS:Edit, Zone:Read. Not a deployment value. nothing in the stack reads it and it is absent from `.env.example`. It authenticates `deploy/cloudflare` and hand-run API calls. |
 | Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
 | Stripe webhook signing secret | `.env`, `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` | Returned only when the endpoint is created. Replace the endpoint through `deploy/stripe`, take the new output, recreate `control-plane`. |
 | Stripe API key | `.env`, `LAZYCLOUD_STRIPE_API_KEY` | Roll the restricted key in the Stripe dashboard, update `.env`, recreate `control-plane`. |
 | Resend webhook secret | `.env`, `LAZYCLOUD_RESEND_WEBHOOK_SECRET` | Returned only when the endpoint is created. Re-register `POST /webhooks/resend` in the Resend dashboard, take the new secret, recreate `control-plane`. Mail keeps sending without it; only delivery reporting stops. |
 | Resend API key | `.env`, `LAZYCLOUD_RESEND_API_KEY` | Read by the scheduler, which sends the mail; the control plane only queues it. Create a new key in the Resend dashboard, update `.env`, recreate `scheduler`, then delete the old key. Queued messages are durable, so mail queued during the gap goes out after it. |
 
-Legacy credentials from the superseded architecture live outside the repo at
-`~/.lazycloud-legacy-secrets/secrets-backup/`. They are **not** rotated. Anything
-still live there (AWS keys, Cloudflare, WorkOS, Polar, Resend, Depot, Upstash,
-Prefect) should be rotated and the directory deleted.
-
 ## Irreversible actions
 
 Confirm the target belongs to the task before each of these. None can be undone.
 
-- **Deleting the tunnel issuer key.** Existing certificates stop renewing.
+- Deleting the tunnel issuer key. Existing certificates stop renewing.
   Preserve the issuer until a planned trust rotation reaches every agent.
-- **Deleting a customer connection stack.** Removes the roles the control plane
+- Deleting a customer connection stack. Removes the roles the control plane
   assumes; the connection must be re-established from scratch.
-- **Deleting launch-template versions.** The pool cannot roll back to a template
+- Deleting launch-template versions. The pool cannot roll back to a template
   version that no longer exists.
-- **`ssm:SendCommand`.** Arbitrary code on a running customer node.
 
-## Not yet covered
+## Telemetry
 
-- **Alerting.** A deployment now exports to a real backend:
-  `deploy/telemetry/collector.deploy.yaml` replaces the debug exporter with an
-  OTLP one, and the collector holds the backend credential because
-  `TelemetrySettings` has no headers field — a process can push OTLP but cannot
-  authenticate to a hosted backend. Set `telemetry-backend-endpoint`,
-  `-username` and `-password` in Secrets Manager.
+Configure the collector's OTLP backend and credentials through the deployment's
+secret bindings. Inspect collector errors and confirm metrics arrive at the
+backend after a rollout. A healthy API does not prove telemetry delivery.
 
-  What is still missing is what the numbers should mean. Alert thresholds come
-  after there is history to read them against.
-
-  Only `control-plane` and `scheduler` export. They are the two processes that
-  call `setup_telemetry`, and between them they record every platform metric —
-  the container worker publishes its container metrics through the worker
-  repository instead, on a path that does not use the meter.
-
-  A missing telemetry credential is deliberately not fatal. The collector cannot
-  export and says so; the control plane keeps serving, because an exporter that
-  cannot reach a receiver drops the batch rather than failing the process.
+Use query latency, placement delay, task failures, and gateway reconnects to
+set alerts against measured normal traffic. Workers report container metrics
+through the worker repository.

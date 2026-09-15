@@ -1,4 +1,14 @@
-"""Plan a bounded code patch remotely and test it in an isolated Sandbox."""
+"""Ask a model to fix calculator.add and test its patch in a sandbox.
+
+Configure provider secrets using ``docs/examples/sandboxed-coding-agent.mdx``,
+then run from the repository root:
+
+    lazycloud deploy examples.sandboxed_coding_agent.app:app
+    lazycloud run examples.sandboxed_coding_agent.app:run_agent
+
+Read ``tests_passed`` and ``test_output`` in the result. The sandbox terminates
+after the test, and the seed files in your checkout remain unchanged.
+"""
 
 from __future__ import annotations
 

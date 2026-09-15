@@ -9,13 +9,13 @@ const QUICKSTART_STEPS = [
     commands: ["uv tool install lazycloud-client", "lazycloud login"],
   },
   {
-    title: "Create and deploy",
+    title: "Create a function",
     detail: "Quickstart writes quickstart.py with one function.",
-    commands: ["lazycloud quickstart", "lazycloud deploy quickstart.py:hello"],
+    commands: ["lazycloud quickstart"],
   },
   {
     title: "Run the function",
-    detail: "The first task will appear here with its output and logs.",
+    detail: "Your terminal shows progress and logs, then prints hello LazyCloud.",
     commands: ["lazycloud run quickstart.py:hello 'LazyCloud'"],
   },
 ] as const;
@@ -29,10 +29,10 @@ export function QuickstartEmptyState() {
             <Boxes className="size-5" aria-hidden="true" />
           </div>
           <h2 className="mt-8 max-w-md text-2xl font-semibold tracking-tight text-foreground">
-            Deploy your first app
+            Run your first function
           </h2>
           <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            Run these commands in your terminal to deploy and call a Python function.
+            Run these commands in your terminal to execute Python on LazyCloud.
           </p>
         </div>
       </div>

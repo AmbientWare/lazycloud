@@ -1,11 +1,13 @@
-"""One production app covering every public deployable workload kind.
+"""Try functions, HTTP services, a schedule, and containers in one app.
 
 Deploy the app from the repository root:
 
-    uv run lazycloud deploy examples.all_workloads:app --workspace default
+    lazycloud deploy examples.all_workloads:app
+    lazycloud run examples.all_workloads:run_function 7
 
-Then use the named helpers with ``lazycloud run`` to create representative
-Runs. See ``examples/README.md`` for the complete command list.
+The result is 49. The heartbeat runs every minute and the pod stays running;
+use ``lazycloud app pause all_workloads`` when finished. See
+``examples/README.md`` for the other helpers and cleanup of on-demand containers.
 """
 
 from __future__ import annotations
@@ -252,8 +254,7 @@ web = app.pod(
     ports={"http": 8080},
     cpu=0.25,
     memory="128Mi",
-    # -1 holds the pod up rather than releasing it when idle, so it never
-    # scales to zero and never answers a request from a cold boot.
+    # Keep the server available until its deployment is stopped.
     keep_warm=-1,
 )
 

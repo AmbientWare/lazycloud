@@ -1,13 +1,14 @@
 """Serve a small instruction model through vLLM's OpenAI-compatible API.
 
-Deploy this module from the repository root with::
+Create the model cache, then deploy from the repository root:
 
+    lazycloud volume create vllm-model-cache
     lazycloud deploy examples.openai_compatible_llm.app:app \
         --resource pod:openai-server
 
-The official vLLM image contains every model-serving dependency. Importing
-this module only declares LazyCloud resources and does not download the model
-or contact a control plane.
+Use the printed URL with a LazyCloud bearer token to call ``/v1/chat/completions``.
+Stop GPU charges with ``lazycloud deployment stop openai-server`` when finished.
+The full request and cache cleanup are in ``docs/examples/openai-compatible-llm.mdx``.
 """
 
 from __future__ import annotations

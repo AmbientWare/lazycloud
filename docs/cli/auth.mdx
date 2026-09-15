@@ -5,6 +5,8 @@ description: "Sign the CLI in, choose a workspace, and manage stored credentials
 
 ## lazycloud login
 
+Sign in once on your machine:
+
 ```bash
 lazycloud login
 ```
@@ -12,13 +14,14 @@ lazycloud login
 Prints a link and a code. Approve it in the browser and the CLI is signed in
 as you. See [Sign-in and workspaces](/platform/auth).
 
-For CI, pass an access token instead:
+For CI, configure `LAZYCLOUD_TOKEN` through your CI secret store and set
+`LAZYCLOUD_WORKSPACE` to the target workspace. No login step is needed.
+To save an existing environment token in a local profile:
 
 ```bash
-lazycloud login --token <token> [--workspace <name>]
+lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <name>
 ```
 
-Or set `LAZYCLOUD_TOKEN` in the environment and skip `login` entirely.
 `--profile <name>` saves the sign-in under a named profile, and
 `--no-activate` saves it without switching to it.
 
@@ -36,6 +39,7 @@ lazycloud workspace rename NAME     # renames the current workspace
 ## lazycloud profile
 
 Profiles hold separate sign-ins. One is active at a time.
+Switching workspaces within one account does not need a new profile.
 
 ```bash
 lazycloud profile list

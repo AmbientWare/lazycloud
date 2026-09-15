@@ -1,3 +1,14 @@
+"""Summarize Parquet partitions in an S3 bucket with parallel remote calls.
+
+Set bucket paths and credentials using ``docs/examples/parallel-parquet-s3.mdx``.
+From the repository root, create and process four ten-row sample partitions:
+
+    lazycloud run examples.parallel_parquet.app:run_batch true 4 10 false
+
+The result includes row counts, task IDs, and the summary's object key. Rerun
+with ``false`` to process existing files without replacing the seed data.
+"""
+
 from __future__ import annotations
 
 import json

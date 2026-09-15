@@ -1,4 +1,9 @@
-# Provider provisioning
+# Provision worker capacity
+
+Use the workflow below to add or update platform-owned provider capacity.
+For customer AWS connections, use the [public compute guide](../docs/platform/compute.mdx).
+Keep the provider credentials and image identities available until its workers
+have finished draining and cleanup is verified.
 
 Platform purchases require a 30% margin at full sellable CPU, RAM and GPU
 capacity. Compute subtracts scheduler headroom and includes supplier compute,
@@ -27,7 +32,7 @@ the scheduler must not compete to set the same fleet's size. Customer-owned
 AWS onboarding remains a separate account-authorization workflow; once resolved,
 its capacity implements the same provider interface as platform capacity.
 
-## One operator workflow
+## Deploy provider changes
 
 1. Prepare provider credentials and host images. Keep credentials in the
    deployment's operator secret, not Terraform inputs or image artifacts.
@@ -156,10 +161,10 @@ Acceptance uses the real provider to create, enroll, run, reuse, bill, drain,
 and delete capacity. Cover uncertain creates, enrollment replay, restarts,
 expired credentials, and exact cleanup. GCP and Azure are not supported today.
 
-## Current rollout and verification
+## Verify a rollout
 
-The owner approved merge and deployment after release checks, with one adaptive
-Ashburn warm CPU baseline and all other platform pools cold from startup.
+Read the current provider definitions and `compute.fleet_policy` before
+choosing acceptance workloads. Warm targets and eligible shapes can change.
 
 After rollout, submit small and larger CPU/memory jobs to prove reuse and
 resource-based node selection, then an AWS GPU job. Poll durable units,
@@ -172,8 +177,8 @@ Use a billing-enabled account for workload checks. An administrator token does
 not bypass billing admission. A billing refusal must finish the image build as
 failed with its reason and clean up dispatch credentials, not keep retrying.
 
-Host-image preparation has passed. Full live workload acceptance is outstanding.
-Check CI for the exact release commit. Local owner checks do not establish either.
+Record the release commit and the live scenarios that passed. Image-build
+checks alone do not prove workload execution or cleanup.
 
 For teardown, stop new workload admission, lower warm floors, and drain through
 the compute service before removing credentials or persistent infrastructure.

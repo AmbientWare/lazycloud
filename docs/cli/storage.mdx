@@ -5,6 +5,9 @@ description: "Manage volumes, move files, and manage workspace secrets."
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
+Use volumes for files your workloads share and artifacts for downloadable task
+output. Both belong to the selected workspace.
+
 ## lazycloud volume
 
 ```bash
@@ -26,12 +29,16 @@ lazycloud mv ORIGINAL_PATH NEW_PATH
 ```
 
 ```bash
-lazycloud ls models/checkpoints
+lazycloud volume create models
 lazycloud cp model.safetensors lazycloud://models/checkpoints/model.safetensors
+lazycloud ls models/checkpoints
 lazycloud cp lazycloud://models/checkpoints/model.safetensors ./model.safetensors
 lazycloud mv models/checkpoints/model.safetensors models/archive/model.safetensors
-lazycloud rm models/archive/model.safetensors
 ```
+
+This uploads a local checkpoint, downloads a copy, and archives the remote file.
+To remove the archived file, run `lazycloud rm models/archive/model.safetensors`.
+Deleting a volume removes all its files; download what you need first.
 
 ## lazycloud secret
 
@@ -47,5 +54,18 @@ lazycloud secret delete NAME
   A value typed on the command line lands in your shell history. Read it from
   a variable or a file instead: `lazycloud secret create OPENAI_API_KEY "$OPENAI_API_KEY"`.
 </Warning>
+
+## lazycloud artifact
+
+Find reports saved by tasks and inspect their storage use:
+
+```bash
+lazycloud artifact list --search report
+lazycloud artifact usage
+```
+
+Use `lazycloud artifact delete <artifact-id>` to remove a saved file. Lists
+return a `next` cursor; pass `--cursor <cursor>` for another page. See
+[Artifacts](/concepts/artifacts) for downloads and retention.
 
 <WorkspaceFlag />

@@ -1,48 +1,50 @@
 ---
-title: "Dashboard"
-description: "What each part of the dashboard at lazycloud.dev shows."
+title: "Use the dashboard"
+description: "Find run results, test an API, manage stored files, and check your spending."
 ---
 
-The dashboard at [lazycloud.dev](https://lazycloud.dev) is where you sign in,
-approve CLI logins, watch your workloads, and manage your account.
+Open [the dashboard](https://lazycloud.dev/dashboard) and choose your workspace
+from the menu at the top.
 
-## Workspace pages
+## Find a result or investigate a failure
 
-Apps lists every app in the workspace with its workloads, recent activity, and
-version history. From an app you can pause, resume, scale, and delete
-workloads, inspect pod instances, watch latency, and call a workload from the
-browser with the request playground.
+Open Tasks and select the run. Its detail view shows status, timing, retries,
+the result or error, and logs. For a task that is still pending, check the
+displayed reason before retrying it.
 
-Tasks is the workspace's task history. Each task shows its status, timing,
-retries, result, and logs.
+You can also open an app to find its workloads and recent activity.
 
-Storage holds volumes, secrets, and the queue and map collections, with a
-browser for each and links back to the workloads that use them.
+## Test or stop a deployed service
 
-Sandboxes are listed under their app, with an in-browser terminal, a file
-browser, and a process list for each running one.
+Open the workload under Apps and use the request playground to send input.
+Use its controls to scale, pause, resume, or delete it. Pausing is useful when
+you want to stop serving without removing the definition.
 
-Usage shows spend over time, broken down by app and workload. It answers for
-the account, so the figure is the same whichever workspace you are in.
+For a running sandbox, open its terminal, file browser, or process list from
+the app page.
 
-## Settings
+## Retrieve files
 
-Settings opens over the current page and is about your account rather than a
-workspace.
+Storage contains volumes, artifacts, secrets, queues, and maps. Use the
+volume browser for shared files and the artifact browser for task output.
+Artifact downloads and public URLs are subject to
+[retention](/concepts/artifacts#retention).
 
-General shows your GitHub identity and your plan: what is included, what you
-have used, how many containers are running against your limit, and the buttons
-to manage the subscription and payment method.
+## Check spending
 
-Tokens creates and deletes access tokens for the CLI, CI, and direct API calls.
+Usage shows account spending by app and workload. The account total is the
+same across workspaces you own.
 
-Compute is where you connect an AWS account, adjust what it may launch, and
-join your own machines. See [Compute](/platform/compute).
+Open Settings, then Billing to check your balance, payment method, plan, and
+monthly usage limit. See [Plans and limits](/platform/plans) for what happens
+when a limit is reached.
 
-Domains registers hostnames you own. See [Custom domains](/platform/domains).
+## Manage access and compute
 
-Workspace creation, renaming, and members are in the workspace menu at the top
-of the page. Members opens the list, where an owner or administrator invites by
-email, changes roles, resends or withdraws an invitation, and removes people. An
-invitation you receive is a link in the email; opening it joins as the account
-you are signed in as.
+In Settings, Tokens creates access tokens for scripts and direct HTTP calls.
+Compute connects an AWS account or joins a machine.
+Domains registers a hostname for your API.
+
+Use the workspace menu to create or rename a workspace and manage members.
+Check which account you are signed in as before opening an invitation link;
+accepting joins that account to the workspace.

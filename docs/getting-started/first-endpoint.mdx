@@ -1,73 +1,87 @@
 ---
-title: "Your first endpoint"
-description: "Turn a typed Python callable into an HTTP endpoint and call it."
+title: "Serve your first endpoint"
+description: "Deploy an HTTP API, send a request, and read its JSON response."
 ---
 
-An endpoint is a Python callable with an HTTP route. Requests map to arguments,
-the return value becomes the response, and warm workers stay up between calls.
+You'll deploy a POST endpoint that counts words in text. Start with the
+[client installed](/getting-started/installation) and `lazycloud login` complete.
 
 ## Write the endpoint
 
-Save this as `api_demo.py`:
+Save this as `text_api.py`:
 
 ```python
-from lazycloud import App, Image
+from lazycloud import App
 
-app = App("api_demo")
-image = Image(python_version="3.12")
+app = App("text_api")
 
 
-@app.endpoint(name="predict", route="/predict", methods=["POST"], image=image)
-def predict(value: int = 7) -> dict[str, int]:
-    return {"input": value, "prediction": value + 1}
+@app.endpoint(name="word-count", route="/count", methods=["POST"])
+def count_words(text: str) -> dict[str, int]:
+    return {"words": len(text.split())}
 ```
 
-## Preview it
+LazyCloud maps the JSON request body to the function's arguments and returns
+the dictionary as JSON.
 
-`lazycloud serve` runs the endpoint on LazyCloud with a temporary URL and
-streams its logs to your terminal. It keeps your working directory synced into
-the container as you edit, so this is the fastest way to iterate:
+## Deploy and call it
 
 ```bash
-lazycloud serve api_demo.py:predict
+lazycloud deploy text_api.py:count_words
 ```
 
-## Deploy it
+Copy the endpoint URL from the output. Endpoints require a bearer token by
+default. Create an access token in Settings, then Tokens in the dashboard.
+In Bash, read it without putting the value in shell history:
 
 ```bash
-lazycloud deploy api_demo.py:predict
-```
-
-The deploy output prints the endpoint's URL. Endpoints require a bearer token
-by default. Create one in the dashboard under Settings, then Tokens, and send
-it in the `Authorization` header:
-
-```bash
-curl -X POST "<endpoint-url>" \
+read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
+export LAZYCLOUD_TOKEN
+export ENDPOINT_URL="<endpoint-url>"
+curl --fail --show-error "$ENDPOINT_URL" \
   -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"value": 41}'
+  -d '{"text": "Run Python on LazyCloud"}'
 ```
 
-Set `authorized=False` on the decorator to make the endpoint public.
+The response is `{"words": 4}`. Browser sign-in does not export
+`LAZYCLOUD_TOKEN` for curl.
 
-## Call it from Python
+## Edit with a preview
 
-The decorated object is also a typed client. `.request(...)` calls the served
-or deployed endpoint and returns a response with `status_code` and `json()`:
+When changing the code, use a temporary preview:
+
+```bash
+lazycloud serve text_api.py:count_words
+```
+
+Keep this terminal open. The command shows the preview URL and logs, and
+syncs your edits. Send requests from a second terminal using that URL.
+Press Ctrl+C to end the preview. Deploy again when you want the saved
+deployment to use your changes.
+
+## Call from Python
+
+With `text_api.py` in your project, the decorated function is also a client:
 
 ```python
-response = predict.target("deployed").request(41)
+from text_api import count_words
+
+response = count_words.target("deployed").request("Run Python on LazyCloud")
 print(response.status_code, response.json())
 ```
 
-## Manage it
+The SDK uses your configured LazyCloud credentials.
+
+## Stop the endpoint
+
+When you're finished:
 
 ```bash
-lazycloud deployment list --app api_demo
-lazycloud deployment scale predict --containers 2
-lazycloud deployment stop predict
+lazycloud deployment stop word-count
 ```
 
-See [Endpoints](/concepts/endpoints) for workers, concurrency, keep-warm,
-autoscaling, ASGI apps, and realtime handlers.
+Use `lazycloud deployment start word-count` to restart it, or
+`lazycloud deployment delete word-count` to remove the deployment.
+
+See [Endpoints](/concepts/endpoints) for scaling, public access, and FastAPI apps.

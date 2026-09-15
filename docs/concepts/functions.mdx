@@ -1,177 +1,195 @@
 ---
 title: "Functions"
-description: "Run a Python callable on remote compute with retries, timeouts, secrets, volumes, and lifecycle hooks."
+description: "Call Python remotely, process batches, and submit work in the background."
 ---
 
 import WorkloadOptions from '/snippets/workload-options.mdx';
 
-Use `@app.function` for Python that should run remotely and does not need an
-HTTP route. The decorated object keeps the callable's argument and return
-types.
+Use a function for work that returns a result, such as processing a file,
+running inference, or generating a report. Add `@app.function` and call it
+with `.remote()` or `lazycloud run`.
+
+## Run a function
+
+Save this as `reports.py`:
 
 ```python
-from lazycloud import App, Image
+from lazycloud import App
 
 app = App("reports")
-image = Image(python_version="3.12").add_python_packages(["pandas"])
 
 
-@app.function(image=image, cpu=2.0, memory="1Gi", timeout_seconds=600, retries=2)
-def build_report(month: str) -> dict[str, str]:
-    return {"month": month, "status": "built"}
+@app.function(cpu=1, memory="256Mi", timeout_seconds=60, retries=0)
+def summarize_sales(amounts_cents: list[int]) -> dict[str, int]:
+    print(f"Summarizing {len(amounts_cents)} sales", flush=True)
+    return {"sales": len(amounts_cents), "total_cents": sum(amounts_cents)}
+
+
+if __name__ == "__main__":
+    print(summarize_sales.remote([1200, 3500, 800]))
 ```
 
-Deploy it with `lazycloud deploy reports.py:build_report` or
-`build_report.deploy()`.
-
-## Call it
-
-```python
-build_report("2026-06")           # runs in the current process
-build_report.local("2026-06")     # same as the direct call
-build_report.remote("2026-06")    # runs on LazyCloud and returns the result
-
-handle = build_report.spawn("2026-06")   # returns a FunctionCall without waiting
-handle.task_id
-handle.get()                             # waits for the value
-
-for result in build_report.map(["2026-05", "2026-06"]):   # one task per input
-    ...
-handles = build_report.spawn_map(["2026-05", "2026-06"])
+```bash
+lazycloud run reports.py:summarize_sales '[1200, 3500, 800]'
 ```
 
-Direct calls and `.local()` execute the Python callable in the current process,
-both on your machine and inside a LazyCloud container. They do not build an image,
-submit a task, or apply the decorator's remote configuration and lifecycle hooks.
-With `python script.py`, a decorated `main()` called under
-`if __name__ == "__main__":` runs in that Python process.
+The command shows progress and logs, then returns three sales totaling 5500
+cents. It prepares the image and uploads your source automatically.
+You can also run `python reports.py` with the SDK installed.
 
-Use `.remote()` to submit a remote task, including when calling another function
-from a cloud task. For a decorated async function, direct calls and `.local()`
-return a coroutine to await in the current process.
-
-`async_remote` and `async_spawn` are the awaitable forms. A `FunctionCall`
-carries the task id; see [Tasks and logs](/concepts/tasks-and-logs) for
-results, waiting, and logs.
-
-From the CLI, `lazycloud run reports.py:build_report 2026-06` submits one remote call
-and prints the result. An argument that parses as JSON is passed as that
-value; anything else is a string.
-
-## Progress and logs
-
-Python `.remote()` calls show image-build logs, source-upload progress, task
-status, and the function's stdout and stderr by default when run locally,
-including in notebooks and CI. Calls from LazyCloud containers stay quiet by
-default. `async_remote()` uses the same output settings.
-
-Progress and replayed remote logs go to stderr. Return values are not printed
-automatically, and your own `print()` calls still write to stdout.
-
-Use `output(enabled=False)` to silence a block. `output()` enables output,
-including inside a LazyCloud container:
+## Choose how to call it
 
 ```python
-from lazycloud import output
+from reports import summarize_sales
 
-result = build_report.remote("2026-06")
-with output(enabled=False):
-    result = build_report.remote("2026-07")
-
+result = summarize_sales.remote([1200, 3500, 800])
 print(result)
 ```
 
-The setting applies to functions created before the block too. Nested blocks
-restore the enclosing setting when they exit, even after an exception. Async
-tasks inherit the setting when created; changing it in one task does not change
-another task's setting.
+`.remote()` submits a task and returns its result. For async code, use
+`await summarize_sales.async_remote(...)`.
 
-Quiet output does not suppress exceptions or disable stored logs.
-Detached calls such as `.spawn()` do not keep following logs after submission;
-read them through [Tasks and logs](/concepts/tasks-and-logs).
+Calling `summarize_sales(...)` or `summarize_sales.local(...)` runs in the
+current Python process. Local calls do not use the image, mounted volumes,
+secrets, retries, or lifecycle hooks from the decorator.
 
-## Sizing, timeouts, and retries
+When one remote function calls another with `.remote()`, the callee must
+already be deployed. Deploy the app containing both before running the parent:
 
-Functions default to `cpu=0.125`, `memory="128Mi"`, `timeout_seconds=3600`,
-and `retries=3`.
+```bash
+lazycloud deploy reports.py:app
+```
 
-`timeout_seconds` caps one invocation. A run that exceeds it ends with status
-`timeout`. `retries` is the number of attempts after a failure, with
-`retry_delay_seconds` between them. For backoff, pass a `RetryPolicy`:
+## Process several inputs
+
+`.map()` submits one task per input and yields results in input order:
 
 ```python
+from reports import summarize_sales
+
+for result in summarize_sales.map([([1200, 3500],), ([800, 900],)]):
+    print(result)
+```
+
+Each tuple holds the arguments for one call. Here, each call takes one list.
+A failed task yields `None`. If every item must succeed before you use the
+batch, use `spawn_map()` and check each outcome:
+
+```python
+calls = summarize_sales.spawn_map([([1200, 3500],), ([800, 900],)])
+outcomes = [call.result(wait=True) for call in calls]
+for outcome in outcomes:
+    if not outcome.ok:
+        raise RuntimeError(outcome.error or "Sales summary failed")
+print([outcome.value for outcome in outcomes])
+```
+
+See [Parallel Parquet processing](/examples/parallel-parquet-s3) for a
+complete batch workflow that writes output only after every task succeeds.
+
+## Submit work in the background
+
+```python
+from reports import summarize_sales
+
+call = summarize_sales.spawn([1200, 3500, 800])
+print(call.task_id)
+```
+
+`.spawn()` returns a `FunctionCall` without waiting for the result.
+Use `call.get()` when you need the value, or retrieve it later with
+`lazycloud task result <task-id>`. `async_spawn()` is the awaitable form.
+
+## Progress and logs
+
+Local `.remote()` calls and `lazycloud run` show image-build progress,
+source uploads, task status, and remote stdout and stderr. Use a separate
+[log command](/concepts/tasks-and-logs) when revisiting a run or following
+background work.
+
+Progress and remote logs go to stderr. The CLI prints the result to stdout;
+Python returns it to your caller. To suppress progress in a Python block:
+
+```python
+from lazycloud import output
+from reports import summarize_sales
+
+with output(enabled=False):
+    result = summarize_sales.remote([1200, 3500, 800])
+print(result)
+```
+
+Calls made inside LazyCloud containers are quiet by default. `with output():`
+enables their output. Silencing output leaves exceptions and stored logs intact.
+
+## Choose resources and retry behavior
+
+Set `cpu`, `memory`, and, for GPU work, `gpu` and `gpu_count` on the
+decorator. Defaults are `cpu=0.125`, `memory="128Mi"`,
+`timeout_seconds=3600`, and `retries=3`.
+
+`timeout_seconds` caps each invocation. `retries` sets the number of
+additional attempts after failure. Make writes safe to repeat before enabling
+retries. Use a retry policy for exponential backoff:
+
+```python
+import urllib.request
+
 from lazycloud import RetryBackoff, RetryPolicy
 
 
 @app.function(
     retry_policy=RetryPolicy(
         max_attempts=4,
-        delay_seconds=2.0,
+        delay_seconds=2,
         backoff=RetryBackoff.Exponential,
-        max_delay_seconds=30.0,
+        max_delay_seconds=30,
     ),
 )
-def flaky_ingest(url: str) -> int: ...
+def fetch_text(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        return response.read().decode("utf-8")
 ```
 
 ## Warm containers and concurrency
 
-A container stays up for `keep_warm` seconds after a call finishes, 10 by
-default, so a call arriving inside that window reaches an interpreter that has
-already imported your code and run `on_start`. Set `keep_warm=0` to retire a
-container as soon as it goes idle.
+`keep_warm` keeps an idle container available between calls, for 10 seconds
+by default. Set it to `0` to release the container when idle. Warm containers
+continue to incur compute charges.
 
-`concurrency` is how many calls one container serves at once. Each slot runs
-in its own process by default, so calls cannot disturb each other and CPU-bound
-work runs in parallel.
+`concurrency` sets how many calls a container handles at once. By default,
+each slot uses its own process. `in_process=True` shares one interpreter,
+which can avoid loading a GPU model once per process. CPU-bound Python code
+in those slots contends for the GIL.
 
-`in_process=True` puts the slots in one interpreter instead. Use it when the
-slots must share something a process cannot duplicate. A model loaded onto a
-GPU by `on_start` is loaded once and served by every slot; with separate
-processes, four slots would try to load four copies. The trade is Python's:
-CPU-bound handlers contend for the GIL, so it suits work that waits on a
-device, a network call, or a library that releases the lock.
-
-```python
-@app.function(gpu="a100-80", gpu_count=1, concurrency=8, in_process=True, on_start=load_model)
-def embed(text: str) -> list[float]:
-    return MODEL.encode(text).tolist()
-```
-
-Inside a handler, read the current task id with `lazycloud.current_task_id()`.
-Several calls can share one environment, so the `TASK_ID` environment variable
-is not per call.
-
-`max_pending_tasks` caps how many calls a function has in flight; a call past
-the cap is refused with a capacity error rather than queued.
-
-Queue-depth autoscaling adds containers when calls back up:
+To add containers as calls queue up:
 
 ```python
 from lazycloud import QueueDepthAutoscaler
 
 
-@app.function(autoscaler=QueueDepthAutoscaler(min_containers=0, max_containers=8, tasks_per_container=2))
-def transcribe(path: str) -> str: ...
+@app.function(
+    autoscaler=QueueDepthAutoscaler(
+        min_containers=0,
+        max_containers=8,
+        tasks_per_container=2,
+    ),
+)
+def count_words(text: str) -> int:
+    return len(text.split())
 ```
 
-`min_containers` keeps that many containers up with nothing queued, which also
-makes the keep-warm window infinite for them.
+`min_containers` keeps that many containers running even without work.
+`max_pending_tasks` limits calls in flight; excess calls receive a capacity error.
 
-## Pending calls
+## Understand a pending call
 
-After a call has been pending for five seconds, the dashboard and CLI show the
-available explanation and elapsed wait. Messages distinguish compute startup,
-compute availability, container startup, busy containers, dependencies, and retries.
-The explanation clears when execution starts or the call ends. If startup updates
-stop arriving, the dashboard shows that it is waiting for an update.
-
-Local `.remote()` calls show pending explanations automatically. Calls from
-LazyCloud containers stay quiet unless enabled with `lazycloud.output()`.
-Observe structured updates independently of terminal output:
+After five seconds pending, the CLI and dashboard show the available reason,
+such as compute startup, busy containers, or a retry. For progress in your own UI:
 
 ```python
 import lazycloud
+from reports import summarize_sales
 
 
 def report_progress(task_id: str, pending: lazycloud.TaskPendingProgress | None) -> None:
@@ -180,61 +198,35 @@ def report_progress(task_id: str, pending: lazycloud.TaskPendingProgress | None)
 
 
 with lazycloud.progress(report_progress):
-    call = transcribe.spawn("recording.wav")
-    result = call.get()
+    result = summarize_sales.remote([1200, 3500, 800])
 ```
 
-The callback runs when the reason or phase start changes, including during
-`.remote()` and detached result polling. It receives `None` when pending progress
-clears. `call.task.pending_progress` reads the current explanation without waiting
-for a result. Progress includes `since` for the current phase, `pending_since` for
-the pending interval, and `observed_at` for the last observation.
+The callback receives `None` when the pending explanation clears.
+`call.task.pending_progress` reads it for a submitted call.
 
-## Secrets and environment
+## Add dependencies and data
 
-`env` sets plain environment variables. `secrets` injects
-[workspace secrets](/concepts/secrets) by name, each as an environment
-variable with the same name:
+Use an [Image](/concepts/images) for packages, [secrets](/concepts/secrets)
+for credentials, and [volumes](/concepts/volumes) for files that must survive
+the container. Plain configuration belongs in `env`.
 
-```python
-@app.function(env={"REGION": "us-east-1"}, secrets=["OPENAI_API_KEY"])
-def summarize(text: str) -> str: ...
+## Initialize a container or handle failures
+
+`on_start` runs when a container boots, before it accepts calls. Use it to
+load a model or initialize a client. Per-task hooks are `on_running`,
+`on_success`, `on_error`, `on_retry`, `on_failure`, and `on_finish`.
+Each accepts a callable, a decorated function, a dotted import string, or a list.
+
+Inside a handler, `lazycloud.current_task_id()` identifies the current call.
+Use it instead of the `TASK_ID` environment variable when calls share a process.
+
+## Debug the remote environment
+
+```bash
+lazycloud shell reports.py:summarize_sales
 ```
 
-## Volumes
-
-Mount [volumes and cloud buckets](/concepts/volumes) at a path:
-
-```python
-from lazycloud import Volume
-
-
-@app.function(volumes=[Volume("models", "/models")])
-def load_model(name: str) -> str: ...
-```
-
-## Lifecycle hooks
-
-`on_start` runs once when a container boots, before its first call. Load
-models and warm caches there. The other hooks run at each stage of a task:
-`on_running`, `on_success`, `on_error`, `on_retry`, `on_failure`, and
-`on_finish`. A hook is a callable, a decorated function, or a dotted import
-string, and each option also takes a list. `on_finish` runs after a reported
-success or error.
-
-```python
-def notify_failure() -> None:
-    print("report build failed", flush=True)
-
-
-@app.function(retries=1, on_failure=notify_failure)
-def build_daily() -> None: ...
-```
-
-## Debugging
-
-`build_report.shell()` or `lazycloud shell reports.py:build_report` opens an
-interactive shell in the function's image.
+This opens a shell in the function's image so you can inspect packages and files.
 
 ## Shared options
 

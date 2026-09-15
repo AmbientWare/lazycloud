@@ -5,9 +5,16 @@ description: "Manage deployed apps, deployments, running containers, and generat
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
+Pause an app to stop its workloads together. Stop one deployment to take a
+single service offline. Container commands act on individual instances;
+an active deployment may replace a container you stop.
+
 ## lazycloud app
 
 An app is addressed by name or id.
+
+The blocks below show command syntax. Replace uppercase names and omit
+square brackets when supplying an optional flag.
 
 ```bash
 lazycloud app list [--active | --inactive | --all]
@@ -23,7 +30,7 @@ A deployment is addressed by name or id.
 
 ```bash
 lazycloud deployment list [--app <name>] [--limit <n>]
-lazycloud deployment stop IDS_OR_NAMES...        # scale to zero; the record stays
+lazycloud deployment stop IDS_OR_NAMES...        # stop serving; keep the definition
 lazycloud deployment start ID_OR_NAME
 lazycloud deployment scale ID_OR_NAME --containers <n>
 lazycloud deployment delete ID_OR_NAME
@@ -31,7 +38,7 @@ lazycloud deployment delete ID_OR_NAME
 
 ```bash
 lazycloud deployment list --app api_demo
-lazycloud deployment scale predict --containers 3
+lazycloud deployment scale count_words --containers 3
 ```
 
 ## lazycloud container
@@ -54,5 +61,8 @@ lazycloud client remove APP [--output <dir>]
 endpoints, and ASGI apps into `lazycloud_clients/<app>/`, so another project
 can call them with the app's argument and return types without importing its
 source. `client remove` deletes it.
+
+Run `client get` again after deploying API changes to update the generated
+client in the consuming project.
 
 <WorkspaceFlag />

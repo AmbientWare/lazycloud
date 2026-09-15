@@ -6,20 +6,24 @@ description: "Generate starter files."
 ## lazycloud quickstart
 
 ```bash
-lazycloud quickstart [-o <path>] [--force]
+lazycloud quickstart
+lazycloud run quickstart.py:hello LazyCloud
 ```
 
-Writes the starter function app, `quickstart.py` by default. `--force`
-overwrites an existing file. The [Quickstart](/getting-started/quickstart)
-walks through it.
+The first command writes `quickstart.py`; the second runs it on LazyCloud.
+Use `-o <path>` for another filename. Existing files are preserved unless
+you pass `--force`. See [Quickstart](/getting-started/quickstart) for sign-in
+and expected output.
 
 ## lazycloud create-app
 
 ```bash
-lazycloud create-app NAME [-o <path>] [--force]
+lazycloud create-app quickstart --output my-project
 ```
 
-Writes the starter app into a directory named `NAME`.
+Writes the `quickstart` template and its README into `my-project`. The name
+selects an available template, not an arbitrary app name. Edit `App("quickstart")`
+in the generated file to rename your app.
 
 ## lazycloud example
 
@@ -29,3 +33,5 @@ lazycloud example download NAME [-o <path>] [--force]
 ```
 
 Lists and downloads starter templates. `quickstart` is the one available.
+The [guided examples](/examples/index) live in the repository and are not
+downloaded by this command.

@@ -3,9 +3,9 @@ title: "Queues, maps, and signals"
 description: "Shared state for coordinating work across containers."
 ---
 
-These objects share state between workloads and your local process. They are
-addressed by name: two objects with the same name in the same workspace share
-the same data. Inspect them under Storage in the dashboard.
+Use a queue to pass work items between processes, a map for temporary shared
+values, and a signal for notifications. Objects with the same name in the
+same workspace share data. Sign in before running these Python examples.
 
 ## Queue
 
@@ -17,16 +17,16 @@ from lazycloud import Queue
 q = Queue("work-items")
 
 q.put({"path": "a.wav"})
-len(q)          # 1
-q.empty()       # False
-q.peek()        # read the head without removing it
+print(len(q))
+print(q.peek())
 item = q.pop()
-q.delete()      # remove the queue and its contents
+print(item)
 ```
 
-Pair a queue with a function whose `autoscaler` is a
-[`QueueDepthAutoscaler`](/concepts/functions#warm-containers-and-concurrency)
-to scale consumers with backlog.
+`pop()` removes the item. Your consumer must decide what to do if processing
+fails afterward. For work that needs task results and retries, submit a
+[function](/concepts/functions#submit-work-in-the-background) instead.
+`QueueDepthAutoscaler` scales a function's pending calls, not this named queue.
 
 ## Map
 
@@ -44,16 +44,15 @@ state.set("cursor", 43, ttl=3600)   # per-key TTL in seconds
 list(state.keys())
 len(state)
 del state["cursor"]
-state.delete()                      # remove the whole map
 ```
 
 Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
 days is also the maximum.
 
-## Signal (experimental)
+## Send a signal
 
-A named flag one container sets and another reacts to. Use it for cache
-invalidation, reload triggers, and similar notifications.
+A signal is a named flag one container sets and another checks. Use it to
+request a cache reload. The API is experimental and may change between releases.
 
 ```python
 from lazycloud.abstractions.experimental import Signal
@@ -66,14 +65,14 @@ reload_flag.set(ttl=600)    # 600 seconds is the default
 # Consumer: check once
 response = reload_flag.monitor_once()
 
-# Or poll in a background thread
-signal = Signal("reload-models", handler=lambda: print("reloading"))
-signal.start_monitoring(poll_interval_seconds=1.0)
-signal.stop_monitoring()
-
 reload_flag.clear()
 ```
 
-<Note>
-  `Signal` is experimental. Its interface may change between releases.
-</Note>
+For a long-running consumer, pass a `handler` and call
+`start_monitoring(poll_interval_seconds=1.0)`. Call `stop_monitoring()` when
+your consumer shuts down.
+
+## Remove example state
+
+When you no longer need the example data, `q.delete()` removes the queue and
+its remaining items, and `state.delete()` removes the map and all its keys.

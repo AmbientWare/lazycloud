@@ -5,9 +5,10 @@ description: "Durable shared filesystems mounted into workloads, and S3-compatib
 
 ## Volumes
 
-A `Volume` is a durable filesystem owned by the workspace. Mount it into any
-workload at a path you choose. Use it for model weights, datasets, and
-anything that should outlive a container.
+A volume keeps files after your container stops. Mount the same workspace
+volume in several workloads to share datasets, checkpoints, or reports.
+
+Save this as `models.py`:
 
 ```python
 from pathlib import Path
@@ -19,20 +20,23 @@ models = Volume("models", "/models")
 
 
 @app.function(volumes=[models])
-def load(name: str) -> int:
-    return len((Path("/models") / name).read_bytes())
+def model_size() -> int:
+    return Path("/models/weights.pt").stat().st_size
 ```
 
-Create it from the CLI or Python:
+Create the volume, upload a local `weights.pt` file, then read its size remotely:
 
 ```bash
 lazycloud volume create models
-lazycloud volume list
-lazycloud volume delete models
+lazycloud cp ./weights.pt lazycloud://models/weights.pt
+lazycloud run models.py:model_size
 ```
 
+The result is the uploaded file's size in bytes. From Python, create the
+volume only if it does not exist:
+
 ```python
-models.get_or_create()   # idempotent; .create() and .delete() also exist
+models.get_or_create()
 ```
 
 Volume storage is billed per GiB-month. See [Plans and limits](/platform/plans).
@@ -49,7 +53,6 @@ models.list("llama")                              # names under a prefix
 models.list_path("llama")                         # entries with size and time
 models.stat("llama/weights.pt")
 models.move("llama/weights.pt", "archive/weights.pt")
-models.remove("archive/weights.pt")
 
 models.write_text("notes.txt", "hello")
 models.read_text("notes.txt")
@@ -62,11 +65,10 @@ optional except on the source of a download, where it marks the path as
 remote:
 
 ```bash
-lazycloud ls models/llama
 lazycloud cp weights.pt lazycloud://models/llama/weights.pt
+lazycloud ls models/llama
 lazycloud cp lazycloud://models/llama/weights.pt ./weights.pt
 lazycloud mv models/llama/weights.pt models/archive/weights.pt
-lazycloud rm models/archive/weights.pt
 ```
 
 For multi-gigabyte uploads, `presigned_url(...)`,
@@ -111,3 +113,16 @@ mount name, `prefix` to mount only part of the bucket, `endpoint` for a
 non-AWS S3-compatible store, `force_path_style` for stores that need
 path-style addressing, and `read_only`. The bucket must already exist; a
 mount never creates one.
+
+## Delete files you no longer need
+
+Deleting a deployment leaves its volumes intact. Check a path before removing it:
+
+```bash
+lazycloud ls models/archive
+lazycloud rm models/archive/weights.pt
+```
+
+`lazycloud volume delete models` deletes the entire volume and all its files.
+Download anything you need first. From Python, use `models.remove(path)` for
+one path or `models.delete()` for the volume.

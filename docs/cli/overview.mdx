@@ -3,7 +3,7 @@ title: "CLI overview"
 description: "The lazycloud command: global flags, handler references, and command groups."
 ---
 
-The `lazycloud` command installs with the `lazycloud` Python package. See
+The `lazycloud` command installs with the `lazycloud-client` Python package. See
 [Installation](/getting-started/installation). Sign in once with
 `lazycloud login`; see [Sign-in and workspaces](/platform/auth).
 
@@ -18,6 +18,10 @@ Interactive commands (`shell`, `dev`, `serve`) reject `--json`. `--debug`
 shows full tracebacks. `-h` or `--help` works on every command.
 
 Human output is the default. Styling is dropped when output is redirected.
+
+For one remote function call, use `lazycloud run file.py:function`. It shows
+progress and logs, then prints the result. Use `deploy` for an endpoint,
+schedule, or a function other remote workloads need to call.
 
 ## Handler references
 
@@ -42,7 +46,7 @@ everything registered with that app. If there are several apps, choose one with
 | `deploy`, `run`, `serve`, `shell`, `dev` | [Deploy and run](/cli/deploy-and-run) |
 | `task`, `logs` | [Tasks and logs](/cli/tasks-and-logs) |
 | `app`, `deployment`, `container`, `client` | [Apps and deployments](/cli/deployments-and-containers) |
-| `volume`, `ls`, `cp`, `rm`, `mv`, `secret` | [Storage](/cli/storage) |
+| `volume`, `ls`, `cp`, `rm`, `mv`, `secret`, `artifact` | [Storage](/cli/storage) |
 | `compute`, `cloud`, `machine`, `domain` | [Compute and domains](/cli/compute) |
 | `login`, `workspace`, `profile`, `token` | [Sign-in](/cli/auth) |
 | `quickstart`, `create-app`, `example` | [Scaffolding](/cli/scaffolding) |

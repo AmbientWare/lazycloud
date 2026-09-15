@@ -1,78 +1,80 @@
 ---
 title: "Apps"
-description: "An App groups the workloads you deploy together under one name."
+description: "Group related functions, APIs, and containers so you can deploy and manage them together."
 ---
 
-An `App` is the unit you deploy. Every workload registers under an app slug,
-and the slug is how the dashboard, the CLI, and generated clients refer to it.
+An `App` groups workloads under a name in your workspace. Use one app for
+resources you want to deploy, pause, or inspect together.
+
+## Define an app
+
+Save this as `text_tools.py`:
 
 ```python
 from lazycloud import App
 
-app = App("billing")
+app = App("text_tools")
+
+
+@app.function()
+def count_words(text: str) -> int:
+    return len(text.split())
+
+
+@app.endpoint(name="count", methods=["POST"])
+def count(text: str) -> dict[str, int]:
+    return {"words": count_words.local(text)}
 ```
 
-A slug starts with a lowercase letter and contains only lowercase letters,
-digits, and underscores, up to 63 characters: `"billing"`, `"reporting_api"`.
+The endpoint calls the counting function locally in its container. It needs
+no second remote task for this small calculation.
 
-## Register workloads
+App names start with a lowercase letter and contain lowercase letters,
+digits, or underscores, up to 63 characters. Workload names must be unique
+within each kind in the app.
 
-```python
-@app.function(...)      # a remote function
-@app.endpoint(...)      # an HTTP endpoint
-@app.asgi(...)          # a FastAPI, Starlette, or raw ASGI app
-@app.realtime(...)      # a WebSocket-style handler
-web = app.pod(...)      # a long-running container command
-box = app.sandbox(...)  # an on-demand container
-```
-
-Names must be unique per kind within an app. Registering the same name twice
-raises an error.
-
-## Deploy
-
-Deploy everything the app registers:
+## Deploy together
 
 ```bash
-lazycloud deploy billing_app.py:app
+lazycloud deploy text_tools.py
 ```
 
-Or from Python:
+This deploys both workloads. A bare file selects its only app.
+Use `text_tools.py:app` to select the app explicitly when a module has several.
 
-```python
-app.deploy()
-```
+`@app.function`, `@app.endpoint`, `@app.asgi`, `@app.realtime`, and
+`app.pod(...)` register deployable workloads. Sandboxes created with
+`app.sandbox(...)` run on demand and are not started by a deploy.
 
-Deploy one resource with a selector. Pass its name, or `"kind:name"` when the
-name exists in more than one kind:
+## Deploy or preview one workload
 
 ```bash
-lazycloud deploy billing_app.py:app --resource endpoint:api
+lazycloud deploy text_tools.py:app --resource endpoint:count
 ```
 
-```python
-app.deploy(resource="endpoint:api")
-```
-
-Sandboxes are created on demand and are not deployed.
-
-## Preview
-
-`lazycloud serve` runs one endpoint or ASGI app on LazyCloud with a temporary
-URL and live logs. When an app has more than one, pick one:
+A selector is the resource name, or `kind:name` if the name is shared by
+several kinds. You can also pass the decorated object directly:
 
 ```bash
-lazycloud serve billing_app.py:app --resource endpoint:api
+lazycloud serve text_tools.py:count
 ```
 
-## Manage a deployed app
+The preview prints a temporary URL and logs. Ctrl+C ends it.
+
+From Python, use `app.deploy()` or `app.deploy(resource="endpoint:count")`.
+
+## Manage the app
 
 ```bash
-lazycloud app list
-lazycloud app show billing
-lazycloud app pause billing     # stop every workload in the app
-lazycloud app resume billing
-lazycloud app delete billing
+lazycloud app show text_tools
 ```
 
-The same actions are on the app's page in the dashboard.
+To stop its workloads while keeping their definitions:
+
+```bash
+lazycloud app pause text_tools
+```
+
+Use `lazycloud app resume text_tools` to resume. When you no longer need
+the app, `lazycloud app delete text_tools` removes it. Check separately for
+[stored files](/concepts/volumes) you want to retain or delete.

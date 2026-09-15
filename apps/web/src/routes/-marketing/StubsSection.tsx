@@ -28,11 +28,15 @@ class Review(BaseModel):
 
 @app.endpoint(route="/review")
 def review_patch(diff: str) -> Review:
-    return analyze(diff)
+    added = [line[1:] for line in diff.splitlines()
+             if line.startswith("+") and not line.startswith("+++")]
+    risks = ["Review added TODOs"] if any("TODO" in line for line in added) else []
+    return Review(summary=f"{len(added)} added lines", risks=risks)
 
 @app.function(retries=3)
 def run_checks(commit_sha: str) -> dict[str, bool]:
-    return check_release(commit_sha)`;
+    valid = len(commit_sha) == 40 and all(c in "0123456789abcdef" for c in commit_sha)
+    return {"valid_commit_sha": valid}`;
 
 const phaseLabel =
   "font-mono text-sm leading-none font-semibold transition-colors duration-500 motion-reduce:transition-none sm:text-base";

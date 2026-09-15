@@ -3,6 +3,8 @@ title: "Run a coding agent in a sandbox"
 description: "Plan a code change with an OpenAI-compatible model in a function, then test it in a sandbox with no network and no credentials."
 ---
 
+import ExampleSetup from '/snippets/example-setup.mdx';
+
 This example separates model access from running generated code. A function
 calls your OpenAI-compatible provider and returns one validated file
 replacement. A network-blocked sandbox receives only the seed project and
@@ -12,20 +14,13 @@ passes, fails, or errors.
 The source and seed project are under `examples/sandboxed_coding_agent/` in
 the LazyCloud repository.
 
-## Trust boundary
+<ExampleSetup />
 
-Only the planner function receives provider configuration:
+## What runs where
 
-```python
-@app.function(
-    name="plan-patch",
-    secrets=["CODING_AGENT_BASE_URL", "CODING_AGENT_MODEL", "CODING_AGENT_API_KEY"],
-)
-def plan_patch(prompt: str, seed_files: dict[str, str]) -> PatchPlan: ...
-
-
-sandbox = app.sandbox(name="test-patch", block_network=True)
-```
+The deployed `plan-patch` function receives the provider base URL, model,
+and API key as workspace secrets. The `test-patch` sandbox runs the generated
+code with `block_network=True`.
 
 The sandbox has no secrets, no outbound network, no exposed ports, and no
 retained filesystem. The local orchestrator validates the planner's result
@@ -38,8 +33,8 @@ model cannot modify the test.
 
 ## Configure a provider
 
-Set a base URL ending at the provider's OpenAI-compatible root (an HTTPS
-`/v1` URL), the model name, and the API key. The example appends
+Use your provider's HTTPS base URL ending in `/v1`, the model name, and its
+API key. The example appends
 `/chat/completions` itself.
 
 ```bash
@@ -68,15 +63,14 @@ Deploying the app deploys the planner. Sandboxes are created on demand.
 
 ```bash
 lazycloud deploy examples.sandboxed_coding_agent.app:app
-lazycloud deployment list --app sandboxed_coding_agent
 lazycloud run examples.sandboxed_coding_agent.app:run_agent
 ```
 
 The default prompt asks the planner to fix the deliberately wrong
 `calculator.add` without changing its test. The result includes the planner
 task id, the terminated sandbox id, changed paths, the test exit code,
-bounded test output, and `tests_passed`. It never includes credentials or
-generated file contents.
+test output, and `tests_passed`. A successful repair returns `tests_passed: true`
+and `test_exit_code: 0`. The command does not change your local seed project.
 
 Pass a different instruction as the first argument:
 
@@ -84,7 +78,7 @@ Pass a different instruction as the first argument:
 lazycloud run examples.sandboxed_coding_agent.app:run_agent "Correct calculator.add and preserve its type hints."
 ```
 
-## Inspect
+## If the repair fails
 
 ```bash
 lazycloud task show <planner-task-id>
@@ -92,22 +86,22 @@ lazycloud task logs <planner-task-id>
 lazycloud run examples.sandboxed_coding_agent.app:inspect_sandboxes 20
 ```
 
-The sandbox list should show this run's sandbox as `stopped` or `failed`,
-never `running`. A failed provider request fails before the sandbox is
-created. An upload, process, or test exception terminates the sandbox before
-the error propagates. A failing test returns `tests_passed: false` and a
-nonzero exit code; it is never reported as success.
+Use the returned planner task ID to investigate provider failures. A failed
+provider request creates no sandbox. For a failing test, read `test_output`
+and revise the instruction. `test_exit_code` is the test process's exit code;
+check `tests_passed` even when the CLI command itself completes.
+The orchestrator terminates its sandbox in a `finally` block.
 
-## Cost and hardening
+## Adapt the example
 
 Each run costs your provider's tokens plus a short planner function and one
 CPU sandbox. The seed project is tiny; costs grow with source size, model
 pricing, and retries.
 
-This is a narrow execution boundary, not an autonomous development system.
-Before adapting it, add authorization, an approval policy, repository
-checkout controls, prompt-injection defenses, per-language resource limits,
-audit retention, and human review before merging generated changes.
+To work on another project, change the seed files and explicitly allowed
+patch paths. Keep tests outside the model's editable files. Review generated
+changes before applying them to a real repository; passing a test only proves
+what that test checks.
 
 ## Clean up
 

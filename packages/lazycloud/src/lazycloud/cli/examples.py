@@ -22,12 +22,12 @@ image = Image(python_version="3.12")
 
 @app.function(name="hello", image=image, cpu=1.0, memory="256Mi")
 def hello(name: str = "world") -> str:
-    print(f"quickstart greeting for {name}", flush=True)
+    print(f"Greeting {name} from LazyCloud", flush=True)
     return f"hello {name}"
 
 
 if __name__ == "__main__":
-    print(hello.local("lazycloud"))
+    print(hello.remote("LazyCloud"))
 """
 
 
@@ -45,10 +45,18 @@ class ExampleTemplate:
 TEMPLATES: dict[str, ExampleTemplate] = {
     "quickstart": ExampleTemplate(
         name="quickstart",
-        description="Minimal function app.",
+        description="Run a Python function on LazyCloud.",
         files={
             "quickstart.py": QUICKSTART_TEMPLATE,
-            "README.md": "# Quickstart\n\nRun locally with `python quickstart.py`.\n",
+            "README.md": (
+                "# Run your first function\n\n"
+                "Install `lazycloud-client`, then sign in and run:\n\n"
+                "```bash\nlazycloud login\n"
+                "lazycloud run quickstart.py:hello LazyCloud\n```\n\n"
+                "The command shows progress and logs, then prints `hello LazyCloud`.\n"
+                "With the SDK in your Python environment, `python quickstart.py` also "
+                "runs remotely. Use `hello.local(...)` to call it on your machine.\n"
+            ),
         },
     ),
 }

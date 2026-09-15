@@ -4,41 +4,37 @@ Proprietary software. All rights reserved. Use, modification, redistribution,
 and hosting require written permission. See [LICENSE](LICENSE) for the terms
 and third-party exceptions.
 
-LazyCloud is a Python-first toolkit for defining, registering, and running
-workloads with local development semantics that mirror remote execution
-workflows.
+LazyCloud runs Python functions, APIs, and containers on remote compute.
+Start with the [quickstart](docs/getting-started/quickstart.mdx) or pick a
+[complete example](examples/README.md).
 
-```python
-from lazycloud import App, Image
+## Run a function
 
-app = App("quickstart")
-image = Image(python_version="3.12").add_python_packages(["httpx"])
-
-
-@app.function(image=image, cpu=1.0, memory="512Mi")
-def hello(name: str = "world") -> str:
-    return f"hello {name}"
-
-
-if __name__ == "__main__":
-    print(hello.local("lazycloud"))
-```
-
-## Install From Source
+Install the public client and sign in:
 
 ```bash
-uv tool install ./packages/lazycloud
-lazycloud --help
+uv tool install lazycloud-client
+lazycloud login
+lazycloud quickstart
+lazycloud run quickstart.py:hello LazyCloud
 ```
 
-Run the install command from the repository root. Installing the `lazycloud`
-distribution provides both the `import lazycloud` Python SDK and the `lazycloud`
-command. A registry install command will be documented after the distribution
-is published for the beta.
+The command shows progress and remote logs, then prints `hello LazyCloud`.
+For Python scripts, install the SDK in your project with `uv add lazycloud-client`.
+See [installation](docs/getting-started/installation.mdx) for environment details.
 
-Local working files are stored under `~/.lazycloud` by default. Durable application
-state is stored in PostgreSQL and hot coordination state is stored in Redis.
-Set `LAZYCLOUD_HOME=/path/to/state` to isolate local filesystem resources.
+## Work on this repository
+
+Use Python 3.12 and uv from the repository root:
+
+```bash
+uv sync --locked --group dev
+uv run --group workspace lazycloud --help
+```
+
+Public documentation lives in [docs/](docs/index.mdx). Platform operators should
+start with [local deployment](deploy/README.md) or the
+[hosted deployment lifecycle](deploy/platform-deployment/LIFECYCLE.md).
 
 ## Development validation
 
@@ -117,7 +113,7 @@ and Redis stay local, Stripe uses test mode, and GitHub uses the development App
 See [local deployment](deploy/README.md#local-environment) for startup.
 
 ```bash
-uv run lazycloud-admin login --profile local
+uv run --group workspace lazycloud-admin login --profile local
 uv run lazycloud-admin quickstart
 uv run lazycloud-admin deploy quickstart.py:hello
 uv run lazycloud-admin run quickstart.py:hello 'LazyCloud'

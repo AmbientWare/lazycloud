@@ -1,4 +1,8 @@
-# Deployment
+# Deploy LazyCloud
+
+For a local stack, follow [Local environment](#local-environment) below.
+For a hosted installation, use the [deployment lifecycle](platform-deployment/LIFECYCLE.md).
+For a failed release or node, use the [runbook](RUNBOOK.md).
 
 Ship publishes the platform images from Docker Bake and records their executable
 digests in one complete release manifest. An unchanged connection gateway image keeps its
@@ -55,7 +59,7 @@ for signed storage transfers.
 
 Use the public SDK against this deployment by exporting `LAZYCLOUD_ENDPOINT` and
 the local `LAZYCLOUD_TOKEN`. `examples/artifacts/app.py` writes through a volume
-and saves an artifact with seven-day retention. A token-only administrator can
+and saves an artifact with the account's plan retention. A token-only administrator can
 provision its Stripe test subscription through `/api/v1/billing/card-session`
 before running workloads, just as an account does when adding a card. An existing
 Stripe test catalog must contain the current plans; `lazycloud-admin billing
@@ -182,11 +186,10 @@ superseded host, and retires it after its work finishes. It then removes the
 temporary capacity. Let that controller complete; do not also run installer
 updates on hosts it is replacing.
 
-Self-hosted machines do not use that replacement path. Upgrade them one at a
-time through the installer's `--install-only` mode and the agent restart command,
-preserving their service arguments and enrollment state. Cordon each worker and
-finish its active work before restarting its host agent, then verify private
-connectivity before uncordoning it.
+Supervised managed and joined agents update application artifacts in place
+after work drains. Host-image changes use the managed replacement controller.
+Preserve enrollment and verify fresh request intake after either kind of update.
+See [release rollout](RUNBOOK.md#shipping-from-actions).
 
 The stack is usable after an authenticated agent session can run a real function.
 API and gateway health prove their processes and dependencies, not workload routes.
@@ -237,8 +240,7 @@ startup, and production DNS. Recreating the API preserves gateway connections.
 
 `public-ingress` is a locally-managed tunnel: it carries `config_src: local`, so
 Cloudflare pushes no configuration and `public-ingress/cloudflared.yml` is the
-only source of what is exposed. Dashboard public hostnames do not apply and must
-not be added — they read as live routing while changing nothing.
+only source of what is exposed. Dashboard public hostnames do not apply and do not change its routing.
 
 A connector with ready connections and a hostname still returning 1033 is a DNS
 problem, not a route problem: the hostname's record is not a proxied CNAME to
@@ -247,8 +249,8 @@ namespace to separate connector health from edge routing.
 
 Cloudflare DNS hides what it is doing at a zone apex. A proxied CNAME to
 `<tunnel>.cfargotunnel.com` is flattened to Cloudflare anycast A records, so `dig`
-cannot distinguish it from an unrelated proxied A record — read the zone through
-the API before concluding anything about apex records. Auto-created tunnel DNS
+cannot distinguish it from an unrelated proxied A record. Read the zone through
+the API to inspect apex records. Auto-created tunnel DNS
 silently declines to overwrite an existing record, and a record pinned as a
 Cloudflare for SaaS fallback origin (SSL/TLS → Custom Hostnames) cannot be
 deleted at all until that designation is removed.

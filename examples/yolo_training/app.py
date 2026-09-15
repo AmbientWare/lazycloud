@@ -3,6 +3,15 @@
 The default training run uses the eight-image COCO8 dataset for one epoch. Both
 functions persist their outputs in ``yolo-artifacts`` so checkpoints and
 predictions survive container replacement and deployment deletion.
+
+From the repository root, create the volume and run training, then prediction:
+
+    lazycloud volume create yolo-artifacts
+    lazycloud run examples.yolo_training.app:train_yolo
+    lazycloud run examples.yolo_training.app:predict_yolo
+
+The commands show logs and output paths. Download the annotated image and use
+new run names for later trials; see ``docs/examples/train-yolo-object-detector.mdx``.
 """
 
 from __future__ import annotations

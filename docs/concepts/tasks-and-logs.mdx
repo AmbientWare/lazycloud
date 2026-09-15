@@ -3,9 +3,13 @@ title: "Tasks and logs"
 description: "Every invocation is a durable task with a status, a result, and logs."
 ---
 
-Every function call, endpoint request, scheduled run, and `lazycloud run` is
-recorded as a task. A task keeps its status, timing, result or error, retry
-history, and logs.
+Remote function calls, endpoint requests, and scheduled runs create tasks.
+Use task history to revisit a result, investigate a failure, or follow work
+you submitted in the background.
+
+`lazycloud run` already shows progress, remote logs, and the result for a
+function. You only need the commands here to inspect it separately.
+Local Python calls do not create remote tasks.
 
 ## Lifecycle
 
@@ -47,14 +51,18 @@ unbuffered, so lines show up promptly.
 `spawn` returns a `FunctionCall`:
 
 ```python
-handle = my_function.spawn(42)
-handle.task_id
-handle.get(timeout_seconds=120)              # waits and returns the value, or raises
+from reports import summarize_sales
+
+handle = summarize_sales.spawn([1200, 3500, 800])
+print(handle.task_id)
 
 result = handle.result(wait=True, timeout_seconds=120)
-result.ok, result.status, result.value, result.error
-handle.logs()
+print(result.ok, result.status, result.value, result.error)
 ```
+
+This uses `reports.py` from the [functions guide](/concepts/functions).
+`handle.get(timeout_seconds=120)` returns the value or raises on failure.
+`handle.logs()` reads stored logs.
 
 For a task you only know by id, use `Client`:
 
@@ -62,10 +70,12 @@ For a task you only know by id, use `Client`:
 from lazycloud import Client
 
 task = Client().task_handle("<task-id>")
-outcome = task.wait(timeout_seconds=120)     # a TaskResult
-task.logs()
-task.cancel()
+outcome = task.wait(timeout_seconds=120)
+print(outcome.status, outcome.value)
 ```
+
+Use `task.cancel()` to cancel pending work, or `lazycloud task stop <task-id>`
+to stop a running task.
 
 Failed tasks keep the error message and the full logs.
 

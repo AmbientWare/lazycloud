@@ -1,3 +1,14 @@
+"""Save a report in a volume and attach a downloadable copy to its task.
+
+From the repository root with the SDK installed and signed in:
+
+    lazycloud volume create artifact-reports
+    lazycloud run examples.artifacts.app:create_report
+
+Download the returned artifact from Storage in the dashboard. The volume copy
+stays at ``artifact-reports/report.txt`` until you delete it.
+"""
+
 from pathlib import Path
 
 from lazycloud import App, Artifact, Image, Volume

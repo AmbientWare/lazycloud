@@ -3,6 +3,9 @@ title: "Sign-in and workspaces"
 description: "How you sign in to the dashboard and the CLI, how workspaces work, and how to authenticate CI and scripts."
 ---
 
+Use browser sign-in for your own development and access tokens for CI or
+scripts. Select a workspace before creating resources.
+
 ## Sign in to the dashboard
 
 Go to [lazycloud.dev](https://lazycloud.dev) and continue with GitHub. The first
@@ -58,14 +61,16 @@ every workspace you own.
 ## CI and scripts
 
 Create an access token in the dashboard under Settings, then Tokens. Give it a
-name and an expiry (1 day to 90 days, or never). Copy the value when it is
+name and an expiry between 1 and 90 days, or no expiry. Copy the value when it is
 shown; it is not shown again. A token has the same reach as your sign-in, so
 treat it like a password. Deleting a token stops it working immediately.
 
-Give the token to the CLI through the environment:
+In CI, inject the token from your CI secret store as `LAZYCLOUD_TOKEN`.
+For an interactive Bash session:
 
 ```bash
-export LAZYCLOUD_TOKEN="<token>"
+read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
+export LAZYCLOUD_TOKEN
 export LAZYCLOUD_WORKSPACE="<workspace-name>"
 lazycloud deploy app.py:app
 ```
@@ -77,7 +82,7 @@ state directory away from `~/.lazycloud` if the job cannot write there.
 To store a token instead of exporting it each time:
 
 ```bash
-lazycloud login --token "<token>" --workspace <workspace-name>
+lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <workspace-name>
 ```
 
 Use the token as a bearer credential when calling an authorized endpoint or
@@ -89,12 +94,12 @@ curl "<endpoint-url>" -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
 
 ### Profiles
 
-The CLI can keep more than one sign-in, for example one per workspace or one
-for an automation token. Each is a profile, and one profile is active at a
+Use profiles for separate accounts or automation credentials. Changing
+workspaces within one account only needs `workspace use`. Each is a profile, and one profile is active at a
 time:
 
 ```bash
-lazycloud login --profile ci --token "<token>" --workspace staging --no-activate
+lazycloud login --profile ci --token "$LAZYCLOUD_TOKEN" --workspace staging --no-activate
 lazycloud profile list
 lazycloud profile activate ci
 lazycloud profile current

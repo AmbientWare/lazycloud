@@ -1,4 +1,7 @@
-# Cloudflare deployment
+# Configure Cloudflare ingress
+
+Use the existing state and operator identity to update HTTP ingress or agent
+tunnel DNS. Start with a saved plan; verify both routes after applying it.
 
 This module owns the public HTTP tunnel, its apex and wildcard DNS records, the
 DNS-only agent tunnel record, and the configured SaaS fallback origin. It does
@@ -33,8 +36,8 @@ terraform -chdir=deploy/cloudflare validate
 terraform -chdir=deploy/cloudflare plan -out=cloudflare.tfplan
 ```
 
-Read the existing zone records and review the plan before applying. During agent
-tunnel cutover, the only DNS addition is the dedicated connection gateway record.
+Read the existing zone records and review the plan before applying. When adding the agent
+tunnel, scope the DNS change to its dedicated connection gateway record.
 Apex, wildcard, mail, verification, custom-hostname and SaaS records must remain
 unchanged. Apply only the reviewed plan, then verify both public HTTP and an
 authenticated agent tunnel. Do not print tunnel credentials or operator tokens.

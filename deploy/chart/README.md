@@ -1,15 +1,15 @@
 # LazyCloud chart
 
-The control plane, the scheduler, the cache, the tunnel, and the bootstrap that
-has to run before any of them.
+Use this chart through the deployment workflow. It runs the API, scheduler,
+cache, connection gateways, HTTP ingress, and bootstrap Jobs. Argo owns the
+installed resources; use local Helm rendering to review changes before deployment.
 
 Image archives share the application S3 bucket and workload identity.
 Infrastructure descriptor version 7 supplies its endpoint and bucket identities,
 the role that issues temporary workspace credentials, and `fleet.networks` keyed
 by AWS region. Fleet registration passes that map to `fleet ensure --networks-json`.
-Follow the
-[S3 cutover steps](../platform-deployment/OBJECT_STORAGE.md) before deploying
-these settings to an existing installation.
+See [object storage](../platform-deployment/OBJECT_STORAGE.md) for identity,
+verification, and data-preservation requirements.
 
 Helm owns application defaults in `values.yaml` and environment policy in
 `environments/<environment>.yaml`. Terraform owns resource identities and publishes
@@ -38,18 +38,10 @@ rates and completed ledger segments are preserved. If publication conflicts
 with usage already priced, review a new future card before deploying. Do not
 change an existing rate boundary or ledger row to make the sync pass.
 
-Rate card `2026-09-10.a` was activated at `2026-09-10T04:09:05.835918Z`.
-Migration `0030_withdraw_rate_schedule` removes only the unused September 11
-and 12 schedules, refusing withdrawal if either has priced ledger entries.
-The recorded activation time makes subsequent publication idempotent and
-preserves all charges before the cutover.
+## Bootstrap order
 
-## The order the bootstrap runs in
-
-Sync waves, not preference. The schema must exist before an administrator can be
-created against it, and the administrator must exist before anything
-authenticates. The rate card is published into that schema last, so the
-deployment can price usage from the moment it serves any.
+Sync waves order secret projection, migrations, administrator and billing
+bootstrap, and workloads. Inspect the first failed Job before retrying a sync.
 
 Each database Job is alone in its wave. The chart budgets both API engines,
 scheduler and gateway pools, one bootstrap Job, and bounded workload rollout
@@ -66,15 +58,10 @@ The database rejects writes that reopen a terminal capacity operation or replace
 an owned container assignment. Older replicas may report these errors during
 rollout. A rejected write leaves the recorded ownership intact.
 
-The administrator credential is the one with a trap in it. `auth bootstrap`
-adopts a configured credential when it finds one and mints its own when it does
-not, recording a different bootstrap request id for each. Install without
-`administrator-token` written to Secrets Manager and the credential exists only
-inside that Job's pod, every later step has no bearer token, and supplying the
-value afterwards is refused as an already completed bootstrap. Do not reset a persistent installation to recover a credential. Resolve the
-bootstrap identity through the account owner.
-
-Write it before the first install.
+Populate the administrator token in the operator secret before the first sync.
+A bootstrap without that configured value can leave later Jobs without the
+credential they need. Recover a lost credential through the account owner;
+never reset the persistent database.
 
 ## Log retention
 
@@ -128,18 +115,11 @@ trust admits this namespace's subject only. That is the one role ARN in the
 chart. Every other identity is a Pod Identity association the deployment
 module declares beside the cluster.
 
-## Requests, and the node count that follows from them
+## Size and place pods
 
-Karpenter provisions from what the pods request, which makes a request an
-instruction to the cluster rather than a description of a process. Every
-container in this chart states one, including the Jobs and the init containers,
-because a pod that requests nothing is not one the node's arithmetic can see.
-It is provisioned around, and then run anyway.
-
-The figures come from `/api/v1/nodes/<node>/proxy/metrics/resource` on a live
-node, not from estimates. Memory carries a limit; CPU does not, because a CPU
-limit is throttling, and throttling a connector or an API turns contention into
-the latency the request was meant to prevent.
+Auto Mode provisions from declared pod requests. Measure representative usage
+before changing them, and include bootstrap Jobs and init containers in the
+budget. Keep memory limits and preserve headroom for startup and reconnects.
 
 `control-plane`, `scheduler`, `cloudflared`, and `connection-gateway` spread
 replicas across nodes and availability zones. Both constraints require two
@@ -149,23 +129,17 @@ replica to drain at a time; they cannot prevent a Spot interruption.
 
 ## Replica counts
 
-`scheduler` at two is an availability decision, not capacity: it serialises on
-Redis token locks and tolerates overlapping ticks, so the second replica adds
-nothing to throughput and keeps placement running while a node is replaced.
+Two scheduler replicas preserve availability during node replacement. Redis
+locks coordinate their work; raising replicas alone does not raise throughput.
 
 `cache-server` has one replica and one ReadWriteOnce EBS volume. A replacement
 must run in the volume's zone and attach the same disk. Cache service is
 unavailable during that recovery. Do not increase replicas against this claim.
 Its readiness probe checks the listener; acceptance must also read stored data.
 
-Each gateway index runs one replica with its own key, UDP Service and Redis lease.
-Both identities forward traffic. Clients move new connections to another healthy
-gateway when one drains or becomes unavailable.
+Connection gateways share one TCP Service and NLB. Each pod holds its own
+short-lived certificate and session identity. Readiness checks its listener,
+certificate, database, and Redis access. See the gateway guide for drain limits.
 
-Cloudflare readiness requires a connection to its edge before a replacement
-counts as available. Gateway readiness requires identity ownership and a platform
-handshake through its public endpoint.
-
-`cloudflared` runs several deliberately. Cloudflare balances a tunnel across its
-connectors, and one was a single point of failure that also collided with any
-other process holding the same credentials.
+Cloudflare connectors report readiness after connecting to the edge. Keep
+replicas on separate nodes and verify public requests after a rollout.

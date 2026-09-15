@@ -3,9 +3,13 @@ title: "Sandboxes"
 description: "On-demand containers with process control, a filesystem API, exposed ports, snapshots, and optional Docker."
 ---
 
-A sandbox is a container you create when you need it, run commands in, move
-files in and out of, and terminate. It suits code-execution agents, dev
-environments, and untrusted workloads.
+A sandbox gives you a remote container for commands and files. Use one to
+run generated code, test a patch, or provide a development environment.
+
+## Run a command
+
+Save this as `sandbox_demo.py`, then run `python sandbox_demo.py` after
+installing the SDK and signing in:
 
 ```python
 from lazycloud import App, Image
@@ -20,16 +24,24 @@ sandbox = app.sandbox(
 )
 
 instance = sandbox.create()
-result = instance.run("python --version")
-print(result.exit_code, result.stdout)
-instance.terminate()
+try:
+    result = instance.run("python --version")
+    print(result.exit_code, result.stdout)
+finally:
+    instance.terminate()
 ```
+
+The output includes exit code `0` and the remote Python version. The `finally`
+block terminates the container even if a command fails. Compute charges continue
+while a sandbox runs, so use this pattern when adapting the examples below.
 
 Sandboxes default to `cpu=1.0`, `memory=128` (MiB), `keep_warm_seconds=600`,
 and `authorized=False`. They are created on demand; `app.deploy()` does not
 deploy them.
 
-## Instances
+## Reconnect to a running sandbox
+
+Keep the sandbox ID if another process needs to reconnect before it expires:
 
 ```python
 instance = sandbox.create()
@@ -37,7 +49,6 @@ sandbox_id = instance.sandbox_id()
 
 same = sandbox.connect(sandbox_id)   # reconnect later
 instance.update_ttl(1800)            # extend the idle lifetime
-instance.terminate()
 ```
 
 `sandbox.list()` returns the workspace's sandboxes, `sandbox.stats()` counts
@@ -52,9 +63,9 @@ long-running ones:
 result = instance.run("pytest -q", cwd="/workspace", timeout_seconds=300)
 
 proc = instance.process.exec("python", "-m", "http.server", "8000")
-proc.wait()                    # or proc.status()
-print(proc.stdout.read())      # stdout, stderr, and combined logs streams
+print(proc.status())
 proc.kill()
+proc.wait(timeout=10)
 
 instance.process.run_code("print(2 + 2)")   # a Python snippet
 instance.list_processes()
@@ -62,6 +73,9 @@ instance.list_processes()
 
 A process has `pid`, `wait(timeout)`, `kill()`, `status()`, and `stdout`,
 `stderr`, and `logs` streams with `read()` and `lines()`.
+The pytest command needs pytest in your image and tests uploaded to `/workspace`.
+For a web server, inspect `status()` or expose its port while it runs; `wait()`
+returns only after the process exits.
 
 ## Files
 
@@ -117,7 +131,7 @@ captures the disk as an image id you can reuse with `Image.from_id(...)`.
 
 ## Async
 
-Every surface has an async twin under `.aio`: `await instance.aio.run(...)`,
+The command, process, and file APIs have async methods under `.aio`: `await instance.aio.run(...)`,
 `await instance.process.aio.exec(...)`, `await instance.fs.aio.upload_file(...)`.
 
 ## Definition options

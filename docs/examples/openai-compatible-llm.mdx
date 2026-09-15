@@ -3,6 +3,8 @@ title: "OpenAI-compatible LLM service"
 description: "Run a small instruction model behind an authenticated vLLM pod on one GPU."
 ---
 
+import ExampleSetup from '/snippets/example-setup.mdx';
+
 This example deploys the official vLLM OpenAI server as a pod. It serves
 `Qwen/Qwen2.5-1.5B-Instruct` on one NVIDIA L4 and keeps downloaded model
 files in a volume, so a replacement container reuses the cache instead of
@@ -11,14 +13,18 @@ downloading again.
 The source is `examples/openai_compatible_llm/app.py` in the LazyCloud
 repository.
 
+<ExampleSetup />
+
 ## Prerequisites
 
-- Sign in with `lazycloud login`.
+- Check that your account can run an L4 and has credit. This pod holds a GPU
+  while running; stop it after your requests if you do not need a server.
 - Create an access token in the dashboard for calling the service directly,
   and export it:
 
 ```bash
-export LAZYCLOUD_TOKEN="<access-token>"
+read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
+export LAZYCLOUD_TOKEN
 ```
 
 The model is public, so no Hugging Face token is needed.
@@ -75,14 +81,16 @@ from the deploy output, without a trailing slash:
 export VLLM_URL="<pod-url>"
 ```
 
-Wait for the health check to pass before sending requests:
+Check whether the server has loaded the model:
 
 ```bash
 curl --fail --show-error "$VLLM_URL/health" \
   -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
 ```
 
-A request without the header is rejected before it reaches vLLM.
+A request without the header is rejected before it reaches vLLM. If health
+fails during startup, inspect `lazycloud logs --deployment openai-server -n 50`
+for download or GPU errors, then check health again.
 
 ## Use it
 
@@ -105,24 +113,19 @@ curl --fail --show-error "$VLLM_URL/v1/chat/completions" \
   }'
 ```
 
-The response follows the OpenAI chat-completions schema.
+Read the answer in `choices[0].message.content`. For an OpenAI-compatible
+client, use `$VLLM_URL/v1` as the base URL, your LazyCloud token as the API
+key, and `qwen-1.5b` as the model.
 
-## Inspect
+## Troubleshoot a request
 
 ```bash
 lazycloud deployment list --app openai_compatible_llm
-lazycloud container list
-lazycloud logs --deployment openai-server --follow --show-timestamp
-lazycloud volume list
-```
-
-To see the cache in use, stop the running container and watch the
-replacement's logs. It skips the download:
-
-```bash
-lazycloud container stop <container-id>
 lazycloud logs --deployment openai-server --follow --show-timestamp
 ```
+
+Use the logs when startup or a request fails. Model-loading and GPU errors
+appear here. A missing bearer token produces an authorization error.
 
 ## Cost and licensing
 
@@ -140,11 +143,19 @@ affect GPU memory.
 
 ## Clean up
 
-Delete the deployment first so nothing is still using the volume:
+To stop GPU charges while keeping the deployment and cache:
+
+```bash
+lazycloud deployment stop openai-server
+```
+
+Restart with `lazycloud deployment start openai-server`. To remove it entirely,
+delete the deployment first. Delete the cache only if this example created it
+and you no longer need the model files:
 
 ```bash
 lazycloud deployment delete openai-server
-lazycloud volume delete vllm-model-cache --yes
+lazycloud volume delete vllm-model-cache
 unset VLLM_URL
 ```
 

@@ -3,9 +3,9 @@ title: "Examples"
 description: "Complete applications built on the LazyCloud SDK: GPU inference, model training, an ASGI service, a coding agent, and parallel data processing."
 ---
 
-Each example is a complete application. Its source lives under `examples/` in
-the LazyCloud repository; clone the repository and run the commands in each
-guide from its root, where `examples.<name>.app:app` is importable.
+Choose the result you want, then follow the guide through setup, a first run,
+and cleanup. Each guide uses source under `examples/` in the
+[LazyCloud repository](https://github.com/AmbientWare/lazycloud/tree/main/examples).
 
 <CardGroup cols={2}>
   <Card
@@ -27,7 +27,7 @@ guide from its root, where `examples.<name>.app:app` is importable.
     icon="file-magnifying-glass"
     href="/examples/document-processing-asgi"
   >
-    An ASGI upload service with background OCR and polling over durable tasks.
+    Upload a PDF or image in your browser and download the extracted text.
   </Card>
   <Card
     title="Sandboxed coding agent"
@@ -45,14 +45,27 @@ guide from its root, where `examples.<name>.app:app` is importable.
   </Card>
 </CardGroup>
 
-## Before you begin
+## Set up the examples
+
+You need Python 3.12 or newer, uv, and access to the source repository. From
+your checkout's root, create an environment for the examples:
+
+```bash
+uv venv .venv-examples --python 3.12
+source .venv-examples/bin/activate
+uv pip install ./packages/shared ./packages/lazycloud
+```
+
+These commands use Bash. Keep this environment active and run the guide's
+commands from the repository root. Module references such as
+`examples.yolo_training.app:train_yolo` depend on that working directory.
+GPU libraries install in the remote images; you do not need a local GPU.
 
 ```bash
 lazycloud login
-lazycloud workspace list
 ```
 
-The GPU examples need GPU capacity and cost compute and model-download time.
-The storage examples create volumes and files that stay until you run the
-cleanup steps. Each guide names its external credentials, licenses, and
-teardown commands before the first deploy.
+If you use several workspaces, select one with `lazycloud workspace use <name>`.
+Check your credit balance and GPU access in Settings, then Billing before
+running a GPU example. The storage examples leave files behind so you can
+reuse their outputs. Follow each guide's cleanup steps when finished.
