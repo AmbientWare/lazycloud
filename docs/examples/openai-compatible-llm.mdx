@@ -10,10 +10,16 @@ This example deploys the official vLLM OpenAI server as a pod. It serves
 files in a volume, so a replacement container reuses the cache instead of
 downloading again.
 
-The source is `examples/openai_compatible_llm/app.py` in the LazyCloud
-repository.
+The downloaded project's `app.py` contains the pod and its resources.
 
 <ExampleSetup />
+
+```bash
+lazycloud example download openai-compatible-llm
+cd openai-compatible-llm
+uv sync
+uv run lazycloud login
+```
 
 ## Prerequisites
 
@@ -74,7 +80,7 @@ no separate storage setup is needed.
 ## Deploy
 
 ```bash
-lazycloud deploy examples.openai_compatible_llm.app:app --resource pod:openai-server
+uv run lazycloud deploy app:app --resource pod:openai-server
 ```
 
 The first start downloads the model, so it takes a while. Copy the pod URL
@@ -92,7 +98,7 @@ curl --fail --show-error "$VLLM_URL/health" \
 ```
 
 A request without the header is rejected before it reaches vLLM. If health
-fails during startup, inspect `lazycloud logs --deployment openai-server -n 50`
+fails during startup, inspect `uv run lazycloud logs --deployment openai-server -n 50`
 for download or GPU errors, then check health again.
 
 ## Use it
@@ -123,8 +129,8 @@ key, and `qwen-1.5b` as the model.
 ## Troubleshoot a request
 
 ```bash
-lazycloud deployment list --app openai_compatible_llm
-lazycloud logs --deployment openai-server --follow --show-timestamp
+uv run lazycloud deployment list --app openai_compatible_llm
+uv run lazycloud logs --deployment openai-server --follow --show-timestamp
 ```
 
 Use the logs when startup or a request fails. Model-loading and GPU errors
@@ -149,16 +155,16 @@ affect GPU memory.
 To stop GPU charges while keeping the deployment and cache:
 
 ```bash
-lazycloud deployment stop openai-server
+uv run lazycloud deployment stop openai-server
 ```
 
-Restart with `lazycloud deployment start openai-server`. To remove it entirely,
+Restart with `uv run lazycloud deployment start openai-server`. To remove it entirely,
 delete the deployment first. Delete the cache only if this example created it
 and you no longer need the model files:
 
 ```bash
-lazycloud deployment delete openai-server
-lazycloud volume delete vllm-model-cache
+uv run lazycloud deployment delete openai-server
+uv run lazycloud volume delete vllm-model-cache
 unset VLLM_URL
 ```
 

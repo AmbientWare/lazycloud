@@ -23,7 +23,8 @@ private; CORS permits browser requests but grants no object access.
 
 After a storage configuration change, run a cold image build, write a volume
 file, and upload and download an artifact through the public SDK. Use
-`examples/artifacts/app.py` with the target workspace selected. Inspect the
+`uv run --group workspace lazycloud example download artifacts` to get the
+standalone project, then follow its README with the target workspace selected. Inspect the
 API, worker, and object-store errors if any step fails.
 
 Signed downloads must be reachable from the browser as well as the workload.

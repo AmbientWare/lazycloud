@@ -31,7 +31,7 @@ def create_report(amounts_cents: list[int]) -> str:
 ```
 
 ```bash
-lazycloud run report:create_report '[1200, 3500, 800]'
+uv run lazycloud run report:create_report '[1200, 3500, 800]'
 ```
 
 Open the returned URL to download `sales.csv`. Anyone with that URL can read
@@ -103,9 +103,9 @@ For durable files, use a Volume or download a copy before expiration.
 ## CLI
 
 ```bash
-lazycloud artifact list --search report
-lazycloud artifact usage
-lazycloud artifact delete ARTIFACT_ID
+uv run lazycloud artifact list --search report
+uv run lazycloud artifact usage
+uv run lazycloud artifact delete ARTIFACT_ID
 ```
 
 Lists return a `next` cursor; pass it with `--cursor` to continue. Use `--workspace`

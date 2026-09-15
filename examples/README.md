@@ -1,106 +1,68 @@
-# Run an example
+# Download an example
 
-Choose a guide below and run its commands from this repository's root.
-Use Python 3.12 or newer. Set up an environment with the public SDK:
-
-```bash
-uv venv .venv-examples --python 3.12
-source .venv-examples/bin/activate
-uv pip install ./packages/shared ./packages/lazycloud
-lazycloud login
-```
-
-Keep this environment active. The document-processing example also needs
-FastAPI locally; its guide includes the install command. GPU dependencies
-install in remote images.
-
-If you use several workspaces, choose one with
-`lazycloud workspace use <name>`. For CI, inject `LAZYCLOUD_TOKEN` and
-`LAZYCLOUD_WORKSPACE` through the job's environment.
-
-## Choose a workflow
-
-- [Serve a language model](../docs/examples/openai-compatible-llm.mdx) with
-  vLLM on an L4, an authenticated API, and a reusable model cache.
-- [Train an object detector](../docs/examples/train-yolo-object-detector.mdx)
-  and download predictions from its saved checkpoint.
-- [Extract text from documents](../docs/examples/document-processing-asgi.mdx)
-  through a browser upload app.
-- [Test a coding agent's patch](../docs/examples/sandboxed-coding-agent.mdx)
-  in a sandbox without network access or provider credentials.
-- [Summarize Parquet files](../docs/examples/parallel-parquet-s3.mdx) in your
-  bucket with parallel function calls.
-
-Each guide names required credentials, expected output, and cleanup steps.
-Workload code defines images, compute, volumes, schedules, and secret names.
-Mounted volumes are created on first use and reused by name within the workspace.
-The credential examples include Python setup modules; values stay out of source
-control. Deploy or run the app to use its definitions.
-
-`lazycloud run` shows function progress, logs, and results. Use task and log
-commands separately when investigating earlier runs or background work.
-
-## Save a report as an artifact
-
-`examples/artifacts/app.py` saves a report in a volume and attaches a copy
-to the task as an artifact:
+Users get complete projects through the public CLI:
 
 ```bash
-lazycloud run examples.artifacts.app:create_report
+uv tool install lazycloud-client
+lazycloud example list
+lazycloud example download yolo-training
+cd yolo-training
+uv sync
+uv run lazycloud login
+uv run lazycloud run app:train_yolo
 ```
 
-The function's volume declaration handles storage creation. The result includes
-the artifact ID and filename. Open Storage, then Artifacts
-in the dashboard to download it. The volume copy stays at `report.txt`:
+No repository access is required. Each project's README covers setup, expected
+results, and cleanup. The [public guides](https://docs.lazycloud.dev/examples)
+show the full workflows.
+
+## Maintain the catalog
+
+Canonical sources live under
+[the SDK's example assets](../packages/lazycloud/src/lazycloud/_examples).
+Each directory contains `example.json` and a `project/` directory.
+The CLI reads these directories through Python package resources; it has no
+per-example registry.
+
+To add an example, create one directory with metadata:
+
+```json
+{
+  "name": "my-example",
+  "description": "Describe the result users get.",
+  "python_version": "3.12",
+  "dependencies": []
+}
+```
+
+Put all source, assets, and a README under `project/`. Declare only local
+dependencies in the metadata. Remote dependencies belong in the workload's
+image. Use relative imports within a multi-file app package so it can run from
+any downloaded directory.
+
+The CLI generates `pyproject.toml`, `.python-version`, and `.gitignore`.
+It pins `lazycloud-client` to the installed SDK version. Do not add generated
+files, credentials, environments, or lockfiles to the asset directory.
+Users generate and commit their own `uv.lock` after downloading.
+
+Update an example in place. Remove its catalog directory to remove it from
+future SDK releases. No CLI code change is needed. Update the corresponding
+guide in the same change; existing user downloads are independent copies.
+
+## Check a change
+
+From the repository root, download the real project into a temporary directory:
 
 ```bash
-lazycloud cp lazycloud://artifact-reports/report.txt ./report.txt
+uv run --group workspace lazycloud example download my-example --output /tmp/my-example
 ```
 
-When finished, remove the returned artifact with
-`lazycloud artifact delete <artifact-id>`. Delete `artifact-reports` only
-if you no longer need its files. See [artifact retention](../docs/concepts/artifacts.mdx).
+Verify its imports and documented commands from that directory with the current
+client wheels installed. Build both an sdist and wheel for the client and verify
+the catalog from the wheel built from that sdist; source-checkout success alone
+does not prove that users receive the assets.
 
-## Try several workload types together
-
-`examples.all_workloads` includes functions, HTTP endpoints, an ASGI app,
-a recurring heartbeat, a pod, and an on-demand sandbox. Deploy it when you
-want to explore those resources in the dashboard:
-
-```bash
-lazycloud deploy examples.all_workloads:app
-lazycloud run examples.all_workloads:run_function 7
-```
-
-The result includes a task ID and a calculation result of 49. Then try:
-
-```bash
-lazycloud run examples.all_workloads:run_nested_function 6
-lazycloud run examples.all_workloads:run_artifacts "sample report"
-lazycloud run examples.all_workloads:run_background_job 5
-lazycloud run examples.all_workloads:run_endpoint 7
-lazycloud run examples.all_workloads:run_asgi
-```
-
-The background helper submits with `.spawn()` and retrieves the result
-before returning. Use `jobs.spawn(...)` directly for a detached call.
-
-To inspect error handling, run `run_function_failure` or
-`run_background_job_failure`. They deliberately fail a task and return
-`expected_failure: true`. `exercise_runs` runs all function scenarios,
-including those intentional failures.
-
-The heartbeat runs every minute and the pod stays running after deployment.
-Stop them when finished:
-
-```bash
-lazycloud app pause all_workloads
-```
-
-The `create_pod` and `create_sandbox` helpers start additional containers
-and return their IDs. Stop each returned container with
-`lazycloud container stop <container-id>`; pausing the app's deployments
-does not replace cleanup of those on-demand instances.
-
-Use `lazycloud app delete all_workloads` to remove the app. Saved artifacts
-have separate retention; delete any you no longer need from Storage.
+Example behavior tests live under
+[the SDK owner tests](../packages/lazycloud/tests/examples).
+Run the tests for the example you changed, plus relevant SDK checks. Clean up
+temporary downloads and any resources a live run creates.

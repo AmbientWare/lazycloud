@@ -90,7 +90,7 @@ function TypedExportStory({ active }: { active: boolean }) {
                 >
                   <span className="text-brand">$</span>
                   <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                    lazycloud deploy review_app:app
+                    uv run lazycloud deploy review_app:app
                   </span>
                   <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
                     <StatusDot /> 2 workloads deployed

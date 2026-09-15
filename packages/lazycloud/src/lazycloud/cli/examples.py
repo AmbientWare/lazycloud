@@ -1,200 +1,78 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
 import typer
-from shared.app_slug import validate_app_slug
 
-from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud.cli.components.cards import result_card
 from lazycloud.cli.components.output import console, emit, json_output_enabled, print_payload, table
+from lazycloud.example_catalog import example_catalog, write_projects
 
-example_app = typer.Typer(help="Manage example apps.")
-
-
-def _quickstart_source(app_name: str) -> str:
-    return f"""from __future__ import annotations
-
-from lazycloud import App, Image
-
-app = App({app_name!r})
-image = Image(python_version="3.12")
+example_app = typer.Typer(help="List and download standalone example projects.")
 
 
-@app.function(name="hello", image=image, cpu=1.0, memory="256Mi")
-def hello(name: str = "world") -> str:
-    print(f"Greeting {{name}} from LazyCloud", flush=True)
-    return f"hello {{name}}"
-
-
-if __name__ == "__main__":
-    print(hello.remote("LazyCloud"))
-"""
-
-
-QUICKSTART_TEMPLATE = _quickstart_source("quickstart")
-
-
-@dataclass(frozen=True, slots=True)
-class ExampleTemplate:
-    name: str
-    description: str
-    files: dict[str, str]
-
-    @property
-    def size_bytes(self) -> int:
-        return sum(len(content.encode("utf-8")) for content in self.files.values())
-
-
-TEMPLATES: dict[str, ExampleTemplate] = {
-    "quickstart": ExampleTemplate(
-        name="quickstart",
-        description="Run a Python function on LazyCloud.",
-        files={
-            "quickstart.py": QUICKSTART_TEMPLATE,
-            "README.md": (
-                "# Run your first function\n\n"
-                "Install `lazycloud-client`, then sign in and run:\n\n"
-                "```bash\nlazycloud login\n"
-                "lazycloud run quickstart:hello LazyCloud\n```\n\n"
-                "The command shows progress and logs, then prints `hello LazyCloud`.\n"
-                "With the SDK in your Python environment, `python quickstart.py` also "
-                "runs remotely. Use `hello.local(...)` to call it on your machine.\n"
-            ),
-        },
-    ),
-}
-
-
-def quickstart(
-    ctx: typer.Context,
-    output: Annotated[Path, typer.Option("--output", "-o")] = Path("quickstart.py"),
-    force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
-) -> None:
-    _write_file(output, QUICKSTART_TEMPLATE, force=force)
-    emit(
-        ctx,
-        payload={"path": str(output), "written": True},
-        view=notice_card(
-            "Quickstart written",
-            f"Created {output}.",
-            tone="success",
-        ),
-    )
-
-
-def create_app(
-    ctx: typer.Context,
-    name: str,
-    output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
-    force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
-) -> None:
-    name = validate_app_slug(name)
-    target = output or Path(name)
-    written = _write_files(
-        {
-            "quickstart.py": _quickstart_source(name),
-            "README.md": TEMPLATES["quickstart"].files["README.md"],
-        },
-        target,
-        force=force,
-    )
-    emit(
-        ctx,
-        payload={"name": name, "path": str(target), "files": written},
-        view=result_card(
-            "App scaffold created",
-            {"path": str(target), "files": len(written)},
-            tone="success",
-        ),
-    )
-
-
-@example_app.command("download", help="Write an example app to disk.")
+@example_app.command("download", help="Write a bundled example project to disk.")
 def example_download(
     ctx: typer.Context,
     name: str,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
-    force: Annotated[bool, typer.Option("--force", help="Overwrite existing files.")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Overwrite example files.")] = False,
 ) -> None:
+    catalog = example_catalog()
+    target = output or Path("examples" if name == "all" else name)
     if name == "all":
-        base = output or Path("examples")
-        files: dict[str, list[str]] = {}
-        for template_name in TEMPLATES:
-            files[template_name] = _write_template(
-                template_name,
-                base / template_name,
-                force=force,
-            )
-        emit(
-            ctx,
-            payload={"name": name, "path": str(base), "files": files},
-            view=result_card(
-                "Examples downloaded",
-                {
-                    "path": str(base),
-                    "examples": len(files),
-                    "files": sum(len(paths) for paths in files.values()),
-                },
-                tone="success",
-            ),
-        )
-        return
-    target = output or Path(name)
-    written = _write_template(name, target, force=force)
+        selected = {target / key: project for key, project in catalog.items()}
+    else:
+        if name not in catalog:
+            raise typer.BadParameter(f"unknown example: {name}; run 'lazycloud example list'")
+        selected = {target: catalog[name]}
+    try:
+        written = write_projects(selected, force=force)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     emit(
         ctx,
         payload={"name": name, "path": str(target), "files": written},
         view=result_card(
             "Example downloaded",
-            {"path": str(target), "files": len(written)},
+            {
+                "path": str(target),
+                "files": len(written),
+                "next": (
+                    "Choose a project directory and follow its README.md."
+                    if name == "all"
+                    else "Open the project directory and follow README.md."
+                ),
+            },
             tone="success",
         ),
     )
 
 
-@example_app.command("list", help="List available example apps.")
+@example_app.command("list", help="List example projects bundled with this SDK.")
 def example_list(ctx: typer.Context) -> None:
-    rows = [[template.name, template.description] for template in TEMPLATES.values()]
+    catalog = example_catalog()
     if json_output_enabled(ctx):
         print_payload(
             ctx,
             [
                 {
-                    "name": template.name,
-                    "description": template.description,
-                    "size_bytes": template.size_bytes,
+                    "name": project.manifest.name,
+                    "description": project.manifest.description,
+                    "size_bytes": project.size_bytes,
                 }
-                for template in TEMPLATES.values()
+                for project in catalog.values()
             ],
         )
         return
-    console.print(table("Examples", ["name", "description"], rows))
+    console.print(
+        table(
+            "Examples",
+            ["name", "description"],
+            [[project.manifest.name, project.manifest.description] for project in catalog.values()],
+        )
+    )
 
 
-def _write_template(name: str, target: Path, *, force: bool) -> list[str]:
-    template = TEMPLATES.get(name)
-    if template is None:
-        raise typer.BadParameter(f"unknown example: {name}")
-    return _write_files(template.files, target, force=force)
-
-
-def _write_files(files: dict[str, str], target: Path, *, force: bool) -> list[str]:
-    written: list[str] = []
-    for relative_path, content in files.items():
-        destination = target / relative_path
-        _write_file(destination, content, force=force)
-        written.append(str(destination))
-    return written
-
-
-def _write_file(path: Path, content: str, *, force: bool) -> None:
-    selected = path.expanduser()
-    if selected.exists() and not force:
-        raise typer.BadParameter(f"file already exists: {selected}")
-    selected.parent.mkdir(parents=True, exist_ok=True)
-    selected.write_text(content, encoding="utf-8")
-
-
-__all__ = ["create_app", "example_app", "quickstart"]
+__all__ = ["example_app"]

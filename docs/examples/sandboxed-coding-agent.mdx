@@ -11,10 +11,17 @@ replacement. A network-blocked sandbox receives only the seed project and
 that replacement, runs the unit test, and is terminated whether the test
 passes, fails, or errors.
 
-The source and seed project are under `examples/sandboxed_coding_agent/` in
-the LazyCloud repository.
+The downloaded project contains the source and seed files under
+`sandboxed_coding_agent/`.
 
 <ExampleSetup />
+
+```bash
+lazycloud example download sandboxed-coding-agent
+cd sandboxed-coding-agent
+uv sync
+uv run lazycloud login
+```
 
 ## What runs where
 
@@ -43,7 +50,7 @@ export CODING_AGENT_MODEL="provider-model-name"
 read -rsp "Provider API key: " CODING_AGENT_API_KEY && echo
 export CODING_AGENT_API_KEY
 
-python -m examples.sandboxed_coding_agent.configure
+uv run python -m sandboxed_coding_agent.configure
 unset CODING_AGENT_BASE_URL CODING_AGENT_MODEL CODING_AGENT_API_KEY
 ```
 
@@ -63,8 +70,8 @@ the sandbox declares none. Keep the key out of the prompt, URLs, and source file
 Deploying the app deploys the planner. Sandboxes are created on demand.
 
 ```bash
-lazycloud deploy examples.sandboxed_coding_agent.app:app
-lazycloud run examples.sandboxed_coding_agent.app:run_agent
+uv run lazycloud deploy sandboxed_coding_agent.app:app
+uv run lazycloud run sandboxed_coding_agent.app:run_agent
 ```
 
 The default prompt asks the planner to fix the deliberately wrong
@@ -76,15 +83,15 @@ and `test_exit_code: 0`. The command does not change your local seed project.
 Pass a different instruction as the first argument:
 
 ```bash
-lazycloud run examples.sandboxed_coding_agent.app:run_agent "Correct calculator.add and preserve its type hints."
+uv run lazycloud run sandboxed_coding_agent.app:run_agent "Correct calculator.add and preserve its type hints."
 ```
 
 ## If the repair fails
 
 ```bash
-lazycloud task show <planner-task-id>
-lazycloud task logs <planner-task-id>
-lazycloud run examples.sandboxed_coding_agent.app:inspect_sandboxes 20
+uv run lazycloud task show <planner-task-id>
+uv run lazycloud task logs <planner-task-id>
+uv run lazycloud run sandboxed_coding_agent.app:inspect_sandboxes 20
 ```
 
 Use the returned planner task ID to investigate provider failures. A failed
@@ -110,8 +117,8 @@ The orchestrator terminates its sandbox. Delete the planner deployment and
 the three secrets:
 
 ```bash
-lazycloud deployment delete plan-patch
-lazycloud secret delete CODING_AGENT_BASE_URL
-lazycloud secret delete CODING_AGENT_MODEL
-lazycloud secret delete CODING_AGENT_API_KEY
+uv run lazycloud deployment delete plan-patch
+uv run lazycloud secret delete CODING_AGENT_BASE_URL
+uv run lazycloud secret delete CODING_AGENT_MODEL
+uv run lazycloud secret delete CODING_AGENT_API_KEY
 ```

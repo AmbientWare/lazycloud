@@ -27,7 +27,7 @@ the dictionary as JSON.
 ## Deploy and call it
 
 ```bash
-lazycloud deploy text_api:count_words
+uv run lazycloud deploy text_api:count_words
 ```
 
 Copy the endpoint URL from the output. Endpoints require a bearer token by
@@ -52,7 +52,7 @@ The response is `{"words": 4}`. Browser sign-in does not export
 When changing the code, use a temporary preview:
 
 ```bash
-lazycloud serve text_api:count_words
+uv run lazycloud serve text_api:count_words
 ```
 
 Keep this terminal open. The command shows the preview URL and logs, and
@@ -78,10 +78,10 @@ The SDK uses your configured LazyCloud credentials.
 When you're finished:
 
 ```bash
-lazycloud deployment stop word-count
+uv run lazycloud deployment stop word-count
 ```
 
-Use `lazycloud deployment start word-count` to restart it, or
-`lazycloud deployment delete word-count` to remove the deployment.
+Use `uv run lazycloud deployment start word-count` to restart it, or
+`uv run lazycloud deployment delete word-count` to remove the deployment.
 
 See [Endpoints](/concepts/endpoints) for scaling, public access, and FastAPI apps.

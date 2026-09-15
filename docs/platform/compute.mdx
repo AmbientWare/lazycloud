@@ -26,7 +26,7 @@ def gpu_name() -> str:
     ).strip()
 ```
 
-Run `lazycloud run compute_demo:gpu_name` to print the assigned GPU's name.
+Run `uv run lazycloud run compute_demo:gpu_name` to print the assigned GPU's name.
 Check your GPU access and balance in Settings, then Billing first.
 
 Available GPU models are `t4`, `a10g`, `l4`, `l40s`, `a100-40`, `a100-80`,
@@ -36,9 +36,9 @@ last to take whatever is free.
 Check what your workspace is using:
 
 ```bash
-lazycloud compute status
-lazycloud compute instances
-lazycloud compute workloads
+uv run lazycloud compute status
+uv run lazycloud compute instances
+uv run lazycloud compute workloads
 ```
 
 ## Pools
@@ -61,9 +61,9 @@ To send every workload in a workspace to a pool without naming it each
 time, set the workspace default:
 
 ```bash
-lazycloud compute pools
-lazycloud compute policy show
-lazycloud compute policy update --default-pool aws
+uv run lazycloud compute pools
+uv run lazycloud compute policy show
+uv run lazycloud compute policy update --default-pool aws
 ```
 
 ## Your own AWS account
@@ -78,20 +78,20 @@ as everywhere else.
 The connection belongs to your account and serves every workspace you own.
 
 ```bash
-lazycloud cloud connect aws --account-id 123456789012
+uv run lazycloud cloud connect aws --account-id 123456789012
 ```
 
 Authorize the connection with your AWS profile. The command submits a
 CloudFormation stack that creates the management role and network:
 
 ```bash
-lazycloud cloud authorize --profile YOUR_AWS_PROFILE
-lazycloud cloud status
+uv run lazycloud cloud authorize --profile YOUR_AWS_PROFILE
+uv run lazycloud cloud status
 ```
 
 Check the CloudFormation stack's events in your AWS account if authorization
-has not completed. After the stack finishes, run `lazycloud cloud validate`,
-then `lazycloud cloud status` to read the result. The dashboard shows the same
+has not completed. After the stack finishes, run `uv run lazycloud cloud validate`,
+then `uv run lazycloud cloud status` to read the result. The dashboard shows the same
 connection under Settings, then Compute. Once ready, select its pool on a workload.
 
 LazyCloud manages instance selection, regions, capacity limits, warm workers,
@@ -99,9 +99,9 @@ idle shutdown, and root disks. These settings apply to every workspace the
 connection backs. Choose CPU, memory, GPU, and pool on each workload.
 
 If the authorization stops working, for example after a role change in AWS,
-`lazycloud cloud status` says so. `lazycloud cloud reconnect` starts a
-replacement authorization, and `lazycloud cloud validate` rechecks the current
-one. `lazycloud cloud disconnect` drains instances and removes the connection;
+`uv run lazycloud cloud status` says so. `uv run lazycloud cloud reconnect` starts a
+replacement authorization, and `uv run lazycloud cloud validate` rechecks the current
+one. `uv run lazycloud cloud disconnect` drains instances and removes the connection;
 add `--wait` to block until it is gone.
 
 ## Your own machines
@@ -120,7 +120,7 @@ The host needs:
 Run the join on the machine itself:
 
 ```bash
-lazycloud machine join --pool on-prem --gpu a100-80 --max-gpus 4 --max-cpu 32 --max-memory 128Gi
+uv run lazycloud machine join --pool on-prem --gpu a100-80 --max-gpus 4 --max-cpu 32 --max-memory 128Gi
 ```
 
 The command runs the agent in the foreground. Add `--background` to install a
@@ -138,8 +138,8 @@ machine, and shows the host checks as they pass. Select that pool with
 `--pool on-prem` when running your workload.
 
 ```bash
-lazycloud machine list
+uv run lazycloud machine list
 ```
 
 When retiring a machine, finish its active workloads and remove the exact
-machine ID with `lazycloud machine remove <machine-id>`.
+machine ID with `uv run lazycloud machine remove <machine-id>`.

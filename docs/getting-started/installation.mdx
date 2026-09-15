@@ -1,72 +1,85 @@
 ---
 title: "Installation"
-description: "Install the lazycloud Python SDK and CLI."
+description: "Use uv to install the CLI and manage each project's Python environment."
 ---
 
-Install `lazycloud-client` in the environment where you write your code. It
-provides `import lazycloud` and the `lazycloud` command, and needs Python 3.10
-or newer.
+Use uv for the CLI, project dependencies, and Python commands. Install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) first.
 
-## Install in a project
-
-For a uv project:
-
-```bash
-uv add lazycloud-client
-```
-
-Run commands with `uv run lazycloud` and scripts with `uv run python`.
-The examples in these docs use `lazycloud` and `python` directly; add `uv run`
-when using a uv project.
-
-For an activated Python virtual environment:
-
-```bash
-python -m pip install lazycloud-client
-```
-
-## Install only the CLI
+## Get the CLI
 
 ```bash
 uv tool install lazycloud-client
-```
-
-This makes `lazycloud` available in your shell. It does not install the SDK
-into the Python environment used by `python your_script.py`.
-
-Check the install:
-
-```bash
 lazycloud --help
 ```
 
-## Upgrade
+This installs the `lazycloud` command in an isolated environment. Use it to
+download an example or manage your account from any directory. It does not
+install the SDK into another project's Python environment.
 
-Upgrade the installation you are running:
+## Start from an example
 
 ```bash
-lazycloud update
+lazycloud example download quickstart
+cd quickstart
+uv sync
+uv run lazycloud login
+uv run lazycloud run quickstart:hello LazyCloud
 ```
 
-For a uv project, run:
+The download includes source, a README, `.python-version`, and
+`pyproject.toml`. The SDK dependency is pinned to the version that supplied the
+example. `uv sync` installs the project's dependencies and creates `uv.lock`.
+Run subsequent commands from this directory.
+
+Commit `pyproject.toml`, `uv.lock`, and the source. Keep `.venv` and
+credentials out of version control. In CI, use `uv sync --locked` to require
+the committed dependency versions.
+
+## Add LazyCloud to an existing project
+
+From your uv project:
+
+```bash
+uv add lazycloud-client
+uv run lazycloud login
+```
+
+For a new project, run `uv init my-project` and `cd my-project` first.
+Use `uv run lazycloud` for CLI workflows and `uv run python` for scripts.
+The guides use this project environment by default.
+
+The client supports Python 3.10 or newer. Downloaded examples select Python
+3.12; uv can install that interpreter when needed. Remote Python and GPU
+dependencies belong in the workload's `Image` definition.
+
+## Upgrade deliberately
+
+Upgrade the global tool:
+
+```bash
+uv tool upgrade lazycloud-client
+```
+
+For a project, run:
 
 ```bash
 uv run lazycloud update
 ```
 
-This updates `uv.lock` and the project's environment together, preserving the
-dependency constraints in `pyproject.toml`. If a version pin prevents an upgrade,
-the command reports it. Change the pin before retrying.
+This updates the environment and lockfile within the constraints in
+`pyproject.toml`. A downloaded example pins the SDK, so select the release
+you want explicitly before upgrading:
 
-Global tools update through `uv tool` or `pipx`. Other environments use their
-installer's pip command. The output identifies the installation and its environment
-path. `lazycloud update --check` reports the installed and latest versions without
-changing anything; use `uv run lazycloud update --check` to check a uv project.
+```bash
+uv add "lazycloud-client==<version>"
+```
 
-If the CLI recommends an update, run it in the same environment as the command
-you were using.
+Review the changed dependency and lockfile, then rerun your workflow.
+Downloading a newer example into a new directory lets you compare its code
+without replacing your edits. Downloading never upgrades an existing project.
 
-The CLI keeps its sign-in state under `~/.lazycloud`. Set `LAZYCLOUD_HOME` to
-put it somewhere else.
+The CLI keeps sign-in state under `~/.lazycloud`; global and project commands
+share it. Set `LAZYCLOUD_HOME` to use another location.
 
-Next, [sign in and run a function](/getting-started/quickstart).
+Next, [run your first function](/getting-started/quickstart).

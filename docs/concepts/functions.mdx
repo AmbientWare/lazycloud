@@ -7,7 +7,7 @@ import WorkloadOptions from '/snippets/workload-options.mdx';
 
 Use a function for work that returns a result, such as processing a file,
 running inference, or generating a report. Add `@app.function` and call it
-with `.remote()` or `lazycloud run`.
+with `.remote()` or `uv run lazycloud run`.
 
 ## Run a function
 
@@ -30,12 +30,12 @@ if __name__ == "__main__":
 ```
 
 ```bash
-lazycloud run reports:summarize_sales '[1200, 3500, 800]'
+uv run lazycloud run reports:summarize_sales '[1200, 3500, 800]'
 ```
 
 The command shows progress and logs, then returns three sales totaling 5500
 cents. It prepares the image and uploads your source automatically.
-You can also run `python reports.py` with the SDK installed.
+You can also run `uv run python reports.py`.
 
 ## Choose how to call it
 
@@ -57,7 +57,7 @@ When one remote function calls another with `.remote()`, the callee must
 already be deployed. Deploy the app containing both before running the parent:
 
 ```bash
-lazycloud deploy reports:app
+uv run lazycloud deploy reports:app
 ```
 
 ## Preview while you edit
@@ -65,13 +65,13 @@ lazycloud deploy reports:app
 Keep a preview running in one terminal:
 
 ```bash
-lazycloud serve reports:summarize_sales
+uv run lazycloud serve reports:summarize_sales
 ```
 
 Call it from a second terminal:
 
 ```bash
-lazycloud run reports:summarize_sales '[1200, 3500, 800]'
+uv run lazycloud run reports:summarize_sales '[1200, 3500, 800]'
 ```
 
 Calls from the same local configuration use the preview while it is active.
@@ -116,11 +116,11 @@ print(call.task_id)
 
 `.spawn()` returns a `FunctionCall` without waiting for the result.
 Use `call.get()` when you need the value, or retrieve it later with
-`lazycloud task result <task-id>`. `async_spawn()` is the awaitable form.
+`uv run lazycloud task result <task-id>`. `async_spawn()` is the awaitable form.
 
 ## Progress and logs
 
-Local `.remote()` calls and `lazycloud run` show image-build progress,
+Local `.remote()` calls and `uv run lazycloud run` show image-build progress,
 source uploads, task status, and remote stdout and stderr. Use a separate
 [log command](/concepts/tasks-and-logs) when revisiting a run or following
 background work.
@@ -246,7 +246,7 @@ Use it instead of the `TASK_ID` environment variable when calls share a process.
 ## Debug the remote environment
 
 ```bash
-lazycloud shell reports:summarize_sales
+uv run lazycloud shell reports:summarize_sales
 ```
 
 This opens a shell in the function's image so you can inspect packages and files.

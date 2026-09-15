@@ -41,7 +41,7 @@ within each kind in the app.
 ## Deploy together
 
 ```bash
-lazycloud deploy text_tools
+uv run lazycloud deploy text_tools
 ```
 
 This deploys both workloads. A module name selects its only app.
@@ -59,14 +59,14 @@ review and remove unused resources separately.
 ## Deploy or preview one workload
 
 ```bash
-lazycloud deploy text_tools:app --resource endpoint:count
+uv run lazycloud deploy text_tools:app --resource endpoint:count
 ```
 
 A selector is the resource name, or `kind:name` if the name is shared by
 several kinds. You can also pass the decorated object directly:
 
 ```bash
-lazycloud serve text_tools:count
+uv run lazycloud serve text_tools:count
 ```
 
 The preview prints a temporary URL and logs. Ctrl+C ends it.
@@ -76,7 +76,7 @@ From Python, use `app.deploy()` or `app.deploy(resource="endpoint:count")`.
 ## Export a typed Python package
 
 ```bash
-lazycloud app export text_tools
+uv run lazycloud app export text_tools
 ```
 
 This writes `lazycloud_clients/text_tools`. Import a deployed function or endpoint
@@ -91,8 +91,8 @@ path or supply a JSON file when needed. For example, for the `service` ASGI
 app from the [ASGI guide](/concepts/endpoints#asgi-applications):
 
 ```bash
-lazycloud app export web_app --openapi-path service=/schema/openapi.json
-lazycloud app export web_app --openapi service=./openapi.json
+uv run lazycloud app export web_app --openapi-path service=/schema/openapi.json
+uv run lazycloud app export web_app --openapi service=./openapi.json
 ```
 
 ASGI methods use the schema's operation IDs and include async equivalents.
@@ -107,15 +107,15 @@ endpoints, and ASGI apps. Pods and sandboxes are excluded.
 ## Manage the app
 
 ```bash
-lazycloud app show text_tools
+uv run lazycloud app show text_tools
 ```
 
 To stop its workloads while keeping their definitions:
 
 ```bash
-lazycloud app pause text_tools
+uv run lazycloud app pause text_tools
 ```
 
-Use `lazycloud app resume text_tools` to resume. When you no longer need
-the app, `lazycloud app delete text_tools` removes it. Check separately for
+Use `uv run lazycloud app resume text_tools` to resume. When you no longer need
+the app, `uv run lazycloud app delete text_tools` removes it. Check separately for
 [stored files](/concepts/volumes) you want to retain or delete.

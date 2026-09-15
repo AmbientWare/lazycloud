@@ -6,29 +6,37 @@ description: "Write a Python function, run it on LazyCloud, and see its result i
 You'll run a Python function on remote compute and get `hello LazyCloud` back
 in your terminal. Start with the [client installed](/getting-started/installation).
 
+## Download the project
+
+With the CLI [installed through uv](/getting-started/installation):
+
+```bash
+lazycloud example download quickstart
+cd quickstart
+uv sync
+```
+
+This gives you `quickstart.py`, a README, and a project pinned to your SDK
+version. `uv sync` creates the environment and `uv.lock`. Keep the lockfile
+with your source so another machine can install the same dependencies.
+
 ## Sign in
 
 ```bash
-lazycloud login
+uv run lazycloud login
 ```
 
 Open the link, check that the code matches your terminal, and approve the
 sign-in. If you belong to several workspaces, choose where to run:
 
 ```bash
-lazycloud workspace list
-lazycloud workspace use <name>
+uv run lazycloud workspace list
+uv run lazycloud workspace use <name>
 ```
 
-## Create the function
+## Read the function
 
-In your project directory, generate `quickstart.py`:
-
-```bash
-lazycloud quickstart
-```
-
-The file contains:
+The downloaded `quickstart.py` contains:
 
 ```python
 from __future__ import annotations
@@ -56,7 +64,7 @@ Change these settings in the file so your next run uses the same configuration.
 ## Run it
 
 ```bash
-lazycloud run quickstart:hello LazyCloud
+uv run lazycloud run quickstart:hello LazyCloud
 ```
 
 LazyCloud prepares the image, uploads your code, and runs `hello` remotely.
@@ -67,7 +75,7 @@ Run the command from the directory containing `quickstart.py`.
 `quickstart:hello` selects `hello` from that module; omit the `.py` extension.
 Arguments follow it. Change `LazyCloud` to your name and run it again.
 
-You can also run `python quickstart.py` when the SDK is installed in your Python
+You can also run `uv run python quickstart.py` when the SDK is installed in your Python
 environment. The `.remote()` call in the file submits the same remote work.
 Use `.local()` instead when you want to call the function on your own machine.
 

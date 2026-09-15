@@ -14,9 +14,11 @@ Install the public client and sign in:
 
 ```bash
 uv tool install lazycloud-client
-lazycloud login
-lazycloud quickstart
-lazycloud run quickstart:hello LazyCloud
+lazycloud example download quickstart
+cd quickstart
+uv sync
+uv run lazycloud login
+uv run lazycloud run quickstart:hello LazyCloud
 ```
 
 The command shows progress and remote logs, then prints `hello LazyCloud`.
@@ -119,9 +121,8 @@ See [local deployment](deploy/README.md#local-environment) for startup.
 
 ```bash
 uv run --group workspace lazycloud-admin login --profile local
-uv run lazycloud-admin quickstart
-uv run lazycloud-admin deploy quickstart:hello
-uv run lazycloud-admin run quickstart:hello 'LazyCloud'
+uv run --group workspace lazycloud-admin example download quickstart --output quickstart_project
+uv run --group workspace lazycloud-admin run quickstart_project.quickstart:hello 'LazyCloud'
 uv run lazycloud-admin task list
 uv run lazycloud-admin task result <run-id>
 uv run lazycloud-admin task logs <run-id>

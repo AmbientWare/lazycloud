@@ -13,9 +13,16 @@ The default run trains on Ultralytics' eight-image COCO8 dataset for one
 epoch. Use it to check training, checkpoint storage, and prediction before
 spending GPU time on your own dataset.
 
-The source is `examples/yolo_training/app.py` in the LazyCloud repository.
+The downloaded project's `app.py` contains both functions and their resources.
 
 <ExampleSetup />
+
+```bash
+lazycloud example download yolo-training
+cd yolo-training
+uv sync
+uv run lazycloud login
+```
 
 You need access to an L4 and a positive credit balance. Training and prediction
 both use GPU compute. Check [Ultralytics licensing](https://www.ultralytics.com/license)
@@ -24,7 +31,7 @@ before adapting the example for commercial use.
 ## Define shared storage
 
 Both functions use the pinned Ultralytics image in
-`examples/yolo_training/app.py`. Training writes a checkpoint and metrics;
+`app.py`. Training writes a checkpoint and metrics;
 prediction reads that checkpoint from the same volume. The code rejects paths
 outside the volume and refuses to overwrite an existing run directory.
 
@@ -47,14 +54,14 @@ locally.
 With no arguments the function uses `coco8.yaml`, YOLO26n, and one epoch:
 
 ```bash
-lazycloud run examples.yolo_training.app:train_yolo
+uv run lazycloud run app:train_yolo
 ```
 
 The command shows training logs and returns checkpoint and metrics paths.
 Download the metrics CSV:
 
 ```bash
-lazycloud cp lazycloud://yolo-artifacts/training/coco8-smoke/results.csv ./results.csv
+uv run lazycloud cp lazycloud://yolo-artifacts/training/coco8-smoke/results.csv ./results.csv
 ```
 
 Compute is charged while the container runs, including startup and its idle
@@ -68,8 +75,8 @@ The prediction function loads the saved `best.pt` and, by default, runs it on
 Ultralytics' public `bus.jpg`:
 
 ```bash
-lazycloud run examples.yolo_training.app:predict_yolo
-lazycloud cp lazycloud://yolo-artifacts/predictions/bus-prediction/bus.jpg ./bus-prediction.jpg
+uv run lazycloud run app:predict_yolo
+uv run lazycloud cp lazycloud://yolo-artifacts/predictions/bus-prediction/bus.jpg ./bus-prediction.jpg
 ```
 
 Open `bus-prediction.jpg` to see the detected objects. The one-epoch run
@@ -84,7 +91,7 @@ YAML must point at files under `/artifacts` too.
 Provision and upload from Python first. This also works before running the sample:
 
 ```python
-from examples.yolo_training.app import artifact_volume
+from app import artifact_volume
 
 artifact_volume.create()
 artifact_volume.put("datasets/my-detector", "datasets/my-detector")
@@ -93,21 +100,21 @@ artifact_volume.put("datasets/my-detector", "datasets/my-detector")
 `create()` reuses an existing volume. Once the files are uploaded:
 
 ```bash
-lazycloud run examples.yolo_training.app:train_yolo custom-run 50 datasets/my-detector/data.yaml
+uv run lazycloud run app:train_yolo custom-run 50 datasets/my-detector/data.yaml
 ```
 
 To predict on an uploaded image, pass its volume-relative path as the third
 argument. The first two name the training run and the prediction run:
 
 ```bash
-lazycloud cp ./sample.jpg lazycloud://yolo-artifacts/inputs/sample.jpg
-lazycloud run examples.yolo_training.app:predict_yolo custom-run sample-prediction inputs/sample.jpg
+uv run lazycloud cp ./sample.jpg lazycloud://yolo-artifacts/inputs/sample.jpg
+uv run lazycloud run app:predict_yolo custom-run sample-prediction inputs/sample.jpg
 ```
 
 Run names cannot be reused. Pick a new training name for another trial and
 use that same name for prediction. This preserves your earlier checkpoint.
 
-If training fails, use `lazycloud task list --app yolo_training` and inspect
+If training fails, use `uv run lazycloud task list --app yolo_training` and inspect
 that task's logs. Check the dataset path before retrying with a new name.
 
 ## Clean up
@@ -118,14 +125,14 @@ while you still need the checkpoints. Download important files before deleting t
 Remove runs you no longer need:
 
 ```bash
-lazycloud rm yolo-artifacts/training/coco8-smoke
-lazycloud rm yolo-artifacts/predictions/bus-prediction
+uv run lazycloud rm yolo-artifacts/training/coco8-smoke
+uv run lazycloud rm yolo-artifacts/predictions/bus-prediction
 ```
 
 Or delete the whole volume:
 
 ```bash
-lazycloud volume delete yolo-artifacts
+uv run lazycloud volume delete yolo-artifacts
 ```
 
 <Warning>

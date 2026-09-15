@@ -19,7 +19,7 @@ CLI and other browsers stay signed in.
 ## Sign in from the CLI
 
 ```bash
-lazycloud login
+uv run lazycloud login
 ```
 
 The CLI prints a link and a code. Open the link, confirm the code matches what
@@ -38,9 +38,9 @@ to several workspaces, and the same sign-in reaches all of them.
 The CLI acts in one workspace at a time:
 
 ```bash
-lazycloud workspace list
-lazycloud workspace use <name>
-lazycloud workspace rename <new-name>
+uv run lazycloud workspace list
+uv run lazycloud workspace use <name>
+uv run lazycloud workspace rename <new-name>
 ```
 
 To act in a different workspace for one command, pass `--workspace <name>`.
@@ -72,7 +72,7 @@ For an interactive Bash session:
 read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
 export LAZYCLOUD_TOKEN
 export LAZYCLOUD_WORKSPACE="<workspace-name>"
-lazycloud deploy app:app
+uv run lazycloud deploy app:app
 ```
 
 `LAZYCLOUD_TOKEN` and `LAZYCLOUD_WORKSPACE` override whatever the CLI has
@@ -82,7 +82,7 @@ state directory away from `~/.lazycloud` if the job cannot write there.
 To store a token instead of exporting it each time:
 
 ```bash
-lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <workspace-name>
+uv run lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <workspace-name>
 ```
 
 Use the token as a bearer credential when calling an authorized endpoint or
@@ -99,11 +99,11 @@ workspaces within one account only needs `workspace use`. Each is a profile, and
 time:
 
 ```bash
-lazycloud login --profile ci --token "$LAZYCLOUD_TOKEN" --workspace staging --no-activate
-lazycloud profile list
-lazycloud profile activate ci
-lazycloud profile current
-lazycloud profile delete ci
+uv run lazycloud login --profile ci --token "$LAZYCLOUD_TOKEN" --workspace staging --no-activate
+uv run lazycloud profile list
+uv run lazycloud profile activate ci
+uv run lazycloud profile current
+uv run lazycloud profile delete ci
 ```
 
 `LAZYCLOUD_PROFILE=<name>` selects a profile for one command without changing

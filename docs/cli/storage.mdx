@@ -15,9 +15,9 @@ on first use. These commands are useful for ad hoc storage work and inspection.
 ## lazycloud volume
 
 ```bash
-lazycloud volume list
-lazycloud volume create NAME
-lazycloud volume delete NAME [-y]     # deletes the files too; -y skips the prompt
+uv run lazycloud volume list
+uv run lazycloud volume create NAME
+uv run lazycloud volume delete NAME [-y]     # deletes the files too; -y skips the prompt
 ```
 
 ## Files
@@ -29,37 +29,37 @@ Volume paths are `lazycloud://<volume>/<path>`. The scheme is optional except
 on the source of a download, where it marks the path as remote.
 
 ```bash
-lazycloud ls REMOTE_PATH
-lazycloud cp SOURCE DESTINATION
-lazycloud rm REMOTE_PATH
-lazycloud mv ORIGINAL_PATH NEW_PATH
+uv run lazycloud ls REMOTE_PATH
+uv run lazycloud cp SOURCE DESTINATION
+uv run lazycloud rm REMOTE_PATH
+uv run lazycloud mv ORIGINAL_PATH NEW_PATH
 ```
 
 ```bash
-lazycloud volume create models
-lazycloud cp model.safetensors lazycloud://models/checkpoints/model.safetensors
-lazycloud ls models/checkpoints
-lazycloud cp lazycloud://models/checkpoints/model.safetensors ./model.safetensors
-lazycloud mv models/checkpoints/model.safetensors models/archive/model.safetensors
+uv run lazycloud volume create models
+uv run lazycloud cp model.safetensors lazycloud://models/checkpoints/model.safetensors
+uv run lazycloud ls models/checkpoints
+uv run lazycloud cp lazycloud://models/checkpoints/model.safetensors ./model.safetensors
+uv run lazycloud mv models/checkpoints/model.safetensors models/archive/model.safetensors
 ```
 
 This uploads a local checkpoint, downloads a copy, and archives the remote file.
-To remove the archived file, run `lazycloud rm models/archive/model.safetensors`.
+To remove the archived file, run `uv run lazycloud rm models/archive/model.safetensors`.
 Deleting a volume removes all its files; download what you need first.
 
 ## lazycloud secret
 
 ```bash
-lazycloud secret list
-lazycloud secret create NAME VALUE
-lazycloud secret modify NAME VALUE
-lazycloud secret show NAME [--reveal]   # metadata; --reveal prints the value
-lazycloud secret delete NAME
+uv run lazycloud secret list
+uv run lazycloud secret create NAME VALUE
+uv run lazycloud secret modify NAME VALUE
+uv run lazycloud secret show NAME [--reveal]   # metadata; --reveal prints the value
+uv run lazycloud secret delete NAME
 ```
 
 <Warning>
   A value typed on the command line lands in your shell history. Read it from
-  a variable or a file instead: `lazycloud secret create OPENAI_API_KEY "$OPENAI_API_KEY"`.
+  a variable or a file instead: `uv run lazycloud secret create OPENAI_API_KEY "$OPENAI_API_KEY"`.
 </Warning>
 
 ## lazycloud artifact
@@ -67,11 +67,11 @@ lazycloud secret delete NAME
 Find reports saved by tasks and inspect their storage use:
 
 ```bash
-lazycloud artifact list --search report
-lazycloud artifact usage
+uv run lazycloud artifact list --search report
+uv run lazycloud artifact usage
 ```
 
-Use `lazycloud artifact delete <artifact-id>` to remove a saved file. Lists
+Use `uv run lazycloud artifact delete <artifact-id>` to remove a saved file. Lists
 return a `next` cursor; pass `--cursor <cursor>` for another page. See
 [Artifacts](/concepts/artifacts) for downloads and retention.
 

@@ -8,7 +8,7 @@ description: "Sign the CLI in, choose a workspace, and manage stored credentials
 Sign in once on your machine:
 
 ```bash
-lazycloud login
+uv run lazycloud login
 ```
 
 Prints a link and a code. Approve it in the browser and the CLI is signed in
@@ -19,7 +19,7 @@ For CI, configure `LAZYCLOUD_TOKEN` through your CI secret store and set
 To save an existing environment token in a local profile:
 
 ```bash
-lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <name>
+uv run lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <name>
 ```
 
 `--profile <name>` saves the sign-in under a named profile, and
@@ -28,9 +28,9 @@ lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <name>
 ## lazycloud workspace
 
 ```bash
-lazycloud workspace list
-lazycloud workspace use NAME        # the workspace later commands act in
-lazycloud workspace rename NAME     # renames the current workspace
+uv run lazycloud workspace list
+uv run lazycloud workspace use NAME        # the workspace later commands act in
+uv run lazycloud workspace rename NAME     # renames the current workspace
 ```
 
 `LAZYCLOUD_WORKSPACE` overrides the stored choice for every command, and
@@ -42,12 +42,12 @@ Profiles hold separate sign-ins. One is active at a time.
 Switching workspaces within one account does not need a new profile.
 
 ```bash
-lazycloud profile list
-lazycloud profile current
-lazycloud profile show [--profile <name>]
-lazycloud profile set [--profile <name>] [--workspace <name>] [--token <token>] [--no-activate]
-lazycloud profile activate NAME
-lazycloud profile delete NAME
+uv run lazycloud profile list
+uv run lazycloud profile current
+uv run lazycloud profile show [--profile <name>]
+uv run lazycloud profile set [--profile <name>] [--workspace <name>] [--token <token>] [--no-activate]
+uv run lazycloud profile activate NAME
+uv run lazycloud profile delete NAME
 ```
 
 `LAZYCLOUD_PROFILE=<name>` uses a profile for one command.
@@ -55,8 +55,8 @@ lazycloud profile delete NAME
 ## lazycloud token
 
 ```bash
-lazycloud token show [--profile <name>]     # whether the profile holds a token
-lazycloud token set VALUE [--profile <name>]
+uv run lazycloud token show [--profile <name>]     # whether the profile holds a token
+uv run lazycloud token set VALUE [--profile <name>]
 ```
 
 Tokens are created and deleted in the dashboard under Settings, then Tokens.

@@ -58,8 +58,10 @@ it to loopback. A browser on another machine also needs access to that endpoint
 for signed storage transfers.
 
 Use the public SDK against this deployment by exporting `LAZYCLOUD_ENDPOINT` and
-the local `LAZYCLOUD_TOKEN`. `examples/artifacts/app.py` writes through a volume
-and saves an artifact with the account's plan retention. A token-only administrator can
+the local `LAZYCLOUD_TOKEN`. Download the `artifacts` project with
+`uv run --group workspace lazycloud example download artifacts`. Its `app.py`
+writes through a volume and saves an artifact with the account's plan retention.
+A token-only administrator can
 provision its Stripe test subscription through `/api/v1/billing/card-session`
 before running workloads, just as an account does when adding a card. An existing
 Stripe test catalog must contain the current plans; `lazycloud-admin billing

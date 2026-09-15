@@ -32,7 +32,7 @@ with `concurrency=1`, `keep_warm=180`, `max_pending_tasks=100`, and
 Deploy it:
 
 ```bash
-lazycloud deploy api_demo:count_words
+uv run lazycloud deploy api_demo:count_words
 ```
 
 The command prints the endpoint's URL. Send a bearer token for the
@@ -92,7 +92,7 @@ from it instead of cold-starting.
 
 Use `@app.asgi` for an existing FastAPI or Starlette application with several
 routes. Save this complete example as `web_app.py`. Install FastAPI locally
-with `python -m pip install fastapi` so the CLI can import the file:
+with `uv add fastapi` so the CLI can import the file:
 
 ```python
 from fastapi import FastAPI
@@ -114,7 +114,7 @@ service = app.asgi(
 ```
 
 ```bash
-lazycloud deploy web_app:service
+uv run lazycloud deploy web_app:service
 ```
 
 ASGI apps take the endpoint options with two renamed: `concurrent_requests`
@@ -148,12 +148,12 @@ way. `name` defaults to `"realtime"`.
 
 ## Preview before deploying
 
-`lazycloud serve` runs an endpoint or ASGI app on LazyCloud with a temporary
+`uv run lazycloud serve` runs an endpoint or ASGI app on LazyCloud with a temporary
 URL and streams logs, syncing your working directory into the container as you
 edit:
 
 ```bash
-lazycloud serve api_demo:count_words
+uv run lazycloud serve api_demo:count_words
 ```
 
 ## Custom domains
@@ -164,7 +164,7 @@ realtime handler serves it from a hostname you own. See
 
 ## Shared options
 
-To stop an endpoint, use `lazycloud deployment stop <name>`. Warm containers
+To stop an endpoint, use `uv run lazycloud deployment stop <name>`. Warm containers
 incur compute charges while they remain running.
 
 Endpoints, ASGI apps, and realtime handlers also accept `env`, `secrets`,

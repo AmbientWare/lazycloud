@@ -3,9 +3,9 @@ title: "Examples"
 description: "Complete applications built on the LazyCloud SDK: GPU inference, model training, an ASGI service, a coding agent, and parallel data processing."
 ---
 
-Choose the result you want, then follow the guide through setup, a first run,
-and cleanup. Each guide uses source under `examples/` in the
-[LazyCloud repository](https://github.com/AmbientWare/lazycloud/tree/main/examples).
+Choose a workflow and download its standalone uv project. Each guide walks
+through setup, a first run, and cleanup. The source and assets come with the SDK;
+no repository access is needed.
 
 Each app defines its images, compute, and storage mounts in Python. Run or
 deploy it to use those definitions; mounted volumes need no separate CLI
@@ -52,25 +52,30 @@ step. CLI storage commands are for inspecting, downloading, and cleaning up data
 
 ## Set up the examples
 
-You need Python 3.12 or newer, uv, and access to the source repository. From
-your checkout's root, create an environment for the examples:
+Install the CLI with uv, then choose a project:
 
 ```bash
-uv venv .venv-examples --python 3.12
-source .venv-examples/bin/activate
-uv pip install ./packages/shared ./packages/lazycloud
+uv tool install lazycloud-client
+lazycloud example list
+lazycloud example download yolo-training
+cd yolo-training
+uv sync
 ```
 
-These commands use Bash. Keep this environment active and run the guide's
-commands from the repository root. Module references such as
-`examples.yolo_training.app:train_yolo` depend on that working directory.
-GPU libraries install in the remote images; you do not need a local GPU.
+Each download includes a README and dependencies pinned to the installed SDK.
+Run the guide's commands from the downloaded directory. Use `uv run` for Python
+scripts and CLI workflows. Commit the generated `uv.lock`; use `uv sync --locked`
+in CI. GPU libraries install in remote images, so you do not need a local GPU.
 
 ```bash
-lazycloud login
+uv run lazycloud login
 ```
 
-If you use several workspaces, select one with `lazycloud workspace use <name>`.
+If you use several workspaces, select one with `uv run lazycloud workspace use <name>`.
 Check your credit balance and GPU access in Settings, then Billing before
 running a GPU example. The storage examples leave files behind so you can
 reuse their outputs. Follow each guide's cleanup steps when finished.
+
+The catalog also includes `quickstart`, `artifacts`, and `all-workloads`.
+Their downloaded READMEs include run commands and cleanup. Use
+`lazycloud example download all` to write every project into its own directory.

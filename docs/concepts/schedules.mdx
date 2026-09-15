@@ -30,7 +30,7 @@ def count_files() -> dict[str, int]:
 Deploy the function to register its schedule:
 
 ```bash
-lazycloud deploy daily_report:count_files
+uv run lazycloud deploy daily_report:count_files
 ```
 
 The first invocation creates or reuses the declared volume. An empty volume
@@ -55,12 +55,12 @@ to 23, and days up to 31. Invalid expressions fail at deploy time.
 ## Try it now
 
 ```bash
-lazycloud run daily_report:count_files
+uv run lazycloud run daily_report:count_files
 ```
 
 This runs once immediately and shows its logs and result. It does not wait
 for the schedule. Review automatic runs in the dashboard or with
-`lazycloud task list --app daily_report`.
+`uv run lazycloud task list --app daily_report`.
 
 Functions keep their normal timeout and retry settings. Scheduled functions
 default to `keep_warm=0`, so a container shuts down when idle.
@@ -73,9 +73,9 @@ redeploy to keep the function callable without automatic runs.
 To stop it now:
 
 ```bash
-lazycloud deployment stop count-files
+uv run lazycloud deployment stop count-files
 ```
 
 To remove the example entirely, delete the deployment with
-`lazycloud deployment delete count-files`. Delete `report-inputs` only
+`uv run lazycloud deployment delete count-files`. Delete `report-inputs` only
 after downloading any files you need.

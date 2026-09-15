@@ -9,14 +9,14 @@ const QUICKSTART_STEPS = [
     commands: ["uv tool install lazycloud-client", "lazycloud login"],
   },
   {
-    title: "Create a function",
-    detail: "Quickstart writes quickstart.py with one function.",
-    commands: ["lazycloud quickstart"],
+    title: "Download the project",
+    detail: "The project includes a function and pinned SDK dependencies.",
+    commands: ["lazycloud example download quickstart", "cd quickstart", "uv sync"],
   },
   {
     title: "Run the function",
     detail: "Your terminal shows progress and logs, then prints hello LazyCloud.",
-    commands: ["lazycloud run quickstart:hello 'LazyCloud'"],
+    commands: ["uv run lazycloud run quickstart:hello 'LazyCloud'"],
   },
 ] as const;
 

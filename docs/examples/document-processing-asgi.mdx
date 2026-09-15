@@ -9,18 +9,21 @@ Upload a PDF, JPEG, or PNG and read its text in a browser. This example runs
 FastAPI as an HTTP service and Tesseract in a separate background function.
 Files pass between them through a volume.
 
-Source is in `examples/document_processing/`.
+Source is in `document_processing/`.
 
 <ExampleSetup />
 
+```bash
+lazycloud example download document-processing
+cd document-processing
+uv sync
+uv run lazycloud login
+```
+
 ## Prepare the app
 
-Install FastAPI in your local example environment so the CLI can import the
+`uv sync` installs FastAPI from `pyproject.toml` so the CLI can import the
 application. Tesseract and Poppler install only in the remote image.
-
-```bash
-uv pip install fastapi==0.139.2
-```
 
 The app declares its shared volume in `resources.py`:
 
@@ -35,7 +38,7 @@ the volume when they start. The secret needs an initial value. Run the
 example's Python setup module once:
 
 ```bash
-python -m examples.document_processing.configure
+uv run python -m document_processing.configure
 ```
 
 `configure.py` uses `Secret(JOB_TOKEN_SECRET_NAME).create(...)` with a random
@@ -53,7 +56,7 @@ HTTP service receives it.
 ## Deploy and upload
 
 ```bash
-lazycloud deploy examples.document_processing.app:app
+uv run lazycloud deploy document_processing.app:app
 ```
 
 Open the `document-api` URL from the deploy output. Select a document in the
@@ -111,12 +114,12 @@ Deletion returns HTTP 409 if work is still running.
 
 ## Diagnose a failed upload or job
 
-For an HTTP error, inspect `lazycloud logs --deployment document-api -n 100`.
+For an HTTP error, inspect `uv run lazycloud logs --deployment document-api -n 100`.
 For OCR failures, use:
 
 ```bash
-lazycloud task list --app document_processing --limit 20
-lazycloud task logs <task-id>
+uv run lazycloud task list --app document_processing --limit 20
+uv run lazycloud task logs <task-id>
 ```
 
 The API and worker definitions live in `app.py` and `worker.py`.
@@ -129,15 +132,15 @@ Rotating `DOCUMENT_JOB_TOKEN_SECRET` invalidates outstanding job tokens.
 Delete the two deployments to stop accepting work:
 
 ```bash
-lazycloud deployment delete document-api
-lazycloud deployment delete ocr-worker
+uv run lazycloud deployment delete document-api
+uv run lazycloud deployment delete ocr-worker
 ```
 
 If you created the volume and secret for this example, download any results
 you need before removing them:
 
 ```bash
-lazycloud volume delete document-processing-data
-lazycloud secret delete DOCUMENT_JOB_TOKEN_SECRET
+uv run lazycloud volume delete document-processing-data
+uv run lazycloud secret delete DOCUMENT_JOB_TOKEN_SECRET
 unset DOCUMENT_API_URL
 ```

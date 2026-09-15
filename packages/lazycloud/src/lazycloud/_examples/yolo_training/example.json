@@ -1,0 +1,6 @@
+{
+  "name": "yolo-training",
+  "description": "Train a detector and reuse its checkpoint for prediction.",
+  "python_version": "3.12",
+  "dependencies": []
+}

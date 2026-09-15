@@ -7,7 +7,7 @@ Remote function calls, endpoint requests, and scheduled runs create tasks.
 Use task history to revisit a result, investigate a failure, or follow work
 you submitted in the background.
 
-`lazycloud run` already shows progress, remote logs, and the result for a
+`uv run lazycloud run` already shows progress, remote logs, and the result for a
 function. You only need the commands here to inspect it separately.
 Local Python calls do not create remote tasks.
 
@@ -20,12 +20,12 @@ attempt fails and retries remain it is `retry`. It ends as `complete`,
 ## From the CLI
 
 ```bash
-lazycloud task list                 # recent tasks, --app to filter by app
-lazycloud task show <task-id>       # status, timing, deployment, container
-lazycloud task result <task-id>     # waits for completion and prints the result
-lazycloud task logs <task-id>       # recent log lines
-lazycloud task stop <task-id> ...   # stop running tasks
-lazycloud task cancel <task-id>     # cancel a pending task
+uv run lazycloud task list                 # recent tasks, --app to filter by app
+uv run lazycloud task show <task-id>       # status, timing, deployment, container
+uv run lazycloud task result <task-id>     # waits for completion and prints the result
+uv run lazycloud task logs <task-id>       # recent log lines
+uv run lazycloud task stop <task-id> ...   # stop running tasks
+uv run lazycloud task cancel <task-id>     # cancel a pending task
 ```
 
 `task result --no-wait` returns the current state without waiting;
@@ -33,13 +33,13 @@ lazycloud task cancel <task-id>     # cancel a pending task
 
 ## Logs
 
-`lazycloud logs` reads logs by deployment, task, or container, and `--follow`
+`uv run lazycloud logs` reads logs by deployment, task, or container, and `--follow`
 streams them:
 
 ```bash
-lazycloud logs --task-id <task-id> --follow
-lazycloud logs --deployment predict -n 500 --show-timestamp
-lazycloud logs --container-id <container-id>
+uv run lazycloud logs --task-id <task-id> --follow
+uv run lazycloud logs --deployment predict -n 500 --show-timestamp
+uv run lazycloud logs --container-id <container-id>
 ```
 
 `--deployment` takes a deployment name or id. Anything your code prints to
@@ -74,7 +74,7 @@ outcome = task.wait(timeout_seconds=120)
 print(outcome.status, outcome.value)
 ```
 
-Use `task.cancel()` to cancel pending work, or `lazycloud task stop <task-id>`
+Use `task.cancel()` to cancel pending work, or `uv run lazycloud task stop <task-id>`
 to stop a running task.
 
 Failed tasks keep the error message and the full logs.

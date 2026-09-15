@@ -8,7 +8,7 @@ The `lazycloud` command installs with the `lazycloud-client` Python package. See
 `lazycloud login`; see [Sign-in and workspaces](/platform/auth).
 
 ```text
-lazycloud [--json] [--debug] COMMAND [ARGS]...
+uv run lazycloud [--json] [--debug] COMMAND [ARGS]...
 ```
 
 `--json` prints one JSON document to stdout for scripting; progress goes to
@@ -19,7 +19,7 @@ shows full tracebacks. `-h` or `--help` works on every command.
 
 Human output is the default. Styling is dropped when output is redirected.
 
-For one remote function call, use `lazycloud run module:function`. It shows
+For one remote function call, use `uv run lazycloud run module:function`. It shows
 progress and logs, then prints the result. Use `deploy` for an endpoint,
 schedule, or a function other remote workloads need to call.
 
@@ -38,7 +38,7 @@ everything it registers; `--resource <name>` or `--resource <kind>:<name>`
 selects one.
 
 `deploy` also accepts a module without `:object`, such as
-`lazycloud deploy quickstart`, when it contains exactly one app. This deploys
+`uv run lazycloud deploy quickstart`, when it contains exactly one app. This deploys
 everything registered with that app. If there are several apps, choose one with
 `module:app_name`.
 
@@ -52,4 +52,4 @@ everything registered with that app. If there are several apps, choose one with
 | `volume`, `ls`, `cp`, `rm`, `mv`, `secret`, `artifact` | [Storage](/cli/storage) |
 | `compute`, `cloud`, `machine`, `domain` | [Compute and domains](/cli/compute) |
 | `login`, `workspace`, `profile`, `token` | [Sign-in](/cli/auth) |
-| `quickstart`, `create-app`, `example` | [Scaffolding](/cli/scaffolding) |
+| `example` | [Download projects](/cli/scaffolding) |

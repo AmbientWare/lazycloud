@@ -5,29 +5,29 @@ description: "Revisit a run, retrieve background results, or investigate a faile
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-`lazycloud run` already displays a function's logs and result. Use these
+`uv run lazycloud run` already displays a function's logs and result. Use these
 commands for an earlier run, a scheduled task, or work submitted with `.spawn()`.
 
 ## lazycloud task
 
 ```bash
-lazycloud task list [--limit <n>] [--app <name>]          # recent tasks, default 100
-lazycloud task show TASK_ID                                # status, timing, deployment, container
-lazycloud task result TASK_ID [--no-wait] [--timeout <s>]  # waits for completion by default
-lazycloud task logs TASK_ID [--limit <n>]                  # recent log lines, default 250
-lazycloud task stop TASK_IDS...                            # stop running tasks
-lazycloud task cancel TASK_ID                              # cancel a pending task
+uv run lazycloud task list [--limit <n>] [--app <name>]          # recent tasks, default 100
+uv run lazycloud task show TASK_ID                                # status, timing, deployment, container
+uv run lazycloud task result TASK_ID [--no-wait] [--timeout <s>]  # waits for completion by default
+uv run lazycloud task logs TASK_ID [--limit <n>]                  # recent log lines, default 250
+uv run lazycloud task stop TASK_IDS...                            # stop running tasks
+uv run lazycloud task cancel TASK_ID                              # cancel a pending task
 ```
 
 ```bash
-lazycloud task list --limit 20 --app api_demo
-lazycloud task result <task-id> --timeout 60
+uv run lazycloud task list --limit 20 --app api_demo
+uv run lazycloud task result <task-id> --timeout 60
 ```
 
 ## lazycloud logs
 
 ```bash
-lazycloud logs (--deployment <name-or-id> | --task-id <id> | --container-id <id>) [options]
+uv run lazycloud logs (--deployment <name-or-id> | --task-id <id> | --container-id <id>) [options]
 ```
 
 Prints logs for exactly one source, or streams them with `--follow`.
@@ -40,8 +40,8 @@ Prints logs for exactly one source, or streams them with `--follow`.
 | `--max-events <n>` | Stop after N streamed events. `0`, the default, is unlimited. |
 
 ```bash
-lazycloud logs --deployment count_words --follow --show-timestamp
-lazycloud logs --task-id <task-id> -n 1000
+uv run lazycloud logs --deployment count_words --follow --show-timestamp
+uv run lazycloud logs --task-id <task-id> -n 1000
 ```
 
 <WorkspaceFlag />

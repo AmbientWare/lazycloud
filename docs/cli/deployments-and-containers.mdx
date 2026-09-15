@@ -17,12 +17,12 @@ The blocks below show command syntax. Replace uppercase names and omit
 square brackets when supplying an optional flag.
 
 ```bash
-lazycloud app list [--active | --inactive | --all]
-lazycloud app show APP
-lazycloud app export APP    # write a typed Python package for its deployed workloads
-lazycloud app pause APP      # stop every workload in the app
-lazycloud app resume APP
-lazycloud app delete APP
+uv run lazycloud app list [--active | --inactive | --all]
+uv run lazycloud app show APP
+uv run lazycloud app export APP    # write a typed Python package for its deployed workloads
+uv run lazycloud app pause APP      # stop every workload in the app
+uv run lazycloud app resume APP
+uv run lazycloud app delete APP
 ```
 
 ## lazycloud deployment
@@ -35,25 +35,25 @@ resources and autoscaler settings in Python so a later deploy uses your intended
 configuration.
 
 ```bash
-lazycloud deployment list [--app <name>] [--limit <n>]
-lazycloud deployment stop IDS_OR_NAMES...        # stop serving; keep the definition
-lazycloud deployment start ID_OR_NAME
-lazycloud deployment scale ID_OR_NAME --containers <n>
-lazycloud deployment delete ID_OR_NAME
+uv run lazycloud deployment list [--app <name>] [--limit <n>]
+uv run lazycloud deployment stop IDS_OR_NAMES...        # stop serving; keep the definition
+uv run lazycloud deployment start ID_OR_NAME
+uv run lazycloud deployment scale ID_OR_NAME --containers <n>
+uv run lazycloud deployment delete ID_OR_NAME
 ```
 
 ```bash
-lazycloud deployment list --app tools
-lazycloud deployment scale web --containers 3
+uv run lazycloud deployment list --app tools
+uv run lazycloud deployment scale web --containers 3
 ```
 
 ## lazycloud container
 
 ```bash
-lazycloud container list [--limit <n>]                        # recent containers, default 100
-lazycloud container attach CONTAINER_ID                       # stream output until it exits
-lazycloud container checkpoint CONTAINER_ID [--checkpoint-id <id>]
-lazycloud container stop CONTAINER_IDS...
+uv run lazycloud container list [--limit <n>]                        # recent containers, default 100
+uv run lazycloud container attach CONTAINER_ID                       # stream output until it exits
+uv run lazycloud container checkpoint CONTAINER_ID [--checkpoint-id <id>]
+uv run lazycloud container stop CONTAINER_IDS...
 ```
 
 <WorkspaceFlag />

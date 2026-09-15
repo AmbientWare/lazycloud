@@ -36,7 +36,7 @@ if __name__ == "__main__":
 Run it with the SDK installed and signed in:
 
 ```bash
-python reports.py
+uv run python reports.py
 ```
 
 The function returns three sales totaling 5500 cents. The script downloads
@@ -104,8 +104,8 @@ For multi-gigabyte uploads, `presigned_url(...)`,
 Use the CLI to inspect or copy files outside your workflow:
 
 ```bash
-lazycloud ls sales-reports
-lazycloud cp lazycloud://sales-reports/latest.json ./latest.json
+uv run lazycloud ls sales-reports
+uv run lazycloud cp lazycloud://sales-reports/latest.json ./latest.json
 ```
 
 Paths use `lazycloud://<volume>/<path>`. The scheme is optional except on
@@ -160,10 +160,10 @@ and every file in it.
 For one-off cleanup, inspect the target before deleting:
 
 ```bash
-lazycloud ls sales-reports
-lazycloud rm sales-reports/latest.json
+uv run lazycloud ls sales-reports
+uv run lazycloud rm sales-reports/latest.json
 ```
 
-Use `lazycloud volume delete sales-reports` only when you no longer need
+Use `uv run lazycloud volume delete sales-reports` only when you no longer need
 any of its files. Stop workloads that use the volume first; another invocation
 can create an empty volume with the same name.

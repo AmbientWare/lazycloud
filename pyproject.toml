@@ -183,6 +183,7 @@ target-version = "py312"
 "packages/foundation/**/*.py" = "py310"
 "packages/runner/**/*.py" = "py310"
 "packages/lazycloud/**/*.py" = "py310"
+"packages/lazycloud/src/lazycloud/_examples/**/*.py" = "py312"
 "packages/shared/**/*.py" = "py310"
 "**/test_*_python_compatibility.py" = "py310"
 
