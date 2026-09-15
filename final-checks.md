@@ -28,13 +28,13 @@ The shipped supervisor was restored before production removal acceptance.
 Remaining known problems: warm-function preparation race, intermittent endpoint
 dispatch delay, unavailable production TCP ingress, and Docker image-cache publication.
 Docker registry and Compose checks are blocked by the image-cache failure.
-The current batch is on `fix/sdk-failure-batch`, based on that merge.
+The current batch is PR #284 on `fix/sdk-failure-batch`, based on that merge.
 Keep speed work limited to the unresolved endpoint checks.
 
 Local progress, 2026-09-15:
 - Restored the local agent after reboot. Docker had recreated its missing worker
   configuration file as an empty directory. The worker is healthy again.
-- Committed provider launch error details, agent retry diagnostics, correction of
+- Committed typed capacity-shortage reporting, agent retry diagnostics, correction of
   invented container start times, and cancellation handling during startup.
 - Twenty worker checks and the focused API/compute checks passed. Changed
   production Python files pass Ruff and type checking.
@@ -44,10 +44,21 @@ Local progress, 2026-09-15:
   failure; the image-cache error now retains its transport cause.
 - Compose returned `compose-ok`; its containers and volume were removed and the
   sandbox terminated.
+- A disposable authenticated registry accepted login, push, and pull. The pulled
+  image returned `registry-ok`. The registry, sandbox, and temporary credentials
+  were removed.
 - All 11 local endpoint responses matched. Five concurrent calls took
   2.15–2.21 seconds; five later warm calls took 0.49–0.65 seconds.
-- The API and worker are being refreshed together for validation of the startup
-  cancellation change. No additional production passes are claimed.
+- The patched API and rebuilt worker passed warm reuse. Pausing the test app
+  returned HTTP 503 in 0.47 seconds; resuming restored HTTP 200 in 2.14 seconds.
+- AWS retained the failed GPU launch history after its groups were deleted.
+  The group tied to the SDK acquisition reported insufficient g4dn.8xlarge
+  capacity in us-east-1d. The new adapter classified that actual record as
+  `capacity_unavailable`; the compute owner preserved the typed diagnosis.
+  Provider messages are reduced to safe diagnoses before persistence.
+- Deleted the disposable app and its four deployments. Its containers and every
+  registry/Compose sandbox are terminal; image-build cleanup is complete.
+  No additional production passes are claimed.
 
 Rules:
 - Use account mclean-connor. Record target and published client version.
