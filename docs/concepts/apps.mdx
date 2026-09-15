@@ -36,11 +36,11 @@ within each kind in the app.
 ## Deploy together
 
 ```bash
-lazycloud deploy text_tools.py
+lazycloud deploy text_tools
 ```
 
-This deploys both workloads. A bare file selects its only app.
-Use `text_tools.py:app` to select the app explicitly when a module has several.
+This deploys both workloads. A module name selects its only app.
+Use `text_tools:app` to select the app explicitly when a module has several.
 
 `@app.function`, `@app.endpoint`, `@app.asgi`, `@app.realtime`, and
 `app.pod(...)` register deployable workloads. Sandboxes created with
@@ -49,14 +49,14 @@ Use `text_tools.py:app` to select the app explicitly when a module has several.
 ## Deploy or preview one workload
 
 ```bash
-lazycloud deploy text_tools.py:app --resource endpoint:count
+lazycloud deploy text_tools:app --resource endpoint:count
 ```
 
 A selector is the resource name, or `kind:name` if the name is shared by
 several kinds. You can also pass the decorated object directly:
 
 ```bash
-lazycloud serve text_tools.py:count
+lazycloud serve text_tools:count
 ```
 
 The preview prints a temporary URL and logs. Ctrl+C ends it.

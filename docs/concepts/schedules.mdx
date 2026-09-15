@@ -31,7 +31,7 @@ Create the volume, then deploy the function:
 
 ```bash
 lazycloud volume create report-inputs
-lazycloud deploy daily_report.py:count_files
+lazycloud deploy daily_report:count_files
 ```
 
 An empty volume produces `{"files": 0}`. Upload your files to
@@ -55,7 +55,7 @@ to 23, and days up to 31. Invalid expressions fail at deploy time.
 ## Try it now
 
 ```bash
-lazycloud run daily_report.py:count_files
+lazycloud run daily_report:count_files
 ```
 
 This runs once immediately and shows its logs and result. It does not wait

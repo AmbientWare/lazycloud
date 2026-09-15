@@ -27,7 +27,7 @@ def ffmpeg_version() -> str:
     return subprocess.check_output(["ffmpeg", "-version"], text=True).splitlines()[0]
 ```
 
-Save this as `audio.py` and run `lazycloud run audio.py:ffmpeg_version`.
+Save this as `audio.py` and run `lazycloud run audio:ffmpeg_version`.
 The result reports the remote ffmpeg version. Your machine does not need ffmpeg.
 Use `.add_python_packages(["httpx"])` to install a Python dependency.
 

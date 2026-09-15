@@ -55,14 +55,15 @@ resources for the container. Your machine only needs the LazyCloud client.
 ## Run it
 
 ```bash
-lazycloud run quickstart.py:hello LazyCloud
+lazycloud run quickstart:hello LazyCloud
 ```
 
 LazyCloud prepares the image, uploads your code, and runs `hello` remotely.
 The command shows progress and the function's logs, then prints `hello LazyCloud`.
 The first run can take longer while the image builds.
 
-The reference `quickstart.py:hello` names the file and the function to run.
+Run the command from the directory containing `quickstart.py`.
+`quickstart:hello` selects `hello` from that module; omit the `.py` extension.
 Arguments follow it. Change `LazyCloud` to your name and run it again.
 
 You can also run `python quickstart.py` when the SDK is installed in your Python

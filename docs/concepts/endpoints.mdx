@@ -32,7 +32,7 @@ with `concurrency=1`, `keep_warm=180`, `max_pending_tasks=100`, and
 Deploy it:
 
 ```bash
-lazycloud deploy api_demo.py:count_words
+lazycloud deploy api_demo:count_words
 ```
 
 The command prints the endpoint's URL. Send a bearer token for the
@@ -114,7 +114,7 @@ service = app.asgi(
 ```
 
 ```bash
-lazycloud deploy web_app.py:service
+lazycloud deploy web_app:service
 ```
 
 ASGI apps take the endpoint options with two renamed: `concurrent_requests`
@@ -153,7 +153,7 @@ URL and streams logs, syncing your working directory into the container as you
 edit:
 
 ```bash
-lazycloud serve api_demo.py:count_words
+lazycloud serve api_demo:count_words
 ```
 
 ## Custom domains

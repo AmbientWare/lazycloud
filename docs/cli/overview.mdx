@@ -19,25 +19,28 @@ shows full tracebacks. `-h` or `--help` works on every command.
 
 Human output is the default. Styling is dropped when output is redirected.
 
-For one remote function call, use `lazycloud run file.py:function`. It shows
+For one remote function call, use `lazycloud run module:function`. It shows
 progress and logs, then prints the result. Use `deploy` for an endpoint,
 schedule, or a function other remote workloads need to call.
 
 ## Handler references
 
-Commands that take a `HANDLER` accept `<file-or-module>:<object>`:
+Use `module:object` for commands that take a `HANDLER`. Run from your project root:
 
-- `quickstart.py:hello`, a Python file and a decorated object in it.
-- `myproject.api:app`, an importable module and an object in it.
+- `quickstart:hello` selects `hello` in `quickstart.py`.
+- `myproject.api:app` selects `app` in `myproject/api.py`.
+
+Use dots between directory names and omit `.py`. File references such as
+`quickstart.py:hello` are also supported; both forms resolve to the same handler.
 
 The object is one decorated resource or an `App`. Deploying an `App` deploys
 everything it registers; `--resource <name>` or `--resource <kind>:<name>`
 selects one.
 
-`deploy` also accepts a file or module without `:object`, such as
-`lazycloud deploy quickstart.py`, when it contains exactly one app. This deploys
+`deploy` also accepts a module without `:object`, such as
+`lazycloud deploy quickstart`, when it contains exactly one app. This deploys
 everything registered with that app. If there are several apps, choose one with
-`file.py:app_name`.
+`module:app_name`.
 
 ## Command groups
 

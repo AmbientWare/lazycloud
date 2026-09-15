@@ -91,14 +91,14 @@ const heroStories = [
     key: "apps",
     label: "APIs",
     code: endpointExample,
-    command: "lazycloud deploy application.py:app",
+    command: "lazycloud deploy application:app",
     status: "deployed",
   },
   {
     key: "functions",
     label: "Functions",
     code: functionExample,
-    command: "lazycloud run application.py:summarize_sales '[1200, 3500, 800]'",
+    command: "lazycloud run application:summarize_sales '[1200, 3500, 800]'",
     status: "complete",
   },
   {
@@ -112,14 +112,14 @@ const heroStories = [
     key: "services",
     label: "Services",
     code: podExample,
-    command: "lazycloud deploy application.py:app",
+    command: "lazycloud deploy application:app",
     status: "deployed",
   },
   {
     key: "schedules",
     label: "Schedules",
     code: cronExample,
-    command: "lazycloud deploy application.py:app",
+    command: "lazycloud deploy application:app",
     status: "deployed",
   },
 ] as const;
@@ -186,7 +186,7 @@ const parityModes = [
     key: "production",
     Plate: ProductionPlate,
     title: "Deploy your app",
-    call: "lazycloud deploy app.py:app",
+    call: "lazycloud deploy app:app",
     body: "Publish the function so your services can call it.",
   },
 ];

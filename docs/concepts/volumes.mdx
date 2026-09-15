@@ -29,7 +29,7 @@ Create the volume, upload a local `weights.pt` file, then read its size remotely
 ```bash
 lazycloud volume create models
 lazycloud cp ./weights.pt lazycloud://models/weights.pt
-lazycloud run models.py:model_size
+lazycloud run models:model_size
 ```
 
 The result is the uploaded file's size in bytes. From Python, create the

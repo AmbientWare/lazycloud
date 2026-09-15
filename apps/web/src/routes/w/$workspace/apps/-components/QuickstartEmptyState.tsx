@@ -16,7 +16,7 @@ const QUICKSTART_STEPS = [
   {
     title: "Run the function",
     detail: "Your terminal shows progress and logs, then prints hello LazyCloud.",
-    commands: ["lazycloud run quickstart.py:hello 'LazyCloud'"],
+    commands: ["lazycloud run quickstart:hello 'LazyCloud'"],
   },
 ] as const;
 

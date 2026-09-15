@@ -30,7 +30,7 @@ if __name__ == "__main__":
 ```
 
 ```bash
-lazycloud run reports.py:summarize_sales '[1200, 3500, 800]'
+lazycloud run reports:summarize_sales '[1200, 3500, 800]'
 ```
 
 The command shows progress and logs, then returns three sales totaling 5500
@@ -57,7 +57,7 @@ When one remote function calls another with `.remote()`, the callee must
 already be deployed. Deploy the app containing both before running the parent:
 
 ```bash
-lazycloud deploy reports.py:app
+lazycloud deploy reports:app
 ```
 
 ## Preview while you edit
@@ -65,13 +65,13 @@ lazycloud deploy reports.py:app
 Keep a preview running in one terminal:
 
 ```bash
-lazycloud serve reports.py:summarize_sales
+lazycloud serve reports:summarize_sales
 ```
 
 Call it from a second terminal:
 
 ```bash
-lazycloud run reports.py:summarize_sales '[1200, 3500, 800]'
+lazycloud run reports:summarize_sales '[1200, 3500, 800]'
 ```
 
 Calls from the same local configuration use the preview while it is active.
@@ -246,7 +246,7 @@ Use it instead of the `TASK_ID` environment variable when calls share a process.
 ## Debug the remote environment
 
 ```bash
-lazycloud shell reports.py:summarize_sales
+lazycloud shell reports:summarize_sales
 ```
 
 This opens a shell in the function's image so you can inspect packages and files.

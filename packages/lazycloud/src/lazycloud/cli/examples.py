@@ -57,7 +57,7 @@ TEMPLATES: dict[str, ExampleTemplate] = {
                 "# Run your first function\n\n"
                 "Install `lazycloud-client`, then sign in and run:\n\n"
                 "```bash\nlazycloud login\n"
-                "lazycloud run quickstart.py:hello LazyCloud\n```\n\n"
+                "lazycloud run quickstart:hello LazyCloud\n```\n\n"
                 "The command shows progress and logs, then prints `hello LazyCloud`.\n"
                 "With the SDK in your Python environment, `python quickstart.py` also "
                 "runs remotely. Use `hello.local(...)` to call it on your machine.\n"

@@ -19,9 +19,9 @@ Deploys one decorated object or every deployable resource registered with an `Ap
 Omit `:object` when the file or module contains exactly one app:
 
 ```bash
-lazycloud deploy quickstart.py:hello
-lazycloud deploy quickstart.py
-lazycloud deploy quickstart.py:app
+lazycloud deploy quickstart:hello
+lazycloud deploy quickstart
+lazycloud deploy quickstart:app
 lazycloud deploy myproject.api:app
 lazycloud deploy myproject.api:app --resource endpoint:predict
 ```
@@ -29,16 +29,16 @@ lazycloud deploy myproject.api:app --resource endpoint:predict
 `--name` overrides the deployment name when you select a handler or use `--resource`.
 `--source-root <dir>` packages a different directory as the code root.
 
-`quickstart.py` and `quickstart.py:app` deploy the same app, including its functions,
+`quickstart` and `quickstart:app` deploy the same app, including its functions,
 endpoints, pods, and other deployable resources. App references imported into the
 module count too; aliases for the same app count once. Resources belong to the
 selected app even when their definitions live in other files.
 
-If the module contains multiple apps, choose one with `file.py:app_name`. If it
+If the module contains multiple apps, choose one with `module:app_name`. If it
 contains no app, supply an explicit handler reference. A decorated handler such as
-`quickstart.py:hello` deploys only that handler.
+`quickstart:hello` deploys only that handler.
 
-`--resource` also works with a bare file. With `--json`, a successful app deployment
+`--resource` also works with a module name. With `--json`, a successful app deployment
 returns one object containing the app name and its resource results. A deployment
 failure stops the command without undoing resources already deployed.
 
@@ -53,8 +53,8 @@ and prints the result. A separate deploy is not required for a local function
 call. JSON arguments become Python values; other arguments stay strings:
 
 ```bash
-lazycloud run quickstart.py:hello LazyCloud
-lazycloud run reports.py:summarize_sales '[1200, 3500, 800]'
+lazycloud run quickstart:hello LazyCloud
+lazycloud run reports:summarize_sales '[1200, 3500, 800]'
 ```
 
 The second command uses the [functions example](/concepts/functions).

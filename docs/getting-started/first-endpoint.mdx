@@ -27,7 +27,7 @@ the dictionary as JSON.
 ## Deploy and call it
 
 ```bash
-lazycloud deploy text_api.py:count_words
+lazycloud deploy text_api:count_words
 ```
 
 Copy the endpoint URL from the output. Endpoints require a bearer token by
@@ -52,7 +52,7 @@ The response is `{"words": 4}`. Browser sign-in does not export
 When changing the code, use a temporary preview:
 
 ```bash
-lazycloud serve text_api.py:count_words
+lazycloud serve text_api:count_words
 ```
 
 Keep this terminal open. The command shows the preview URL and logs, and
