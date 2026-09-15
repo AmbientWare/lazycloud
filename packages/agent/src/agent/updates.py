@@ -34,7 +34,7 @@ restore() {
 restore
 "$@" &
 child=$!
-trap 'kill -INT "$child" 2>/dev/null; wait "$child"; exit 1' INT TERM
+trap 'kill -TERM "$child" 2>/dev/null; wait "$child"; exit 0' INT TERM
 attempts=0
 while kill -0 "$child" 2>/dev/null; do
     if [ -f "$pending" ]; then
