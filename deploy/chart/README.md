@@ -125,11 +125,13 @@ using Cloudflare DNS validation and renews it automatically. Only this controlle
 uses `tcp-ingress-dns`. The control plane mounts `tcp-ingress-tls` and reloads the
 certificate without restarting.
 
-Before releasing this chart, save `LAZYCLOUD_TCP_DNS_API_TOKEN` in the deployment's
-operator secret document, preserving all other fields. Restrict the token to the
-installation's Cloudflare zone with Zone Read and DNS Edit. Keep the broader
-Terraform operator token outside the cluster. External Secrets reads this one
-property into a separate Secret; it is not an application environment variable.
+Before releasing this chart, save the existing deploy Cloudflare token as
+`LAZYCLOUD_TCP_DNS_API_TOKEN` in the deployment's operator secret document,
+preserving all other fields. This reuses the same credential; it does not create
+another Cloudflare token. It needs Zone Read and DNS Edit for the installation's
+zone. External Secrets reads this property into the certificate controller's
+Secret; it is not an application environment variable. Renewal uses the token's
+existing permissions.
 
 Merge the cert-manager Application and verify its controller, webhook, and CRDs
 before deploying the chart. Verify the DNS ExternalSecret, Issuer, and Certificate

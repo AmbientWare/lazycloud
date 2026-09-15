@@ -33,7 +33,8 @@ the HTTP tunnel or agent gateway hostname for the TCP load balancer.
 The [application chart](../chart/README.md#public-tcp-ingress) owns the TCP Service
 and wildcard Certificate. cert-manager owns temporary DNS validation TXT records;
 Terraform owns the workload CNAME. Do not import the temporary TXT records into
-Terraform or share the operator token with the certificate controller.
+Terraform. The certificate controller reuses the deploy Cloudflare token through
+the operator secret document.
 
 Use the existing operator Terraform credentials to manage this record. No DNS
 controller or Cloudflare DNS token in the application is required. If the load
@@ -42,7 +43,7 @@ balancer is replaced, update `tcp_ingress_endpoint` and apply the reviewed plan.
 ## Credentials and state
 
 Use the shared private [S3 state backend](../terraform-state/README.md). Keep the
-Cloudflare operator token outside Terraform variable files and workload secrets.
+Cloudflare operator token outside Terraform variable files and user workloads.
 The operator token needs the permissions for the tunnel, DNS records, and any
 configured SaaS fallback origin. Workload tokens retain their narrower permissions.
 
