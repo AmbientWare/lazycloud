@@ -40,7 +40,6 @@ func newContentCache(connection cacheConnection) (*httpContentCache, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = 32
 	transport.DialContext = (&net.Dialer{Timeout: 500 * time.Millisecond, KeepAlive: 30 * time.Second}).DialContext
-	transport.ResponseHeaderTimeout = 2 * time.Second
 	return &httpContentCache{connection: connection, client: &http.Client{
 		Transport:     transport,
 		Timeout:       120 * time.Second,
@@ -67,7 +66,12 @@ func (c *httpContentCache) request(method, path string, body io.Reader, size int
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	response, err := c.client.Do(req)
+	client := *c.client
+	if method != http.MethodPut {
+		client.Timeout = 2 * time.Second
+	}
+	// Upload completion includes the cache's checksum verification and durable write.
+	response, err := client.Do(req)
 	if err != nil {
 		var requestError *url.Error
 		if errors.As(err, &requestError) {
