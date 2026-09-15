@@ -17,6 +17,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from database.repositories.compute import (
+    ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
@@ -31,7 +32,7 @@ from database.repositories.orchestration import (
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
-from shared.capacity import CapacityOwnerKind
+from shared.capacity import CapacityOperationStatus, CapacityOwnerKind, capacity_failure_message
 from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
@@ -630,6 +631,40 @@ class ProviderMachineReconciler:
                 if current is None:
                     raise RuntimeError(f"compute pool disappeared during reconciliation: {pool.id}")
                 return current
+            if failure_at is not None and snapshot.observed_machines < snapshot.desired_machines:
+                operations = ComputeCapacityOperationRepository(session)
+                for candidate in operations.list_open_for_owner(pool.capacity_owner_id):
+                    operation = operations.get(
+                        pool.capacity_owner_id, candidate.operation_id, for_update=True
+                    )
+                    if operation is None or operation.status not in {
+                        CapacityOperationStatus.Intent,
+                        CapacityOperationStatus.Requested,
+                        CapacityOperationStatus.ExistingPending,
+                        CapacityOperationStatus.TemporarilyUnavailable,
+                    }:
+                        continue
+                    desired, _ = provider_unit_operational_capacity(
+                        updated.model_copy(update={"desired_machines": operation.desired_unit})
+                    )
+                    if (
+                        to_utc(failure_at) < to_utc(operation.created_at)
+                        or snapshot.observed_machines >= desired
+                    ):
+                        continue
+                    # Preserve the diagnosis before reconciliation disables failed launches.
+                    operations.upsert(
+                        operation.model_copy(
+                            update={
+                                "status": CapacityOperationStatus.Rejected,
+                                "failure_code": snapshot.last_capacity_failure_code,
+                                "last_error": capacity_failure_message(
+                                    snapshot.last_capacity_failure_code
+                                ),
+                                "updated_at": current_time,
+                            }
+                        )
+                    )
             missing_machine_ids = self._sync_pooled_instances(
                 session,
                 pool=updated,
