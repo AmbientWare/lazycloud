@@ -14,7 +14,7 @@ from types import FrameType
 from typing import Any, Protocol, TextIO
 
 import cloudpickle
-from foundation.handler_loading import load_callable
+from foundation.handler_loading import evict_user_code_modules, load_callable
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from shared.deployments import DeploymentKind
 from shared.env import (
@@ -73,6 +73,7 @@ from shared.tasks import TaskStatus
 from runner.checkpoints import wait_for_checkpoint
 from runner.hooks import lifecycle_hooks_from_env, run_lifecycle_hooks
 from runner.invocation import cloudpickle_bytes, invoke_handler
+from runner.reload import SourceChangeWatcher, hot_reload_enabled, hot_reload_root
 from runner.runtime import (
     DEFAULT_GATEWAY_ENDPOINT,
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
@@ -174,6 +175,11 @@ class FunctionRunner:
     _active_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _monitor_shutdown: threading.Event = field(default_factory=threading.Event, init=False)
     _monitor: threading.Thread | None = field(default=None, init=False)
+    _reload_watcher: SourceChangeWatcher | None = field(default=None, init=False)
+    _reload_pending: threading.Event = field(default_factory=threading.Event, init=False)
+    _generation_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _generation_calls: int = field(default=0, init=False)
+    _reload_failed: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self.container_id = self.config.container_id
@@ -214,6 +220,8 @@ class FunctionRunner:
             self.close()
 
     def close(self) -> None:
+        if self._reload_watcher is not None:
+            self._reload_watcher.stop()
         self._monitor_shutdown.set()
         if self._monitor is not None:
             self._monitor.join()
@@ -287,26 +295,53 @@ class FunctionRunner:
     def serve(self, shutdown: threading.Event | None = None) -> int:
         """Claim and run invocations until the keep-warm window passes.
 
-        One of these per concurrent slot. Everything it touches on the runner is
-        either read-only after startup — the handler, the hooks, the container
-        identity — or per-invocation, so several may run at once against one
-        loaded copy of the user's code. That sharing is the point: a model in
-        VRAM is loaded by `on_start` and served by all of them.
+        Concurrent slots share the handler and startup state. A source change
+        closes admission until active calls finish, then reloads both before
+        claiming more work.
         """
 
         idle_since = time.monotonic()
         while shutdown is None or not shutdown.is_set():
             if self._retired.is_set():
                 return 0
-            task = self.claim()
+            if not self._begin_invocation():
+                time.sleep(self.config.poll_interval_seconds)
+                continue
+            try:
+                task = self.claim()
+                if task is not None:
+                    self.run_task(task)
+            finally:
+                with self._generation_lock:
+                    self._generation_calls -= 1
             if task is None:
                 if self.keep_warm_expired(idle_since) and self.retire_if_idle():
                     return 0
                 time.sleep(self.config.poll_interval_seconds)
                 continue
-            self.run_task(task)
             idle_since = time.monotonic()
         return 0
+
+    def _begin_invocation(self) -> bool:
+        with self._generation_lock:
+            if self._reload_pending.is_set():
+                if self._generation_calls:
+                    return False
+                self._reload_pending.clear()
+                try:
+                    evict_user_code_modules(hot_reload_root())
+                    self._handler = None
+                    self._load_handler_and_hooks()
+                except Exception:
+                    self._reload_failed = True
+                    self.append_container_log("stderr", traceback.format_exc())
+                    return False
+                self._reload_failed = False
+                self.append_container_log("stdout", "hot reload: function handler refreshed\n")
+            if self._reload_failed:
+                return False
+            self._generation_calls += 1
+            return True
 
     def keep_warm_expired(self, idle_since: float) -> bool:
         if self.config.keep_warm_seconds < 0:
@@ -510,6 +545,19 @@ class FunctionRunner:
         if self._startup_hooks_ran:
             return
         self._startup_hooks_ran = True
+        self._load_handler_and_hooks()
+        restored = wait_for_checkpoint(
+            enabled=self.config.checkpoint_enabled,
+            workers=self.config.workers,
+        )
+        if restored is not None:
+            self.container_id = restored.container_id
+            self.container_hostname = restored.container_hostname
+        if hot_reload_enabled():
+            self._reload_watcher = SourceChangeWatcher(hot_reload_root(), self._reload_pending.set)
+            self._reload_watcher.start()
+
+    def _load_handler_and_hooks(self) -> None:
         self.handler()
         context = LifecycleStartupContext(
             stub_id=self.config.stub_id,
@@ -529,16 +577,6 @@ class FunctionRunner:
             capture_output=False,
             raise_on_error=True,
         )
-        # After the handler is imported and `on_start` has run, so the image
-        # captured is one that is ready to serve rather than one that still has
-        # the expensive part ahead of it.
-        restored = wait_for_checkpoint(
-            enabled=self.config.checkpoint_enabled,
-            workers=self.config.workers,
-        )
-        if restored is not None:
-            self.container_id = restored.container_id
-            self.container_hostname = restored.container_hostname
 
     def run_error_hooks(
         self,

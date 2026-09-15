@@ -5,7 +5,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from control.apps import DatabaseAppExecutionAdmission
@@ -31,7 +31,7 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.env import parse_environment
+from shared.env import HOT_RELOAD_DIR_ENV, HOT_RELOAD_ENV, parse_environment
 from shared.errors import (
     CapacityLimitReachedError,
     ConflictError,
@@ -60,6 +60,8 @@ from shared.http.functions import (
     FunctionMonitorResponse,
     FunctionRetireRequest,
     FunctionRetireResponse,
+    FunctionServeRequest,
+    FunctionServeResponse,
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
@@ -382,6 +384,25 @@ class FunctionControlService:
         with self.services.context.database.session() as session:
             return TaskRepository(session).containers_with_inflight_work(container_ids)
 
+    def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse:
+        stub = self.control_plane.get_stub(request.stub_id)
+        if stub.kind is not StubKind.Function:
+            raise InvalidInputError("serve requires a function")
+        if stub.deployment_id is not None:
+            raise InvalidInputError("serve requires a prepared preview, not a deployed function")
+        result = self._launch_function_container(
+            stub,
+            task=None,
+            eligible_at=None,
+            authority=FunctionContainerStartAuthority.Preview,
+            preview_timeout=request.timeout,
+        )
+        if result is None:
+            raise CapacityLimitReachedError("this function already has a live container")
+        if not result.accepted:
+            raise CapacityLimitReachedError(result.reason or "function preview could not start")
+        return FunctionServeResponse(container_id=result.container_id)
+
     def start_function_container(self, stub_id: str) -> bool:
         """Start one more container for this stub, because the autoscaler said so.
 
@@ -452,6 +473,7 @@ class FunctionControlService:
         task: Task | None,
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
+        preview_timeout: int | None = None,
     ) -> SchedulerSubmissionResult | None:
         """Plan, reserve and submit one container for this stub.
 
@@ -483,7 +505,7 @@ class FunctionControlService:
                 stub_id=stub.id,
                 handler=stub.handler or "",
                 container_id=container_id,
-                keep_warm_seconds=config.runtime.keep_warm,
+                keep_warm_seconds=-1 if preview_timeout is not None else config.runtime.keep_warm,
                 concurrency=config.runtime.concurrency,
                 in_process=config.runtime.in_process,
                 python_executable=config.image.python_executable,
@@ -497,7 +519,17 @@ class FunctionControlService:
                 gpu=list(config.runtime.gpu),
                 image_id=config.effective_image_id,
                 checkpoint_enabled=config.runtime.checkpoint_enabled,
-                env=config.env_list,
+                env=[
+                    *config.env_list,
+                    *(
+                        [
+                            f"{HOT_RELOAD_ENV}=true",
+                            f"{HOT_RELOAD_DIR_ENV}={WORKER_USER_CODE_VOLUME}",
+                        ]
+                        if preview_timeout is not None
+                        else []
+                    ),
+                ],
                 secret_env=[],
                 lifecycle_hooks=config.lifecycle_hooks,
             )
@@ -515,6 +547,7 @@ class FunctionControlService:
             preemptible=config.runtime.preemptible,
             authority=authority,
             max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
+            preview_timeout=preview_timeout,
         )
         if container is None:
             return None
@@ -841,6 +874,7 @@ class FunctionControlService:
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
         max_containers: int,
+        preview_timeout: int | None = None,
     ) -> ContainerRecord | None:
         """Reserve a container for this stub, prompted by `task` but not bound to it.
 
@@ -897,6 +931,12 @@ class FunctionControlService:
                         gpu_count=container_plan.gpu_count,
                         region=region,
                         availability_zone=availability_zone,
+                        timeout_seconds=preview_timeout or 0,
+                        expires_at=(
+                            datetime.now(UTC) + timedelta(seconds=preview_timeout)
+                            if preview_timeout
+                            else None
+                        ),
                     ),
                 )
             except ConflictError:
