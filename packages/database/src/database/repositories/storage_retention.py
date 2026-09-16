@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
+from database.mappers.identity import workspace_record_from_table
 from database.tables.billing import BillingAccountTable
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
 from database.tables.storage import ObjectTable, VolumeTable
@@ -30,7 +31,7 @@ class StorageRetentionRepository:
             .with_for_update(read=True, key_share=True, skip_locked=True)
             .execution_options(populate_existing=True)
         )
-        return WorkspaceRecord.model_validate(row.payload) if row is not None else None
+        return workspace_record_from_table(row) if row is not None else None
 
     def lock_object(self, object_id: str, *, workspace_id: str) -> bool:
         return (

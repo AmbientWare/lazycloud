@@ -13,10 +13,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
-from database.tables.base import DatabaseBase, IdPayloadTable, uuid_type
+from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
 
 
-class CustomDomainTable(IdPayloadTable, DatabaseBase):
+class CustomDomainTable(IdTable, DatabaseBase):
     """A domain a user registered, and the provider hostname backing it.
 
     Owned by the account rather than a workspace because DNS control was proven once
@@ -35,7 +35,6 @@ class CustomDomainTable(IdPayloadTable, DatabaseBase):
             "hostname",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
         Index("ix_custom_domains_user", "user_id", "hostname"),
         Index("ix_custom_domains_reconcile_due", "phase", "last_checked_at"),
@@ -53,6 +52,9 @@ class CustomDomainTable(IdPayloadTable, DatabaseBase):
     hostname: Mapped[str] = mapped_column(String(253), nullable=False)
     phase: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_hostname_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    required_records: Mapped[list[dict[str, str]]] = mapped_column(json_type, default=list)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(512))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

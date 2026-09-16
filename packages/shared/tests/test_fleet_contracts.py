@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 from pydantic import ValidationError
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import ComputeUnitRecord
-from shared.containers import ContainerRecord, ContainerStatus
-from shared.cron import CronJobRun
 
 _UNIT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _WORKSPACE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -84,34 +80,3 @@ def test_compute_pool_capacity_owner_id_is_frozen() -> None:
 
     with pytest.raises(ValidationError, match="Field is frozen"):
         pool.capacity_owner_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-
-
-def test_container_and_cron_records_preserve_terminal_state_and_timestamps() -> None:
-    now = datetime(2026, 7, 19, tzinfo=timezone.utc)
-    container = ContainerRecord(
-        id="container-1",
-        name="function",
-        image="registry.example/function:1",
-        command=["python", "-m", "runner.function"],
-        workspace_id="workspace-1",
-        status=ContainerStatus.Stopped,
-        exit_code=0,
-        env={"PRIVATE_TOKEN": "persisted-for-worker-only"},
-        ports={"8080": 8080},
-        timeout_seconds=-1,
-        created_at=now,
-        started_at=now,
-        finished_at=now,
-    )
-    run = CronJobRun(
-        id="run-1",
-        workspace_id="workspace-1",
-        cron_job="nightly",
-        enqueued=True,
-        message_id="message-1",
-        task_id="task-1",
-        created_at=now,
-    )
-
-    assert ContainerRecord.model_validate_json(container.model_dump_json()) == container
-    assert CronJobRun.model_validate_json(run.model_dump_json()) == run

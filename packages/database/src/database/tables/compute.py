@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import JsonValue
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from sqlalchemy import (
     DDL,
     BigInteger,
@@ -14,20 +13,22 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     event,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
-from database.tables.base import DatabaseBase, IdPayloadTable, json_type, uuid_type
+from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
 
 
-class ComputeUnitTable(IdPayloadTable, DatabaseBase):
+class ComputeUnitTable(IdTable, DatabaseBase):
     __tablename__ = "compute_units"
     warm_handoff_from: Mapped[list[str]] = mapped_column(
-        json_type, nullable=False, default=list, server_default=text("'[]'")
+        ARRAY(uuid_type), nullable=False, default=list, server_default=text("'{}'")
     )
     provider_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     drain_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -41,7 +42,6 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
             "worker_gpu_count",
             "desired_machines",
             postgresql_where=text("provider_ref <> '' AND desired_machines > 0"),
-            sqlite_where=text("provider_ref <> '' AND desired_machines > 0"),
         ),
         Index(
             "uq_compute_units_internal_placement",
@@ -52,7 +52,6 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
             "root_volume_gib",
             unique=True,
             postgresql_where=text("visibility = 'internal' AND provider_ref <> ''"),
-            sqlite_where=text("visibility = 'internal' AND provider_ref <> ''"),
         ),
         CheckConstraint(
             "min_machines >= 0 AND desired_machines >= min_machines "
@@ -66,7 +65,7 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
             "AND offer_id <> '' AND capability_key <> '' AND capacity_mode = 'pooled' "
             "AND capacity_owner_kind = 'pooled_provider' AND capacity_owner_id = id "
             "AND (provider_connection_id IS NOT NULL "
-            "OR COALESCE(CAST(payload->>'platform_fleet' AS BOOLEAN), false)))",
+            "OR platform_fleet))",
             name="ck_compute_units_internal_provider_identity",
         ),
         CheckConstraint(
@@ -122,7 +121,7 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     observed_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
-    provider_state: Mapped[dict[str, JsonValue]] = mapped_column(
+    provider_attributes: Mapped[dict[str, JsonValue]] = mapped_column(
         json_type,
         nullable=False,
         default=dict,
@@ -137,7 +136,7 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     worker_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     worker_gpu_type: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     worker_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    worker_runtimes: Mapped[list[str]] = mapped_column(json_type, nullable=False)
+    worker_runtimes: Mapped[list[str]] = mapped_column(ARRAY(String(80)), nullable=False)
     worker_preemptible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     idle_drain_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     scale_up_cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
@@ -146,8 +145,24 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     root_volume_gib: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
     fallback: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
 
+    provider_resource_id: Mapped[str] = mapped_column(String(2048), nullable=False)
+    degraded_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    degraded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_capacity_failure_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    launch_attempt_baseline: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    platform_fleet: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    offer_cost_terms: Mapped[dict[str, JsonValue] | None] = mapped_column(json_type, nullable=True)
+    offer_storage_mib: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    offer_availability_zone: Mapped[str] = mapped_column(String(64), nullable=False)
+    supplier_cpu_unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    supplier_cpu_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    replacement_machine_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    replacement_template_version: Mapped[str] = mapped_column(String(160), nullable=False)
 
-class WorkspaceComputePolicyTable(IdPayloadTable, DatabaseBase):
+
+class WorkspaceComputePolicyTable(IdTable, DatabaseBase):
     __tablename__ = "workspace_compute_policies"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
@@ -170,7 +185,7 @@ class WorkspaceComputePolicyTable(IdPayloadTable, DatabaseBase):
     )
 
 
-class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
+class ComputeCapacityOperationTable(IdTable, DatabaseBase):
     __tablename__ = "compute_capacity_operations"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
@@ -181,7 +196,16 @@ class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
         UniqueConstraint("reservation_id", name="uq_compute_capacity_operations_reservation"),
         Index("ix_compute_capacity_operations_owner_status", "capacity_owner_id", "status"),
         Index("ix_compute_capacity_operations_demand", "demand_container_id", "created_at"),
-        CheckConstraint("desired_unit > 0", name="ck_compute_capacity_operations_desired_unit"),
+        CheckConstraint(
+            "desired_unit > 0 AND previous_desired_unit >= 0 AND release_desired_unit >= 0 "
+            "AND join_attempt > 0 AND failure_count >= 0",
+            name="ck_compute_capacity_operations_desired_unit",
+        ),
+        CheckConstraint(
+            "cpu_millicores > 0 AND memory_mib > 0 AND gpu_count >= 0 "
+            "AND ((gpu_type = '' AND gpu_count = 0) OR (gpu_type <> '' AND gpu_count > 0))",
+            name="ck_compute_capacity_operations_shape",
+        ),
         CheckConstraint(
             "status IN ('intent', 'existing_pending', 'requested', 'at_limit', "
             "'temporarily_unavailable', 'rejected', 'unsupported', 'releasing', "
@@ -213,6 +237,21 @@ class ComputeCapacityOperationTable(IdPayloadTable, DatabaseBase):
     demand_container_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    provider_instance_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    previous_desired_unit: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    release_desired_unit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    owns_capacity: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    join_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    failure_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gpu_type: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runtime: Mapped[str] = mapped_column(String(80), nullable=False)
+    preemptible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
 
 event.listen(
     ComputeCapacityOperationTable.__table__,
@@ -225,8 +264,8 @@ BEGIN
         NEW.status IS DISTINCT FROM OLD.status
         OR NEW.target_machine_id IS DISTINCT FROM OLD.target_machine_id
         OR (
-            NOT COALESCE((OLD.payload->>'owns_capacity')::boolean, false)
-            AND COALESCE((NEW.payload->>'owns_capacity')::boolean, false)
+            NOT OLD.owns_capacity
+            AND NEW.owns_capacity
         )
     ) THEN
         RAISE EXCEPTION 'terminal capacity ownership cannot be reopened'
@@ -242,9 +281,15 @@ FOR EACH ROW EXECUTE FUNCTION enforce_compute_capacity_ownership();
 )
 
 
-class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
+class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     __tablename__ = "compute_provider_instances"
     __table_args__: tuple[SchemaItem, ...] = (
+        CheckConstraint(
+            "gpu_count >= 0 AND cpu_millicores >= 0 AND memory_mb >= 0 "
+            "AND storage_mib >= 0 AND supplier_cpu_count >= 0 "
+            "AND launch_attempt > 0 AND unserved_observations >= 0",
+            name="ck_compute_provider_instances_capacity",
+        ),
         Index("ix_compute_provider_instances_pool", "pool_id"),
         Index("ix_compute_provider_instances_pool_status", "pool_id", "status"),
         Index("ix_compute_provider_instances_renewal", "billing_renewal_at"),
@@ -254,14 +299,12 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
             "instance_id",
             unique=True,
             postgresql_where=text("pool_id IS NOT NULL AND instance_id IS NOT NULL"),
-            sqlite_where=text("pool_id IS NOT NULL AND instance_id IS NOT NULL"),
         ),
         Index(
             "uq_compute_provider_instances_machine",
             "machine_id",
             unique=True,
             postgresql_where=text("machine_id IS NOT NULL"),
-            sqlite_where=text("machine_id IS NOT NULL"),
         ),
     )
 
@@ -292,8 +335,44 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
         nullable=True,
     )
 
+    cost_terms: Mapped[dict[str, JsonValue]] = mapped_column(json_type, nullable=False)
+    storage_mib: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    supplier_cpu_unit: Mapped[str] = mapped_column(Text, nullable=False)
+    supplier_cpu_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    billing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    bootstrap_phase: Mapped[str] = mapped_column(Text, nullable=False)
+    bootstrap_failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bootstrap_failure_detail: Mapped[str] = mapped_column(Text, nullable=False)
+    bootstrap_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    bootstrap_phase_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    first_enrolled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    first_served_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_served_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    unserved_observations: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    launch_attempt: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    architecture: Mapped[str] = mapped_column(Text, nullable=False)
+    runtime: Mapped[str] = mapped_column(Text, nullable=False)
+    region: Mapped[str] = mapped_column(Text, nullable=False)
+    availability_zone: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_volume_ids: Mapped[list[str]] = mapped_column(ARRAY(String(255)), nullable=False)
+    booted_template_version: Mapped[str] = mapped_column(Text, nullable=False)
+    missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_storage_destroyed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terminating_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    terminated_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status_message: Mapped[str] = mapped_column(Text, nullable=False)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False)
 
-class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
+
+class ComputeJoinCredentialTable(IdTable, DatabaseBase):
     """Authority to enroll one machine into an account's capacity.
 
     `user_id` is the account the machine will belong to, resolved from the owner of
@@ -330,6 +409,7 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
     )
     capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    machine_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_by_token_id: Mapped[str | None] = mapped_column(
         uuid_type,
@@ -343,7 +423,7 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
+class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
     """A joined machine, owned by the account whose credential enrolled it.
 
     The fingerprint is unique per account, not per workspace: one physical host is
@@ -373,6 +453,14 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_machine_enrollments_generation",
         ),
         CheckConstraint(
+            "cpu_count >= 0 AND cpu_millicores >= 0 AND memory_mb >= 0 AND gpu_count >= 0",
+            name="ck_compute_machine_enrollments_capacity",
+        ),
+        CheckConstraint(
+            "tunnel_public_key_sha256 = '' OR tunnel_public_key_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_compute_machine_enrollments_tunnel_key",
+        ),
+        CheckConstraint(
             "capacity_state IN ('available', 'draining', 'preempting', 'cordoned')",
             name="ck_compute_machine_enrollments_capacity_state",
         ),
@@ -394,6 +482,26 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             "last_join_at",
         ),
     )
+
+    tunnel_public_key_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    capacity_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    capacity_notice_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    os: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    arch: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    cpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    memory_mb: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    gpus: Mapped[list[str]] = mapped_column(ARRAY(String(160)), nullable=False, default=list)
+    gpu_ids: Mapped[list[str]] = mapped_column(ARRAY(String(160)), nullable=False, default=list)
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    executor: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    preflight_checks: Mapped[list[dict[str, JsonValue]]] = mapped_column(
+        json_type, nullable=False, default=list
+    )
+    agent_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
 
     user_id: Mapped[str] = mapped_column(
         uuid_type,
@@ -437,87 +545,3 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
         DateTime(timezone=True), nullable=True
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
-    """The customer AWS account backing every workspace one user owns.
-
-    One per account rather than per workspace: an org running dev, staging, and prod
-    authorized the same account once, and re-authorizing it per workspace produced
-    three records that had to be kept in step by hand.
-    """
-
-    __tablename__ = "aws_account_connections"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("user_id", name="uq_aws_account_connections_user"),
-        UniqueConstraint("external_id", name="uq_aws_account_connections_external_id"),
-        Index(
-            "ix_aws_account_connections_reconcile_due",
-            "next_reconcile_at",
-            "claim_expires_at",
-        ),
-        CheckConstraint("revision > 0", name="ck_aws_account_connections_revision"),
-        CheckConstraint(
-            "reconcile_attempt_count >= 0",
-            name="ck_aws_account_connections_reconcile_attempts",
-        ),
-    )
-
-    user_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    account_id: Mapped[str] = mapped_column(String(12), nullable=False)
-    external_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
-    phase: Mapped[str] = mapped_column(String(32), nullable=False)
-    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
-    next_reconcile_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    claim_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    reconcile_attempt_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    provider_operation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    provider_operation_started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AwsAuthorizationCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "aws_authorization_cleanup_tombstones"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint(
-            "provider_operation_id",
-            name="uq_aws_authorization_cleanup_operation",
-        ),
-        Index(
-            "ix_aws_authorization_cleanup_due",
-            "next_reconcile_at",
-            "claim_expires_at",
-        ),
-        CheckConstraint("revision > 0", name="ck_aws_authorization_cleanup_revision"),
-        CheckConstraint(
-            "reconcile_attempt_count >= 0",
-            name="ck_aws_authorization_cleanup_attempts",
-        ),
-    )
-
-    # No foreign key: the tombstone outlives the account whose authorization it is
-    # still tearing down, which is the whole reason it is written separately.
-    user_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
-    connection_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
-    account_id: Mapped[str] = mapped_column(String(12), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    provider_operation_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
-    next_reconcile_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    claim_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    reconcile_attempt_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

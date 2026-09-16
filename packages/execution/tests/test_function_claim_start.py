@@ -45,12 +45,7 @@ def test_claim_commits_one_running_attempt_before_returning_work(
     )
     with isolated_services.context.database.session() as session:
         for container in containers:
-            ContainerRepository(session).records.upsert(
-                container,
-                workspace_id=stub.workspace_id,
-                name=container.name,
-                status=container.status.value,
-            )
+            ContainerRepository(session).upsert(container)
         TaskRepository(session).mark_claimable(task.id, at=utc_now())
     barrier = Barrier(2)
 
@@ -92,12 +87,7 @@ def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
         status=ContainerStatus.Pending,
     )
     with isolated_services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            container,
-            workspace_id=stub.workspace_id,
-            name=container.name,
-            status=container.status.value,
-        )
+        ContainerRepository(session).upsert(container)
     assign_runtime(isolated_services.containers, isolated_services.scheduler_workers, container.id)
     with isolated_services.context.database.session() as session:
         assigned = ContainerRepository(session).get_across_workspaces(container.id)
@@ -105,12 +95,7 @@ def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
         machine_id = assigned.runtime_machine_id
         assigned.status = ContainerStatus.Running
         assigned.started_at = utc_now() - timedelta(seconds=30)
-        ContainerRepository(session).records.upsert(
-            assigned,
-            workspace_id=stub.workspace_id,
-            name=assigned.name,
-            status=assigned.status.value,
-        )
+        ContainerRepository(session).upsert(assigned)
     service = FunctionControlService(isolated_services)
     request = FunctionClaimRequest(
         stub_id=stub.id,

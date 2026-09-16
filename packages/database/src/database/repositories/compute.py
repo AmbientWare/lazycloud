@@ -1,21 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.common import (
-    GlobalTableRepository,
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
-)
 from database.repositories.identity import WorkspaceRepository
-from database.tables.base import IdPayloadTable
+from database.tables.aws_connections import AwsAccountConnectionTable
 from database.tables.compute import (
-    AwsAccountConnectionTable,
-    AwsAuthorizationCleanupTombstoneTable,
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
     ComputeMachineEnrollmentTable,
@@ -24,13 +16,10 @@ from database.tables.compute import (
     WorkspaceComputePolicyTable,
 )
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter
-from shared.aws_connections import (
-    AwsAccountConnection,
-    AwsAuthorizationCleanupTombstone,
-)
+from pydantic import Field
 from shared.capacity import (
     TERMINAL_REASON_MAX_LENGTH,
+    CapacityAcquisitionShape,
     CapacityFailureCode,
     CapacityOperationStatus,
     CapacityOwnerKind,
@@ -57,7 +46,7 @@ from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
-from shared.timestamps import to_utc, utc_now
+from shared.timestamps import to_utc, to_utc_or_none, utc_now
 from sqlalchemy import (
     Select,
     String,
@@ -73,19 +62,8 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session, load_only
-from sqlalchemy.orm.attributes import flag_modified
-
-type DatabaseInsertValue = JsonValue | datetime
-
-_JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
-_DATETIME_ADAPTER = TypeAdapter(datetime)
-
-
-def _model_json(model: BaseModel) -> dict[str, JsonValue]:
-    return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
+from sqlalchemy.orm import Session
 
 
 class ComputeCapacityOperationRecord(ContractModel):
@@ -105,7 +83,7 @@ class ComputeCapacityOperationRecord(ContractModel):
     release_desired_unit: int | None = Field(default=None, ge=0)
     owns_capacity: bool = False
     join_attempt: int = Field(default=1, ge=1)
-    shape: dict[str, JsonValue] = Field(default_factory=dict)
+    shape: CapacityAcquisitionShape
     failure_code: CapacityFailureCode | None = None
     failure_count: int = Field(default=0, ge=0)
     last_error: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
@@ -167,7 +145,18 @@ class ComputeProviderInstanceRecord(ContractModel):
     last_served_at: datetime | None = None
     unserved_observations: int = Field(default=0, ge=0)
     launch_attempt: int = Field(default=1, ge=1)
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    architecture: str = ""
+    runtime: str = ""
+    region: str = ""
+    availability_zone: str = ""
+    storage_volume_ids: tuple[str, ...] = ()
+    booted_template_version: str = ""
+    missing_since: datetime | None = None
+    provider_storage_destroyed_at: datetime | None = None
+    terminating_reason: str = ""
+    terminated_reason: str = ""
+    status_message: str = ""
+    last_error: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -349,39 +338,73 @@ class ComputeMachineEnrollmentCreate(ContractModel):
         )
 
 
-class _ClaimedRecord(Protocol):
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def revision(self) -> int: ...
-
-    @property
-    def claim_token(self) -> str | None: ...
-
-
-def _locked_claimed_row[RowT: IdPayloadTable, RecordT: _ClaimedRecord](
-    session: Session,
-    table: type[RowT],
-    validate: Callable[[object], RecordT],
-    claimed: RecordT,
-) -> RowT | None:
-    """Lock the row a claim names, or return None when the claim is no longer current."""
-
-    row = session.scalars(select(table).where(table.id == claimed.id).with_for_update()).first()
-    if row is None:
-        return None
-    current = validate(row.payload)
-    if current.revision != claimed.revision or current.claim_token != claimed.claim_token:
-        return None
-    return row
-
-
 def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
     return ComputeUnitRecord.model_validate(
         {
-            **row.payload,
+            "capacity_owner_id": row.capacity_owner_id,
+            "capacity_owner_kind": row.capacity_owner_kind,
+            "capacity_owner_source": row.capacity_owner_source,
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "name": row.name,
+            "pool": row.pool,
+            "provider": row.provider,
+            "selector": row.selector,
+            "status": row.status,
+            "source": row.source,
+            "expires_at": to_utc_or_none(row.expires_at),
+            "provider_ref": row.provider_ref,
+            "provider_connection_id": row.provider_connection_id,
+            "platform_fleet": row.platform_fleet,
+            "capacity_mode": row.capacity_mode,
+            "visibility": row.visibility,
+            "region": row.region,
+            "offer_id": row.offer_id,
+            "capability_key": row.capability_key,
+            "offer_cost_terms": SupplierCostTerms.model_validate(row.offer_cost_terms)
+            if row.offer_cost_terms is not None
+            else None,
+            "offer_storage_mib": row.offer_storage_mib,
+            "offer_availability_zone": row.offer_availability_zone,
+            "supplier_cpu_unit": row.supplier_cpu_unit,
+            "supplier_cpu_count": row.supplier_cpu_count,
+            "desired_machines": row.desired_machines,
+            "initial_machines": row.initial_machines,
+            "min_machines": row.min_machines,
+            "max_machines": row.max_machines,
+            "observed_machines": row.observed_machines,
+            "replacement_machine_id": row.replacement_machine_id,
+            "replacement_template_version": row.replacement_template_version,
             "warm_handoff_from": row.warm_handoff_from,
+            "generation": row.generation,
+            "phase": row.phase,
+            "provider_state": ComputeUnitProviderState(
+                resource_id=row.provider_resource_id,
+                attributes=row.provider_attributes,
+                degraded_reason=row.degraded_reason,
+                degraded_at=to_utc_or_none(row.degraded_at),
+                last_capacity_failure_at=to_utc_or_none(row.last_capacity_failure_at),
+                launch_attempt_baseline=row.launch_attempt_baseline,
+            ),
+            "scaling_enabled": row.scaling_enabled,
+            "default_eligible": row.default_eligible,
+            "priority": row.priority,
+            "min_free_cpu_millicores": row.min_free_cpu_millicores,
+            "min_free_memory_mib": row.min_free_memory_mib,
+            "min_free_gpu_count": row.min_free_gpu_count,
+            "worker_cpu_millicores": row.worker_cpu_millicores,
+            "worker_memory_mib": row.worker_memory_mib,
+            "worker_gpu_type": row.worker_gpu_type,
+            "worker_gpu_count": row.worker_gpu_count,
+            "worker_runtimes": row.worker_runtimes,
+            "worker_preemptible": row.worker_preemptible,
+            "idle_drain_timeout_seconds": row.idle_drain_timeout_seconds,
+            "scale_up_cooldown_seconds": row.scale_up_cooldown_seconds,
+            "scale_down_cooldown_seconds": row.scale_down_cooldown_seconds,
+            "registration_timeout_seconds": row.registration_timeout_seconds,
+            "root_volume_gib": row.root_volume_gib,
+            "fallback": row.fallback,
+            "created_at": to_utc(row.created_at),
         }
     )
 
@@ -421,13 +444,9 @@ class ComputeUnitRepository:
         row.source = record.source
         row.expires_at = record.expires_at
         row.updated_at = utc_now()
-        row.payload = _JSON_OBJECT_ADAPTER.validate_json(
-            record.model_dump_json(exclude={"warm_handoff_from"})
-        )
-        flag_modified(row, "payload")
         row.warm_handoff_from = list(record.warm_handoff_from)
         self._write_columns(row, record)
-        return record
+        return _compute_unit_record(row)
 
     def delete(self, pool_id: str, *, workspace_id: str) -> None:
         self.session.execute(
@@ -458,13 +477,6 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -487,13 +499,6 @@ class ComputeUnitRepository:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -534,13 +539,6 @@ class ComputeUnitRepository:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -571,13 +569,6 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -586,18 +577,13 @@ class ComputeUnitRepository:
     ) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
-                )
-            )
             .where(ComputeUnitTable.workspace_id == workspace_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         if not include_retired_platform:
             statement = statement.where(
                 ~and_(
-                    ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+                    ComputeUnitTable.platform_fleet.is_(True),
                     ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
                     ComputeUnitTable.phase == ComputeUnitPhase.Deleted.value,
                 )
@@ -634,11 +620,6 @@ class ComputeUnitRepository:
                     ),
                 )
             )
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
-                )
-            )
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
@@ -668,13 +649,6 @@ class ComputeUnitRepository:
             statement = statement.where(
                 ComputeUnitTable.capacity_owner_kind == capacity_owner_kind.value
             )
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def claim_reconciliation_batch(
@@ -737,7 +711,7 @@ class ComputeUnitRepository:
     ) -> list[ComputeUnitRecord]:
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
-            ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+            ComputeUnitTable.platform_fleet.is_(True),
             ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value,
         )
         if preemptible is not None:
@@ -748,9 +722,7 @@ class ComputeUnitRepository:
                 if gpu
                 else ComputeUnitTable.worker_gpu_count == 0
             )
-        statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id).options(
-            load_only(ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True)
-        )
+        statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
@@ -759,23 +731,11 @@ class ComputeUnitRepository:
             ComputeUnitTable.workspace_id == workspace_id,
         )
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
-                )
-            )
             .where(ComputeUnitTable.provider_connection_id == connection_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
@@ -825,9 +785,7 @@ class ComputeUnitRepository:
                     or_(
                         ComputeProviderInstanceTable.machine_id.is_(None),
                         cast(ComputeProviderInstanceTable.machine_id, String)
-                        != func.coalesce(
-                            ComputeUnitTable.payload["replacement_machine_id"].as_string(), ""
-                        ),
+                        != func.coalesce(ComputeUnitTable.replacement_machine_id, ""),
                     ),
                 )
                 .label("retiring_count"),
@@ -839,8 +797,7 @@ class ComputeUnitRepository:
         )
         surge = case(
             (
-                func.coalesce(ComputeUnitTable.payload["replacement_machine_id"].as_string(), "")
-                != "",
+                func.coalesce(ComputeUnitTable.replacement_machine_id, "") != "",
                 1,
             ),
             else_=0,
@@ -859,7 +816,7 @@ class ComputeUnitRepository:
             .outerjoin(live_instances, live_instances.c.pool_id == ComputeUnitTable.id)
             .where(
                 ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
-                ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+                ComputeUnitTable.platform_fleet.is_(True),
                 or_(
                     ComputeUnitTable.desired_machines > 0,
                     ComputeUnitTable.observed_machines > 0,
@@ -955,8 +912,24 @@ class ComputeUnitRepository:
         row.observed_machines = record.observed_machines
         row.generation = record.generation
         row.phase = record.phase.value
-        row.provider_state = _model_json(record.provider_state)
-        flag_modified(row, "provider_state")
+        row.provider_resource_id = record.provider_state.resource_id
+        row.provider_attributes = dict(record.provider_state.attributes)
+        row.degraded_reason = record.provider_state.degraded_reason
+        row.degraded_at = record.provider_state.degraded_at
+        row.last_capacity_failure_at = record.provider_state.last_capacity_failure_at
+        row.launch_attempt_baseline = record.provider_state.launch_attempt_baseline
+        row.platform_fleet = record.platform_fleet
+        row.offer_cost_terms = (
+            record.offer_cost_terms.model_dump(mode="json")
+            if record.offer_cost_terms is not None
+            else None
+        )
+        row.offer_storage_mib = record.offer_storage_mib
+        row.offer_availability_zone = record.offer_availability_zone
+        row.supplier_cpu_unit = record.supplier_cpu_unit.value
+        row.supplier_cpu_count = record.supplier_cpu_count
+        row.replacement_machine_id = record.replacement_machine_id
+        row.replacement_template_version = record.replacement_template_version
         row.scaling_enabled = record.scaling_enabled
         row.default_eligible = record.default_eligible
         row.priority = record.priority
@@ -968,7 +941,6 @@ class ComputeUnitRepository:
         row.worker_gpu_type = record.worker_gpu_type
         row.worker_gpu_count = record.worker_gpu_count
         row.worker_runtimes = list(record.worker_runtimes)
-        flag_modified(row, "worker_runtimes")
         row.worker_preemptible = record.worker_preemptible
         row.idle_drain_timeout_seconds = record.idle_drain_timeout_seconds
         row.scale_up_cooldown_seconds = record.scale_up_cooldown_seconds
@@ -979,51 +951,53 @@ class ComputeUnitRepository:
         self.session.flush()
 
 
+def _workspace_compute_policy_record(row: WorkspaceComputePolicyTable) -> WorkspaceComputePolicy:
+    return WorkspaceComputePolicy.model_validate(
+        {
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "revision": row.revision,
+            "default_pool": row.default_pool,
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
+
+
 @dataclass(slots=True)
 class WorkspaceComputePolicyRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[WorkspaceComputePolicy]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(WorkspaceComputePolicyTable, WorkspaceComputePolicy),
-        )
-
     def create(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        return self.records.create(
-            policy.model_dump(mode="python"),
+        policy = WorkspaceComputePolicy.model_validate(dict(policy))
+        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
+        row = WorkspaceComputePolicyTable(
+            id=policy.id,
             workspace_id=policy.workspace_id,
+            revision=policy.revision,
+            default_pool=policy.default_pool,
+            created_at=policy.created_at,
+            updated_at=policy.updated_at,
         )
+        self.session.add(row)
+        self.session.flush()
+        return _workspace_compute_policy_record(row)
 
     def ensure_default(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        values: dict[str, DatabaseInsertValue] = {
-            "id": policy.id,
-            "workspace_id": policy.workspace_id,
-            "revision": policy.revision,
-            "default_pool": policy.default_pool,
-            "payload": _model_json(policy),
-            "created_at": policy.created_at,
-            "updated_at": policy.updated_at,
-        }
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            statement = (
-                postgresql_insert(WorkspaceComputePolicyTable)
-                .values(**values)
-                .on_conflict_do_nothing(index_elements=[WorkspaceComputePolicyTable.workspace_id])
+        policy = WorkspaceComputePolicy.model_validate(dict(policy))
+        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
+        self.session.execute(
+            postgresql_insert(WorkspaceComputePolicyTable)
+            .values(
+                id=policy.id,
+                workspace_id=policy.workspace_id,
+                revision=policy.revision,
+                default_pool=policy.default_pool,
+                created_at=policy.created_at,
+                updated_at=policy.updated_at,
             )
-        elif dialect == "sqlite":
-            statement = (
-                sqlite_insert(WorkspaceComputePolicyTable)
-                .values(**values)
-                .on_conflict_do_nothing(index_elements=[WorkspaceComputePolicyTable.workspace_id])
-            )
-        else:
-            current = self.get_for_workspace(policy.workspace_id)
-            return current or self.create(policy)
-        self.session.execute(statement)
-        self.session.flush()
+            .on_conflict_do_nothing(constraint="uq_workspace_compute_policies_workspace")
+        )
         current = self.get_for_workspace(policy.workspace_id)
         if current is None:
             raise RuntimeError("workspace compute policy insert did not persist")
@@ -1041,19 +1015,26 @@ class WorkspaceComputePolicyRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return WorkspaceComputePolicy.model_validate(row.payload) if row is not None else None
+        return _workspace_compute_policy_record(row) if row is not None else None
 
     def save(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        saved = self.records.upsert(policy, workspace_id=policy.workspace_id)
-        row = self.session.scalars(
+        policy = WorkspaceComputePolicy.model_validate(dict(policy))
+        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
+        row = self.session.scalar(
             select(WorkspaceComputePolicyTable)
-            .where(WorkspaceComputePolicyTable.id == policy.id)
+            .where(
+                WorkspaceComputePolicyTable.id == policy.id,
+                WorkspaceComputePolicyTable.workspace_id == policy.workspace_id,
+            )
             .with_for_update()
-        ).one()
+        )
+        if row is None:
+            raise LookupError("workspace compute policy does not exist")
         row.revision = policy.revision
         row.default_pool = policy.default_pool
+        row.updated_at = policy.updated_at
         self.session.flush()
-        return saved
+        return _workspace_compute_policy_record(row)
 
 
 def _capacity_operation_record(
@@ -1061,9 +1042,35 @@ def _capacity_operation_record(
 ) -> ComputeCapacityOperationRecord:
     return ComputeCapacityOperationRecord.model_validate(
         {
-            **row.payload,
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "pool_id": row.pool_id,
+            "capacity_owner_id": row.capacity_owner_id,
+            "reservation_id": row.reservation_id,
+            "operation_id": row.operation_id,
             "demand_container_id": row.demand_container_id,
-            "fulfilled_at": row.fulfilled_at,
+            "desired_unit": row.desired_unit,
+            "status": row.status,
+            "target_machine_id": row.target_machine_id,
+            "fulfilled_at": to_utc_or_none(row.fulfilled_at),
+            "provider_instance_id": row.provider_instance_id,
+            "previous_desired_unit": row.previous_desired_unit,
+            "release_desired_unit": row.release_desired_unit,
+            "owns_capacity": row.owns_capacity,
+            "join_attempt": row.join_attempt,
+            "shape": CapacityAcquisitionShape(
+                cpu_millicores=row.cpu_millicores,
+                memory_mib=row.memory_mib,
+                gpu_type=row.gpu_type,
+                gpu_count=row.gpu_count,
+                runtime=row.runtime,
+                preemptible=row.preemptible,
+            ),
+            "failure_code": row.failure_code,
+            "failure_count": row.failure_count,
+            "last_error": row.last_error,
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
         }
     )
 
@@ -1081,7 +1088,7 @@ class ComputeCapacityOperationRepository:
         failures = (
             select(
                 table.demand_container_id.label("container_id"),
-                table.payload["failure_code"].as_string().label("failure_code"),
+                table.failure_code.label("failure_code"),
                 func.row_number()
                 .over(
                     partition_by=table.demand_container_id,
@@ -1091,7 +1098,7 @@ class ComputeCapacityOperationRepository:
             )
             .where(
                 table.demand_container_id.in_(container_ids),
-                table.payload["failure_code"].as_string().is_not(None),
+                table.failure_code.is_not(None),
             )
             .subquery()
         )
@@ -1138,7 +1145,7 @@ class ComputeCapacityOperationRepository:
                 ComputeCapacityOperationTable.status.not_in(
                     tuple(status.value for status in CapacityOperationStatus if status.terminal)
                 ),
-                ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean().is_(True),
+                ComputeCapacityOperationTable.owns_capacity.is_(True),
             )
             .order_by(ComputeCapacityOperationTable.created_at, ComputeCapacityOperationTable.id)
         )
@@ -1154,21 +1161,21 @@ class ComputeCapacityOperationRepository:
                 ComputeCapacityOperationTable.desired_unit,
                 ComputeCapacityOperationTable.status,
                 func.coalesce(
-                    ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean(),
+                    ComputeCapacityOperationTable.owns_capacity,
                     False,
                 ),
                 func.coalesce(
-                    ComputeCapacityOperationTable.payload["failure_count"].as_integer(),
+                    ComputeCapacityOperationTable.failure_count,
                     0,
                 ),
-                ComputeCapacityOperationTable.payload["updated_at"].as_string(),
+                ComputeCapacityOperationTable.updated_at,
             )
             .where(
                 ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id,
                 ComputeCapacityOperationTable.status.not_in(
                     tuple(status.value for status in CapacityOperationStatus if status.terminal)
                 ),
-                ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean().is_(True),
+                ComputeCapacityOperationTable.owns_capacity.is_(True),
             )
             .order_by(
                 ComputeCapacityOperationTable.created_at,
@@ -1182,7 +1189,7 @@ class ComputeCapacityOperationRepository:
                 status=CapacityOperationStatus(status),
                 owns_capacity=owns_capacity,
                 failure_count=failure_count,
-                updated_at=to_utc(_DATETIME_ADAPTER.validate_python(updated_at)),
+                updated_at=to_utc(updated_at),
             )
             for (
                 operation_id,
@@ -1206,7 +1213,7 @@ class ComputeCapacityOperationRepository:
         self,
         capacity_owner_id: str,
     ) -> ComputeCapacityOperationHistorySummary:
-        """Summarize all requests without loading their durable JSON payloads.
+        """Summarize the retained request history.
 
         Released operations stay in the aggregate so the peak remains monotonic.
         That stops the sizer from buying back every machine the drain controller
@@ -1215,15 +1222,13 @@ class ComputeCapacityOperationRepository:
         peak_desired_unit, last_requested_at = self.session.execute(
             select(
                 func.max(ComputeCapacityOperationTable.desired_unit),
-                func.max(ComputeCapacityOperationTable.payload["created_at"].as_string()),
+                func.max(ComputeCapacityOperationTable.created_at),
             ).where(ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id)
         ).one()
         return ComputeCapacityOperationHistorySummary(
             peak_desired_unit=int(peak_desired_unit or 0),
             last_requested_at=(
-                to_utc(_DATETIME_ADAPTER.validate_python(last_requested_at))
-                if last_requested_at is not None
-                else None
+                to_utc(last_requested_at) if last_requested_at is not None else None
             ),
         )
 
@@ -1272,47 +1277,142 @@ class ComputeCapacityOperationRepository:
         row.target_machine_id = record.target_machine_id
         row.demand_container_id = record.demand_container_id
         row.fulfilled_at = record.fulfilled_at
-        row.payload = _JSON_OBJECT_ADAPTER.validate_json(
-            record.model_dump_json(exclude={"demand_container_id", "fulfilled_at"})
-        )
-        flag_modified(row, "payload")
-        row.updated_at = utc_now()
+        row.provider_instance_id = record.provider_instance_id
+        row.previous_desired_unit = record.previous_desired_unit
+        row.release_desired_unit = record.release_desired_unit
+        row.owns_capacity = record.owns_capacity
+        row.join_attempt = record.join_attempt
+        row.failure_code = record.failure_code.value if record.failure_code is not None else None
+        row.failure_count = record.failure_count
+        row.last_error = record.last_error
+        row.cpu_millicores = record.shape.cpu_millicores
+        row.memory_mib = record.shape.memory_mib
+        row.gpu_type = record.shape.gpu_type
+        row.gpu_count = record.shape.gpu_count
+        row.runtime = record.shape.runtime
+        row.preemptible = record.shape.preemptible
+        row.updated_at = record.updated_at
         self.session.flush()
-        return record
+        return _capacity_operation_record(row)
 
 
-def _provider_instance_record(
-    row: ComputeProviderInstanceTable,
-) -> ComputeProviderInstanceRecord:
-    """Read one provider instance, taking its machine from the enforced column.
-
-    The payload is the record and the column is the constraint, and only the
-    column is maintained by the database: deleting a machine nulls it through
-    `ON DELETE SET NULL` and cannot reach into the JSON beside it. A reader that
-    trusted the payload would hand back a machine that no longer exists, and the
-    next write would offer it to the foreign key that had just removed it —
-    which every pass then fails on identically, so the pool degrades on an error
-    it can never get past.
-    """
-    record = ComputeProviderInstanceRecord.model_validate(row.payload)
-    if record.machine_id == row.machine_id:
-        return record
-    return record.model_copy(update={"machine_id": row.machine_id})
+def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProviderInstanceRecord:
+    return ComputeProviderInstanceRecord.model_validate(
+        {
+            "id": row.id,
+            "provider": row.provider,
+            "offer_id": row.offer_id,
+            "status": row.status,
+            "source": row.source,
+            "pool_id": row.pool_id,
+            "instance_type": row.instance_type,
+            "instance_id": row.instance_id,
+            "machine_id": row.machine_id,
+            "gpu": row.gpu,
+            "gpu_count": row.gpu_count,
+            "cpu_millicores": row.cpu_millicores,
+            "memory_mb": row.memory_mb,
+            "cost_terms": SupplierCostTerms.model_validate(row.cost_terms),
+            "storage_mib": row.storage_mib,
+            "supplier_cpu_unit": row.supplier_cpu_unit,
+            "supplier_cpu_count": row.supplier_cpu_count,
+            "committed_micros": row.committed_micros,
+            "expires_at": to_utc_or_none(row.expires_at),
+            "billing_renewal_at": to_utc_or_none(row.billing_renewal_at),
+            "billing_started_at": to_utc_or_none(row.billing_started_at),
+            "bootstrap_phase": row.bootstrap_phase,
+            "bootstrap_failure_reason": row.bootstrap_failure_reason,
+            "bootstrap_failure_detail": row.bootstrap_failure_detail,
+            "bootstrap_observed_at": to_utc(row.bootstrap_observed_at),
+            "bootstrap_phase_started_at": to_utc_or_none(row.bootstrap_phase_started_at),
+            "first_enrolled_at": to_utc_or_none(row.first_enrolled_at),
+            "first_served_at": to_utc_or_none(row.first_served_at),
+            "last_served_at": to_utc_or_none(row.last_served_at),
+            "unserved_observations": row.unserved_observations,
+            "launch_attempt": row.launch_attempt,
+            "architecture": row.architecture,
+            "runtime": row.runtime,
+            "region": row.region,
+            "availability_zone": row.availability_zone,
+            "storage_volume_ids": row.storage_volume_ids,
+            "booted_template_version": row.booted_template_version,
+            "missing_since": to_utc_or_none(row.missing_since),
+            "provider_storage_destroyed_at": to_utc_or_none(row.provider_storage_destroyed_at),
+            "terminating_reason": row.terminating_reason,
+            "terminated_reason": row.terminated_reason,
+            "status_message": row.status_message,
+            "last_error": row.last_error,
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
 
 
 @dataclass(slots=True)
 class ComputeProviderInstanceRepository:
     session: Session
 
-    @property
-    def records(self) -> GlobalTableRepository[ComputeProviderInstanceRecord]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeProviderInstanceTable, ComputeProviderInstanceRecord),
-        )
+    def get(self, instance_id: str) -> ComputeProviderInstanceRecord | None:
+        row = self.session.get(ComputeProviderInstanceTable, instance_id)
+        return _provider_instance_record(row) if row is not None else None
 
     def upsert(self, record: ComputeProviderInstanceRecord) -> ComputeProviderInstanceRecord:
-        return self.records.upsert(record, status=record.status)
+        record = ComputeProviderInstanceRecord.model_validate(dict(record))
+        row = self.session.get(ComputeProviderInstanceTable, record.id)
+        if row is None:
+            row = ComputeProviderInstanceTable(id=record.id, created_at=record.created_at)
+            self.session.add(row)
+        elif row.pool_id != record.pool_id or row.provider != record.provider:
+            raise ConflictError("provider instance owner cannot change")
+        row.provider = record.provider
+        row.offer_id = record.offer_id
+        row.status = record.status
+        row.source = record.source
+        row.pool_id = record.pool_id
+        row.instance_type = record.instance_type
+        row.instance_id = record.instance_id
+        row.machine_id = record.machine_id
+        row.gpu = record.gpu
+        row.gpu_count = record.gpu_count
+        row.cpu_millicores = record.cpu_millicores
+        row.memory_mb = record.memory_mb
+        row.cost_terms = record.cost_terms.model_dump(mode="json")
+        row.storage_mib = record.storage_mib
+        row.supplier_cpu_unit = record.supplier_cpu_unit.value
+        row.supplier_cpu_count = record.supplier_cpu_count
+        row.committed_micros = record.committed_micros
+        row.expires_at = record.expires_at
+        row.billing_renewal_at = record.billing_renewal_at
+        row.billing_started_at = record.billing_started_at
+        row.bootstrap_phase = record.bootstrap_phase.value
+        row.bootstrap_failure_reason = (
+            record.bootstrap_failure_reason.value
+            if record.bootstrap_failure_reason is not None
+            else None
+        )
+        row.bootstrap_failure_detail = record.bootstrap_failure_detail
+        row.bootstrap_observed_at = record.bootstrap_observed_at
+        row.bootstrap_phase_started_at = record.bootstrap_phase_started_at
+        row.first_enrolled_at = record.first_enrolled_at
+        row.first_served_at = record.first_served_at
+        row.last_served_at = record.last_served_at
+        row.unserved_observations = record.unserved_observations
+        row.launch_attempt = record.launch_attempt
+        row.architecture = record.architecture
+        row.runtime = record.runtime
+        row.region = record.region
+        row.availability_zone = record.availability_zone
+        row.storage_volume_ids = list(record.storage_volume_ids)
+        row.booted_template_version = record.booted_template_version
+        row.missing_since = record.missing_since
+        row.provider_storage_destroyed_at = record.provider_storage_destroyed_at
+        row.terminating_reason = record.terminating_reason
+        row.terminated_reason = record.terminated_reason
+        row.status_message = record.status_message
+        row.last_error = record.last_error
+        row.updated_at = utc_now()
+        self.session.flush()
+        return _provider_instance_record(row)
 
     def list_for_pool(
         self,
@@ -1324,13 +1424,6 @@ class ComputeProviderInstanceRepository:
     ) -> list[ComputeProviderInstanceRecord]:
         statement = (
             select(ComputeProviderInstanceTable)
-            .options(
-                load_only(
-                    ComputeProviderInstanceTable.payload,
-                    ComputeProviderInstanceTable.machine_id,
-                    raiseload=True,
-                )
-            )
             .where(ComputeProviderInstanceTable.pool_id == pool_id)
             .order_by(
                 ComputeProviderInstanceTable.created_at.desc(),
@@ -1356,17 +1449,15 @@ class ComputeProviderInstanceRepository:
         for_update: bool = False,
     ) -> list[ComputeProviderInstanceRecord]:
         table = ComputeProviderInstanceTable
-        metadata = table.payload["metadata"]
         statement = (
             select(table)
-            .options(load_only(table.payload, table.machine_id, raiseload=True))
             .where(
                 table.pool_id == pool_id,
                 or_(
                     table.status.not_in(terminal_statuses),
                     table.instance_id.in_(observed_instance_ids),
-                    metadata["missing_since"].as_string().is_(None),
-                    metadata["provider_storage_destroyed_at"].as_string().is_(None),
+                    table.missing_since.is_(None),
+                    table.provider_storage_destroyed_at.is_(None),
                 ),
             )
             .order_by(table.created_at.desc(), table.id.asc())
@@ -1377,13 +1468,9 @@ class ComputeProviderInstanceRepository:
 
     def highest_launch_attempt(self, pool_id: str, *, default: int = 0) -> int:
         highest = self.session.scalar(
-            select(
-                func.max(
-                    func.coalesce(
-                        ComputeProviderInstanceTable.payload["launch_attempt"].as_integer(), 1
-                    )
-                )
-            ).where(ComputeProviderInstanceTable.pool_id == pool_id)
+            select(func.max(func.coalesce(ComputeProviderInstanceTable.launch_attempt, 1))).where(
+                ComputeProviderInstanceTable.pool_id == pool_id
+            )
         )
         return highest if highest is not None else default
 
@@ -1441,12 +1528,10 @@ class ComputeProviderInstanceRepository:
             return None
         if current.machine_id == machine_id:
             return current
-        bound = current.model_copy(update={"machine_id": machine_id, "updated_at": utc_now()})
         row.machine_id = machine_id
-        row.payload = _model_json(bound)
-        flag_modified(row, "payload")
+        row.updated_at = utc_now()
         self.session.flush()
-        return bound
+        return _provider_instance_record(row)
 
     def get_for_pool_instance(
         self,
@@ -1473,20 +1558,50 @@ class ComputeProviderInstanceRepository:
         return _provider_instance_record(row) if row is not None else None
 
 
+def _join_credential_record(row: ComputeJoinCredentialTable) -> ComputeJoinCredentialRecord:
+    return ComputeJoinCredentialRecord.model_validate(
+        {
+            "id": row.id,
+            "token_hash": row.token_hash,
+            "user_id": row.user_id,
+            "workspace_id": row.workspace_id,
+            "capacity_owner_id": row.capacity_owner_id,
+            "pool": row.pool,
+            "machine_id": row.machine_id,
+            "created_by_token_id": row.created_by_token_id,
+            "status": row.status,
+            "max_uses": row.max_uses,
+            "use_count": row.use_count,
+            "expires_at": to_utc(row.expires_at),
+            "revoked_at": to_utc_or_none(row.revoked_at),
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
+
+
+def _write_join_credential_row(
+    row: ComputeJoinCredentialTable, record: ComputeJoinCredentialRecord
+) -> None:
+    row.token_hash = record.token_hash
+    row.user_id = record.user_id
+    row.workspace_id = record.workspace_id
+    row.capacity_owner_id = record.capacity_owner_id
+    row.pool = record.pool
+    row.machine_id = record.machine_id
+    row.created_by_token_id = record.created_by_token_id
+    row.status = record.status.value
+    row.max_uses = record.max_uses
+    row.use_count = record.use_count
+    row.expires_at = record.expires_at
+    row.revoked_at = record.revoked_at
+    row.created_at = record.created_at
+    row.updated_at = record.updated_at
+
+
 @dataclass(slots=True)
 class ComputeJoinCredentialRepository:
     session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeJoinCredentialRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(
-                ComputeJoinCredentialTable,
-                ComputeJoinCredentialRecord,
-                key_field="token_hash",
-            ),
-        )
 
     def create(
         self,
@@ -1501,23 +1616,27 @@ class ComputeJoinCredentialRepository:
         max_uses: int,
         expires_at: datetime,
     ) -> ComputeJoinCredentialRecord:
-        return self.records.create(
-            {
-                "token_hash": token_hash,
-                "user_id": user_id,
-                "workspace_id": workspace_id,
-                "capacity_owner_id": capacity_owner_id,
-                "pool": pool,
-                "machine_id": machine_id,
-                "created_by_token_id": created_by_token_id,
-                "status": ComputeCredentialStatus.Active,
-                "max_uses": max(max_uses, 1),
-                "use_count": 0,
-                "expires_at": expires_at,
-            },
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        now = utc_now()
+        record = ComputeJoinCredentialRecord(
+            id=str(uuid4()),
+            token_hash=token_hash,
+            user_id=user_id,
             workspace_id=workspace_id,
-            status=ComputeCredentialStatus.Active.value,
+            capacity_owner_id=capacity_owner_id,
+            pool=pool,
+            machine_id=machine_id,
+            created_by_token_id=created_by_token_id,
+            max_uses=max(max_uses, 1),
+            expires_at=expires_at,
+            created_at=now,
+            updated_at=now,
         )
+        row = ComputeJoinCredentialTable(id=record.id)
+        _write_join_credential_row(row, record)
+        self.session.add(row)
+        self.session.flush()
+        return _join_credential_record(row)
 
     def lock_unit(self, workspace_id: str, capacity_owner_id: str) -> bool:
         """Fence the unit a credential is minted against for the mint's duration."""
@@ -1543,7 +1662,7 @@ class ComputeJoinCredentialRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputeJoinCredentialRecord.model_validate(row.payload) if row is not None else None
+        return _join_credential_record(row) if row is not None else None
 
     def get(
         self,
@@ -1557,7 +1676,7 @@ class ComputeJoinCredentialRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputeJoinCredentialRecord.model_validate(row.payload) if row is not None else None
+        return _join_credential_record(row) if row is not None else None
 
     def list_for_unit(
         self,
@@ -1577,18 +1696,25 @@ class ComputeJoinCredentialRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        return [
-            ComputeJoinCredentialRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_join_credential_record(row) for row in self.session.scalars(statement)]
 
     def save(self, record: ComputeJoinCredentialRecord) -> ComputeJoinCredentialRecord:
-        return self.records.upsert(
-            record,
-            key=record.token_hash,
-            workspace_id=record.workspace_id,
-            status=record.status.value,
-        )
+        record = ComputeJoinCredentialRecord.model_validate(dict(record))
+        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
+        row = self.session.get(ComputeJoinCredentialTable, record.id)
+        if row is None:
+            raise LookupError(f"compute join credential does not exist: {record.id}")
+        if (
+            row.workspace_id != record.workspace_id
+            or row.user_id != record.user_id
+            or row.token_hash != record.token_hash
+            or row.capacity_owner_id != record.capacity_owner_id
+            or row.machine_id != record.machine_id
+        ):
+            raise ConflictError("compute join credential authority cannot change")
+        _write_join_credential_row(row, record)
+        self.session.flush()
+        return _join_credential_record(row)
 
     def save_for_workspace_deletion(
         self,
@@ -1607,14 +1733,14 @@ class ComputeJoinCredentialRepository:
         ).first()
         if row is None:
             raise LookupError(f"compute join credential does not exist: {record.id}")
-        row.payload = _model_json(record)
+        record = ComputeJoinCredentialRecord.model_validate(dict(record))
         row.status = record.status.value
         row.use_count = record.use_count
         row.expires_at = record.expires_at
         row.revoked_at = record.revoked_at
-        flag_modified(row, "payload")
+        row.updated_at = record.updated_at
         self.session.flush()
-        return record
+        return _join_credential_record(row)
 
     def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
@@ -1635,29 +1761,124 @@ class ComputeJoinCredentialRepository:
         return len(ids)
 
 
+def _machine_enrollment_record(
+    row: ComputeMachineEnrollmentTable,
+) -> ComputeMachineEnrollmentRecord:
+    return ComputeMachineEnrollmentRecord.model_validate(
+        {
+            "id": row.id,
+            "user_id": row.user_id,
+            "workspace_id": row.workspace_id,
+            "capacity_owner_id": row.capacity_owner_id,
+            "pool": row.pool,
+            "machine_id": row.machine_id,
+            "machine_fingerprint_hash": row.machine_fingerprint_hash,
+            "join_credential_id": row.join_credential_id,
+            "credential_hash": row.credential_hash,
+            "credential_generation": row.credential_generation,
+            "tunnel_public_key_sha256": row.tunnel_public_key_sha256,
+            "status": row.status,
+            "preflight_passed": row.preflight_passed,
+            "heartbeat_confirmed": row.heartbeat_confirmed,
+            "schedulable": row.schedulable,
+            "capacity_state": row.capacity_state,
+            "capacity_reason": row.capacity_reason,
+            "capacity_observed_at": to_utc_or_none(row.capacity_observed_at),
+            "capacity_notice_at": to_utc_or_none(row.capacity_notice_at),
+            "readiness_phase": row.readiness_phase,
+            "hostname": row.hostname,
+            "os": row.os,
+            "arch": row.arch,
+            "cpu_count": row.cpu_count,
+            "cpu_millicores": row.cpu_millicores,
+            "memory_mb": row.memory_mb,
+            "gpus": row.gpus,
+            "gpu_ids": row.gpu_ids,
+            "gpu_count": row.gpu_count,
+            "executor": row.executor,
+            "preflight": row.preflight_checks,
+            "agent_version": row.agent_version,
+            "last_join_at": to_utc(row.last_join_at),
+            "last_heartbeat_at": to_utc_or_none(row.last_heartbeat_at),
+            "last_disconnect_at": to_utc_or_none(row.last_disconnect_at),
+            "revoked_at": to_utc_or_none(row.revoked_at),
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
+
+
+def _write_machine_enrollment_row(
+    row: ComputeMachineEnrollmentTable, record: ComputeMachineEnrollmentRecord
+) -> None:
+    row.user_id = record.user_id
+    row.workspace_id = record.workspace_id
+    row.capacity_owner_id = record.capacity_owner_id
+    row.pool = record.pool
+    row.machine_id = record.machine_id
+    row.machine_fingerprint_hash = record.machine_fingerprint_hash
+    row.join_credential_id = record.join_credential_id
+    row.credential_hash = record.credential_hash
+    row.credential_generation = record.credential_generation
+    row.tunnel_public_key_sha256 = record.tunnel_public_key_sha256
+    row.status = record.status.value
+    row.preflight_passed = record.preflight_passed
+    row.heartbeat_confirmed = record.heartbeat_confirmed
+    row.schedulable = record.schedulable
+    row.capacity_state = record.capacity_state.value
+    row.capacity_reason = record.capacity_reason
+    row.capacity_observed_at = record.capacity_observed_at
+    row.capacity_notice_at = record.capacity_notice_at
+    row.readiness_phase = record.readiness_phase.value
+    row.hostname = record.hostname
+    row.os = record.os
+    row.arch = record.arch
+    row.cpu_count = record.cpu_count
+    row.cpu_millicores = record.cpu_millicores
+    row.memory_mb = record.memory_mb
+    row.gpus = list(record.gpus)
+    row.gpu_ids = list(record.gpu_ids)
+    row.gpu_count = record.gpu_count
+    row.executor = record.executor
+    row.preflight_checks = [check.model_dump(mode="json") for check in record.preflight]
+    row.agent_version = record.agent_version
+    row.last_join_at = record.last_join_at
+    row.last_heartbeat_at = record.last_heartbeat_at
+    row.last_disconnect_at = record.last_disconnect_at
+    row.revoked_at = record.revoked_at
+    row.created_at = record.created_at
+    row.updated_at = record.updated_at
+
+
 @dataclass(slots=True)
 class ComputeMachineEnrollmentRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeMachineEnrollmentRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(
-                ComputeMachineEnrollmentTable,
-                ComputeMachineEnrollmentRecord,
-            ),
+    def delete(self, enrollment_id: str, *, workspace_id: str) -> None:
+        self.session.execute(
+            delete(ComputeMachineEnrollmentTable).where(
+                ComputeMachineEnrollmentTable.id == enrollment_id,
+                ComputeMachineEnrollmentTable.workspace_id == workspace_id,
+            )
         )
+        self.session.flush()
 
-    def create(
-        self,
-        enrollment: ComputeMachineEnrollmentCreate,
-    ) -> ComputeMachineEnrollmentRecord:
-        return self.records.create(
-            enrollment.model_dump(mode="python"),
-            workspace_id=enrollment.workspace_id,
-            status=enrollment.status.value,
+    def create(self, enrollment: ComputeMachineEnrollmentCreate) -> ComputeMachineEnrollmentRecord:
+        WorkspaceRepository(self.session).lock_active_owner(enrollment.workspace_id)
+        now = utc_now()
+        record = ComputeMachineEnrollmentRecord.model_validate(
+            {
+                **enrollment.model_dump(),
+                "id": str(uuid4()),
+                "created_at": now,
+                "updated_at": now,
+            }
         )
+        row = ComputeMachineEnrollmentTable(id=record.id)
+        _write_machine_enrollment_row(row, record)
+        self.session.add(row)
+        self.session.flush()
+        return _machine_enrollment_record(row)
 
     def by_id(
         self,
@@ -1675,11 +1896,16 @@ class ComputeMachineEnrollmentRepository:
         )
 
     def save(self, record: ComputeMachineEnrollmentRecord) -> ComputeMachineEnrollmentRecord:
-        return self.records.upsert(
-            record,
-            workspace_id=record.workspace_id,
-            status=record.status.value,
-        )
+        record = ComputeMachineEnrollmentRecord.model_validate(dict(record))
+        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
+        row = self.session.get(ComputeMachineEnrollmentTable, record.id)
+        if row is None:
+            raise LookupError(f"compute machine enrollment does not exist: {record.id}")
+        if row.workspace_id != record.workspace_id or row.user_id != record.user_id:
+            raise ConflictError("compute machine enrollment owner cannot change")
+        _write_machine_enrollment_row(row, record)
+        self.session.flush()
+        return _machine_enrollment_record(row)
 
     def save_for_workspace_deletion(
         self,
@@ -1698,22 +1924,24 @@ class ComputeMachineEnrollmentRepository:
         ).first()
         if row is None:
             raise LookupError(f"compute machine enrollment does not exist: {record.id}")
-        row.payload = _model_json(record)
+        record = ComputeMachineEnrollmentRecord.model_validate(dict(record))
         row.status = record.status.value
         row.credential_generation = record.credential_generation
         row.preflight_passed = record.preflight_passed
         row.heartbeat_confirmed = record.heartbeat_confirmed
         row.schedulable = record.schedulable
         row.capacity_state = record.capacity_state.value
+        row.capacity_reason = record.capacity_reason
         row.capacity_observed_at = record.capacity_observed_at
+        row.capacity_notice_at = record.capacity_notice_at
         row.readiness_phase = record.readiness_phase.value
         row.last_join_at = record.last_join_at
         row.last_heartbeat_at = record.last_heartbeat_at
         row.last_disconnect_at = record.last_disconnect_at
         row.revoked_at = record.revoked_at
-        flag_modified(row, "payload")
+        row.updated_at = record.updated_at
         self.session.flush()
-        return record
+        return _machine_enrollment_record(row)
 
     def list_active_capacity_interruptions(
         self,
@@ -1726,12 +1954,9 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.pool,
                 ComputeMachineEnrollmentTable.machine_id,
                 ComputeMachineEnrollmentTable.capacity_state,
-                func.coalesce(
-                    ComputeMachineEnrollmentTable.payload["capacity_reason"].as_string(),
-                    "",
-                ),
+                ComputeMachineEnrollmentTable.capacity_reason,
                 ComputeMachineEnrollmentTable.capacity_observed_at,
-                ComputeMachineEnrollmentTable.payload["capacity_notice_at"].as_string(),
+                ComputeMachineEnrollmentTable.capacity_notice_at,
             )
             .where(
                 ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
@@ -1759,7 +1984,7 @@ class ComputeMachineEnrollmentRepository:
                 state=AgentCapacityState(state),
                 reason=reason,
                 observed_at=to_utc(observed_at),
-                notice_at=_DATETIME_ADAPTER.validate_python(notice_at) if notice_at else None,
+                notice_at=to_utc_or_none(notice_at),
             )
             for (
                 enrollment_id,
@@ -1784,15 +2009,9 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.status,
                 ComputeMachineEnrollmentTable.schedulable,
                 ComputeMachineEnrollmentTable.capacity_state,
-                func.coalesce(
-                    ComputeMachineEnrollmentTable.payload["capacity_reason"].as_string(), ""
-                ).label("capacity_reason"),
-                ComputeMachineEnrollmentTable.payload["capacity_observed_at"]
-                .as_string()
-                .label("capacity_observed_at"),
-                ComputeMachineEnrollmentTable.payload["capacity_notice_at"]
-                .as_string()
-                .label("capacity_notice_at"),
+                ComputeMachineEnrollmentTable.capacity_reason,
+                ComputeMachineEnrollmentTable.capacity_observed_at.label("capacity_observed_at"),
+                ComputeMachineEnrollmentTable.capacity_notice_at.label("capacity_notice_at"),
             ).where(ComputeMachineEnrollmentTable.credential_hash == credential_hash)
         ).one_or_none()
         return (
@@ -1840,10 +2059,7 @@ class ComputeMachineEnrollmentRepository:
             .where(ComputeMachineEnrollmentTable.user_id == user_id)
             .order_by(ComputeMachineEnrollmentTable.created_at.asc())
         )
-        return [
-            ComputeMachineEnrollmentRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_machine_enrollment_record(row) for row in self.session.scalars(statement)]
 
     def list_silent_since(
         self,
@@ -1885,10 +2101,7 @@ class ComputeMachineEnrollmentRepository:
             .order_by(joined.asc(), ComputeMachineEnrollmentTable.id.asc())
             .limit(max(limit, 1))
         )
-        return [
-            ComputeMachineEnrollmentRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_machine_enrollment_record(row) for row in self.session.scalars(statement)]
 
     def by_machine(
         self,
@@ -1919,10 +2132,7 @@ class ComputeMachineEnrollmentRepository:
             )
             .order_by(ComputeMachineEnrollmentTable.created_at.asc())
         )
-        return [
-            ComputeMachineEnrollmentRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_machine_enrollment_record(row) for row in self.session.scalars(statement)]
 
     def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
@@ -1950,361 +2160,5 @@ class ComputeMachineEnrollmentRepository:
     ) -> ComputeMachineEnrollmentRecord | None:
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(ComputeMachineEnrollmentTable.payload, raiseload=True)
-        )
         row = self.session.scalars(statement).first()
-        return (
-            ComputeMachineEnrollmentRecord.model_validate(row.payload) if row is not None else None
-        )
-
-
-@dataclass(slots=True)
-class AwsAccountConnectionRepository:
-    session: Session
-
-    def create(self, connection: AwsAccountConnection) -> AwsAccountConnection:
-        row = AwsAccountConnectionTable(
-            id=connection.id,
-            user_id=connection.user_id,
-            account_id=connection.account_id,
-            external_id=connection.external_id,
-            pool=connection.pool,
-            phase=connection.phase.value,
-            revision=connection.revision,
-            next_reconcile_at=connection.next_reconcile_at,
-            claim_token=connection.claim_token,
-            claim_expires_at=connection.claim_expires_at,
-            reconcile_attempt_count=connection.reconcile_attempt_count,
-            provider_operation_id=connection.provider_operation_id,
-            provider_operation_started_at=connection.provider_operation_started_at,
-            payload=_model_json(connection),
-            created_at=connection.created_at,
-            updated_at=connection.updated_at,
-        )
-        self.session.add(row)
-        self.session.flush()
-        return connection
-
-    def save(self, connection: AwsAccountConnection) -> AwsAccountConnection:
-        row = self.session.get(AwsAccountConnectionTable, connection.id)
-        if row is None:
-            raise LookupError(f"AWS account connection {connection.id} does not exist")
-        self._write(row, connection)
-        return connection
-
-    def get_for_user(
-        self,
-        user_id: str,
-        *,
-        for_update: bool = False,
-    ) -> AwsAccountConnection | None:
-        statement = select(AwsAccountConnectionTable).where(
-            AwsAccountConnectionTable.user_id == user_id
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        row = self.session.scalars(statement).first()
-        return AwsAccountConnection.model_validate(row.payload) if row is not None else None
-
-    def get_for_workspace_owner(
-        self,
-        workspace_id: str,
-        *,
-        for_update: bool = False,
-    ) -> AwsAccountConnection | None:
-        """The connected account backing a workspace, reached through its owner.
-
-        One join rather than two lookups so the owner cannot change between them, and
-        so every caller asks the question the same way.
-        """
-        statement = (
-            select(AwsAccountConnectionTable)
-            .join(
-                WorkspaceMemberTable,
-                WorkspaceMemberTable.user_id == AwsAccountConnectionTable.user_id,
-            )
-            .where(
-                WorkspaceMemberTable.workspace_id == workspace_id,
-                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
-            )
-        )
-        if for_update:
-            statement = statement.with_for_update(of=AwsAccountConnectionTable)
-        row = self.session.scalars(statement).first()
-        return AwsAccountConnection.model_validate(row.payload) if row is not None else None
-
-    def get(
-        self,
-        connection_id: str,
-        *,
-        for_update: bool = False,
-    ) -> AwsAccountConnection | None:
-        statement = select(AwsAccountConnectionTable).where(
-            AwsAccountConnectionTable.id == connection_id
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        row = self.session.scalars(statement).first()
-        return AwsAccountConnection.model_validate(row.payload) if row is not None else None
-
-    def list_for_user(self, user_id: str) -> list[AwsAccountConnection]:
-        statement = (
-            select(AwsAccountConnectionTable)
-            .where(AwsAccountConnectionTable.user_id == user_id)
-            .order_by(
-                AwsAccountConnectionTable.created_at.desc(),
-                AwsAccountConnectionTable.id.asc(),
-            )
-        )
-        return [
-            AwsAccountConnection.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
-
-    def list_all(self) -> list[AwsAccountConnection]:
-        """Every connected account, for control-plane-wide reconciliation."""
-        statement = select(AwsAccountConnectionTable).order_by(
-            AwsAccountConnectionTable.created_at.asc(),
-            AwsAccountConnectionTable.id.asc(),
-        )
-        return [
-            AwsAccountConnection.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
-
-    def claim_due(
-        self,
-        *,
-        now: datetime,
-        lease_until: datetime,
-        limit: int,
-    ) -> list[AwsAccountConnection]:
-        statement = (
-            select(AwsAccountConnectionTable)
-            .where(
-                AwsAccountConnectionTable.next_reconcile_at.is_not(None),
-                AwsAccountConnectionTable.next_reconcile_at <= now,
-                or_(
-                    AwsAccountConnectionTable.claim_expires_at.is_(None),
-                    AwsAccountConnectionTable.claim_expires_at <= now,
-                ),
-            )
-            .order_by(
-                AwsAccountConnectionTable.next_reconcile_at.asc(),
-                AwsAccountConnectionTable.id.asc(),
-            )
-            .limit(max(limit, 1))
-            .with_for_update(skip_locked=True)
-        )
-        claimed: list[AwsAccountConnection] = []
-        for row in self.session.scalars(statement):
-            current = AwsAccountConnection.model_validate(row.payload)
-            connection = current.model_copy(
-                update={
-                    "claim_token": str(uuid4()),
-                    "claim_expires_at": lease_until,
-                    "updated_at": now,
-                }
-            )
-            self._write(row, connection)
-            claimed.append(connection)
-        return claimed
-
-    def finish_claim(
-        self,
-        claimed: AwsAccountConnection,
-        updated: AwsAccountConnection,
-    ) -> AwsAccountConnection | None:
-        row = self._claimed_row(claimed)
-        if row is None:
-            return None
-        finished = updated.model_copy(
-            update={
-                "revision": claimed.revision + 1,
-                "claim_token": None,
-                "claim_expires_at": None,
-            }
-        )
-        self._write(row, finished)
-        return finished
-
-    def delete_claimed(self, claimed: AwsAccountConnection) -> bool:
-        row = self._claimed_row(claimed)
-        if row is None:
-            return False
-        self.session.delete(row)
-        self.session.flush()
-        return True
-
-    def delete(self, connection: AwsAccountConnection) -> None:
-        self.session.execute(
-            delete(AwsAccountConnectionTable).where(AwsAccountConnectionTable.id == connection.id)
-        )
-        self.session.flush()
-
-    def _claimed_row(
-        self,
-        claimed: AwsAccountConnection,
-    ) -> AwsAccountConnectionTable | None:
-        return _locked_claimed_row(
-            self.session,
-            AwsAccountConnectionTable,
-            AwsAccountConnection.model_validate,
-            claimed,
-        )
-
-    def _write(
-        self,
-        row: AwsAccountConnectionTable,
-        connection: AwsAccountConnection,
-    ) -> None:
-        row.user_id = connection.user_id
-        row.account_id = connection.account_id
-        row.external_id = connection.external_id
-        row.pool = connection.pool
-        row.phase = connection.phase.value
-        row.revision = connection.revision
-        row.next_reconcile_at = connection.next_reconcile_at
-        row.claim_token = connection.claim_token
-        row.claim_expires_at = connection.claim_expires_at
-        row.reconcile_attempt_count = connection.reconcile_attempt_count
-        row.provider_operation_id = connection.provider_operation_id
-        row.provider_operation_started_at = connection.provider_operation_started_at
-        row.payload = _model_json(connection)
-        row.updated_at = connection.updated_at
-        flag_modified(row, "payload")
-        self.session.flush()
-
-
-@dataclass(slots=True)
-class AwsAuthorizationCleanupTombstoneRepository:
-    session: Session
-
-    def create(
-        self,
-        tombstone: AwsAuthorizationCleanupTombstone,
-    ) -> AwsAuthorizationCleanupTombstone:
-        row = AwsAuthorizationCleanupTombstoneTable(
-            id=tombstone.id,
-            user_id=tombstone.user_id,
-            connection_id=tombstone.connection_id,
-            account_id=tombstone.account_id,
-            status=tombstone.status.value,
-            provider_operation_id=tombstone.provider_operation_id,
-            revision=tombstone.revision,
-            next_reconcile_at=tombstone.next_reconcile_at,
-            expires_at=tombstone.expires_at,
-            claim_token=tombstone.claim_token,
-            claim_expires_at=tombstone.claim_expires_at,
-            reconcile_attempt_count=tombstone.reconcile_attempt_count,
-            payload=_model_json(tombstone),
-            created_at=tombstone.created_at,
-            updated_at=tombstone.updated_at,
-        )
-        self.session.add(row)
-        self.session.flush()
-        return tombstone
-
-    def claim_due(
-        self,
-        *,
-        now: datetime,
-        lease_until: datetime,
-        limit: int,
-    ) -> list[AwsAuthorizationCleanupTombstone]:
-        statement = (
-            select(AwsAuthorizationCleanupTombstoneTable)
-            .where(
-                AwsAuthorizationCleanupTombstoneTable.next_reconcile_at <= now,
-                or_(
-                    AwsAuthorizationCleanupTombstoneTable.claim_expires_at.is_(None),
-                    AwsAuthorizationCleanupTombstoneTable.claim_expires_at <= now,
-                ),
-            )
-            .order_by(
-                AwsAuthorizationCleanupTombstoneTable.next_reconcile_at.asc(),
-                AwsAuthorizationCleanupTombstoneTable.id.asc(),
-            )
-            .limit(max(limit, 1))
-            .with_for_update(skip_locked=True)
-        )
-        claimed: list[AwsAuthorizationCleanupTombstone] = []
-        for row in self.session.scalars(statement):
-            current = AwsAuthorizationCleanupTombstone.model_validate(row.payload)
-            tombstone = current.model_copy(
-                update={
-                    "claim_token": str(uuid4()),
-                    "claim_expires_at": lease_until,
-                    "updated_at": now,
-                }
-            )
-            self._write(row, tombstone)
-            claimed.append(tombstone)
-        return claimed
-
-    def finish_claim(
-        self,
-        claimed: AwsAuthorizationCleanupTombstone,
-        updated: AwsAuthorizationCleanupTombstone,
-    ) -> AwsAuthorizationCleanupTombstone | None:
-        row = self._claimed_row(claimed)
-        if row is None:
-            return None
-        finished = updated.model_copy(
-            update={
-                "revision": claimed.revision + 1,
-                "claim_token": None,
-                "claim_expires_at": None,
-            }
-        )
-        self._write(row, finished)
-        return finished
-
-    def complete(self, claimed: AwsAuthorizationCleanupTombstone) -> bool:
-        row = self._claimed_row(claimed)
-        if row is None:
-            return False
-        self.session.delete(row)
-        self.session.flush()
-        return True
-
-    def pending_count(self) -> int:
-        return int(
-            self.session.scalar(
-                select(func.count()).select_from(AwsAuthorizationCleanupTombstoneTable)
-            )
-            or 0
-        )
-
-    def _claimed_row(
-        self,
-        claimed: AwsAuthorizationCleanupTombstone,
-    ) -> AwsAuthorizationCleanupTombstoneTable | None:
-        return _locked_claimed_row(
-            self.session,
-            AwsAuthorizationCleanupTombstoneTable,
-            AwsAuthorizationCleanupTombstone.model_validate,
-            claimed,
-        )
-
-    def _write(
-        self,
-        row: AwsAuthorizationCleanupTombstoneTable,
-        tombstone: AwsAuthorizationCleanupTombstone,
-    ) -> None:
-        row.user_id = tombstone.user_id
-        row.connection_id = tombstone.connection_id
-        row.account_id = tombstone.account_id
-        row.status = tombstone.status.value
-        row.provider_operation_id = tombstone.provider_operation_id
-        row.revision = tombstone.revision
-        row.next_reconcile_at = tombstone.next_reconcile_at
-        row.expires_at = tombstone.expires_at
-        row.claim_token = tombstone.claim_token
-        row.claim_expires_at = tombstone.claim_expires_at
-        row.reconcile_attempt_count = tombstone.reconcile_attempt_count
-        row.payload = _model_json(tombstone)
-        row.updated_at = tombstone.updated_at
-        flag_modified(row, "payload")
-        self.session.flush()
+        return _machine_enrollment_record(row) if row is not None else None

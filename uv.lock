@@ -814,6 +814,8 @@ source = { editable = "packages/database" }
 dependencies = [
     { name = "alembic" },
     { name = "anyio" },
+    { name = "cryptography" },
+    { name = "foundation" },
     { name = "greenlet" },
     { name = "lazycloud-shared" },
     { name = "psycopg", extra = ["binary"] },
@@ -826,6 +828,8 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.17,<2" },
     { name = "anyio", specifier = ">=4,<5" },
+    { name = "cryptography", specifier = ">=50,<51" },
+    { name = "foundation", editable = "packages/foundation" },
     { name = "greenlet", specifier = ">=3,<4" },
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
@@ -844,7 +848,6 @@ dependencies = [
     { name = "compute" },
     { name = "control" },
     { name = "coordination" },
-    { name = "cryptography" },
     { name = "database" },
     { name = "foundation" },
     { name = "identity" },
@@ -863,7 +866,6 @@ requires-dist = [
     { name = "compute", editable = "packages/compute" },
     { name = "control", editable = "packages/control" },
     { name = "coordination", editable = "packages/coordination" },
-    { name = "cryptography", specifier = ">=50,<51" },
     { name = "database", editable = "packages/database" },
     { name = "foundation", editable = "packages/foundation" },
     { name = "identity", editable = "packages/identity" },

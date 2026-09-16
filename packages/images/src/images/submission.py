@@ -61,7 +61,6 @@ class ImageBuildSubmissionService:
             phase=ImageBuildPhase.Submitted,
             tag=tag or f"local:{plan.cache_key[:12]}",
             cache_metadata={
-                "build_container_id": build_id,
                 "build_container_required": "true",
                 "scheduler_submit_status": "queued",
                 "executor": "build-container",

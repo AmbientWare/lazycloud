@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from pydantic import JsonValue
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -14,10 +15,11 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
-from database.tables.base import DatabaseBase, IdPayloadTable, uuid_type
+from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
 
 
 class ImageBuildLogTable(DatabaseBase):
@@ -40,7 +42,7 @@ class ImageBuildRequestTable(DatabaseBase):
     )
 
 
-class ImageArchiveTable(IdPayloadTable, DatabaseBase):
+class ImageArchiveTable(IdTable, DatabaseBase):
     """The one archive for an image, owned by the system rather than a workspace.
 
     Image identity is already global — it digests the dockerfile, build context,
@@ -61,6 +63,10 @@ class ImageArchiveTable(IdPayloadTable, DatabaseBase):
         CheckConstraint("size_bytes > 0", name="ck_image_archives_size_positive"),
         CheckConstraint("length(sha256) = 64", name="ck_image_archives_sha256_complete"),
         CheckConstraint("object_key <> ''", name="ck_image_archives_object_key_present"),
+        CheckConstraint("format_version >= 1", name="ck_image_archives_format_version"),
+        CheckConstraint(
+            "architecture IN ('', 'amd64', 'arm64')", name="ck_image_archives_architecture"
+        ),
     )
 
     image_id: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -68,18 +74,20 @@ class ImageArchiveTable(IdPayloadTable, DatabaseBase):
     object_key: Mapped[str] = mapped_column(Text, nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    registry_ref: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    manifest_digest: Mapped[str] = mapped_column(String(71), nullable=False, default="")
+    architecture: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    format_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     cleanup_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
 
-class ImageTable(IdPayloadTable, DatabaseBase):
+class ImageTable(IdTable, DatabaseBase):
     """A workspace's authorization to use an image, and its clip version.
 
-    Archive facts live on `image_archives`. Keeping them here made every workspace
-    carry its own digest of shared content, so deleting one tenant destroyed bytes a
-    surviving tenant referenced, and the workspace-scoped `RESTRICT` foreign key onto
-    `objects` wedged deletion after the bytes were already gone.
+    Archive facts live on `image_archives`; tenant deletion revokes access without
+    deleting bytes that another workspace still needs.
     """
 
     __tablename__ = "images"
@@ -102,6 +110,7 @@ class ImageTable(IdPayloadTable, DatabaseBase):
     )
     image_id: Mapped[str] = mapped_column(String(512), nullable=False)
     clip_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     cleanup_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -110,9 +119,23 @@ class ImageTable(IdPayloadTable, DatabaseBase):
     )
 
 
-class ImageBuildTable(IdPayloadTable, DatabaseBase):
+class ImageBuildTable(IdTable, DatabaseBase):
     __tablename__ = "image_builds"
     __table_args__: tuple[SchemaItem, ...] = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'complete', 'failed', 'cancelled', 'timeout')",
+            name="ck_image_builds_status",
+        ),
+        CheckConstraint(
+            "phase IN ('verify', 'planning', 'submitted', 'manifest', "
+            "'complete', 'failed', 'reused')",
+            name="ck_image_builds_phase",
+        ),
+        CheckConstraint(
+            "image_archive_format_version IS NULL OR image_archive_format_version >= 1",
+            name="ck_image_builds_archive_format_version",
+        ),
+        Index("ix_image_builds_context_object", "context_object_id"),
         Index(
             "ix_image_builds_cleanup_due",
             "execution_cleanup_after",
@@ -157,7 +180,6 @@ class ImageBuildTable(IdPayloadTable, DatabaseBase):
             "fingerprint",
             unique=True,
             postgresql_where=text("status IN ('pending', 'running')"),
-            sqlite_where=text("status IN ('pending', 'running')"),
         ),
     )
 
@@ -178,6 +200,18 @@ class ImageBuildTable(IdPayloadTable, DatabaseBase):
     cache_manifest_path_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     cache_publish_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
+    image_definition: Mapped[dict[str, JsonValue]] = mapped_column(json_type, nullable=False)
+    context_object_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    dockerfile: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_digest: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    tag: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cache_details: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False, default=dict)
+    build_container_required: Mapped[bool | None] = mapped_column(nullable=True)
+    image_archive_format_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_archive_status: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    diagnostic_lines: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     phase: Mapped[str] = mapped_column(String(80), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -198,7 +232,7 @@ class ImageBuildTable(IdPayloadTable, DatabaseBase):
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class CheckpointTable(IdPayloadTable, DatabaseBase):
+class CheckpointTable(IdTable, DatabaseBase):
     __tablename__ = "checkpoints"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("checkpoint_id", name="uq_checkpoints_checkpoint_id"),
@@ -217,6 +251,7 @@ class CheckpointTable(IdPayloadTable, DatabaseBase):
         nullable=True,
     )
     container_ip: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    exposed_ports: Mapped[list[int]] = mapped_column(ARRAY(Integer), nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     remote_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
     workspace_id: Mapped[str | None] = mapped_column(

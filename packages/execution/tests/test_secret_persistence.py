@@ -5,7 +5,7 @@ from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.records.identity import SecretStorageRecord
 from database.repositories.identity import SecretRepository
-from execution.secrets.crypto import (
+from database.workspace_secrets import (
     SECRET_VALUE_PREFIX,
     SecretDecryptionError,
     WorkspaceSecretCipher,

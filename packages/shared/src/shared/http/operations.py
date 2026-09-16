@@ -18,8 +18,6 @@ class CronJobResponse(HttpModel):
     name: str
     cron: str
     deployment_id: str
-    queue: str = "tasks"
-    payload: JsonValue = None
     enabled: bool = True
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
@@ -36,7 +34,6 @@ class CronJobRunResponse(HttpModel):
     workspace_id: str
     cron_job: str
     enqueued: bool
-    message_id: str | None = None
     task_id: str | None = None
     reason: str | None = None
     created_at: datetime

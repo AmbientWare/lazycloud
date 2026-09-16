@@ -29,7 +29,6 @@ class WorkerCacheGenerationTable(IdTable, DatabaseBase):
             "storage_id",
             unique=True,
             postgresql_where=text("state <> 'retired'"),
-            sqlite_where=text("state <> 'retired'"),
         ),
         CheckConstraint(
             "state IN ('initializing', 'available', 'draining', 'retired')",

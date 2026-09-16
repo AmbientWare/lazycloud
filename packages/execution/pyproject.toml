@@ -10,7 +10,6 @@ dependencies = [
     "lazycloud-shared==0.1.0",
     "control",
     "coordination",
-    "cryptography>=50,<51",
     "database",
     "foundation",
     "identity",

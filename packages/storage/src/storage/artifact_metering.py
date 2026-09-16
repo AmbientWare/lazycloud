@@ -72,8 +72,7 @@ def meter_artifact(
     usage_repository = UsageRepository(session)
     usage = usage_repository.append_storage(usage)
     MeteredUsagePricer(session).price(usage)
-    record.artifact_metered_at = end
-    repository.update(record)
+    repository.advance_metering_checkpoint(artifact_id, workspace_id=workspace_id, metered_at=end)
 
 
 def meter_due_artifacts(

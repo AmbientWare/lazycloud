@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.execution import (
@@ -143,36 +144,27 @@ class TaskService:
         persisted_container_id = (
             resolved_container_id if _container_exists(session, resolved_container_id) else None
         )
-        return TaskRepository(session).records.create_across_workspaces(
-            {
-                "name": name,
-                "workspace_id": resolved_workspace_id,
-                "app_id": resolved_app_id,
-                "stub_id": resolved_stub_id,
-                "deployment_id": resolved_deployment_id,
-                "container_id": persisted_container_id,
-                "parent_task_id": resolved_parent_task_id,
-                "root_task_id": resolved_root_task_id,
-                "handler": handler,
-                "command": command or [],
-                "args": args or [],
-                "kwargs": dict(kwargs or {}),
-                "invocation": (
-                    invocation.model_dump(mode="json") if invocation is not None else None
-                ),
-                "retry_policy": (
-                    resolved_retry_policy.model_dump(mode="json")
-                    if resolved_retry_policy is not None
-                    else None
-                ),
-                "attempt_number": 0,
-                "max_attempts": (
-                    resolved_retry_policy.max_attempts if resolved_retry_policy is not None else 1
-                ),
-                "status": TaskStatus.Pending.value,
-            },
-            name=name,
-            status=TaskStatus.Pending.value,
+        return TaskRepository(session).upsert(
+            Task(
+                id=str(uuid4()),
+                name=name,
+                workspace_id=resolved_workspace_id,
+                app_id=resolved_app_id,
+                stub_id=resolved_stub_id,
+                deployment_id=resolved_deployment_id,
+                container_id=persisted_container_id,
+                parent_task_id=resolved_parent_task_id,
+                root_task_id=resolved_root_task_id,
+                handler=handler,
+                command=command or [],
+                args=args or [],
+                kwargs=dict(kwargs or {}),
+                invocation=invocation,
+                retry_policy=resolved_retry_policy,
+                max_attempts=resolved_retry_policy.max_attempts
+                if resolved_retry_policy is not None
+                else 1,
+            )
         )
 
     def publish_created(self, task: Task) -> None:
@@ -188,11 +180,9 @@ class TaskService:
     def save(self, task: Task) -> Task:
         """System-authority write; task ownership comes from the record."""
         with self.context.database.session() as session:
-            return TaskRepository(session).records.upsert_across_workspaces(
+            return TaskRepository(session).upsert(
                 task,
                 workspace_id=task.workspace_id,
-                name=task.name,
-                status=task.status.value,
             )
 
     def append_logs(self, task_id: str, stream: str, messages: list[str]) -> None:
@@ -203,28 +193,31 @@ class TaskService:
                 if task.container_id
                 else None
             )
-            records = LogRepository(session).records
+            repository = LogRepository(session)
             entries = [
-                records.create_across_workspaces(
-                    {
-                        "task_id": required_uuid(task_id, field="task_id"),
-                        "container_id": task.container_id,
-                        "app_id": task.app_id,
-                        "stub_id": task.stub_id,
-                        "deployment_id": task.deployment_id,
-                        "machine_id": (
-                            container.runtime_machine_id or container.machine_id
-                            if container is not None
-                            else None
-                        ),
-                        "worker_id": (
-                            container.runtime_worker_id or container.worker_id
-                            if container is not None
-                            else None
-                        ),
-                        "stream": stream,
-                        "message": message.rstrip("\n"),
-                    },
+                repository.append(
+                    LogEntry.model_validate(
+                        {
+                            "id": str(uuid4()),
+                            "task_id": required_uuid(task_id, field="task_id"),
+                            "container_id": task.container_id,
+                            "app_id": task.app_id,
+                            "stub_id": task.stub_id,
+                            "deployment_id": task.deployment_id,
+                            "machine_id": (
+                                container.runtime_machine_id or container.machine_id
+                                if container is not None
+                                else None
+                            ),
+                            "worker_id": (
+                                container.runtime_worker_id or container.worker_id
+                                if container is not None
+                                else None
+                            ),
+                            "stream": stream,
+                            "message": message.rstrip("\n"),
+                        }
+                    ),
                     workspace_id=task.workspace_id,
                 )
                 for message in messages
@@ -357,11 +350,9 @@ class TaskService:
         current.function_result = function_result
         current.error = error
         current.exit_code = exit_code
-        updated = task_repository.records.upsert_across_workspaces(
+        updated = task_repository.upsert(
             current,
             workspace_id=current.workspace_id,
-            name=current.name,
-            status=status.value,
         )
         if status is not TaskStatus.Pending:
             attempts = TaskAttemptRepository(session)
@@ -435,7 +426,7 @@ class TaskService:
                 f"not {resolved_container_id}"
             )
         container = (
-            ContainerRepository(session).records.get_across_workspaces(resolved_container_id)
+            ContainerRepository(session).get_across_workspaces(resolved_container_id)
             if resolved_container_id
             else None
         )
@@ -470,11 +461,9 @@ class TaskService:
         current.function_result = None
         current.error = None
         current.exit_code = None
-        saved = task_repository.records.upsert_across_workspaces(
+        saved = task_repository.upsert(
             current,
             workspace_id=current.workspace_id,
-            name=current.name,
-            status=TaskStatus.Running.value,
         )
         attempt_started = False
         if active_attempt and latest is not None:
@@ -484,17 +473,16 @@ class TaskService:
                 latest.container_id = attempt_container_id
             attempt_repository.upsert(latest)
         else:
-            attempt_repository.records.create_across_workspaces(
-                {
-                    "task_id": required_uuid(saved.id, field="task_id"),
-                    "workspace_id": saved.workspace_id,
-                    "container_id": attempt_container_id,
-                    "attempt_number": saved.attempt_number,
-                    "status": TaskStatus.Running.value,
-                    "started_at": now,
-                },
-                workspace_id=saved.workspace_id,
-                status=TaskStatus.Running.value,
+            attempt_repository.create(
+                TaskAttempt(
+                    id=str(uuid4()),
+                    task_id=required_uuid(saved.id, field="task_id"),
+                    workspace_id=saved.workspace_id,
+                    container_id=attempt_container_id,
+                    attempt_number=saved.attempt_number,
+                    status=TaskStatus.Running,
+                    started_at=now,
+                )
             )
             attempt_started = True
         return _TaskStartPersistence(
@@ -749,11 +737,9 @@ class TaskService:
             current.container_id = None
         elif is_terminal_task_status(next_status):
             current.finished_at = now
-        updated = task_repository.records.upsert_across_workspaces(
+        updated = task_repository.upsert(
             current,
             workspace_id=current.workspace_id,
-            name=current.name,
-            status=next_status.value,
         )
         attempts = TaskAttemptRepository(session)
         latest = attempts.latest_for_task(updated.id)
@@ -1050,7 +1036,7 @@ def _task_event_level(status: TaskStatus) -> EventLevel:
 def _container_exists(session: DatabaseSession, container_id: str | None) -> bool:
     if not container_id:
         return False
-    return ContainerRepository(session).records.get_across_workspaces(container_id) is not None
+    return ContainerRepository(session).get_across_workspaces(container_id) is not None
 
 
 def _task_retry_policy(

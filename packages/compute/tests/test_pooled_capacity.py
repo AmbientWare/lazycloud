@@ -38,8 +38,8 @@ from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
 from database.context import ServiceContext
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,
@@ -728,14 +728,9 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
                     desired_unit=waiting.desired_unit,
                     status=CapacityOperationStatus.AtLimit,
                     previous_desired_unit=pool.desired_machines,
-                    shape={
-                        "cpu_millicores": pool.worker_cpu_millicores,
-                        "memory_mib": pool.worker_memory_mib,
-                        "gpu_type": "",
-                        "gpu_count": 0,
-                        "runtime": "runsc",
-                        "preemptible": False,
-                    },
+                    shape=CapacityAcquisitionShape(
+                        cpu_millicores=pool.worker_cpu_millicores, memory_mib=pool.worker_memory_mib
+                    ),
                     created_at=now,
                     updated_at=now,
                 )
@@ -1820,11 +1815,8 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
                 "status": "pending",
                 "instance_id": "i-pending0000000001",
                 "machine_id": None,
-                "metadata": {
-                    **active.metadata,
-                    "missing_since": missing_since.isoformat(),
-                    "storage_volume_ids": [],
-                },
+                "missing_since": missing_since,
+                "storage_volume_ids": (),
             }
         )
         planned_without_instance = active.model_copy(
@@ -1833,11 +1825,8 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
                 "status": "pending",
                 "instance_id": None,
                 "machine_id": None,
-                "metadata": {
-                    **active.metadata,
-                    "missing_since": missing_since.isoformat(),
-                    "storage_volume_ids": [],
-                },
+                "missing_since": missing_since,
+                "storage_volume_ids": (),
             }
         )
         repository.upsert(pending_with_instance)
@@ -1845,6 +1834,7 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
         before = {item.id: item.created_at for item in repository.list_for_pool(pool.id)}
         orphaned_operation = ComputeCapacityOperationRepository(session).upsert(
             ComputeCapacityOperationRecord(
+                shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32_768),
                 id=str(uuid4()),
                 workspace_id=pool.workspace_id,
                 pool_id=pool.id,
@@ -1875,8 +1865,8 @@ def test_scale_zero_terminalizes_missing_provider_instance_projections(
     assert scaled.phase is ComputeUnitPhase.Ready
     assert {item.id: item.created_at for item in after} == before
     assert {item.status for item in after} == {"deleted"}
-    assert all(item.metadata["terminated_reason"] == "provider_instance_missing" for item in after)
-    assert all("provider_storage_destroyed_at" in item.metadata for item in after)
+    assert all(item.terminated_reason == "provider_instance_missing" for item in after)
+    assert all(item.provider_storage_destroyed_at is not None for item in after)
     assert released_operation is not None
     assert released_operation.status == "released"
     assert released_operation.release_desired_unit == 0
@@ -2408,7 +2398,7 @@ def test_named_retirement_ignores_absent_machines_and_preserves_retry_intent(
                     "id": absent_id,
                     "instance_id": "i-fffffffffffffffff",
                     "machine_id": None,
-                    "metadata": {"missing_since": datetime.now(UTC).isoformat()},
+                    "missing_since": datetime.now(UTC),
                 }
             )
         )
@@ -2426,9 +2416,9 @@ def test_named_retirement_ignores_absent_machines_and_preserves_retry_intent(
             retired = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
         assert retired is not None
         assert retired.status == "terminating"
-        assert retired.metadata["terminating_reason"] == "idle_pool_scale_down"
+        assert retired.terminating_reason == "idle_pool_scale_down"
         with service_context.database.session() as session:
-            absent = ComputeProviderInstanceRepository(session).records.get(absent_id)
+            absent = ComputeProviderInstanceRepository(session).get(absent_id)
         assert absent is not None
         assert absent.status == "active"
 
@@ -2783,7 +2773,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         active_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
         updating_pool = ComputeUnitRepository(session).get(pool.id)
     assert lingering.status != "deleted"
-    assert lingering.metadata["storage_volume_ids"] == ["vol-00000000000000000"]
+    assert lingering.storage_volume_ids == ("vol-00000000000000000",)
     assert active_generation is not None
     assert active_generation.state is not WorkerCacheGenerationState.Retired
     assert updating_pool is not None
@@ -2796,10 +2786,9 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         retired_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
         ready_pool = ComputeUnitRepository(session).get(pool.id)
     assert destroyed.status == "deleted"
-    assert "provider_storage_destroyed_at" in destroyed.metadata
-    observed_at = destroyed.metadata["provider_storage_destroyed_at"]
-    assert isinstance(observed_at, str)
-    assert datetime.fromisoformat(observed_at) >= cache_created_at
+    observed_at = destroyed.provider_storage_destroyed_at
+    assert observed_at is not None
+    assert observed_at >= cache_created_at
     assert retired_generation is not None
     assert retired_generation.state is WorkerCacheGenerationState.Retired
     assert ready_pool is not None
@@ -2817,7 +2806,8 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         [preserved] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         preserved_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
     assert preserved.updated_at == destroyed.updated_at
-    assert preserved.metadata == destroyed.metadata
+    assert preserved.provider_storage_destroyed_at == destroyed.provider_storage_destroyed_at
+    assert preserved.terminated_reason == destroyed.terminated_reason
     assert preserved_generation is not None
     assert preserved_generation.state is WorkerCacheGenerationState.Retired
 
@@ -3016,7 +3006,7 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
     assert replacement.bootstrap_phase is MachineBootstrapPhase.Provisioning
     assert replacement.bootstrap_failure_reason is None
     assert replacement.machine_id is None
-    assert "terminating_reason" not in replacement.metadata
+    assert replacement.terminating_reason == ""
     assert current is not None
     assert current.provider_state.degraded_reason is None
     assert current.desired_machines == 1
@@ -3124,8 +3114,8 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     assert reclaimed.status == "deleted"
     assert reclaimed.bootstrap_phase is MachineBootstrapPhase.Failed
     assert reclaimed.bootstrap_failure_reason is MachineBootstrapFailureReason.BootstrapTimedOut
-    assert reclaimed.metadata["terminating_reason"] == "bootstrap_deadline_exceeded"
-    assert reclaimed.metadata["provider_storage_destroyed_at"]
+    assert reclaimed.terminating_reason == "bootstrap_deadline_exceeded"
+    assert reclaimed.provider_storage_destroyed_at is not None
     assert provider.desired == 0
     assert len(provider.ensure_calls) == ensure_calls_before_exhaustion
 
@@ -3865,7 +3855,7 @@ def test_obsolete_pool_retains_history_until_provider_storage_is_destroyed(
         records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         assert len(records) == 1 and records[0].id == instance.id
         assert records[0].status == "deleted"
-        assert records[0].metadata["provider_storage_destroyed_at"]
+        assert records[0].provider_storage_destroyed_at is not None
 
 
 def test_an_unbuilt_pool_is_not_deleted_by_the_account_it_has_not_been_built_in(

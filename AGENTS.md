@@ -268,14 +268,16 @@ For owner-authorized deployments of our platform, use the AWS `default` profile.
 for deploying our platform. GitHub deployments use their configured OIDC role.
 Never copy local AWS credentials into workloads, images, or GitHub secrets.
 
-The repository is deployed. A persistent installation holds data nobody can
-reconstruct, so a schema change adds an Alembic revision chained onto the one
-before it and `0001_initial` is never edited or renamed again. Do not rewrite
-the baseline: a deployed database records the revision it reached, and changing
-the file it points at makes that record a lie and refuses the next deploy.
+The owner authorized one reset of production and local Compose for the relational
+schema release, without preserving application data. The execution plan is
+`database-cleanup-plan.md`. Resolve resources and pass acceptance before either
+reset. This release establishes `0001_relational_baseline`; once deployed, it is
+frozen. Subsequent schema changes add an Alembic revision chained onto the previous
+one. A deployed database records the revision it reached, so changing that file
+invalidates its history and refuses the next deploy.
 Local development state is the Compose databases, volumes, and stacks;
-resetting and re-bootstrapping those is ordinary development work. Never reset
-external, deployed, or production data.
+resetting and re-bootstrapping those is ordinary development work. The relational
+schema release authorization does not cover subsequent production resets.
 
 Resolve destructive targets exactly before acting. List what a delete would
 remove and confirm every item belongs to the current task; a stack, a bucket,

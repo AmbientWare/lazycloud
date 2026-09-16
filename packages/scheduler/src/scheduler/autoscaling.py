@@ -13,6 +13,7 @@ from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.orchestration import ContainerRepository
 from pydantic import Field, JsonValue
 from shared.autoscaler_state import (
+    AutoscaleAction,
     AutoscalerStateRecord,
     AutoscalerTargetKind,
     autoscaler_state_name,
@@ -146,12 +147,6 @@ class EndpointAutoscalingDispatchReader(Protocol):
         *,
         finished_since: datetime,
     ) -> dict[str, list[EndpointAutoscalingDispatchObservation]]: ...
-
-
-class AutoscaleAction(ContractModel):
-    container_id: str = ""
-    action: str
-    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -587,13 +582,9 @@ class AutoscalingDriver:
             lock_acquired=result.lock_acquired,
             owner_lock_key=self._lock_key(stub),
             failed_container_count=len(result.failed_containers),
-            last_sample={
-                result.signal_name: result.signal_value,
-                "current_containers": result.current_containers,
-                "pending_containers": result.pending_containers,
-                "guardrails": result.guardrails,
-            },
-            last_actions=action_payloads,
+            pending_count=result.pending_containers,
+            guardrails=result.guardrails,
+            last_actions=result.actions,
         )
         previous = self.services.autoscaler_states.get(
             workspace_id=stub.workspace_id,
@@ -1259,8 +1250,9 @@ def _autoscaler_state(
     lock_acquired: bool = True,
     owner_lock_key: str = "",
     failed_container_count: int = 0,
-    last_sample: dict[str, JsonValue] | None = None,
-    last_actions: list[dict[str, JsonValue]] | None = None,
+    pending_count: int = 0,
+    guardrails: dict[str, JsonValue] | None = None,
+    last_actions: list[AutoscaleAction] | None = None,
     cooldown_until: datetime | None = None,
 ) -> AutoscalerStateRecord:
     actions = last_actions or []
@@ -1284,8 +1276,8 @@ def _autoscaler_state(
         owner_lock_key=owner_lock_key,
         cooldown_until=cooldown_until,
         failed_container_count=failed_container_count,
-        error=_autoscaler_error(actions),
-        last_sample=last_sample or {},
+        pending_count=pending_count,
+        guardrails=guardrails or {},
         last_actions=actions,
         updated_at=utc_now(),
     )
@@ -1298,15 +1290,6 @@ def _autoscaler_state_changed(
     if previous is None:
         return True
     return previous.model_dump(exclude={"updated_at"}) != current.model_dump(exclude={"updated_at"})
-
-
-def _autoscaler_error(actions: list[dict[str, JsonValue]]) -> str:
-    for action in actions:
-        action_name = action.get("action")
-        if isinstance(action_name, str) and "failed" in action_name:
-            reason = action.get("reason")
-            return reason if isinstance(reason, str) else action_name
-    return ""
 
 
 def load_autoscaling_placement_snapshot(
@@ -1660,7 +1643,6 @@ def _redis_non_negative_int(value: object) -> int:
 
 __all__ = [
     "CONTAINER_START_DEADLINE_SECONDS",
-    "AutoscaleAction",
     "AutoscaleResult",
     "AutoscalerIdentity",
     "AutoscalingDriver",

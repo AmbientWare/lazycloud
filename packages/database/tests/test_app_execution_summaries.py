@@ -74,7 +74,6 @@ def _seed(database: DatabaseClient, hour: datetime) -> tuple[str, str]:
                 id=workspace_id,
                 name="summaries",
                 status="active",
-                payload={},
             )
         )
         session.execute(
@@ -83,7 +82,6 @@ def _seed(database: DatabaseClient, hour: datetime) -> tuple[str, str]:
                 workspace_id=workspace_id,
                 name="activity",
                 lifecycle_state="active",
-                payload={},
             )
         )
         session.execute(
@@ -96,7 +94,6 @@ def _seed(database: DatabaseClient, hour: datetime) -> tuple[str, str]:
                         "name": f"task-{index}",
                         "status": status.value,
                         "created_at": hour + timedelta(minutes=index),
-                        "payload": {},
                     }
                     for index, status in enumerate(statuses)
                 ]

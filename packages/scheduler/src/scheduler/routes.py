@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
 from shared.routing import AgentBackendRoute
 
@@ -10,22 +9,11 @@ from scheduler.state import (
 )
 
 
-class BackendRouteReader(Protocol):
-    def get(self, route_id: str) -> AgentBackendRoute | None: ...
-
-
 @dataclass(slots=True)
 class SchedulerBackendRouteResolver:
-    database_routes: BackendRouteReader
     containers: RedisSchedulerContainerRepository | None
 
     def get_backend_route(self, route_id: str) -> AgentBackendRoute | None:
-        route = self._scheduler_route(route_id)
-        if route is not None:
-            return route
-        return self.database_routes.get(route_id)
-
-    def _scheduler_route(self, route_id: str) -> AgentBackendRoute | None:
         if self.containers is None:
             return None
         container_id = _container_id_from_route_id(route_id)

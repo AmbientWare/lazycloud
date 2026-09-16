@@ -15,7 +15,7 @@ from api.server.worker_repository_service import WorkerRepositoryService
 from apps.api.tests.runtime import services_with_object_storage
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
-from database.repositories.compute import AwsAccountConnectionRepository
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.identity import (
     WorkspaceAuditRepository,
     WorkspaceRepository,

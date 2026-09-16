@@ -23,7 +23,10 @@ from compute.providers import (
 )
 from compute.service import ComputeService
 from control.service import ControlPlaneService
-from database.repositories.compute import AwsAccountConnectionRepository, ComputeUnitRepository
+from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.compute import (
+    ComputeUnitRepository,
+)
 from fastapi.testclient import TestClient
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,

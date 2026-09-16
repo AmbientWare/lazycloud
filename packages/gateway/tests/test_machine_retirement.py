@@ -95,9 +95,7 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
             )
             == []
         )
-        container = ContainerRepository(session).records.get(
-            container_id, workspace_id=workspace.id
-        )
+        container = ContainerRepository(session).get(container_id, workspace_id=workspace.id)
         assert container is not None
         assert container.worker_id == worker_id and container.machine_id == agent.machine_id
         assert not ContainerRepository(session).storage_is_released(

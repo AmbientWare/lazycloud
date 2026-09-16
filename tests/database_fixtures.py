@@ -124,9 +124,7 @@ def workspace_template_url(
             )
         )
         try:
-            context = ServiceContext.create(
-                database, root=tmp_path_factory.mktemp("domain"), create_schema=False
-            )
+            context = ServiceContext.create(database, root=tmp_path_factory.mktemp("domain"))
             control = ControlPlaneService(context, workspace_storage_client=FakeWorkspaceBuckets())
             owned_workspace(control, "default")
             control.ensure_workspace_storage("default")
@@ -163,7 +161,7 @@ def service_context(domain_database: DatabaseClient, tmp_path: Path) -> Iterator
             ),
         )
         try:
-            yield ServiceContext.create(database, root=tmp_path, create_schema=False)
+            yield ServiceContext.create(database, root=tmp_path)
         finally:
             assert transaction.is_active, "owner test ended its outer isolation transaction"
             transaction.rollback()
@@ -172,7 +170,7 @@ def service_context(domain_database: DatabaseClient, tmp_path: Path) -> Iterator
 @pytest.fixture
 def committed_service_context(seeded_database: DatabaseClient, tmp_path: Path) -> ServiceContext:
     """Owner services whose transactions must commit across independent connections."""
-    return ServiceContext.create(seeded_database, root=tmp_path, create_schema=False)
+    return ServiceContext.create(seeded_database, root=tmp_path)
 
 
 @pytest.fixture

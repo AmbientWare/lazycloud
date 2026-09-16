@@ -826,11 +826,9 @@ class ManagementService:
         deployment.active = active
         deployment.updated_at = utc_now()
         with self.services.context.database.session() as session:
-            updated = DeploymentRepository(session).records.upsert(
+            updated = DeploymentRepository(session).upsert(
                 deployment,
                 workspace_id=workspace_id,
-                name=deployment.name,
-                status="active" if deployment.active else "inactive",
             )
             if active:
                 targets = AutoscalingTargetRepository(session)
@@ -886,11 +884,9 @@ class ManagementService:
             raise ConflictError(f"pod deployment has no scalable workload: {deployment.name}")
         deployment.updated_at = utc_now()
         with self.services.context.database.session() as session:
-            updated = DeploymentRepository(session).records.upsert(
+            updated = DeploymentRepository(session).upsert(
                 deployment,
                 workspace_id=scaled_stubs[0].workspace_id,
-                name=deployment.name,
-                status="active" if deployment.active else "inactive",
             )
         self._publish_deployment_change(
             updated,

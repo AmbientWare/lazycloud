@@ -45,7 +45,6 @@ class EndpointDispatchTable(TimestampMixin, DatabaseBase):
             "stub_id",
             "expires_at",
             postgresql_where=text("status IN ('queued', 'waiting-capacity', 'inflight')"),
-            sqlite_where=text("status IN ('queued', 'waiting-capacity', 'inflight')"),
         ),
         Index(
             "ix_endpoint_dispatches_stub_container_inflight",
@@ -53,7 +52,6 @@ class EndpointDispatchTable(TimestampMixin, DatabaseBase):
             "container_id",
             "expires_at",
             postgresql_where=text("status = 'inflight'"),
-            sqlite_where=text("status = 'inflight'"),
         ),
         Index(
             "ix_endpoint_dispatches_stub_container_finished",
@@ -61,7 +59,6 @@ class EndpointDispatchTable(TimestampMixin, DatabaseBase):
             "container_id",
             "finished_at",
             postgresql_where=text("container_id IS NOT NULL AND finished_at IS NOT NULL"),
-            sqlite_where=text("container_id IS NOT NULL AND finished_at IS NOT NULL"),
         ),
     )
 

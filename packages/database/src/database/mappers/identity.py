@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import secrets
+
+from pydantic import JsonValue
+from shared.errors import InvalidInputError
+from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
     AuthTokenRecord,
+    ConcurrencyLimitRecord,
     DeviceAuthorizationStatus,
     IdentityProvider,
     PlatformRole,
@@ -13,20 +19,146 @@ from shared.identity import (
     WorkspaceInvitationRecord,
     WorkspaceInvitationRole,
     WorkspaceMemberRecord,
+    WorkspaceRecord,
     WorkspaceRole,
+    WorkspaceStatus,
+    WorkspaceStorageConfig,
 )
 from shared.timestamps import to_utc, to_utc_or_none
 
-from database.records.identity import DeviceAuthorizationRecord, SecretStorageRecord
+from database.records.identity import (
+    DeviceAuthorizationRecord,
+    SecretStorageRecord,
+    WorkspaceAuditRecord,
+)
 from database.tables.identity import (
+    ConcurrencyLimitTable,
     DeviceAuthorizationTable,
     SecretTable,
     TokenTable,
     UserIdentityTable,
     UserTable,
+    WorkspaceAuditEventTable,
     WorkspaceInvitationTable,
     WorkspaceMemberTable,
+    WorkspaceTable,
 )
+from database.workspace_secrets import WorkspaceSecretCipher
+
+
+def concurrency_limit_from_table(row: ConcurrencyLimitTable) -> ConcurrencyLimitRecord:
+    return ConcurrencyLimitRecord(
+        id=row.id,
+        workspace_id=row.workspace_id,
+        name=row.name,
+        limit=row.limit,
+        in_flight=row.in_flight,
+        resource_type=row.resource_type,
+        resource_id=row.resource_id,
+        metadata=dict(row.metadata_json),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
+    )
+
+
+def workspace_audit_from_table(row: WorkspaceAuditEventTable) -> WorkspaceAuditRecord:
+    return WorkspaceAuditRecord(
+        id=row.id,
+        workspace_id=row.workspace_id,
+        action=WorkspaceAuditAction(row.action),
+        actor_token_id=row.actor_token_id,
+        actor_user_id=row.actor_user_id,
+        actor_name=row.actor_name,
+        target_type=WorkspaceAuditTarget(row.target_type),
+        target_id=row.target_id,
+        target_name=row.target_name,
+        summary=row.summary,
+        previous_value=row.previous_value,
+        new_value=row.new_value,
+        created_at=to_utc(row.created_at),
+    )
+
+
+def workspace_record_from_table(row: WorkspaceTable) -> WorkspaceRecord:
+    config: dict[str, JsonValue] = {}
+    if row.storage_endpoint_url is not None:
+        config["endpoint_url"] = row.storage_endpoint_url
+    if row.storage_region is not None:
+        config["region"] = row.storage_region
+    if row.storage_credential_key is not None:
+        if row.storage_access_key_ciphertext is None or row.storage_secret_key_ciphertext is None:
+            raise ValueError("workspace storage credential pair is incomplete")
+        cipher = WorkspaceSecretCipher(row.id, row.storage_credential_key)
+        config["access_key"] = cipher.decrypt(
+            "storage-access-key", row.storage_access_key_ciphertext
+        )
+        config["secret_key"] = cipher.decrypt(
+            "storage-secret-key", row.storage_secret_key_ciphertext
+        )
+    if row.storage_force_path_style is not None:
+        config["force_path_style"] = row.storage_force_path_style
+    return WorkspaceRecord(
+        id=row.id,
+        name=row.name,
+        status=WorkspaceStatus(row.status),
+        signing_key=row.signing_key or "",
+        signing_key_prefix=row.signing_key_prefix,
+        primary_token_id=row.primary_token_id,
+        concurrency_limit_id=row.concurrency_limit_id,
+        storage=WorkspaceStorageConfig(
+            backend=row.storage_backend,
+            bucket=row.storage_bucket,
+            prefix=row.storage_prefix,
+            config=config,
+        ),
+        labels=dict(row.labels),
+        metadata=dict(row.metadata_json),
+        created_at=to_utc(row.created_at),
+        updated_at=to_utc(row.updated_at),
+    )
+
+
+def write_workspace_row(row: WorkspaceTable, workspace: WorkspaceRecord) -> None:
+    storage = workspace.storage
+    if storage.config.keys() - {
+        "endpoint_url",
+        "region",
+        "access_key",
+        "secret_key",
+        "force_path_style",
+    }:
+        raise InvalidInputError("workspace storage contains unsupported connection settings")
+    row.name = workspace.name
+    row.status = workspace.status.value
+    row.signing_key = workspace.signing_key
+    row.signing_key_prefix = workspace.signing_key_prefix
+    row.primary_token_id = workspace.primary_token_id
+    row.concurrency_limit_id = workspace.concurrency_limit_id
+    row.storage_backend = storage.backend
+    row.storage_bucket = storage.bucket
+    row.storage_prefix = storage.prefix
+    row.storage_endpoint_url = storage.endpoint_url if "endpoint_url" in storage.config else None
+    row.storage_region = storage.region if "region" in storage.config else None
+    if storage.access_key or storage.secret_key:
+        if not storage.access_key or not storage.secret_key:
+            raise InvalidInputError("workspace storage requires both access key and secret key")
+        # Storage cleanup can outlive signing-key revocation during workspace deletion.
+        if row.storage_credential_key is None:
+            row.storage_credential_key = secrets.token_urlsafe(32)
+        cipher = WorkspaceSecretCipher(row.id, row.storage_credential_key)
+        row.storage_access_key_ciphertext = cipher.encrypt("storage-access-key", storage.access_key)
+        row.storage_secret_key_ciphertext = cipher.encrypt("storage-secret-key", storage.secret_key)
+    else:
+        row.storage_access_key_ciphertext = None
+        row.storage_secret_key_ciphertext = None
+        row.storage_credential_key = None
+    row.storage_force_path_style = (
+        storage.force_path_style if "force_path_style" in storage.config else None
+    )
+    row.labels = dict(workspace.labels)
+    row.metadata_json = dict(workspace.metadata)
+    row.created_at = workspace.created_at
+    row.updated_at = workspace.updated_at
 
 
 def _optional_id(value: str | None) -> str:

@@ -40,10 +40,7 @@ class ServiceContext:
         database: DatabaseClient,
         *,
         root: Path | None = None,
-        create_schema: bool = True,
     ) -> ServiceContext:
-        if create_schema:
-            database.create_schema()
         return cls(database=database, paths=ServicePaths.from_root(root))
 
     def workspace(self, session: DatabaseSession, workspace: str = "default") -> WorkspaceRecord:

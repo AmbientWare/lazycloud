@@ -10,12 +10,26 @@ from pydantic import Field, JsonValue, model_validator
 from shared.app_identity import METRICS_SOURCE
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
-from shared.timestamps import utc_now
+from shared.timestamps import to_utc, utc_now
 
 METERING_WINDOW_STARTED_AT_METADATA_KEY = "metering_window_started_at"
 METERING_WINDOW_ENDED_AT_METADATA_KEY = "metering_window_ended_at"
 METERING_OBSERVATION_QUALITY_METADATA_KEY = "metering_observation_quality"
 METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY = "metering_observation_error_type"
+
+
+def metering_instant(value: JsonValue) -> datetime | None:
+    """Read an explicit instant; an ambiguous timestamp cannot establish a charge."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        return None
+    return to_utc(moment)
+
 
 # The workload id image builds meter under: a build runs for an image, not for a
 # stub, and the ledger tells builds apart from the rest of a workspace by it.
@@ -169,5 +183,6 @@ __all__ = [
     "UsageRecord",
     "UsageRecordIdentityPart",
     "UsageUnit",
+    "metering_instant",
     "usage_record_id",
 ]

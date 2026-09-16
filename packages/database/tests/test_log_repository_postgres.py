@@ -59,7 +59,6 @@ def test_task_log_attribution_survives_reassignment_and_replayed_writes(
             workspace_id=workspace.id,
         )
         entry = LogEntry(id=str(uuid4()), task_id=task.id, message="retained output")
-        payload = entry.model_dump(mode="json", exclude_none=True)
         session.execute(
             insert(LogTable).values(
                 id=entry.id,
@@ -68,7 +67,6 @@ def test_task_log_attribution_survives_reassignment_and_replayed_writes(
                 stream=entry.stream,
                 message=entry.message,
                 created_at=entry.created_at,
-                payload=payload,
             )
         )
         task.container_id = None
@@ -76,7 +74,7 @@ def test_task_log_attribution_survives_reassignment_and_replayed_writes(
         session.execute(
             update(LogTable)
             .where(LogTable.id == entry.id)
-            .values(container_id=None, machine_id=None, worker_id=None, payload=payload)
+            .values(container_id=None, machine_id=None, worker_id=None)
         )
 
     with database.session() as session:
@@ -174,9 +172,7 @@ def test_log_retention_deletes_only_expired_rows_under_each_owners_plan(
         DatabaseSettings(url=url, application_name=DatabaseApplicationName.Test)
     )
     now = utc_now()
-    service = LogRetentionService(
-        ServiceContext.create(database, root=tmp_path, create_schema=False)
-    )
+    service = LogRetentionService(ServiceContext.create(database, root=tmp_path))
     try:
         workspaces: dict[BillingPlanId, str] = {}
         with database.session() as session:
@@ -207,14 +203,11 @@ def test_log_retention_deletes_only_expired_rows_under_each_owners_plan(
                     ("boundary", cutoff),
                     ("recent", now),
                 ):
-                    entry = LogRepository(session).append(
+                    LogRepository(session).append(
                         LogEntry(
                             id=str(uuid4()), task_id=task.id, message=message, created_at=timestamp
                         ),
                         workspace_id=workspace.id,
-                    )
-                    session.execute(
-                        update(LogTable).where(LogTable.id == entry.id).values(created_at=timestamp)
                     )
 
         for plan, workspace_id in workspaces.items():

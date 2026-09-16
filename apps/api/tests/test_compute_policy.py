@@ -14,9 +14,9 @@ from compute.request_placement import (
     ComputeCapacityPlacementService,
 )
 from control.service import ControlPlaneService
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,

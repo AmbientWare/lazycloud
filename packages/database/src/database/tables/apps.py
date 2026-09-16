@@ -2,26 +2,31 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from pydantic import JsonValue
 from sqlalchemy import (
+    ARRAY,
     BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
-from database.tables.base import DatabaseBase, IdPayloadTable, uuid_type
+from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
 
 
-class AppTable(IdPayloadTable, DatabaseBase):
+class AppTable(IdTable, DatabaseBase):
     __tablename__ = "apps"
+    metadata_json: Mapped[dict[str, JsonValue]] = mapped_column("metadata", json_type, default=dict)
     __table_args__: tuple[SchemaItem, ...] = (
         Index(
             "uq_apps_workspace_name_active",
@@ -29,7 +34,6 @@ class AppTable(IdPayloadTable, DatabaseBase):
             "name",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
         Index("ix_apps_workspace_updated", "workspace_id", "updated_at", "id"),
         Index("ix_apps_name", "name"),
@@ -196,10 +200,99 @@ class AppContainerShutdownIntentTable(DatabaseBase):
     )
 
 
-class StubTable(IdPayloadTable, DatabaseBase):
+class StubTable(IdTable, DatabaseBase):
     __tablename__ = "stubs"
+    handler: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deployment_id: Mapped[str | None] = mapped_column(
+        uuid_type, ForeignKey("deployments.id", ondelete="SET NULL", use_alter=True), nullable=True
+    )
+    configuration: Mapped[dict[str, JsonValue]] = mapped_column(json_type, default=dict)
+    metadata_json: Mapped[dict[str, JsonValue]] = mapped_column("metadata", json_type, default=dict)
+    image_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    image_context_object_id: Mapped[str | None] = mapped_column(
+        uuid_type, ForeignKey("objects.id", ondelete="SET NULL"), nullable=True
+    )
+    copied_object_ids: Mapped[list[str] | None] = mapped_column(ARRAY(uuid_type), nullable=True)
+    config_copied_object_ids: Mapped[list[str] | None] = mapped_column(
+        ARRAY(uuid_type), nullable=True
+    )
+    autoscaling_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    runtime_region: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    runtime_availability_zone: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    runtime_cpu: Mapped[JsonValue | None] = mapped_column(json_type, nullable=True)
+    runtime_cpu_millicores: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_memory: Mapped[JsonValue | None] = mapped_column(json_type, nullable=True)
+    runtime_disk: Mapped[JsonValue | None] = mapped_column(json_type, nullable=True)
+    runtime_memory_mib: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_gpu: Mapped[list[str] | None] = mapped_column(ARRAY(String(160)), nullable=True)
+    runtime_gpu_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_requires_gpu: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    runtime_image_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    runtime_timeout_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    runtime_retries: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_keep_warm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_concurrency: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_in_process: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    runtime_workers: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_checkpoint_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    runtime_checkpoint_readiness_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    runtime_checkpoint_readiness_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_checkpoint_readiness_timeout_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    runtime_checkpoint_readiness_interval_seconds: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    runtime_health_check_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    runtime_health_check_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_pool_selector: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    runtime_runtime: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    runtime_runtime_class: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    runtime_docker_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    runtime_block_network: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    runtime_allow_list: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    runtime_preemptible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    runtime_workspace_gpu_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_workspace_cpu_quota_millicores: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    autoscaler_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    autoscaler_max_containers: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    autoscaler_min_containers: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    autoscaler_tasks_per_container: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    autoscaler_failed_container_threshold: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    autoscaler_max_failed_containers: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    autoscaler_failure_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    autoscaler_failed_container_window_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    autoscaler_failure_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_policy_timeout: Mapped[float | None] = mapped_column(Float, nullable=True)
+    task_policy_timeout_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    task_policy_ttl: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_policy_ttl_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("external_id", name="uq_stubs_external_id"),
+        CheckConstraint(
+            "runtime_cpu_millicores >= 0 AND runtime_memory_mib >= 0 AND "
+            "runtime_gpu_count >= 0 AND runtime_timeout_seconds >= 0 AND "
+            "runtime_retries >= 0 AND runtime_keep_warm >= -1 AND "
+            "runtime_concurrency > 0 AND runtime_workers >= 0",
+            name="ck_stubs_runtime_limits",
+        ),
+        CheckConstraint(
+            "COALESCE(autoscaler_min_containers, 0) >= 0 AND "
+            "COALESCE(autoscaler_max_containers, 1) >= "
+            "COALESCE(autoscaler_min_containers, 0) AND "
+            "autoscaler_tasks_per_container > 0",
+            name="ck_stubs_autoscaler_limits",
+        ),
+        CheckConstraint(
+            "runtime_checkpoint_readiness_port BETWEEN 0 AND 65535 AND "
+            "runtime_health_check_port BETWEEN 0 AND 65535",
+            name="ck_stubs_probe_ports",
+        ),
         UniqueConstraint(
             "workspace_id", "preparation_fingerprint", name="uq_stubs_preparation_fingerprint"
         ),
@@ -212,20 +305,12 @@ class StubTable(IdPayloadTable, DatabaseBase):
             "app_id",
             "created_at",
             "id",
-            postgresql_where=text("CAST((payload ->> 'deployment_id') AS VARCHAR) IS NULL"),
-            sqlite_where=text("JSON_EXTRACT(payload, '$.\"deployment_id\"') IS NULL"),
+            postgresql_where=text("deployment_id IS NULL"),
         ),
         Index("ix_stubs_app_created", "app_id", "created_at", "id"),
         Index("ix_stubs_app_type_created", "app_id", "type", "created_at", "id"),
-        Index("ix_stubs_payload_artifact_refs", "payload", postgresql_using="gin"),
-        Index("ix_stubs_group", "group"),
     )
 
-    external_id: Mapped[str] = mapped_column(
-        uuid_type,
-        server_default=text("gen_random_uuid()"),
-        nullable=False,
-    )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),
@@ -243,14 +328,14 @@ class StubTable(IdPayloadTable, DatabaseBase):
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     type: Mapped[str] = mapped_column(String(80), nullable=False)
-    group: Mapped[str | None] = mapped_column(String(240), nullable=True)
     public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     preparation_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
-class DeploymentTable(IdPayloadTable, DatabaseBase):
+class DeploymentTable(IdTable, DatabaseBase):
     __tablename__ = "deployments"
+    spec: Mapped[dict[str, JsonValue]] = mapped_column(json_type, nullable=False)
+    pool: Mapped[str] = mapped_column(String(240), nullable=False)
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
             "workspace_id",
@@ -272,7 +357,6 @@ class DeploymentTable(IdPayloadTable, DatabaseBase):
             "version",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
         # Same reasoning for a claimed hostname. Nulls do not collide, so resources
         # that claimed nothing are not treated as claiming the same thing.
@@ -282,7 +366,6 @@ class DeploymentTable(IdPayloadTable, DatabaseBase):
             "version",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 
@@ -310,9 +393,10 @@ class DeploymentTable(IdPayloadTable, DatabaseBase):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class CronJobTable(IdPayloadTable, DatabaseBase):
+class CronJobTable(IdTable, DatabaseBase):
     __tablename__ = "cron_jobs"
     __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("workspace_id", "name", name="uq_cron_jobs_workspace_name"),
         Index("ix_cron_jobs_deployment", "deployment_id"),
         Index("ix_cron_jobs_workspace", "workspace_id"),
         Index(
@@ -320,7 +404,6 @@ class CronJobTable(IdPayloadTable, DatabaseBase):
             "next_run_at",
             "id",
             postgresql_where=text("enabled IS TRUE"),
-            sqlite_where=text("enabled = 1"),
         ),
     )
 

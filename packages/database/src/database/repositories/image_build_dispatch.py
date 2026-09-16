@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from database.mappers.images import image_build_from_table
 from database.tables.images import ImageBuildRequestTable, ImageBuildTable
 from shared.image_building.records import ImageBuildRecord
 from sqlalchemy import select, text, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +54,7 @@ class ImageBuildDispatchRepository:
                 ImageBuildTable.started_at.is_(None),
             )
         row = self.session.scalar(statement)
-        return ImageBuildRecord.model_validate(row.payload) if row is not None else None
+        return image_build_from_table(row) if row is not None else None
 
     def schedule_cleanup(self, build_id: str, *, after: datetime | None) -> None:
         self.session.execute(
@@ -124,6 +125,16 @@ class ImageBuildDispatchRepository:
     ) -> list[ImageBuildDispatchClaim]:
         statement = (
             select(ImageBuildTable)
+            .options(
+                load_only(
+                    ImageBuildTable.id,
+                    ImageBuildTable.workspace_id,
+                    ImageBuildTable.dispatch_payload,
+                    ImageBuildTable.created_at,
+                    ImageBuildTable.started_at,
+                    raiseload=True,
+                )
+            )
             .where(
                 ImageBuildTable.dispatch_payload.is_not(None),
                 ImageBuildTable.dispatched_at.is_(None),

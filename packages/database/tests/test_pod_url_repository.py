@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from database.repositories.execution import PodExecutionRepository
+from database.repositories.execution import PodUrlRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from database.tables.execution import PodUrlTable
@@ -30,19 +30,19 @@ def test_pod_url_upsert_preserves_identity_timestamps_port_and_cascade(
     try:
         container_id = _seed_container(database)
         with database.session() as session:
-            first = PodExecutionRepository(session).urls.upsert(
+            first = PodUrlRepository(session).upsert(
                 container_id=container_id,
                 port=8080,
                 url="https://gateway.example/sandbox/first",
             )
         with database.session() as session:
-            same = PodExecutionRepository(session).urls.upsert(
+            same = PodUrlRepository(session).upsert(
                 container_id=container_id,
                 port=8080,
                 url=first.url,
             )
         with database.session() as session:
-            replacement = PodExecutionRepository(session).urls.upsert(
+            replacement = PodUrlRepository(session).upsert(
                 container_id=container_id,
                 port=8080,
                 url="https://gateway.example/sandbox/replacement",
@@ -86,8 +86,8 @@ def test_postgresql_concurrent_pod_url_upsert_preserves_one_identity(
         try:
             with database.session() as session:
                 return (
-                    PodExecutionRepository(session)
-                    .urls.upsert(
+                    PodUrlRepository(session)
+                    .upsert(
                         container_id=container_id,
                         port=8080,
                         url=f"https://gateway-{index}.example/sandbox/{container_id}/8080",
@@ -102,7 +102,7 @@ def test_postgresql_concurrent_pod_url_upsert_preserves_one_identity(
     verification = _client(database_url)
     try:
         with verification.session() as session:
-            rows = PodExecutionRepository(session).urls.list_for_container(container_id)
+            rows = PodUrlRepository(session).list_for_container(container_id)
     finally:
         verification.dispose()
 

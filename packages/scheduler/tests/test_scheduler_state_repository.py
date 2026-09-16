@@ -512,12 +512,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     previous_container.status = ContainerStatus.Failed
     previous_container.finished_at = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            previous_container,
-            workspace_id=previous_container.workspace_id,
-            name=previous_container.name,
-            status=previous_container.status.value,
-        )
+        ContainerRepository(session).upsert(previous_container)
     scheduled = functions.schedule_due_retries(now=datetime.now(UTC))
     assert len(scheduled) == 1
     assert len(container_scheduler.requests) == 2
@@ -648,12 +643,7 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     finished_container = isolated_services.containers.get(finished_container_id)
     finished_container.status = ContainerStatus.Exited
     with isolated_services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            finished_container,
-            workspace_id=finished_container.workspace_id,
-            name=finished_container.name,
-            status=finished_container.status.value,
-        )
+        ContainerRepository(session).upsert(finished_container)
 
     management = ManagementService(isolated_services)
     management.set_deployment_active("default", deployment.id, active=False)
@@ -694,9 +684,7 @@ def test_scheduler_tick_skips_cron_function_when_lock_is_held(
     assert len(runs) == 1
     assert not runs[0].enqueued
     assert runs[0].task_id is None
-    assert runs[0].message_id is None
     assert runs[0].reason == "cron job lock not acquired"
-    assert isolated_services.collections.queue_depth("tasks") == 0
     assert isolated_services.tasks.list() == []
     assert container_scheduler.requests == []
 
@@ -743,11 +731,9 @@ def test_inactive_cron_deployment_never_enqueues(
     deployment.active = False
     workspace_id = ControlPlaneService(isolated_services.context).get_workspace("default").id
     with isolated_services.context.database.session() as session:
-        DeploymentRepository(session).records.upsert(
+        DeploymentRepository(session).upsert(
             deployment,
             workspace_id=workspace_id,
-            name=deployment.name,
-            status="inactive",
         )
     assert cron_job.next_run_at is not None
 

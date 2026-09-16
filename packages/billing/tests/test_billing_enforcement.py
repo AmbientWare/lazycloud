@@ -49,7 +49,7 @@ def test_monitor_stops_empty_accounts_and_canceled_subscriptions_with_live_compu
             user_id=user_id,
             grant=CreditGrant("payment:monitor", CreditKind.Purchased, 10**9, now),
         )
-        ContainerRepository(session).records.upsert(
+        ContainerRepository(session).upsert(
             ContainerRecord(
                 id=container_id,
                 name="credit-enforcement",
@@ -57,8 +57,7 @@ def test_monitor_stops_empty_accounts_and_canceled_subscriptions_with_live_compu
                 command=["true"],
                 workspace_id=workspace_id,
                 status=ContainerStatus.Running,
-            ),
-            workspace_id=workspace_id,
+            )
         )
     stopper = _Stopper()
     service = BillingEnforcementService(

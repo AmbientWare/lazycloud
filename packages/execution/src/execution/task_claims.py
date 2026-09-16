@@ -21,9 +21,7 @@ class TaskClaimReleaseService:
             return task
         if not task.workspace_id:
             raise InvalidInputError("claimable task has no workspace")
-        stub = StubRepository(self.session).records.get(
-            task.stub_id, workspace_id=task.workspace_id
-        )
+        stub = StubRepository(self.session).get(task.stub_id, workspace_id=task.workspace_id)
         if stub is not None and (kind := autoscaler_target_kind(stub.kind)) is not None:
             # The last serving container can retire the autoscaling target while
             # this task is still claimed. Commit its renewed demand with the claim.

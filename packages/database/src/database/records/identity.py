@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import DeviceAuthorizationStatus
 from shared.timestamps import utc_now
 
@@ -34,4 +35,22 @@ class SecretStorageRecord(ContractModel):
     updated_at: datetime
 
 
-__all__ = ["DeviceAuthorizationRecord", "SecretStorageRecord"]
+class WorkspaceAuditRecord(ContractModel):
+    id: str
+    workspace_id: str
+    action: WorkspaceAuditAction
+    actor_token_id: str | None = None
+    actor_user_id: str | None = None
+    """Account behind the change, kept because a token can be revoked and a person cannot."""
+
+    actor_name: str
+    target_type: WorkspaceAuditTarget
+    target_id: str
+    target_name: str
+    summary: str
+    previous_value: str | None = None
+    new_value: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+__all__ = ["DeviceAuthorizationRecord", "SecretStorageRecord", "WorkspaceAuditRecord"]

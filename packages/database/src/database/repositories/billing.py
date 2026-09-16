@@ -16,7 +16,6 @@ from shared.identity import WorkspaceRole
 from shared.timestamps import to_utc
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -61,12 +60,7 @@ class BillingAccountRepository:
         finishes it.
         """
 
-        dialect = self.session.get_bind().dialect.name
-        statement = (
-            postgresql_insert(BillingAccountTable)
-            if dialect == "postgresql"
-            else sqlite_insert(BillingAccountTable)
-        )
+        statement = postgresql_insert(BillingAccountTable)
         self.session.execute(
             statement.values(
                 id=str(uuid4()),

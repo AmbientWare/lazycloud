@@ -13,7 +13,7 @@ from compute.aws_connections import (
 )
 from compute.bucket_access import AwsConnectionBucketAccessReconciler
 from database.context import ServiceContext
-from database.repositories.compute import (
+from database.repositories.aws_connections import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
 )
