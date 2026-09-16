@@ -6,6 +6,7 @@ import {
   usageCostSeriesSchema,
   type UsageCostBucket,
   type UsageCostGroupKey,
+  type UsageCostCategory,
 } from "@/lib/api/schemas";
 
 import { accountQueryKeys } from "./workspace-keys";
@@ -18,6 +19,8 @@ export type UsageCostWindow = {
 export type UsageCostScope = {
   groupBy: UsageCostGroupKey;
   appId?: string;
+  workspaceId?: string;
+  category?: UsageCostCategory;
   limit?: number;
 };
 
@@ -29,13 +32,15 @@ export type UsageCostScope = {
  * rather than the one the sidebar happens to have selected.
  */
 export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCostScope) {
-  const { groupBy, appId, limit = 50 } = scope;
+  const { groupBy, appId, workspaceId, category, limit = 50 } = scope;
   return infiniteQueryOptions({
     queryKey: accountQueryKeys.usage.costs({
       start: window.start,
       end: window.end,
       groupBy,
       appId: appId ?? null,
+      workspaceId: workspaceId ?? null,
+      category: category ?? null,
     }),
     initialPageParam: "",
     queryFn: ({ pageParam }) => {
@@ -46,6 +51,8 @@ export function accountCostsQueryOptions(window: UsageCostWindow, scope: UsageCo
         limit: String(limit),
       });
       if (appId !== undefined) params.set("app_id", appId);
+      if (workspaceId !== undefined) params.set("workspace_id", workspaceId);
+      if (category !== undefined) params.set("category", category);
       if (pageParam) params.set("cursor", pageParam);
       return apiRequest(`/api/v1/billing/costs?${params.toString()}`, usageCostListSchema);
     },

@@ -39,6 +39,7 @@ from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.usage import (
     UsageCostBucket,
     UsageCostBucketResponse,
+    UsageCostCategory,
     UsageCostDimensionTotalResponse,
     UsageCostGroupKey,
     UsageCostListResponse,
@@ -204,28 +205,17 @@ def account_costs(
     user_id: read_user,
     group_by: UsageCostGroupKey = UsageCostGroupKey.App,
     app_id: str | None = None,
+    workspace_id: str | None = None,
+    category: UsageCostCategory | None = None,
     limit: int = Query(50, ge=1, le=MAX_COST_PAGE),
     cursor: str | None = None,
     services: ApiServices = Depends(current_services),
 ) -> UsageCostListResponse:
-    """What this account spent, across every workspace it is invoiced for.
+    """Costs charged to this account, grouped by app, workload, or task.
 
-    Beside the summary rather than under `/usage` for the reason the summary
-    itself is: the provider invoices an account, so someone running dev, staging
-    and prod wants one figure covering the three, and reaching it a workspace at
-    a time leaves them adding up their own bill.
-
-    Scoped to the rows this account is invoiced for, which is what the ledger's
-    `owner_user_id` records and what the allowance and the invoice are summed
-    over. Resolving the same scope through workspace membership would answer
-    "what do I owe" with the spend of every workspace somebody added this person
-    to, and leave off the workspaces they pay for but no longer belong to.
-
-    `app_id` narrows to one app, which is how a caller reads what the workloads
-    inside it cost without a second scope to authorize: the payer still decides
-    which rows are summed, so an id belonging to somebody else's app selects
-    rows this account has none of and totals nothing. An empty value is a filter
-    rather than an absent one, and selects the usage that reached no app at all.
+    Ledger ownership defines the payer scope independently of current workspace
+    membership. App, workspace, and category filters only narrow that scope.
+    An empty `app_id` selects usage without an app; omitting it includes all apps.
     """
 
     with services.context.database.session() as session:
@@ -235,11 +225,11 @@ def account_costs(
             end=end,
             group_by=group_by,
             app_id=app_id,
+            workspace_id=workspace_id,
+            category=category,
             limit=limit,
             cursor=cursor,
         )
-    # No workspace named: this page covers an account, and picking one of its
-    # workspaces to label it with would state a scope the page does not have.
     return usage_cost_list_response(
         page,
         workspace_id="",
@@ -261,19 +251,7 @@ def account_cost_series(
     bucket: UsageCostBucket = UsageCostBucket.Day,
     services: ApiServices = Depends(current_services),
 ) -> UsageCostSeriesResponse:
-    """What this account spent over a window, interval by interval.
-
-    Beside the total rather than derived from it: a bill is one figure, and the
-    question a customer asks next is which day it came from. One request answers
-    the whole chart — a request per bar would be thirty scans of the same index,
-    and two of them reading either side of a metering write would draw a shape
-    the total does not add up to.
-
-    Scoped to what this account is invoiced for, the same way the total beside
-    it is and for the same reason: the two are read off one page, so a shape
-    drawn over a different set of rows from the figure above it is a chart that
-    does not add up to its own total.
-    """
+    """Gross costs by interval and subscription credits allocated to the same usage window."""
 
     with services.context.database.session() as session:
         series = UsageCostService(session).series(
@@ -413,6 +391,7 @@ def start_billing_portal(
 
 def _series_response(series: UsageCostSeries) -> UsageCostSeriesResponse:
     return UsageCostSeriesResponse(
+        subscription_credit_nanos=series.subscription_credit_nanos,
         start=series.start,
         end=series.end,
         currency=BILLING_CURRENCY,

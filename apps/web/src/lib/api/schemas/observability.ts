@@ -55,6 +55,11 @@ export type ContainerEventSummary = z.infer<typeof containerEventSummarySchema>;
 
 export const containerEventSummaryOrNullSchema = containerEventSummarySchema.nullable();
 
+export const containerEventsBatchSchema = z.object({
+  count: z.number(),
+  items: z.array(containerEventSummarySchema),
+});
+
 export const containerMetricsPointSchema = z.object({
   timestamp: z.string(),
   sample_interval_ms: z.number().default(0),

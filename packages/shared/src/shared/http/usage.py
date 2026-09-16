@@ -53,6 +53,11 @@ class UsageCostGroupKey(StringEnum):
     Task = "task"
 
 
+class UsageCostCategory(StringEnum):
+    ImageBuild = "image-build"
+    Unattributed = "unattributed"
+
+
 class UsageCostBucket(StringEnum):
     """How wide one interval of a cost series is.
 
@@ -197,6 +202,7 @@ class UsageCostSeriesResponse(HttpModel):
     end: datetime
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     bucket: UsageCostBucket
+    subscription_credit_nanos: int = Field(ge=0)
     cost_nanos: int = Field(default=0, ge=0)
     data: list[UsageCostBucketResponse] = Field(default_factory=list)
 
@@ -205,6 +211,7 @@ __all__ = [
     "UsageAggregationResponse",
     "UsageCostBucket",
     "UsageCostBucketResponse",
+    "UsageCostCategory",
     "UsageCostComponentResponse",
     "UsageCostDimensionTotalResponse",
     "UsageCostGroupKey",

@@ -1,89 +1,117 @@
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelError } from "@/components/shared/PanelError";
 import { highlight, type CodeLanguage } from "@/components/ui/code-syntax";
 import { Skeleton } from "@/components/ui/skeleton";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
-
-import { curlSnippet, exampleBody, pythonSnippet } from "./playground-form";
+import { curlSnippet, exampleBody, pythonSnippet, shellSingleQuote } from "./playground-form";
+import { pythonCall, sourceImport, sourceSnippet } from "./call-snippets";
 
 export function CallMethods({
   workspaceId,
+  workspaceName,
   deploymentId,
+  handler,
 }: {
   workspaceId: string;
+  workspaceName: string;
   deploymentId: string;
+  handler?: string | null;
 }) {
   const manifest = useQuery(deploymentManifestQueryOptions(workspaceId, deploymentId));
-
-  if (manifest.isPending) {
+  if (manifest.isPending)
     return (
-      <div className="divide-y divide-border/70" aria-hidden="true">
-        <SnippetSkeleton />
-        <SnippetSkeleton />
+      <div className="space-y-2 p-4" aria-hidden="true">
+        {Array.from({ length: 4 }, (_, i) => (
+          <Skeleton key={i} className="h-9 w-full" />
+        ))}
       </div>
     );
-  }
   if (manifest.isError) return <PanelError message={manifest.error.message} />;
-
-  const body = exampleBody(manifest.data);
+  const resource = manifest.data;
+  const asgi = resource.kind === "asgi";
+  const body = asgi ? undefined : exampleBody(resource);
+  const method = asgi && resource.methods.includes("GET") ? "GET" : "POST";
+  const source = handler ? sourceImport(handler) : null;
 
   return (
-    <div className="min-w-0 divide-y divide-border/70">
-      <p className="px-4 py-3 text-xs text-muted-foreground">
-        Set LAZYCLOUD_TOKEN to your access token before running these examples.
-      </p>
-      <Snippet
-        title="curl"
-        text={curlSnippet(manifest.data.invoke_url, body)}
-        label="curl command"
-        language="shell"
-      />
-      <Snippet
-        title="Python requests"
-        text={pythonSnippet(manifest.data.invoke_url, body)}
-        label="Python request"
-        language="python"
-      />
+    <div className="content-transition min-w-0 divide-y divide-border/70 px-4 py-1">
+      <CallSection title="Typed Python package">
+        <Code
+          text={`lazycloud app export ${shellSingleQuote(resource.app)} --workspace ${shellSingleQuote(workspaceName)}`}
+          language="shell"
+          label="Export typed package"
+        />
+      </CallSection>
+      {source && (
+        <CallSection title="Python SDK">
+          <Code text={sourceSnippet(resource, source)} language="python" label="SDK calls" />
+        </CallSection>
+      )}
+      {source && !asgi && (
+        <CallSection title="Local Python">
+          <Code
+            text={`${source.importLine}\n\n${pythonCall("result", `${source.reference}.local`, resource)}\nprint(result)`}
+            language="python"
+            label="Local Python call"
+          />
+        </CallSection>
+      )}
+      <CallSection title="curl">
+        <Code
+          text={curlSnippet(resource.invoke_url, body, method)}
+          language="shell"
+          label="curl command"
+        />
+      </CallSection>
+      <CallSection title="Python requests">
+        <Code
+          text={pythonSnippet(resource.invoke_url, body, method)}
+          language="python"
+          label="Python HTTP request"
+        />
+      </CallSection>
     </div>
   );
 }
 
-function Snippet({
-  title,
+function CallSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details className="group min-w-0">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90 motion-reduce:transition-none"
+        />
+        {title}
+      </summary>
+      <div className="min-w-0 space-y-3 pb-3">{children}</div>
+    </details>
+  );
+}
+
+function Code({
   text,
   label,
   language,
 }: {
-  title: string;
   text: string;
   label: string;
   language: Exclude<CodeLanguage, "auto">;
 }) {
   return (
-    <section className="min-w-0 px-4 py-5">
-      <div className="dark mt-3 min-w-0 overflow-hidden border-l-2 border-brand/60 bg-card">
-        <div className="flex h-9 items-center justify-between border-b border-border px-3">
-          <h3 className="text-xs font-medium text-foreground">{title}</h3>
-          <CopyButton value={text} label={label} className="size-7" />
-        </div>
-        <pre
-          className="m-0 min-w-0 overflow-x-hidden p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
-          aria-label={label}
-          tabIndex={0}
-        >
-          <code>{highlight(text, language)}</code>
-        </pre>
-      </div>
-    </section>
-  );
-}
-
-function SnippetSkeleton() {
-  return (
-    <div className="min-w-0 space-y-3 px-4 py-5">
-      <Skeleton className="h-40 min-w-0 w-full rounded-none border-l-2 border-brand/20" />
+    <div className="relative min-w-0 rounded-md border bg-muted/20">
+      <CopyButton value={text} label={label} className="absolute top-1.5 right-1.5 size-7" />
+      <pre
+        className="m-0 overflow-x-auto p-3 pr-10 font-mono text-xs leading-5 text-muted-foreground"
+        aria-label={label}
+        tabIndex={0}
+      >
+        <code>{highlight(text, language)}</code>
+      </pre>
     </div>
   );
 }

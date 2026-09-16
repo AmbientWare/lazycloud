@@ -29,7 +29,7 @@ from shared.billing_quotes import BilledDimension
 from shared.billing_rate_card import PlanEntitlements, account_terms, complimentary_terms
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
-from shared.http.usage import UsageCostBucket, UsageCostGroupKey
+from shared.http.usage import UsageCostBucket, UsageCostCategory, UsageCostGroupKey
 from shared.timestamps import to_utc
 from sqlalchemy.orm import Session
 
@@ -193,6 +193,7 @@ class UsageCostSeries:
 
     cost_nanos: int
     intervals: tuple[UsageCostInterval, ...]
+    subscription_credit_nanos: int
 
 
 class _CostCursorPayload(ContractModel):
@@ -311,6 +312,8 @@ class UsageCostService:
         limit: int,
         app_id: str | None = None,
         workload_id: str | None = None,
+        workspace_id: str | None = None,
+        category: UsageCostCategory | None = None,
         cursor: str | None = None,
     ) -> UsageCostPage:
         """One page of what this scope spent, and what the whole window cost.
@@ -332,6 +335,8 @@ class UsageCostService:
             limit=limit,
             app_id=app_id,
             workload_id=workload_id,
+            workspace_id=workspace_id,
+            category=category,
             cursor=_decode_cursor(cursor),
         )
         return UsageCostPage(
@@ -341,6 +346,8 @@ class UsageCostService:
                 end=end,
                 app_id=app_id,
                 workload_id=workload_id,
+                workspace_id=workspace_id,
+                category=category,
             ),
             rows=page.rows,
             next=_encode_cursor(page.next),
@@ -354,16 +361,9 @@ class UsageCostService:
         end: datetime,
         bucket: UsageCostBucket,
     ) -> UsageCostSeries:
-        """What the window cost, interval by interval.
+        """Gross costs and allocated subscription credits for the same usage window.
 
-        One read for the whole window rather than one per interval: a chart of a
-        month is thirty-one questions with the same answer, and asking them
-        separately is thirty-one scans of the same index and thirty-one chances
-        for two of them to straddle a boundary.
-
-        Intervals are whole `bucket` widths measured from `start`, so a caller
-        that opens its window on a UTC boundary reads UTC days. Every interval
-        the window covers is returned, including the ones nothing ran in.
+        Buckets start at `start`; empty intervals remain in the series.
         """
 
         start, end = to_utc(start), to_utc(end)
@@ -395,6 +395,9 @@ class UsageCostService:
             end=end,
             cost_nanos=sum(interval.cost_nanos for interval in intervals),
             intervals=intervals,
+            subscription_credit_nanos=BillingLedgerCostRepository(
+                self.session
+            ).subscription_credit_nanos(scope=scope, start=start, end=end),
         )
 
 

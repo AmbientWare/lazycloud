@@ -49,7 +49,7 @@ export function QueueInspector({
   }
 
   return (
-    <div className="min-w-0 px-4 py-3">
+    <div className="content-transition min-w-0 px-4 py-3">
       <InspectorHeader label="Head message" count={depth} singular="message" />
       {error ? (
         <p role="alert" className="mt-2 text-xs text-destructive">
@@ -143,7 +143,7 @@ export function MapInspector({
 
   const keyCount = count.data?.count ?? allKeys.length;
   return (
-    <div className="min-w-0 px-4 py-3">
+    <div className="content-transition min-w-0 px-4 py-3">
       <InspectorHeader label="Value" count={keyCount} singular="key" />
       {error ? (
         <p role="alert" className="mt-2 text-xs text-destructive">
@@ -295,7 +295,7 @@ function MapEntryInspector({
   const current = value.data;
   const editable = editableJson(current) !== null;
   return (
-    <div className="min-w-0">
+    <div className="content-transition min-w-0">
       <p className="mono mb-2 break-all text-xs font-medium">{entryKey === "" ? '""' : entryKey}</p>
       <EncodedValuePreview valueBase64={current.value_base64} />
       <p className="mt-2 text-xs text-muted-foreground">

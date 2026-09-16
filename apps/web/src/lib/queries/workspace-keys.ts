@@ -24,6 +24,8 @@ export type AccountCostKeyParts = {
   end: string;
   groupBy: string;
   appId: string | null;
+  workspaceId: string | null;
+  category: string | null;
 };
 
 export type AccountCostSeriesKeyParts = {

@@ -145,6 +145,7 @@ class FunctionSetResultResponse(HttpModel):
 
 class FunctionCallGraphNode(HttpModel):
     task_id: str
+    container_id: str | None = None
     parent_task_id: str = ""
     root_task_id: str = ""
     status: TaskStatus

@@ -1,7 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { billedDimensions, type UsageCostSeries } from "@/lib/api/schemas";
 import { formatCostNanos } from "@/lib/money";
-
 import { COST_DIMENSIONS } from "./cost-colors";
 
 export function SpendTotals({
@@ -13,51 +12,63 @@ export function SpendTotals({
 }) {
   return (
     <>
-      <dl className="min-w-0">
-        <dt className="text-xs text-muted-foreground">Total spend</dt>
-        <dd className="mt-4 sm:mt-2">
-          {error ? (
-            <span aria-label="Spend unavailable" className="readout text-3xl sm:text-4xl">
-              —
-            </span>
-          ) : series ? (
-            <span className="readout break-all text-3xl leading-none sm:text-4xl">
-              {formatCostNanos(series.cost_nanos, series.currency)}
-            </span>
-          ) : (
-            <Skeleton className="h-9 w-36 max-w-full sm:h-10" />
-          )}
-        </dd>
-      </dl>
-      <dl
-        aria-label="Spend by category"
-        className="flex flex-wrap gap-x-8 gap-y-3 sm:gap-x-10 lg:self-end lg:pl-4"
-      >
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-2">
+        <dl>
+          <dt className="text-xs text-muted-foreground">Usage cost</dt>
+          <dd className="mt-1">
+            {error ? (
+              <span aria-label="Usage cost unavailable">—</span>
+            ) : series ? (
+              <span className="content-transition readout text-3xl">
+                {formatCostNanos(series.cost_nanos, series.currency)}
+              </span>
+            ) : (
+              <Skeleton className="h-9 w-32" />
+            )}
+          </dd>
+        </dl>
+        <dl className="pb-1">
+          <dt className="text-xs text-muted-foreground">Covered by subscription credits</dt>
+          <dd className="mt-1">
+            {error ? (
+              <span aria-label="Credit coverage unavailable">—</span>
+            ) : series ? (
+              <span className="content-transition mono text-sm tabular-nums text-positive">
+                {formatCostNanos(series.subscription_credit_nanos, series.currency)}
+              </span>
+            ) : (
+              <Skeleton className="h-5 w-20" />
+            )}
+          </dd>
+        </dl>
+      </div>
+      <dl aria-label="Usage by category" className="flex flex-wrap gap-x-5 gap-y-2 pb-1 text-xs">
         {billedDimensions.map((dimension) => {
           const totals = series?.data.flatMap((interval) =>
             interval.dimensions.filter((total) => total.dimension === dimension),
           );
           return (
-            <div key={dimension}>
-              <dt className="text-xs text-muted-foreground">{COST_DIMENSIONS[dimension].label}</dt>
-              <dd className="mt-1">
+            <div key={dimension} className="flex items-center gap-2">
+              <dt className="flex items-center gap-1.5 text-muted-foreground">
+                <span
+                  aria-hidden="true"
+                  className="size-1.5"
+                  style={{ background: COST_DIMENSIONS[dimension].color }}
+                />
+                {COST_DIMENSIONS[dimension].label}
+              </dt>
+              <dd className="mono tabular-nums">
                 {error ? (
-                  <span aria-label="Spend unavailable" className="text-sm text-muted-foreground">
-                    —
-                  </span>
+                  "—"
                 ) : !series ? (
-                  <Skeleton className="h-5 w-20" />
+                  <Skeleton className="h-4 w-12" />
                 ) : totals?.length ? (
-                  <span className="mono text-sm tabular-nums">
-                    {formatCostNanos(
-                      totals.reduce((sum, total) => sum + total.cost_nanos, 0),
-                      series.currency,
-                    )}
-                  </span>
+                  formatCostNanos(
+                    totals.reduce((sum, total) => sum + total.cost_nanos, 0),
+                    series.currency,
+                  )
                 ) : (
-                  <span aria-label="No metered usage" className="text-sm text-muted-foreground">
-                    —
-                  </span>
+                  "—"
                 )}
               </dd>
             </div>

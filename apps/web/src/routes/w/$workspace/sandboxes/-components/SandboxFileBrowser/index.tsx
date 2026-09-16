@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -179,7 +180,10 @@ export function SandboxFileBrowser({
             {downloadError ?? (upload.error || remove.error)?.message}
           </p>
         ) : null}
-        <div className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
+        <ContentTransition
+          pending={query.isPending}
+          className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto"
+        >
           {query.isPending ? (
             <FileSkeleton />
           ) : query.isError ? (
@@ -266,17 +270,17 @@ export function SandboxFileBrowser({
               );
             })
           )}
-        </div>
+        </ContentTransition>
       </div>
 
       <div className="flex min-h-0 flex-col overflow-hidden">
         <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
           {preview ? <span className="mono text-foreground">{preview.path}</span> : "Preview"}
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-3">
+        <ContentTransition pending={previewing} className="min-h-0 flex-1 overflow-auto p-3">
           {previewing ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
+              <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
               Reading
             </div>
           ) : previewError ? (
@@ -288,7 +292,7 @@ export function SandboxFileBrowser({
           ) : (
             <p className="text-sm text-muted-foreground">Select a file to preview.</p>
           )}
-        </div>
+        </ContentTransition>
       </div>
     </div>
   );

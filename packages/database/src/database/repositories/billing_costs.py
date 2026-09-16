@@ -7,12 +7,13 @@ from decimal import Decimal
 
 from database.repositories.common import bucket_index, names_by_id
 from database.tables.apps import AppTable, StubTable
+from database.tables.billing_credits import BillingCreditAllocationTable, BillingCreditLotTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.identity import WorkspaceTable
 from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import InvalidInputError
-from shared.http.usage import UsageCostGroupKey
+from shared.http.usage import UsageCostCategory, UsageCostGroupKey
 from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 from sqlalchemy import (
     ColumnElement,
@@ -227,6 +228,8 @@ class BillingLedgerCostRepository:
         end: datetime,
         app_id: str | None = None,
         workload_id: str | None = None,
+        workspace_id: str | None = None,
+        category: UsageCostCategory | None = None,
     ) -> int:
         total = self.session.scalars(
             select(func.coalesce(func.sum(BillingLedgerSegmentTable.cost_nanos), 0)).where(
@@ -236,10 +239,38 @@ class BillingLedgerCostRepository:
                     end=end,
                     app_id=app_id,
                     workload_id=workload_id,
+                    workspace_id=workspace_id,
+                    category=category,
                 )
             )
         ).one()
         return int(total)
+
+    def subscription_credit_nanos(
+        self,
+        *,
+        scope: LedgerCostScope,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        total = self.session.scalar(
+            select(func.coalesce(func.sum(BillingCreditAllocationTable.amount_nanos), 0))
+            .select_from(BillingLedgerSegmentTable)
+            .join(
+                BillingCreditAllocationTable,
+                BillingCreditAllocationTable.ledger_segment_id == BillingLedgerSegmentTable.id,
+            )
+            .join(
+                BillingCreditLotTable,
+                BillingCreditLotTable.id == BillingCreditAllocationTable.credit_lot_id,
+            )
+            .where(
+                *_window(scope=scope, start=start, end=end, app_id=None, workload_id=None),
+                BillingCreditLotTable.kind == "subscription",
+                BillingCreditLotTable.user_id == BillingLedgerSegmentTable.owner_user_id,
+            )
+        )
+        return int(total or 0)
 
     def bucket_totals(
         self,
@@ -419,6 +450,8 @@ class BillingLedgerCostRepository:
         limit: int,
         app_id: str | None = None,
         workload_id: str | None = None,
+        workspace_id: str | None = None,
+        category: UsageCostCategory | None = None,
         cursor: LedgerCostCursor | None = None,
     ) -> LedgerCostPage:
         columns = _GROUP_COLUMNS[group_by]
@@ -435,6 +468,8 @@ class BillingLedgerCostRepository:
                     end=end,
                     app_id=app_id,
                     workload_id=workload_id,
+                    workspace_id=workspace_id,
+                    category=category,
                 )
             )
             .group_by(*columns)
@@ -456,6 +491,8 @@ class BillingLedgerCostRepository:
             keys=keys,
             app_id=app_id,
             workload_id=workload_id,
+            workspace_id=workspace_id,
+            category=category,
         )
         names = self._names(keys, group_by=group_by)
         rows = tuple(
@@ -487,6 +524,8 @@ class BillingLedgerCostRepository:
         keys: Sequence[tuple[str, ...]],
         app_id: str | None,
         workload_id: str | None,
+        workspace_id: str | None,
+        category: UsageCostCategory | None,
     ) -> dict[tuple[str, ...], tuple[LedgerComponentTotal, ...]]:
         """Each row's components, restricted to the rows the page carries.
 
@@ -514,6 +553,8 @@ class BillingLedgerCostRepository:
                     end=end,
                     app_id=app_id,
                     workload_id=workload_id,
+                    workspace_id=workspace_id,
+                    category=category,
                 ),
                 deepest.in_([key[-1] for key in keys]),
             )
@@ -629,6 +670,8 @@ def _window(
     end: datetime,
     app_id: str | None,
     workload_id: str | None,
+    workspace_id: str | None = None,
+    category: UsageCostCategory | None = None,
 ) -> tuple[ColumnElement[bool], ...]:
     predicates: tuple[ColumnElement[bool], ...] = (
         _scope(scope),
@@ -639,6 +682,16 @@ def _window(
         predicates = (*predicates, BillingLedgerSegmentTable.app_id == app_id)
     if workload_id is not None:
         predicates = (*predicates, BillingLedgerSegmentTable.workload_id == workload_id)
+    if workspace_id is not None:
+        predicates = (*predicates, BillingLedgerSegmentTable.workspace_id == workspace_id)
+    if category is UsageCostCategory.ImageBuild:
+        predicates = (*predicates, BillingLedgerSegmentTable.workload_id == IMAGE_BUILD_WORKLOAD_ID)
+    elif category is UsageCostCategory.Unattributed:
+        predicates = (
+            *predicates,
+            BillingLedgerSegmentTable.app_id == "",
+            BillingLedgerSegmentTable.workload_id != IMAGE_BUILD_WORKLOAD_ID,
+        )
     return predicates
 
 

@@ -26,7 +26,7 @@ export function PanelError({
     <p
       role="alert"
       className={cn(
-        "p-4 text-sm text-destructive",
+        "content-transition p-4 text-sm text-destructive",
         layout === "centered" && "flex h-full min-h-0 flex-1 items-center justify-center",
         layout === "framed" && "panel flex min-h-48 items-center justify-center rounded-md",
       )}

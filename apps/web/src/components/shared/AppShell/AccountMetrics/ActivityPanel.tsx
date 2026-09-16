@@ -6,6 +6,7 @@ import type { BarShapeProps } from "recharts";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { ShareBar } from "@/components/shared/ShareBar";
 import {
   ChartContainer,
@@ -124,7 +125,7 @@ export function ActivityPanel() {
         <WindowSummary activity={activity.data} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <ContentTransition pending={activity.isPending} className="min-h-0 flex-1 overflow-y-auto">
         {activity.isPending ? (
           <ActivitySkeleton />
         ) : activity.isError ? (
@@ -134,7 +135,7 @@ export function ActivityPanel() {
         ) : (
           <ActivityReading activity={activity.data} measure={measure} range={range} />
         )}
-      </div>
+      </ContentTransition>
     </section>
   );
 }

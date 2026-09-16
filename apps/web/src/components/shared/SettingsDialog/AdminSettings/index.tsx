@@ -111,6 +111,7 @@ export function AdminSettings() {
   return (
     <>
       <Panel
+        pending={controller.isLoading}
         title="Accounts"
         className="min-h-0 flex-1"
         contentClassName="flex flex-col overflow-hidden"
@@ -134,7 +135,7 @@ export function AdminSettings() {
           ) : controller.accounts.length === 0 ? (
             <PanelEmpty
               message={controller.narrowed ? "No accounts match this search" : "No accounts yet"}
-              className="min-h-full p-8"
+              className="min-h-full p-4"
             />
           ) : (
             <AccountTable controller={controller} />

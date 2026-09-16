@@ -22,6 +22,8 @@ import {
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { ContentTransition } from "@/components/shared/ContentTransition";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatCostNanos } from "@/lib/money";
 import { countLabel, formatBytes } from "@/lib/format";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -252,14 +254,14 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
           </Button>
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto">
+      <ContentTransition pending={query.isPending} className="min-h-0 flex-1 overflow-auto">
         {query.isPending ? (
           <div className="divide-y" aria-label="Loading artifacts">
             {[0, 1, 2, 3, 4].map((key) => (
               <div key={key} className="flex h-14 items-center gap-3 px-4">
-                <div className="size-4 animate-pulse rounded-sm bg-muted" />
-                <div className="h-3 w-1/3 animate-pulse rounded-sm bg-muted" />
-                <div className="ml-auto h-3 w-20 animate-pulse rounded-sm bg-muted" />
+                <Skeleton className="size-4 rounded-sm" />
+                <Skeleton className="h-3 w-1/3 rounded-sm" />
+                <Skeleton className="ml-auto h-3 w-20 rounded-sm" />
               </div>
             ))}
           </div>
@@ -328,7 +330,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
           onLoadMore={() => void query.fetchNextPage()}
           resourceLabel="artifacts"
         />
-      </div>
+      </ContentTransition>
       {!taskId && (
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t px-3 py-2 text-xs text-muted-foreground">
           {summary.data ? (
