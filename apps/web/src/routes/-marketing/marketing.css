@@ -39,15 +39,9 @@
 }
 
 .marketing-header {
+  --accent: color-mix(in oklab, var(--foreground) 8%, var(--background));
+  --border: var(--surface-border);
   height: var(--marketing-header-height);
-}
-
-.marketing-header > div {
-  border-radius: 0;
-  border-width: 0 0 1px;
-  background: color-mix(in oklab, var(--card) 94%, transparent);
-  box-shadow: none;
-  backdrop-filter: blur(16px);
 }
 
 .marketing-site main > section {
