@@ -3,6 +3,8 @@ import { computeDestinations } from "./ComputePlacement";
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const ease = (value: number) => value * value * (3 - 2 * value);
+const slideDuration = 0.22;
+const scrollDuration = computeDestinations.length - 2 * slideDuration;
 
 export function useComputeScroll() {
   const sectionRef = useRef<HTMLElement>(null);
@@ -31,13 +33,16 @@ export function useComputeScroll() {
       const top = Number.parseFloat(getComputedStyle(sticky).top);
       const distance = section.offsetHeight - sticky.offsetHeight;
       const progress = clamp((top - section.getBoundingClientRect().top) / distance);
-      const position = progress * cards.length;
+      const position = slideDuration + progress * scrollDuration;
       const selectedIndex = Math.min(cards.length - 1, Math.floor(position));
       setSelectedIndex(selectedIndex);
       cards.forEach((card, index) => {
         const phase = position - index;
-        const enter = index === 0 ? 1 : ease(clamp(phase / 0.22));
-        const leave = index === cards.length - 1 ? 0 : ease(clamp((phase - 0.78) / 0.22));
+        const enter = index === 0 ? 1 : ease(clamp(phase / slideDuration));
+        const leave =
+          index === cards.length - 1
+            ? 0
+            : ease(clamp((phase - (1 - slideDuration)) / slideDuration));
         const distanceFromFront = 1 - enter + leave;
         card.style.setProperty("--compute-slide", `${distanceFromFront * 64}%`);
         card.style.setProperty("--compute-docked", String(distanceFromFront));
@@ -67,7 +72,7 @@ export function useComputeScroll() {
     const start = scroller.scrollTop + section.getBoundingClientRect().top - top;
     const distance = section.offsetHeight - sticky.offsetHeight;
     scroller.scrollTo({
-      top: start + (distance * (index + 0.5)) / computeDestinations.length,
+      top: start + (distance * (index + 0.5 - slideDuration)) / scrollDuration,
       behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
     });
   }, []);

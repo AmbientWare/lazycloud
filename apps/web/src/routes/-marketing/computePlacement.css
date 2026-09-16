@@ -1,7 +1,7 @@
 .compute-section {
   position: relative;
   overflow: clip;
-  height: 320svh;
+  height: 288svh;
   background: #0b0d0f;
 }
 .marketing-site main > .compute-section > .compute-sticky {
