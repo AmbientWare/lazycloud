@@ -1,9 +1,9 @@
 .marketing-site main > .marketing-parity {
   --marketing-section-background: #0c1821;
-  --surface-border: #304753;
-  --surface-frame: linear-gradient(135deg, #1a2e3c, #12232f 45%, #0e1922);
-  --surface-raised: linear-gradient(145deg, #20333f, #152630);
-  --surface-inset: linear-gradient(155deg, #0b1720, #13232e);
+  --surface-border: #353d42;
+  --surface-frame: linear-gradient(135deg, #21272b, #191f23 45%, #12181c);
+  --surface-raised: linear-gradient(145deg, #252c31, #1b2328);
+  --surface-inset: linear-gradient(155deg, #11171b, #182025);
   background: var(--marketing-section-background);
 }
 
