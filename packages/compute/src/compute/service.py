@@ -3830,6 +3830,7 @@ class ComputeService:
         cpu: float | None = None,
         memory: str | None = None,
         gpu: str | None = None,
+        gpu_count: int = 0,
         address: str | None = None,
         labels: dict[str, str] | None = None,
     ) -> Machine:
@@ -3843,6 +3844,7 @@ class ComputeService:
                     cpu=cpu,
                     memory=memory,
                     gpu=gpu,
+                    gpu_count=gpu_count,
                     address=address,
                     labels=labels or {},
                 ),

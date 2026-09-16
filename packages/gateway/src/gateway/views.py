@@ -80,8 +80,8 @@ def machine_view(
     tunnel_connected: bool,
 ) -> UnitMachineResponse:
     memory = _memory_mb(machine.memory)
-    gpu = machine.gpu or machine.labels.get("gpu", "")
-    gpu_count = int(machine.labels.get("gpu_count", "1") or 1) if gpu else 0
+    gpu = machine.gpu or ""
+    gpu_count = (machine.gpu_count or 1) if gpu else 0
     telemetry = agent_telemetry_state(agent_state) if agent_state is not None else None
     readiness_phase = _machine_readiness_phase(machine, agent_state, telemetry)
     if readiness_phase is MachineReadinessPhase.Ready and not tunnel_connected:

@@ -117,6 +117,7 @@ class MachineTable(IdTable, DatabaseBase):
         Index("ix_machines_pool_status", "pool", "status"),
         Index("ix_machines_workspace_owner", "workspace_id", "capacity_owner_id"),
         Index("ix_machines_provider_status", "provider", "status"),
+        CheckConstraint("gpu_count >= 0", name="ck_machines_gpu_count"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -133,6 +134,7 @@ class MachineTable(IdTable, DatabaseBase):
     cpu: Mapped[float | None] = mapped_column(Float, nullable=True)
     memory: Mapped[str | None] = mapped_column(Text, nullable=True)
     gpu: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
 
 

@@ -413,7 +413,8 @@ deleted, leaving 78 application tables and no whole-record payload stores.
   and two rows; serialized bytes drop from 10,318 to 528. Listing all 202 containers
   keeps one query and 202 rows, bytes 1,253,796 to 111,394. Idle scans return no rows.
 
-Remaining JSON review, integrated release acceptance and both resets are pending.
+The retained JSON review is recorded in [database-schema.md](database-schema.md).
+Integrated release acceptance and both resets are pending.
 
 External workspace storage credentials are encrypted with the existing workspace
 cipher, now owned by the database package. Their key lives until storage cleanup
@@ -431,3 +432,15 @@ array. Fresh bootstrap remains the explicit Alembic baseline.
   concurrency and rate publication pass 45 focused checks.
 - The wider database run found three remaining direct container fixtures using
   `payload`; those now use columns. Its deletion concurrency cases pass.
+
+The complete owner suite passed 1,892 tests after the PostgreSQL and credential
+changes. Repository type checks passed after removing an ignored stale SDK build
+directory from the source tree; that generated directory is preserved under `/tmp`.
+Latest main, `1cc127be1`, is merged.
+
+Final JSON writes enforce document size and valid numeric encoding through the
+database owner. Oversized metadata raises the existing typed input-error boundary
+and leaves the row unchanged. SQL errors hide bound values. Machine GPU counts
+are explicit through enrollment, persistence and the HTTP machine contract.
+The gateway and compute slice, schema and document checks pass 174 cases.
+The final document and GPU changes still require the integrated release gate.

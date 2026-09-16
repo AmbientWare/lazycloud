@@ -276,6 +276,7 @@ def _engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
     return {
         "connect_args": _connection_args(settings),
         "echo": settings.echo,
+        "hide_parameters": True,
         "pool_size": settings.pool_size,
         "max_overflow": settings.max_overflow,
         "pool_timeout": settings.pool_timeout_seconds,
@@ -305,6 +306,7 @@ def _direct_engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
         "pool_timeout": settings.pool_timeout_seconds,
         "pool_pre_ping": True,
         "isolation_level": "AUTOCOMMIT",
+        "hide_parameters": True,
     }
 
 

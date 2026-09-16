@@ -17,6 +17,7 @@ def machine_from_row(row: MachineTable) -> Machine:
             "cpu": row.cpu,
             "memory": row.memory,
             "gpu": row.gpu,
+            "gpu_count": row.gpu_count,
             "address": row.address,
             "labels": row.labels,
             "created_at": to_utc(row.created_at),
@@ -33,6 +34,7 @@ def write_machine(row: MachineTable, record: Machine) -> None:
     row.cpu = record.cpu
     row.memory = record.memory
     row.gpu = record.gpu
+    row.gpu_count = record.gpu_count
     row.address = record.address
     row.labels = dict(record.labels)
 

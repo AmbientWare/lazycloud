@@ -1888,11 +1888,11 @@ class GatewayControlService:
                     cpu=agent_state.cpu_millicores / 1000,
                     memory=f"{agent_state.memory_mb}Mi",
                     gpu=agent_state.gpus[0] if agent_state.gpus else None,
+                    gpu_count=agent_state.gpu_count,
                     labels={
                         "hostname": agent_state.hostname,
                         "os": agent_state.os,
                         "arch": agent_state.arch,
-                        "gpu_count": str(agent_state.gpu_count),
                         "source": "attached",
                     },
                     created_at=(

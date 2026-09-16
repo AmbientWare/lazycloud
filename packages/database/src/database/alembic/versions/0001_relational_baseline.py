@@ -1045,11 +1045,13 @@ CREATE TABLE machines (
 	cpu FLOAT,
 	memory TEXT,
 	gpu TEXT,
+	gpu_count INTEGER NOT NULL,
 	labels JSONB NOT NULL,
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (id),
+	CONSTRAINT ck_machines_gpu_count CHECK (gpu_count >= 0),
 	FOREIGN KEY(workspace_id) REFERENCES workspaces (id) ON DELETE SET NULL
 )
 """)

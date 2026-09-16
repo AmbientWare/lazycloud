@@ -19,20 +19,28 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
+from database.json_documents import JsonDocument
 from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
+
+# Bound dependency results may contain base64 envelopes for multiple invocations.
+task_data_type = JsonDocument(max_bytes=128 * 1024 * 1024)
 
 
 class TaskTable(IdTable, DatabaseBase):
     __tablename__ = "tasks"
     handler: Mapped[str | None] = mapped_column(Text, nullable=True)
     command: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
-    args: Mapped[list[JsonValue]] = mapped_column(json_type, default=list)
-    kwargs: Mapped[dict[str, JsonValue]] = mapped_column(json_type, default=dict)
+    args: Mapped[list[JsonValue]] = mapped_column(task_data_type, default=list)
+    kwargs: Mapped[dict[str, JsonValue]] = mapped_column(task_data_type, default=dict)
     input_container_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    invocation: Mapped[dict[str, JsonValue] | None] = mapped_column(json_type, nullable=True)
-    dependency_bindings: Mapped[list[dict[str, JsonValue]]] = mapped_column(json_type, default=list)
-    function_result: Mapped[dict[str, JsonValue] | None] = mapped_column(json_type, nullable=True)
-    result: Mapped[JsonValue] = mapped_column(json_type, nullable=True)
+    invocation: Mapped[dict[str, JsonValue] | None] = mapped_column(task_data_type, nullable=True)
+    dependency_bindings: Mapped[list[dict[str, JsonValue]]] = mapped_column(
+        task_data_type, default=list
+    )
+    function_result: Mapped[dict[str, JsonValue] | None] = mapped_column(
+        task_data_type, nullable=True
+    )
+    result: Mapped[JsonValue] = mapped_column(task_data_type, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_backoff: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -123,7 +131,7 @@ class TaskTable(IdTable, DatabaseBase):
 
 class TaskAttemptTable(IdTable, DatabaseBase):
     __tablename__ = "task_attempts"
-    result: Mapped[JsonValue] = mapped_column(json_type, nullable=True)
+    result: Mapped[JsonValue] = mapped_column(task_data_type, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     __table_args__: tuple[SchemaItem, ...] = (

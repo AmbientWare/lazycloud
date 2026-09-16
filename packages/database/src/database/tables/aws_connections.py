@@ -15,10 +15,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.schema import SchemaItem
 
+from database.json_documents import JsonDocument
 from database.tables.base import DatabaseBase, IdTable, uuid_type
 
 
@@ -83,7 +84,7 @@ class AuthorizationColumns:
         ARRAY(String(255)), nullable=True
     )
     authorization_stack: Mapped[dict[str, JsonValue] | None] = mapped_column(
-        JSONB(none_as_null=True), nullable=True
+        JsonDocument(none_as_null=True), nullable=True
     )
 
 

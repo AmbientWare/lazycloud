@@ -130,6 +130,7 @@ def create_machine(
             cpu=request.cpu,
             memory=request.memory,
             gpu=request.gpu,
+            gpu_count=request.gpu_count,
             address=request.address,
             labels=request.labels,
         )
