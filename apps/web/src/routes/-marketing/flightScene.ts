@@ -7,7 +7,7 @@ import { createShip } from "./shipModel";
 import { createLaunchPlatform } from "./launchPlatform";
 import { createStarfield } from "./starfield";
 
-export function createFlightScene(canvas: HTMLCanvasElement) {
+export function createFlightScene(canvas: HTMLCanvasElement, stage: HTMLDivElement) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
@@ -141,17 +141,24 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
     render();
   }
   function resize() {
-    const { width, height } = canvas.getBoundingClientRect();
+    const { width, height, left, top } = canvas.getBoundingClientRect();
+    const frame = stage.getBoundingClientRect();
     if (!width || !height) return;
-    camera.aspect = width / height;
-    cameraDistance = Math.max(11.8, 9.5 / camera.aspect);
-    camera.updateProjectionMatrix();
+    cameraDistance = Math.max(11.8, 9.5 / (frame.width / frame.height));
+    camera.setViewOffset(
+      frame.width,
+      frame.height,
+      left - frame.left,
+      top - frame.top,
+      width,
+      height,
+    );
     renderer.setSize(width, height, false);
     composer.setSize(width, height);
     render();
   }
   function movePointer(event: PointerEvent) {
-    const rect = canvas.getBoundingClientRect();
+    const rect = stage.getBoundingClientRect();
     pointer.set(
       (event.clientX - rect.left) / rect.width - 0.5,
       (event.clientY - rect.top) / rect.height - 0.5,
@@ -166,13 +173,14 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
   }
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(canvas);
+  resizeObserver.observe(stage);
   const intersection = new IntersectionObserver(([entry]) => {
     visible = entry.isIntersecting;
     syncMotion();
   });
   intersection.observe(canvas);
-  canvas.addEventListener("pointermove", movePointer);
-  canvas.addEventListener("pointerleave", resetPointer);
+  stage.addEventListener("pointermove", movePointer);
+  stage.addEventListener("pointerleave", resetPointer);
   document.addEventListener("visibilitychange", syncMotion);
   reducedMotion.addEventListener("change", motionPreference);
   resize();
@@ -183,8 +191,8 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
       renderer.setAnimationLoop(null);
       resizeObserver.disconnect();
       intersection.disconnect();
-      canvas.removeEventListener("pointermove", movePointer);
-      canvas.removeEventListener("pointerleave", resetPointer);
+      stage.removeEventListener("pointermove", movePointer);
+      stage.removeEventListener("pointerleave", resetPointer);
       document.removeEventListener("visibilitychange", syncMotion);
       reducedMotion.removeEventListener("change", motionPreference);
       const geometries = new Set<THREE.BufferGeometry>();

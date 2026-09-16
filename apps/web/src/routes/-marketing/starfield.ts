@@ -90,7 +90,7 @@ export function createStarfield() {
     update(time: number, flight: number, reducedMotion: boolean) {
       // Integrating the smooth acceleration keeps stars continuous through launch.
       const t = THREE.MathUtils.clamp((time - 1.8) / 1.4, 0, 1);
-      const distance = 1.4 * (t ** 3 - 0.5 * t ** 4) + Math.max(0, time - 3.2);
+      const distance = (1.4 * (t ** 3 - 0.5 * t ** 4) + Math.max(0, time - 3.2)) * 0.8;
       for (let index = 0; index < count; index++) {
         const star = seeds[index];
         const y = 21 - ((star.y + distance * star.speed) % 42);

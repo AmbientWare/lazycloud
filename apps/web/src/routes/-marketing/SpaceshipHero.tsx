@@ -10,18 +10,20 @@ type FlightScene = ReturnType<typeof createFlightScene>;
 
 export function SpaceshipHero() {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     const target = canvas.current;
-    if (!target) return;
+    const frame = stage.current;
+    if (!target || !frame) return;
     let disposed = false;
     let instance: FlightScene | undefined;
     void import("./flightScene")
       .then(({ createFlightScene }) => {
         if (disposed) return;
-        return createFlightScene(target);
+        return createFlightScene(target, frame);
       })
       .then((result) => {
         if (!result) return;
@@ -44,6 +46,9 @@ export function SpaceshipHero() {
 
   return (
     <section className="spaceship-hero" aria-labelledby="flight-headline">
+      <div className="flight-space" aria-hidden="true">
+        <canvas ref={canvas} className="flight-canvas" />
+      </div>
       <div className="flight-copy">
         <h1 id="flight-headline">
           Deploy as fast
@@ -60,13 +65,12 @@ export function SpaceshipHero() {
           </Button>
         </div>
       </div>
-      <div className="flight-stage">
-        <canvas
-          ref={canvas}
-          className="flight-canvas"
-          role="img"
-          aria-label="A detailed spacecraft assembles on a launch platform, lifts off, and accelerates through streaks of blue and white stars."
-        />
+      <div
+        ref={stage}
+        className="flight-stage"
+        role="img"
+        aria-label="A detailed spacecraft assembles on a launch platform, lifts off, and accelerates through streaks of blue and white stars."
+      >
         {!ready && (
           <p className="flight-loading" role="status">
             {error
