@@ -124,6 +124,8 @@ class CapacityRecoveryService:
         ):
             self._finish_without_replacement(record, reason="capacity owner retired", now=now)
             return
+        if not record.source_adjusted:
+            source, record = self._adjust_source(source, record, now=now)
         if record.replacement_machine_id is None and (
             now >= record.observed_at + timedelta(seconds=source.registration_timeout_seconds)
             or (record.target_unit_id is None and record.attempt >= MAX_RECOVERY_ATTEMPTS)
@@ -132,8 +134,6 @@ class CapacityRecoveryService:
                 record, reason="replacement acquisition exhausted", now=now
             )
             return
-        if not record.source_adjusted:
-            source, record = self._adjust_source(source, record, now=now)
         # Persisted reduction must reach the provider before it can replenish the old market.
         if not record.source_applied:
             with self.compute._required_capacity_owner_mutations().mutation_lock(source.id):

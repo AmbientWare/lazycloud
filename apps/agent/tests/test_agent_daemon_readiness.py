@@ -245,7 +245,10 @@ def test_stale_release_cannot_apply_worker_instructions(tmp_path: Path) -> None:
     assert not service.state_store.ready_path.exists()
 
 
-def test_advisory_keeps_workers_alive_until_an_actual_interruption(tmp_path: Path) -> None:
+@pytest.mark.parametrize("planned_drain", [False, True])
+def test_advisory_keeps_workers_alive_until_an_actual_interruption(
+    tmp_path: Path, planned_drain: bool
+) -> None:
     events: list[str] = []
     service = _service(
         tmp_path,
@@ -254,6 +257,8 @@ def test_advisory_keeps_workers_alive_until_an_actual_interruption(tmp_path: Pat
     )
     state = service.state_store.load(service.options.gateway_url)
     assert state is not None
+    if planned_drain:
+        state = state.model_copy(update={"capacity_state": AgentCapacityState.Draining})
     advisory = AgentCapacityInterruptionNotice(
         kind=CapacitySignalKind.Rebalance, reason="provider-capacity-at-risk"
     )
@@ -273,6 +278,11 @@ def test_advisory_keeps_workers_alive_until_an_actual_interruption(tmp_path: Pat
         assert draining.capacity_state is AgentCapacityState.Draining
         assert service._begin_capacity_interruption(draining, advisory) == draining
         assert service._capacity_shutdown.deadline == deadline
+        immediate = service._begin_capacity_interruption(
+            draining, AgentCapacityInterruptionNotice(reason="provider-hibernate")
+        )
+        assert immediate.capacity_state is AgentCapacityState.Preempting
+        assert immediate.capacity_notice_at == deadline
     finally:
         service._capacity_shutdown.close()
         service.worker_controller.close()

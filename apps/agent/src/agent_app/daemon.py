@@ -1310,6 +1310,10 @@ class AgentDaemonService:
         if (
             notice.kind is CapacitySignalKind.Rebalance
             and state.capacity_state is not AgentCapacityState.Available
+            and not (
+                state.capacity_state is AgentCapacityState.Draining
+                and state.capacity_notice_at is None
+            )
         ):
             return state
         if (
@@ -1331,7 +1335,7 @@ class AgentDaemonService:
                 ),
                 "capacity_reason": notice.reason,
                 "capacity_observed_at": _next_capacity_observation(state.capacity_observed_at),
-                "capacity_notice_at": notice.notice_at,
+                "capacity_notice_at": notice.notice_at or state.capacity_notice_at,
                 "updated_at": utc_now(),
             }
         )

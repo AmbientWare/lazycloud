@@ -883,13 +883,13 @@ def test_two_warm_workers_use_distinct_availability_zones(service_context: Servi
                 "provider": f"aws:{zone}",
                 "id": zone,
                 "capability_key": zone,
-                    "availability_zone": zone,
-                    "preemptible": True,
-                    "cost_terms": SupplierCostTerms(
-                        compute_hourly_micros=100_000,
-                        root_disk_hourly_micros=0,
-                        public_ipv4_hourly_micros=0,
-                    ),
+                "availability_zone": zone,
+                "preemptible": True,
+                "cost_terms": SupplierCostTerms(
+                    compute_hourly_micros=100_000,
+                    root_disk_hourly_micros=0,
+                    public_ipv4_hourly_micros=0,
+                ),
             }
         )
         providers.append(

@@ -166,8 +166,10 @@ from worker_repository.source_cache import (
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
+@pytest.mark.parametrize("cancel", [False, True])
 def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
     isolated_services: ApiServices,
+    cancel: bool,
 ) -> None:
     services = isolated_services
     images = services.images
@@ -272,7 +274,39 @@ def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
         (1, "first attempt\n"),
         (2, "second attempt\n"),
     ]
-    images.submission.cancel(build.id, workspace_id=workspace_id, reason="cancelled")
+    if cancel:
+        images.submission.cancel(build.id, workspace_id=workspace_id, reason="cancelled")
+    else:
+        second_machine = str(uuid4())
+        now = utc_now()
+        with services.context.database.session() as session:
+            MachineRepository(session).upsert(
+                Machine(id=second_machine, pool=pool), workspace_id=workspace_id
+            )
+            CapacityRecoveryRepository(session).record_signal(
+                workspace_id=workspace_id,
+                source_unit_id=unit_id,
+                source_machine_id=second_machine,
+                observed_at=now,
+                deadline=now,
+                now=now,
+            )
+            containers = ContainerRepository(session)
+            current = containers.get(replacement, workspace_id=workspace_id)
+            assert current is not None
+            containers.upsert(
+                current.model_copy(
+                    update={
+                        "machine_id": second_machine,
+                        "status": ContainerStatus.Stopped,
+                        "termination_reason": StopContainerReason.Preempted,
+                        "finished_at": now,
+                    }
+                )
+            )
+        assert images.submission.retry_interrupted(build.id, workspace_id=workspace_id)
+        terminal = images.get(build.id, workspace_id=workspace_id)
+        assert terminal.status is BuildStatus.Failed and terminal.attempt_number == 2
     with pytest.raises(ConflictError):
         images.record_worker_progress(
             build.id,
@@ -282,6 +316,7 @@ def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
             messages=["late"],
         )
     assert not images.submission.retry_interrupted(build.id, workspace_id=workspace_id)
+    assert images.stream_events(build.id, workspace_id=workspace_id, after=999)[-1].done
 
 
 def test_image_build_credentials_reject_wrong_assigned_worker(
