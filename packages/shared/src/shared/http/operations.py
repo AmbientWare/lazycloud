@@ -111,6 +111,7 @@ class ImageBuildRequest(HttpModel):
 
 class ImageBuildResponse(HttpModel):
     id: str
+    attempt_number: int = Field(default=0, ge=0, le=2)
     image: ImageSpec
     fingerprint: str
     image_id: str | None = None

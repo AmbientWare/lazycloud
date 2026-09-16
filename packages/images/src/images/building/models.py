@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.http.task_progress import TaskPendingReason
 from shared.image_building.authoring import ImageBuildStepKind
 from shared.image_building.records import BuildStatus, ImageBuildPhase
 
@@ -79,6 +80,7 @@ class ImageBuildCredentialAction(StrEnum):
 
 
 class ImageBuildStreamEventKind(StrEnum):
+    Progress = "progress"
     Log = "log"
     Warning = "warning"
     Reused = "reused"
@@ -193,6 +195,8 @@ class ImageBuildStreamEventPlan(ContractModel):
     status: BuildStatus = BuildStatus.Running
     phase: ImageBuildPhase = ImageBuildPhase.Submitted
     error: str = ""
+    attempt_number: int = Field(default=0, ge=0, le=2)
+    pending_reason: TaskPendingReason | None = None
 
 
 class ImageBuildSessionPlan(ContractModel):
@@ -200,13 +204,7 @@ class ImageBuildSessionPlan(ContractModel):
     image_id: str = ""
     build_id: str = ""
     container_id: str = ""
-    """The container this build runs in, which carries the build's own id.
-
-    One identity, because the control plane holds one durable container row per
-    build and prices the placement it recorded against that row: a separate id
-    would need a mapping to get back to the build, and could not be a container
-    id the ledger recognises.
-    """
+    """The execution attempt's container, used for placement and usage attribution."""
 
     build_container_required: bool = True
     v2: bool = True

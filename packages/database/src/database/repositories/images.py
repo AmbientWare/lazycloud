@@ -604,6 +604,7 @@ class ImageBuildRepository:
         *,
         workspace_id: str,
         claim_id: str,
+        container_id: str | None,
         claimed_at: datetime | None = None,
     ) -> bool:
         now = claimed_at or utc_now()
@@ -613,6 +614,7 @@ class ImageBuildRepository:
                 ImageBuildTable.id == build_id,
                 ImageBuildTable.workspace_id == workspace_id,
                 ImageBuildTable.status.in_([BuildStatus.Pending.value, BuildStatus.Running.value]),
+                ImageBuildTable.execution_container_id == container_id,
                 or_(
                     ImageBuildTable.publication_claim_id == "",
                     ImageBuildTable.publication_claimed_at < now - timedelta(seconds=30),

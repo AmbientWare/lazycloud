@@ -29,11 +29,15 @@ from coordination.event_bus import (
 )
 from database.context import ServiceContext
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
+from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
+    ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
 )
 from database.repositories.execution import TaskRepository
+from database.repositories.image_build_attempts import ImageBuildAttemptRepository
+from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.images import (
     ImageArchiveRepository,
     ImageBuildRepository,
@@ -41,6 +45,7 @@ from database.repositories.images import (
 )
 from database.repositories.orchestration import (
     ContainerRepository,
+    MachineRepository,
 )
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.tables.orchestration import WorkerTable
@@ -72,10 +77,13 @@ from shared.agent_connections import AgentConnectionRecord
 from shared.app_identity import FUNCTION_IMAGE
 from shared.billing_quotes import ContainerShape
 from shared.compute_enrollment import (
+    AgentCapacityState,
     ComputePreflightCheck,
     PreflightSeverity,
 )
+from shared.compute_fleet import Machine
 from shared.compute_policy import (
+    ComputeUnitRecord,
     MachinePool,
     UnitName,
 )
@@ -158,6 +166,124 @@ from worker_repository.source_cache import (
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
+def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
+    isolated_services: ApiServices,
+) -> None:
+    services = isolated_services
+    images = services.images
+    workspace_id = services.control_plane_service.get_workspace().id
+    owner_id = workspace_owner_user_id(services.context, workspace_id)
+    build = images.build(
+        ImageSpec(ignore_python=True, commands=["true"]), workspace_id=workspace_id
+    )
+    original = build.execution_container_id
+    assert original is not None and original != build.id
+    assert (
+        images.record_worker_progress(
+            build.id,
+            workspace_id=workspace_id,
+            container_id=original,
+            after=0,
+            messages=["first attempt"],
+        )
+        == 1
+    )
+    now = utc_now()
+    unit_id, machine_id = str(uuid4()), str(uuid4())
+    pool = MachinePool("interrupted-build")
+    with services.context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=unit_id, workspace_id=workspace_id, name=UnitName("interrupted-build"), pool=pool
+            )
+        )
+        MachineRepository(session).upsert(
+            Machine(id=machine_id, pool=pool), workspace_id=workspace_id
+        )
+        ComputeMachineEnrollmentRepository(session).create(
+            ComputeMachineEnrollmentCreate(
+                user_id=owner_id,
+                workspace_id=workspace_id,
+                capacity_owner_id=unit_id,
+                pool=pool,
+                machine_id=machine_id,
+                machine_fingerprint_hash=uuid4().hex,
+                credential_hash=uuid4().hex,
+                last_join_at=now,
+                capacity_state=AgentCapacityState.Preempting,
+            )
+        )
+        CapacityRecoveryRepository(session).record_signal(
+            workspace_id=workspace_id,
+            source_unit_id=unit_id,
+            source_machine_id=machine_id,
+            observed_at=now,
+            deadline=now,
+            now=now,
+        )
+        containers = ContainerRepository(session)
+        container = containers.get(original, workspace_id=workspace_id)
+        assert container is not None
+        containers.upsert(
+            container.model_copy(
+                update={
+                    "machine_id": machine_id,
+                    "status": ContainerStatus.Stopped,
+                    "termination_reason": StopContainerReason.Preempted,
+                    "finished_at": now,
+                }
+            )
+        )
+        old_payload = ImageBuildDispatchRepository(session).payload(
+            build.id, workspace_id=workspace_id
+        )
+    assert images.submission.retry_interrupted(build.id, workspace_id=workspace_id)
+    retry = images.get(build.id, workspace_id=workspace_id)
+    replacement = retry.execution_container_id
+    assert replacement is not None and replacement != original
+    assert retry.attempt_number == 2 and retry.status is BuildStatus.Pending
+    with pytest.raises(ConflictError):
+        images.record_worker_progress(
+            build.id, workspace_id=workspace_id, container_id=original, after=1, messages=["stale"]
+        )
+    assert old_payload is not None
+    with pytest.raises(AuthorizationDeniedError):
+        images.submission.executor.dispatch(build.id, workspace_id, old_payload)
+    images.submission.drain(build_id=build.id, limit=1)
+    images.submission.cleanup(build_id=build.id, limit=1)
+    with services.context.database.session() as session:
+        container = ContainerRepository(session).get(replacement, workspace_id=workspace_id)
+        assert container is not None and container.status is ContainerStatus.Pending
+        assert not ImageBuildRepository(session).claim_publication(
+            build.id, workspace_id=workspace_id, claim_id=uuid4().hex, container_id=original
+        )
+    assert (
+        images.record_worker_progress(
+            build.id,
+            workspace_id=workspace_id,
+            container_id=replacement,
+            after=0,
+            messages=["second attempt"],
+        )
+        == 1
+    )
+    events = images.stream_events(build.id, workspace_id=workspace_id)
+    assert [(event.sequence, event.message) for event in events if event.sequence] == [
+        (1, "first attempt\n"),
+        (2, "second attempt\n"),
+    ]
+    images.submission.cancel(build.id, workspace_id=workspace_id, reason="cancelled")
+    with pytest.raises(ConflictError):
+        images.record_worker_progress(
+            build.id,
+            workspace_id=workspace_id,
+            container_id=replacement,
+            after=1,
+            messages=["late"],
+        )
+    assert not images.submission.retry_interrupted(build.id, workspace_id=workspace_id)
+
+
 def test_image_build_credentials_reject_wrong_assigned_worker(
     isolated_services: ApiServices,
 ) -> None:
@@ -199,7 +325,10 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
     build = _pending_image_build(isolated_services, ImageSpec(commands=["python -V"]))
     container_id = build.id
     reserved = isolated_services.containers.reserve_image_build_container(
-        container_id=container_id, workspace_id=workspace_id, image_id=build.image_id or ""
+        build_id=build.id,
+        container_id=container_id,
+        workspace_id=workspace_id,
+        image_id=build.image_id or "",
     )
     with isolated_services.context.database.session() as session:
         ContainerRepository(session).upsert(
@@ -309,7 +438,8 @@ def test_managed_image_build_credentials_use_assigned_workspace(
     redis = real_redis_actors.client()
     service = isolated_services.worker_repository_service
     workspace_id = owned_workspace(isolated_services.control_plane_service, "tenant-workspace").id
-    container_id = str(uuid4())
+    build = _pending_image_build(isolated_services, ImageSpec(), workspace_id=workspace_id)
+    container_id = build.id
     service.containers.set_container_state(
         SchedulerContainerState(
             container_id=container_id,
@@ -533,7 +663,9 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
     response = service.get_image_archive_upload_credentials(request, principal=principal)
     assert response.credentials is not None
     assert response.credentials.ok
-    assert response.credentials.object_key == f"image-archives/{build.image_id}.rclip"
+    assert (
+        response.credentials.object_key == f"image-archives/{build.image_id}/{container_id}.rclip"
+    )
     assert response.credentials.upload_url.startswith("memory://image-archives/image-archives/")
     with pytest.raises(AuthorizationDeniedError, match="already consumed"):
         service.get_image_archive_upload_credentials(request, principal=principal)
@@ -3428,12 +3560,14 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
     assert settled.attempt_number == 2
 
 
-def _pending_image_build(services: ApiServices, image: ImageSpec) -> ImageBuildRecord:
+def _pending_image_build(
+    services: ApiServices, image: ImageSpec, *, workspace_id: str | None = None
+) -> ImageBuildRecord:
     plan = build_image_plan(image)
     build_id = str(uuid4())
     with services.context.database.session() as session:
-        workspace_id = services.context.default_workspace_id(session)
-        return ImageBuildRepository(session).upsert(
+        workspace_id = workspace_id or services.context.default_workspace_id(session)
+        ImageBuildRepository(session).upsert(
             ImageBuildRecord(
                 id=build_id,
                 image=plan.spec,
@@ -3443,4 +3577,11 @@ def _pending_image_build(services: ApiServices, image: ImageSpec) -> ImageBuildR
                 cache_metadata={"build_container_required": "true"},
             ),
             workspace_id=workspace_id,
+        )
+        return ImageBuildAttemptRepository(session).begin(
+            build_id,
+            workspace_id=workspace_id,
+            container_id=build_id,
+            expected_container_id=None,
+            now=utc_now(),
         )

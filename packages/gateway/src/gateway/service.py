@@ -38,6 +38,7 @@ from compute.capacity_errors import (
     CapacityReservationLeaseLostError,
     CapacityReservationLockContendedError,
 )
+from compute.capacity_recovery import record_capacity_risk
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
 from compute.service import ComputeService
@@ -71,6 +72,7 @@ from control.releases import DeploymentReleaseService
 from control.service import ControlPlaneService, StubKind
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
+from coordination.wake_signal import WakeSignalPublisher
 from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
@@ -385,6 +387,7 @@ class GatewayControlService:
     connections: RedisAgentConnectionDirectory
     tunnel_authority: AgentTunnelAuthority
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
+    capacity_recovery_wake: WakeSignalPublisher | None = None
     scheduler_maintenance: SchedulerWorkerMaintenance | None = None
     agent_cluster_name: str = AGENT_NAME
     agent_artifact_version: str = ""
@@ -2306,6 +2309,13 @@ class GatewayControlService:
             current_observed_at = enrollment.capacity_observed_at
             if current_observed_at is not None and request.observed_at < current_observed_at:
                 raise ConflictError("agent capacity interruption observation is stale")
+            lifecycle = tuple(AgentCapacityState)
+            if lifecycle.index(request.state) < lifecycle.index(enrollment.capacity_state):
+                raise ConflictError("agent capacity interruption cannot reopen admission")
+            if enrollment.capacity_notice_at is not None and (
+                request.notice_at is None or request.notice_at > enrollment.capacity_notice_at
+            ):
+                raise ConflictError("agent capacity interruption cannot postpone its deadline")
             same_transition = (
                 enrollment.capacity_state is request.state
                 and enrollment.capacity_reason == request.reason
@@ -2331,6 +2341,9 @@ class GatewayControlService:
                 )
             if updated.capacity_state is not AgentCapacityState.Available:
                 WorkerReleaseRepository(session).cancel_machine_update(updated.machine_id)
+                record_capacity_risk(session, updated)
+        if self.capacity_recovery_wake is not None:
+            self.capacity_recovery_wake.signal()
         state = _agent_state_from_enrollment(updated)
         if state is None:
             raise ConflictError("agent enrollment is no longer active")

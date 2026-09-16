@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from scheduler.service import SchedulerRunResult
+from scheduler.service import SchedulerRunResult, SchedulerWorkloadControls
 from scheduler_app.loops import run_loop, start_scheduler_loops
 from shared.process_liveness import HeartbeatFile
 
@@ -97,7 +97,7 @@ def test_setting_the_stop_event_ends_every_loop() -> None:
 
     class _Scheduler:
         def __init__(self) -> None:
-            self.workloads = type("_W", (), {"dispatch_wake": None})()
+            self.workloads = SchedulerWorkloadControls()
 
         def run_placement_pass(self, **_: object) -> SchedulerRunResult:
             return SchedulerRunResult()

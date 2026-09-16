@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import uuid4
 
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.image_build_attempts import ImageBuildAttemptRepository
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.images import ImageBuildRepository
 from database.workspace_secrets import WorkspaceSecretCipher
@@ -16,7 +18,7 @@ from pydantic import Field
 from scheduler.containers import SchedulerContainerRequestService
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
-from shared.errors import NotFoundError, UpstreamUnavailableError
+from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.identity import WorkspaceRecord, WorkspaceStatus
 from shared.image_building.records import BuildStatus
 from worker.repository_payloads import ImageBuildPrivateInputs, ImageBuildRegistryAuth
@@ -36,20 +38,62 @@ class DurableImageBuildDispatch:
     containers: ExecutionContainerService
     settings: ImageBuildContainerSettings
 
-    def abort(self, build_id: str, workspace_id: str) -> None:
+    def abort(self, build_id: str, workspace_id: str, *, container_id: str) -> None:
         with self.database.session() as session:
             record = ImageBuildRepository(session).get(build_id, workspace_id=workspace_id)
         if record is None:
             return
         try:
             self.containers.stop(
-                build_id,
+                container_id,
                 reason=StopContainerReason.User
                 if record.status is BuildStatus.Cancelled
                 else StopContainerReason.Scheduler,
             )
         except NotFoundError:
-            self.scheduler.cancel(build_id)
+            self.scheduler.cancel(container_id)
+
+    def prepare_retry(
+        self, build_id: str, workspace_id: str, payload: str, *, container_id: str
+    ) -> str:
+        cipher = WorkspaceSecretCipher.from_workspace(_workspace(self.database, workspace_id))
+        prepared = ImageBuildDispatchPayload.model_validate_json(
+            cipher.decrypt(f"image-build-dispatch:{build_id}", payload)
+        )
+        options = prepared.plan.build_options
+        if options.filesystem_source_container_id or options.build_context_path:
+            raise InvalidInputError(
+                "interrupted build depends on a filesystem that cannot be recovered"
+            )
+        metadata = prepared.plan.credential_metadata.model_copy(
+            update={
+                "cache_key": (
+                    f"build-credential:{workspace_id}:{build_id}:{container_id}:{uuid4().hex}"
+                )
+            }
+        )
+        request = prepared.plan.scheduler_request
+        request = request.model_copy(
+            update={
+                "container_id": container_id,
+                "payload": {
+                    **request.payload,
+                    "credential_metadata": metadata.model_dump(mode="json"),
+                    "archive_upload_capability": uuid4().hex,
+                },
+            }
+        )
+        prepared = prepared.model_copy(
+            update={
+                "plan": prepared.plan.model_copy(
+                    update={
+                        "scheduler_request": request,
+                        "credential_metadata": metadata,
+                    }
+                )
+            }
+        )
+        return cipher.encrypt(f"image-build-dispatch:{build_id}", prepared.model_dump_json())
 
     def prepare(self, request: ImageBuildExecutionRequest) -> str:
         registry_auth: ImageBuildRegistryAuth | None = None
@@ -90,10 +134,14 @@ class DurableImageBuildDispatch:
             )
         )
         request = prepared.plan.scheduler_request
-        if request.container_id != build_id or request.workspace_id != workspace_id:
+        if (
+            request.container_id != record.execution_container_id
+            or request.workspace_id != workspace_id
+        ):
             raise AuthorizationDeniedError("image build dispatch identity does not match")
         self.containers.reserve_image_build_container(
-            container_id=build_id,
+            build_id=build_id,
+            container_id=request.container_id,
             workspace_id=workspace_id,
             image_id=record.image_id or "",
         )
@@ -112,6 +160,9 @@ def image_build_private_inputs(
     cache_key: str,
 ) -> ImageBuildPrivateInputs | None:
     with database.session() as session:
+        ImageBuildAttemptRepository(session).require_active(
+            build_id, workspace_id=workspace_id, container_id=container_id
+        )
         encrypted = ImageBuildDispatchRepository(session).payload(
             build_id, workspace_id=workspace_id
         )
@@ -125,8 +176,7 @@ def image_build_private_inputs(
     )
     metadata = payload.plan.credential_metadata
     if (
-        container_id != build_id
-        or payload.plan.scheduler_request.container_id != container_id
+        payload.plan.scheduler_request.container_id != container_id
         or metadata.cache_key != cache_key
         or metadata.registry != registry
     ):

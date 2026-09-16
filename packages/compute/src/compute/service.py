@@ -9,11 +9,13 @@ from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
+    ComputeOfferState,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
@@ -94,6 +96,7 @@ from compute.capacity_errors import (
 from compute.context import ComputeContext
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
 from compute.offers import (
+    CapacityMarket,
     ComputeOffer,
     OfferRequest,
     ReservationStatus,
@@ -159,6 +162,7 @@ class _PooledCapacityBaseline:
     min_free_cpu_millicores: int
     min_free_memory_mib: int
     warm_eligible_owners: frozenset[str] = frozenset()
+    warm_targets: tuple[tuple[str, int], ...] = ()
 
 
 _BOOTSTRAP_PHASE_TRANSITIONS: dict[MachineBootstrapPhase, frozenset[MachineBootstrapPhase]] = {
@@ -1867,6 +1871,7 @@ class ComputeService:
                         for item in fleet_units
                     )
                     or self._worker_update_in_progress(session, fleet_units),
+                    targets=dict(baseline.warm_targets) or None,
                 )
                 if plan.target_machines == 0:
                     raise CapacityLimitReachedError("fleet commitments leave no baseline headroom")
@@ -1882,6 +1887,7 @@ class ComputeService:
                     min_free_cpu_millicores=0,
                     min_free_memory_mib=0,
                     warm_eligible_owners=baseline.warm_eligible_owners,
+                    warm_targets=baseline.warm_targets,
                 )
                 desired_machines = plan.target_machines
                 handoff_from = plan.handoff_from
@@ -2434,6 +2440,8 @@ class ComputeService:
 
         if not machine_id:
             raise InvalidInputError("replacement machine is required")
+        if not template_version:
+            raise InvalidInputError("planned replacement requires a template version")
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
             initial = _require_internal_pooled_unit(
@@ -2464,24 +2472,6 @@ class ComputeService:
                 raise NotFoundError(f"provider machine not found in compute unit: {machine_id}")
             if not _provider_machine_can_be_replaced(provider_machine):
                 raise ConflictError("retired provider machine cannot start a replacement")
-            if not template_version:
-                enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-                    workspace_id, machine_id
-                )
-                if (
-                    enrollment is None
-                    or enrollment.status is not ComputeMachineEnrollmentStatus.Active
-                    or enrollment.capacity_state
-                    not in {
-                        AgentCapacityState.Draining,
-                        AgentCapacityState.Preempting,
-                        AgentCapacityState.Cordoned,
-                    }
-                    or enrollment.capacity_notice_at is None
-                ):
-                    raise InvalidInputError(
-                        "replacement requires a template or interruption notice"
-                    )
             available = self._available_fleet_machines(
                 units,
                 platform_fleet=unit.platform_fleet,
@@ -2561,6 +2551,9 @@ class ComputeService:
             if unit.platform_fleet
             else [unit]
         )
+        recovering = CapacityRecoveryRepository(session).active_source_units()
+        if any(item.id in recovering for item in candidates):
+            raise ConflictError("capacity interruption recovery takes precedence over maintenance")
         if any(item.replacement_machine_id or item.warm_handoff_from for item in candidates):
             raise ConflictError("capacity maintenance is already in progress")
         if self._worker_update_in_progress(session, candidates, excluding_machine_id=machine_id):
@@ -2671,6 +2664,15 @@ class ComputeService:
             and enrollment.capacity_notice_at is not None
         }
 
+    def recovery_protected_machines(self, capacity_owner_id: str) -> set[str]:
+        with self.context.database.session() as session:
+            return CapacityRecoveryRepository(session).protected_sources(capacity_owner_id)
+
+    def reconcile_capacity_recovery(self, *, now: datetime, limit: int = 16) -> None:
+        from compute.capacity_recovery import CapacityRecoveryService
+
+        CapacityRecoveryService(self).reconcile(now=now, limit=limit)
+
     def drain_internal_unit_machine(
         self,
         workspace_id: str,
@@ -2698,7 +2700,10 @@ class ComputeService:
             enrollment = enrollments.by_machine(workspace_id, machine_id, for_update=True)
             if enrollment is None:
                 raise KeyError(f"machine enrollment not found: {machine_id}")
-            if enrollment.capacity_state is not AgentCapacityState.Available:
+            if enrollment.capacity_state not in {
+                AgentCapacityState.Available,
+                AgentCapacityState.AtRisk,
+            }:
                 return False
             enrollments.save(
                 enrollment.model_copy(
@@ -2751,7 +2756,9 @@ class ComputeService:
                 operational, _maximum = provider_unit_operational_capacity(current)
                 target = (
                     current.desired_machines
-                    if replacement or live > operational
+                    if replacement
+                    or live > operational
+                    or CapacityRecoveryRepository(session).source_capacity_adjusted(machine_id)
                     else max(current.desired_machines - 1, current.min_machines)
                 )
                 intent = units.update_capacity(
@@ -3012,6 +3019,9 @@ class ComputeService:
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
             units = repository.list_platform_internal(preemptible=preemptible, gpu=False)
+            recovering = CapacityRecoveryRepository(session).active_source_units()
+        if any(unit.id in recovering for unit in units):
+            return
         for unit in units:
             self._release_unclaimed_failed_capacity(unit, now=now)
         with self.context.database.session() as session:
@@ -3080,7 +3090,32 @@ class ComputeService:
         eligible_owners = frozenset(
             owner_id for _, _, owner_id in candidates if owner_id not in unavailable_owners
         )
-        for provider, offer, unit_id in candidates:
+        distinct_candidates: list[tuple[ResolvedComputeProvider, ComputeOffer, str]] = []
+        markets: set[CapacityMarket] = set()
+        zones: set[str] = set()
+        remaining_candidates = [item for item in candidates if item[2] in eligible_owners]
+        while remaining_candidates and len(distinct_candidates) < minimum:
+            candidate = min(
+                remaining_candidates,
+                key=lambda item: (
+                    item[2] not in warm_owners,
+                    item[1].availability_zone in zones,
+                    offer_selection_key(item[1], request),
+                ),
+            )
+            remaining_candidates.remove(candidate)
+            if candidate[1].market in markets:
+                continue
+            markets.add(candidate[1].market)
+            zones.add(candidate[1].availability_zone)
+            distinct_candidates.append(candidate)
+        targets = {
+            candidate[2]: minimum // len(distinct_candidates)
+            + int(index < minimum % len(distinct_candidates))
+            for index, candidate in enumerate(distinct_candidates)
+        }
+        prepared_count = 0
+        for provider, offer, unit_id in distinct_candidates:
             policy = provider.policy
             assert policy is not None
             if unit_id in unavailable_owners:
@@ -3100,10 +3135,11 @@ class ComputeService:
                             min_free_cpu_millicores=0,
                             min_free_memory_mib=0,
                             warm_eligible_owners=eligible_owners,
+                            warm_targets=tuple(targets.items()),
                         ),
                         now=now,
                     )
-                return
+                prepared_count += 1
             except (CapacityReservationLockContendedError, CapacityReservationLeaseLostError):
                 raise
             except (CapacityLimitReachedError, UpstreamUnavailableError):
@@ -3114,12 +3150,16 @@ class ComputeService:
                 if prepared is not None and prepared.min_machines >= minimum:
                     raise
                 LOGGER.exception("platform warm capacity preparation failed for %s", offer.id)
+        if prepared_count:
+            return
         raise UpstreamUnavailableError(
             f"no approved capacity can supply the warm target for preemptible={preemptible}"
         )
 
     @staticmethod
-    def _failed_market_retry_ready(unit: ComputeUnitRecord, *, now: datetime) -> bool:
+    def _failed_market_retry_ready(
+        unit: ComputeUnitRecord | ComputeOfferState, *, now: datetime
+    ) -> bool:
         return (
             unit.provider_state.degraded_reason is not None
             and unit.provider_state.degraded_at is not None
@@ -3264,7 +3304,10 @@ class ComputeService:
             operations = ComputeCapacityOperationRepository(session).list_for_owner(
                 unit.capacity_owner_id
             )
+            recovery_operations = CapacityRecoveryRepository(session).active_operations(unit.id)
         for operation in operations:
+            if operation.operation_id in recovery_operations:
+                continue
             if operation.status.terminal or not operation.owns_capacity:
                 continue
             if now < to_utc(operation.created_at) + timedelta(
@@ -3472,6 +3515,7 @@ class ComputeService:
                 or current.min_free_gpu_count
                 or current.replacement_machine_id
                 or current.replacement_template_version
+                or CapacityRecoveryRepository(session).unit_has_active_recovery(current.id)
                 or ComputeCapacityOperationRepository(session).list_open_for_owner(
                     current.capacity_owner_id
                 )

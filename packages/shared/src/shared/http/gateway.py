@@ -35,6 +35,12 @@ class AgentCapacityInterruptionRequest(HttpModel):
     observed_at: datetime
     notice_at: datetime | None = None
 
+    @model_validator(mode="after")
+    def advisory_has_no_deadline(self) -> AgentCapacityInterruptionRequest:
+        if self.state is AgentCapacityState.AtRisk and self.notice_at is not None:
+            raise ValueError("capacity risk advisory cannot name a termination deadline")
+        return self
+
     @field_validator("state")
     @classmethod
     def state_must_interrupt_capacity(cls, value: AgentCapacityState) -> AgentCapacityState:
