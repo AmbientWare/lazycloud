@@ -53,7 +53,6 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   return (
     <Panel
       title="Domains"
-      description="Available to every workspace in this account"
       className="min-h-0 flex-1"
       headerClassName="flex-wrap"
       contentClassName="flex flex-col overflow-y-auto"

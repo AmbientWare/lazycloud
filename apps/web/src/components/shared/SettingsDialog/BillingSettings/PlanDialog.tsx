@@ -11,13 +11,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { BillingSummary } from "@/lib/api/schemas";
 import { gpuModelsPhrase, limitPhrase, memberLimitPhrase } from "@/lib/entitlements";
 import { countLabel } from "@/lib/format";
@@ -43,12 +37,12 @@ function PlanDialogBody({ controller }: { controller: BillingSettingsController 
 
   return (
     <>
-      <DialogContent className="flex max-h-[min(46rem,calc(100svh-2rem))] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+      <DialogContent
+        aria-describedby={undefined}
+        className="flex max-h-[min(46rem,calc(100svh-2rem))] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+      >
         <DialogHeader className="shrink-0 border-b border-border bg-muted/20 px-5 py-4 pr-12 text-left">
           <DialogTitle className="text-base">Change plan</DialogTitle>
-          <DialogDescription>
-            Paid plans include monthly usage credit. Usage rates are the same across plans.
-          </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">

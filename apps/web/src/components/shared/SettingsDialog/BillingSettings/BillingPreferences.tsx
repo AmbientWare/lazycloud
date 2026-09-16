@@ -95,7 +95,7 @@ function PreferencesForm({
 
   return (
     <form
-      className="space-y-4"
+      className="space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (valid && dirty && !busy)
@@ -107,8 +107,8 @@ function PreferencesForm({
           });
       }}
     >
-      <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
-        <div className="min-w-0 space-y-3">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="min-w-0 space-y-2">
           <label className="flex items-center gap-2 text-sm font-medium">
             <Checkbox
               checked={enabled}
@@ -184,10 +184,17 @@ function PreferencesForm({
             </p>
           ) : null}
         </div>
-        <div className="min-w-0 space-y-3 border-t border-border pt-4 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-6">
-          <label htmlFor={`${id}-usageLimit`} className="text-sm font-medium">
-            Monthly usage limit, USD
-          </label>
+        <div className="min-w-0 space-y-2 border-t border-border pt-4 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <label htmlFor={`${id}-usageLimit`} className="text-sm font-medium">
+              Monthly usage limit, USD
+            </label>
+            {budget.data ? (
+              <span className="text-xs text-muted-foreground">
+                {formatCostNanos(budget.data.spent_nanos)} used this month
+              </span>
+            ) : null}
+          </div>
           <AmountSelect
             id={`${id}-usageLimit`}
             label="Monthly usage limit, USD"
@@ -200,17 +207,9 @@ function PreferencesForm({
               save.reset();
             }}
           />
-          {budget.data ? (
-            <p className="text-xs text-muted-foreground">
-              {formatCostNanos(budget.data.spent_nanos)} used this month.
-            </p>
-          ) : null}
-          <p className="text-xs text-muted-foreground">
-            Set $0 to stop new work and transfers, or choose No limit.
-          </p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-3">
+      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-2">
         {error ? (
           <p role="alert" className="mr-auto text-sm text-destructive">
             {error.message}

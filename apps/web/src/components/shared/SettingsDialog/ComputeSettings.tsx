@@ -111,7 +111,6 @@ function ConnectedCloudsPanel({
   return (
     <Panel
       title="Connected clouds"
-      description="Available to every workspace in this account"
       action={
         <AddCloudMenu
           connection={connection}
@@ -135,7 +134,7 @@ function ConnectedCloudsPanel({
                 ? "Connect AWS to run workloads in your account."
                 : "Connected cloud accounts are available on the Business plan."
           }
-          className="min-h-full px-6 py-6"
+          className="min-h-full p-4"
         />
       ) : (
         <div>
@@ -299,11 +298,8 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
         <span className="mono text-xs text-muted-foreground">{instances.length}</span>
       </div>
       {instances.length === 0 ? (
-        <div className="border-y border-border px-4 py-8 text-center">
+        <div className="border-y border-border p-4 text-center">
           <p className="text-sm font-medium">No AWS instances running</p>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Instances start when a workload uses AWS.
-          </p>
         </div>
       ) : (
         <ul
@@ -374,7 +370,7 @@ function SelfHostedPanel({
       ) : error ? (
         <PanelError message={error.message} />
       ) : machines.length === 0 ? (
-        <PanelEmpty message="No self-hosted machines connected" className="min-h-full px-4 py-6" />
+        <PanelEmpty message="No self-hosted machines connected" className="min-h-full p-4" />
       ) : (
         <ul aria-label="Self-hosted machines" className="divide-y divide-border">
           {machines.map((machine) => (

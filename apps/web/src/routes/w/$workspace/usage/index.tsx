@@ -46,7 +46,7 @@ function UsagePage() {
       contentClassName="flex min-h-0 flex-col gap-3 overflow-y-auto lg:overflow-hidden"
     >
       <section aria-label="Spend" className="panel shrink-0 overflow-hidden rounded-md">
-        <header className="grid grid-cols-1 items-start gap-x-4 gap-y-5 px-4 py-5 sm:px-5 lg:grid-cols-[minmax(10rem,auto)_minmax(0,1fr)]">
+        <header className="grid grid-cols-1 items-start gap-3 px-3 py-3 lg:grid-cols-[minmax(10rem,auto)_minmax(0,1fr)]">
           <SpendTotals series={series.data} error={series.error} />
         </header>
         <div className="h-48 px-3 pb-3 sm:h-56">

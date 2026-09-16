@@ -86,8 +86,7 @@ export function AccessTokens() {
         ) : tokens.length === 0 && !controller.nextCursor ? (
           <PanelEmpty
             message={showDeviceTokens ? "No tokens yet" : "No access tokens yet"}
-            detail="Create a token for CLI, CI, or API access."
-            className="min-h-full p-8"
+            className="min-h-full p-4"
           />
         ) : (
           <TokenTable controller={controller} tokens={tokens} />

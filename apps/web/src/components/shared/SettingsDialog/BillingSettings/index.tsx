@@ -25,12 +25,8 @@ export function BillingSettings({
 
   return (
     <>
-      <div className="grid shrink-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-3 lg:grid-rows-[auto_minmax(0,1fr)]">
-        <Panel
-          title="Plan and payment"
-          className="lg:col-span-3"
-          contentClassName="flex flex-col gap-3 p-4"
-        >
+      <div className="grid shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
+        <Panel title="Plan and payment" contentClassName="flex flex-col gap-3 p-3">
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">
               <Skeleton className="h-4 w-56" />
@@ -96,11 +92,6 @@ export function BillingSettings({
                   ) : null}
                 </div>
               </div>
-              {!complimentary && !summary.payment_method_on_file ? (
-                <p className="text-xs text-muted-foreground">
-                  Add a payment method to buy credit, enable automatic reload, or change plans.
-                </p>
-              ) : null}
               {controller.settling ? (
                 <p className="text-sm text-warning">
                   Your plan change is processing. The current plan stays active until it finishes.
@@ -111,10 +102,10 @@ export function BillingSettings({
         </Panel>
         {summary && !complimentary ? (
           <>
-            <Panel title="Prepaid credit" contentClassName="p-4">
+            <Panel title="Prepaid credit" contentClassName="p-3">
               <PrepaidCredit paymentMethodOnFile={summary.payment_method_on_file} />
             </Panel>
-            <Panel title="Spending controls" className="lg:col-span-2" contentClassName="p-4">
+            <Panel title="Spending controls" contentClassName="p-3">
               <BillingPreferences paymentMethodOnFile={summary.payment_method_on_file} />
             </Panel>
           </>

@@ -26,7 +26,7 @@ export function Panel({
     >
       <div
         className={cn(
-          "flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border/80 px-4 py-2.5",
+          "flex min-h-10 shrink-0 items-center justify-between gap-3 border-b border-border/80 px-3 py-2",
           headerClassName,
         )}
       >

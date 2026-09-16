@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Container, Deployment } from "@/lib/api/schemas";
-import { countLabel, formatKind } from "@/lib/format";
+import { formatKind } from "@/lib/format";
 
 import { groupDeploymentsByWorkload } from "../-workloads/grouping";
 import { WorkloadRowActions } from "./WorkloadRowActions";
@@ -74,7 +74,6 @@ export function AppWorkloadsSection({
     >
       <Panel
         title={<span id="app-workloads-heading">Workloads</span>}
-        description={countLabel(groups.length, "deployed workload")}
         action={
           <Select
             value={kind ?? "all"}

@@ -36,10 +36,10 @@ export function WorkspacePage({
   return (
     <div
       data-workspace-page=""
-      className="flex h-full min-h-0 w-full flex-col overflow-hidden px-4 py-4 md:px-6 md:py-5"
+      className="flex h-full min-h-0 w-full flex-col overflow-hidden p-3 md:p-4"
     >
       <div className={cn("mx-auto flex min-h-0 w-full flex-1 flex-col gap-3", PAGE_WIDTH)}>
-        <header className="panel shrink-0 rounded-md bg-card px-4 py-3">
+        <header className="panel shrink-0 rounded-md bg-card px-3 py-2.5">
           <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <h1 className="truncate text-xl font-semibold text-foreground">{title}</h1>

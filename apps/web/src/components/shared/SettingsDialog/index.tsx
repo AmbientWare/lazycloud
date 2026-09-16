@@ -40,7 +40,7 @@ export function SettingsDialog({
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
       <DialogContent className="flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[76rem] flex-col gap-0 overflow-hidden p-0 sm:h-[min(48rem,calc(100dvh-3rem))] sm:w-[calc(100vw-3rem)] sm:max-w-[76rem]">
-        <header className="shrink-0 border-b border-border px-5 py-3.5 pr-12">
+        <header className="shrink-0 border-b border-border px-4 py-3 pr-12">
           <DialogTitle className="text-base">Settings</DialogTitle>
           <DialogDescription className="sr-only">
             Signed in as {user.display_name}
@@ -52,7 +52,7 @@ export function SettingsDialog({
           onValueChange={(next) => onViewChange(settingsView(next) ?? "billing")}
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
-          <div className="shrink-0 px-5 pt-3">
+          <div className="shrink-0 px-4 pt-2">
             <LinearTabsList ariaLabel="Settings sections">
               <LinearTab value="billing">Billing</LinearTab>
               <LinearTab value="tokens">Tokens</LinearTab>
@@ -64,9 +64,9 @@ export function SettingsDialog({
 
           <TabsContent
             value="billing"
-            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 lg:overflow-hidden"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-3 lg:overflow-hidden"
           >
-            <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
+            <div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1">
               <AccountSettings />
               <BillingSettings planOpen={planOpen} onPlanOpenChange={setPlanOpen} />
             </div>
@@ -76,21 +76,21 @@ export function SettingsDialog({
               what drops a freshly issued secret without anything having to clear it. */}
           <TabsContent
             value="tokens"
-            className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3"
           >
             <AccessTokens />
           </TabsContent>
 
           <TabsContent
             value="compute"
-            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 sm:overflow-hidden"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-3 sm:overflow-hidden"
           >
             <ComputeSettings onUpgrade={openUpgrade} />
           </TabsContent>
 
           <TabsContent
             value="domains"
-            className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3"
           >
             <DomainSettings onUpgrade={openUpgrade} />
           </TabsContent>
@@ -98,7 +98,7 @@ export function SettingsDialog({
           {admin ? (
             <TabsContent
               value="admin"
-              className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4"
+              className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3"
             >
               <AdminSettings />
             </TabsContent>

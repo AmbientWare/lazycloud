@@ -28,7 +28,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
 
   return (
     <section
-      className="grid gap-4 sm:grid-cols-2 sm:items-start sm:gap-6 lg:grid-cols-1 lg:gap-4"
+      className="grid gap-3 sm:grid-cols-2 sm:items-start sm:gap-4"
       aria-label="Prepaid credit"
     >
       <div className="min-w-0">
@@ -85,12 +85,6 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
             {purchase.isPending ? "Opening checkout…" : "Add credits"}
           </Button>
         </div>
-        {terms && (
-          <p className="text-xs text-muted-foreground">
-            {formatCostNanos(terms.minimum_cents * 10_000_000)} to{" "}
-            {formatCostNanos(terms.maximum_cents * 10_000_000)}. Purchased credit never expires.
-          </p>
-        )}
         {purchase.error || pricing.error || balance.error ? (
           <p role="alert" className="text-sm text-destructive">
             {purchase.error?.message ?? pricing.error?.message ?? balance.error?.message}

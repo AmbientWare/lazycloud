@@ -28,7 +28,6 @@ export function AppActivitySection({
     >
       <Panel
         title={<span id="app-activity-heading">Activity</span>}
-        description="Hourly tasks by outcome over the last 24 hours"
         action={<AppActivityLegend activity={activity} />}
         className="h-full"
         contentClassName="overflow-hidden p-0"

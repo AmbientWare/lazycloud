@@ -224,7 +224,6 @@ function WorkloadDetailPage() {
       {!isPod ? (
         <Panel
           title="Activity"
-          description="Recent tasks and 24-hour latency"
           contentClassName="flex flex-col overflow-hidden p-0"
           className="min-h-[24rem] lg:min-h-0"
         >

@@ -6,13 +6,7 @@ import { toast } from "sonner";
 
 import { useSession } from "@/components/shared/AuthGate/session";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -90,10 +84,9 @@ export function WorkspaceMembersDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="max-w-lg">
+      <DialogContent aria-describedby={undefined} className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{workspace.name} members</DialogTitle>
-          <DialogDescription>People who can access this workspace.</DialogDescription>
         </DialogHeader>
         {owner && billing.data?.entitlements ? (
           <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
