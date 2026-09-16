@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useReducedMotion } from "./useReducedMotion";
 import { usePreviewActivity } from "./usePreviewActivity";
+import { MarketingCard } from "./MarketingPrimitives";
 
 /* Queue telemetry models one operational story from a deterministic sample
    stream: ingress surges, the autoscaler observes sustained depth, workers
@@ -187,7 +188,7 @@ export function LiveQueuePreview() {
         />
       </div>
 
-      <div className="queue-chart">
+      <MarketingCard surface="inset" className="queue-chart">
         <div className="queue-chart-heading">
           <strong>Queue activity</strong>
           <span>tasks left · workers right · last 60 seconds</span>
@@ -214,7 +215,7 @@ export function LiveQueuePreview() {
           <span>30s</span>
           <span>now</span>
         </div>
-      </div>
+      </MarketingCard>
     </div>
   );
 }
@@ -231,13 +232,13 @@ function QueueMetric({
   tone: "brand" | "positive" | "warning";
 }) {
   return (
-    <div className={`queue-metric is-${tone}`}>
+    <MarketingCard surface="raised" className={`queue-metric is-${tone}`}>
       <span className="queue-metric-label">
         <i aria-hidden="true" /> {label}
       </span>
       <strong>{value}</strong>
       <small>{detail}</small>
-    </div>
+    </MarketingCard>
   );
 }
 

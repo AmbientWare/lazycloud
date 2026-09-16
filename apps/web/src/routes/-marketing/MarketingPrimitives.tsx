@@ -1,4 +1,5 @@
 import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
 import { useEffect, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
@@ -61,19 +62,30 @@ export function MarketingHero({
   );
 }
 
+const marketingCardVariants = cva("overflow-hidden rounded-md border", {
+  variants: {
+    surface: {
+      flat: "border-input bg-[color-mix(in_oklab,var(--background-subtle)_78%,transparent)]",
+      frame: "surface-frame",
+      raised: "surface-raised",
+      inset: "surface-inset",
+    },
+  },
+  defaultVariants: { surface: "flat" },
+});
+
 export function MarketingCard({
   asChild = false,
   className,
+  surface,
   ...props
-}: ComponentPropsWithoutRef<"div"> & { asChild?: boolean }) {
+}: ComponentPropsWithoutRef<"div"> &
+  VariantProps<typeof marketingCardVariants> & { asChild?: boolean }) {
   const Component = asChild ? Slot : "div";
   return (
     <Component
       data-marketing-card=""
-      className={cn(
-        "overflow-hidden rounded-[var(--radius)] border border-input bg-[color-mix(in_oklab,var(--background-subtle)_78%,transparent)]",
-        className,
-      )}
+      className={cn(marketingCardVariants({ surface }), className)}
       {...props}
     />
   );

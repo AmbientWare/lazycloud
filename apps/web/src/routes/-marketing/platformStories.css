@@ -53,42 +53,47 @@
 }
 
 .platform-example-card {
-  --product-inset: transparent;
-  --product-header: transparent;
   container-name: product-preview;
   container-type: inline-size;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in oklab, var(--background-subtle) 78%, transparent);
 }
 
 .platform-example-visual {
   display: flex;
-  height: 350px;
-  padding: 20px 18px;
+  height: 414px;
+  padding: 18px;
   color: var(--muted-foreground);
 }
 
 .platform-example-card
   :is(
     .marketing-stat-grid,
-    .marketing-product-stat,
-    .endpoint-plot,
     .endpoint-route-summary,
     .pipeline-run-metrics,
-    .pipeline-run-metric,
-    .timeline-panel,
     .timeline-head,
-    .queue-metric,
-    .queue-chart
+    .queue-metrics
   ) {
   border: 0;
   background: transparent;
 }
 
-.platform-example-card .marketing-product-stat {
-  padding: 4px 12px 12px;
+.platform-example-card :is(.marketing-stat-grid, .pipeline-run-metrics, .queue-metrics) {
+  gap: 10px;
+  overflow: visible;
+}
+
+.platform-example-card
+  :is(
+    .marketing-product-stat,
+    .pipeline-run-metric,
+    .queue-metric,
+    .marketing-sandbox-preview > :last-child > div
+  ) {
+  padding: 12px 14px;
+}
+
+.platform-example-card :is(.marketing-endpoint-chart, .marketing-queue-preview) {
+  gap: 12px;
+  padding-bottom: 0;
 }
 
 .platform-example-card
@@ -110,16 +115,12 @@
 
 .platform-example-card :is(.endpoint-plot, .queue-chart) {
   margin: 0;
-  padding: 8px 12px 0;
+  padding: 12px;
   min-height: 0;
 }
 
 .platform-example-card .endpoint-plot-visual {
-  background-image: radial-gradient(
-    color-mix(in oklab, var(--brand) 22%, transparent) 0.7px,
-    transparent 0.9px
-  );
-  background-size: 9px 9px;
+  background-image: none;
 }
 
 .platform-example-card .endpoint-grid-line,
@@ -175,16 +176,12 @@
 }
 
 .platform-example-card .marketing-timeline {
-  padding: 0 12px;
-  gap: 10px;
+  padding: 0;
+  gap: 12px;
 }
 
 .platform-example-card .pipeline-run-summary {
   font-size: 9px;
-}
-
-.platform-example-card .pipeline-run-metric {
-  padding: 6px 0;
 }
 
 .platform-example-card .pipeline-run-metric > small {
@@ -196,7 +193,7 @@
 }
 
 .platform-example-card .timeline-head {
-  padding-inline: 0;
+  padding: 12px;
 }
 
 .platform-example-card .timeline-name {
@@ -227,40 +224,51 @@
   background: transparent;
 }
 
-.platform-example-card .queue-metric {
-  padding-top: 0;
-}
-
 .platform-example-card .marketing-sandbox-preview {
-  padding: 0 10px;
+  padding: 0;
 }
 
 .platform-example-card .marketing-sandbox-preview [data-marketing-terminal-surface] {
-  border: 0;
   border-radius: var(--radius);
-  background: transparent;
   font-size: 12px;
   line-height: 1.8;
 }
 
-.platform-example-card .marketing-sandbox-preview > :last-child > div {
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-}
-
 @container product-preview (max-width: 420px) {
   .platform-example-visual {
-    height: 336px;
-    padding: 16px 6px;
+    height: 408px;
+    padding: 12px;
+  }
+
+  .platform-example-card :is(.marketing-stat-grid, .pipeline-run-metrics, .queue-metrics) {
+    gap: 6px;
+  }
+
+  .platform-example-card
+    :is(
+      .marketing-product-stat,
+      .pipeline-run-metric,
+      .queue-metric,
+      .marketing-sandbox-preview > :last-child > div
+    ) {
+    padding: 10px 8px;
+  }
+
+  .platform-example-card
+    :is(.marketing-product-stat span, .pipeline-run-metric > span, .queue-metric-label) {
+    font-size: 9px;
+  }
+
+  .platform-example-card :is(.endpoint-plot, .queue-chart) {
+    padding: 10px 8px;
   }
 
   .platform-example-card .timeline-axis {
-    margin-left: 118px;
+    margin-left: 130px;
   }
 
   .platform-example-card .timeline-row {
-    grid-template-columns: 108px minmax(0, 1fr) 26px;
+    grid-template-columns: 120px minmax(0, 1fr) 26px;
     padding-inline: 0;
   }
 

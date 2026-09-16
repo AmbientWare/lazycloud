@@ -123,6 +123,18 @@
   --info-foreground: hsl(0 0% 9%);
   --border: #333333;
   --input: var(--border);
+  --surface-border: #36383b;
+  --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.62' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='1.6' intercept='-.3'/%3E%3CfeFuncG type='linear' slope='1.6' intercept='-.3'/%3E%3CfeFuncB type='linear' slope='1.6' intercept='-.3'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Cpath opacity='.2' fill='%23fff' filter='url(%23n)' d='M0 0h180v180H0z'/%3E%3C/svg%3E");
+  --surface-frame: linear-gradient(135deg, #232426, #191a1c 45%, #111214);
+  --surface-raised: linear-gradient(145deg, #242628, #191b1d);
+  --surface-inset: linear-gradient(155deg, #121315, #1b1c1e);
+  --surface-shadow-frame:
+    inset 0 1px 0 rgb(226 241 250 / 8%), inset 1px 0 0 rgb(226 241 250 / 3%), 0 3px 0 #090a0b,
+    0 4px 0 #292c2f, 0 18px 36px -18px rgb(0 0 0 / 80%);
+  --surface-shadow-raised:
+    inset 0 1px 0 rgb(228 243 251 / 7%), inset 1px 0 0 rgb(228 243 251 / 3%),
+    0 4px 10px rgb(0 0 0 / 24%);
+  --surface-shadow-inset: inset 0 2px 6px rgb(0 0 0 / 32%), 0 1px 0 rgb(224 240 249 / 5%);
   --ring: var(--brand);
   --chart-1: #82aaff;
   --chart-2: oklch(0.696 0.17 162.48);
@@ -137,6 +149,30 @@
   --sidebar-accent-foreground: var(--foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--brand);
+}
+
+@utility surface-frame {
+  border-color: var(--surface-border);
+  background-image: var(--surface-frame);
+  box-shadow: var(--surface-shadow-frame);
+}
+
+@utility surface-raised {
+  border-color: var(--surface-border);
+  background-image: var(--surface-grain), var(--surface-raised);
+  background-size:
+    180px 180px,
+    auto;
+  box-shadow: var(--surface-shadow-raised);
+}
+
+@utility surface-inset {
+  border-color: var(--surface-border);
+  background-image: var(--surface-grain), var(--surface-inset);
+  background-size:
+    180px 180px,
+    auto;
+  box-shadow: var(--surface-shadow-inset);
 }
 
 @layer base {

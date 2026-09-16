@@ -12,7 +12,8 @@ import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
 import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimitives";
 import { StoryPreview, type StoryVisual } from "./ProductPreviews";
-import { ComputePlacement, computeDestinations } from "./ComputePlacement";
+import { ComputePlacement } from "./ComputePlacement";
+import { computeDestinations } from "./computeDestinations";
 import { useComputeScroll } from "./useComputeScroll";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
@@ -446,7 +447,7 @@ function PlatformStoryRail() {
                   {story.body}
                 </p>
               </div>
-              <div className="platform-example-card">
+              <MarketingCard surface="frame" className="platform-example-card">
                 <div
                   aria-label={`${story.label} preview`}
                   className="platform-example-visual"
@@ -454,7 +455,7 @@ function PlatformStoryRail() {
                 >
                   <StoryPreview visual={story.visual} />
                 </div>
-              </div>
+              </MarketingCard>
             </article>
           ))}
         </MarketingReveal>

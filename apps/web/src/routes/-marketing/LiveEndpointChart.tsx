@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useReducedMotion } from "./useReducedMotion";
 import { usePreviewActivity } from "./usePreviewActivity";
+import { MarketingCard } from "./MarketingPrimitives";
 
 /* Live application traffic is presented as one stacked step-area timeline. The
    total silhouette communicates request load, the bands preserve route mix,
@@ -130,70 +131,72 @@ export function LiveEndpointChart() {
       ref={previewRef}
     >
       <div className="marketing-stat-grid endpoint-overview-stats">
-        <div className="marketing-product-stat">
+        <MarketingCard surface="raised" className="marketing-product-stat">
           <span>In flight</span>
           <strong>{inFlight}</strong>
-        </div>
-        <div className="marketing-product-stat">
+        </MarketingCard>
+        <MarketingCard surface="raised" className="marketing-product-stat">
           <span>Utilization</span>
           <strong>{utilization}%</strong>
-        </div>
-        <div className="marketing-product-stat">
+        </MarketingCard>
+        <MarketingCard surface="raised" className="marketing-product-stat">
           <span>Containers</span>
           <strong>{containers}</strong>
-        </div>
+        </MarketingCard>
       </div>
-      <figure className="endpoint-plot">
-        <figcaption className="endpoint-plot-caption">
-          <strong>Live request load</strong>
-          <span>Last 60 seconds</span>
-        </figcaption>
-        <div className="endpoint-chart-canvas">
-          <div className="endpoint-y-axis" aria-hidden="true">
-            <span>{axisMax}</span>
-            <span>{axisMax / 2}</span>
-            <span>0</span>
-          </div>
-          <div className="endpoint-plot-visual">
-            <svg
-              aria-label="Stacked live request load for /review, /generate, and /status over the last 60 seconds"
-              preserveAspectRatio="none"
-              role="img"
-              viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-            >
-              {[PLOT_TOP, HEIGHT / 2, HEIGHT - PLOT_BOTTOM].map((y) => (
-                <line className="endpoint-grid-line" key={y} x1="0" x2={WIDTH} y1={y} y2={y} />
-              ))}
-              <g className="endpoint-shift" key={tick}>
-                {ENDPOINTS.map((endpoint, series) => ({ endpoint, series }))
-                  .reverse()
-                  .map(({ endpoint, series }) => (
-                    <g className={endpoint.tone} key={endpoint.route}>
-                      <path className="endpoint-area" d={areaPath(bands[series] ?? [], scale)} />
-                      <path className="endpoint-line" d={stepPath(bands[series] ?? [], scale)} />
-                    </g>
-                  ))}
-              </g>
-            </svg>
-          </div>
-        </div>
-        <div className="endpoint-time-axis" aria-hidden="true">
-          <span>60s ago</span>
-          <span>30s</span>
-          <span>now</span>
-        </div>
-        <div className="endpoint-route-summaries">
-          {routeMetrics.map(({ active, latency, route, tone }) => (
-            <div className={`endpoint-route-summary ${tone}`} key={route}>
-              <code className="endpoint-series-label">{route}</code>
-              <span className="endpoint-series-metrics">
-                <strong>{active} active</strong>
-                <small>{latency} ms median</small>
-              </span>
+      <MarketingCard surface="inset" asChild>
+        <figure className="endpoint-plot">
+          <figcaption className="endpoint-plot-caption">
+            <strong>Live request load</strong>
+            <span>Last 60 seconds</span>
+          </figcaption>
+          <div className="endpoint-chart-canvas">
+            <div className="endpoint-y-axis" aria-hidden="true">
+              <span>{axisMax}</span>
+              <span>{axisMax / 2}</span>
+              <span>0</span>
             </div>
-          ))}
-        </div>
-      </figure>
+            <div className="endpoint-plot-visual">
+              <svg
+                aria-label="Stacked live request load for /review, /generate, and /status over the last 60 seconds"
+                preserveAspectRatio="none"
+                role="img"
+                viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+              >
+                {[PLOT_TOP, HEIGHT / 2, HEIGHT - PLOT_BOTTOM].map((y) => (
+                  <line className="endpoint-grid-line" key={y} x1="0" x2={WIDTH} y1={y} y2={y} />
+                ))}
+                <g className="endpoint-shift" key={tick}>
+                  {ENDPOINTS.map((endpoint, series) => ({ endpoint, series }))
+                    .reverse()
+                    .map(({ endpoint, series }) => (
+                      <g className={endpoint.tone} key={endpoint.route}>
+                        <path className="endpoint-area" d={areaPath(bands[series] ?? [], scale)} />
+                        <path className="endpoint-line" d={stepPath(bands[series] ?? [], scale)} />
+                      </g>
+                    ))}
+                </g>
+              </svg>
+            </div>
+          </div>
+          <div className="endpoint-time-axis" aria-hidden="true">
+            <span>60s ago</span>
+            <span>30s</span>
+            <span>now</span>
+          </div>
+          <div className="endpoint-route-summaries">
+            {routeMetrics.map(({ active, latency, route, tone }) => (
+              <div className={`endpoint-route-summary ${tone}`} key={route}>
+                <code className="endpoint-series-label">{route}</code>
+                <span className="endpoint-series-metrics">
+                  <strong>{active} active</strong>
+                  <small>{latency} ms median</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        </figure>
+      </MarketingCard>
     </div>
   );
 }
