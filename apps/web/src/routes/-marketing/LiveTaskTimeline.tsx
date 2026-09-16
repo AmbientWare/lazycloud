@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useReducedMotion } from "./useReducedMotion";
 import { usePreviewActivity } from "./usePreviewActivity";
+import { MarketingCard } from "./MarketingPrimitives";
 
 /* Live task timeline: a dependency-aware run replayed on a loop, so the graph
    shows Tasks starting as their upstream results land. The clock only advances
@@ -126,25 +127,25 @@ export function LiveTaskTimeline() {
         </strong>
       </div>
       <div className="pipeline-run-metrics">
-        <div className="pipeline-run-metric">
+        <MarketingCard surface="raised" className="pipeline-run-metric">
           <span>Run progress</span>
           <strong>{progress}%</strong>
           <small>current execution</small>
-        </div>
-        <div className="pipeline-run-metric">
+        </MarketingCard>
+        <MarketingCard surface="raised" className="pipeline-run-metric">
           <span>Completed</span>
           <strong>
             {completed}/{TASKS.length}
           </strong>
           <small>dependency-aware</small>
-        </div>
-        <div className="pipeline-run-metric">
+        </MarketingCard>
+        <MarketingCard surface="raised" className="pipeline-run-metric">
           <span>Elapsed</span>
           <strong>{formatClock(visibleClock)}</strong>
           <small>30s expected</small>
-        </div>
+        </MarketingCard>
       </div>
-      <div className="timeline-panel">
+      <MarketingCard surface="inset" className="timeline-panel">
         <div className="timeline-head">
           <span>Task timeline</span>
           <code>
@@ -188,7 +189,7 @@ export function LiveTaskTimeline() {
             );
           })}
         </div>
-      </div>
+      </MarketingCard>
     </div>
   );
 }

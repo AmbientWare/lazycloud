@@ -1,4 +1,5 @@
 import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
 import { useEffect, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
@@ -11,11 +12,18 @@ import { MarketingReveal } from "./MarketingReveal";
 
 export type MarketingRoute = "/" | "/pricing" | "/legal/privacy" | "/legal/terms" | "/dashboard";
 
-/* Shared page rhythm: compact phone gutters that open up with the viewport. */
 export const shell =
-  "ml-[max(1rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] w-auto max-w-[1200px] mr-[max(1rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] sm:ml-[max(1.5rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] sm:mr-[max(1.5rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] lg:ml-[max(2rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] lg:mr-[max(2rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))]";
+  "ml-[max(var(--marketing-gutter),env(safe-area-inset-left),calc((100%_-_1200px)/2))] w-auto max-w-[1200px] mr-[max(var(--marketing-gutter),env(safe-area-inset-right),calc((100%_-_1200px)/2))]";
 
-export function MarketingHero({ children }: { children: ReactNode }) {
+export function MarketingHero({
+  children,
+  className,
+  overlay,
+}: {
+  children: ReactNode;
+  className?: string;
+  overlay?: ReactNode;
+}) {
   const [entered, setEntered] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
 
@@ -31,7 +39,10 @@ export function MarketingHero({ children }: { children: ReactNode }) {
 
   return (
     <section
-      className="marketing-hero relative overflow-hidden border-b border-border bg-background"
+      className={cn(
+        "marketing-hero relative overflow-hidden border-b border-border bg-background",
+        className,
+      )}
       data-hero-entered={entered}
       data-fonts-ready={fontsReady}
       onFocusCapture={() => setEntered(true)}
@@ -43,25 +54,40 @@ export function MarketingHero({ children }: { children: ReactNode }) {
       <div
         className={cn(
           shell,
-          "marketing-hero-content relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 sm:gap-12 lg:gap-16 max-lg:grid-cols-1",
+          "marketing-hero-content relative z-[2] grid grid-cols-[0.84fr_1.16fr] items-center gap-10 sm:gap-12 lg:gap-8 xl:gap-16 max-lg:grid-cols-1",
         )}
       >
         {children}
       </div>
+      {overlay}
     </section>
   );
 }
 
+const marketingCardVariants = cva("overflow-hidden rounded-md border", {
+  variants: {
+    surface: {
+      flat: "border-input bg-[color-mix(in_oklab,var(--background-subtle)_78%,transparent)]",
+      frame: "surface-frame",
+      raised: "surface-raised",
+      inset: "surface-inset",
+    },
+  },
+  defaultVariants: { surface: "flat" },
+});
+
 export function MarketingCard({
   asChild = false,
   className,
+  surface,
   ...props
-}: ComponentPropsWithoutRef<"div"> & { asChild?: boolean }) {
+}: ComponentPropsWithoutRef<"div"> &
+  VariantProps<typeof marketingCardVariants> & { asChild?: boolean }) {
   const Component = asChild ? Slot : "div";
   return (
     <Component
       data-marketing-card=""
-      className={cn("overflow-hidden rounded-2xl border border-input bg-card", className)}
+      className={cn(marketingCardVariants({ surface }), className)}
       {...props}
     />
   );

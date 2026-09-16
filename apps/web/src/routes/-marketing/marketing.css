@@ -1,4 +1,5 @@
 .marketing-theme {
+  --marketing-gutter: 1.5rem;
   --background: #080808;
   --background-subtle: #111113;
   --foreground: #eef3f7;
@@ -17,6 +18,18 @@
   --accent-foreground: var(--foreground);
   --border: #354550;
   --input: var(--border);
+}
+
+@media (min-width: 640px) {
+  .marketing-theme {
+    --marketing-gutter: 2.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .marketing-theme {
+    --marketing-gutter: 4rem;
+  }
 }
 
 .marketing-site,
@@ -39,15 +52,9 @@
 }
 
 .marketing-header {
+  --accent: color-mix(in oklab, var(--foreground) 8%, var(--background));
+  --border: var(--surface-border);
   height: var(--marketing-header-height);
-}
-
-.marketing-header > div {
-  border-radius: 0;
-  border-width: 0 0 1px;
-  background: color-mix(in oklab, var(--card) 94%, transparent);
-  box-shadow: none;
-  backdrop-filter: blur(16px);
 }
 
 .marketing-site main > section {
@@ -67,7 +74,18 @@
   backdrop-filter: blur(8px);
 }
 
-.marketing-site main > section > :not(.marketing-grid-field),
+.marketing-site main > section::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background-image: var(--surface-grain);
+  background-size: 180px 180px;
+  opacity: 0.18;
+}
+
+.marketing-site main > section > :not(.marketing-grid-field, [data-marketing-overlay]),
 .marketing-site > main > :not(section),
 .marketing-site > footer > * {
   position: relative;
@@ -214,19 +232,6 @@
   border-left: 1px solid color-mix(in oklab, var(--primary-foreground) 25%, transparent);
 }
 
-.marketing-site [data-marketing-card],
-.marketing-site .code-block-paper {
-  border-radius: var(--radius);
-  box-shadow: none;
-}
-
-.marketing-product-bar code i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--positive);
-}
-
 .marketing-grid-field {
   position: absolute;
   inset: 0;
@@ -244,57 +249,6 @@
   pointer-events: none;
 }
 
-.marketing-product-frame {
-  --product-inset: color-mix(in oklab, var(--brand) 6%, var(--card));
-  --product-header: color-mix(in oklab, var(--brand) 16%, var(--card));
-  container-name: product-preview;
-  container-type: inline-size;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  height: 100%;
-  min-height: 362px;
-  border-color: color-mix(in oklab, var(--brand) 18%, var(--border));
-  color: var(--muted-foreground);
-}
-
-.marketing-product-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 52px;
-  padding: 0 15px;
-  border-bottom: 1px solid var(--border);
-  background: var(--product-header);
-}
-
-.marketing-product-bar > div {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.marketing-product-bar strong {
-  color: var(--foreground);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.marketing-product-bar span {
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 8px;
-}
-
-.marketing-product-bar code {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--positive);
-  font-family: var(--font-mono);
-  font-size: 8px;
-}
-
 .marketing-stat-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -304,11 +258,6 @@
 .marketing-product-stat {
   min-width: 0;
   padding: 13px 14px;
-  border-right: 1px solid var(--border);
-}
-
-.marketing-product-stat:last-child {
-  border-right: 0;
 }
 
 .marketing-product-stat span,
@@ -389,9 +338,6 @@
   min-height: 210px;
   margin: 14px 14px 0;
   overflow: hidden;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background-color: var(--product-inset);
   padding: 10px 10px 9px;
 }
 
@@ -615,11 +561,6 @@
 .pipeline-run-metric {
   min-width: 0;
   padding: 8px 10px;
-  border-right: 1px solid var(--border);
-}
-
-.pipeline-run-metric:last-child {
-  border-right: 0;
 }
 
 .pipeline-run-metric > span,
@@ -657,9 +598,6 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--product-inset);
 }
 
 .timeline-head {
@@ -790,55 +728,10 @@
   color: var(--muted-foreground);
 }
 
-/* The sticky chapter has to fit as one composed viewport even on a 720px-tall
-   laptop. Only its copies of the live visuals compact; the standalone compute
-   and generated-client panels keep their roomier dimensions. */
-.marketing-story-visual .marketing-product-frame {
-  min-height: 0;
-}
-
-.marketing-story-visual .marketing-product-frame > :last-child {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.marketing-story-visual .marketing-endpoint-chart {
-  min-height: 0;
-  padding-bottom: 10px;
-}
-
-.marketing-story-visual .marketing-product-bar {
-  min-height: 44px;
-  padding-inline: 12px;
-}
-
-.marketing-story-visual .marketing-product-stat {
-  padding: 11px 12px;
-}
-
-.marketing-story-visual .endpoint-plot {
-  min-height: 120px;
-  margin: 10px 11px 0;
-  padding: 8px 9px 6px;
-}
-
-.marketing-story-visual .marketing-timeline {
-  min-height: 0;
-  gap: 7px;
-  padding: 9px 11px 9px;
-}
-
-.marketing-story-visual .timeline-axis {
-  height: 13px;
-}
-
 .queue-metric {
   --series-color: var(--brand);
   min-width: 0;
   padding: 10px 8px 9px;
-  border-right: 1px solid var(--border);
-  border-top: 2px solid var(--series-color);
-  background: color-mix(in oklab, var(--series-color) 6%, var(--card));
 }
 
 .queue-metric.is-positive {
@@ -847,10 +740,6 @@
 
 .queue-metric.is-warning {
   --series-color: var(--warning);
-}
-
-.queue-metric:last-child {
-  border-right: 0;
 }
 
 .queue-metric-label {
@@ -905,9 +794,6 @@
   min-height: 0;
   margin: 10px 11px 11px;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--product-inset);
   padding: 9px 10px 6px;
 }
 
@@ -1038,15 +924,6 @@
     grid-template-columns: 120px 64px 1fr 22px;
   }
 
-  .marketing-story-visual .marketing-product-stat {
-    padding-inline: 9px;
-  }
-
-  .marketing-story-visual .endpoint-plot {
-    margin-inline: 8px;
-    padding-inline: 6px;
-  }
-
   .endpoint-route-summaries {
     gap: 4px;
   }
@@ -1073,11 +950,6 @@
   }
 }
 
-.marketing-story-visual .marketing-sandbox-preview {
-  gap: 7px;
-  padding: 9px 11px 10px;
-}
-
 @keyframes marketing-blink {
   50% {
     opacity: 0;
@@ -1087,14 +959,6 @@
 @media (max-width: 767px) {
   .marketing-site {
     font-size: 15px;
-  }
-
-  .marketing-product-frame {
-    min-height: 350px;
-  }
-
-  .marketing-product-bar > div span {
-    display: none;
   }
 
   .marketing-stat-grid {
@@ -1122,27 +986,6 @@
 /* Product visuals compose from their actual panel width. This keeps tablet
    split views and narrow story rails readable even on a wide viewport. */
 @container product-preview (max-width: 420px) {
-  .marketing-product-bar {
-    min-height: 48px;
-    gap: 10px;
-    padding-inline: 12px;
-  }
-
-  .marketing-product-bar > div {
-    min-width: 0;
-  }
-
-  .marketing-product-bar strong,
-  .marketing-product-bar span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .marketing-product-bar code {
-    flex: none;
-  }
-
   .marketing-timeline {
     gap: 7px;
     padding: 9px;
@@ -1274,11 +1117,6 @@
     margin-inline: 25px;
   }
 
-  .marketing-product-frame .marketing-sandbox-preview {
-    gap: 7px;
-    padding: 9px;
-  }
-
   .marketing-sandbox-preview > :first-child > span {
     display: none;
   }
@@ -1300,44 +1138,9 @@
   .marketing-sandbox-preview > :last-child > div > :last-child {
     display: none;
   }
-
-  .marketing-product-frame .marketing-compute-preview {
-    gap: 7px;
-    padding: 9px;
-  }
-
-  .marketing-compute-preview .compute-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .marketing-compute-preview .compute-overview-stat {
-    min-height: 44px;
-    padding: 7px 9px;
-  }
-
-  .marketing-compute-preview .compute-lane {
-    padding: 7px;
-  }
-
-  .compute-lane-heading > span > span {
-    display: none;
-  }
-
-  .marketing-compute-preview .compute-slot {
-    min-height: 44px;
-  }
-
-  .compute-volume > :last-child {
-    display: none;
-  }
-
-  .compute-events > :nth-child(n + 2) {
-    display: none;
-  }
 }
 
 @container product-preview (max-width: 330px) {
-  .marketing-product-bar span,
   .pipeline-run-summary code,
   .pipeline-run-metric > span,
   .timeline-head code {
@@ -1384,10 +1187,6 @@
   .marketing-sandbox-preview > :first-child > div > span:not(:first-child) {
     display: none;
   }
-
-  .compute-events {
-    display: none;
-  }
 }
 
 .marketing-typed-visual {
@@ -1408,14 +1207,6 @@
 
   .typed-package-path {
     max-width: 100%;
-  }
-
-  .marketing-typed-visual .typed-file-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .marketing-typed-visual .typed-file-grid > :last-child {
-    grid-column: 1 / -1;
   }
 
   .typed-symbol-row {
@@ -1452,14 +1243,6 @@
 }
 
 @container typed-preview (max-width: 330px) {
-  .marketing-typed-visual .typed-file-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .marketing-typed-visual .typed-file-grid > :last-child {
-    grid-column: auto;
-  }
-
   .typed-symbol-row > :last-child {
     display: none;
   }

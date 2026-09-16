@@ -60,7 +60,7 @@ export function MarketingLayout({ children }: { children: ReactNode }) {
         <div
           className={cn(
             shell,
-            "relative flex h-14 items-center justify-between gap-3 border border-border/80 px-3 sm:px-4",
+            "surface-frame relative flex h-14 items-center justify-between gap-3 border px-3 sm:px-4",
           )}
         >
           <Link
@@ -230,7 +230,7 @@ function MobileNavigation() {
     <div className="md:hidden" ref={rootRef}>
       <button
         ref={buttonRef}
-        className="flex size-11 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="surface-inset flex size-11 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:text-foreground"
         type="button"
         aria-controls="marketing-mobile-nav"
         aria-expanded={open}
@@ -243,7 +243,7 @@ function MobileNavigation() {
         <nav
           ref={navigationRef}
           id="marketing-mobile-nav"
-          className="absolute inset-x-0 top-[calc(100%+0.5rem)] rounded-xl border border-border/80 bg-card shadow-[0_14px_32px_color-mix(in_oklab,var(--foreground)_12%,transparent)] motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95"
+          className="surface-frame absolute inset-x-0 top-[calc(100%+0.5rem)] border motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150"
           aria-label="Mobile navigation"
         >
           <div className="px-4 pt-2 pb-4">

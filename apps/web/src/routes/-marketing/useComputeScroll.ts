@@ -1,0 +1,81 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { computeDestinations } from "./computeDestinations";
+
+const clamp = (value: number) => Math.max(0, Math.min(1, value));
+const ease = (value: number) => value * value * (3 - 2 * value);
+const slideDuration = 0.22;
+const scrollDuration = computeDestinations.length - 2 * slideDuration;
+
+export function useComputeScroll() {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [isDesktop, setIsDesktop] = useState(false);
+
+  useEffect(() => {
+    const media = matchMedia("(min-width: 1024px)");
+    const update = () => setIsDesktop(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktop) return;
+    const section = sectionRef.current;
+    const scroller = section?.closest<HTMLElement>(".marketing-site");
+    const sticky = section?.querySelector<HTMLElement>(".compute-sticky");
+    if (!section || !scroller || !sticky) return;
+    const cards = [...section.querySelectorAll<HTMLElement>(".compute-stage")];
+    let frame = 0;
+
+    const update = () => {
+      frame = 0;
+      const top = Number.parseFloat(getComputedStyle(sticky).top);
+      const distance = section.offsetHeight - sticky.offsetHeight;
+      const progress = clamp((top - section.getBoundingClientRect().top) / distance);
+      const position = slideDuration + progress * scrollDuration;
+      const selectedIndex = Math.min(cards.length - 1, Math.floor(position));
+      setSelectedIndex(selectedIndex);
+      cards.forEach((card, index) => {
+        const phase = position - index;
+        const enter = index === 0 ? 1 : ease(clamp(phase / slideDuration));
+        const leave =
+          index === cards.length - 1
+            ? 0
+            : ease(clamp((phase - (1 - slideDuration)) / slideDuration));
+        const distanceFromFront = 1 - enter + leave;
+        card.style.setProperty("--compute-slide", `${distanceFromFront * 64}%`);
+        card.style.setProperty("--compute-docked", String(distanceFromFront));
+      });
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    scroller.addEventListener("scroll", schedule, { passive: true });
+    const resize = new ResizeObserver(schedule);
+    resize.observe(sticky);
+    resize.observe(section);
+    update();
+    return () => {
+      scroller.removeEventListener("scroll", schedule);
+      resize.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [isDesktop]);
+
+  const selectExample = useCallback((index: number) => {
+    const section = sectionRef.current;
+    const scroller = section?.closest<HTMLElement>(".marketing-site");
+    const sticky = section?.querySelector<HTMLElement>(".compute-sticky");
+    if (!section || !scroller || !sticky) return;
+    const top = Number.parseFloat(getComputedStyle(sticky).top);
+    const start = scroller.scrollTop + section.getBoundingClientRect().top - top;
+    const distance = section.offsetHeight - sticky.offsetHeight;
+    scroller.scrollTo({
+      top: start + (distance * (index + 0.5 - slideDuration)) / scrollDuration,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+    });
+  }, []);
+
+  return { sectionRef, selectedIndex, selectExample, isDesktop };
+}
