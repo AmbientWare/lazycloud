@@ -14,7 +14,7 @@ import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimi
 import { ComputePlacementPreview, StoryPreview, type StoryVisual } from "./ProductPreviews";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
-import { CloudPlate, LocalPlate, ProductionPlate } from "./ParityFigures";
+import { RunModeArt } from "./RunModeArt";
 
 type PlatformStory = {
   key: string;
@@ -96,41 +96,40 @@ def heartbeat() -> str:
 const parityModes = [
   {
     key: "local",
-    Plate: LocalPlate,
     title: "Develop locally",
     body: "Use local data and your usual debugger.",
   },
   {
     key: "cloud",
-    Plate: CloudPlate,
     title: "Test in the cloud",
     body: "Send a run to cloud compute and get the result. No deployment required.",
   },
   {
     key: "production",
-    Plate: ProductionPlate,
     title: "Deploy your app",
     body: "Publish APIs, services, and scheduled jobs from your Python definitions.",
   },
-];
+] as const;
 
 function ParitySection() {
   return (
-    <section className="marketing-parity border-t border-input bg-background-subtle py-18 sm:py-22 lg:py-28">
+    <section className="marketing-parity bg-background py-18 sm:py-22 lg:py-28">
       <div className={shell}>
-        <SectionHeading
-          title={
-            <>
-              One definition. <em>Three ways to run it.</em>
-            </>
-          }
-          body="Develop locally, run work on demand, or deploy an app. Keep your infrastructure in Python."
-        />
-
-        <MarketingReveal className="relative max-w-[820px]" delay={80}>
-          <MarketingCard>
+        <div className="grid items-center gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:gap-16">
+          <div>
+            <h2 className="text-[clamp(2.2rem,3.6vw,3.2rem)] leading-[1.08] font-[550] tracking-[-0.045em]">
+              One definition.
+              <br />
+              <span className="text-brand">Three ways to run it.</span>
+            </h2>
+            <p className="mt-6 max-w-[390px] text-base leading-relaxed text-muted-foreground sm:text-[17px]">
+              Develop locally, test on cloud compute, and deploy. Your infrastructure stays in
+              Python.
+            </p>
+          </div>
+          <div className="min-w-0">
             <Tabs defaultValue={definitionExamples[0].key}>
-              <TabsList className="flex h-8 w-full gap-0 px-1" aria-label="Python definitions">
+              <TabsList className="flex h-8 w-full gap-0 border-0" aria-label="Python definitions">
                 {definitionExamples.map((example) => (
                   <TabsTrigger
                     className="h-8 flex-auto px-1 text-[11px] sm:text-xs"
@@ -144,31 +143,29 @@ function ParitySection() {
               {definitionExamples.map((example) => (
                 <TabsContent key={example.key} value={example.key}>
                   <CodeBlock
-                    className="rounded-none border-0 bg-transparent"
+                    className="rounded-none border-0 bg-transparent shadow-none"
                     tone="paper"
-                    bodyClassName="min-h-[154px] p-4 text-[11.5px] leading-[1.75] sm:min-h-[118px] sm:p-6 sm:text-[13px]"
+                    bodyClassName="min-h-[130px] px-0 py-6 text-[11.5px] leading-[1.85] sm:min-h-[140px] sm:text-[13px] xl:text-[14px]"
                   >
                     {example.code}
                   </CodeBlock>
                 </TabsContent>
               ))}
             </Tabs>
-          </MarketingCard>
-        </MarketingReveal>
+          </div>
+        </div>
 
-        <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
-          {parityModes.map((mode, index) => (
-            <MarketingReveal className="relative" key={mode.key} delay={index * 70}>
-              <article>
-                <mode.Plate />
-                <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
-                  {mode.title}
-                </h3>
-                <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                  {mode.body}
-                </p>
-              </article>
-            </MarketingReveal>
+        <div className="mt-10 grid gap-x-12 gap-y-10 sm:grid-cols-3 lg:mt-14">
+          {parityModes.map((mode) => (
+            <article key={mode.key}>
+              <RunModeArt mode={mode.key} />
+              <h3 className="text-[21px] leading-tight font-medium tracking-[-0.025em]">
+                {mode.title}
+              </h3>
+              <p className="mt-3 max-w-[310px] text-sm leading-relaxed text-muted-foreground">
+                {mode.body}
+              </p>
+            </article>
           ))}
         </div>
       </div>

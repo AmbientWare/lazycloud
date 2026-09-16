@@ -1,0 +1,161 @@
+.run-art {
+  --run-delay: 0s;
+  width: 100%;
+  max-width: 390px;
+  margin-bottom: 22px;
+  color: var(--brand);
+}
+
+.run-art-cloud {
+  --run-delay: 2s;
+}
+
+.run-art-production {
+  --run-delay: 4s;
+}
+
+.run-art svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.run-art-route {
+  stroke: #7798aa;
+  stroke-opacity: 0.28;
+  stroke-width: 1;
+}
+
+.run-art-signal {
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 12 100;
+  stroke-dashoffset: 12;
+  opacity: 0;
+  animation: run-art-transmit 6s cubic-bezier(0.4, 0, 0.2, 1) var(--run-delay) infinite;
+}
+
+.run-art-brackets {
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.run-art-core {
+  fill: currentColor;
+}
+
+.run-art-code {
+  stroke: #a4b4c2;
+  opacity: 0.52;
+}
+
+.run-art-debugger,
+.run-art-pointer {
+  animation: run-art-debug 6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.run-art-pointer {
+  fill: var(--background);
+  stroke: var(--foreground);
+  stroke-width: 1.5;
+}
+
+.run-art-terminal {
+  fill: var(--background);
+  stroke: currentColor;
+}
+
+.run-art-check,
+.run-art-destinations {
+  stroke: #c9eaf5;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.run-art-scan {
+  animation: run-art-scan 6s cubic-bezier(0.4, 0, 0.2, 1) var(--run-delay) infinite;
+}
+
+.run-art-online {
+  opacity: 0.4;
+  animation: run-art-online 6s cubic-bezier(0.4, 0, 0.2, 1) var(--run-delay) infinite;
+}
+
+.run-art[data-playing="false"] * {
+  animation-play-state: paused;
+}
+
+@keyframes run-art-transmit {
+  0% {
+    opacity: 0;
+    stroke-dashoffset: 12;
+  }
+  4% {
+    opacity: 0.9;
+  }
+  26%,
+  100% {
+    opacity: 0;
+    stroke-dashoffset: -100;
+  }
+}
+
+@keyframes run-art-debug {
+  0%,
+  6%,
+  40%,
+  100% {
+    transform: translateY(0);
+  }
+  14%,
+  30% {
+    transform: translateY(20px);
+  }
+}
+
+@keyframes run-art-scan {
+  0% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+  4% {
+    opacity: 0.2;
+  }
+  26%,
+  100% {
+    transform: translateX(200px);
+    opacity: 0;
+  }
+}
+
+@keyframes run-art-online {
+  0%,
+  8%,
+  50%,
+  100% {
+    opacity: 0.4;
+  }
+  24%,
+  36% {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 639px) {
+  .run-art {
+    max-width: 320px;
+    margin-bottom: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-art * {
+    animation: none !important;
+  }
+  .run-art-scan {
+    opacity: 0;
+  }
+}
