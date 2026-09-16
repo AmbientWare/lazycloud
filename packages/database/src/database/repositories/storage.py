@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from database.mappers.apps import stub_from_table
 from database.mappers.identity import workspace_record_from_table
+from database.mappers.images import image_build_from_table, image_from_table
 from database.repositories.cleanup import (
     CleanupRepository,
     object_location_lock_key,
@@ -688,7 +689,7 @@ class ObjectReferenceRepository:
         statement = statement.order_by(ImageTable.updated_at.asc(), ImageTable.id.asc()).limit(
             limit
         )
-        return [ImageRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [image_from_table(row) for row in self.session.scalars(statement)]
 
     def list_build_cleanup_candidates(
         self,
@@ -724,10 +725,7 @@ class ObjectReferenceRepository:
             ImageBuildTable.created_at.asc(),
             ImageBuildTable.id.asc(),
         )
-        return [
-            ImageBuildRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement.limit(limit))
-        ]
+        return [image_build_from_table(row) for row in self.session.scalars(statement.limit(limit))]
 
     def object_is_referenced(
         self,
@@ -758,8 +756,7 @@ class ObjectReferenceRepository:
                 select(
                     exists().where(
                         ImageBuildTable.workspace_id == workspace_id,
-                        _image_build_json_text(self.session, "image", "context_object_id")
-                        == object_id,
+                        ImageBuildTable.context_object_id == object_id,
                         or_(
                             ImageBuildTable.status.in_(
                                 [BuildStatus.Pending.value, BuildStatus.Running.value]
@@ -1315,10 +1312,7 @@ def _source_object_reference_exists(
         exists()
         .where(
             ImageBuildTable.workspace_id == ObjectTable.workspace_id,
-            _uuid_text_without_hyphens(
-                _image_build_json_text(session, "image", "context_object_id")
-            )
-            == object_id,
+            _uuid_text_without_hyphens(ImageBuildTable.context_object_id) == object_id,
             or_(
                 _build_active_or_recent(recent_build_after),
                 _direct_image_reference_clause(
@@ -1395,13 +1389,7 @@ def _direct_image_reference_clause(
     return or_(stub_reference, container_reference)
 
 
-def _image_build_json_text(session: Session, *path: str) -> ColumnElement[str]:
-    if session.get_bind().dialect.name == "postgresql":
-        return func.jsonb_extract_path_text(ImageBuildTable.payload, *path, type_=String)
-    return func.json_extract(ImageBuildTable.payload, "$." + ".".join(path), type_=String)
-
-
 def _uuid_text_without_hyphens(
-    value: ColumnElement[str] | InstrumentedAttribute[str],
+    value: ColumnElement[str | None] | InstrumentedAttribute[str | None],
 ) -> ColumnElement[str]:
     return func.replace(cast(value, String), "-", "", type_=String)

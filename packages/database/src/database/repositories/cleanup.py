@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from database.mappers.apps import stub_from_table
+from database.mappers.images import checkpoint_from_table, image_build_from_table, image_from_table
 from database.tables.apps import StubTable
 from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
 from database.tables.storage import ObjectTable
-from pydantic import BaseModel, JsonValue
+from pydantic import JsonValue
 from shared.checkpoints import CheckpointRecord
 from shared.errors import ConflictError
 from shared.image_building.records import ImageBuildRecord, ImageRecord
@@ -287,13 +288,15 @@ class CleanupRepository:
                 ImageTable.image_id == image_id,
             )
         ).one()
-        return _mark_claimed(row, ImageRecord, claimed_at)
+        row.cleanup_claimed_at = claimed_at
+        return image_from_table(row)
 
     def mark_build_claimed(self, build_id: str, *, claimed_at: datetime) -> ImageBuildRecord:
         row = self.session.get(ImageBuildTable, build_id)
         if row is None:
             raise KeyError(build_id)
-        return _mark_claimed(row, ImageBuildRecord, claimed_at)
+        row.cleanup_claimed_at = claimed_at
+        return image_build_from_table(row)
 
     def mark_builds_claimed(
         self,
@@ -313,7 +316,9 @@ class CleanupRepository:
                 .order_by(ImageBuildTable.created_at.asc(), ImageBuildTable.id.asc())
             )
         )
-        return [_mark_claimed(row, ImageBuildRecord, claimed_at) for row in rows]
+        for row in rows:
+            row.cleanup_claimed_at = claimed_at
+        return [image_build_from_table(row) for row in rows]
 
     def mark_checkpoint_claimed(
         self,
@@ -324,7 +329,8 @@ class CleanupRepository:
         row = self.session.scalars(
             select(CheckpointTable).where(CheckpointTable.checkpoint_id == checkpoint_id)
         ).one()
-        return _mark_claimed(row, CheckpointRecord, claimed_at)
+        row.cleanup_claimed_at = claimed_at
+        return checkpoint_from_table(row)
 
     def list_claimed_objects(
         self,
@@ -342,7 +348,7 @@ class CleanupRepository:
 
     def list_claimed_images(self, *, limit: int) -> list[ImageRecord]:
         return [
-            ImageRecord.model_validate(row.payload)
+            image_from_table(row)
             for row in self.session.scalars(
                 select(ImageTable)
                 .where(ImageTable.cleanup_claimed_at.is_not(None))
@@ -353,7 +359,7 @@ class CleanupRepository:
 
     def list_claimed_builds(self, *, limit: int) -> list[ImageBuildRecord]:
         return [
-            ImageBuildRecord.model_validate(row.payload)
+            image_build_from_table(row)
             for row in self.session.scalars(
                 select(ImageBuildTable)
                 .where(ImageBuildTable.cleanup_claimed_at.is_not(None))
@@ -364,7 +370,7 @@ class CleanupRepository:
 
     def list_claimed_checkpoints(self, *, limit: int) -> list[CheckpointRecord]:
         return [
-            CheckpointRecord.model_validate(row.payload)
+            checkpoint_from_table(row)
             for row in self.session.scalars(
                 select(CheckpointTable)
                 .where(CheckpointTable.cleanup_claimed_at.is_not(None))
@@ -372,21 +378,6 @@ class CleanupRepository:
                 .limit(limit)
             )
         ]
-
-
-def _mark_claimed[TModel: BaseModel](
-    row: ImageTable | ImageBuildTable | CheckpointTable,
-    model_type: type[TModel],
-    claimed_at: datetime,
-) -> TModel:
-    payload: dict[str, JsonValue] = {
-        **row.payload,
-        "cleanup_claimed_at": claimed_at.isoformat(),
-    }
-    row.payload = payload
-    row.cleanup_claimed_at = claimed_at
-    flag_modified(row, "payload")
-    return model_type.model_validate(payload)
 
 
 def _stub_object_ids(

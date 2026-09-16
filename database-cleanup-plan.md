@@ -307,5 +307,21 @@ chargeable interval.
   rows in both; serialized bytes 1,602 to 1,106. Grouped usage remains one query,
   one row and 77 bytes. Both idle queries return zero rows.
 
-Containers, compute, storage and images still require their remaining refactors.
+Image authorizations, archives, builds and checkpoints use explicit mappers and
+columns. Image recipes remain validated authored documents with their context
+object reference extracted. Build cache details retain publication diagnostics;
+cleanup paths, cache keys, asynchronous execution and archive version/state are
+columns. Bounded build diagnostic lines and checkpoint ports use arrays. Full
+ordered build output remains in `image_build_logs`. The unused duplicate build
+container ID is removed. Dispatch retains the immutable prepared execution message
+needed to retry submission; mutable dispatch ownership and timing are columns.
+
+- Schema, artifact retention, workspace deletion and app execution summaries:
+  33 checks pass. Image planning, dispatch and publication checks pass.
+- Dispatch with 200 completed and two pending builds keeps the same statement
+  counts, including transaction setup and claim updates: two idle, three active.
+  Idle reads return zero rows. Active reads return two rows, with serialized
+  bytes reduced from 7,620 to 288 by selecting only dispatch fields.
+
+Containers, compute and storage still require their remaining refactors.
 These scoped results are not release acceptance.

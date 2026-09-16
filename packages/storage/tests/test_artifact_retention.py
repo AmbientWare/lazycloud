@@ -17,6 +17,7 @@ from database.repositories.images import (
     ImageBuildRepository,
     ImageRepository,
 )
+from database.repositories.orchestration import ContainerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import (
     ObjectReferenceRepository,
@@ -25,6 +26,7 @@ from database.repositories.storage import (
 )
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.checkpoints import CheckpointRecord, CheckpointStatus, checkpoint_recent_stub_key
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError
 from shared.identity import WorkspaceStatus
 from shared.image_building.authoring import ImageSpec
@@ -592,6 +594,18 @@ def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    with service_context.database.session() as session:
+        container = ContainerRepository(session).records.upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="checkpoint-source",
+                image="checkpoint-image",
+                command=["sleep", "60"],
+                workspace_id=workspace.id,
+                status=ContainerStatus.Stopped,
+            ),
+            workspace_id=workspace.id,
+        )
     service = CheckpointService(
         service_context,
         retention_seconds=60,
@@ -600,7 +614,7 @@ def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
     pending = service.save_state(
         create_checkpoint_state_payload(
             checkpoint_id="checkpoint-deadline",
-            source_container_id="container-deadline",
+            source_container_id=container.id,
             status=WorkerCheckpointStatus.Pending,
             workspace_id=workspace.id,
         )
@@ -610,7 +624,7 @@ def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
     created = service.save_state(
         create_checkpoint_state_payload(
             checkpoint_id=pending.checkpoint_id,
-            source_container_id="container-deadline",
+            source_container_id=container.id,
             status=WorkerCheckpointStatus.Available,
             workspace_id=workspace.id,
         )

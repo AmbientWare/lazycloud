@@ -79,7 +79,6 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
         CheckpointRepository(session).create(
             CheckpointRecord(
                 checkpoint_id="checkpoint-endpoint-1",
-                source_container_id="source-container",
                 workspace_id=stub.workspace_id,
                 stub_id=stub.id,
                 stub_type=StubKind.Endpoint.value,
@@ -90,7 +89,6 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
         CheckpointRepository(session).create(
             CheckpointRecord(
                 checkpoint_id="checkpoint-endpoint-failed",
-                source_container_id="source-container",
                 workspace_id=stub.workspace_id,
                 stub_id=stub.id,
                 stub_type=StubKind.Endpoint.value,

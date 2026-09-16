@@ -216,16 +216,21 @@ CREATE TABLE image_archives (
 	object_key TEXT NOT NULL,
 	size_bytes BIGINT NOT NULL,
 	sha256 VARCHAR(64) NOT NULL,
+	registry_ref TEXT NOT NULL,
+	manifest_digest VARCHAR(71) NOT NULL,
+	architecture VARCHAR(16) NOT NULL,
+	format_version INTEGER NOT NULL,
 	cleanup_claimed_at TIMESTAMP WITH TIME ZONE,
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_image_archives_image_id UNIQUE (image_id),
 	CONSTRAINT ck_image_archives_size_positive CHECK (size_bytes > 0),
 	CONSTRAINT ck_image_archives_sha256_complete CHECK (length(sha256) = 64),
-	CONSTRAINT ck_image_archives_object_key_present CHECK (object_key <> '')
+	CONSTRAINT ck_image_archives_object_key_present CHECK (object_key <> ''),
+	CONSTRAINT ck_image_archives_format_version CHECK (format_version >= 1),
+	CONSTRAINT ck_image_archives_architecture CHECK (architecture IN ('', 'amd64', 'arm64'))
 )
 """)
     op.execute("""
@@ -790,12 +795,12 @@ CREATE TABLE images (
 	workspace_id UUID NOT NULL,
 	image_id VARCHAR(512) NOT NULL,
 	clip_version INTEGER NOT NULL,
+	aliases TEXT[] NOT NULL,
 	cleanup_claimed_at TIMESTAMP WITH TIME ZONE,
 	cleanup_completed_at TIMESTAMP WITH TIME ZONE,
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_images_workspace_image_id UNIQUE (workspace_id, image_id),
 	FOREIGN KEY(workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE
@@ -828,6 +833,18 @@ CREATE TABLE image_builds (
 	cache_manifest_path_digest VARCHAR(64) NOT NULL,
 	cache_publish_key VARCHAR(512) NOT NULL,
 	fingerprint VARCHAR(512) NOT NULL,
+	image_definition JSONB NOT NULL,
+	context_object_id VARCHAR(160),
+	dockerfile TEXT,
+	context_digest VARCHAR(512),
+	tag TEXT,
+	published_ref TEXT,
+	cache_details JSONB NOT NULL,
+	build_container_required BOOLEAN,
+	image_archive_format_version INTEGER,
+	image_archive_status VARCHAR(80),
+	diagnostic_lines TEXT[] NOT NULL,
+	error TEXT,
 	status VARCHAR(80) NOT NULL,
 	phase VARCHAR(80) NOT NULL,
 	started_at TIMESTAMP WITH TIME ZONE,
@@ -843,8 +860,10 @@ CREATE TABLE image_builds (
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
 	PRIMARY KEY (id),
+	CONSTRAINT ck_image_builds_status CHECK (status IN ('pending', 'running', 'complete', 'failed', 'cancelled', 'timeout')),
+	CONSTRAINT ck_image_builds_phase CHECK (phase IN ('verify', 'planning', 'submitted', 'manifest', 'complete', 'failed', 'reused')),
+	CONSTRAINT ck_image_builds_archive_format_version CHECK (image_archive_format_version IS NULL OR image_archive_format_version >= 1),
 	FOREIGN KEY(workspace_id) REFERENCES workspaces (id) ON DELETE SET NULL
 )
 """)
@@ -868,6 +887,9 @@ CREATE INDEX ix_image_builds_cleanup_claimed_at ON image_builds (cleanup_claimed
 """)
     op.execute("""
 CREATE INDEX ix_image_builds_cleanup_due ON image_builds (execution_cleanup_after) WHERE execution_cleanup_after IS NOT NULL
+""")
+    op.execute("""
+CREATE INDEX ix_image_builds_context_object ON image_builds (context_object_id)
 """)
     op.execute("""
 CREATE INDEX ix_image_builds_dispatch_due ON image_builds (dispatch_after) WHERE dispatch_payload IS NOT NULL AND dispatched_at IS NULL
@@ -2167,6 +2189,7 @@ CREATE TABLE checkpoints (
 	checkpoint_id VARCHAR(255) NOT NULL,
 	source_container_id UUID,
 	container_ip VARCHAR(120) NOT NULL,
+	exposed_ports INTEGER[] NOT NULL,
 	status VARCHAR(80) NOT NULL,
 	remote_key TEXT NOT NULL,
 	workspace_id UUID,
@@ -2185,7 +2208,6 @@ CREATE TABLE checkpoints (
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_checkpoints_checkpoint_id UNIQUE (checkpoint_id),
 	CONSTRAINT ck_checkpoints_cache_size_nonnegative CHECK (cache_size_bytes >= 0),

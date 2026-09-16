@@ -60,7 +60,6 @@ def test_checkpoint_enabled_pod_uses_latest_available_checkpoint(
         checkpoints.create(
             CheckpointRecord(
                 checkpoint_id="checkpoint-pod-available",
-                source_container_id="source-container",
                 workspace_id=stub.workspace_id,
                 stub_id=stub.id,
                 stub_type=StubKind.Pod.value,
@@ -71,7 +70,6 @@ def test_checkpoint_enabled_pod_uses_latest_available_checkpoint(
         checkpoints.create(
             CheckpointRecord(
                 checkpoint_id="checkpoint-pod-failed",
-                source_container_id="source-container",
                 workspace_id=stub.workspace_id,
                 stub_id=stub.id,
                 stub_type=StubKind.Pod.value,

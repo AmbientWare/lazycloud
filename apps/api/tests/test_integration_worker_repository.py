@@ -3440,7 +3440,7 @@ def _pending_image_build(services: ApiServices, image: ImageSpec) -> ImageBuildR
                 image_id=plan.image_id,
                 fingerprint=plan.cache_key,
                 cache_key=plan.cache_key,
-                cache_metadata={"build_container_required": "true", "build_container_id": build_id},
+                cache_metadata={"build_container_required": "true"},
             ),
             workspace_id=workspace_id,
         )
