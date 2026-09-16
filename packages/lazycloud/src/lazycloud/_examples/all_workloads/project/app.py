@@ -48,8 +48,8 @@ class ASGIMessage(TypedDict, total=False):
     reason: str
 
 
-type ASGIReceive = Callable[[], Awaitable[ASGIMessage]]
-type ASGISend = Callable[[ASGIMessage], Awaitable[None]]
+ASGIReceive = Callable[[], Awaitable[ASGIMessage]]
+ASGISend = Callable[[ASGIMessage], Awaitable[None]]
 
 
 class CalculationResult(TypedDict):

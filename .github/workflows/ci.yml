@@ -139,10 +139,14 @@ jobs:
               --with dist/pypi/lazycloud_shared-*.whl \
               --with dist/pypi/lazycloud_client-*.whl \
               -- python - <<'PY'
-          import importlib, pkgutil, sys
+          import importlib, pkgutil, py_compile, sys
+          from pathlib import Path
           import lazycloud, shared
           failed = []
           for package in (lazycloud, shared):
+              for root in package.__path__:
+                  for source in Path(root).rglob("*.py"):
+                      py_compile.compile(str(source), doraise=True)
               for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
                   try:
                       importlib.import_module(module.name)
