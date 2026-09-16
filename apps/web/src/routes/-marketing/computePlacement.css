@@ -98,12 +98,6 @@
   font-size: 11px;
   line-height: 1.5;
 }
-.compute-map-caption {
-  margin: 18px 0 4px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  text-align: center;
-}
 .compute-choice {
   display: block;
   width: 100%;
@@ -159,9 +153,6 @@
   }
   .compute-map-destination div > span {
     font-size: 10px;
-  }
-  .compute-map-caption {
-    font-size: 11px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

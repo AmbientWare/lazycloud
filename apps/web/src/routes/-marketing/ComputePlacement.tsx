@@ -93,7 +93,6 @@ export function ComputePlacement({ selected }: { selected: ComputeDestination })
           ))}
         </div>
       </div>
-      <p className="compute-map-caption">One Python API. Your choice of infrastructure.</p>
     </div>
   );
 }
