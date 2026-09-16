@@ -15,7 +15,13 @@ export type MarketingRoute = "/" | "/pricing" | "/legal/privacy" | "/legal/terms
 export const shell =
   "ml-[max(1rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] w-auto max-w-[1200px] mr-[max(1rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] sm:ml-[max(1.5rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] sm:mr-[max(1.5rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))] lg:ml-[max(2rem,env(safe-area-inset-left),calc((100%_-_1200px)/2))] lg:mr-[max(2rem,env(safe-area-inset-right),calc((100%_-_1200px)/2))]";
 
-export function MarketingHero({ children }: { children: ReactNode }) {
+export function MarketingHero({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   const [entered, setEntered] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
 
@@ -31,7 +37,10 @@ export function MarketingHero({ children }: { children: ReactNode }) {
 
   return (
     <section
-      className="marketing-hero relative overflow-hidden border-b border-border bg-background"
+      className={cn(
+        "marketing-hero relative overflow-hidden border-b border-border bg-background",
+        className,
+      )}
       data-hero-entered={entered}
       data-fonts-ready={fontsReady}
       onFocusCapture={() => setEntered(true)}

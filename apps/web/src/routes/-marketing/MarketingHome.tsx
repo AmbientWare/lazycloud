@@ -7,7 +7,7 @@ import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
-import { SpaceshipHero } from "./SpaceshipHero";
+import { CloudHero } from "./CloudHero";
 import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
 import { FinalCta, MarketingCard, SectionHeading, StatusDot, shell } from "./MarketingPrimitives";
@@ -230,11 +230,11 @@ function ParitySection() {
   );
 }
 
-export function MarketingHome({ hero = <SpaceshipHero /> }: { hero?: ReactNode }) {
+export function MarketingHome() {
   return (
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
-        {hero}
+        <CloudHero />
         <section className="bg-background py-16 sm:py-24" aria-labelledby="cloud-code-title">
           <div
             className={cn(shell, "grid items-center gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:gap-16")}
