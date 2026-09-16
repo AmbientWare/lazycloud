@@ -14,7 +14,7 @@ import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimi
 import { ComputePlacementPreview, StoryPreview, type StoryVisual } from "./ProductPreviews";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
-import { GpuPlate, LocalPlate, ProductionPlate } from "./ParityFigures";
+import { CloudPlate, LocalPlate, ProductionPlate } from "./ParityFigures";
 
 type PlatformStory = {
   key: string;
@@ -97,13 +97,13 @@ const parityModes = [
   {
     key: "local",
     Plate: LocalPlate,
-    title: "Debug locally",
+    title: "Develop locally",
     body: "Use local data and your usual debugger.",
   },
   {
-    key: "gpu",
-    Plate: GpuPlate,
-    title: "Run once in the cloud",
+    key: "cloud",
+    Plate: CloudPlate,
+    title: "Test in the cloud",
     body: "Send a run to cloud compute and get the result. No deployment required.",
   },
   {
@@ -130,10 +130,7 @@ function ParitySection() {
         <MarketingReveal className="relative max-w-[820px]" delay={80}>
           <MarketingCard>
             <Tabs defaultValue={definitionExamples[0].key}>
-              <TabsList
-                className="flex h-8 w-full gap-0 px-1"
-                aria-label="Python definitions"
-              >
+              <TabsList className="flex h-8 w-full gap-0 px-1" aria-label="Python definitions">
                 {definitionExamples.map((example) => (
                   <TabsTrigger
                     className="h-8 flex-auto px-1 text-[11px] sm:text-xs"
