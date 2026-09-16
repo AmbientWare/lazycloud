@@ -1,8 +1,20 @@
+.run-mode-card {
+  min-width: 0;
+  padding: 16px 26px 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--background-subtle) 78%, transparent);
+  transition: border-color 240ms ease;
+}
+
+.run-mode-card:hover {
+  border-color: color-mix(in oklab, var(--brand) 35%, var(--border));
+}
+
 .run-art {
   --run-delay: 0s;
-  width: 100%;
-  max-width: 390px;
-  margin-bottom: 22px;
+  width: calc(100% + 20px);
+  margin: 0 -10px 22px;
   color: var(--brand);
 }
 
@@ -22,7 +34,7 @@
 
 .run-art-route {
   stroke: #7798aa;
-  stroke-opacity: 0.28;
+  stroke-opacity: 0.38;
   stroke-width: 1;
 }
 
@@ -36,19 +48,62 @@
   animation: run-art-transmit 6s cubic-bezier(0.4, 0, 0.2, 1) var(--run-delay) infinite;
 }
 
+.run-art-signal-tip {
+  stroke: #e5faff;
+  stroke-width: 2.5;
+  stroke-dasharray: 0.8 111.2;
+  filter: drop-shadow(0 0 3px #6fd4ed);
+}
+
 .run-art-brackets {
   stroke: currentColor;
   stroke-width: 2.5;
   stroke-linecap: round;
+  filter: drop-shadow(0 0 7px #6fd4ed40);
 }
 
 .run-art-core {
-  fill: currentColor;
+  fill: #dcf7ff;
+  filter: drop-shadow(0 0 4px #6fd4ed80);
+}
+
+.run-art-core-ring {
+  stroke: currentColor;
+  stroke-opacity: 0.1;
+  stroke-width: 0.75;
+}
+
+.run-art-core-ticks {
+  stroke: currentColor;
+  stroke-opacity: 0.5;
+  stroke-width: 1;
 }
 
 .run-art-code {
-  stroke: #a4b4c2;
-  opacity: 0.52;
+  opacity: 0.85;
+}
+
+.run-art-syntax-accent {
+  stroke: var(--brand);
+  opacity: 0.8;
+}
+
+.run-art-indent,
+.run-art-breakpoint-ring,
+.run-art-source-orbit,
+.run-art-node-rings,
+.run-art-result-ring {
+  stroke: currentColor;
+  stroke-width: 0.75;
+  stroke-opacity: 0.22;
+}
+
+.run-art-gutter {
+  opacity: 0.22;
+}
+
+.run-art-route-dots {
+  opacity: 0.45;
 }
 
 .run-art-debugger,
@@ -84,6 +139,10 @@
   animation: run-art-online 6s cubic-bezier(0.4, 0, 0.2, 1) var(--run-delay) infinite;
 }
 
+.run-art-result {
+  animation: run-art-result 6s cubic-bezier(0.4, 0, 0.2, 1) var(--run-delay) infinite;
+}
+
 .run-art[data-playing="false"] * {
   animation-play-state: paused;
 }
@@ -96,7 +155,11 @@
   4% {
     opacity: 0.9;
   }
-  26%,
+  26% {
+    opacity: 0.9;
+    stroke-dashoffset: -88;
+  }
+  32%,
   100% {
     opacity: 0;
     stroke-dashoffset: -100;
@@ -144,9 +207,25 @@
   }
 }
 
+@keyframes run-art-result {
+  0%,
+  26%,
+  65%,
+  100% {
+    opacity: 0.45;
+  }
+  40%,
+  52% {
+    opacity: 1;
+  }
+}
+
 @media (max-width: 639px) {
+  .run-mode-card {
+    padding: 12px 24px 26px;
+  }
+
   .run-art {
-    max-width: 320px;
     margin-bottom: 12px;
   }
 }

@@ -155,9 +155,9 @@ function ParitySection() {
           </div>
         </div>
 
-        <div className="mt-10 grid gap-x-12 gap-y-10 sm:grid-cols-3 lg:mt-14">
+        <div className="mt-10 grid gap-5 sm:grid-cols-3 lg:mt-14 lg:gap-6">
           {parityModes.map((mode) => (
-            <article key={mode.key}>
+            <article className="run-mode-card" key={mode.key}>
               <RunModeArt mode={mode.key} />
               <h3 className="text-[21px] leading-tight font-medium tracking-[-0.025em]">
                 {mode.title}
