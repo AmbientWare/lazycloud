@@ -7,6 +7,7 @@ import {
   Boxes,
   ChartNoAxesCombined,
   Database,
+  CornerDownLeft,
   Search,
   Settings,
   SquareTerminal,
@@ -14,12 +15,12 @@ import {
 
 import {
   CommandDialog,
-  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { formatKind } from "@/lib/format";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
@@ -28,6 +29,7 @@ import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
 type SearchResult = {
+  group: "Navigate" | "Apps" | "Workloads" | "Tasks" | "Sandboxes";
   key: string;
   label: string;
   detail: string;
@@ -65,38 +67,41 @@ export function GlobalSearch({
     const destinations: SearchResult[] = [
       {
         key: "destination-apps",
+        group: "Navigate",
         label: "Apps",
-        detail: "Workspace",
+        detail: "",
         href: `${base}/apps`,
         icon: Boxes,
       },
       {
         key: "destination-tasks",
+        group: "Navigate",
         label: "Tasks",
-        detail: "Workspace",
+        detail: "",
         href: `${base}/tasks`,
         icon: Activity,
       },
       {
         key: "destination-storage",
+        group: "Navigate",
         label: "Storage",
-        detail: "Workspace",
+        detail: "",
         href: `${base}/storage`,
         icon: Database,
       },
       {
         key: "destination-usage",
+        group: "Navigate",
         label: "Usage",
-        detail: "Workspace",
+        detail: "",
         href: `${base}/usage`,
         icon: ChartNoAxesCombined,
       },
       {
         key: "destination-settings",
+        group: "Navigate",
         label: "Settings",
-        detail: "Account",
-        // Settings is a layer over the current page rather than a page of its own,
-        // so it is reached by asking for it here rather than by navigating away.
+        detail: "",
         href: `${base}/apps?settings=billing`,
         icon: Settings,
       },
@@ -107,8 +112,9 @@ export function GlobalSearch({
       if (!matches(`${item.app.name} ${item.app.id}`)) continue;
       next.push({
         key: `app-${item.app.id}`,
+        group: "Apps",
         label: item.app.name,
-        detail: `App · ${item.workload_count} ${item.workload_count === 1 ? "workload" : "workloads"}`,
+        detail: `${item.workload_count} ${item.workload_count === 1 ? "workload" : "workloads"}`,
         href: `${base}/apps/${encodeURIComponent(item.app.id)}`,
         icon: AppWindow,
       });
@@ -122,10 +128,9 @@ export function GlobalSearch({
         continue;
       next.push({
         key: `workload-${workload.id}`,
+        group: "Workloads",
         label: workload.name,
-        detail: workload.handler
-          ? `${formatKind(workload.kind)} · ${workload.handler}`
-          : formatKind(workload.kind),
+        detail: formatKind(workload.kind),
         href: `${base}/apps/${encodeURIComponent(workload.app_id)}/workloads/${encodeURIComponent(workload.kind)}/${encodeURIComponent(workload.name)}`,
         icon: Boxes,
       });
@@ -134,8 +139,9 @@ export function GlobalSearch({
     for (const task of tasks.data?.data ?? []) {
       next.push({
         key: `task-${task.id}`,
+        group: "Tasks",
         label: task.name || "Task",
-        detail: `Task · ${formatKind(task.workload?.kind ?? "workload")} · ${formatKind(task.status)}`,
+        detail: `${formatKind(task.status)} · ${task.id.slice(0, 8)}`,
         href: `${base}/tasks/${encodeURIComponent(task.id)}`,
         icon: Activity,
       });
@@ -149,8 +155,9 @@ export function GlobalSearch({
         continue;
       next.push({
         key: `sandbox-${sandbox.id}-${sandbox.container_id}`,
+        group: "Sandboxes",
         label: sandbox.name,
-        detail: `Sandbox · ${formatKind(sandbox.status)}`,
+        detail: formatKind(sandbox.status),
         href: `${base}/sandboxes/${encodeURIComponent(sandbox.container_id)}`,
         icon: SquareTerminal,
       });
@@ -181,47 +188,86 @@ export function GlobalSearch({
       }}
       title="Search workspace"
       description="Search this workspace by name or ID."
-      className="top-[10svh] max-h-[75svh] w-[calc(100%-1.5rem)] max-w-2xl translate-y-0 border-border bg-popover shadow-2xl"
+      shouldFilter={false}
+      className="top-[12svh] flex max-h-[76svh] w-[calc(100%-1.5rem)] translate-y-0 gap-0 border-border bg-popover shadow-2xl sm:max-w-xl"
     >
       <CommandInput
         autoFocus
         value={query}
         onValueChange={setQuery}
-        placeholder="Search apps, workloads, tasks, sandboxes"
-        className="pr-10"
+        placeholder="Search workspace…"
+        aria-label="Search workspace"
+        className="pr-8"
       />
-      <CommandList data-search-results-scroll="" className="max-h-[calc(75svh-3rem)] min-h-24 p-2">
-        <CommandEmpty>{loading ? "Searching workspace" : "No matching resources"}</CommandEmpty>
-        <CommandGroup>
-          {results.map((result) => {
-            const Icon = result.icon;
-            return (
-              <CommandItem
-                key={result.key}
-                value={`${result.key} ${result.label} ${result.detail}`}
-                onSelect={() => openResult(result)}
-                className="min-h-11 gap-3 px-3 py-2 text-muted-foreground data-[selected=true]:bg-accent/70 data-[selected=true]:text-foreground"
-              >
-                <Icon className="size-4 shrink-0" aria-hidden="true" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-foreground">
-                    {result.label}
-                  </span>
-                  <span className="mono block truncate text-[11px] text-muted-foreground">
-                    {result.detail}
-                  </span>
-                </span>
-              </CommandItem>
-            );
-          })}
-        </CommandGroup>
-        {loading && results.length > 0 ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">Searching workspace</p>
+      <CommandList
+        data-search-results-scroll=""
+        className="h-[min(26rem,var(--cmdk-list-height))] max-h-[calc(76svh-5.5rem)] min-h-24 scroll-py-2 p-2 transition-[height] duration-150 motion-reduce:transition-none"
+      >
+        {(["Navigate", "Apps", "Workloads", "Tasks", "Sandboxes"] as const).map((group) => {
+          const items = results.filter((result) => result.group === group);
+          if (!items.length) return null;
+          return (
+            <CommandGroup key={group} heading={group} className="p-0 pb-2 last:pb-0">
+              {items.map((result) => {
+                const Icon = result.icon;
+                return (
+                  <CommandItem
+                    key={result.key}
+                    value={result.key}
+                    onSelect={() => openResult(result)}
+                    className="group min-h-9 gap-2.5 rounded-md px-2 py-2 text-muted-foreground data-[selected=true]:bg-accent data-[selected=true]:text-foreground data-[selected=true]:ring-1 data-[selected=true]:ring-inset data-[selected=true]:ring-border"
+                  >
+                    <Icon className="size-4 shrink-0" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                      {result.label}
+                    </span>
+                    <span className="max-w-[45%] truncate text-xs text-muted-foreground">
+                      {result.detail}
+                    </span>
+                    <CornerDownLeft
+                      className="size-3.5 opacity-0 group-data-[selected=true]:opacity-100"
+                      aria-hidden="true"
+                    />
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          );
+        })}
+        {loading ? (
+          <ContentTransition
+            pending
+            role="status"
+            className="px-2 py-3 text-xs text-muted-foreground"
+          >
+            Searching…
+          </ContentTransition>
+        ) : results.length === 0 ? (
+          <p
+            role="status"
+            className="content-transition px-2 py-8 text-center text-sm text-muted-foreground"
+          >
+            No matching resources
+          </p>
         ) : null}
         {partialError ? (
           <p className="px-3 py-2 text-xs text-warning">Some resource results are unavailable.</p>
         ) : null}
       </CommandList>
+      <div
+        className="flex shrink-0 items-center gap-4 border-t px-4 py-2 text-[11px] text-muted-foreground"
+        aria-hidden="true"
+      >
+        <span>
+          <kbd className="mr-1.5 font-sans">↑ ↓</kbd>Navigate
+        </span>
+        <span>
+          <kbd className="mr-1.5 font-sans">↵</kbd>Open
+        </span>
+        <span className="ml-auto">
+          <kbd className="mr-1.5 font-sans">Esc</kbd>Close
+        </span>
+      </div>
     </CommandDialog>
   );
 }

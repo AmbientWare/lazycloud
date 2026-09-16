@@ -66,7 +66,7 @@ export function LatencyPanel({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
+    <div className="content-transition flex h-full min-h-0 flex-col gap-2">
       {/* One line so the plot keeps the height: the readings qualify the chart,
           they are not a second panel above it. */}
       <div className="flex shrink-0 flex-wrap items-end gap-x-8 gap-y-2">

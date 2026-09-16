@@ -118,6 +118,7 @@ export function isTerminalTaskStatus(status: string): boolean {
 
 const callGraphNodeBaseSchema = z.object({
   task_id: z.string(),
+  container_id: z.string().nullable().default(null),
   parent_task_id: z.string().default(""),
   root_task_id: z.string().default(""),
   status: z.string(),

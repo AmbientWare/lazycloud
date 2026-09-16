@@ -58,7 +58,7 @@ function InvokeTarget({
   if (query.isError) return <PanelError message={query.error.message} />;
 
   return (
-    <div className="min-w-[18rem] flex-1 basis-[32rem]">
+    <div className="content-transition min-w-[18rem] flex-1 basis-[32rem]">
       <div className="micro-label mb-1.5">Invoke URL</div>
       <div className="flex min-w-0 items-start gap-1.5">
         <code className="mono min-w-0 flex-1 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs break-all">
@@ -114,7 +114,7 @@ function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: Wor
   if (cronJobs.isError) return <PanelError message={cronJobs.error.message} />;
 
   return (
-    <FactGrid columns={4} className="max-w-3xl">
+    <FactGrid columns={4} className="content-transition max-w-3xl">
       <Fact label="Schedule" value={job?.cron ?? "Not registered"} mono />
       <Fact label="Timezone" value="UTC" />
       <Fact

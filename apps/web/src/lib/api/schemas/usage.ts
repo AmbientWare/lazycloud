@@ -18,13 +18,9 @@ export type LedgerComponent = (typeof ledgerComponents)[number];
 export const usageCostGroupKeys = ["app", "workload", "task"] as const;
 export type UsageCostGroupKey = (typeof usageCostGroupKeys)[number];
 
-/**
- * One resource's share of a row, and the invoice line it rolls up into.
- *
- * Egress and volume storage arrive here priced at zero rather than absent, and
- * they are rendered that way: a $0.00 line says the traffic is measured and
- * free, where a missing line would say nobody was looking.
- */
+export type UsageCostCategory = "image-build" | "unattributed";
+
+/** A zero cost can represent measured usage with no charge. */
 export const usageCostComponentSchema = z.object({
   dimension: z.enum(billedDimensions),
   component: z.enum(ledgerComponents),
@@ -33,14 +29,7 @@ export const usageCostComponentSchema = z.object({
 });
 export type UsageCostComponent = z.infer<typeof usageCostComponentSchema>;
 
-/**
- * A name is empty where the app or workload has since been deleted. The cost was
- * still incurred, so the row keeps its id and says the name is gone rather than
- * carrying one invented to fill the column.
- *
- * What the row was charged for is in `components` and nowhere else, so a column
- * of the table and the breakdown beside it cannot state different figures.
- */
+/** Deleted resources retain their IDs and costs, with empty names. */
 export const usageCostRowSchema = z.object({
   app_id: z.string().default(""),
   app_name: z.string().default(""),
@@ -57,11 +46,7 @@ export const usageCostRowSchema = z.object({
 });
 export type UsageCostRow = z.infer<typeof usageCostRowSchema>;
 
-/**
- * `cost_nanos` is the whole window's total, not this page's — a page that does
- * not sum to it has more behind it, and the figure shown as the bill never
- * depends on how far somebody scrolled.
- */
+/** `cost_nanos` covers the full filtered window across all pages. */
 export const usageCostListSchema = z.object({
   /** Empty where the page covers an account rather than one workspace. */
   workspace_id: z.string().default(""),
@@ -79,13 +64,7 @@ export type UsageCostList = z.infer<typeof usageCostListSchema>;
 export const usageCostBuckets = ["hour", "day"] as const;
 export type UsageCostBucket = (typeof usageCostBuckets)[number];
 
-/**
- * One invoice line's share of an interval.
- *
- * A dimension nothing was metered in is absent rather than zero: over an
- * interval no ledger row was written at all, and a zero line would claim a
- * measurement nobody took.
- */
+/** A dimension is absent when it has no metered usage in the interval. */
 export const usageCostDimensionTotalSchema = z.object({
   dimension: z.enum(billedDimensions),
   cost_nanos: z.number().int().nonnegative().default(0),
@@ -101,14 +80,9 @@ export const usageCostBucketSchema = z.object({
 });
 export type UsageCostBucketRow = z.infer<typeof usageCostBucketSchema>;
 
-/**
- * An account's spend over a window, in the shape it took.
- *
- * Every interval the window covers is present, quiet ones included, so a chart
- * drawn straight from `data` cannot render a fortnight of nothing as a
- * fortnight of something. `cost_nanos` is those intervals summed.
- */
+/** Includes empty intervals; `cost_nanos` is the sum of all interval costs. */
 export const usageCostSeriesSchema = z.object({
+  subscription_credit_nanos: z.number().int().nonnegative(),
   start: z.string(),
   end: z.string(),
   currency: z.string().regex(/^[A-Z]{3}$/),

@@ -153,7 +153,7 @@ export function buildBody(
 }
 
 /** POSIX shell single-quoting: close, escaped quote, reopen. */
-function shellSingleQuote(value: string): string {
+export function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
@@ -161,24 +161,20 @@ function shellSingleQuote(value: string): string {
  * Working curl equivalent of the playground invoke. The bearer token is never
  * embedded; the snippet reads `$LAZYCLOUD_TOKEN` from the environment.
  */
-export function curlSnippet(url: string, body: JsonValue): string {
+export function curlSnippet(url: string, body?: JsonValue, method = "POST"): string {
   return [
-    `curl -X POST ${shellSingleQuote(url)} \\`,
-    `  -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \\`,
-    `  -H 'Content-Type: application/json' \\`,
-    `  -d ${shellSingleQuote(JSON.stringify(body))}`,
-  ].join("\n");
+    `curl -X ${method} ${shellSingleQuote(url)}`,
+    `  -H "Authorization: Bearer $LAZYCLOUD_TOKEN"`,
+    ...(body === undefined
+      ? []
+      : [
+          `  -H 'Content-Type: application/json'`,
+          `  -d ${shellSingleQuote(JSON.stringify(body))}`,
+        ]),
+  ].join(" \\\n");
 }
 
-/**
- * Working Python (requests) equivalent of the playground invoke.
- *
- * The token is bound before the call rather than read inline: the inline form
- * put the longest line in the snippet at 71 columns, which is what the panel
- * had to scroll sideways to show, and a named binding is what a reader would
- * have written anyway.
- */
-export function pythonSnippet(url: string, body: JsonValue): string {
+export function pythonSnippet(url: string, body?: JsonValue, method = "POST"): string {
   return [
     "import os",
     "",
@@ -186,13 +182,14 @@ export function pythonSnippet(url: string, body: JsonValue): string {
     "",
     `token = os.environ["LAZYCLOUD_TOKEN"]`,
     "",
-    "response = requests.post(",
+    "response = requests.request(",
+    `    ${JSON.stringify(method)},`,
     `    ${JSON.stringify(url)},`,
     `    headers={"Authorization": f"Bearer {token}"},`,
-    `    json=${pythonLiteral(body, 4)},`,
+    ...(body === undefined ? [] : [`    json=${pythonLiteral(body, 4)},`]),
     ")",
     "response.raise_for_status()",
-    "print(response.json())",
+    body === undefined ? "print(response.text)" : "print(response.json())",
   ].join("\n");
 }
 
@@ -207,7 +204,7 @@ const PYTHON_LITERAL_WIDTH = 58;
  * Render a JSON value as a Python literal (True/False/None differ from JSON),
  * expanded across lines once the one-line form outruns the snippet column.
  */
-function pythonLiteral(value: JsonValue, indent: number): string {
+export function pythonLiteral(value: JsonValue, indent: number): string {
   const flat = flatPythonLiteral(value);
   if (value === null || typeof value !== "object") return flat;
   if (indent + flat.length <= PYTHON_LITERAL_WIDTH) return flat;

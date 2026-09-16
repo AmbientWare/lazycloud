@@ -76,6 +76,17 @@ accent color for actions. Product routes fill the viewport below the shell, and
 tables, logs, charts, terminals, and inspectors scroll inside their own region;
 mobile falls back to one predictable content scroller.
 
+- Keep the interface quiet and compact. Limit badges, status dots, and icons to
+  information needed for a decision; do not repeat the same state in several
+  forms. Never add decorative flashing or pulsing. Animate only real, temporary
+  progress and respect reduced motion. Omit subtitles and descriptions that
+  repeat a heading, label, or obvious control. Avoid persistent helper notes for
+  self-explanatory settings, including billing amounts and credit terms. Keep
+  accessibility descriptions, actionable errors, and required confirmations for
+  charges or destructive actions.
+  Use shared spacing and controls, remove empty padding, and fit ordinary desktop
+  dialogs without scrolling the whole dialog. Let dense panels scroll within it;
+  stack and scroll naturally on mobile.
 - Prefer a few framed operational regions over nested decorative cards, badge
   mosaics, or dense grids of tiny metrics. A repeated resource becomes a card
   only when the whole card navigates.

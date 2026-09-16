@@ -46,19 +46,23 @@ function UsagePage() {
       contentClassName="flex min-h-0 flex-col gap-3 overflow-y-auto lg:overflow-hidden"
     >
       <section aria-label="Spend" className="panel shrink-0 overflow-hidden rounded-md">
-        <header className="grid grid-cols-1 items-start gap-x-4 gap-y-5 px-4 py-5 sm:px-5 lg:grid-cols-[minmax(10rem,auto)_minmax(0,1fr)]">
+        <header className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3 px-4 pt-3 pb-2">
           <SpendTotals series={series.data} error={series.error} />
         </header>
-        <div className="h-48 px-3 pb-3 sm:h-56">
+        <div className="h-40 px-3 pb-2 sm:h-44">
           <SpendChart window={range.window} bucket={range.bucket} caption={range.caption} />
         </div>
       </section>
       <Panel
-        title="Usage breakdown"
-        className="min-h-[22rem] flex-1 lg:min-h-0"
+        title="Usage by app"
+        className="min-h-0 shrink-0 lg:flex-1"
         contentClassName="flex min-h-0 flex-col overflow-hidden"
       >
-        <UsageCostBreakdown window={range.window} caption={range.caption} />
+        <UsageCostBreakdown
+          key={`${range.window.start}:${range.window.end}`}
+          window={range.window}
+          caption={range.caption}
+        />
       </Panel>
     </WorkspacePage>
   );

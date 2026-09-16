@@ -27,7 +27,10 @@ export function PanelEmpty({
 }) {
   return (
     <div
-      className={cn("flex flex-col items-center justify-center gap-1 px-4 text-center", className)}
+      className={cn(
+        "content-transition flex flex-col items-center justify-center gap-1 px-4 text-center",
+        className,
+      )}
     >
       {Icon ? <Icon className="mb-2 size-5 text-muted-foreground" aria-hidden="true" /> : null}
       <p

@@ -29,6 +29,7 @@ export function AppSandboxesSection({
       className="min-h-[20rem] lg:h-full lg:min-h-0"
     >
       <Panel
+        pending={pending}
         title={<span id="app-sandboxes-heading">Sandboxes</span>}
         action={
           sandboxes ? (

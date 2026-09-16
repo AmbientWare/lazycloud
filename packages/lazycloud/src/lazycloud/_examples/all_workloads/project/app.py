@@ -145,7 +145,38 @@ async def service(
     send: ASGISend,
 ) -> None:
     del receive
-    body = json.dumps({"status": "ok", "path": scope.get("path", "/")}).encode()
+    path = scope.get("path", "/")
+    payload: JsonValue = {"status": "ok", "path": path}
+    if path == "/openapi.json":
+        payload = {
+            "openapi": "3.1.0",
+            "info": {"title": "Example service", "version": "1.0.0"},
+            "paths": {
+                "/": {
+                    "get": {
+                        "operationId": "status",
+                        "responses": {
+                            "200": {
+                                "description": "Service status",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "status": {"type": "string"},
+                                                "path": {"type": "string"},
+                                            },
+                                            "required": ["status", "path"],
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                }
+            },
+        }
+    body = json.dumps(payload).encode()
     await send(
         {
             "type": "http.response.start",

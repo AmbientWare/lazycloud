@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ResourceConfig, ResourceRow } from "@/lib/api/resources";
 import { displayValue } from "@/lib/format";
@@ -30,7 +31,10 @@ export function CollectionAccordion({
   const singular = config.key === "queues" ? "queue" : "map";
 
   return (
-    <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
+    <ContentTransition
+      pending={query.isPending}
+      className="flex min-h-full flex-col lg:h-full lg:min-h-0"
+    >
       <section
         aria-label={`${config.title} collection`}
         data-collection-scroll=""
@@ -109,7 +113,7 @@ export function CollectionAccordion({
           </div>
         )}
       </section>
-    </div>
+    </ContentTransition>
   );
 }
 

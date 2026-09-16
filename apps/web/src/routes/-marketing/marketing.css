@@ -1,3 +1,24 @@
+.marketing-theme {
+  --background: #080808;
+  --background-subtle: #111113;
+  --foreground: #eef3f7;
+  --card: #121d26;
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --brand-foreground: var(--background);
+  --primary-foreground: var(--brand-foreground);
+  --positive-foreground: var(--background);
+  --secondary: var(--card);
+  --secondary-foreground: var(--foreground);
+  --muted: #18232d;
+  --muted-foreground: #a4b4c2;
+  --accent: var(--muted);
+  --accent-foreground: var(--foreground);
+  --border: #354550;
+  --input: var(--border);
+}
+
 .marketing-site,
 .marketing-site * {
   box-sizing: border-box;

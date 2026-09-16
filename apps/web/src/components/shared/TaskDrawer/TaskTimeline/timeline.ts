@@ -13,13 +13,6 @@ export type TimeDomain = {
   endMs: number;
 };
 
-export type BarSegment = {
-  kind: "queued" | "run";
-  leftPct: number;
-  widthPct: number;
-  durationMs: number;
-};
-
 export type AxisTick = {
   leftPct: number;
   label: string;
@@ -88,29 +81,6 @@ export function timelineDomain(rows: TimelineRow[], nowMs: number): TimeDomain |
   return { startMs, endMs };
 }
 
-/**
- * Bar segments for one task: queued (created to started) then run (started to
- * finished, or `nowMs` while unfinished), positioned exactly on the domain.
- * Pixel-level minimum visibility belongs to the renderer, not the time math.
- */
-export function rowSegments(node: CallGraphNode, domain: TimeDomain, nowMs: number): BarSegment[] {
-  const created = parseMs(node.created_at);
-  if (created === null) return [];
-  const started = parseMs(node.started_at);
-  const finished = parseMs(node.finished_at);
-  const openEnd = Math.max(finished ?? nowMs, created);
-
-  const segments: BarSegment[] = [];
-  const queuedEnd = Math.max(Math.min(started ?? openEnd, openEnd), created);
-  if (queuedEnd > created) {
-    segments.push(segment("queued", created, queuedEnd, domain));
-  }
-  if (started !== null && openEnd > started) {
-    segments.push(segment("run", Math.max(started, created), openEnd, domain));
-  }
-  return segments;
-}
-
 /** Elapsed-time ticks using operationally useful 1/2/5-style intervals. */
 export function axisTicks(domain: TimeDomain, targetIntervals = 4): AxisTick[] {
   const spanMs = domain.endMs - domain.startMs;
@@ -167,28 +137,6 @@ export function statusColor(status: string): string {
   }
 }
 
-function segment(
-  kind: BarSegment["kind"],
-  fromMs: number,
-  toMs: number,
-  domain: TimeDomain,
-): BarSegment {
-  const spanMs = domain.endMs - domain.startMs;
-  const leftPct = ((fromMs - domain.startMs) / spanMs) * 100;
-  const clampedLeft = clampPct(leftPct);
-  const widthPct = ((toMs - fromMs) / spanMs) * 100;
-  return {
-    kind,
-    leftPct: clampedLeft,
-    widthPct: Math.max(Math.min(widthPct, 100 - clampedLeft), 0),
-    durationMs: toMs - fromMs,
-  };
-}
-
-function clampPct(value: number): number {
-  return Math.min(Math.max(value, 0), 100);
-}
-
 function parseMs(value: string | null | undefined): number | null {
   if (!value) return null;
   const ms = Date.parse(value);
@@ -197,6 +145,6 @@ function parseMs(value: string | null | undefined): number | null {
 
 function formatElapsedNumber(value: number): string {
   if (value === 0) return "0";
-  if (value < 1) return value.toFixed(1).replace(/\.0$/, "");
+  if (value < 10) return value.toFixed(1).replace(/\.0$/, "");
   return String(Math.round(value));
 }

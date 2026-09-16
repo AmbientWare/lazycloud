@@ -194,7 +194,7 @@ function TaskDrawerBody({
   const kind = record.workload?.kind;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="content-transition flex min-h-0 flex-1 flex-col">
       <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle className="min-w-0 truncate">{record.name}</SheetTitle>

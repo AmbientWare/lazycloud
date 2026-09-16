@@ -32,5 +32,5 @@ export function TabsContent({
   className,
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.Content>) {
-  return <TabsPrimitive.Content className={cn("outline-none", className)} {...props} />;
+  return <TabsPrimitive.Content className={cn("view-enter outline-none", className)} {...props} />;
 }

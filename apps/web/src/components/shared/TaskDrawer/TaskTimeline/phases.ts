@@ -41,6 +41,7 @@ export function executionPhases(
   task: PhaseInput,
   lifecycle: ContainerLifecycleMetric[],
   nowMs: number,
+  timelineDomain?: ExecutionPhaseDomain,
 ): ExecutionPhase[] {
   const domain = executionPhaseDomain(task, nowMs);
   if (!domain) return [];
@@ -79,10 +80,11 @@ export function executionPhases(
     phases.push(phase("execution", "Execution", executionStart, taskEnd));
   }
 
-  const spanMs = domain.endMs - domain.startMs;
+  const projection = timelineDomain ?? domain;
+  const spanMs = projection.endMs - projection.startMs;
   return phases.map((entry) => ({
     ...entry,
-    leftPct: ((entry.startMs - domain.startMs) / spanMs) * 100,
+    leftPct: ((entry.startMs - projection.startMs) / spanMs) * 100,
     widthPct: (entry.durationMs / spanMs) * 100,
   }));
 }

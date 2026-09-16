@@ -52,7 +52,7 @@ export function AmountSelect({
           if (next !== "custom") onChange(next === "unlimited" ? "" : next);
         }}
       >
-        <SelectTrigger id={id} className="w-full">
+        <SelectTrigger id={id} size="sm" className="w-full">
           <SelectValue />
         </SelectTrigger>
         <SelectContent position="popper" align="start">
@@ -67,6 +67,7 @@ export function AmountSelect({
       </Select>
       {selection === "custom" ? (
         <Input
+          className="h-8"
           aria-label={`${label}, custom amount`}
           inputMode="decimal"
           placeholder="Enter amount"

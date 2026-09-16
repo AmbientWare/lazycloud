@@ -29,6 +29,7 @@ export function AppRecentTasksSection({
       className="min-h-[24rem] lg:h-full lg:min-h-0"
     >
       <Panel
+        pending={pending}
         title={<span id="app-recent-tasks-heading">Recent tasks</span>}
         action={<span className="text-[11px] text-muted-foreground">15 most recent</span>}
         className="h-full"

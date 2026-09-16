@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Square } from "lucide-react";
 
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -45,7 +46,10 @@ export function SandboxProcessList({
           {kill.error.message}
         </p>
       ) : null}
-      <div className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
+      <ContentTransition
+        pending={query.isPending}
+        className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto"
+      >
         {query.isPending ? (
           <div aria-hidden="true">
             {Array.from({ length: 3 }, (_, index) => (
@@ -92,7 +96,7 @@ export function SandboxProcessList({
             </div>
           ))
         )}
-      </div>
+      </ContentTransition>
     </div>
   );
 }

@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-import { Fact } from "@/components/shared/Fact";
-import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import type { Deployment } from "@/lib/api/schemas";
 import { formatDuration, resourceAllocation } from "@/lib/format";
 
@@ -18,32 +16,37 @@ export function WorkloadConfiguration({
   const executesTasks = kind !== "pod";
 
   return (
-    <div className="grid min-w-0 gap-x-8 gap-y-6 p-4 lg:grid-cols-2">
-      <ConfigurationGroup title="Runtime">
-        <Fact label="CPU" value={resourceAllocation(resources.cpu, "vCPUs")} />
-        <Fact label="Memory" value={resourceAllocation(resources.memory)} />
-        {resources.gpu.length > 0 ? (
-          <Fact
-            label="GPU"
-            value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
-          />
-        ) : null}
-        <Fact label="Pool" value={deployment.spec.pool || "Not reported"} />
-        <Fact label="Region" value={resources.region || "Automatic"} />
-        {resources.availability_zone ? (
-          <Fact label="Availability zone" value={resources.availability_zone} />
-        ) : null}
-      </ConfigurationGroup>
+    <div className="@container min-w-0 space-y-5 p-4">
+      <div className="grid min-w-0 gap-x-8 gap-y-5 @xl:grid-cols-2">
+        <ConfigurationGroup title="Runtime">
+          <ConfigurationFact label="CPU" value={resourceAllocation(resources.cpu, "vCPUs")} />
+          <ConfigurationFact label="Memory" value={resourceAllocation(resources.memory)} />
+          {resources.gpu.length > 0 ? (
+            <ConfigurationFact
+              label="GPU"
+              value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
+            />
+          ) : null}
+          <ConfigurationFact label="Pool" value={deployment.spec.pool || "Not reported"} />
+          <ConfigurationFact label="Region" value={resources.region || "Automatic"} />
+          {resources.availability_zone ? (
+            <ConfigurationFact label="Availability zone" value={resources.availability_zone} />
+          ) : null}
+        </ConfigurationGroup>
 
-      <ConfigurationGroup title="Execution">
-        {executesTasks ? (
-          <Fact label="Concurrency" value={Intl.NumberFormat().format(resources.concurrency)} />
-        ) : null}
-        {executesTasks ? (
-          <Fact label="Timeout" value={timeoutLabel(resources.timeout_seconds)} />
-        ) : null}
-        <Fact label="Keep warm" value={retentionLabel(resources.keep_warm)} />
-      </ConfigurationGroup>
+        <ConfigurationGroup title="Execution">
+          {executesTasks ? (
+            <ConfigurationFact
+              label="Concurrency"
+              value={Intl.NumberFormat().format(resources.concurrency)}
+            />
+          ) : null}
+          {executesTasks ? (
+            <ConfigurationFact label="Timeout" value={timeoutLabel(resources.timeout_seconds)} />
+          ) : null}
+          <ConfigurationFact label="Keep warm" value={retentionLabel(resources.keep_warm)} />
+        </ConfigurationGroup>
+      </div>
     </div>
   );
 }
@@ -51,9 +54,18 @@ export function WorkloadConfiguration({
 function ConfigurationGroup({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section aria-label={title}>
-      <h3 className="mb-3 text-xs font-medium text-foreground">{title}</h3>
-      <FactGrid columns={3}>{children}</FactGrid>
+      <h3 className="mb-2 text-sm font-medium text-foreground">{title}</h3>
+      <dl className="space-y-2">{children}</dl>
     </section>
+  );
+}
+
+function ConfigurationFact({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[minmax(7rem,2fr)_minmax(0,3fr)] items-baseline gap-3">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-sm break-words tabular-nums [overflow-wrap:anywhere]">{value}</dd>
+    </div>
   );
 }
 

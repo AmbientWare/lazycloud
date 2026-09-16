@@ -176,7 +176,11 @@ export function LogViewer({
         ) : visible.length === 0 ? (
           <PanelEmpty message="No log lines" className="h-32" />
         ) : (
-          <div className="mono py-2 text-xs leading-5" role="list" aria-label="Log output">
+          <div
+            className="content-transition mono py-2 text-xs leading-5"
+            role="list"
+            aria-label="Log output"
+          >
             {visible.map((record, index) => (
               <LogLine
                 key={recordKey(record)}

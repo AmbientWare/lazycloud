@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { ApiError, clearAuthToken } from "@/lib/api/client";
@@ -95,8 +96,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
 function LoadingScreen() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <Loader2 className="size-6 animate-spin text-brand" />
-    </div>
+    <ContentTransition
+      pending
+      role="status"
+      aria-label="Loading account"
+      className="flex min-h-screen items-center justify-center bg-background"
+    >
+      <Loader2
+        className="size-5 animate-spin text-muted-foreground motion-reduce:animate-none"
+        aria-hidden="true"
+      />
+    </ContentTransition>
   );
 }

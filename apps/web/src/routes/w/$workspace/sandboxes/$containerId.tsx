@@ -259,7 +259,7 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
   }
   const exposed = Object.entries(urls.data.urls).sort(([a], [b]) => Number(a) - Number(b));
   return (
-    <div className="h-full min-h-0 overflow-auto">
+    <div className="content-transition h-full min-h-0 overflow-auto">
       <div className="sticky top-0 grid grid-cols-[5rem_minmax(0,1fr)] border-b border-border bg-card px-3 py-2 text-[11px] uppercase text-muted-foreground sm:grid-cols-[7rem_minmax(0,1fr)]">
         <span>Port</span>
         <span>Endpoint</span>
@@ -300,7 +300,7 @@ function SandboxNetwork({ record, workspaceId }: { record: ContainerDetail; work
 
 function SandboxSkeleton() {
   return (
-    <WorkspacePage title={<Skeleton className="h-7 w-72" />}>
+    <WorkspacePage pending title={<Skeleton className="h-7 w-72" />}>
       <div
         className="grid h-full min-h-0 gap-4 lg:grid-rows-[8rem_minmax(0,1fr)]"
         aria-hidden="true"

@@ -6,6 +6,7 @@ import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { ShareBar } from "@/components/shared/ShareBar";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { shareLabel } from "@/lib/format";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { taskMetricsQueryOptions } from "@/lib/queries/tasks";
@@ -162,24 +163,26 @@ function ReadingCell({
   return (
     <div className={cn("min-w-0 px-4 py-3", className)}>
       <div className="micro-label truncate">{label}</div>
-      {query.isPending ? (
-        <div className="mt-1.5 space-y-1.5" aria-hidden="true">
-          <Skeleton className="h-4 w-14" />
-          <Skeleton className="h-2.5 w-20" />
-        </div>
-      ) : query.isError ? (
-        <>
-          <div className="readout mt-1 truncate text-[15px] text-destructive">Unavailable</div>
-          <p
-            className="mt-1 truncate text-[11px] text-muted-foreground"
-            title={query.error?.message}
-          >
-            {query.error?.message ?? "Could not load this metric"}
-          </p>
-        </>
-      ) : (
-        children
-      )}
+      <ContentTransition pending={query.isPending}>
+        {query.isPending ? (
+          <div className="mt-1.5 space-y-1.5" aria-hidden="true">
+            <Skeleton className="h-4 w-14" />
+            <Skeleton className="h-2.5 w-20" />
+          </div>
+        ) : query.isError ? (
+          <>
+            <div className="readout mt-1 truncate text-[15px] text-destructive">Unavailable</div>
+            <p
+              className="mt-1 truncate text-[11px] text-muted-foreground"
+              title={query.error?.message}
+            >
+              {query.error?.message ?? "Could not load this metric"}
+            </p>
+          </>
+        ) : (
+          children
+        )}
+      </ContentTransition>
     </div>
   );
 }

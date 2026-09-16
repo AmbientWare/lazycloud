@@ -1027,6 +1027,7 @@ class FunctionControlService:
     ) -> FunctionCallGraphNode:
         return FunctionCallGraphNode(
             task_id=task.id,
+            container_id=task.container_id,
             parent_task_id=task.parent_task_id or "",
             root_task_id=task.root_task_id or task.id,
             status=task.status,

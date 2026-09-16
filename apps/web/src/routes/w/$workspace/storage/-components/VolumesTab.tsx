@@ -5,6 +5,7 @@ import { ChevronRight, Download, File, Folder, Loader2, Trash2, Upload } from "l
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Volume, VolumePathInfo } from "@/lib/api/schemas";
@@ -39,7 +40,10 @@ export function VolumesTab({
     query.data?.volumes.find((volume) => volume.name === selectedName) ?? query.data?.volumes[0];
 
   return (
-    <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
+    <ContentTransition
+      pending={query.isPending}
+      className="flex min-h-full flex-col lg:h-full lg:min-h-0"
+    >
       <div className="grid min-h-[28rem] flex-1 overflow-visible lg:min-h-0 lg:grid-cols-[15rem_minmax(0,1fr)] lg:overflow-hidden">
         <aside className="min-h-0 overflow-visible border-b border-border lg:overflow-y-auto lg:border-b-0 lg:border-r">
           {creating ? (
@@ -85,7 +89,7 @@ export function VolumesTab({
           </div>
         )}
       </div>
-    </div>
+    </ContentTransition>
   );
 }
 
@@ -275,7 +279,10 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
       {transferError ? (
         <p className="border-b border-border px-3 py-2 text-xs text-destructive">{transferError}</p>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-visible lg:overflow-y-auto">
+      <ContentTransition
+        pending={query.isPending}
+        className="min-h-0 flex-1 overflow-visible lg:overflow-y-auto"
+      >
         {query.isPending ? (
           <FileSkeleton />
         ) : query.isError ? (
@@ -361,7 +368,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
             })}
           </div>
         )}
-      </div>
+      </ContentTransition>
       {remove.isError ? (
         <p className="border-t border-border px-3 py-2 text-xs text-destructive">
           {remove.error.message}

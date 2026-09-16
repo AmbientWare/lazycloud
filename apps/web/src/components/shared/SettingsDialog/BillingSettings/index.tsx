@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
+import { Panel } from "@/components/shared/Panel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingSummary } from "@/lib/api/schemas";
@@ -24,8 +25,12 @@ export function BillingSettings({
 
   return (
     <>
-      <div className="space-y-4">
-        <div className="flex flex-col gap-2">
+      <div className="grid shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
+        <Panel
+          title="Plan and payment"
+          pending={controller.isLoading}
+          contentClassName="flex flex-col gap-3 p-3"
+        >
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">
               <Skeleton className="h-4 w-56" />
@@ -55,6 +60,7 @@ export function BillingSettings({
                     <>
                       <Button
                         variant="outline"
+                        size="sm"
                         disabled={controller.busy || !summary.payment_method_on_file}
                         onClick={controller.openPlan}
                       >
@@ -62,6 +68,7 @@ export function BillingSettings({
                       </Button>
                       <Button
                         variant={summary.payment_method_on_file ? "outline" : "default"}
+                        size="sm"
                         disabled={controller.busy}
                         onClick={controller.startCard}
                       >
@@ -77,6 +84,7 @@ export function BillingSettings({
                   {summary.portal_available ? (
                     <Button
                       variant="outline"
+                      size="sm"
                       disabled={controller.busy}
                       onClick={controller.openPortal}
                     >
@@ -88,11 +96,6 @@ export function BillingSettings({
                   ) : null}
                 </div>
               </div>
-              {!complimentary && !summary.payment_method_on_file ? (
-                <p className="text-xs text-muted-foreground">
-                  Add a payment method to buy credit, enable automatic reload, or change plans.
-                </p>
-              ) : null}
               {controller.settling ? (
                 <p className="text-sm text-warning">
                   Your plan change is processing. The current plan stays active until it finishes.
@@ -100,11 +103,15 @@ export function BillingSettings({
               ) : null}
             </>
           )}
-        </div>
+        </Panel>
         {summary && !complimentary ? (
           <>
-            <PrepaidCredit paymentMethodOnFile={summary.payment_method_on_file} />
-            <BillingPreferences paymentMethodOnFile={summary.payment_method_on_file} />
+            <Panel title="Prepaid credit" contentClassName="p-3">
+              <PrepaidCredit paymentMethodOnFile={summary.payment_method_on_file} />
+            </Panel>
+            <Panel title="Spending controls" contentClassName="p-3">
+              <BillingPreferences paymentMethodOnFile={summary.payment_method_on_file} />
+            </Panel>
           </>
         ) : null}
       </div>

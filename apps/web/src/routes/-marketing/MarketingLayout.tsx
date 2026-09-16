@@ -164,7 +164,7 @@ function MarketingFrame({
 
   return (
     <Clouds
-      className="dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
+      className="marketing-theme dark isolate h-dvh w-full overflow-hidden bg-background text-foreground"
       contentClassName={contentClassName}
       contentRef={scrollportRef}
       blur={0.9}

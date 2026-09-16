@@ -163,8 +163,8 @@ export async function apiRequest<T>(
  * Artifact content is served by the control plane rather than linked directly
  * at the object store, so it needs a bearer token like any other API call.
  */
-export async function apiBlob(path: string): Promise<Blob> {
-  const response = await apiResponse(path);
+export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await apiResponse(path, { signal });
   return response.blob();
 }
 

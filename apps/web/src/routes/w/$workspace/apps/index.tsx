@@ -32,6 +32,7 @@ function AppsPage() {
   return (
     <WorkspacePage
       title="Apps"
+      pending={apps.isPending}
       description={
         // Gated on the data rather than on pending alone: reported as three
         // zeroes, a failed read of the workspace reads as an empty workspace.

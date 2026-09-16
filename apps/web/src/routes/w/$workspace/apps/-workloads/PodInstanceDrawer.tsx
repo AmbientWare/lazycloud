@@ -118,7 +118,7 @@ function PodInstanceDrawerBody({
   const latestTimestamp = metrics.data?.points.at(-1)?.timestamp;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="content-transition flex min-h-0 flex-1 flex-col">
       <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle>Pod instance</SheetTitle>
