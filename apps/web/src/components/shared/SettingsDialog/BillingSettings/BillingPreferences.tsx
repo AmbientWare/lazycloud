@@ -107,7 +107,7 @@ function PreferencesForm({
           });
       }}
     >
-      <div className="grid gap-4 md:grid-cols-2 md:gap-6">
+      <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
         <div className="min-w-0 space-y-3">
           <label className="flex items-center gap-2 text-sm font-medium">
             <Checkbox
@@ -184,7 +184,7 @@ function PreferencesForm({
             </p>
           ) : null}
         </div>
-        <div className="min-w-0 space-y-3 border-t border-border pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-6">
+        <div className="min-w-0 space-y-3 border-t border-border pt-4 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-6">
           <label htmlFor={`${id}-usageLimit`} className="text-sm font-medium">
             Monthly usage limit, USD
           </label>

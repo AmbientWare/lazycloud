@@ -197,18 +197,18 @@ function DesktopRail({
 
       <div className="flex items-center gap-1.5 px-3">
         <AccountMetricsControl className="min-w-0 flex-1" />
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           onClick={onOpenSearch}
           aria-label="Search workspace"
           title="Search workspace"
-          className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Search className="size-3.5 shrink-0" aria-hidden="true" />
           <kbd className="mono shrink-0 rounded-md border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
             ⌘ K
           </kbd>
-        </button>
+        </Button>
       </div>
 
       <div className="px-3 pt-3">
@@ -298,7 +298,7 @@ function MobileHeader({
       >
         <Search className="size-4" />
       </Button>
-      <AccountMetricsControl />
+      <AccountMetricsControl compact />
       <MobileMenu onLogout={onLogout} onOpenSettings={onOpenSettings} />
     </header>
   );
@@ -395,31 +395,27 @@ function MobileNavigation({ path, basePath }: { path: string; basePath: string }
   );
 }
 
-/**
- * Opens the account's readings beside whatever the rail is currently showing.
- *
- * A gauge rather than a chart glyph: the rail already spends one on Usage, and a
- * second beside it would read as a second page of charts. What this opens leads
- * with instruments — a live count, a figure against the ceiling it is refused
- * at — which is what a dial says and a bar chart does not.
- */
-function AccountMetricsControl({ className }: { className?: string } = {}) {
+function AccountMetricsControl({
+  className,
+  compact = false,
+}: {
+  className?: string;
+  compact?: boolean;
+} = {}) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant={compact ? "ghost" : "outline"}
+        size={compact ? "icon" : "sm"}
         aria-label="Account metrics"
         title="Account metrics"
         onClick={() => setOpen(true)}
-        className={cn(
-          "flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background/45 px-2.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:border-muted-foreground/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-          className,
-        )}
+        className={cn(!compact && "justify-start", className)}
       >
         <Gauge className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="flex-1 truncate">Metrics</span>
-      </button>
+        {!compact && <span className="truncate">Metrics</span>}
+      </Button>
       {open ? (
         <Suspense fallback={null}>
           <AccountMetricsDrawer onClose={() => setOpen(false)} />

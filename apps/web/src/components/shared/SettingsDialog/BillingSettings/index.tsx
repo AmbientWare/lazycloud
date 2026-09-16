@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
+import { Panel } from "@/components/shared/Panel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingSummary } from "@/lib/api/schemas";
@@ -25,7 +26,7 @@ export function BillingSettings({
   return (
     <>
       <div className="space-y-4">
-        <div className="flex flex-col gap-2">
+        <Panel title="Plan and payment" contentClassName="flex flex-col gap-3 overflow-visible p-4">
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">
               <Skeleton className="h-4 w-56" />
@@ -55,6 +56,7 @@ export function BillingSettings({
                     <>
                       <Button
                         variant="outline"
+                        size="sm"
                         disabled={controller.busy || !summary.payment_method_on_file}
                         onClick={controller.openPlan}
                       >
@@ -62,6 +64,7 @@ export function BillingSettings({
                       </Button>
                       <Button
                         variant={summary.payment_method_on_file ? "outline" : "default"}
+                        size="sm"
                         disabled={controller.busy}
                         onClick={controller.startCard}
                       >
@@ -77,6 +80,7 @@ export function BillingSettings({
                   {summary.portal_available ? (
                     <Button
                       variant="outline"
+                      size="sm"
                       disabled={controller.busy}
                       onClick={controller.openPortal}
                     >
@@ -100,11 +104,15 @@ export function BillingSettings({
               ) : null}
             </>
           )}
-        </div>
+        </Panel>
         {summary && !complimentary ? (
           <>
-            <PrepaidCredit paymentMethodOnFile={summary.payment_method_on_file} />
-            <BillingPreferences paymentMethodOnFile={summary.payment_method_on_file} />
+            <Panel title="Prepaid credit" contentClassName="overflow-visible p-4">
+              <PrepaidCredit paymentMethodOnFile={summary.payment_method_on_file} />
+            </Panel>
+            <Panel title="Spending controls" contentClassName="overflow-visible p-4">
+              <BillingPreferences paymentMethodOnFile={summary.payment_method_on_file} />
+            </Panel>
           </>
         ) : null}
       </div>

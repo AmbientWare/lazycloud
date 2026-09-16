@@ -129,8 +129,8 @@ function PlanCard({
   return (
     <section
       className={cn(
-        "flex h-full flex-col rounded-md border bg-card p-5",
-        current ? "border-brand/70 bg-brand/[0.05]" : "border-border",
+        "flex h-full flex-col rounded-md border bg-card p-4",
+        current ? "border-brand/70" : "border-border",
       )}
     >
       <div className="flex items-center justify-between gap-3">

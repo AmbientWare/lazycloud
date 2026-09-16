@@ -28,13 +28,13 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
 
   return (
     <section
-      className="grid gap-4 border-b border-border pb-4 sm:grid-cols-[1fr_auto] sm:items-center"
+      className="grid gap-4 sm:grid-cols-2 sm:items-start sm:gap-6"
       aria-label="Prepaid credit"
     >
       <div className="min-w-0">
-        <h2 className="text-sm text-muted-foreground">Available balance</h2>
+        <h3 className="text-sm font-medium">Available balance</h3>
         {balance.data?.ready ? (
-          <p className="mt-1 font-mono text-3xl font-medium tracking-tight" aria-live="polite">
+          <p className="mt-1 font-mono text-2xl font-medium tracking-tight" aria-live="polite">
             {formatCostNanos(balance.data.balance_nanos)}
           </p>
         ) : balance.isPending ? (
@@ -51,7 +51,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
         ) : null}
       </div>
       <form
-        className="flex min-w-0 flex-col gap-1.5 sm:w-72"
+        className="flex min-w-0 flex-col gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (valid && balance.data?.ready && !purchase.isPending) {
@@ -59,7 +59,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
           }
         }}
       >
-        <label htmlFor={inputId} className="text-sm">
+        <label htmlFor={inputId} className="text-sm font-medium">
           Amount in USD
         </label>
         <div className="flex items-start gap-2">
