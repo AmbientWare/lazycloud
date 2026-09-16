@@ -1,150 +1,208 @@
-import { useId } from "react";
-import { usePreviewActivity } from "./usePreviewActivity";
 import "./computePlacement.css";
 
 export const computeDestinations = [
   {
     key: "managed",
+    slot: 5,
     title: "LazyCloud",
     body: "Deploy without managing servers. LazyCloud provisions CPU capacity and scales down when idle.",
   },
   {
     key: "aws",
+    slot: 7,
     title: "Your AWS account",
     body: "Use CPU and GPU capacity in your AWS account. Manage deployments through LazyCloud.",
   },
   {
     key: "machines",
+    slot: 9,
     title: "Your own machines",
     body: "Connect your Linux servers, VMs, or GPU machines. Deploy through the same Python API.",
   },
 ] as const;
 
-export type ComputeDestination = (typeof computeDestinations)[number]["key"];
+const stackSlots = Array.from({ length: 39 }, (_, index) => index - 12);
 
-const cells = Array.from({ length: 64 }, (_, index) => ({
-  x: index % 8,
-  y: Math.floor(index / 8),
-}));
-
-function ComputePlane({
-  selected,
-  surfaceId,
-  cellId,
+function ComputeExample({
+  destination,
 }: {
-  selected: boolean;
-  surfaceId: string;
-  cellId: string;
+  destination: (typeof computeDestinations)[number]["key"];
 }) {
+  if (destination === "managed") {
+    return (
+      <div className="compute-example">
+        <div className="compute-example-heading">
+          <strong>support-agent</strong>
+          <span>Managed CPU</span>
+        </div>
+        <div className="compute-traffic">
+          <span>Incoming requests</span>
+          <svg viewBox="0 0 520 96" fill="none" aria-hidden="true">
+            <path className="compute-chart-grid" d="M0 24H520M0 56H520M0 88H520" />
+            <path
+              className="compute-chart-fill"
+              d="M0 80L32 79L58 64L82 72L110 54L136 61L168 28L192 40L220 18L250 36L276 32L302 56L330 44L358 65L392 59L420 77L452 72L484 83L520 82V96H0Z"
+            />
+            <path
+              className="compute-chart-line"
+              d="M0 80L32 79L58 64L82 72L110 54L136 61L168 28L192 40L220 18L250 36L276 32L302 56L330 44L358 65L392 59L420 77L452 72L484 83L520 82"
+            />
+          </svg>
+        </div>
+        <div className="compute-service">
+          <span>/chat</span>
+          <span>API</span>
+          <span className="compute-service-track">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </span>
+        </div>
+        <div className="compute-service">
+          <span>summarize</span>
+          <span>Function</span>
+          <span className="compute-service-track">
+            <i />
+            <i />
+            <i />
+          </span>
+        </div>
+        <div className="compute-example-footer">
+          <span>Capacity follows demand</span>
+          <span>Scale to zero</span>
+        </div>
+      </div>
+    );
+  }
+  if (destination === "aws") {
+    return (
+      <div className="compute-example">
+        <div className="compute-example-heading">
+          <strong>document-search</strong>
+          <span>Your AWS account</span>
+        </div>
+        <div className="compute-account">
+          <div className="compute-account-heading">
+            <span>Compute capacity</span>
+            <span>CPU + GPU</span>
+          </div>
+          <div className="compute-capacity-pool">
+            <div className="compute-gpu">
+              <span>GPU</span>
+              <strong>embed</strong>
+              <div className="compute-core-grid" aria-hidden="true">
+                {Array.from({ length: 24 }, (_, i) => (
+                  <i key={i} />
+                ))}
+              </div>
+            </div>
+            <div className="compute-cpu">
+              <span>CPU</span>
+              <strong>search-api</strong>
+              <div className="compute-core-grid" aria-hidden="true">
+                {Array.from({ length: 12 }, (_, i) => (
+                  <i key={i} />
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="compute-example-footer">
+          <span>Deploy through LazyCloud</span>
+          <span>Run in your account</span>
+        </div>
+      </div>
+    );
+  }
   return (
-    <g className="compute-plane" data-selected={selected}>
-      <path className="compute-plane-shadow" d="M0 14 224 114 0 214-224 114Z" />
-      <path className="compute-plane-left" d="M-224 100 0 200v10l-224-100Z" />
-      <path className="compute-plane-right" d="m0 200 224-100v10L0 210Z" />
-      <path
-        className="compute-plane-top"
-        d="M0 0 224 100 0 200-224 100Z"
-        fill={`url(#${surfaceId})`}
-      />
-      <g transform="matrix(1.12 .5 -1.12 .5 0 0)">
-        <path className="compute-plane-rim" d="M5 5H195V195H5Z" />
-        {cells.map(({ x, y }) => (
-          <rect
-            className="compute-cell"
-            data-workload={x >= 2 && x <= 5 && y >= 2 && y <= 5}
-            key={`${x}-${y}`}
-            x={9 + x * 23}
-            y={9 + y * 23}
-            width="21"
-            height="21"
-            fill={`url(#${cellId})`}
-          />
+    <div className="compute-example">
+      <div className="compute-example-heading">
+        <strong>research-agent</strong>
+        <span>Your machines</span>
+      </div>
+      <div className="compute-fleet">
+        {[
+          { name: "gpu-01", kind: "GPU", job: "inference", blocks: 7 },
+          { name: "worker-02", kind: "CPU", job: "process-documents", blocks: 5 },
+          { name: "server-03", kind: "CPU", job: "agent-api", blocks: 3 },
+        ].map((machine) => (
+          <div className="compute-machine" key={machine.name}>
+            <div className="compute-machine-heading">
+              <strong>{machine.name}</strong>
+              <span>{machine.kind}</span>
+            </div>
+            <div className="compute-machine-allocation">
+              <span>{machine.job}</span>
+              <div aria-hidden="true">
+                {Array.from({ length: 8 }, (_, i) => (
+                  <i key={i} data-filled={i < machine.blocks} />
+                ))}
+              </div>
+            </div>
+          </div>
         ))}
-        <g className="compute-workload">
-          <rect className="compute-workload-shadow" x="56" y="56" width="88" height="88" />
-          <rect className="compute-workload-face" x="54" y="54" width="88" height="88" />
-          <path
-            className="compute-workload-mark"
-            d="M84 81h-8v12l-5 5 5 5v12h8m28-34h8v12l5 5-5 5v12h-8"
-          />
-          <path className="compute-workload-core" d="m98 90 8 8-8 8-8-8Z" />
-        </g>
-      </g>
-      <path className="compute-plane-edge" d="m-224 100 224 100 224-100" />
-      <path className="compute-plane-signal" pathLength="100" d="m-224 100 224 100 224-100" />
-      {Array.from({ length: 16 }, (_, index) => (
-        <path
-          key={index}
-          className="compute-plane-vent"
-          d={`m${14 + index * 12} ${202 - index * 5.36}v3`}
-        />
-      ))}
-    </g>
+      </div>
+      <div className="compute-example-footer">
+        <span>Connected Linux machines</span>
+        <span>One deployment API</span>
+      </div>
+    </div>
   );
 }
 
-export function ComputePlacement({ selected }: { selected: ComputeDestination }) {
-  const { active, previewRef } = usePreviewActivity();
-  const id = useId();
+export function ComputePlacement({
+  selectedIndex,
+  isDesktop,
+}: {
+  selectedIndex: number;
+  isDesktop: boolean;
+}) {
   return (
-    <div
-      className="compute-sculpture"
-      ref={previewRef}
-      data-animation-state={active ? "running" : "paused"}
-      data-destination={selected}
-      aria-hidden="true"
-    >
-      <svg viewBox="0 0 600 540" fill="none">
-        <defs>
-          <linearGradient
-            id={`${id}-surface`}
-            x1="-140"
-            y1="0"
-            x2="100"
-            y2="220"
-            gradientUnits="userSpaceOnUse"
-          >
-            <stop stopColor="#33383d" />
-            <stop offset="0.48" stopColor="#1c2024" />
-            <stop offset="1" stopColor="#101214" />
-          </linearGradient>
-          <linearGradient id={`${id}-cell`} x1="0" y1="0" x2="1" y2="1">
-            <stop stopColor="#606970" stopOpacity=".28" />
-            <stop offset="1" stopColor="#252b30" stopOpacity=".12" />
-          </linearGradient>
-          <radialGradient id={`${id}-floor`}>
-            <stop stopColor="var(--brand)" stopOpacity=".1" />
-            <stop offset="1" stopColor="var(--brand)" stopOpacity="0" />
-          </radialGradient>
-          <pattern id={`${id}-grid`} width="24" height="24" patternUnits="userSpaceOnUse">
-            <circle cx="1" cy="1" r=".75" fill="currentColor" />
-          </pattern>
-          <radialGradient id={`${id}-fade`}>
-            <stop stopColor="white" />
-            <stop offset="1" stopColor="black" />
-          </radialGradient>
-          <mask id={`${id}-mask`}>
-            <rect width="600" height="540" fill={`url(#${id}-fade)`} />
-          </mask>
-        </defs>
-        <ellipse cx="300" cy="416" rx="284" ry="122" fill={`url(#${id}-floor)`} />
-        <g mask={`url(#${id}-mask)`} className="compute-ground">
-          <path d="m20 370 280-125 280 125-280 125Z" />
-          <path d="m-40 370 340-152 340 152-340 152Z" />
-          <g transform="matrix(1.12 .5 -1.12 .5 300 40)">
-            <rect width="480" height="480" fill={`url(#${id}-grid)`} stroke="none" />
-          </g>
-        </g>
-        {[...computeDestinations].reverse().map(({ key }, index) => (
-          <g key={key} data-layer={key} transform={`translate(300 ${70 + (2 - index) * 112})`}>
-            <ComputePlane
-              selected={selected === key}
-              surfaceId={`${id}-surface`}
-              cellId={`${id}-cell`}
-            />
-          </g>
-        ))}
-      </svg>
+    <div className="compute-scene" data-destination={computeDestinations[selectedIndex].key}>
+      <div className="compute-scene-atmosphere" aria-hidden="true" />
+      {stackSlots.map(
+        (index) =>
+          !computeDestinations.some((example) => example.slot === index) && (
+            <div
+              className="compute-stack-card"
+              aria-hidden="true"
+              key={index}
+              style={{
+                top: `calc(50% + ${index - 7} * var(--compute-stack-step))`,
+                zIndex: 39 - index,
+              }}
+            >
+              <div className="compute-deployment compute-empty-slot">
+                <div className="compute-material" />
+              </div>
+            </div>
+          ),
+      )}
+      {computeDestinations.map((example, index) => (
+        <div
+          className="compute-stage"
+          key={example.key}
+          data-active={index === selectedIndex}
+          style={{
+            top: `calc(50% + ${example.slot - 7} * var(--compute-stack-step))`,
+            zIndex: 39 - example.slot,
+          }}
+          aria-hidden={isDesktop && index !== selectedIndex}
+        >
+          <figure className="compute-deployment" aria-label={`${example.title} deployment example`}>
+            <div className="compute-material" aria-hidden="true" />
+            <div className="compute-deployment-content">
+              <div className="compute-mobile-description">
+                <h3>{example.title}</h3>
+                <p>{example.body}</p>
+              </div>
+              <ComputeExample destination={example.key} />
+            </div>
+          </figure>
+        </div>
+      ))}
     </div>
   );
 }

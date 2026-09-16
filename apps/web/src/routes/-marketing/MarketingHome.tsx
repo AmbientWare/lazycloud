@@ -12,7 +12,8 @@ import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
 import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimitives";
 import { StoryPreview, type StoryVisual } from "./ProductPreviews";
-import { ComputePlacement, computeDestinations, type ComputeDestination } from "./ComputePlacement";
+import { ComputePlacement, computeDestinations } from "./ComputePlacement";
+import { useComputeScroll } from "./useComputeScroll";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
 import { RunModeArt } from "./RunModeArt";
@@ -463,44 +464,44 @@ function PlatformStoryRail() {
 }
 
 function ComputeSection() {
-  const [selected, setSelected] = useState<ComputeDestination>("managed");
+  const { sectionRef, selectedIndex, selectExample, isDesktop } = useComputeScroll();
+  const selected = computeDestinations[selectedIndex];
   return (
-    <section id="compute" className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
-      <div
-        className={cn(
-          shell,
-          "grid items-center gap-10 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-16",
-        )}
-      >
-        <div className="min-w-0">
-          <SectionHeading
-            title={
-              <>
-                Choose where <em>your code runs.</em>
-              </>
-            }
-            body="Use managed compute or bring your own infrastructure. Keep your deployments in Python either way."
-          />
-          <MarketingReveal className="space-y-2" delay={80}>
-            {computeDestinations.map((path) => (
-              <button
-                className="compute-choice"
-                type="button"
-                key={path.key}
-                aria-pressed={selected === path.key}
-                onClick={() => setSelected(path.key)}
-              >
-                <span className="block text-lg font-medium tracking-[-0.02em]">{path.title}</span>
-                <span className="mt-2 block max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
-                  {path.body}
-                </span>
-              </button>
-            ))}
-          </MarketingReveal>
+    <section id="compute" ref={sectionRef} className="compute-section border-t border-input">
+      <div className="compute-sticky">
+        <div className={cn(shell, "compute-section-inner")}>
+          <div className="compute-section-copy">
+            <h2>
+              Choose where <em>your code runs.</em>
+            </h2>
+            <div className="compute-choices" aria-label="Infrastructure choices">
+              {computeDestinations.map((path, index) => (
+                <div className="compute-choice-item" key={path.key}>
+                  <button
+                    className="compute-choice"
+                    type="button"
+                    aria-expanded={selected.key === path.key}
+                    aria-controls={`compute-description-${path.key}`}
+                    onClick={() => selectExample(index)}
+                  >
+                    {path.title}
+                  </button>
+                  <div
+                    className="compute-choice-description"
+                    id={`compute-description-${path.key}`}
+                    data-expanded={selected.key === path.key}
+                    aria-hidden={selected.key !== path.key}
+                  >
+                    <div>
+                      <p>{path.body}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-        <MarketingReveal className="flex min-w-0 [&>div]:flex-1" delay={140}>
-          <ComputePlacement selected={selected} />
-        </MarketingReveal>
+        <ComputePlacement selectedIndex={selectedIndex} isDesktop={isDesktop} />
       </div>
     </section>
   );
