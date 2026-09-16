@@ -14,14 +14,16 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     event,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
-from database.tables.base import DatabaseBase, IdPayloadTable, json_type, uuid_type
+from database.tables.base import DatabaseBase, IdPayloadTable, IdTable, json_type, uuid_type
 
 
 class ComputeUnitTable(IdPayloadTable, DatabaseBase):
@@ -147,7 +149,7 @@ class ComputeUnitTable(IdPayloadTable, DatabaseBase):
     fallback: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
 
 
-class WorkspaceComputePolicyTable(IdPayloadTable, DatabaseBase):
+class WorkspaceComputePolicyTable(IdTable, DatabaseBase):
     __tablename__ = "workspace_compute_policies"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
@@ -293,7 +295,7 @@ class ComputeProviderInstanceTable(IdPayloadTable, DatabaseBase):
     )
 
 
-class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
+class ComputeJoinCredentialTable(IdTable, DatabaseBase):
     """Authority to enroll one machine into an account's capacity.
 
     `user_id` is the account the machine will belong to, resolved from the owner of
@@ -330,6 +332,7 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
     )
     capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
     pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    machine_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_by_token_id: Mapped[str | None] = mapped_column(
         uuid_type,
@@ -343,7 +346,7 @@ class ComputeJoinCredentialTable(IdPayloadTable, DatabaseBase):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
+class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
     """A joined machine, owned by the account whose credential enrolled it.
 
     The fingerprint is unique per account, not per workspace: one physical host is
@@ -373,6 +376,14 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             name="ck_compute_machine_enrollments_generation",
         ),
         CheckConstraint(
+            "cpu_count >= 0 AND cpu_millicores >= 0 AND memory_mb >= 0 AND gpu_count >= 0",
+            name="ck_compute_machine_enrollments_capacity",
+        ),
+        CheckConstraint(
+            "tunnel_public_key_sha256 = '' OR tunnel_public_key_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_compute_machine_enrollments_tunnel_key",
+        ),
+        CheckConstraint(
             "capacity_state IN ('available', 'draining', 'preempting', 'cordoned')",
             name="ck_compute_machine_enrollments_capacity_state",
         ),
@@ -394,6 +405,26 @@ class ComputeMachineEnrollmentTable(IdPayloadTable, DatabaseBase):
             "last_join_at",
         ),
     )
+
+    tunnel_public_key_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    capacity_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    capacity_notice_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    os: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    arch: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    cpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    memory_mb: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    gpus: Mapped[list[str]] = mapped_column(ARRAY(String(160)), nullable=False, default=list)
+    gpu_ids: Mapped[list[str]] = mapped_column(ARRAY(String(160)), nullable=False, default=list)
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    executor: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    preflight_checks: Mapped[list[dict[str, JsonValue]]] = mapped_column(
+        json_type, nullable=False, default=list
+    )
+    agent_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
 
     user_id: Mapped[str] = mapped_column(
         uuid_type,

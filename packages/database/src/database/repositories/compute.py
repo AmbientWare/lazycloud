@@ -9,7 +9,6 @@ from uuid import uuid4
 from database.repositories.common import (
     GlobalTableRepository,
     TableRepositoryConfig,
-    WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.base import IdPayloadTable
@@ -57,7 +56,7 @@ from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
-from shared.timestamps import to_utc, utc_now
+from shared.timestamps import to_utc, to_utc_or_none, utc_now
 from sqlalchemy import (
     Select,
     String,
@@ -73,12 +72,10 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
-type DatabaseInsertValue = JsonValue | datetime
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _DATETIME_ADAPTER = TypeAdapter(datetime)
@@ -979,51 +976,53 @@ class ComputeUnitRepository:
         self.session.flush()
 
 
+def _workspace_compute_policy_record(row: WorkspaceComputePolicyTable) -> WorkspaceComputePolicy:
+    return WorkspaceComputePolicy.model_validate(
+        {
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "revision": row.revision,
+            "default_pool": row.default_pool,
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
+
+
 @dataclass(slots=True)
 class WorkspaceComputePolicyRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[WorkspaceComputePolicy]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(WorkspaceComputePolicyTable, WorkspaceComputePolicy),
-        )
-
     def create(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        return self.records.create(
-            policy.model_dump(mode="python"),
+        policy = WorkspaceComputePolicy.model_validate(dict(policy))
+        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
+        row = WorkspaceComputePolicyTable(
+            id=policy.id,
             workspace_id=policy.workspace_id,
+            revision=policy.revision,
+            default_pool=policy.default_pool,
+            created_at=policy.created_at,
+            updated_at=policy.updated_at,
         )
+        self.session.add(row)
+        self.session.flush()
+        return _workspace_compute_policy_record(row)
 
     def ensure_default(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        values: dict[str, DatabaseInsertValue] = {
-            "id": policy.id,
-            "workspace_id": policy.workspace_id,
-            "revision": policy.revision,
-            "default_pool": policy.default_pool,
-            "payload": _model_json(policy),
-            "created_at": policy.created_at,
-            "updated_at": policy.updated_at,
-        }
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            statement = (
-                postgresql_insert(WorkspaceComputePolicyTable)
-                .values(**values)
-                .on_conflict_do_nothing(index_elements=[WorkspaceComputePolicyTable.workspace_id])
+        policy = WorkspaceComputePolicy.model_validate(dict(policy))
+        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
+        self.session.execute(
+            postgresql_insert(WorkspaceComputePolicyTable)
+            .values(
+                id=policy.id,
+                workspace_id=policy.workspace_id,
+                revision=policy.revision,
+                default_pool=policy.default_pool,
+                created_at=policy.created_at,
+                updated_at=policy.updated_at,
             )
-        elif dialect == "sqlite":
-            statement = (
-                sqlite_insert(WorkspaceComputePolicyTable)
-                .values(**values)
-                .on_conflict_do_nothing(index_elements=[WorkspaceComputePolicyTable.workspace_id])
-            )
-        else:
-            current = self.get_for_workspace(policy.workspace_id)
-            return current or self.create(policy)
-        self.session.execute(statement)
-        self.session.flush()
+            .on_conflict_do_nothing(constraint="uq_workspace_compute_policies_workspace")
+        )
         current = self.get_for_workspace(policy.workspace_id)
         if current is None:
             raise RuntimeError("workspace compute policy insert did not persist")
@@ -1041,19 +1040,26 @@ class WorkspaceComputePolicyRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return WorkspaceComputePolicy.model_validate(row.payload) if row is not None else None
+        return _workspace_compute_policy_record(row) if row is not None else None
 
     def save(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        saved = self.records.upsert(policy, workspace_id=policy.workspace_id)
-        row = self.session.scalars(
+        policy = WorkspaceComputePolicy.model_validate(dict(policy))
+        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
+        row = self.session.scalar(
             select(WorkspaceComputePolicyTable)
-            .where(WorkspaceComputePolicyTable.id == policy.id)
+            .where(
+                WorkspaceComputePolicyTable.id == policy.id,
+                WorkspaceComputePolicyTable.workspace_id == policy.workspace_id,
+            )
             .with_for_update()
-        ).one()
+        )
+        if row is None:
+            raise LookupError("workspace compute policy does not exist")
         row.revision = policy.revision
         row.default_pool = policy.default_pool
+        row.updated_at = policy.updated_at
         self.session.flush()
-        return saved
+        return _workspace_compute_policy_record(row)
 
 
 def _capacity_operation_record(
@@ -1473,20 +1479,50 @@ class ComputeProviderInstanceRepository:
         return _provider_instance_record(row) if row is not None else None
 
 
+def _join_credential_record(row: ComputeJoinCredentialTable) -> ComputeJoinCredentialRecord:
+    return ComputeJoinCredentialRecord.model_validate(
+        {
+            "id": row.id,
+            "token_hash": row.token_hash,
+            "user_id": row.user_id,
+            "workspace_id": row.workspace_id,
+            "capacity_owner_id": row.capacity_owner_id,
+            "pool": row.pool,
+            "machine_id": row.machine_id,
+            "created_by_token_id": row.created_by_token_id,
+            "status": row.status,
+            "max_uses": row.max_uses,
+            "use_count": row.use_count,
+            "expires_at": to_utc(row.expires_at),
+            "revoked_at": to_utc_or_none(row.revoked_at),
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
+
+
+def _write_join_credential_row(
+    row: ComputeJoinCredentialTable, record: ComputeJoinCredentialRecord
+) -> None:
+    row.token_hash = record.token_hash
+    row.user_id = record.user_id
+    row.workspace_id = record.workspace_id
+    row.capacity_owner_id = record.capacity_owner_id
+    row.pool = record.pool
+    row.machine_id = record.machine_id
+    row.created_by_token_id = record.created_by_token_id
+    row.status = record.status.value
+    row.max_uses = record.max_uses
+    row.use_count = record.use_count
+    row.expires_at = record.expires_at
+    row.revoked_at = record.revoked_at
+    row.created_at = record.created_at
+    row.updated_at = record.updated_at
+
+
 @dataclass(slots=True)
 class ComputeJoinCredentialRepository:
     session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeJoinCredentialRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(
-                ComputeJoinCredentialTable,
-                ComputeJoinCredentialRecord,
-                key_field="token_hash",
-            ),
-        )
 
     def create(
         self,
@@ -1501,23 +1537,27 @@ class ComputeJoinCredentialRepository:
         max_uses: int,
         expires_at: datetime,
     ) -> ComputeJoinCredentialRecord:
-        return self.records.create(
-            {
-                "token_hash": token_hash,
-                "user_id": user_id,
-                "workspace_id": workspace_id,
-                "capacity_owner_id": capacity_owner_id,
-                "pool": pool,
-                "machine_id": machine_id,
-                "created_by_token_id": created_by_token_id,
-                "status": ComputeCredentialStatus.Active,
-                "max_uses": max(max_uses, 1),
-                "use_count": 0,
-                "expires_at": expires_at,
-            },
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        now = utc_now()
+        record = ComputeJoinCredentialRecord(
+            id=str(uuid4()),
+            token_hash=token_hash,
+            user_id=user_id,
             workspace_id=workspace_id,
-            status=ComputeCredentialStatus.Active.value,
+            capacity_owner_id=capacity_owner_id,
+            pool=pool,
+            machine_id=machine_id,
+            created_by_token_id=created_by_token_id,
+            max_uses=max(max_uses, 1),
+            expires_at=expires_at,
+            created_at=now,
+            updated_at=now,
         )
+        row = ComputeJoinCredentialTable(id=record.id)
+        _write_join_credential_row(row, record)
+        self.session.add(row)
+        self.session.flush()
+        return _join_credential_record(row)
 
     def lock_unit(self, workspace_id: str, capacity_owner_id: str) -> bool:
         """Fence the unit a credential is minted against for the mint's duration."""
@@ -1543,7 +1583,7 @@ class ComputeJoinCredentialRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputeJoinCredentialRecord.model_validate(row.payload) if row is not None else None
+        return _join_credential_record(row) if row is not None else None
 
     def get(
         self,
@@ -1557,7 +1597,7 @@ class ComputeJoinCredentialRepository:
         if for_update:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
-        return ComputeJoinCredentialRecord.model_validate(row.payload) if row is not None else None
+        return _join_credential_record(row) if row is not None else None
 
     def list_for_unit(
         self,
@@ -1577,18 +1617,25 @@ class ComputeJoinCredentialRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        return [
-            ComputeJoinCredentialRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_join_credential_record(row) for row in self.session.scalars(statement)]
 
     def save(self, record: ComputeJoinCredentialRecord) -> ComputeJoinCredentialRecord:
-        return self.records.upsert(
-            record,
-            key=record.token_hash,
-            workspace_id=record.workspace_id,
-            status=record.status.value,
-        )
+        record = ComputeJoinCredentialRecord.model_validate(dict(record))
+        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
+        row = self.session.get(ComputeJoinCredentialTable, record.id)
+        if row is None:
+            raise LookupError(f"compute join credential does not exist: {record.id}")
+        if (
+            row.workspace_id != record.workspace_id
+            or row.user_id != record.user_id
+            or row.token_hash != record.token_hash
+            or row.capacity_owner_id != record.capacity_owner_id
+            or row.machine_id != record.machine_id
+        ):
+            raise ConflictError("compute join credential authority cannot change")
+        _write_join_credential_row(row, record)
+        self.session.flush()
+        return _join_credential_record(row)
 
     def save_for_workspace_deletion(
         self,
@@ -1607,14 +1654,14 @@ class ComputeJoinCredentialRepository:
         ).first()
         if row is None:
             raise LookupError(f"compute join credential does not exist: {record.id}")
-        row.payload = _model_json(record)
+        record = ComputeJoinCredentialRecord.model_validate(dict(record))
         row.status = record.status.value
         row.use_count = record.use_count
         row.expires_at = record.expires_at
         row.revoked_at = record.revoked_at
-        flag_modified(row, "payload")
+        row.updated_at = record.updated_at
         self.session.flush()
-        return record
+        return _join_credential_record(row)
 
     def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
@@ -1635,29 +1682,115 @@ class ComputeJoinCredentialRepository:
         return len(ids)
 
 
+def _machine_enrollment_record(
+    row: ComputeMachineEnrollmentTable,
+) -> ComputeMachineEnrollmentRecord:
+    return ComputeMachineEnrollmentRecord.model_validate(
+        {
+            "id": row.id,
+            "user_id": row.user_id,
+            "workspace_id": row.workspace_id,
+            "capacity_owner_id": row.capacity_owner_id,
+            "pool": row.pool,
+            "machine_id": row.machine_id,
+            "machine_fingerprint_hash": row.machine_fingerprint_hash,
+            "join_credential_id": row.join_credential_id,
+            "credential_hash": row.credential_hash,
+            "credential_generation": row.credential_generation,
+            "tunnel_public_key_sha256": row.tunnel_public_key_sha256,
+            "status": row.status,
+            "preflight_passed": row.preflight_passed,
+            "heartbeat_confirmed": row.heartbeat_confirmed,
+            "schedulable": row.schedulable,
+            "capacity_state": row.capacity_state,
+            "capacity_reason": row.capacity_reason,
+            "capacity_observed_at": to_utc_or_none(row.capacity_observed_at),
+            "capacity_notice_at": to_utc_or_none(row.capacity_notice_at),
+            "readiness_phase": row.readiness_phase,
+            "hostname": row.hostname,
+            "os": row.os,
+            "arch": row.arch,
+            "cpu_count": row.cpu_count,
+            "cpu_millicores": row.cpu_millicores,
+            "memory_mb": row.memory_mb,
+            "gpus": row.gpus,
+            "gpu_ids": row.gpu_ids,
+            "gpu_count": row.gpu_count,
+            "executor": row.executor,
+            "preflight": row.preflight_checks,
+            "agent_version": row.agent_version,
+            "last_join_at": to_utc(row.last_join_at),
+            "last_heartbeat_at": to_utc_or_none(row.last_heartbeat_at),
+            "last_disconnect_at": to_utc_or_none(row.last_disconnect_at),
+            "revoked_at": to_utc_or_none(row.revoked_at),
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
+
+
+def _write_machine_enrollment_row(
+    row: ComputeMachineEnrollmentTable, record: ComputeMachineEnrollmentRecord
+) -> None:
+    row.user_id = record.user_id
+    row.workspace_id = record.workspace_id
+    row.capacity_owner_id = record.capacity_owner_id
+    row.pool = record.pool
+    row.machine_id = record.machine_id
+    row.machine_fingerprint_hash = record.machine_fingerprint_hash
+    row.join_credential_id = record.join_credential_id
+    row.credential_hash = record.credential_hash
+    row.credential_generation = record.credential_generation
+    row.tunnel_public_key_sha256 = record.tunnel_public_key_sha256
+    row.status = record.status.value
+    row.preflight_passed = record.preflight_passed
+    row.heartbeat_confirmed = record.heartbeat_confirmed
+    row.schedulable = record.schedulable
+    row.capacity_state = record.capacity_state.value
+    row.capacity_reason = record.capacity_reason
+    row.capacity_observed_at = record.capacity_observed_at
+    row.capacity_notice_at = record.capacity_notice_at
+    row.readiness_phase = record.readiness_phase.value
+    row.hostname = record.hostname
+    row.os = record.os
+    row.arch = record.arch
+    row.cpu_count = record.cpu_count
+    row.cpu_millicores = record.cpu_millicores
+    row.memory_mb = record.memory_mb
+    row.gpus = list(record.gpus)
+    row.gpu_ids = list(record.gpu_ids)
+    row.gpu_count = record.gpu_count
+    row.executor = record.executor
+    row.preflight_checks = [check.model_dump(mode="json") for check in record.preflight]
+    row.agent_version = record.agent_version
+    row.last_join_at = record.last_join_at
+    row.last_heartbeat_at = record.last_heartbeat_at
+    row.last_disconnect_at = record.last_disconnect_at
+    row.revoked_at = record.revoked_at
+    row.created_at = record.created_at
+    row.updated_at = record.updated_at
+
+
 @dataclass(slots=True)
 class ComputeMachineEnrollmentRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[ComputeMachineEnrollmentRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(
-                ComputeMachineEnrollmentTable,
-                ComputeMachineEnrollmentRecord,
-            ),
+    def create(self, enrollment: ComputeMachineEnrollmentCreate) -> ComputeMachineEnrollmentRecord:
+        WorkspaceRepository(self.session).lock_active_owner(enrollment.workspace_id)
+        now = utc_now()
+        record = ComputeMachineEnrollmentRecord.model_validate(
+            {
+                **enrollment.model_dump(),
+                "id": str(uuid4()),
+                "created_at": now,
+                "updated_at": now,
+            }
         )
-
-    def create(
-        self,
-        enrollment: ComputeMachineEnrollmentCreate,
-    ) -> ComputeMachineEnrollmentRecord:
-        return self.records.create(
-            enrollment.model_dump(mode="python"),
-            workspace_id=enrollment.workspace_id,
-            status=enrollment.status.value,
-        )
+        row = ComputeMachineEnrollmentTable(id=record.id)
+        _write_machine_enrollment_row(row, record)
+        self.session.add(row)
+        self.session.flush()
+        return _machine_enrollment_record(row)
 
     def by_id(
         self,
@@ -1675,11 +1808,16 @@ class ComputeMachineEnrollmentRepository:
         )
 
     def save(self, record: ComputeMachineEnrollmentRecord) -> ComputeMachineEnrollmentRecord:
-        return self.records.upsert(
-            record,
-            workspace_id=record.workspace_id,
-            status=record.status.value,
-        )
+        record = ComputeMachineEnrollmentRecord.model_validate(dict(record))
+        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
+        row = self.session.get(ComputeMachineEnrollmentTable, record.id)
+        if row is None:
+            raise LookupError(f"compute machine enrollment does not exist: {record.id}")
+        if row.workspace_id != record.workspace_id or row.user_id != record.user_id:
+            raise ConflictError("compute machine enrollment owner cannot change")
+        _write_machine_enrollment_row(row, record)
+        self.session.flush()
+        return _machine_enrollment_record(row)
 
     def save_for_workspace_deletion(
         self,
@@ -1698,22 +1836,24 @@ class ComputeMachineEnrollmentRepository:
         ).first()
         if row is None:
             raise LookupError(f"compute machine enrollment does not exist: {record.id}")
-        row.payload = _model_json(record)
+        record = ComputeMachineEnrollmentRecord.model_validate(dict(record))
         row.status = record.status.value
         row.credential_generation = record.credential_generation
         row.preflight_passed = record.preflight_passed
         row.heartbeat_confirmed = record.heartbeat_confirmed
         row.schedulable = record.schedulable
         row.capacity_state = record.capacity_state.value
+        row.capacity_reason = record.capacity_reason
         row.capacity_observed_at = record.capacity_observed_at
+        row.capacity_notice_at = record.capacity_notice_at
         row.readiness_phase = record.readiness_phase.value
         row.last_join_at = record.last_join_at
         row.last_heartbeat_at = record.last_heartbeat_at
         row.last_disconnect_at = record.last_disconnect_at
         row.revoked_at = record.revoked_at
-        flag_modified(row, "payload")
+        row.updated_at = record.updated_at
         self.session.flush()
-        return record
+        return _machine_enrollment_record(row)
 
     def list_active_capacity_interruptions(
         self,
@@ -1726,12 +1866,9 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.pool,
                 ComputeMachineEnrollmentTable.machine_id,
                 ComputeMachineEnrollmentTable.capacity_state,
-                func.coalesce(
-                    ComputeMachineEnrollmentTable.payload["capacity_reason"].as_string(),
-                    "",
-                ),
+                ComputeMachineEnrollmentTable.capacity_reason,
                 ComputeMachineEnrollmentTable.capacity_observed_at,
-                ComputeMachineEnrollmentTable.payload["capacity_notice_at"].as_string(),
+                ComputeMachineEnrollmentTable.capacity_notice_at,
             )
             .where(
                 ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
@@ -1759,7 +1896,7 @@ class ComputeMachineEnrollmentRepository:
                 state=AgentCapacityState(state),
                 reason=reason,
                 observed_at=to_utc(observed_at),
-                notice_at=_DATETIME_ADAPTER.validate_python(notice_at) if notice_at else None,
+                notice_at=to_utc_or_none(notice_at),
             )
             for (
                 enrollment_id,
@@ -1784,15 +1921,9 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.status,
                 ComputeMachineEnrollmentTable.schedulable,
                 ComputeMachineEnrollmentTable.capacity_state,
-                func.coalesce(
-                    ComputeMachineEnrollmentTable.payload["capacity_reason"].as_string(), ""
-                ).label("capacity_reason"),
-                ComputeMachineEnrollmentTable.payload["capacity_observed_at"]
-                .as_string()
-                .label("capacity_observed_at"),
-                ComputeMachineEnrollmentTable.payload["capacity_notice_at"]
-                .as_string()
-                .label("capacity_notice_at"),
+                ComputeMachineEnrollmentTable.capacity_reason,
+                ComputeMachineEnrollmentTable.capacity_observed_at.label("capacity_observed_at"),
+                ComputeMachineEnrollmentTable.capacity_notice_at.label("capacity_notice_at"),
             ).where(ComputeMachineEnrollmentTable.credential_hash == credential_hash)
         ).one_or_none()
         return (
@@ -1840,10 +1971,7 @@ class ComputeMachineEnrollmentRepository:
             .where(ComputeMachineEnrollmentTable.user_id == user_id)
             .order_by(ComputeMachineEnrollmentTable.created_at.asc())
         )
-        return [
-            ComputeMachineEnrollmentRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_machine_enrollment_record(row) for row in self.session.scalars(statement)]
 
     def list_silent_since(
         self,
@@ -1885,10 +2013,7 @@ class ComputeMachineEnrollmentRepository:
             .order_by(joined.asc(), ComputeMachineEnrollmentTable.id.asc())
             .limit(max(limit, 1))
         )
-        return [
-            ComputeMachineEnrollmentRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_machine_enrollment_record(row) for row in self.session.scalars(statement)]
 
     def by_machine(
         self,
@@ -1919,10 +2044,7 @@ class ComputeMachineEnrollmentRepository:
             )
             .order_by(ComputeMachineEnrollmentTable.created_at.asc())
         )
-        return [
-            ComputeMachineEnrollmentRecord.model_validate(row.payload)
-            for row in self.session.scalars(statement)
-        ]
+        return [_machine_enrollment_record(row) for row in self.session.scalars(statement)]
 
     def delete_for_unit(self, workspace_id: str, capacity_owner_id: str) -> int:
         ids = list(
@@ -1950,13 +2072,8 @@ class ComputeMachineEnrollmentRepository:
     ) -> ComputeMachineEnrollmentRecord | None:
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(ComputeMachineEnrollmentTable.payload, raiseload=True)
-        )
         row = self.session.scalars(statement).first()
-        return (
-            ComputeMachineEnrollmentRecord.model_validate(row.payload) if row is not None else None
-        )
+        return _machine_enrollment_record(row) if row is not None else None
 
 
 @dataclass(slots=True)
