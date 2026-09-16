@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -14,7 +14,6 @@ import { StoryPreview, type StoryVisual } from "./ProductPreviews";
 import { ComputePlacement } from "./ComputePlacement";
 import { computeDestinations } from "./computeDestinations";
 import { useComputeScroll } from "./useComputeScroll";
-import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
 import { RunModePreview } from "./RunModePreview";
 import { runModeExamples } from "./runModeExamples";
@@ -95,7 +94,7 @@ function ParitySection() {
             }}
           >
             <TabsList
-              className="definition-tabs mx-auto flex h-9 w-full max-w-[640px] gap-0 border-0"
+              className="definition-tabs mx-auto flex h-9 w-full max-w-[640px] gap-0 border-0 max-[400px]:grid max-[400px]:h-auto max-[400px]:grid-cols-3"
               aria-label="Workload examples"
             >
               {runModeExamples.map((example) => (
@@ -167,32 +166,45 @@ export function MarketingHome() {
             </div>
             <MarketingReveal
               delay={80}
-              className="relative grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
+              className="relative grid grid-cols-1 gap-4 max-sm:mx-auto max-sm:max-w-sm sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
               role="region"
               tabIndex={0}
               aria-label="Runnable examples"
             >
               {marketingUseCases.map((useCase) => (
-                <UseCaseCard key={useCase.id} href={`${EXAMPLES_URL}/${useCase.id}`}>
-                  <div className="project-example-art">
-                    <MarketingExampleImage src={useCase.imageSrc} />
-                  </div>
-                  <div
-                    className="relative z-[2] flex flex-1 flex-col px-5 pt-40 pb-5 text-foreground"
-                    data-marketing-example-copy
+                <MarketingCard surface="frame" asChild key={useCase.id}>
+                  <a
+                    className="project-example-card relative isolate flex min-h-[18rem] w-full flex-col text-left text-foreground xl:min-h-[21rem]"
+                    href={`${EXAMPLES_URL}/${useCase.id}`}
                   >
-                    <h3 className="max-w-[390px] text-[19px] leading-[1.2] font-medium tracking-[-0.025em]">
-                      {useCase.title}
-                    </h3>
-                    <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-foreground/80">
-                      {useCase.cardSummary}
-                    </p>
-                    <span className="mt-auto inline-flex items-center justify-between gap-3 pt-5 text-xs text-brand">
-                      View project
-                      <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
-                    </span>
-                  </div>
-                </UseCaseCard>
+                    <div className="project-example-art">
+                      <img
+                        src={useCase.imageSrc}
+                        alt=""
+                        className="h-full w-full object-contain"
+                        width={1254}
+                        height={1254}
+                        decoding="async"
+                        loading="lazy"
+                      />
+                    </div>
+                    <div
+                      className="relative z-[2] flex flex-1 flex-col px-5 pt-36 pb-5 text-foreground xl:pt-40"
+                      data-marketing-example-copy
+                    >
+                      <h3 className="max-w-[390px] text-[19px] leading-[1.2] font-medium tracking-[-0.025em]">
+                        {useCase.title}
+                      </h3>
+                      <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-foreground/80">
+                        {useCase.cardSummary}
+                      </p>
+                      <span className="mt-auto inline-flex items-center justify-between gap-3 pt-5 text-xs text-brand">
+                        View project
+                        <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
+                      </span>
+                    </div>
+                  </a>
+                </MarketingCard>
               ))}
             </MarketingReveal>
           </div>
@@ -211,19 +223,6 @@ export function MarketingHome() {
   );
 }
 
-const useCaseCard =
-  "project-example-card relative isolate flex min-h-[21rem] w-full flex-col text-left text-foreground";
-
-function UseCaseCard({ children, href }: { children: ReactNode; href: string }) {
-  return (
-    <MarketingCard surface="frame" asChild>
-      <a className={useCaseCard} href={href}>
-        {children}
-      </a>
-    </MarketingCard>
-  );
-}
-
 /* The marketing shell scrolls inside its own element, so the story
    controller measures against that scrollport instead of assuming the window. */
 function findScrollport(node: HTMLElement): HTMLElement | null {
@@ -237,18 +236,9 @@ function findScrollport(node: HTMLElement): HTMLElement | null {
 function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
   const sectionRef = useRef<HTMLElement>(null);
   const storyRefs = useRef<Array<HTMLElement | null>>([]);
-  const [scrollDriven, setScrollDriven] = useState(false);
 
   const registerStory = useCallback((index: number, node: HTMLElement | null) => {
     storyRefs.current[index] = node;
-  }, []);
-
-  useEffect(() => {
-    const query = window.matchMedia("(min-width: 1024px)");
-    const sync = () => setScrollDriven(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
   }, []);
 
   useEffect(() => {
@@ -292,7 +282,7 @@ function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
       scrollTarget.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, [onScrollSelect, scrollDriven]);
+  }, [onScrollSelect]);
 
   const moveToStory = useCallback(
     (index: number) => {
@@ -318,7 +308,7 @@ function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
     [onScrollSelect],
   );
 
-  return { sectionRef, registerStory, moveToStory, scrollDriven };
+  return { sectionRef, registerStory, moveToStory };
 }
 
 function PlatformStoryRail() {
@@ -326,14 +316,12 @@ function PlatformStoryRail() {
   const selectByIndex = useCallback((index: number) => {
     setActiveKey(platformStories[index]?.key ?? platformStories[0].key);
   }, []);
-  const { sectionRef, registerStory, moveToStory, scrollDriven } =
-    usePlatformStoryScroll(selectByIndex);
+  const { sectionRef, registerStory, moveToStory } = usePlatformStoryScroll(selectByIndex);
 
   return (
     <section
       id="platform"
       className="relative border-t border-input bg-background"
-      data-scroll-driven={scrollDriven ? "true" : "false"}
       ref={sectionRef}
     >
       <div

@@ -1,0 +1,12 @@
+.pricing-hero.marketing-hero {
+  padding-bottom: 2rem;
+}
+
+.pricing-hero .marketing-hero-content {
+  min-height: calc(100svh - var(--marketing-header-height) - 2rem - 1px);
+  padding-block: 1.5rem;
+}
+
+.pricing-plans {
+  scroll-margin-top: var(--marketing-header-height);
+}

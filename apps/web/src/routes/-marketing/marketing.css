@@ -1,4 +1,5 @@
 .marketing-theme {
+  --marketing-gutter: 1.5rem;
   --background: #080808;
   --background-subtle: #111113;
   --foreground: #eef3f7;
@@ -17,6 +18,18 @@
   --accent-foreground: var(--foreground);
   --border: #354550;
   --input: var(--border);
+}
+
+@media (min-width: 640px) {
+  .marketing-theme {
+    --marketing-gutter: 2.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .marketing-theme {
+    --marketing-gutter: 4rem;
+  }
 }
 
 .marketing-site,
@@ -217,11 +230,6 @@
   margin-left: 0.75rem;
   padding-left: 0.875rem;
   border-left: 1px solid color-mix(in oklab, var(--primary-foreground) 25%, transparent);
-}
-
-.marketing-site .code-block-paper {
-  border-radius: var(--radius);
-  box-shadow: none;
 }
 
 .marketing-grid-field {

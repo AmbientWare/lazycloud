@@ -170,29 +170,17 @@ export function typedClientPhase(clock: number): TypedClientPhase {
 
 export function useTypedClientClock(active: boolean): number {
   const reducedMotion = useReducedMotion();
-  const [documentVisible, setDocumentVisible] = useState(true);
   const [clock, setClock] = useState<number>(0);
 
   useEffect(() => {
-    const handleVisibility = () => {
-      setDocumentVisible(document.visibilityState === "visible");
-    };
-    handleVisibility();
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!active || !documentVisible || reducedMotion || document.visibilityState !== "visible") {
+    if (!active || reducedMotion) {
       return;
     }
     const timer = window.setInterval(() => {
       setClock((current) => (current >= TIMELINE.total + TIMELINE.hold ? 0 : current + 1));
     }, TICK_MS);
     return () => window.clearInterval(timer);
-  }, [active, documentVisible, reducedMotion]);
+  }, [active, reducedMotion]);
 
   return reducedMotion ? TIMELINE.total : clock;
 }

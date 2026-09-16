@@ -26,7 +26,6 @@ uniform int uGlyphCount;
 uniform float uContrast;
 uniform float uEdgeContrast;
 uniform float uExposure;
-uniform float uInvert;
 ${SRGB_ENCODE}
 const vec2 INNER[6] = vec2[6](
   vec2(0.28, 0.26), vec2(0.72, 0.14),
@@ -60,7 +59,6 @@ vec4 sampleCircle(vec2 c) {
 float circleLum(vec4 acc) {
   vec3 straight = toSrgb(acc.rgb / max(acc.a, 1e-4));
   float level = clamp(dot(straight, vec3(0.2126, 0.7152, 0.0722)) * uExposure, 0.0, 1.0);
-  level = mix(level, 1.0 - level, uInvert);
   return level * acc.a;
 }
 float dirContrast(float value, float ext) {
@@ -112,7 +110,6 @@ const POST_FRAG = `
 precision highp float;
 in vec2 vUv;
 out vec4 outColor;
-uniform sampler2D tScene;
 uniform sampler2D tCells;
 uniform sampler2D tAtlas;
 uniform vec2 uResolution;
@@ -121,23 +118,7 @@ uniform vec2 uGrid;
 uniform vec2 uAtlasGrid;
 uniform vec2 uAtlasPad;
 uniform vec2 uAtlasInner;
-uniform float uAscii;
-uniform float uColored;
-uniform vec3 uColor;
-uniform vec3 uBackground;
-uniform float uHasBg;
-${SRGB_ENCODE}
 void main() {
-  if (uAscii < 0.5) {
-    vec4 raw = texture(tScene, vUv);
-    vec3 rawColor = toSrgb(raw.rgb);
-    if (uHasBg > 0.5) {
-      outColor = vec4(uBackground * (1.0 - raw.a) + rawColor, 1.0);
-    } else {
-      outColor = vec4(rawColor * raw.a, raw.a);
-    }
-    return;
-  }
   vec2 fragCoord = vUv * uResolution;
   vec2 cellPos = fragCoord / uCellPx;
   vec2 cell = clamp(floor(cellPos), vec2(0.0), uGrid - 1.0);
@@ -158,12 +139,7 @@ void main() {
     dFdx(cellPos) * atlasStep,
     dFdy(cellPos) * atlasStep
   ).a;
-  vec3 glyphColor = mix(uColor, info.rgb, uColored);
-  if (uHasBg > 0.5) {
-    outColor = vec4(mix(uBackground, glyphColor, mask), 1.0);
-  } else {
-    outColor = vec4(glyphColor * mask, mask);
-  }
+  outColor = vec4(info.rgb * mask, mask);
 }`;
 
 const ATLAS_CELL = 64;
@@ -177,10 +153,6 @@ const INNER_CIRCLES: Array<[number, number]> = [
   [0.28, 0.86],
   [0.72, 0.74],
 ];
-
-function clampAspect(aspect: number) {
-  return Math.min(Math.max(aspect || 0.6, 0.35), 1.25);
-}
 
 function buildGlyphList(charset: string) {
   const seen = new Set<string>([" "]);
@@ -234,6 +206,9 @@ function glyphShapes(image: ImageData, cols: number, cellW: number, cellH: numbe
 }
 
 export function createAsciiRenderer(canvas: HTMLCanvasElement) {
+  const surface = document.createElement("canvas");
+  const ctx = surface.getContext("2d");
+  if (!ctx) throw new Error("A 2D canvas is required to draw the ASCII characters.");
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
@@ -255,16 +230,13 @@ export function createAsciiRenderer(canvas: HTMLCanvasElement) {
   const grid = new THREE.Vector2(1, 1);
   const glyphs = buildGlyphList(" .:-=+*#%@/\\|_(){}<>");
   const cellH = ATLAS_CELL;
-  const cellW = Math.round(cellH * clampAspect(0.6));
+  const cellW = Math.round(cellH * 0.6);
   const padW = cellW + ATLAS_PAD * 2;
   const padH = cellH + ATLAS_PAD * 2;
   const cols = Math.ceil(Math.sqrt(glyphs.length));
   const rows = Math.ceil(glyphs.length / cols);
-  const surface = document.createElement("canvas");
   surface.width = cols * padW;
   surface.height = rows * padH;
-  const ctx = surface.getContext("2d");
-  if (!ctx) throw new Error("A 2D canvas is required to draw the ASCII characters.");
   ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -306,7 +278,6 @@ export function createAsciiRenderer(canvas: HTMLCanvasElement) {
       uContrast: { value: 1.2 },
       uEdgeContrast: { value: 1.8 },
       uExposure: { value: 1.25 },
-      uInvert: { value: 0 },
     },
     depthTest: false,
     depthWrite: false,
@@ -317,7 +288,6 @@ export function createAsciiRenderer(canvas: HTMLCanvasElement) {
     vertexShader: POST_VERT,
     fragmentShader: POST_FRAG,
     uniforms: {
-      tScene: { value: target.texture },
       tCells: { value: cells.texture },
       tAtlas: { value: atlas },
       uResolution: { value: resolution },
@@ -326,11 +296,6 @@ export function createAsciiRenderer(canvas: HTMLCanvasElement) {
       uAtlasGrid: { value: new THREE.Vector2(cols, rows) },
       uAtlasPad: { value: new THREE.Vector2(ATLAS_PAD / padW, ATLAS_PAD / padH) },
       uAtlasInner: { value: new THREE.Vector2(cellW / padW, cellH / padH) },
-      uAscii: { value: 1 },
-      uColored: { value: 1 },
-      uColor: { value: new THREE.Color("#76d6f5") },
-      uBackground: { value: new THREE.Color(0) },
-      uHasBg: { value: 0 },
     },
     depthTest: false,
     depthWrite: false,

@@ -52,7 +52,10 @@ export function LocalInspection({ example }: { example: RunModeExample }) {
   }
   return (
     <>
-      {example.local.values.map(([label, value]) => (
+      {[
+        ["text", '"hello cloud"'],
+        ["words", '["hello", "cloud"]'],
+      ].map(([label, value]) => (
         <div key={label}>
           <span>{label}</span>
           <code>{value}</code>
@@ -175,11 +178,11 @@ export function CloudWorkloadView({ example }: { example: RunModeExample }) {
   return (
     <div className="run-execution">
       <div className="run-execution-scale">
-        {example.cloud.scale.map((time) => (
+        {["0", "500 ms", "1 s"].map((time) => (
           <span key={time}>{time}</span>
         ))}
       </div>
-      {example.cloud.steps.map((step, index) => (
+      {["Prepare", "Execute", "Return"].map((step, index) => (
         <div className="run-execution-row" key={step}>
           <span>{step}</span>
           <div>
@@ -341,9 +344,12 @@ export function DeployedWorkloadView({ example }: { example: RunModeExample }) {
     <RevisionCard className="run-api-release">
       <div className="run-release-route">
         <span>{example.deployment.kind}</span>
-        <strong>{example.deployment.target}</strong>
+        <strong>/count</strong>
       </div>
-      {example.deployment.details.map(([label, value]) => (
+      {[
+        ["Handler", "count_words"],
+        ["Transport", "HTTPS"],
+      ].map(([label, value]) => (
         <div className="run-release-definition" key={label}>
           <span>{label}</span>
           <span>{value}</span>

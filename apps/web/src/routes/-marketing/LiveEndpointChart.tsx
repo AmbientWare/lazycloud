@@ -4,10 +4,6 @@ import { useReducedMotion } from "./useReducedMotion";
 import { usePreviewActivity } from "./usePreviewActivity";
 import { MarketingCard } from "./MarketingPrimitives";
 
-/* Live application traffic is presented as one stacked step-area timeline. The
-   total silhouette communicates request load, the bands preserve route mix,
-   and every active mount starts from the same populated deterministic frame. */
-
 const POINTS = 32;
 const STEP = 16;
 const WIDTH = (POINTS - 1) * STEP;
@@ -147,7 +143,7 @@ export function LiveEndpointChart() {
       <MarketingCard surface="inset" asChild>
         <figure className="endpoint-plot">
           <figcaption className="endpoint-plot-caption">
-            <strong>Live request load</strong>
+            <strong>Request load</strong>
             <span>Last 60 seconds</span>
           </figcaption>
           <div className="endpoint-chart-canvas">
@@ -158,7 +154,7 @@ export function LiveEndpointChart() {
             </div>
             <div className="endpoint-plot-visual">
               <svg
-                aria-label="Stacked live request load for /review, /generate, and /status over the last 60 seconds"
+                aria-label="Example request load for /review, /generate, and /status over 60 seconds"
                 preserveAspectRatio="none"
                 role="img"
                 viewBox={`0 0 ${WIDTH} ${HEIGHT}`}

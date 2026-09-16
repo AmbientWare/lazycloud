@@ -314,12 +314,6 @@
   color: color-mix(in oklab, var(--foreground) 82%, transparent);
 }
 
-/* Paper code examples use the same semantic syntax palette, with the pale
-   dark-sheet builtin blue deepened to the readable paper signal. */
-.code-block-paper .tok-builtin {
-  color: var(--brand);
-}
-
 /* Instrument-panel micro label for stat and section headers. */
 .micro-label {
   font-size: 11px;

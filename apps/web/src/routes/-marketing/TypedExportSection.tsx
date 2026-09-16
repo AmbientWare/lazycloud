@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-
 import { CodeBlock } from "@/components/ui/code-block";
 
 import { MarketingCard, SectionHeading, StatusDot, shell } from "./MarketingPrimitives";
 import { MarketingReveal } from "./MarketingReveal";
+import { usePreviewActivity } from "./usePreviewActivity";
 import {
   GeneratedPackagePanel,
   TypedImportPanel,
@@ -113,27 +112,17 @@ function TypedExportStory({ active }: { active: boolean }) {
 }
 
 export function TypedExportSection() {
-  const sectionRef = useRef<HTMLElement>(null);
-  const [active, setActive] = useState(false);
-
-  useEffect(() => {
-    const section = sectionRef.current;
-    if (!section) return;
-
-    const observer = new IntersectionObserver(([entry]) => setActive(entry.isIntersecting), {
-      rootMargin: "0px 0px -15% 0px",
-      threshold: 0.1,
-    });
-    observer.observe(section);
-    return () => observer.disconnect();
-  }, []);
+  const { active, previewRef } = usePreviewActivity<HTMLElement>({
+    rootMargin: "0px 0px -15% 0px",
+    threshold: 0.1,
+  });
 
   return (
     <section
       id="typed-export"
       className="border-t border-input bg-background py-14 sm:py-20 lg:py-28"
       data-animation-state={active ? "running" : "paused"}
-      ref={sectionRef}
+      ref={previewRef}
     >
       <TypedExportStory active={active} />
     </section>

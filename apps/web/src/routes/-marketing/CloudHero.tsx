@@ -65,13 +65,12 @@ export function CloudHero() {
           </Button>
         </div>
       </div>
-      <div
-        ref={stage}
-        className="cloud-stage"
-        role="img"
-        aria-label="A blue ASCII cloud friend. It follows your cursor and laughs at fireworks when you click the hero background."
-      >
-        <canvas ref={canvas} aria-hidden="true" />
+      <div ref={stage} className="cloud-stage">
+        <canvas
+          ref={canvas}
+          role="img"
+          aria-label="A blue ASCII cloud friend. It follows your cursor and laughs at fireworks when you click the hero background."
+        />
         {error && (
           <p className="cloud-error" role="status">
             The cloud could not load. Please reload the page.

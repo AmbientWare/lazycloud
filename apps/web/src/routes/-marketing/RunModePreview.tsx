@@ -1,40 +1,18 @@
-import { useEffect, useRef } from "react";
 import { highlight } from "@/components/ui/code-syntax";
 
 import { MarketingCard } from "./MarketingPrimitives";
 import type { RunModeExample } from "./runModeExamples";
 import { CloudWorkloadView, DeployedWorkloadView, LocalInspection } from "./RunWorkloadViews";
+import { usePreviewActivity } from "./usePreviewActivity";
 import "./runModes.css";
 
 type RunMode = "local" | "cloud" | "production";
 
 export function RunModePreview({ mode, example }: { mode: RunMode; example: RunModeExample }) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    let visible = false;
-    const sync = () => {
-      element.dataset.playing = String(visible && !document.hidden);
-    };
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        visible = entry.isIntersecting;
-        sync();
-      },
-      { threshold: 0.3 },
-    );
-    observer.observe(element);
-    document.addEventListener("visibilitychange", sync);
-    return () => {
-      observer.disconnect();
-      document.removeEventListener("visibilitychange", sync);
-    };
-  }, []);
+  const { active, previewRef } = usePreviewActivity({ threshold: 0.3 });
 
   return (
-    <div className="run-preview" data-mode={mode} ref={ref} data-playing="false">
+    <div className="run-preview" data-mode={mode} ref={previewRef} data-playing={active}>
       {mode === "local" && (
         <>
           <div className="run-preview-heading">
