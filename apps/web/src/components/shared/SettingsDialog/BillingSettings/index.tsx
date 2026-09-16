@@ -25,8 +25,12 @@ export function BillingSettings({
 
   return (
     <>
-      <div className="space-y-4">
-        <Panel title="Plan and payment" contentClassName="flex flex-col gap-3 overflow-visible p-4">
+      <div className="grid shrink-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-3 lg:grid-rows-[auto_minmax(0,1fr)]">
+        <Panel
+          title="Plan and payment"
+          className="lg:col-span-3"
+          contentClassName="flex flex-col gap-3 p-4"
+        >
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">
               <Skeleton className="h-4 w-56" />
@@ -107,10 +111,10 @@ export function BillingSettings({
         </Panel>
         {summary && !complimentary ? (
           <>
-            <Panel title="Prepaid credit" contentClassName="overflow-visible p-4">
+            <Panel title="Prepaid credit" contentClassName="p-4">
               <PrepaidCredit paymentMethodOnFile={summary.payment_method_on_file} />
             </Panel>
-            <Panel title="Spending controls" contentClassName="overflow-visible p-4">
+            <Panel title="Spending controls" className="lg:col-span-2" contentClassName="p-4">
               <BillingPreferences paymentMethodOnFile={summary.payment_method_on_file} />
             </Panel>
           </>

@@ -62,8 +62,11 @@ export function SettingsDialog({
             </LinearTabsList>
           </div>
 
-          <TabsContent value="billing" className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <div className="space-y-4">
+          <TabsContent
+            value="billing"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 lg:overflow-hidden"
+          >
+            <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
               <AccountSettings />
               <BillingSettings planOpen={planOpen} onPlanOpenChange={setPlanOpen} />
             </div>

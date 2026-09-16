@@ -28,7 +28,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
 
   return (
     <section
-      className="grid gap-4 sm:grid-cols-2 sm:items-start sm:gap-6"
+      className="grid gap-4 sm:grid-cols-2 sm:items-start sm:gap-6 lg:grid-cols-1 lg:gap-4"
       aria-label="Prepaid credit"
     >
       <div className="min-w-0">
