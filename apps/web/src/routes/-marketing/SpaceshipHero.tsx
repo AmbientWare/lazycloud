@@ -57,10 +57,7 @@ export function SpaceshipHero() {
           <br />
           as you develop.
         </h1>
-        <p>
-          From your first function to production.
-          <br className="sm:hidden" /> Your Python, ready for liftoff.
-        </p>
+        <p>Run your Python apps, APIs, and background jobs in the cloud.</p>
         <div className="flight-actions">
           <GetStartedButton />
           <Button asChild size="lg" variant="secondary" className="marketing-button-link">
@@ -75,7 +72,7 @@ export function SpaceshipHero() {
           ref={canvas}
           className="flight-canvas"
           role="img"
-          aria-label="A silver LazyCloud spaceship assembles, launches, and orbits Earth."
+          aria-label="An angular spacecraft assembles on a circular launch platform, lifts off, and orbits an abstract globe."
         />
         {!ready && (
           <p className="flight-loading" role="status">
@@ -84,19 +81,11 @@ export function SpaceshipHero() {
               : "Preparing for liftoff…"}
           </p>
         )}
-        <div className="flight-caption" aria-hidden="true">
-          <span>LazyCloud</span>
-          <span>Orbital / 01</span>
-        </div>
       </div>
       <div className="flight-footer">
-        <div className="flight-phases" aria-label={`Animation: ${phase}`}>
-          {(["Assembling", "Ignition", "Liftoff", "In orbit"] as const).map((step) => (
-            <span key={step} data-active={ready && phase === step}>
-              {step}
-            </span>
-          ))}
-        </div>
+        <span className="sr-only" role="status">
+          {ready ? `Animation: ${phase}` : "Loading animation"}
+        </span>
         <div className="flight-controls">
           <button
             type="button"
