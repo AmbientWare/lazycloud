@@ -1,3 +1,23 @@
+.definition-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--background-subtle) 86%, transparent);
+}
+
+.definition-tabs {
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
+}
+
+.definition-tab[data-state="active"] {
+  color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 6%, transparent);
+}
+
+.definition-tab:hover {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
 .run-mode-card {
   min-width: 0;
   padding: 16px 26px 28px;

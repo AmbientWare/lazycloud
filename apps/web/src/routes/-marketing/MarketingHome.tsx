@@ -117,17 +117,20 @@ function ParitySection() {
       <div className={shell}>
         <div className="flex flex-col items-center gap-8 sm:gap-10">
           <div className="text-center">
-            <h2 className="text-[clamp(1.85rem,3.6vw,3.2rem)] leading-[1.12] font-[550] tracking-[-0.045em]">
+            <h2 className="text-[clamp(1.85rem,4.6vw,4rem)] leading-[1.12] font-[550] tracking-[-0.045em]">
               <span className="inline-block">One definition.</span>{" "}
               <span className="inline-block text-brand">Three ways to run it.</span>
             </h2>
           </div>
-          <div className="w-full min-w-0 max-w-[640px]">
+          <div className="definition-panel w-full min-w-0 max-w-[720px]">
             <Tabs defaultValue={definitionExamples[0].key}>
-              <TabsList className="flex h-8 w-full gap-0 border-0" aria-label="Python definitions">
+              <TabsList
+                className="definition-tabs flex h-9 w-full gap-0 border-0"
+                aria-label="Python definitions"
+              >
                 {definitionExamples.map((example) => (
                   <TabsTrigger
-                    className="h-8 flex-auto px-1 text-[11px] sm:text-xs"
+                    className="definition-tab m-0 h-9 flex-1 px-1 text-[11px] sm:text-[13px]"
                     key={example.key}
                     value={example.key}
                   >
@@ -140,7 +143,8 @@ function ParitySection() {
                   <CodeBlock
                     className="rounded-none border-0 bg-transparent shadow-none"
                     tone="paper"
-                    bodyClassName="min-h-[130px] px-0 py-6 text-[11.5px] leading-[1.85] sm:min-h-[140px] sm:text-[13px] xl:text-[14px]"
+                    lineNumbers
+                    bodyClassName="min-h-[140px] px-3 py-7 text-[11px] leading-[2] sm:min-h-[150px] sm:px-6 sm:text-[13px] xl:text-[14px]"
                   >
                     {example.code}
                   </CodeBlock>
