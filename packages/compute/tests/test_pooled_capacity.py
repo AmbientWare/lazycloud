@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -941,15 +941,17 @@ def test_two_warm_workers_use_distinct_availability_zones(service_context: Servi
     assert len(units) == 2 and sum(unit.desired_machines for unit in units) == 2
 
 
-@pytest.mark.parametrize("replacement_markets", [1, 2])
+@pytest.mark.parametrize("replacement_markets,reject_first", [(1, False), (2, False), (2, True)])
 def test_two_interrupted_workers_admit_distinct_replacements_once(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
     replacement_markets: int,
+    reject_first: bool,
 ) -> None:
     with service_context.database.session() as session:
         workspace_id = service_context.default_workspace_id(session)
     providers: list[ResolvedComputeProvider] = []
+    capacity_providers: list[_PooledProvider] = []
     for index in range(replacement_markets + 1):
         offer = _offer().model_copy(
             update={
@@ -965,11 +967,13 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
                 ),
             }
         )
+        capacity_provider = _PooledProvider(offer=offer)
+        capacity_providers.append(capacity_provider)
         providers.append(
             ResolvedComputeProvider(
                 ref=offer.provider,
                 capacity_mode=ComputeCapacityMode.Pooled,
-                pooled=_PooledProvider(offer=offer),
+                pooled=capacity_provider,
                 policy=ResolvedProviderPolicy(
                     workspace_id=workspace_id,
                     pool=MachinePool("lazycloud"),
@@ -1055,10 +1059,36 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
         assert all(operation is not None and operation.owns_capacity for operation in operations)
         assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) <= 4
         assert len(CapacityRecoveryRepository(session).protected_sources(source.id)) == 2
+    compute = replace(
+        compute,
+        capacity_owner_mutations=RedisCapacityReservationRepository(real_redis_actors.client()),
+    )
+    if reject_first:
+        capacity_providers[1].max_observed_machines = 0
+        capacity_providers[1].last_capacity_failure_at = now + timedelta(seconds=6)
+        capacity_providers[1].last_capacity_failure_code = CapacityFailureCode.CapacityUnavailable
     compute.reconcile_capacity_recovery(now=now + timedelta(seconds=7))
+    if reject_first:
+        with service_context.database.session() as session:
+            rows = session.scalars(select(CapacityRecoveryTable)).all()
+            assert sum(row.target_unit_id is None for row in rows) == 1
+            rejected_operation = next(
+                operation
+                for operation in operations
+                if operation is not None
+                and operation.capacity_owner_id
+                == compute.pooled_offer_owner_id(providers[1], capacity_providers[1].offer)
+            )
+            released = ComputeCapacityOperationRepository(session).get(
+                rejected_operation.capacity_owner_id, rejected_operation.operation_id
+            )
+            assert released is not None and released.status is CapacityOperationStatus.Released
+            assert not released.owns_capacity
+        compute.reconcile_capacity_recovery(now=now + timedelta(seconds=13))
     with service_context.database.session() as session:
         rows = session.scalars(select(CapacityRecoveryTable)).all()
-        assert all(row.attempt == 1 for row in rows)
+        assert sorted(row.attempt for row in rows) == ([1, 2] if reject_first else [1, 1])
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) <= 4
         assert (
             sum(
                 unit.desired_machines
@@ -1085,15 +1115,15 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
             hooks,
             machine_id=machine_id,
             instance_id=f"i-{instance_index:017x}",
-            now=now + timedelta(seconds=8),
+            now=now + timedelta(seconds=14),
         )
-    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=13))
+    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=19))
     with service_context.database.session() as session:
         rows = session.scalars(select(CapacityRecoveryTable)).all()
         assert {row.replacement_machine_id for row in rows} == replacement_ids
         assert all(row.completed_at is None for row in rows)
         assert len(CapacityRecoveryRepository(session).protected_sources(source.id)) == 2
-    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=19))
+    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=25))
     with service_context.database.session() as session:
         rows = session.scalars(select(CapacityRecoveryTable)).all()
         assert all(row.completed_at is not None for row in rows)

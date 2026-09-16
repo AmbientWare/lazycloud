@@ -23,6 +23,7 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from time import monotonic
 from types import FrameType
 
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS
@@ -166,7 +167,12 @@ def start_scheduler_loops(
             resolved_stop.wait(timeout)
             return
         try:
-            wake.wait(timeout_seconds=timeout)
+            deadline = monotonic() + timeout
+            while not resolved_stop.is_set():
+                remaining = deadline - monotonic()
+                # Stay below Redis's socket timeout and observe process shutdown between reads.
+                if remaining <= 0 or wake.wait(timeout_seconds=min(remaining, 1.0)):
+                    return
         except REDIS_UNAVAILABLE_ERRORS:
             LOGGER.warning("capacity wake unavailable; using the durable due-work sweep")
             resolved_stop.wait(timeout)

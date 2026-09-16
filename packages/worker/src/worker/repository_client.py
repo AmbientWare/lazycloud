@@ -53,7 +53,10 @@ from worker.events import (
     ContainerLifecyclePayload,
     WorkerStreamEvent,
 )
-from worker.image_build_execution import WorkerImageBuildExecutionResult
+from worker.image_build_execution import (
+    WorkerImageBuildExecutionResult,
+    WorkerImageBuildRequestPayload,
+)
 from worker.origin_access import (
     CacheOriginCredentialRequest,
     ImageArchiveUploadCredentialRequest,
@@ -933,12 +936,13 @@ class RemoteSchedulerWorkerRepository:
     def report_image_build_progress(
         self, request: WorkerExecutionRequest, *, after: int, logs: list[str]
     ) -> int:
+        payload = WorkerImageBuildRequestPayload.model_validate(request.payload)
         return self.client.report_image_build_progress(
             ReportImageBuildProgressRequest(
                 worker_id=self.state.worker_id,
                 workspace_id=request.workspace_id,
                 container_id=request.container_id,
-                build_id=request.container_id,
+                build_id=payload.build_id,
                 after=after,
                 logs=[_bounded_image_build_log(line) for line in logs],
             )
