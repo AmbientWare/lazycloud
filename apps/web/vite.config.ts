@@ -176,7 +176,7 @@ export default defineConfig({
           outputPath: "/_shell",
         },
       },
-      pages: [{ path: "/" }, { path: "/legal/privacy" }, { path: "/legal/terms" }],
+      pages: [{ path: "/" }, { path: "/1" }, { path: "/legal/privacy" }, { path: "/legal/terms" }],
       prerender: {
         enabled: true,
         failOnError: true,

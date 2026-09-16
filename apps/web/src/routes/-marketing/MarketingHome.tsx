@@ -230,11 +230,11 @@ function ParitySection() {
   );
 }
 
-export function MarketingHome() {
+export function MarketingHome({ hero = <SpaceshipHero /> }: { hero?: ReactNode }) {
   return (
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
-        <SpaceshipHero />
+        {hero}
         <section className="bg-background py-16 sm:py-24" aria-labelledby="cloud-code-title">
           <div
             className={cn(shell, "grid items-center gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:gap-16")}

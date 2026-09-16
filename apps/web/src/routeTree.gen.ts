@@ -14,6 +14,7 @@ import { Route as PricingRouteImport } from "./routes/pricing"
 import { Route as DashboardRouteImport } from "./routes/dashboard"
 import { Route as CallbackRouteImport } from "./routes/callback"
 import { Route as ActivateRouteImport } from "./routes/activate"
+import { Route as R1RouteImport } from "./routes/1"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as LegalTermsRouteImport } from "./routes/legal/terms"
 import { Route as LegalPrivacyRouteImport } from "./routes/legal/privacy"
@@ -57,6 +58,11 @@ const ActivateRoute = ActivateRouteImport.update({
   path: "/activate",
   getParentRoute: () => rootRouteImport,
 } as any)
+const R1Route = R1RouteImport.update({
+  id: "/1",
+  path: "/1",
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import("./routes/1.lazy").then((d) => d.Route))
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
@@ -150,6 +156,7 @@ const WWorkspaceAppsAppIdWorkloadsKindNameInstancesContainerIdRoute =
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
+  "/1": typeof R1Route
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
@@ -174,6 +181,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
+  "/1": typeof R1Route
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
@@ -198,6 +206,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
+  "/1": typeof R1Route
   "/activate": typeof ActivateRoute
   "/callback": typeof CallbackRoute
   "/dashboard": typeof DashboardRoute
@@ -224,6 +233,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | "/"
+    | "/1"
     | "/activate"
     | "/callback"
     | "/dashboard"
@@ -248,6 +258,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
+    | "/1"
     | "/activate"
     | "/callback"
     | "/dashboard"
@@ -271,6 +282,7 @@ export interface FileRouteTypes {
   id:
     | "__root__"
     | "/"
+    | "/1"
     | "/activate"
     | "/callback"
     | "/dashboard"
@@ -296,6 +308,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  R1Route: typeof R1Route
   ActivateRoute: typeof ActivateRoute
   CallbackRoute: typeof CallbackRoute
   DashboardRoute: typeof DashboardRoute
@@ -342,6 +355,13 @@ declare module "@tanstack/react-router" {
       path: "/activate"
       fullPath: "/activate"
       preLoaderRoute: typeof ActivateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/1": {
+      id: "/1"
+      path: "/1"
+      fullPath: "/1"
+      preLoaderRoute: typeof R1RouteImport
       parentRoute: typeof rootRouteImport
     }
     "/": {
@@ -536,6 +556,7 @@ const WWorkspaceRouteRouteWithChildren = WWorkspaceRouteRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  R1Route: R1Route,
   ActivateRoute: ActivateRoute,
   CallbackRoute: CallbackRoute,
   DashboardRoute: DashboardRoute,
