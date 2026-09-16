@@ -288,10 +288,10 @@ def _interactive() -> bool:
 
 
 def _step_row(glyph: RenderableType, name: str, summary: str, elapsed: float) -> Table:
-    grid = Table.grid(padding=(0, 1), expand=False)
+    grid = Table.grid(padding=(0, 1), expand=True)
     grid.add_column(width=1, no_wrap=True)
     grid.add_column(width=NAME_WIDTH, no_wrap=True)
-    grid.add_column(min_width=32, max_width=56, no_wrap=True)
+    grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
     grid.add_column(justify="right", width=7, no_wrap=True)
     grid.add_row(
         glyph,
