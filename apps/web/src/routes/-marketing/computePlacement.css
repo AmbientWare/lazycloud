@@ -1,102 +1,125 @@
-.compute-map {
-  --run-delay: 0s;
+.compute-sculpture {
   width: 100%;
   min-width: 0;
-  padding: 22px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in oklab, var(--background-subtle) 78%, transparent);
   color: var(--brand);
 }
-.compute-map-diagram {
-  position: relative;
-  height: 340px;
-}
-.compute-map-paths {
-  position: absolute;
+.compute-sculpture > svg {
+  display: block;
   width: 100%;
-  height: 100%;
-  inset: 0;
+  overflow: visible;
 }
-.compute-map-route .run-art-route {
-  stroke-opacity: 0.25;
+.compute-ground {
+  stroke: var(--foreground);
+  stroke-opacity: 0.1;
+  color: var(--muted-foreground);
+  opacity: 0.6;
 }
-.compute-map-route[data-selected="true"] .run-art-route {
+.compute-plane {
+  transform: translateY(0);
+  transition: transform 650ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.compute-plane[data-selected="true"] {
+  transform: translateY(-20px);
+}
+.compute-sculpture [data-layer="aws"] .compute-plane[data-selected="true"],
+.compute-sculpture [data-layer="machines"] .compute-plane[data-selected="true"] {
+  transform: translate(28px, 30px);
+}
+.compute-plane-shadow {
+  fill: #000;
+  opacity: 0.38;
+  filter: blur(12px);
+}
+.compute-plane-left {
+  fill: #171a1d;
+  stroke: #343b42;
+  stroke-width: 0.6;
+}
+.compute-plane-right {
+  fill: #0c0e10;
+  stroke: #343b42;
+  stroke-width: 0.6;
+}
+.compute-plane-top {
+  stroke: #697580;
+  stroke-opacity: 0.45;
+  stroke-width: 0.8;
+}
+.compute-plane-rim {
+  stroke: #aab6c0;
+  stroke-opacity: 0.15;
+  stroke-width: 0.5;
+}
+.compute-cell {
+  stroke: #7b8894;
+  stroke-opacity: 0.18;
+  stroke-width: 0.5;
+  transition:
+    fill 500ms,
+    stroke 500ms,
+    stroke-opacity 500ms;
+}
+.compute-plane[data-selected="true"] .compute-cell[data-workload="true"] {
+  fill: color-mix(in oklab, var(--brand) 18%, #1b232a);
   stroke: var(--brand);
   stroke-opacity: 0.65;
 }
-.compute-map-route[data-selected="false"] .run-art-signal {
-  display: none;
+.compute-workload {
+  opacity: 0;
+  transform: translate(-10px, -10px);
+  transition:
+    opacity 350ms,
+    transform 650ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.compute-map-source {
-  position: absolute;
-  top: 50%;
-  left: 6%;
-  width: 28%;
-  transform: translateY(-50%);
-  text-align: center;
+.compute-plane[data-selected="true"] .compute-workload {
+  opacity: 1;
+  transform: translate(0, 0);
 }
-.compute-map-source svg {
-  display: block;
-  width: 100%;
-  max-width: 150px;
-  margin-inline: auto;
+.compute-workload-shadow {
+  fill: #000;
+  opacity: 0.5;
+  filter: blur(4px);
 }
-.compute-map-source > span {
-  position: absolute;
-  top: 100%;
-  left: -10%;
-  width: 120%;
-  font-size: 13px;
-  color: var(--foreground);
+.compute-workload-face {
+  fill: #162b3b;
+  stroke: var(--brand);
+  stroke-width: 1.2;
 }
-.compute-map-dots {
+.compute-workload-mark {
+  stroke: #d9eeff;
+  stroke-width: 2;
+}
+.compute-workload-core {
   fill: var(--brand);
 }
-.compute-map-destinations {
-  display: grid;
-  height: 100%;
-  margin-left: 54%;
-  grid-template-rows: repeat(3, 1fr);
+.compute-plane-edge {
+  stroke: #8399aa;
+  stroke-opacity: 0.3;
+  transition:
+    stroke 400ms,
+    stroke-opacity 400ms;
 }
-.compute-map-destination {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  color: var(--muted-foreground);
+.compute-plane[data-selected="true"] .compute-plane-edge {
+  stroke: var(--brand);
+  stroke-opacity: 0.8;
 }
-.compute-map-icon {
-  display: grid;
-  flex: none;
-  width: 46px;
-  height: 46px;
-  place-items: center;
-  border: 1px solid var(--border);
-  background: var(--background-subtle);
+.compute-plane-signal {
+  stroke: #c9ecff;
+  stroke-width: 1.5;
+  stroke-dasharray: 12 88;
+  stroke-dashoffset: 12;
+  opacity: 0;
+  animation: compute-edge-travel 5s linear infinite;
 }
-.compute-map-icon svg {
-  width: 27px;
-  height: 27px;
+.compute-plane[data-selected="true"] .compute-plane-signal {
+  opacity: 0.85;
 }
-.compute-map-destination[data-selected="true"] .compute-map-icon {
-  color: var(--brand);
-  border-color: var(--brand);
-  background: color-mix(in oklab, var(--brand) 7%, var(--background-subtle));
+.compute-plane-vent {
+  stroke: #8499a9;
+  stroke-opacity: 0.35;
 }
-.compute-map-destination strong {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.35;
-}
-.compute-map-destination[data-selected="true"] strong {
-  color: var(--foreground);
-}
-.compute-map-destination div > span {
-  display: block;
-  margin-top: 5px;
-  font-size: 11px;
-  line-height: 1.5;
+.compute-sculpture[data-animation-state="paused"] .compute-plane-signal {
+  animation-play-state: paused;
 }
 .compute-choice {
   display: block;
@@ -118,45 +141,19 @@
 .compute-choice:focus-visible {
   outline-offset: 2px;
 }
-@media (max-width: 639px) {
-  .compute-map {
-    padding: 18px 12px;
-  }
-  .compute-map-diagram {
-    height: 310px;
-  }
-  .compute-map-paths {
-    width: 80%;
-  }
-  .compute-map-source {
-    left: 0;
-  }
-  .compute-map-source > span {
-    font-size: 11px;
-  }
-  .compute-map-destinations {
-    margin-left: 44%;
-  }
-  .compute-map-destination {
-    gap: 9px;
-  }
-  .compute-map-icon {
-    width: 32px;
-    height: 38px;
-  }
-  .compute-map-icon svg {
-    width: 23px;
-    height: 23px;
-  }
-  .compute-map-destination strong {
-    font-size: 12px;
-  }
-  .compute-map-destination div > span {
-    font-size: 10px;
+@keyframes compute-edge-travel {
+  to {
+    stroke-dashoffset: -88;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .compute-map .run-art-signal {
-    animation: none !important;
+  .compute-plane,
+  .compute-plane *,
+  .compute-choice {
+    animation: none;
+    transition: none;
+  }
+  .compute-plane-signal {
+    display: none;
   }
 }

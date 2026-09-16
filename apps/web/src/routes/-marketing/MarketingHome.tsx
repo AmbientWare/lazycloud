@@ -49,13 +49,6 @@ const platformStories: PlatformStory[] = [
     visual: "background",
   },
   {
-    key: "pods",
-    label: "Pods",
-    title: "Run your own container.",
-    body: "Run web servers, model servers, and long-lived processes from a container image or command. Expose ports and manage deployments from Python.",
-    visual: "pod",
-  },
-  {
     key: "sandboxes",
     label: "Agent sandboxes",
     title: "Run your agent's code in a sandbox.",
@@ -403,7 +396,7 @@ function PlatformStoryRail() {
                 Ship the <em>whole product.</em>
               </>
             }
-            body="APIs, services, jobs, pods, and agent sandboxes. Define your workloads in Python alongside your code."
+            body="APIs, services, jobs, and agent sandboxes. Define your workloads in Python alongside your code."
           />
           <nav aria-label="Platform use cases" className="relative border-t border-border">
             <ol className="m-0 list-none p-0">
