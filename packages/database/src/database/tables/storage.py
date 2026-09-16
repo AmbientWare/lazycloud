@@ -18,15 +18,14 @@ from sqlalchemy.sql.schema import SchemaItem
 
 from database.tables.base import (
     DatabaseBase,
-    IdPayloadTable,
     IdTable,
-    NamedWorkspacePayloadTable,
+    json_type,
     utc_now,
     uuid_type,
 )
 
 
-class ObjectTable(IdPayloadTable, DatabaseBase):
+class ObjectTable(IdTable, DatabaseBase):
     __tablename__ = "objects"
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("workspace_id", "bucket", "key", name="uq_objects_workspace_bucket_key"),
@@ -35,6 +34,29 @@ class ObjectTable(IdPayloadTable, DatabaseBase):
         Index("ix_objects_write_claimed_at", "write_claimed_at"),
         Index("ix_objects_cleanup_claimed_at", "cleanup_claimed_at"),
         CheckConstraint("size >= 0", name="ck_objects_size_nonnegative"),
+        CheckConstraint(
+            "(write_claimed_at IS NULL AND write_claim_id = '' AND NOT write_created "
+            "AND write_target_size IS NULL) OR "
+            "(write_claimed_at IS NOT NULL AND write_claim_id <> '' "
+            "AND write_target_size IS NOT NULL AND write_target_size >= 0 "
+            "AND write_target_path IS NOT NULL AND write_target_sha256 IS NOT NULL "
+            "AND write_target_content_type IS NOT NULL)",
+            name="ck_objects_write_claim_target",
+        ),
+        CheckConstraint(
+            "artifact_retention_seconds IS NULL OR artifact_retention_seconds > 0",
+            name="ck_objects_artifact_retention_positive",
+        ),
+        CheckConstraint(
+            "artifact_task_id IS NULL OR artifact_retention_seconds IS NOT NULL",
+            name="ck_objects_artifact_retention_required",
+        ),
+        CheckConstraint(
+            "write_target_artifact_task_id IS NULL OR "
+            "(write_target_artifact_retention_seconds IS NOT NULL "
+            "AND write_target_artifact_retention_seconds > 0)",
+            name="ck_objects_write_target_artifact_retention",
+        ),
         CheckConstraint(
             "artifact_task_id IS NULL OR write_claimed_at IS NOT NULL "
             "OR artifact_expires_at IS NOT NULL",
@@ -67,6 +89,41 @@ class ObjectTable(IdPayloadTable, DatabaseBase):
     cleanup_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    metadata_json: Mapped[dict[str, str]] = mapped_column(
+        "metadata", json_type, nullable=False, default=dict
+    )
+    artifact_app_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    artifact_filename: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    artifact_retention_seconds: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    artifact_stored_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    artifact_deletion_failed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    write_created: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    write_target_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    write_target_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    write_target_sha256: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    write_target_content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    write_target_metadata: Mapped[dict[str, str] | None] = mapped_column(json_type, nullable=True)
+    write_target_artifact_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    write_target_artifact_app_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    write_target_artifact_app_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    write_target_artifact_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    write_target_artifact_retention_seconds: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    write_target_artifact_stored_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    write_target_artifact_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    write_target_artifact_metered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    write_target_artifact_deletion_failed: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
     artifact_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     artifact_app_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     artifact_expires_at: Mapped[datetime | None] = mapped_column(
@@ -77,8 +134,12 @@ class ObjectTable(IdPayloadTable, DatabaseBase):
     )
 
 
-class VolumeTable(NamedWorkspacePayloadTable, DatabaseBase):
+class VolumeTable(IdTable, DatabaseBase):
     __tablename__ = "volumes"
+    name: Mapped[str] = mapped_column(String(240), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("workspace_id", "name", name="uq_volumes_workspace_name"),
         Index("ix_volumes_workspace", "workspace_id"),

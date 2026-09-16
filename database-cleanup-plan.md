@@ -323,5 +323,24 @@ needed to retry submission; mutable dispatch ownership and timing are columns.
   Idle reads return zero rows. Active reads return two rows, with serialized
   bytes reduced from 7,620 to 288 by selecting only dispatch fields.
 
-Containers, compute and storage still require their remaining refactors.
-These scoped results are not release acceptance.
+Objects and volumes now use explicit mappers. Object write targets have typed
+columns alongside the committed object fields, preserving the previous content
+until a fenced write completes. Only user object metadata remains JSON. Artifact
+names, retention, accounting cursors and deletion failures are columns; metering
+and deletion failure updates write only their owned fields. Object timestamps now
+come from the same columns used for retention, including the update time of a
+physical repair. Volume creation uses its workspace/name uniqueness constraint
+with `ON CONFLICT`, and volume metering selects the workspace name without fetching
+workspace configuration.
+
+- Storage, schema and artifact checks pass, including failed writes, retained
+  ownership, public artifact access and immutable object repair.
+- Workspace write races, concurrent volume creation, artifact billing, retention
+  and volume deletion: 37 checks pass. Database and storage type checks pass.
+- Active object listing with 200 claimed and two available objects keeps one
+  query; rows read drop from 202 to 2 and serialized bytes from 284,034 to 1,416.
+- Volume metering with 200 deleting and two active volumes keeps one query and
+  two rows; bytes drop from 2,066 to 478. Idle metering remains one query, zero rows.
+
+Containers and compute still require their remaining refactors. These scoped
+results are not release acceptance.

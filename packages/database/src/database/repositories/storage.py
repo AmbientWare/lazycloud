@@ -6,15 +6,11 @@ from typing import overload
 from uuid import uuid4
 
 from database.mappers.apps import stub_from_table
-from database.mappers.identity import workspace_record_from_table
 from database.mappers.images import image_build_from_table, image_from_table
+from database.mappers.storage import object_from_table, volume_from_table, write_object_row
 from database.repositories.cleanup import (
     CleanupRepository,
     object_location_lock_key,
-)
-from database.repositories.common import (
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import container_storage_release_pending
@@ -24,11 +20,10 @@ from database.tables.identity import WorkspaceTable
 from database.tables.images import ImageBuildTable, ImageTable
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import CacheEntryTable, ObjectTable, VolumeCleanupTable, VolumeTable
-from pydantic import JsonValue
 from shared.cache_records import CacheEntry
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError
-from shared.identity import WorkspaceRecord, WorkspaceStatus
+from shared.identity import WorkspaceStatus
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord, ObjectWriteCommand
 from shared.tasks import TaskStatus
@@ -51,7 +46,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import InstrumentedAttribute, Session
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
 
 
@@ -93,19 +87,24 @@ class ObjectWriteClaim:
 class ObjectRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[ObjectRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ObjectTable, ObjectRecord),
-        )
-
     def upsert(self, record: ObjectRecord, *, workspace_id: str) -> ObjectRecord:
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
         CleanupRepository(self.session).assert_object_write_available(
-            record,
-            workspace_id=workspace_id,
+            record, workspace_id=workspace_id
         )
-        return self.records.upsert(record, workspace_id=workspace_id)
+        return self._save(record, workspace_id=workspace_id)
+
+    def _save(self, record: ObjectRecord, *, workspace_id: str) -> ObjectRecord:
+        record = ObjectRecord.model_validate(dict(record))
+        row = self.session.get(ObjectTable, record.id)
+        if row is None:
+            row = ObjectTable(id=record.id, workspace_id=workspace_id)
+            self.session.add(row)
+        elif row.workspace_id != workspace_id:
+            raise ConflictError("object ownership cannot change")
+        write_object_row(row, record)
+        self.session.flush()
+        return object_from_table(row)
 
     def begin_write(
         self,
@@ -148,17 +147,19 @@ class ObjectRepository:
         claim_id = str(uuid4())
         claimed_at = utc_now()
         write_target = command.model_copy(deep=True)
-        payload = _object_write_payload(command)
+        fields = command.model_dump(mode="json")
         if existing is None:
-            record = self.records.create(
-                {
-                    **payload,
-                    **({"id": object_id} if object_id is not None else {}),
-                    "write_claim_id": claim_id,
-                    "write_claimed_at": claimed_at,
-                    "write_created": True,
-                    "write_target": write_target,
-                },
+            record = self._save(
+                ObjectRecord.model_validate(
+                    {
+                        **fields,
+                        "id": object_id or str(uuid4()),
+                        "write_claim_id": claim_id,
+                        "write_claimed_at": claimed_at,
+                        "write_created": True,
+                        "write_target": write_target,
+                    }
+                ),
                 workspace_id=workspace_id,
             )
             return ObjectWriteClaim(record=record, claim_id=claim_id, created=True)
@@ -170,11 +171,11 @@ class ObjectRepository:
                 "write_target": write_target,
             }
         )
-        self.records.upsert(claimed, workspace_id=workspace_id)
+        self._save(claimed, workspace_id=workspace_id)
         target = ObjectRecord.model_validate(
             {
                 **existing.model_dump(),
-                **payload,
+                **fields,
                 "write_claim_id": claim_id,
                 "write_claimed_at": claimed_at,
                 "write_created": False,
@@ -225,9 +226,9 @@ class ObjectRepository:
                 completed.artifact_expires_at = stored + timedelta(
                     seconds=completed.artifact_retention_seconds
                 )
-        _write_object_row(row, completed)
+        write_object_row(row, completed)
         self.session.flush()
-        return completed
+        return object_from_table(row)
 
     def abort_write(self, claim: ObjectWriteClaim, *, workspace_id: str) -> None:
         if not claim.write_required:
@@ -253,18 +254,11 @@ class ObjectRepository:
             self.session.delete(row)
             self.session.flush()
             return
-        current = ObjectRecord.model_validate(row.payload).model_copy(
-            update={
-                "write_claim_id": "",
-                "write_claimed_at": None,
-                "write_created": False,
-                "write_target": None,
-            }
-        )
-        row.payload = current.model_dump(mode="json")
         row.write_claim_id = ""
         row.write_claimed_at = None
-        flag_modified(row, "payload")
+        row.write_created = False
+        current = object_from_table(row)
+        write_object_row(row, current)
         self.session.flush()
 
     def list_stale_write_claims(
@@ -285,7 +279,7 @@ class ObjectRepository:
         return [
             OwnedObjectRecord(
                 workspace_id=str(row.workspace_id),
-                record=ObjectRecord.model_validate(row.payload),
+                record=object_from_table(row),
             )
             for row in self.session.scalars(statement)
         ]
@@ -310,7 +304,7 @@ class ObjectRepository:
         return [
             OwnedObjectRecord(
                 workspace_id=str(row.workspace_id),
-                record=ObjectRecord.model_validate(row.payload),
+                record=object_from_table(row),
             )
             for row in self.session.scalars(statement)
         ]
@@ -336,13 +330,13 @@ class ObjectRepository:
             raise ConflictError("saved artifacts are immutable; save a new artifact")
         if existing is not None and not overwrite:
             return existing
-        payload = _object_write_payload(command)
+        fields = command.model_dump(mode="json")
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
         if existing is None:
-            return self.records.create(payload, workspace_id=workspace_id)
-        return self.records.upsert(
-            ObjectRecord.model_validate({**existing.model_dump(), **payload}),
-            workspace_id=workspace_id,
-        )
+            record = ObjectRecord.model_validate({**fields, "id": str(uuid4())})
+        else:
+            record = ObjectRecord.model_validate({**existing.model_dump(), **fields})
+        return self._save(record, workspace_id=workspace_id)
 
     def claim_delete(
         self,
@@ -423,14 +417,11 @@ class ObjectRepository:
         row = self.session.get(ObjectTable, object_id)
         if row is None:
             return False
-        current = ObjectRecord.model_validate(row.payload)
+        current = object_from_table(row)
         if current.cleanup_kind != cleanup_kind:
             raise ConflictError(f"object delete claim was replaced: {object_id}")
-        released = current.model_copy(update={"cleanup_kind": "", "cleanup_claimed_at": None})
-        row.payload = released.model_dump(mode="json")
         row.cleanup_kind = ""
         row.cleanup_claimed_at = None
-        flag_modified(row, "payload")
         self.session.flush()
         return True
 
@@ -441,7 +432,13 @@ class ObjectRepository:
         workspace_id: str,
         include_operations: bool = False,
     ) -> ObjectRecord | None:
-        record = self.records.get(object_id, workspace_id=workspace_id)
+        row = self.session.scalar(
+            select(ObjectTable).where(
+                ObjectTable.id == object_id,
+                ObjectTable.workspace_id == workspace_id,
+            )
+        )
+        record = object_from_table(row) if row is not None else None
         if record is not None and not include_operations and _object_operation_active(record):
             return None
         return record
@@ -457,7 +454,7 @@ class ObjectRepository:
             return None
         owned = OwnedObjectRecord(
             workspace_id=str(row.workspace_id),
-            record=ObjectRecord.model_validate(row.payload),
+            record=object_from_table(row),
         )
         if not include_operations and _object_operation_active(owned.record):
             return None
@@ -478,7 +475,7 @@ class ObjectRepository:
                 ObjectTable.key == key,
             )
         ).first()
-        record = ObjectRecord.model_validate(row.payload) if row is not None else None
+        record = object_from_table(row) if row is not None else None
         if record is not None and not include_operations and _object_operation_active(record):
             return None
         return record
@@ -499,18 +496,28 @@ class ObjectRepository:
         row = self.session.scalars(
             statement.order_by(ObjectTable.created_at.desc(), ObjectTable.id.asc()).limit(1)
         ).first()
-        return ObjectRecord.model_validate(row.payload) if row is not None else None
+        return object_from_table(row) if row is not None else None
 
     def list(self, *, workspace_id: str) -> list[ObjectRecord]:
-        return [
-            record
-            for record in self.records.list(workspace_id=workspace_id)
-            if not _object_operation_active(record)
-        ]
+        statement = (
+            select(ObjectTable)
+            .where(
+                ObjectTable.workspace_id == workspace_id,
+                ObjectTable.write_claimed_at.is_(None),
+                ObjectTable.cleanup_claimed_at.is_(None),
+            )
+            .order_by(ObjectTable.created_at.desc(), ObjectTable.id)
+        )
+        return [object_from_table(row) for row in self.session.scalars(statement)]
 
     def list_for_workspace_deletion(self, workspace_id: str) -> list[ObjectRecord]:
         """System cleanup listing that retains active operation records."""
-        return self.records.list(workspace_id=workspace_id)
+        statement = (
+            select(ObjectTable)
+            .where(ObjectTable.workspace_id == workspace_id)
+            .order_by(ObjectTable.created_at.desc(), ObjectTable.id)
+        )
+        return [object_from_table(row) for row in self.session.scalars(statement)]
 
     def list_source_object_ids_for_deletion(
         self,
@@ -549,11 +556,27 @@ class ObjectRepository:
         )
 
     def delete(self, object_id: str, *, workspace_id: str) -> bool:
-        return self.records.delete(object_id, workspace_id=workspace_id)
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        return (
+            self.session.scalar(
+                delete(ObjectTable)
+                .where(
+                    ObjectTable.id == object_id,
+                    ObjectTable.workspace_id == workspace_id,
+                )
+                .returning(ObjectTable.id)
+            )
+            is not None
+        )
 
     def delete_across_workspaces(self, object_id: str) -> bool:
         """System retention/cleanup deletion regardless of owning workspace."""
-        return self.records.delete_across_workspaces(object_id)
+        return (
+            self.session.scalar(
+                delete(ObjectTable).where(ObjectTable.id == object_id).returning(ObjectTable.id)
+            )
+            is not None
+        )
 
     def delete_for_workspace_deletion(
         self,
@@ -571,7 +594,7 @@ class ObjectRepository:
             return False
         if str(row.workspace_id) != workspace_id:
             raise ConflictError(f"object is not owned by deleting workspace: {object_id}")
-        record = ObjectRecord.model_validate(row.payload)
+        record = object_from_table(row)
         if record.cleanup_kind != cleanup_kind:
             raise ConflictError(f"object delete claim was replaced: {object_id}")
         self.session.delete(row)
@@ -602,31 +625,6 @@ def _object_content_matches_write_command(
         and record.size == command.size
         and record.sha256 == command.sha256
     )
-
-
-def _object_write_payload(command: ObjectWriteCommand) -> dict[str, JsonValue]:
-    """Copy one validated command into the durable object-record fields."""
-    return command.model_dump(mode="json")
-
-
-def _write_object_row(row: ObjectTable, record: ObjectRecord) -> None:
-    row.payload = record.model_dump(mode="json")
-    row.bucket = record.bucket
-    row.key = record.key
-    row.path = record.path
-    row.size = record.size
-    row.sha256 = record.sha256
-    row.content_type = record.content_type
-    row.write_claim_id = record.write_claim_id
-    row.write_claimed_at = record.write_claimed_at
-    row.cleanup_kind = record.cleanup_kind
-    row.cleanup_claimed_at = record.cleanup_claimed_at
-    row.artifact_task_id = record.artifact_task_id
-    row.artifact_app_id = record.artifact_app_id
-    row.artifact_expires_at = record.artifact_expires_at
-    row.artifact_metered_at = record.artifact_metered_at
-    row.updated_at = utc_now()
-    flag_modified(row, "payload")
 
 
 @dataclass(slots=True)
@@ -660,7 +658,7 @@ class ObjectReferenceRepository:
         return [
             OwnedObjectRecord(
                 workspace_id=str(row.workspace_id),
-                record=ObjectRecord.model_validate(row.payload),
+                record=object_from_table(row),
             )
             for row in self.session.scalars(statement)
         ]
@@ -848,34 +846,21 @@ class ObjectReferenceRepository:
 class VolumeRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[VolumeRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(VolumeTable, VolumeRecord, key_field="name"),
-        )
-
     def create(self, name: str, *, workspace_id: str) -> tuple[VolumeRecord, bool]:
-        """Insert this volume, or return the one that beat us to the name.
-
-        Returns whether this call is the one that created it, because the caller
-        publishes a change and admits a new billed thing off that answer — doing
-        either for a volume somebody else created would announce a creation twice.
-
-        The lookup callers do before this one is not a lock. Workspace scoping
-        takes `FOR KEY SHARE`, which does not serialize writers, so two containers
-        mounting the same new volume name during an autoscaler ramp both read
-        absence and both insert. `uq_volumes_workspace_name` is what makes that
-        safe, and catching it here is what turns the loser's container start from
-        an unmapped `IntegrityError` into the volume it was asking for.
-        """
-
-        return self.records.create_or_existing(
-            {"name": name},
-            workspace_id=workspace_id,
-            name=name,
-            existing=lambda: self.get(name, workspace_id=workspace_id),
+        """Return the named volume and whether this transaction created it."""
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        created = self.session.scalar(
+            postgresql_insert(VolumeTable)
+            .values(name=name, workspace_id=workspace_id)
+            .on_conflict_do_nothing(constraint="uq_volumes_workspace_name")
+            .returning(VolumeTable)
         )
+        if created is not None:
+            return volume_from_table(created), True
+        existing = self.get(name, workspace_id=workspace_id)
+        if existing is None:
+            raise ConflictError("volume changed during creation; retry the request")
+        return existing, False
 
     def get(self, name: str, *, workspace_id: str) -> VolumeRecord | None:
         row = self.session.scalar(
@@ -884,24 +869,15 @@ class VolumeRepository:
                 VolumeTable.name == name,
             )
         )
-        return self._record(row) if row is not None else None
+        return volume_from_table(row) if row is not None else None
 
     def list(self, *, workspace_id: str) -> list[VolumeRecord]:
         return [
-            self._record(row)
+            volume_from_table(row)
             for row in self.session.scalars(
                 select(VolumeTable).where(VolumeTable.workspace_id == workspace_id)
             )
         ]
-
-    @staticmethod
-    def _record(row: VolumeTable) -> VolumeRecord:
-        return VolumeRecord.model_validate(row.payload).model_copy(
-            update={
-                "deletion_requested_at": row.deletion_requested_at,
-                "size_bytes": row.size_bytes,
-            }
-        )
 
     def lock(self, name: str, *, workspace_id: str, allow_deleting: bool = False) -> VolumeTable:
         row = self.session.scalar(
@@ -1012,7 +988,7 @@ class VolumeRepository:
         limit: int,
     ) -> tuple[VolumeMeteringTarget, ...]:
         statement = (
-            select(VolumeTable, WorkspaceTable)
+            select(VolumeTable, WorkspaceTable.name)
             .join(WorkspaceTable, WorkspaceTable.id == VolumeTable.workspace_id)
             .where(
                 VolumeTable.metered_at <= metered_before,
@@ -1022,8 +998,8 @@ class VolumeRepository:
             .limit(limit)
         )
         return tuple(
-            self._metering_target(row, workspace_record_from_table(workspace))
-            for row, workspace in self.session.execute(statement).tuples()
+            self._metering_target(row, workspace_name)
+            for row, workspace_name in self.session.execute(statement).tuples()
         )
 
     def get_metering_target(
@@ -1033,7 +1009,7 @@ class VolumeRepository:
         workspace_id: str,
     ) -> VolumeMeteringTarget | None:
         statement = (
-            select(VolumeTable, WorkspaceTable)
+            select(VolumeTable, WorkspaceTable.name)
             .join(WorkspaceTable, WorkspaceTable.id == VolumeTable.workspace_id)
             .where(
                 VolumeTable.workspace_id == workspace_id,
@@ -1043,11 +1019,8 @@ class VolumeRepository:
         result = self.session.execute(statement).tuples().first()
         if result is None:
             return None
-        row, workspace = result
-        return self._metering_target(
-            row,
-            workspace_record_from_table(workspace),
-        )
+        row, workspace_name = result
+        return self._metering_target(row, workspace_name)
 
     def lock_metering_checkpoint(self, volume_id: str) -> VolumeMeteringCheckpoint | None:
         row = self.session.scalars(
@@ -1081,12 +1054,12 @@ class VolumeRepository:
     @staticmethod
     def _metering_target(
         row: VolumeTable,
-        workspace: WorkspaceRecord,
+        workspace_name: str,
     ) -> VolumeMeteringTarget:
         return VolumeMeteringTarget(
             id=str(row.id),
             workspace_id=str(row.workspace_id),
-            workspace_name=workspace.name,
+            workspace_name=workspace_name,
             name=row.name,
             size_bytes=row.size_bytes,
             metered_at=row.metered_at,
