@@ -4,8 +4,8 @@ This runbook applies only to the owner's approved reset of production and local
 Compose for PR #295. It destroys application data and migration history. Future
 releases use forward Alembic migrations from `0001_relational_baseline`.
 
-Status: local Compose reset, bootstrap and live acceptance completed. Production
-has not been changed.
+Status: both resets and live acceptance completed. Production runs release
+`0.1.0`; normal service, Argo reconciliation and retention are restored.
 
 ## Targets observed before reset
 
@@ -137,6 +137,92 @@ scenario uses its public cleanup path.
 Function log streaming and attribution pass for sequential and concurrent calls.
 Repeating the database bootstrap reports the baseline already current.
 
-Production's recorded subscription was independently read. It is a live free
+Production's old subscription was independently read. It was a live free
 subscription with one paid zero-dollar invoice and no pending invoice items.
-It has not been canceled or changed.
+It was canceled during production maintenance. Its customer and paid invoice
+history remain at Stripe.
+
+## Production execution
+
+PR #295 merged as `ba958db9e0840d47e7661566b833a2340bab0de1` after all checks
+passed. The implementation's complete CI run passed 1,893 tests. Ship run
+`35048751994` publishes the merged source.
+
+Maintenance added `argocd.argoproj.io/skip-reconcile=true` to the `lazycloud-prod`
+Application, suspended the retention CronJob and scaled the five application
+Deployments to zero. The prior replicas were control-plane 2, scheduler 2,
+connection-gateway 2, cloudflared 2 and cache-server 1. Argo's configured automated
+sync policy was preserved. Only the deployment's operator pod remained running
+before the database reset.
+
+The public compute deletion owner retired unit
+`908c3fbd-66d7-5a3b-bcdb-628ce1a68673`. The first request encountered a scheduler
+lease; after the scheduler stopped, deletion requested provider termination and a
+subsequent request returned 204. Independent AWS reads confirmed the ASG, launch
+template and attached volume absent, and no pending, running, stopping or stopped
+instances tagged with the three workspace IDs in either configured AWS region.
+
+Workspace `c4a4e80c-a617-4069-9bf6-ea058de8903a` completed its public deletion.
+The old release could not finalize `mclean-connor` because historical worker
+shutdown acknowledgments were missing; its default workspace cannot be deleted
+through the public route. After infrastructure shutdown was independently proved,
+the deployed storage issuer retired those two exact workspace buckets, fencing
+issued grants and purging their objects through its production implementation.
+AWS then listed no remaining deployment workspace buckets.
+
+The application bucket held 47 image archives and 19 workspace source objects,
+1,440,646,617 bytes total. It had versioning disabled and no unfinished multipart
+uploads. Those inventoried objects were removed after writers stopped; the
+deployment bucket itself remains, empty. Release buckets, ECR repositories,
+networking, roles, authorization infrastructure and other accounts were preserved.
+
+The database reset verified the mounted direct target, revision
+`0049_database_lookup_indexes`, and exact equality between the 82 public tables
+and the deployed metadata plus Alembic. It dropped those tables and the three
+application trigger functions in one transaction. Schema ownership, grants and
+extensions remain. No revision was stamped over old data.
+
+The Redis reset verified the deployment's database 0 endpoint and enumerated the
+keys. It removed 3,912 keys belonging to `lazycloud:` and the application's health
+rate limiter, then verified zero remained. It did not flush another database.
+
+The temporary `relational-reset-operator` pod held only the database and Redis
+configuration needed for reset verification. Cluster consolidation evicted and
+removed it after both resets were verified. The standalone `lazycloud-tests`
+services and local acceptance credentials have also been removed.
+
+## Completed deployment
+
+Ship run `35048751994` succeeded. Release `0.1.0` names source
+`ba958db9e0840d47e7661566b833a2340bab0de1`; the deployment branch records it at
+`afc7743bd1de00e736904ba471b100a4a1cd1b84`. Argo reports Synced and Healthy.
+
+On resuming reconciliation, the controller briefly restored the old Deployment
+replica counts while refreshing its branch revision. They were immediately held
+at zero again. The new migration job completed with `0001_relational_baseline`
+before application rollout continued. Database, administrator, billing catalog,
+billing rates and fleet bootstrap jobs all completed from the new release.
+
+The production database reports 79 public tables including Alembic. The GitHub
+identity was compared directly with the configured bootstrap ID and belongs to
+the active administrator. Both API and both scheduler replicas read active release
+generation 35, version `0.1.0`, with the merged source revision. All five
+Deployments have their original replica counts and healthy replicas. The temporary
+Argo skip annotation is removed, its original automatic sync policy remains,
+and log retention is unsuspended with the new CLI image.
+
+The administrator's new free billing relationship was provisioned through the
+same `BillingAccountService` used by sign-in. Its subscription is
+`sub_1UG8ynLpRGtVfZdqBrjRWxu9`. No OAuth session was fabricated; a browser sign-in
+will authenticate the already-linked GitHub identity.
+
+The public production SDK deployed `relational_reset_acceptance_20260916`,
+built its Python image on the new managed fleet and invoked one Function.
+Task `9d1a347e-7728-4e7a-8a90-166d305be201` completed with
+`{"square": 49, "values": [7, null, true]}` and streamed its execution marker.
+The app was deleted through the public API and verified absent. Its Function
+container is stopped and image-build container exited. The deployment's normal
+two-machine warm fleet remains; acceptance did not create a separate pool.
+
+`0001_relational_baseline` is now frozen. Future schema changes add forward
+migrations. This completed reset authorizes no subsequent production reset.

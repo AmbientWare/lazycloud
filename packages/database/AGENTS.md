@@ -7,12 +7,11 @@ wherever the schema can hold it: a rule enforced only in Python is enforced only
 where someone remembered to call it. Repositories map and query; services decide.
 Redis hot state stays out unless the history itself has to be durable.
 
-The owner authorized the relational schema release to replace the old migration
-chain and reset production and local Compose after acceptance. Follow
-`database-cleanup-plan.md` for that one reset. `0001_relational_baseline` becomes
-frozen when deployed. Later schema changes require forward migrations; editing a
-deployed revision invalidates the database's history. Local databases remain
-disposable. This release does not authorize subsequent production resets.
+`0001_relational_baseline` is deployed and frozen. Schema changes require forward
+migrations; editing a deployed revision invalidates the database's history.
+The completed owner-authorized reset is recorded in `deploy/database-reset.md`.
+Local databases remain disposable. This release does not authorize another
+production reset.
 
 The revisions are explicit DDL, never `create_all`. A migration generated from
 the live metadata always agrees with it, which sounds like safety and is the
