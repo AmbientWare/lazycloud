@@ -1,5 +1,5 @@
 .marketing-site main > .marketing-parity {
-  --marketing-section-background: #0c1821;
+  --marketing-section-background: var(--background);
   --surface-border: #353d42;
   --surface-frame: linear-gradient(135deg, #21272b, #191f23 45%, #12181c);
   --surface-raised: linear-gradient(145deg, #252c31, #1b2328);
