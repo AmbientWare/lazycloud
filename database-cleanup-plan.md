@@ -1,7 +1,8 @@
 # Database cleanup and reset plan
 
-Status: schema implementation and CI checks pass. Local Compose reset, bootstrap
-and live acceptance pass. Production reset is pending.
+Status: complete. Both installations were reset and pass live acceptance.
+Production runs release `0.1.0` from merged PR #295. The deployed baseline is
+frozen; the execution record is in `deploy/database-reset.md`.
 Branch: `refactor/relational-database`, based on `a257b2e18`.
 
 ## Outcome
