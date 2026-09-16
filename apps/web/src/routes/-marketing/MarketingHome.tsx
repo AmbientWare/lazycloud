@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ArrowUpRight } from "lucide-react";
 
 import { CodeBlock } from "@/components/ui/code-block";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -10,111 +9,11 @@ import { MarketingLayout } from "./MarketingLayout";
 import { CloudHero } from "./CloudHero";
 import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
-import { FinalCta, MarketingCard, SectionHeading, StatusDot, shell } from "./MarketingPrimitives";
+import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimitives";
 import { ComputePlacementPreview, StoryPreview, type StoryVisual } from "./ProductPreviews";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
 import { GpuPlate, LocalPlate, ProductionPlate } from "./ParityFigures";
-
-const endpointExample = `from lazycloud import App
-from pydantic import BaseModel
-
-app = App("review_api")
-
-class Review(BaseModel):
-    summary: str
-    risks: list[str]
-
-@app.endpoint(route="/review")
-def review_patch(diff: str) -> Review:
-    added = [line[1:] for line in diff.splitlines()
-             if line.startswith("+") and not line.startswith("+++")]
-    risks = ["Review added TODOs"] if any("TODO" in line for line in added) else []
-    return Review(summary=f"{len(added)} added lines", risks=risks)`;
-
-const functionExample = `from lazycloud import App
-
-app = App("sales")
-
-@app.function(cpu=1.0, memory="256Mi")
-def summarize_sales(amounts_cents: list[int]) -> dict[str, int]:
-    return {"sales": len(amounts_cents), "total_cents": sum(amounts_cents)}`;
-
-const sandboxExample = `from lazycloud import App
-
-app = App("coding_agent")
-workspace = app.sandbox(
-    name="workspace",
-    block_network=True,
-)
-
-instance = workspace.create()
-try:
-    result = instance.run("python --version")
-    print(result.stdout)
-finally:
-    instance.terminate()`;
-
-const podExample = `from lazycloud import App, Image
-
-app = App("preview")
-preview = app.pod(
-    name="web",
-    image=Image(python_version="3.12"),
-    command=["python", "-m", "http.server", "8080"],
-    ports={"http": 8080},
-    authorized=True,
-)`;
-
-const cronExample = `from datetime import datetime, timezone
-
-from lazycloud import App
-
-app = App("maintenance")
-
-@app.function(cron="0 2 * * *", retries=2)
-def heartbeat() -> str:
-    timestamp = datetime.now(timezone.utc).isoformat()
-    print(f"Scheduled run at {timestamp}", flush=True)
-    return timestamp`;
-
-const heroStories = [
-  {
-    key: "apps",
-    label: "APIs",
-    code: endpointExample,
-    command: "uv run lazycloud deploy application:app",
-    status: "deployed",
-  },
-  {
-    key: "functions",
-    label: "Functions",
-    code: functionExample,
-    command: "uv run lazycloud run application:summarize_sales '[1200, 3500, 800]'",
-    status: "complete",
-  },
-  {
-    key: "sandboxes",
-    label: "Sandboxes",
-    code: sandboxExample,
-    command: "uv run python application.py",
-    status: "sandbox stopped",
-  },
-  {
-    key: "services",
-    label: "Services",
-    code: podExample,
-    command: "uv run lazycloud deploy application:app",
-    status: "deployed",
-  },
-  {
-    key: "schedules",
-    label: "Schedules",
-    code: cronExample,
-    command: "uv run lazycloud deploy application:app",
-    status: "deployed",
-  },
-] as const;
 
 type PlatformStory = {
   key: string;
@@ -235,72 +134,6 @@ export function MarketingHome() {
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
         <CloudHero />
-        <section className="bg-background py-16 sm:py-24" aria-labelledby="cloud-code-title">
-          <div
-            className={cn(shell, "grid items-center gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:gap-16")}
-          >
-            <div>
-              <h2 id="cloud-code-title" className="text-4xl font-medium tracking-tight sm:text-5xl">
-                Your cloud, in Python.
-              </h2>
-              <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-                Your coding agent helps you build faster. LazyCloud runs your product in the cloud.
-                Use the same Python code locally, for a one-off cloud run, or as a deployed app.
-              </p>
-            </div>
-
-            <div className="relative min-w-0">
-              <MarketingCard className="relative z-[2] min-w-0">
-                <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
-                  <TabsList
-                    className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
-                    aria-label="Python code examples"
-                  >
-                    {heroStories.map((story) => (
-                      <TabsTrigger
-                        className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
-                        key={story.key}
-                        value={story.key}
-                      >
-                        {story.label}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                  {heroStories.map((story) => (
-                    <TabsContent key={story.key} value={story.key}>
-                      <CodeBlock
-                        className="rounded-none border-0 bg-transparent"
-                        tone="paper"
-                        /* Fixed body height so switching examples never resizes the
-                         panel; sized to the tallest snippet. On narrow screens the
-                         type eases down a notch so wrapped lines still fit without
-                         a scroll. */
-                        bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
-                        footer={
-                          <div
-                            className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                            data-marketing-terminal-surface=""
-                          >
-                            <span className="text-brand">$</span>
-                            <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                              {story.command}
-                            </span>
-                            <i className="marketing-cursor" aria-hidden="true" />
-                            <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                              <StatusDot /> {story.status}
-                            </strong>
-                          </div>
-                        }
-                      >
-                        {story.code}
-                      </CodeBlock>
-                    </TabsContent>
-                  ))}
-                </Tabs>
-              </MarketingCard>
-            </div>
-          </div>
-        </section>
 
         <ParitySection />
 
