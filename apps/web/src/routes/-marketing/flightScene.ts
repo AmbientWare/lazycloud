@@ -1,5 +1,8 @@
 import * as THREE from "three";
-import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { createShip } from "./shipModel";
 import { createLaunchPlatform } from "./launchPlatform";
 import { createStarfield } from "./starfield";
@@ -14,27 +17,67 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   const scene = new THREE.Scene();
+  scene.background = new THREE.Color("#000000");
   const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 50);
-  const environment = new RoomEnvironment();
+  const environment = new THREE.Scene();
+  environment.background = new THREE.Color("#243240");
+  const lightCards: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>[] = [];
+  for (const [x, y, z, width, height, color, intensity] of [
+    [-4, 4, 6, 3, 7, "#e4eeff", 5],
+    [-5, -3, 5, 4, 9, "#e2edff", 4],
+    [4, 1, 2, 0.8, 6, "#72baff", 4],
+    [0, 6, -1, 4, 2, "#ffffff", 3],
+    [0, -4, 3, 3, 1, "#99cfff", 1],
+  ] as const) {
+    const card = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, height),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color).multiplyScalar(intensity),
+        side: THREE.DoubleSide,
+      }),
+    );
+    card.position.set(x, y, z);
+    card.lookAt(0, 0, 0);
+    environment.add(card);
+    lightCards.push(card);
+  }
   const pmrem = new THREE.PMREMGenerator(renderer);
   const environmentMap = pmrem.fromScene(environment, 0.04);
   scene.environment = environmentMap.texture;
-  scene.environmentIntensity = 0.65;
-  environment.dispose();
+  scene.environmentIntensity = 1;
+  for (const card of lightCards) {
+    card.geometry.dispose();
+    card.material.dispose();
+  }
   pmrem.dispose();
-  scene.add(new THREE.HemisphereLight("#b8e7ff", "#081019", 1));
-  const key = new THREE.DirectionalLight("#edf6ff", 3);
+  scene.add(new THREE.HemisphereLight("#b8d9ef", "#081019", 0.5));
+  const key = new THREE.DirectionalLight("#fff4e8", 2.2);
   key.position.set(-3, 5, 4);
-  const rim = new THREE.DirectionalLight("#69caff", 2.5);
-  rim.position.set(4, 2, -3);
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.left = key.shadow.camera.bottom = -5;
+  key.shadow.camera.right = key.shadow.camera.top = 5;
+  key.shadow.normalBias = 0.018;
+  key.shadow.bias = -0.0001;
+  const rim = new THREE.DirectionalLight("#4aaaff", 4);
+  rim.position.set(4, 1, -2);
   scene.add(key, rim);
-  const { ship, parts, exhaust } = createShip();
+  const { ship, parts, exhaust, exhaustMaterial, engineLight } = createShip();
   const { platform, clamps, wash } = createLaunchPlatform();
   const { stars, update: updateStars } = createStarfield();
   scene.add(ship, platform, stars);
   const launchRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -0.35, 0));
-  const flightRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.28, -0.3, -0.62));
+  const flightRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.24, -0.44, -0.62));
+  const composer = new EffectComposer(renderer);
+  const renderPass = new RenderPass(scene, camera);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.3, 0.35, 2.8);
+  const output = new OutputPass();
+  composer.addPass(renderPass);
+  composer.addPass(bloom);
+  composer.addPass(output);
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let elapsed = reducedMotion.matches ? 3.4 : 0;
@@ -63,6 +106,8 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
     ship.scale.setScalar(1.05 + flight * 0.17);
     exhaust.visible = ignition > 0;
     exhaust.scale.y = ignition * (0.18 + lift * 0.9 + flight * 0.25);
+    exhaustMaterial.uniforms.time.value = elapsed;
+    engineLight.intensity = ignition * (0.4 + flight * 0.8);
     platform.position.set(-flight * 2, -1.9 - lift * 7, -lift * 3);
     platform.scale.setScalar(0.78 - lift * 0.3);
     platform.visible = lift < 1;
@@ -81,7 +126,7 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
       cameraDistance,
     );
     camera.lookAt(0, 0, 0);
-    renderer.render(scene, camera);
+    composer.render();
   }
   function animate(now: number) {
     if (previousTime) elapsed += (now - previousTime) / 1000;
@@ -102,6 +147,7 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
     cameraDistance = Math.max(11.8, 9.5 / camera.aspect);
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
+    composer.setSize(width, height);
     render();
   }
   function movePointer(event: PointerEvent) {
@@ -144,6 +190,7 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
       const geometries = new Set<THREE.BufferGeometry>();
       const materials = new Set<THREE.Material>();
       scene.traverse((node) => {
+        if (node instanceof THREE.InstancedMesh) node.dispose();
         if (
           node instanceof THREE.Mesh ||
           node instanceof THREE.Line ||
@@ -157,6 +204,11 @@ export function createFlightScene(canvas: HTMLCanvasElement) {
       for (const geometry of geometries) geometry.dispose();
       for (const material of materials) material.dispose();
       environmentMap.dispose();
+      key.shadow.dispose();
+      bloom.dispose();
+      output.dispose();
+      renderPass.dispose();
+      composer.dispose();
       renderer.dispose();
     },
   };

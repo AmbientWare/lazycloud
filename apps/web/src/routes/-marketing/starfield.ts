@@ -44,6 +44,46 @@ export function createStarfield() {
   const streaks = new THREE.LineSegments(geometry, material);
   streaks.frustumCulled = false;
   stars.add(streaks);
+  const nearCount = 28;
+  const nearStars = Array.from({ length: nearCount }, (_, index) => ({
+    x: (index % 2 ? 1 : -1) * (2.6 + random() * 6),
+    y: random() * 42,
+    z: -2 + random() * 4,
+    speed: 18 + random() * 18,
+    length: 1.6 + random() * 2.5,
+    width: 0.018 + random() * 0.025,
+  }));
+  const nearMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { strength: { value: 0 } },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec2 vUv;
+      uniform float strength;
+      void main() {
+        float width = exp(-pow((vUv.x - 0.5) * 5.0, 2.0));
+        float tail = pow(1.0 - vUv.y, 1.4) * smoothstep(0.0, 0.08, vUv.y);
+        gl_FragColor = vec4(0.45, 0.75, 1.0, width * tail * strength);
+      }
+    `,
+  });
+  const nearStreaks = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(1, 1),
+    nearMaterial,
+    nearCount,
+  );
+  nearStreaks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  nearStreaks.frustumCulled = false;
+  stars.add(nearStreaks);
+  const transform = new THREE.Object3D();
 
   return {
     stars,
@@ -63,6 +103,15 @@ export function createStarfield() {
       }
       attribute.needsUpdate = true;
       material.opacity = 0.35 + flight * 0.55;
+      nearMaterial.uniforms.strength.value = reducedMotion ? 0 : flight * 0.7;
+      nearStreaks.visible = flight > 0 && !reducedMotion;
+      nearStars.forEach((star, index) => {
+        transform.position.set(star.x, 21 - ((star.y + distance * star.speed) % 42), star.z);
+        transform.scale.set(star.width * 3, 0.02 + flight * star.length, 1);
+        transform.updateMatrix();
+        nearStreaks.setMatrixAt(index, transform.matrix);
+      });
+      nearStreaks.instanceMatrix.needsUpdate = true;
     },
   };
 }

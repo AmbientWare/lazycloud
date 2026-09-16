@@ -1,24 +1,32 @@
 import * as THREE from "three";
+import { createEngineExhaust } from "./engineExhaust";
 
 export function createShip() {
   const ship = new THREE.Group();
   const shell = new THREE.MeshPhysicalMaterial({
-    color: "#a9bdcb",
-    metalness: 0.82,
-    roughness: 0.27,
-    clearcoat: 0.5,
+    color: "#b8c8d5",
+    metalness: 0.8,
+    roughness: 0.26,
+    clearcoat: 1,
+    clearcoatRoughness: 0.16,
   });
   const edge = new THREE.MeshStandardMaterial({
-    color: "#293e50",
-    metalness: 0.85,
-    roughness: 0.3,
+    color: "#14212e",
+    metalness: 0.92,
+    roughness: 0.24,
   });
   const inner = new THREE.MeshStandardMaterial({
-    color: "#0c1925",
-    metalness: 0.75,
-    roughness: 0.25,
+    color: "#080f18",
+    metalness: 0.55,
+    roughness: 0.36,
   });
-  const energy = new THREE.MeshBasicMaterial({ color: "#93eaff" });
+  const energy = new THREE.MeshStandardMaterial({
+    color: "#73dfff",
+    emissive: "#39bfe9",
+    emissiveIntensity: 0.8,
+    roughness: 0.22,
+    metalness: 0.3,
+  });
   const blue = new THREE.MeshStandardMaterial({
     color: "#2485a5",
     emissive: "#197997",
@@ -28,7 +36,17 @@ export function createShip() {
   });
   const parts: { group: THREE.Group; offset: THREE.Vector3; spin: THREE.Vector3; delay: number }[] =
     [];
-  const exhaust = new THREE.Group();
+  const glass = new THREE.MeshPhysicalMaterial({
+    color: "#063450",
+    metalness: 0.65,
+    roughness: 0.14,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.03,
+    iridescence: 0.18,
+    iridescenceIOR: 1.3,
+    envMapIntensity: 0.7,
+  });
+  const { exhaust, material: exhaustMaterial } = createEngineExhaust();
 
   function part(x: number, y: number, z: number, delay: number) {
     const group = new THREE.Group();
@@ -47,15 +65,16 @@ export function createShip() {
     depth: number,
     material: THREE.Material,
     z = 0,
+    panelHeight = 0.38,
   ) {
     const panels = new THREE.Group();
     parent.add(panels);
     const low = Math.min(...points.map((point) => point[1]));
     const high = Math.max(...points.map((point) => point[1]));
-    const count = Math.ceil((high - low) / 0.38);
+    const count = Math.ceil((high - low) / panelHeight);
     for (let index = 0; index < count; index++) {
-      const bottom = low + ((high - low) * index) / count + 0.012;
-      const top = low + ((high - low) * (index + 1)) / count - 0.012;
+      const bottom = low + ((high - low) * index) / count + 0.009;
+      const top = low + ((high - low) * (index + 1)) / count - 0.009;
       const polygon = clipHorizontal(clipHorizontal(points, bottom, true), top, false);
       if (polygon.length < 3) continue;
       const center = new THREE.Vector3(
@@ -69,11 +88,21 @@ export function createShip() {
       const geometry = new THREE.ExtrudeGeometry(shape, {
         depth,
         bevelEnabled: true,
-        bevelSegments: 2,
-        bevelSize: 0.01,
-        bevelThickness: 0.012,
+        bevelSegments: 3,
+        bevelSize: 0.007,
+        bevelThickness: 0.008,
       });
       geometry.translate(0, 0, -depth / 2);
+      const positions = geometry.getAttribute("position");
+      for (let vertex = 0; vertex < positions.count; vertex++) {
+        const x = positions.getX(vertex) + center.x;
+        const y = positions.getY(vertex) + center.y;
+        positions.setZ(
+          vertex,
+          positions.getZ(vertex) + 0.22 * Math.cos(x * 1.8) + 0.06 * Math.cos(y * 1.5),
+        );
+      }
+      geometry.computeVertexNormals();
       const panel = new THREE.Mesh(geometry, material);
       const pivot = new THREE.Group();
       pivot.position.copy(center);
@@ -112,7 +141,7 @@ export function createShip() {
     inner,
     -0.12,
   );
-  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.14, 1.7, 8), energy);
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.14, 1.7, 8), blue);
   core.position.set(0, -0.05, 0.13);
   spine.add(core);
   for (const y of [-0.6, -0.2, 0.2, 0.6]) {
@@ -226,21 +255,12 @@ export function createShip() {
     0.14,
     edge,
     0.34,
+    1.4,
   );
-  plate(
-    cockpit,
-    [
-      [0, 0.94],
-      [0.12, 0.51],
-      [0.1, 0.1],
-      [0, -0.02],
-      [-0.1, 0.1],
-      [-0.12, 0.51],
-    ],
-    0.08,
-    blue,
-    0.43,
-  );
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), glass);
+  canopy.scale.set(0.15, 0.49, 0.17);
+  canopy.position.set(0, 0.47, 0.66);
+  cockpit.add(canopy);
   for (const side of [-1, 1]) {
     const pod = part(side * 3.1, -0.8, 0.8, 1.2);
     const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.2, 0.95, 8), shell);
@@ -296,28 +316,17 @@ export function createShip() {
     ring.position.y = -1.48;
     engine.add(ring);
   }
-  const plume = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.21, 0.025, 2.6, 32, 1, true),
-    new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending,
-      vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: `varying vec2 vUv; void main() { float fade = pow(vUv.y, 1.8); gl_FragColor = vec4(mix(vec3(0.1, 0.45, 0.85), vec3(0.7, 0.95, 1.0), vUv.y), fade * 0.65); }`,
-    }),
-  );
-  plume.position.y = -1.3;
-  exhaust.add(plume);
-  for (const side of [-1, 1]) {
-    const sidePlume = plume.clone();
-    sidePlume.scale.set(0.48, 0.72, 0.48);
-    sidePlume.position.set(side * 0.97, -1, 0.12);
-    exhaust.add(sidePlume);
-  }
-  exhaust.position.y = -1.49;
+  ship.traverse((node) => {
+    if (node instanceof THREE.Mesh) {
+      node.castShadow = true;
+      node.receiveShadow = true;
+    }
+  });
   engine.add(exhaust);
-  return { ship, parts, exhaust };
+  const engineLight = new THREE.PointLight("#47bfff", 0, 3.5, 2);
+  engineLight.position.set(0, -1.65, 0.65);
+  ship.add(engineLight);
+  return { ship, parts, exhaust, exhaustMaterial, engineLight };
 }
 
 function clipHorizontal(
