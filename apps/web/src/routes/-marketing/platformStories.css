@@ -144,11 +144,11 @@
 }
 
 .platform-example-card .is-generate {
-  --series-color: var(--muted-foreground);
+  --series-color: var(--warning);
 }
 
 .platform-example-card .is-status {
-  --series-color: var(--foreground);
+  --series-color: var(--positive);
 }
 
 .platform-example-card :is(.is-review, .is-generate, .is-status) .endpoint-line {
@@ -213,12 +213,13 @@
 }
 
 .platform-example-card .timeline-bar {
-  background: color-mix(in oklab, var(--brand) 48%, transparent);
-  border-left: 2px solid var(--brand);
+  background: color-mix(in oklab, var(--positive) 36%, transparent);
+  border-left: 2px solid var(--positive);
 }
 
 .platform-example-card .timeline-bar.is-running {
   background: var(--brand);
+  border-left-color: var(--brand);
 }
 
 .platform-example-card .timeline-bar.is-queued {
@@ -228,22 +229,6 @@
 
 .platform-example-card .queue-metric {
   padding-top: 0;
-}
-
-.platform-example-card .queue-metric.is-warning {
-  --series-color: var(--foreground);
-}
-
-.platform-example-card .queue-metric.is-positive {
-  --series-color: var(--muted-foreground);
-}
-
-.platform-example-card .queue-processing-line {
-  stroke: var(--foreground);
-}
-
-.platform-example-card .queue-workers-line {
-  stroke: var(--muted-foreground);
 }
 
 .platform-example-card .marketing-sandbox-preview {

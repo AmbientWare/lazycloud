@@ -225,10 +225,10 @@
   stroke-width: 1;
 }
 .compute-chart-fill {
-  fill: rgb(118 214 245 / 9%);
+  fill: color-mix(in oklab, var(--compute-series, var(--brand)) 9%, transparent);
 }
 .compute-chart-line {
-  stroke: #76d6f5;
+  stroke: var(--compute-series, var(--brand));
   stroke-width: 2;
   stroke-linejoin: round;
 }
@@ -275,7 +275,7 @@
   color: #d2e1ea;
 }
 .compute-workspace-files em {
-  color: #87cbb1;
+  color: var(--positive);
   font-size: 10px;
   font-style: normal;
 }
@@ -286,12 +286,12 @@
   padding: 18px;
 }
 .compute-agent-actions > div {
-  border-left: 2px solid #487766;
+  border-left: 2px solid color-mix(in oklab, var(--positive) 65%, transparent);
   padding-left: 12px;
 }
 .compute-agent-actions span {
   display: block;
-  color: #abc5ba;
+  color: var(--positive);
   font-size: 12px;
 }
 .compute-agent-actions small {
@@ -301,10 +301,10 @@
   margin-top: 4px;
 }
 .compute-agent-actions [data-current="true"] {
-  border-color: #76d6f5;
+  border-color: var(--warning);
 }
 .compute-agent-actions [data-current="true"] span {
-  color: #76d6f5;
+  color: var(--warning);
 }
 .compute-sandbox-terminal {
   margin-top: -10px;
@@ -318,7 +318,7 @@
   color: #d5e8f1;
 }
 .compute-sandbox-terminal > div > span {
-  color: #87cbb1;
+  color: var(--positive);
   margin-left: 8px;
 }
 .compute-sandbox-terminal i {
@@ -350,6 +350,12 @@
   border: 1px solid #365667;
   background: linear-gradient(100deg, rgb(118 214 245 / 6%), transparent);
 }
+.compute-endpoint:nth-child(2) {
+  --compute-series: var(--warning);
+}
+.compute-endpoint:nth-child(3) {
+  --compute-series: var(--positive);
+}
 .compute-http-method {
   font: 10px var(--font-mono);
   color: #91a6b5;
@@ -364,7 +370,7 @@
 }
 .compute-http-status {
   font: 11px var(--font-mono);
-  color: #87cbb1;
+  color: var(--positive);
   text-align: right;
 }
 .compute-route-footer {
@@ -413,6 +419,12 @@
   font-size: 15px;
   color: #738d9d;
 }
+.compute-training-summary > div:first-child strong {
+  color: var(--chart-1);
+}
+.compute-training-chart {
+  --compute-series: var(--chart-1);
+}
 .compute-training-chart svg {
   display: block;
   width: 100%;
@@ -434,7 +446,7 @@
 }
 .compute-checkpoint strong {
   font: 11px var(--font-mono);
-  color: #b5d8e8;
+  color: var(--positive);
 }
 .compute-training-progress {
   height: 3px;
