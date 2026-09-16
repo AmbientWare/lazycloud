@@ -1,14 +1,16 @@
 # Spot recovery acceptance
 
 Implementation is on `feat/spot-capacity-recovery`. Production has not been
-deployed with this change. The live AWS interruption scenario, public CLI run,
-artifact cleanup proof and deployed database-rate verification remain open.
+deployed with this change. The live AWS interruption scenario, interrupted-upload
+cleanup proof and deployed database-rate verification remain open.
 
 Local owner checks use real PostgreSQL and Redis. Provider-owner tests use their
 existing deterministic provider; they do not prove AWS behavior.
 
 - Compute, pool drain and migration checks passed, including simultaneous loss
-  with one or two replacement markets. A separate warm-floor check confirms
+  with one or two replacement markets, a fresh service/Redis client between
+  passes, and a rejected purchase releasing ownership before another market
+  replaces it. A separate warm-floor check confirms
   two workers occupy distinct eligible availability zones.
 - Agent interruption, shutdown, scheduler preemption/liveness, image dispatch,
   worker API and SDK image checks passed in their changed scopes.
@@ -16,6 +18,35 @@ existing deterministic provider; they do not prove AWS behavior.
   preserves the public build ID and log order, rejects retired execution and
   publication, preserves the successor during cleanup, and fences cancellation.
 - Changed-file Python types and Ruff passed. Web TypeScript passed.
+- All checks on implementation commit `2ecd22ae5` passed in CI, including the
+  changed Python owners, types, lint/format, client wheel installation and web.
+
+## Public execution
+
+An isolated canonical Compose project built and activated commit `2ecd22ae5`,
+including the API, scheduler, agent and worker. The active release's worker digest
+matched the running worker. PostgreSQL, Redis, Garage, the registry and gVisor
+were real services. The existing development stack was not modified.
+
+A real `lazycloud run` built a Python 3.12 image in 9.5 seconds, delivered actual
+build and function logs, and returned `49` from `square(7)` in 1.9 seconds. Build
+`08d6a460-bcfe-44c4-854c-8562a3778947` completed with execution container
+`9c6cb99d-4078-4c4e-8933-80e07e157d1a`. Reconnecting with a cursor beyond the last
+log returned the successful terminal event. No active apps remained afterward.
+The acceptance Compose containers, worker, volumes, network and test PostgreSQL/
+Redis containers were removed. No AWS resources were created or interrupted.
+
+This execution exposed and fixed a worker progress report that still equated
+the build ID with its container ID. Scheduler wake reads also hit Redis's socket
+timeout at the five-second interval; bounded reads retain that reconciliation
+interval and permit prompt shutdown. The corrected local scheduler reported no
+wake timeout warnings.
+
+The existing `tests.e2e.local.image_build.python_package --case python311-httpx`
+scenario built and published its image, then failed because its `tests` module
+was excluded from the source bundle. The successful CLI run used a temporary
+ordinary application module. Neither execution exercised AWS notices or a real
+interrupted upload.
 
 ## Database measurements
 
@@ -50,5 +81,10 @@ Sharing target reconciliation within a pass reduced the one-market pending
 pass from 166 commands / 49,181 bytes to 129 / 37,316. Due-row claiming prevents
 another replica from executing the same obligations concurrently; it still pays
 for its idle claim query. Provider calls and admission are bounded by live work.
-Rejected-acquisition/restart cost and production query insights still need
-measurement before the full acceptance criteria are satisfied.
+With a fresh compute service and Redis client after admission, then a confirmed
+capacity rejection in one replacement market, rejection/release used 189
+commands / 52,539 bytes. Readmission used 177 / 44,307, fulfillment 114 / 32,594,
+and completion 42 / 10,105. The same 10,000 completed records were present.
+Both replacements completed without exceeding the four-machine cap or retaining
+the failed operation's capacity ownership. This does not simulate a process
+crash during a provider call. Production query insights remain unverified.
