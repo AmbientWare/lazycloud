@@ -236,13 +236,13 @@ CREATE INDEX ix_image_archives_updated_at ON image_archives (updated_at)
 """)
     op.execute("""
 CREATE TABLE worker_events (
+	event_data JSONB NOT NULL,
 	worker_id VARCHAR(160) NOT NULL,
 	event_type VARCHAR(160) NOT NULL,
 	resource_id VARCHAR(160),
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
 	PRIMARY KEY (id)
 )
 """)
@@ -898,6 +898,18 @@ CREATE UNIQUE INDEX uq_image_builds_active_workspace_fingerprint ON image_builds
 """)
     op.execute("""
 CREATE TABLE usage_records (
+	unit VARCHAR(40) NOT NULL,
+	labels JSONB NOT NULL,
+	metadata JSONB NOT NULL,
+	metering_started_at TIMESTAMP WITH TIME ZONE,
+	metering_ended_at TIMESTAMP WITH TIME ZONE,
+	app_id VARCHAR(160),
+	stub_id VARCHAR(160),
+	deployment_id VARCHAR(160),
+	gpu VARCHAR(160),
+	container_id VARCHAR(160),
+	task_id VARCHAR(160),
+	worker_id VARCHAR(160),
 	workspace_id UUID NOT NULL,
 	resource_type VARCHAR(120) NOT NULL,
 	resource_id VARCHAR(160) NOT NULL,
@@ -906,8 +918,8 @@ CREATE TABLE usage_records (
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
 	PRIMARY KEY (id),
+	CONSTRAINT ck_usage_records_quantity CHECK (quantity >= 0 AND quantity < 'Infinity'::float8),
 	FOREIGN KEY(workspace_id) REFERENCES workspaces (id) ON DELETE RESTRICT
 )
 """)

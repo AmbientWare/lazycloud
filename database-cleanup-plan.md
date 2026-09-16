@@ -293,5 +293,19 @@ round trips preserve revision reuse. Existing reuse coverage includes a timeout.
   columns replacing compact empty policy objects. It adds no query or fetched
   configuration document. Empty target sets issue no query in either version.
 
-Containers, compute, storage, images and usage still require their remaining
-refactors. These scoped results are not release acceptance.
+Usage records now store attribution, units and metering instants in explicit
+columns. Worker events retain only event details in their named document.
+Usage producers put attribution in labels; metadata no longer supplies a second
+attribution source. Remaining labels describe diagnostic dimensions and reported
+allocations; durable placement rows remain the authority for billing reservations.
+Malformed metering timestamps remain diagnostic evidence and cannot establish a
+chargeable interval.
+
+- Schema, workspace deletion, usage, billing costs, reconciliation and worker
+  supervision: 45 checks pass. Scoped type checks pass.
+- Usage with 200 old records and two in the requested window: one query and two
+  rows in both; serialized bytes 1,602 to 1,106. Grouped usage remains one query,
+  one row and 77 bytes. Both idle queries return zero rows.
+
+Containers, compute, storage and images still require their remaining refactors.
+These scoped results are not release acceptance.

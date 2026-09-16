@@ -300,9 +300,10 @@ def _priced_usage(
                     workspace_id=workspace_id,
                     resource_type="container",
                     resource_id=str(uuid4()),
-                    metric="container_runtime_seconds",
-                    quantity=60.0,
-                    payload={},
+                    metric="container_duration_milliseconds",
+                    quantity=60000.0,
+                    unit="milliseconds",
+                    labels={"cpu_millicores": "1000", "mem_mb": "2048", "gpu_count": "0"},
                 )
             )
             session.flush()

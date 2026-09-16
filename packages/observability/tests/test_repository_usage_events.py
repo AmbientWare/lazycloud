@@ -107,7 +107,7 @@ def test_worker_event_prune_deletes_aged_rows(service_context: ServiceContext) -
     assert [item.id for item in remaining] == [fresh.id]
 
 
-def test_usage_repository_aggregation_groups_by_label_with_metadata_fallback(
+def test_usage_repository_aggregation_groups_by_attribution(
     service_context: ServiceContext,
 ) -> None:
     with service_context.database.session() as session:
@@ -143,7 +143,6 @@ def test_usage_repository_aggregation_groups_by_label_with_metadata_fallback(
                 "gpu_count": "1",
             },
         )
-        # Older task-count records carried app_id in metadata only.
         usage.record(
             workspace_id=workspace_id,
             resource_type="function",
@@ -151,8 +150,7 @@ def test_usage_repository_aggregation_groups_by_label_with_metadata_fallback(
             metric=UsageMetric.TaskCount,
             quantity=1,
             unit=UsageUnit.Count,
-            labels={"kind": "function"},
-            metadata={"app_id": "app-b"},
+            labels={"kind": "function", "app_id": "app-b"},
         )
 
         by_app = usage.aggregate(
