@@ -1,21 +1,26 @@
-.definition-panel {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in oklab, var(--background-subtle) 86%, transparent);
-}
-
-.definition-tabs {
-  background: color-mix(in oklab, var(--muted) 45%, transparent);
+.definition-tab {
+  position: relative;
+  border-bottom: 0;
 }
 
 .definition-tab[data-state="active"] {
   color: var(--brand);
-  background: color-mix(in oklab, var(--brand) 6%, transparent);
 }
 
-.definition-tab:hover {
-  color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+.definition-tab::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 20px;
+  height: 2px;
+  background: var(--brand);
+  transform: translateX(-50%) scaleX(0);
+  transition: transform 180ms ease;
+}
+
+.definition-tab[data-state="active"]::after {
+  transform: translateX(-50%) scaleX(1);
 }
 
 .run-mode-card {

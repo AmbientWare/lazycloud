@@ -35,42 +35,10 @@ function ProductFrame({
 }
 
 export function StoryPreview({ visual }: { visual: StoryVisual }) {
-  if (visual === "application") return <ApplicationPreview />;
-  if (visual === "jobs") return <TaskGraphPreview />;
-  if (visual === "background") return <QueuePreview />;
-  return <SandboxPreview />;
-}
-
-function TaskGraphPreview() {
-  return (
-    <ProductFrame title="Release pipeline" detail="release-evals · production">
-      <LiveTaskTimeline />
-    </ProductFrame>
-  );
-}
-
-function ApplicationPreview() {
-  return (
-    <ProductFrame title="Application traffic" detail="review-api · autoscaling">
-      <LiveEndpointChart />
-    </ProductFrame>
-  );
-}
-
-function QueuePreview() {
-  return (
-    <ProductFrame title="Build queue" detail="release-checks">
-      <LiveQueuePreview />
-    </ProductFrame>
-  );
-}
-
-function SandboxPreview() {
-  return (
-    <ProductFrame title="Agent workspace" detail="coding-agent">
-      <LiveSandboxPreview />
-    </ProductFrame>
-  );
+  if (visual === "application") return <LiveEndpointChart />;
+  if (visual === "jobs") return <LiveTaskTimeline />;
+  if (visual === "background") return <LiveQueuePreview />;
+  return <LiveSandboxPreview />;
 }
 
 /* The homepage compute section's proof panel. */

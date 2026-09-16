@@ -790,48 +790,6 @@
   color: var(--muted-foreground);
 }
 
-/* The sticky chapter has to fit as one composed viewport even on a 720px-tall
-   laptop. Only its copies of the live visuals compact; the standalone compute
-   and generated-client panels keep their roomier dimensions. */
-.marketing-story-visual .marketing-product-frame {
-  min-height: 0;
-}
-
-.marketing-story-visual .marketing-product-frame > :last-child {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.marketing-story-visual .marketing-endpoint-chart {
-  min-height: 0;
-  padding-bottom: 10px;
-}
-
-.marketing-story-visual .marketing-product-bar {
-  min-height: 44px;
-  padding-inline: 12px;
-}
-
-.marketing-story-visual .marketing-product-stat {
-  padding: 11px 12px;
-}
-
-.marketing-story-visual .endpoint-plot {
-  min-height: 120px;
-  margin: 10px 11px 0;
-  padding: 8px 9px 6px;
-}
-
-.marketing-story-visual .marketing-timeline {
-  min-height: 0;
-  gap: 7px;
-  padding: 9px 11px 9px;
-}
-
-.marketing-story-visual .timeline-axis {
-  height: 13px;
-}
-
 .queue-metric {
   --series-color: var(--brand);
   min-width: 0;
@@ -1038,15 +996,6 @@
     grid-template-columns: 120px 64px 1fr 22px;
   }
 
-  .marketing-story-visual .marketing-product-stat {
-    padding-inline: 9px;
-  }
-
-  .marketing-story-visual .endpoint-plot {
-    margin-inline: 8px;
-    padding-inline: 6px;
-  }
-
   .endpoint-route-summaries {
     gap: 4px;
   }
@@ -1071,11 +1020,6 @@
   .queue-chart-heading > span {
     max-width: 100%;
   }
-}
-
-.marketing-story-visual .marketing-sandbox-preview {
-  gap: 7px;
-  padding: 9px 11px 10px;
 }
 
 @keyframes marketing-blink {

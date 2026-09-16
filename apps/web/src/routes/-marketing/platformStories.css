@@ -1,0 +1,243 @@
+.platform-example-card {
+  --product-inset: transparent;
+  --product-header: transparent;
+  container-name: product-preview;
+  container-type: inline-size;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--background-subtle) 78%, transparent);
+}
+
+.platform-example-visual {
+  display: flex;
+  height: 330px;
+  padding: 20px 18px 0;
+  color: var(--muted-foreground);
+}
+
+.platform-example-copy {
+  padding: 24px 28px 28px;
+}
+
+.platform-example-card
+  :is(
+    .marketing-stat-grid,
+    .marketing-product-stat,
+    .endpoint-plot,
+    .endpoint-route-summary,
+    .pipeline-run-metrics,
+    .pipeline-run-metric,
+    .timeline-panel,
+    .timeline-head,
+    .queue-metric,
+    .queue-chart
+  ) {
+  border: 0;
+  background: transparent;
+}
+
+.platform-example-card .marketing-product-stat {
+  padding: 4px 12px 12px;
+}
+
+.platform-example-card
+  :is(.marketing-product-stat span, .pipeline-run-metric > span, .queue-metric-label) {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.platform-example-card
+  :is(.marketing-product-stat strong, .pipeline-run-metric > strong, .queue-metric > strong) {
+  font-family: var(--font-sans);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+}
+
+.platform-example-card :is(.endpoint-plot, .queue-chart) {
+  margin: 0;
+  padding: 8px 12px 0;
+  min-height: 0;
+}
+
+.platform-example-card .endpoint-plot-visual {
+  background-image: radial-gradient(
+    color-mix(in oklab, var(--brand) 22%, transparent) 0.7px,
+    transparent 0.9px
+  );
+  background-size: 9px 9px;
+}
+
+.platform-example-card .endpoint-grid-line,
+.platform-example-card .queue-grid-line {
+  stroke: color-mix(in oklab, var(--border) 38%, transparent);
+  stroke-dasharray: 2 6;
+}
+
+.platform-example-card :is(.endpoint-plot-caption, .queue-chart-heading, .timeline-head) {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.platform-example-card .endpoint-line {
+  stroke-width: 1.5;
+}
+
+.platform-example-card .is-review {
+  --series-color: var(--brand);
+}
+
+.platform-example-card .is-generate {
+  --series-color: var(--muted-foreground);
+}
+
+.platform-example-card .is-status {
+  --series-color: var(--foreground);
+}
+
+.platform-example-card :is(.is-review, .is-generate, .is-status) .endpoint-line {
+  stroke: var(--series-color);
+}
+
+.platform-example-card :is(.is-review, .is-generate, .is-status) .endpoint-area {
+  fill: color-mix(in oklab, var(--series-color) 7%, transparent);
+}
+
+.platform-example-card :is(.is-review, .is-generate, .is-status) .endpoint-series-label {
+  color: var(--series-color);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.platform-example-card .endpoint-series-metrics strong {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.platform-example-card .endpoint-route-summary {
+  padding: 8px 0 0;
+}
+
+.platform-example-card .marketing-timeline {
+  padding: 0 12px;
+  gap: 10px;
+}
+
+.platform-example-card .pipeline-run-summary {
+  font-size: 9px;
+}
+
+.platform-example-card .pipeline-run-metric {
+  padding: 6px 0;
+}
+
+.platform-example-card .pipeline-run-metric > small {
+  display: none;
+}
+
+.platform-example-card .pipeline-run-metric > span {
+  display: block;
+}
+
+.platform-example-card .timeline-head {
+  padding-inline: 0;
+}
+
+.platform-example-card .timeline-name {
+  font-size: 11px;
+}
+
+.platform-example-card .timeline-name small {
+  display: none;
+}
+
+.platform-example-card .timeline-track {
+  background: repeating-linear-gradient(90deg, var(--border) 0 1px, transparent 1px 8px) center /
+    100% 1px no-repeat;
+}
+
+.platform-example-card .timeline-bar {
+  background: color-mix(in oklab, var(--brand) 48%, transparent);
+  border-left: 2px solid var(--brand);
+}
+
+.platform-example-card .timeline-bar.is-running {
+  background: var(--brand);
+}
+
+.platform-example-card .timeline-bar.is-queued {
+  border: 0;
+  background: transparent;
+}
+
+.platform-example-card .queue-metric {
+  padding-top: 0;
+}
+
+.platform-example-card .queue-metric.is-warning {
+  --series-color: var(--foreground);
+}
+
+.platform-example-card .queue-metric.is-positive {
+  --series-color: var(--muted-foreground);
+}
+
+.platform-example-card .queue-processing-line {
+  stroke: var(--foreground);
+}
+
+.platform-example-card .queue-workers-line {
+  stroke: var(--muted-foreground);
+}
+
+.platform-example-card .marketing-sandbox-preview {
+  padding: 0 10px;
+}
+
+.platform-example-card .marketing-sandbox-preview [data-marketing-terminal-surface] {
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.platform-example-card .marketing-sandbox-preview > :last-child > div {
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+}
+
+@container product-preview (max-width: 420px) {
+  .platform-example-visual {
+    height: 320px;
+    padding: 16px 6px 0;
+  }
+
+  .platform-example-copy {
+    padding: 22px 20px;
+  }
+
+  .platform-example-card .timeline-axis {
+    margin-left: 118px;
+  }
+
+  .platform-example-card .timeline-row {
+    grid-template-columns: 108px minmax(0, 1fr) 26px;
+    padding-inline: 0;
+  }
+
+  .platform-example-card .timeline-name {
+    font-size: 10px;
+  }
+
+  .platform-example-card .marketing-sandbox-preview [data-marketing-terminal-surface] {
+    font-size: 10px;
+  }
+}

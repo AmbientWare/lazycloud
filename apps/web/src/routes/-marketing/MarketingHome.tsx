@@ -15,6 +15,7 @@ import { ComputePlacementPreview, StoryPreview, type StoryVisual } from "./Produ
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
 import { RunModeArt } from "./RunModeArt";
+import "./platformStories.css";
 
 type PlatformStory = {
   key: string;
@@ -122,7 +123,7 @@ function ParitySection() {
               <span className="inline-block text-brand">Three ways to run it.</span>
             </h2>
           </div>
-          <div className="definition-panel w-full min-w-0 max-w-[720px]">
+          <div className="definition-panel w-full min-w-0 max-w-[640px]">
             <Tabs defaultValue={definitionExamples[0].key}>
               <TabsList
                 className="definition-tabs flex h-9 w-full gap-0 border-0"
@@ -130,7 +131,7 @@ function ParitySection() {
               >
                 {definitionExamples.map((example) => (
                   <TabsTrigger
-                    className="definition-tab m-0 h-9 flex-1 px-1 text-[11px] sm:text-[13px]"
+                    className="definition-tab m-0 h-9 flex-1 px-1 text-[11px] focus-visible:ring-0 sm:text-[13px]"
                     key={example.key}
                     value={example.key}
                   >
@@ -419,31 +420,31 @@ function PlatformStoryRail() {
           {platformStories.map((story, index) => (
             <article
               aria-labelledby={`platform-story-${story.key}-title`}
-              className="scroll-mt-28 border-b border-border py-10 first:pt-0 last:border-b-0 last:pb-0 sm:py-12 lg:py-10 lg:first:pt-16 lg:last:pb-16"
+              className="scroll-mt-28 pb-6 last:pb-0 lg:first:pt-16 lg:last:pb-16"
               data-platform-story={story.key}
               id={`platform-story-${story.key}`}
               key={story.key}
               ref={(node) => registerStory(index, node)}
             >
-              <div className="relative mb-6 sm:mb-8">
-                <p className="text-sm font-medium text-brand">{story.label}</p>
-                <h3
-                  className="mt-3 text-2xl leading-tight font-medium sm:text-3xl"
-                  id={`platform-story-${story.key}-title`}
+              <div className="platform-example-card">
+                <div
+                  aria-label={`${story.label} preview`}
+                  className="platform-example-visual"
+                  role="region"
                 >
-                  {story.title}
-                </h3>
-                <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground sm:text-base">
-                  {story.body}
-                </p>
-              </div>
-              <div
-                aria-label={`${story.label} preview`}
-                className="relative marketing-story-panel min-w-0"
-                role="region"
-              >
-                <div className="marketing-story-visual flex h-[390px] sm:h-[430px] lg:h-[clamp(380px,46dvh,430px)] [&>div]:flex-1">
                   <StoryPreview visual={story.visual} />
+                </div>
+                <div className="platform-example-copy">
+                  <p className="text-sm font-medium text-brand">{story.label}</p>
+                  <h3
+                    className="mt-3 text-2xl leading-tight font-medium tracking-[-0.025em] sm:text-[28px]"
+                    id={`platform-story-${story.key}-title`}
+                  >
+                    {story.title}
+                  </h3>
+                  <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground">
+                    {story.body}
+                  </p>
                 </div>
               </div>
             </article>
