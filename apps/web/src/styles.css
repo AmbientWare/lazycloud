@@ -87,7 +87,7 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-/* One dark palette shared by the workspace and marketing routes. */
+/* Neutral surfaces keep color focused on actions and operational state. */
 :root,
 .dark {
   color-scheme: dark;
@@ -95,12 +95,12 @@
   --lazycloud: #76d6f5;
   --lazycloud-light: #a1e6fb;
   --lazycloud-dark: #4dbce8;
-  --background: #080808;
-  --background-subtle: #111113;
-  --foreground: #eef3f7;
-  --card: #121d26;
+  --background: #101010;
+  --background-subtle: #141414;
+  --foreground: #f2f2f2;
+  --card: #181818;
   --card-foreground: var(--foreground);
-  --popover: var(--card);
+  --popover: #1c1c1c;
   --popover-foreground: var(--foreground);
   /* The brand cyan itself carries dark ink for AA on filled brand surfaces. */
   --brand: var(--lazycloud);
@@ -111,8 +111,8 @@
   --positive-foreground: var(--background);
   --secondary: var(--card);
   --secondary-foreground: var(--foreground);
-  --muted: #18232d;
-  --muted-foreground: #a4b4c2;
+  --muted: #232323;
+  --muted-foreground: #a3a3a3;
   --accent: var(--muted);
   --accent-foreground: var(--foreground);
   --destructive: oklch(0.704 0.191 22.216);
@@ -121,10 +121,10 @@
   --warning-foreground: hsl(0 0% 9%);
   --info: hsl(197 90% 65%);
   --info-foreground: hsl(0 0% 9%);
-  --border: #354550;
+  --border: #333333;
   --input: var(--border);
   --ring: var(--brand);
-  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-1: #82aaff;
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
@@ -187,8 +187,8 @@
 
 .interactive-panel:hover,
 .interactive-panel:focus-visible {
-  background: color-mix(in oklab, var(--card) 92%, var(--brand) 8%);
-  border-color: color-mix(in oklab, var(--brand) 42%, transparent);
+  background: var(--accent);
+  border-color: color-mix(in oklab, var(--muted-foreground) 50%, var(--border));
 }
 
 /* Navigable rows share one stable hover, selected, and keyboard-focus treatment. */
@@ -211,7 +211,7 @@
 }
 
 .interactive-row[data-selected="true"] {
-  background: color-mix(in oklab, var(--brand) 11%, var(--card));
+  background: var(--accent);
   box-shadow: inset 3px 0 0 var(--brand);
 }
 
