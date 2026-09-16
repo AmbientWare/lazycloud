@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ArrowUpRight } from "lucide-react";
 
 import { CodeBlock } from "@/components/ui/code-block";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -54,31 +55,62 @@ const platformStories: PlatformStory[] = [
   },
 ];
 
-const parityDefinition = `@app.function(gpu="A100-40", memory="16Gi")
-def embed(batch: list[str]) -> list[list[float]]:
-    return model.encode(batch)`;
+const definitionExamples = [
+  {
+    key: "apis",
+    label: "APIs",
+    code: `@app.endpoint(route="/count")
+def count_words(text: str) -> dict[str, int]:
+    return {"words": len(text.split())}`,
+  },
+  {
+    key: "functions",
+    label: "Functions",
+    code: `@app.function(cpu=1, memory="256Mi")
+def total_sales(amounts: list[int]) -> int:
+    return sum(amounts)`,
+  },
+  {
+    key: "sandboxes",
+    label: "Sandboxes",
+    code: `workspace = app.sandbox(
+    name="workspace", cpu=2, memory="2Gi",
+)`,
+  },
+  {
+    key: "services",
+    label: "Services",
+    code: `@app.asgi()
+def web():
+    return FastAPI()`,
+  },
+  {
+    key: "schedules",
+    label: "Schedules",
+    code: `@app.function(cron="0 2 * * *", retries=2)
+def heartbeat() -> str:
+    return "ok"`,
+  },
+] as const;
 
 const parityModes = [
   {
     key: "local",
     Plate: LocalPlate,
     title: "Debug locally",
-    call: "embed.local(rows)",
     body: "Use local data and your usual debugger.",
   },
   {
     key: "gpu",
     Plate: GpuPlate,
     title: "Run once in the cloud",
-    call: "embed.remote(rows)",
     body: "Send a run to cloud compute and get the result. No deployment required.",
   },
   {
     key: "production",
     Plate: ProductionPlate,
     title: "Deploy your app",
-    call: "uv run lazycloud deploy app:app",
-    body: "Publish the function so your services can call it.",
+    body: "Publish APIs, services, and scheduled jobs from your Python definitions.",
   },
 ];
 
@@ -89,20 +121,41 @@ function ParitySection() {
         <SectionHeading
           title={
             <>
-              One function. <em>Three ways to run it.</em>
+              One definition. <em>Three ways to run it.</em>
             </>
           }
-          body="Debug on your laptop, send a one-off cloud run, or deploy the app. The function stays the same."
+          body="Develop locally, run work on demand, or deploy an app. Keep your infrastructure in Python."
         />
 
         <MarketingReveal className="relative max-w-[820px]" delay={80}>
-          <MarketingCard asChild>
-            <CodeBlock
-              tone="paper"
-              bodyClassName="p-4 text-[11.5px] leading-[1.75] sm:p-5 sm:text-[12.5px]"
-            >
-              {parityDefinition}
-            </CodeBlock>
+          <MarketingCard>
+            <Tabs defaultValue={definitionExamples[0].key}>
+              <TabsList
+                className="grid h-8 w-full grid-cols-5 gap-0 px-1"
+                aria-label="Python definitions"
+              >
+                {definitionExamples.map((example) => (
+                  <TabsTrigger
+                    className="h-8 px-1 text-[11px] sm:text-xs"
+                    key={example.key}
+                    value={example.key}
+                  >
+                    {example.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {definitionExamples.map((example) => (
+                <TabsContent key={example.key} value={example.key}>
+                  <CodeBlock
+                    className="rounded-none border-0 bg-transparent"
+                    tone="paper"
+                    bodyClassName="min-h-[154px] p-4 text-[11.5px] leading-[1.75] sm:min-h-[118px] sm:p-6 sm:text-[13px]"
+                  >
+                    {example.code}
+                  </CodeBlock>
+                </TabsContent>
+              ))}
+            </Tabs>
           </MarketingCard>
         </MarketingReveal>
 
@@ -114,9 +167,6 @@ function ParitySection() {
                 <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
                   {mode.title}
                 </h3>
-                <code className="mt-2 block font-mono text-[12px] break-all text-brand">
-                  {mode.call}
-                </code>
                 <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
                   {mode.body}
                 </p>
