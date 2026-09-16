@@ -4,8 +4,9 @@ import fnmatch
 import hashlib
 import os
 import posixpath
+import time
 import zipfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import SpooledTemporaryFile
@@ -22,6 +23,7 @@ SOURCE_PACKAGE_PREFIX = "sources"
 SOURCE_PACKAGE_CONTENT_TYPE = "application/zip"
 SOURCE_IGNORE_FILE = ".lazycloudignore"
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+ARCHIVE_CHUNK_SIZE = 1024 * 1024
 
 DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     SOURCE_IGNORE_FILE,
@@ -81,8 +83,6 @@ class SourceSyncStep(Protocol):
 
     def update(self, summary: str) -> None: ...
 
-    def progress(self, completed: int, total: int) -> None: ...
-
     def done(self, summary: str = "") -> None: ...
 
 
@@ -131,21 +131,25 @@ class SourcePackageSyncer:
             msg = f"source root is not a directory: {root}"
             raise SourcePackageSyncError(msg)
 
-        archive = build_source_package_archive(
-            root,
-            archive_prefix=self.archive_prefix,
-            ignore_patterns=ignore_patterns,
-            include_patterns=include_patterns,
-        )
-        plural = "s" if len(archive.files) != 1 else ""
-        description = f"{len(archive.files)} file{plural}, {humanize_bytes(archive.size)}"
-        with self._step("Source", description) as step:
+        with self._step("Source", "collecting files") as step:
+            archive = build_source_package_archive(
+                root,
+                archive_prefix=self.archive_prefix,
+                ignore_patterns=ignore_patterns,
+                include_patterns=include_patterns,
+                progress=step.update,
+            )
+            plural = "s" if len(archive.files) != 1 else ""
+            description = f"{len(archive.files):,} file{plural}, {humanize_bytes(archive.size)}"
+            step.update(f"syncing {description}")
             object_name = f"{SOURCE_PACKAGE_PREFIX}/{archive.sha256}.zip"
             uploaded = _upload_source_package(
                 self.object_client,
                 archive,
                 object_name=object_name,
-                progress=lambda completed: step.progress(completed, archive.size),
+                progress=lambda completed: step.update(
+                    f"syncing {min(100, completed * 100 // archive.size):3}% · {description}"
+                ),
             )
             object_id = _uploaded_object_id(uploaded)
             if not object_id:
@@ -181,9 +185,6 @@ class _SilentStep:
     def update(self, summary: str) -> None:
         return None
 
-    def progress(self, completed: int, total: int) -> None:
-        return None
-
     def done(self, summary: str = "") -> None:
         return None
 
@@ -217,28 +218,83 @@ def build_source_package_archive(
     archive_prefix: Sequence[str] = (),
     ignore_patterns: Sequence[str] | None = None,
     include_patterns: Sequence[str] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> SourcePackageArchive:
+    reporter = _ArchiveProgress(progress)
+    reporter.update("collecting files", force=True)
     selected_archive_prefix = _validate_archive_prefix(archive_prefix)
     selected_ignore_patterns = tuple(ignore_patterns or _ignore_patterns_from_file(root))
     selected_include_patterns = tuple(include_patterns or ())
-    files = tuple(
-        _collect_source_files(
-            root,
-            ignore_patterns=selected_ignore_patterns,
-            include_patterns=selected_include_patterns,
-        )
-    )
+    files: list[Path] = []
+    total_bytes = 0
+    for path in _collect_source_files(
+        root,
+        ignore_patterns=selected_ignore_patterns,
+        include_patterns=selected_include_patterns,
+        progress=reporter,
+    ):
+        files.append(path)
+        total_bytes += path.stat().st_size
     archived_files = tuple(
         _archive_path(selected_archive_prefix, _relative_posix(root, item)) for item in files
     )
-    data = _zip_files(root, files, archived_files)
-    digest = hashlib.sha256(data).hexdigest()
+    data = _zip_files(files, archived_files, total_bytes=total_bytes, progress=reporter)
+    digest = hashlib.sha256()
+    reporter.update(f"hashing   0% · {humanize_bytes(len(data))}", force=True)
+    view = memoryview(data)
+    for offset in range(0, len(data), ARCHIVE_CHUNK_SIZE):
+        chunk = view[offset : offset + ARCHIVE_CHUNK_SIZE]
+        digest.update(chunk)
+        reporter.update(
+            f"hashing {(offset + len(chunk)) * 100 // len(data):3}% · {humanize_bytes(len(data))}"
+        )
+    reporter.update(f"hashing 100% · {humanize_bytes(len(data))}", force=True)
     return SourcePackageArchive(
         data=data,
-        sha256=digest,
+        sha256=digest.hexdigest(),
         size=len(data),
         files=archived_files,
     )
+
+
+@dataclass(slots=True)
+class _ArchiveProgress:
+    callback: Callable[[str], None] | None
+    last_update: float = 0
+
+    def update(self, summary: str, *, force: bool = False) -> None:
+        if self.callback is None:
+            return
+        now = time.monotonic()
+        if force or now - self.last_update >= 0.25:
+            self.callback(summary)
+            self.last_update = now
+
+    def collection(self, files: int, folders: int) -> None:
+        file_label = "file" if files == 1 else "files"
+        folder_label = "folder" if folders == 1 else "folders"
+        self.update(f"collecting · {files:,} {file_label}, {folders:,} {folder_label}")
+
+    def compression(
+        self,
+        completed_files: int,
+        total_files: int,
+        completed_bytes: int,
+        total_bytes: int,
+        *,
+        force: bool = False,
+    ) -> None:
+        percent = (
+            min(100, completed_bytes * 100 // total_bytes)
+            if total_bytes
+            else (100 if completed_files == total_files else 0)
+        )
+        file_label = "file" if total_files == 1 else "files"
+        self.update(
+            f"compressing {percent:3}% · {completed_files:,}/{total_files:,} {file_label} · "
+            f"{humanize_bytes(completed_bytes)}/{humanize_bytes(total_bytes)}",
+            force=force,
+        )
 
 
 def collect_source_files(
@@ -275,10 +331,16 @@ def _collect_source_files(
     *,
     ignore_patterns: Sequence[str],
     include_patterns: Sequence[str],
+    progress: _ArchiveProgress | None = None,
 ) -> Iterable[Path]:
+    file_count = 0
+    directory_count = 0
     if _matches_all(ignore_patterns):
         return
     for current_root, dirs, files in os.walk(root):
+        directory_count += 1
+        if progress is not None:
+            progress.collection(file_count, directory_count)
         current = Path(current_root)
         dirs[:] = [
             dirname
@@ -300,17 +362,36 @@ def _collect_source_files(
                 directory=False,
             ):
                 continue
+            file_count += 1
+            if progress is not None:
+                progress.collection(file_count, directory_count)
             yield path
 
 
-def _zip_files(root: Path, files: Sequence[Path], archived_files: Sequence[str]) -> bytes:
+def _zip_files(
+    files: Sequence[Path],
+    archived_files: Sequence[str],
+    *,
+    total_bytes: int,
+    progress: _ArchiveProgress,
+) -> bytes:
+    completed_bytes = 0
+    progress.compression(0, len(files), 0, total_bytes, force=True)
     with SpooledTemporaryFile(max_size=16 * 1024 * 1024) as handle:
         with zipfile.ZipFile(handle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for file, archived_file in zip(files, archived_files, strict=True):
+            for index, (file, archived_file) in enumerate(zip(files, archived_files, strict=True)):
                 info = zipfile.ZipInfo(archived_file, ZIP_EPOCH)
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o644 << 16
-                archive.writestr(info, file.read_bytes())
+                info.file_size = file.stat().st_size
+                with file.open("rb") as source, archive.open(info, "w") as target:
+                    while chunk := source.read(ARCHIVE_CHUNK_SIZE):
+                        target.write(chunk)
+                        completed_bytes += len(chunk)
+                        progress.compression(index, len(files), completed_bytes, total_bytes)
+                progress.compression(index + 1, len(files), completed_bytes, total_bytes)
+        progress.compression(len(files), len(files), completed_bytes, total_bytes, force=True)
+        progress.update("finalizing archive", force=True)
         handle.seek(0)
         return handle.read()
 
