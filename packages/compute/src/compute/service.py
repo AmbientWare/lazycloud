@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,

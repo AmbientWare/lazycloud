@@ -39,8 +39,9 @@ from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisSettings
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
+    ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
@@ -470,19 +471,18 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                         max_machines=1,
                     )
                 )
-                ComputeProviderInstanceRepository(session).records.create(
-                    {
-                        "id": str(uuid4()),
-                        "provider": pool.provider_ref,
-                        "offer_id": pool.offer_id,
-                        "status": "active",
-                        "source": "platform_policy",
-                        "pool_id": pool.id,
-                        "instance_type": "ccx13",
-                        "instance_id": "123",
-                        "bootstrap_phase": MachineBootstrapPhase.Booting,
-                    },
-                    status="active",
+                ComputeProviderInstanceRepository(session).upsert(
+                    ComputeProviderInstanceRecord(
+                        id=str(uuid4()),
+                        provider=pool.provider_ref,
+                        offer_id=pool.offer_id,
+                        status="active",
+                        source="platform_policy",
+                        pool_id=pool.id,
+                        instance_type="ccx13",
+                        instance_id="123",
+                        bootstrap_phase=MachineBootstrapPhase.Booting,
+                    ),
                 )
             offer = ComputeOffer(
                 id=pool.offer_id,
@@ -812,18 +812,17 @@ def _seed_connection_and_pool(
         )
         # The verifier reads the reconciler's durable inventory, never the
         # provider, so a node this pool owns has to be in it.
-        ComputeProviderInstanceRepository(session).records.create(
-            {
-                "id": str(uuid4()),
-                "provider": pool.provider_ref,
-                "offer_id": _OFFER_ID,
-                "status": "active",
-                "source": "workspace_policy",
-                "pool_id": pool.id,
-                "instance_type": "m7i.xlarge",
-                "instance_id": _INSTANCE_ID,
-            },
-            status="active",
+        ComputeProviderInstanceRepository(session).upsert(
+            ComputeProviderInstanceRecord(
+                id=str(uuid4()),
+                provider=pool.provider_ref,
+                offer_id=_OFFER_ID,
+                status="active",
+                source="workspace_policy",
+                pool_id=pool.id,
+                instance_type="m7i.xlarge",
+                instance_id=_INSTANCE_ID,
+            ),
         )
         return pool
 
@@ -840,7 +839,7 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputeUnitRecord:
         selector=name,
         status=ComputeUnitPhase.Ready.value,
         source="workspace_policy",
-        config={"root_volume_gib": 200},
+        root_volume_gib=200,
         provider_ref=f"aws:{_CONNECTION_ID}",
         provider_connection_id=_CONNECTION_ID,
         capacity_mode=ComputeCapacityMode.Pooled,

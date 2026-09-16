@@ -38,8 +38,8 @@ from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
 from database.context import ServiceContext
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,

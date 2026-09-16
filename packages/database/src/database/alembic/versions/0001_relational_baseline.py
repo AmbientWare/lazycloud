@@ -20,6 +20,63 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto
 CREATE EXTENSION IF NOT EXISTS btree_gist
 """)
     op.execute("""
+CREATE TABLE aws_authorization_cleanup_tombstones (
+	user_id UUID NOT NULL,
+	connection_id UUID NOT NULL,
+	account_id VARCHAR(12) NOT NULL,
+	status VARCHAR(32) NOT NULL,
+	provider_operation_id VARCHAR(128) NOT NULL,
+	revision BIGINT NOT NULL,
+	next_reconcile_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	claim_token UUID,
+	claim_expires_at TIMESTAMP WITH TIME ZONE,
+	reconcile_attempt_count BIGINT NOT NULL,
+	external_id TEXT NOT NULL,
+	node_role_arn TEXT,
+	node_instance_profile_arn TEXT,
+	remove_node_identity BOOLEAN NOT NULL,
+	last_error TEXT NOT NULL,
+	authorization_id UUID NOT NULL,
+	authorization_generation BIGINT NOT NULL,
+	authorization_role_arn TEXT NOT NULL,
+	authorization_mode VARCHAR(32) NOT NULL,
+	authorization_phase TEXT NOT NULL,
+	authorization_validation_generation BIGINT NOT NULL,
+	authorization_last_validation_started_at TIMESTAMP WITH TIME ZONE,
+	authorization_last_validated_at TIMESTAMP WITH TIME ZONE,
+	authorization_expires_at TIMESTAMP WITH TIME ZONE,
+	authorization_error_code TEXT,
+	authorization_error_message TEXT NOT NULL,
+	authorization_created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	authorization_updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	managed_stack_name TEXT,
+	managed_region TEXT,
+	managed_stack_id TEXT,
+	managed_template_version TEXT,
+	managed_template_sha256 TEXT,
+	managed_shared_ami_ids VARCHAR(255)[],
+	authorization_stack JSONB,
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT ck_aws_cleanup_authorization_generation CHECK (authorization_generation > 0 AND authorization_validation_generation >= 0),
+	CONSTRAINT ck_aws_cleanup_authorization_managed_identity CHECK (authorization_mode IN ('managed_stack', 'existing_role') AND ((authorization_mode = 'managed_stack' AND managed_stack_name IS NOT NULL AND managed_region IS NOT NULL AND managed_template_version IS NOT NULL AND managed_template_sha256 IS NOT NULL AND managed_shared_ami_ids IS NOT NULL) OR (authorization_mode = 'existing_role' AND managed_stack_name IS NULL AND managed_region IS NULL AND managed_stack_id IS NULL AND managed_template_version IS NULL AND managed_template_sha256 IS NULL AND managed_shared_ami_ids IS NULL AND authorization_stack IS NULL))),
+	CONSTRAINT ck_aws_cleanup_authorization_error CHECK ((authorization_error_code IS NULL) = (authorization_error_message = '')),
+	CONSTRAINT ck_aws_cleanup_authorization_validation CHECK (authorization_phase <> 'ready' OR authorization_last_validated_at IS NOT NULL),
+	CONSTRAINT ck_aws_authorization_cleanup_claim CHECK ((claim_token IS NULL) = (claim_expires_at IS NULL)),
+	CONSTRAINT ck_aws_authorization_cleanup_node_identity CHECK ((node_role_arn IS NULL) = (node_instance_profile_arn IS NULL) AND (NOT remove_node_identity OR node_role_arn IS NOT NULL)),
+	CONSTRAINT ck_aws_authorization_cleanup_expiry CHECK (expires_at > created_at),
+	CONSTRAINT uq_aws_authorization_cleanup_operation UNIQUE (provider_operation_id),
+	CONSTRAINT ck_aws_authorization_cleanup_revision CHECK (revision > 0),
+	CONSTRAINT ck_aws_authorization_cleanup_attempts CHECK (reconcile_attempt_count >= 0)
+)
+""")
+    op.execute("""
+CREATE INDEX ix_aws_authorization_cleanup_due ON aws_authorization_cleanup_tombstones (next_reconcile_at, claim_expires_at)
+""")
+    op.execute("""
 CREATE TABLE billing_compute_rates (
 	billing_owner VARCHAR(40) NOT NULL,
 	rate_class VARCHAR(64) DEFAULT 'auto' NOT NULL,
@@ -72,32 +129,6 @@ CREATE TABLE billing_webhook_events (
 	received_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	PRIMARY KEY (event_id)
 )
-""")
-    op.execute("""
-CREATE TABLE aws_authorization_cleanup_tombstones (
-	user_id UUID NOT NULL,
-	connection_id UUID NOT NULL,
-	account_id VARCHAR(12) NOT NULL,
-	status VARCHAR(32) NOT NULL,
-	provider_operation_id VARCHAR(128) NOT NULL,
-	revision BIGINT NOT NULL,
-	next_reconcile_at TIMESTAMP WITH TIME ZONE NOT NULL,
-	expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-	claim_token VARCHAR(36),
-	claim_expires_at TIMESTAMP WITH TIME ZONE,
-	reconcile_attempt_count BIGINT NOT NULL,
-	id UUID DEFAULT gen_random_uuid() NOT NULL,
-	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
-	PRIMARY KEY (id),
-	CONSTRAINT uq_aws_authorization_cleanup_operation UNIQUE (provider_operation_id),
-	CONSTRAINT ck_aws_authorization_cleanup_revision CHECK (revision > 0),
-	CONSTRAINT ck_aws_authorization_cleanup_attempts CHECK (reconcile_attempt_count >= 0)
-)
-""")
-    op.execute("""
-CREATE INDEX ix_aws_authorization_cleanup_due ON aws_authorization_cleanup_tombstones (next_reconcile_at, claim_expires_at)
 """)
     op.execute("""
 CREATE TABLE email_outbox (
@@ -329,6 +360,46 @@ CREATE INDEX ix_apps_workspace_updated ON apps (workspace_id, updated_at, id)
 CREATE UNIQUE INDEX uq_apps_workspace_name_active ON apps (workspace_id, name) WHERE deleted_at IS NULL
 """)
     op.execute("""
+CREATE TABLE aws_account_connections (
+	user_id UUID NOT NULL,
+	account_id VARCHAR(12) NOT NULL,
+	external_id VARCHAR(256) NOT NULL,
+	pool VARCHAR(240) NOT NULL,
+	phase VARCHAR(32) NOT NULL,
+	revision BIGINT NOT NULL,
+	next_reconcile_at TIMESTAMP WITH TIME ZONE,
+	claim_token UUID,
+	claim_expires_at TIMESTAMP WITH TIME ZONE,
+	reconcile_attempt_count BIGINT NOT NULL,
+	provider_operation_id VARCHAR(128),
+	provider_operation_started_at TIMESTAMP WITH TIME ZONE,
+	platform_fleet BOOLEAN NOT NULL,
+	node_role_arn TEXT,
+	node_instance_profile_arn TEXT,
+	drain_total_pools BIGINT NOT NULL,
+	drain_remaining_pools BIGINT NOT NULL,
+	customer_action_url TEXT,
+	customer_action_label TEXT NOT NULL,
+	bucket_access_reconcile_pending BOOLEAN NOT NULL,
+	last_error TEXT NOT NULL,
+	id UUID DEFAULT gen_random_uuid() NOT NULL,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_aws_account_connections_user UNIQUE (user_id),
+	CONSTRAINT uq_aws_account_connections_external_id UNIQUE (external_id),
+	CONSTRAINT ck_aws_account_connections_revision CHECK (revision > 0),
+	CONSTRAINT ck_aws_account_connections_claim CHECK ((claim_token IS NULL) = (claim_expires_at IS NULL)),
+	CONSTRAINT ck_aws_account_connections_node_identity CHECK ((node_role_arn IS NULL) = (node_instance_profile_arn IS NULL)),
+	CONSTRAINT ck_aws_account_connections_drain CHECK (drain_remaining_pools >= 0 AND drain_total_pools >= drain_remaining_pools),
+	CONSTRAINT ck_aws_account_connections_reconcile_attempts CHECK (reconcile_attempt_count >= 0),
+	FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
+)
+""")
+    op.execute("""
+CREATE INDEX ix_aws_account_connections_reconcile_due ON aws_account_connections (next_reconcile_at, claim_expires_at)
+""")
+    op.execute("""
 CREATE TABLE billing_accounts (
 	user_id UUID NOT NULL,
 	status VARCHAR(32) NOT NULL,
@@ -533,35 +604,6 @@ CREATE TABLE workspace_compute_policies (
 	CONSTRAINT ck_workspace_compute_policies_revision CHECK (revision > 0),
 	FOREIGN KEY(workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE
 )
-""")
-    op.execute("""
-CREATE TABLE aws_account_connections (
-	user_id UUID NOT NULL,
-	account_id VARCHAR(12) NOT NULL,
-	external_id VARCHAR(256) NOT NULL,
-	pool VARCHAR(240) NOT NULL,
-	phase VARCHAR(32) NOT NULL,
-	revision BIGINT NOT NULL,
-	next_reconcile_at TIMESTAMP WITH TIME ZONE,
-	claim_token VARCHAR(36),
-	claim_expires_at TIMESTAMP WITH TIME ZONE,
-	reconcile_attempt_count BIGINT NOT NULL,
-	provider_operation_id VARCHAR(128),
-	provider_operation_started_at TIMESTAMP WITH TIME ZONE,
-	id UUID DEFAULT gen_random_uuid() NOT NULL,
-	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
-	PRIMARY KEY (id),
-	CONSTRAINT uq_aws_account_connections_user UNIQUE (user_id),
-	CONSTRAINT uq_aws_account_connections_external_id UNIQUE (external_id),
-	CONSTRAINT ck_aws_account_connections_revision CHECK (revision > 0),
-	CONSTRAINT ck_aws_account_connections_reconcile_attempts CHECK (reconcile_attempt_count >= 0),
-	FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
-)
-""")
-    op.execute("""
-CREATE INDEX ix_aws_account_connections_reconcile_due ON aws_account_connections (next_reconcile_at, claim_expires_at)
 """)
     op.execute("""
 CREATE TABLE custom_domains (
@@ -1314,6 +1356,53 @@ CREATE INDEX ix_stubs_reusable_identity ON stubs (workspace_id, name, app_id, cr
 """)
     op.execute("""
 CREATE INDEX ix_stubs_workspace ON stubs (workspace_id)
+""")
+    op.execute("""
+CREATE TABLE aws_authorization_generations (
+	connection_id UUID NOT NULL,
+	slot VARCHAR(16) NOT NULL,
+	authorization_id UUID NOT NULL,
+	authorization_generation BIGINT NOT NULL,
+	authorization_role_arn TEXT NOT NULL,
+	authorization_mode VARCHAR(32) NOT NULL,
+	authorization_phase TEXT NOT NULL,
+	authorization_validation_generation BIGINT NOT NULL,
+	authorization_last_validation_started_at TIMESTAMP WITH TIME ZONE,
+	authorization_last_validated_at TIMESTAMP WITH TIME ZONE,
+	authorization_expires_at TIMESTAMP WITH TIME ZONE,
+	authorization_error_code TEXT,
+	authorization_error_message TEXT NOT NULL,
+	authorization_created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	authorization_updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+	managed_stack_name TEXT,
+	managed_region TEXT,
+	managed_stack_id TEXT,
+	managed_template_version TEXT,
+	managed_template_sha256 TEXT,
+	managed_shared_ami_ids VARCHAR(255)[],
+	authorization_stack JSONB,
+	PRIMARY KEY (connection_id, slot),
+	CONSTRAINT ck_aws_authorization_generation CHECK (authorization_generation > 0 AND authorization_validation_generation >= 0),
+	CONSTRAINT ck_aws_authorization_managed_identity CHECK (authorization_mode IN ('managed_stack', 'existing_role') AND ((authorization_mode = 'managed_stack' AND managed_stack_name IS NOT NULL AND managed_region IS NOT NULL AND managed_template_version IS NOT NULL AND managed_template_sha256 IS NOT NULL AND managed_shared_ami_ids IS NOT NULL) OR (authorization_mode = 'existing_role' AND managed_stack_name IS NULL AND managed_region IS NULL AND managed_stack_id IS NULL AND managed_template_version IS NULL AND managed_template_sha256 IS NULL AND managed_shared_ami_ids IS NULL AND authorization_stack IS NULL))),
+	CONSTRAINT ck_aws_authorization_error CHECK ((authorization_error_code IS NULL) = (authorization_error_message = '')),
+	CONSTRAINT ck_aws_authorization_validation CHECK (authorization_phase <> 'ready' OR authorization_last_validated_at IS NOT NULL),
+	CONSTRAINT ck_aws_authorization_slot CHECK (slot IN ('active', 'pending', 'retiring')),
+	CONSTRAINT uq_aws_authorization_generation UNIQUE (connection_id, authorization_generation) DEFERRABLE INITIALLY DEFERRED,
+	CONSTRAINT uq_aws_authorization_identity UNIQUE (connection_id, authorization_id) DEFERRABLE INITIALLY DEFERRED,
+	FOREIGN KEY(connection_id) REFERENCES aws_account_connections (id) ON DELETE CASCADE
+)
+""")
+    op.execute("""
+CREATE TABLE aws_account_networks (
+	connection_id UUID NOT NULL,
+	region VARCHAR(64) NOT NULL,
+	vpc_id VARCHAR(128) NOT NULL,
+	subnet_ids VARCHAR(128)[] NOT NULL,
+	security_group_id VARCHAR(128) NOT NULL,
+	PRIMARY KEY (connection_id, region),
+	CONSTRAINT ck_aws_account_network_subnets CHECK (cardinality(subnet_ids) >= 2),
+	FOREIGN KEY(connection_id) REFERENCES aws_account_connections (id) ON DELETE CASCADE
+)
 """)
     op.execute("""
 CREATE TABLE billing_credit_adjustments (

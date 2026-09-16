@@ -6,6 +6,12 @@ from database.tables.apps import (
     DeploymentTable,
     StubTable,
 )
+from database.tables.aws_connections import (
+    AwsAccountConnectionTable,
+    AwsAccountNetworkTable,
+    AwsAuthorizationCleanupTombstoneTable,
+    AwsAuthorizationGenerationTable,
+)
 from database.tables.base import (
     DatabaseBase,
     IdPayloadTable,
@@ -34,8 +40,6 @@ from database.tables.billing_preferences import BillingPreferencesTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from database.tables.billing_webhook_events import BillingWebhookEventTable
 from database.tables.compute import (
-    AwsAccountConnectionTable,
-    AwsAuthorizationCleanupTombstoneTable,
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
     ComputeMachineEnrollmentTable,
@@ -106,7 +110,9 @@ __all__ = [
     "AutoscalerStateTable",
     "AutoscalingTargetTable",
     "AwsAccountConnectionTable",
+    "AwsAccountNetworkTable",
     "AwsAuthorizationCleanupTombstoneTable",
+    "AwsAuthorizationGenerationTable",
     "BillingAccountTable",
     "BillingAllowancePeriodTable",
     "BillingCreditAdjustmentTable",

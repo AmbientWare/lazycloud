@@ -3,8 +3,8 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeProviderInstanceRecord,

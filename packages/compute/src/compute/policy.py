@@ -9,8 +9,8 @@ from typing import Protocol
 from uuid import uuid4
 
 from database.repositories.apps import DeploymentRepository
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,

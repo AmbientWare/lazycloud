@@ -362,5 +362,23 @@ bag is removed and scheduler drain timing reads the canonical timeout field.
 - Capacity sizing keeps one query and two rows, bytes 192 to 202 due to datetime
   serialization. Idle sizing returns zero rows. Neither path fetches history.
 
-Cloud authorization, runtime and container tables still require their remaining
-refactors. These scoped results are not release acceptance.
+AWS connections now own relational authorization generations and regional network
+rows. Cleanup tombstones hold their own typed authorization snapshot and survive
+connection deletion. Only the validated stack creation request remains JSON.
+Claims, node identity pairs, drain counts and generation uniqueness have database
+constraints. Generation uniqueness is deferred until commit so promotion can move
+the predecessor into retirement atomically. Repositories and mappers have a
+dedicated AWS connection owner; every consumer imports that owner directly.
+
+- Lifecycle, bucket access, billing admission and API deletion checks pass.
+  Provider enrollment and schema comparison pass 13 checks. A focused PostgreSQL
+  case proves generation promotion preserves its predecessor through retirement.
+- With 200 later-due connections and two due connections, active claims use three
+  SELECTs instead of one, batching the two child collections. Returned rows are six
+  instead of two and bytes drop from 3,630 to 1,598. Including transaction setup and
+  claim updates, statements increase from four to six. Idle remains two statements,
+  one SELECT and zero rows. The extra reads enforce independently owned generations
+  and regional networks; they do not grow with the number of claimed connections.
+
+Runtime and container tables still require their remaining refactors. These
+scoped results are not release acceptance.

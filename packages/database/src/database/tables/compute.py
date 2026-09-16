@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import JsonValue
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from sqlalchemy import (
     DDL,
     BigInteger,
@@ -23,7 +22,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
-from database.tables.base import DatabaseBase, IdPayloadTable, IdTable, json_type, uuid_type
+from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
 
 
 class ComputeUnitTable(IdTable, DatabaseBase):
@@ -550,87 +549,3 @@ class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
         DateTime(timezone=True), nullable=True
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class AwsAccountConnectionTable(IdPayloadTable, DatabaseBase):
-    """The customer AWS account backing every workspace one user owns.
-
-    One per account rather than per workspace: an org running dev, staging, and prod
-    authorized the same account once, and re-authorizing it per workspace produced
-    three records that had to be kept in step by hand.
-    """
-
-    __tablename__ = "aws_account_connections"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("user_id", name="uq_aws_account_connections_user"),
-        UniqueConstraint("external_id", name="uq_aws_account_connections_external_id"),
-        Index(
-            "ix_aws_account_connections_reconcile_due",
-            "next_reconcile_at",
-            "claim_expires_at",
-        ),
-        CheckConstraint("revision > 0", name="ck_aws_account_connections_revision"),
-        CheckConstraint(
-            "reconcile_attempt_count >= 0",
-            name="ck_aws_account_connections_reconcile_attempts",
-        ),
-    )
-
-    user_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    account_id: Mapped[str] = mapped_column(String(12), nullable=False)
-    external_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
-    phase: Mapped[str] = mapped_column(String(32), nullable=False)
-    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
-    next_reconcile_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    claim_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    reconcile_attempt_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    provider_operation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    provider_operation_started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AwsAuthorizationCleanupTombstoneTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "aws_authorization_cleanup_tombstones"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint(
-            "provider_operation_id",
-            name="uq_aws_authorization_cleanup_operation",
-        ),
-        Index(
-            "ix_aws_authorization_cleanup_due",
-            "next_reconcile_at",
-            "claim_expires_at",
-        ),
-        CheckConstraint("revision > 0", name="ck_aws_authorization_cleanup_revision"),
-        CheckConstraint(
-            "reconcile_attempt_count >= 0",
-            name="ck_aws_authorization_cleanup_attempts",
-        ),
-    )
-
-    # No foreign key: the tombstone outlives the account whose authorization it is
-    # still tearing down, which is the whole reason it is written separately.
-    user_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
-    connection_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
-    account_id: Mapped[str] = mapped_column(String(12), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    provider_operation_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
-    next_reconcile_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    claim_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    reconcile_attempt_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
