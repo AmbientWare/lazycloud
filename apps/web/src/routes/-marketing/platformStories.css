@@ -5,39 +5,51 @@
   border-color: color-mix(in oklab, var(--brand) 45%, var(--border));
 }
 .project-example-art {
-  aspect-ratio: 1.4;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
-  mask-image: linear-gradient(black 65%, transparent);
 }
 .project-example-art img {
-  filter: grayscale(0.65) brightness(1.4);
-  opacity: 0.9;
+  height: 220px;
+  object-position: center 66%;
+  transform: translateY(-24px);
+  filter: grayscale(0.25) brightness(1.15);
+  mask-image: linear-gradient(#000 75%, transparent 100%);
+}
+.project-example-card::before,
+.project-example-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.project-example-card::before {
+  background: linear-gradient(
+    180deg,
+    transparent 20%,
+    rgb(12 15 17 / 15%) 40%,
+    rgb(12 15 17 / 88%) 70%,
+    #101315 100%
+  );
+}
+.project-example-card::after {
+  background-image: var(--surface-grain);
+  background-size: 180px 180px;
+  opacity: 0.3;
 }
 
 #typed-export {
-  --card: var(--background-subtle);
+  --surface-grain-blend: soft-light;
 }
+
 #typed-export .typed-panel-bar,
 #typed-export .typed-editor-tabs {
   background: transparent;
   border-bottom-color: color-mix(in oklab, var(--border) 65%, transparent);
 }
-#typed-export .typed-symbol-row {
-  border: 0;
-  background: transparent;
-  padding-block: 7px;
-}
-#typed-export .typed-file-grid > div {
-  border: 0;
-  background: transparent;
-  padding-inline: 0;
-}
-#typed-export .typed-package-heading {
-  padding-block: 8px;
-}
-#typed-export .typed-editor-inspector {
-  background: color-mix(in oklab, var(--brand) 3%, var(--background-subtle));
-  border-radius: var(--radius);
+.typed-symbol-row + .typed-symbol-row {
+  border-top: 1px solid color-mix(in oklab, var(--surface-border) 65%, transparent);
 }
 #typed-export .typed-editor-tabs > span:first-child {
   border: 0;

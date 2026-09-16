@@ -67,6 +67,17 @@
   backdrop-filter: blur(8px);
 }
 
+.marketing-site main > section::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background-image: var(--surface-grain);
+  background-size: 180px 180px;
+  opacity: 0.18;
+}
+
 .marketing-site main > section > :not(.marketing-grid-field),
 .marketing-site > main > :not(section),
 .marketing-site > footer > * {
@@ -1196,14 +1207,6 @@
     max-width: 100%;
   }
 
-  .marketing-typed-visual .typed-file-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .marketing-typed-visual .typed-file-grid > :last-child {
-    grid-column: 1 / -1;
-  }
-
   .typed-symbol-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -1238,14 +1241,6 @@
 }
 
 @container typed-preview (max-width: 330px) {
-  .marketing-typed-visual .typed-file-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .marketing-typed-visual .typed-file-grid > :last-child {
-    grid-column: auto;
-  }
-
   .typed-symbol-row > :last-child {
     display: none;
   }

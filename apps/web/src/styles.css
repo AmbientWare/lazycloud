@@ -153,13 +153,18 @@
 
 @utility surface-frame {
   border-color: var(--surface-border);
-  background-image: var(--surface-frame);
+  background-image: var(--surface-grain), var(--surface-frame);
+  background-blend-mode: soft-light, normal;
+  background-size:
+    180px 180px,
+    auto;
   box-shadow: var(--surface-shadow-frame);
 }
 
 @utility surface-raised {
   border-color: var(--surface-border);
   background-image: var(--surface-grain), var(--surface-raised);
+  background-blend-mode: var(--surface-grain-blend, normal), normal;
   background-size:
     180px 180px,
     auto;
@@ -169,6 +174,7 @@
 @utility surface-inset {
   border-color: var(--surface-border);
   background-image: var(--surface-grain), var(--surface-inset);
+  background-blend-mode: var(--surface-grain-blend, normal), normal;
   background-size:
     180px 180px,
     auto;

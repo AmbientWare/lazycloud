@@ -32,21 +32,10 @@ def run_checks(commit_sha: str) -> dict[str, bool]:
     valid = len(commit_sha) == 40 and all(c in "0123456789abcdef" for c in commit_sha)
     return {"valid_commit_sha": valid}`;
 
-const phaseLabel =
-  "text-xl leading-none font-medium tracking-[-0.025em] transition-colors duration-500 motion-reduce:transition-none";
-
-function PhaseHeader({
-  title,
-  caption,
-  active,
-}: {
-  title: string;
-  caption: string;
-  active: boolean;
-}) {
+function PhaseHeader({ title, caption }: { title: string; caption: string }) {
   return (
     <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 sm:mb-3 sm:gap-x-3">
-      <h3 className={`${phaseLabel} ${active ? "text-foreground" : "text-muted-foreground"}`}>
+      <h3 className="text-xl leading-none font-medium tracking-[-0.025em] text-foreground">
         {title}
       </h3>
       <span className="min-w-0 text-sm leading-snug text-muted-foreground">{caption}</span>
@@ -73,46 +62,48 @@ function TypedExportStory({ active }: { active: boolean }) {
 
       <div className="grid grid-cols-[1.02fr_0.98fr] gap-4 sm:gap-6 lg:gap-7 max-lg:grid-cols-1">
         <MarketingReveal className="relative flex min-w-0 flex-col">
-          <PhaseHeader active={phase === "define"} caption="your app" title="Define" />
-          <MarketingCard asChild>
-            <CodeBlock
-              className={`flex flex-1 flex-col transition-colors duration-500 motion-reduce:transition-none ${
-                phase === "define" ? "border-brand/45" : "border-input"
-              }`}
-              bodyClassName="flex-1 p-4 text-[11px] leading-[1.8] sm:p-6 sm:text-[12px] lg:text-[12.5px]"
-              tone="paper"
-              footer={
-                <div
-                  className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                  data-marketing-terminal-surface=""
-                >
-                  <span className="text-brand">$</span>
-                  <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                    uv run lazycloud deploy review_app:app
-                  </span>
-                  <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                    <StatusDot /> 2 workloads deployed
-                  </strong>
-                </div>
-              }
-            >
-              {defineExample}
-            </CodeBlock>
+          <PhaseHeader caption="your app" title="Define" />
+          <MarketingCard
+            surface="frame"
+            className="typed-source-frame flex flex-1 flex-col p-4 sm:p-5"
+          >
+            <div className="mb-4 flex justify-between font-mono text-[11px] text-muted-foreground">
+              <span className="text-foreground">review_app.py</span>
+              <span>Python</span>
+            </div>
+            <MarketingCard surface="inset" asChild>
+              <CodeBlock
+                className="flex flex-1 flex-col"
+                bodyClassName="flex-1 p-3 text-[11px] leading-[1.9] sm:p-4 sm:text-[12px]"
+                footer={
+                  <div
+                    className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
+                    data-marketing-terminal-surface=""
+                  >
+                    <span className="text-brand">$</span>
+                    <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+                      uv run lazycloud deploy review_app:app
+                    </span>
+                    <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
+                      <StatusDot /> 2 workloads deployed
+                    </strong>
+                  </div>
+                }
+              >
+                {defineExample}
+              </CodeBlock>
+            </MarketingCard>
           </MarketingCard>
         </MarketingReveal>
 
         <div className="flex min-w-0 flex-col gap-4 sm:gap-5 lg:gap-7">
           <MarketingReveal className="relative flex min-w-0 flex-col" delay={80}>
-            <PhaseHeader active={phase === "generate"} caption="a typed package" title="Generate" />
+            <PhaseHeader caption="a typed package" title="Generate" />
             <GeneratedPackagePanel active={phase === "generate"} clock={clock} />
           </MarketingReveal>
 
           <MarketingReveal className="relative flex min-w-0 flex-col" delay={140}>
-            <PhaseHeader
-              active={phase === "import"}
-              caption="from another project"
-              title="Import"
-            />
+            <PhaseHeader caption="from another project" title="Import" />
             <TypedImportPanel active={phase === "import"} clock={clock} />
           </MarketingReveal>
         </div>

@@ -178,16 +178,17 @@ export function MarketingHome() {
                     <MarketingExampleImage src={useCase.imageSrc} />
                   </div>
                   <div
-                    className="relative flex flex-1 flex-col px-5 pt-3 pb-5 text-foreground"
+                    className="relative z-[2] flex flex-1 flex-col px-5 pt-40 pb-5 text-foreground"
                     data-marketing-example-copy
                   >
                     <h3 className="max-w-[390px] text-[19px] leading-[1.2] font-medium tracking-[-0.025em]">
                       {useCase.title}
                     </h3>
-                    <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-muted-foreground">
+                    <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-foreground/80">
                       {useCase.cardSummary}
                     </p>
-                    <span className="mt-auto inline-flex pt-3 text-brand">
+                    <span className="mt-auto inline-flex items-center justify-between gap-3 pt-5 text-xs text-brand">
+                      View project
                       <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
                     </span>
                   </div>
@@ -211,11 +212,11 @@ export function MarketingHome() {
 }
 
 const useCaseCard =
-  "project-example-card relative flex min-h-80 w-full flex-col text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
+  "project-example-card relative isolate flex min-h-[21rem] w-full flex-col text-left text-foreground";
 
 function UseCaseCard({ children, href }: { children: ReactNode; href: string }) {
   return (
-    <MarketingCard asChild>
+    <MarketingCard surface="frame" asChild>
       <a className={useCaseCard} href={href}>
         {children}
       </a>

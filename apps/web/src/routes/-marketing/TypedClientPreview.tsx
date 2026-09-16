@@ -303,22 +303,28 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
   const done = clock >= TIMELINE.generateDoneAt;
 
   return (
-    <MarketingCard className={panelState(active)}>
+    <MarketingCard surface="frame" className={panelState(active)}>
       <div
         className="typed-panel-bar flex min-h-9 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3.5 py-1.5 text-[10.5px]"
         data-marketing-terminal-surface=""
       >
         <span className="text-brand">$</span>
-        <span className="min-w-[8rem] flex-1 break-words text-foreground [overflow-wrap:anywhere]">
-          {command}
-          {typing ? <Caret /> : null}
+        <span className="relative min-w-[8rem] flex-1 break-words text-foreground [overflow-wrap:anywhere]">
+          <span aria-hidden="true" className="invisible">
+            {GENERATE_COMMAND}▍
+          </span>
+          <span className="absolute inset-0">
+            {command}
+            {typing ? <Caret /> : null}
+          </span>
         </span>
-        <span className="ml-auto shrink-0 text-[9px] tracking-[0.12em] text-muted-foreground uppercase">
-          {done ? "written" : "resolving"}
+        <span className="ml-auto grid shrink-0 text-[9px] tracking-[0.12em] text-muted-foreground uppercase">
+          <span className={`col-start-1 row-start-1 ${done ? "" : "invisible"}`}>written</span>
+          <span className={`col-start-1 row-start-1 ${done ? "invisible" : ""}`}>resolving</span>
         </span>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-3 px-3.5 py-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 sm:p-5">
         <div className="typed-package-heading flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
           <span className="typed-package-path min-w-0 truncate text-[12.5px] text-foreground">
             lazycloud_clients/review_app
@@ -330,17 +336,26 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
                 : "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground"
             }
           >
-            {versionReady ? <StatusDot /> : null}
-            {versionReady ? "v_84bd1a7c20f3" : "hashing manifest"}
+            <span className={`inline-flex ${versionReady ? "" : "invisible"}`}>
+              <StatusDot />
+            </span>
+            <span className="grid">
+              <span className={`col-start-1 row-start-1 ${versionReady ? "" : "invisible"}`}>
+                v_84bd1a7c20f3
+              </span>
+              <span className={`col-start-1 row-start-1 ${versionReady ? "invisible" : ""}`}>
+                hashing manifest
+              </span>
+            </span>
           </span>
         </div>
 
-        <div className="typed-file-grid grid grid-cols-[1fr_1fr_1.4fr] gap-1.5 max-[640px]:grid-cols-1">
+        <MarketingCard surface="inset" className="typed-file-grid grid gap-1 p-3">
           {GENERATED_FILES.map((file, index) => {
             const ready = clock >= TIMELINE.filesAt[index];
             return (
               <div
-                className="flex min-h-[26px] min-w-0 items-center gap-1.5 rounded-md border border-border bg-background/40 px-2 py-1"
+                className="flex min-h-[26px] min-w-0 items-center gap-2 px-1 py-1"
                 key={file.name}
               >
                 <i
@@ -361,37 +376,39 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
               </div>
             );
           })}
-        </div>
+        </MarketingCard>
 
         <div className="flex min-w-0 flex-col">
           <div className="mb-1.5 flex items-center justify-between text-[9px] tracking-[0.12em] text-muted-foreground">
             <span>Methods and models</span>
             <span className="uppercase">{done ? "4 symbols" : "generating"}</span>
           </div>
-          <div className="flex min-w-0 flex-col gap-1">
+          <MarketingCard surface="raised" className="flex min-w-0 flex-col px-3 py-1">
             {GENERATED_SYMBOLS.map((item, index) => {
               const ready = clock >= TIMELINE.symbolsAt[index];
               return (
                 <div
-                  className="typed-symbol-row flex min-h-[28px] min-w-0 items-baseline gap-2 rounded-md border border-border bg-background/40 px-2.5 py-1"
+                  className="typed-symbol-row relative flex min-h-[28px] min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 py-3"
                   key={item.symbol}
                 >
-                  <span className={`min-w-0 flex-1 self-center ${ready ? "hidden" : ""}`}>
+                  <span
+                    className={`absolute inset-x-0 top-1/2 -translate-y-1/2 ${ready ? "hidden" : ""}`}
+                  >
                     <SkeletonBar width="w-2/3" />
                   </span>
                   <span
-                    className={`typed-symbol-name shrink-0 text-[11px] text-foreground ${ready ? "" : "hidden"}`}
+                    className={`typed-symbol-name shrink-0 text-[11px] text-foreground ${ready ? "" : "invisible"}`}
                   >
                     {item.symbol}
                   </span>
                   <span
-                    className={`typed-symbol-signature min-w-0 flex-1 truncate text-[10.5px] ${ready ? "" : "hidden"}`}
+                    className={`typed-symbol-signature min-w-0 flex-1 truncate text-[10.5px] ${ready ? "" : "invisible"}`}
                   >
                     <Segments segments={item.signature} shown={segmentLength(item.signature)} />
                   </span>
                   <span
                     className={`shrink-0 text-[9px] tracking-[0.1em] text-muted-foreground uppercase max-[520px]:hidden ${
-                      ready ? "" : "hidden"
+                      ready ? "" : "invisible"
                     }`}
                   >
                     {item.kind}
@@ -399,7 +416,7 @@ export function GeneratedPackagePanel({ clock, active }: { clock: number; active
                 </div>
               );
             })}
-          </div>
+          </MarketingCard>
         </div>
       </div>
     </MarketingCard>
@@ -479,7 +496,11 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
   const settled = clock >= TIMELINE.valueLineDoneAt;
 
   return (
-    <MarketingCard className={panelState(active)} data-marketing-terminal-surface="">
+    <MarketingCard
+      surface="frame"
+      className={panelState(active)}
+      data-marketing-terminal-surface=""
+    >
       <div className="typed-editor-tabs flex min-h-9 items-center gap-1 border-b border-border px-2.5 text-[10px]">
         <span className="rounded-md border border-border bg-background/60 px-2 py-0.5 text-foreground">
           release.py
@@ -490,8 +511,8 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
         </span>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-2 px-2.5 py-2.5">
-        <div className="flex min-w-0 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 sm:p-5">
+        <MarketingCard surface="inset" className="flex min-w-0 flex-col p-3">
           {EDITOR_LINES.map((line, index) => {
             const shown = typedChars(clock, line);
             const total = segmentLength(line.segments);
@@ -504,19 +525,25 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
                 <span className="w-4 shrink-0 text-right text-muted-foreground/50">
                   {index + 1}
                 </span>
-                <span className="min-w-0 break-words whitespace-normal [overflow-wrap:anywhere]">
-                  {shown > 0 ? <Segments segments={line.segments} shown={shown} /> : " "}
-                  {caret ? <Caret /> : null}
+                <span className="relative min-w-0 break-words whitespace-normal [overflow-wrap:anywhere]">
+                  <span aria-hidden="true" className="invisible">
+                    <Segments segments={line.segments} shown={total} />▍
+                  </span>
+                  <span className="absolute inset-0">
+                    {shown > 0 ? <Segments segments={line.segments} shown={shown} /> : " "}
+                    {caret ? <Caret /> : null}
+                  </span>
                 </span>
               </div>
             );
           })}
-        </div>
+        </MarketingCard>
 
         <div className="flex min-h-[80px] min-w-0 flex-col justify-start">
           {popupOpen ? (
-            <div
-              className="typed-editor-inspector ml-6 min-w-0 overflow-hidden rounded-md border border-brand/40 bg-background shadow-lg"
+            <MarketingCard
+              surface="raised"
+              className="typed-editor-inspector ml-6 min-w-0"
               key="popup"
             >
               <div className="flex items-center justify-between border-b border-border px-2 py-1 text-[9px] tracking-[0.12em] text-muted-foreground uppercase">
@@ -545,10 +572,11 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
                   </span>
                 </div>
               ))}
-            </div>
+            </MarketingCard>
           ) : returnReady ? (
-            <div
-              className="typed-editor-inspector ml-6 min-w-0 overflow-hidden rounded-md border border-border bg-background/50"
+            <MarketingCard
+              surface="raised"
+              className="typed-editor-inspector ml-6 min-w-0"
               key="result"
             >
               <div className="flex min-w-0 items-baseline justify-between gap-2 border-b border-border px-2 py-1">
@@ -588,7 +616,7 @@ export function TypedImportPanel({ clock, active }: { clock: number; active: boo
                   </div>
                 );
               })}
-            </div>
+            </MarketingCard>
           ) : null}
         </div>
 
