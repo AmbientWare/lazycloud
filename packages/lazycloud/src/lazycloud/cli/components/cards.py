@@ -47,7 +47,7 @@ def notice_card(
 ) -> RenderableType:
     body = Text(message)
     if hint:
-        body.append("\n\nNext step  ", style=theme.MUTED)
+        body.append("\nNext step  ", style=theme.MUTED)
         body.append(hint)
     return card(title, body, tone=tone)
 
@@ -63,7 +63,7 @@ def card(
         title=Text(title, style=theme.EMPHASIS),
         title_align="left",
         border_style=_tone_style(tone),
-        padding=(1, 2),
+        padding=(0, 1),
         expand=False,
     )
     return Constrain(panel, width=CARD_MAX_WIDTH)
