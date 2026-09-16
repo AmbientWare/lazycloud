@@ -1,3 +1,105 @@
+.pod-illustration {
+  --run-delay: 0s;
+  width: 100%;
+  align-self: center;
+  color: var(--brand);
+  text-align: center;
+}
+.pod-illustration svg {
+  display: block;
+  width: 100%;
+  max-height: 230px;
+}
+.pod-container-dots {
+  fill: var(--brand);
+}
+.pod-container-edge {
+  stroke: var(--brand);
+  stroke-opacity: 0.38;
+}
+.pod-container-inset {
+  fill: var(--background-subtle);
+}
+.pod-port {
+  stroke: var(--brand);
+  fill: var(--background-subtle);
+}
+.pod-diagram-label {
+  fill: var(--muted-foreground);
+  font: 12px var(--font-sans);
+}
+.pod-command {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--foreground);
+}
+.pod-caption {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.project-example-card {
+  transition: border-color 180ms ease;
+}
+.project-example-card:hover {
+  border-color: color-mix(in oklab, var(--brand) 45%, var(--border));
+}
+.project-example-art {
+  aspect-ratio: 1.4;
+  overflow: hidden;
+  mask-image: linear-gradient(black 65%, transparent);
+}
+.project-example-art img {
+  filter: grayscale(0.65) brightness(1.4);
+  opacity: 0.9;
+}
+
+#typed-export {
+  --card: var(--background-subtle);
+}
+#typed-export .typed-panel-bar,
+#typed-export .typed-editor-tabs {
+  background: transparent;
+  border-bottom-color: color-mix(in oklab, var(--border) 65%, transparent);
+}
+#typed-export .typed-symbol-row {
+  border: 0;
+  background: transparent;
+  padding-block: 7px;
+}
+#typed-export .typed-file-grid > div {
+  border: 0;
+  background: transparent;
+  padding-inline: 0;
+}
+#typed-export .typed-package-heading {
+  padding-block: 8px;
+}
+#typed-export .typed-editor-inspector {
+  background: color-mix(in oklab, var(--brand) 3%, var(--background-subtle));
+  border-radius: var(--radius);
+}
+#typed-export .typed-editor-tabs > span:first-child {
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+}
+#typed-export .typed-code-line {
+  font-size: 12px;
+  line-height: 1.9;
+}
+#typed-export .typed-symbol-name {
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pod-illustration .run-art-signal {
+    animation: none !important;
+  }
+}
+
 .platform-example-card {
   --product-inset: transparent;
   --product-header: transparent;
@@ -11,13 +113,9 @@
 
 .platform-example-visual {
   display: flex;
-  height: 330px;
-  padding: 20px 18px 0;
+  height: 350px;
+  padding: 20px 18px;
   color: var(--muted-foreground);
-}
-
-.platform-example-copy {
-  padding: 24px 28px 28px;
 }
 
 .platform-example-card
@@ -216,12 +314,8 @@
 
 @container product-preview (max-width: 420px) {
   .platform-example-visual {
-    height: 320px;
-    padding: 16px 6px 0;
-  }
-
-  .platform-example-copy {
-    padding: 22px 20px;
+    height: 336px;
+    padding: 16px 6px;
   }
 
   .platform-example-card .timeline-axis {

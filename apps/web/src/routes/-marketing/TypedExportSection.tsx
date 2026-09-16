@@ -33,7 +33,7 @@ def run_checks(commit_sha: str) -> dict[str, bool]:
     return {"valid_commit_sha": valid}`;
 
 const phaseLabel =
-  "font-mono text-sm leading-none font-semibold transition-colors duration-500 motion-reduce:transition-none sm:text-base";
+  "text-xl leading-none font-medium tracking-[-0.025em] transition-colors duration-500 motion-reduce:transition-none";
 
 function PhaseHeader({
   title,
@@ -49,9 +49,7 @@ function PhaseHeader({
       <h3 className={`${phaseLabel} ${active ? "text-foreground" : "text-muted-foreground"}`}>
         {title}
       </h3>
-      <span className="min-w-0 font-mono text-xs leading-snug text-muted-foreground sm:text-sm">
-        {caption}
-      </span>
+      <span className="min-w-0 text-sm leading-snug text-muted-foreground">{caption}</span>
     </div>
   );
 }
@@ -81,7 +79,7 @@ function TypedExportStory({ active }: { active: boolean }) {
               className={`flex flex-1 flex-col transition-colors duration-500 motion-reduce:transition-none ${
                 phase === "define" ? "border-brand/45" : "border-input"
               }`}
-              bodyClassName="flex-1 p-3 text-[10px] leading-[1.6] sm:p-5 sm:text-[11px] sm:leading-[1.7] lg:p-6 lg:text-[11.5px] lg:leading-[1.75]"
+              bodyClassName="flex-1 p-4 text-[11px] leading-[1.8] sm:p-6 sm:text-[12px] lg:text-[12.5px]"
               tone="paper"
               footer={
                 <div
@@ -142,7 +140,7 @@ export function TypedExportSection() {
   return (
     <section
       id="typed-export"
-      className="border-t border-input bg-background-subtle py-14 sm:py-20 lg:py-28"
+      className="border-t border-input bg-background py-14 sm:py-20 lg:py-28"
       data-animation-state={active ? "running" : "paused"}
       ref={sectionRef}
     >

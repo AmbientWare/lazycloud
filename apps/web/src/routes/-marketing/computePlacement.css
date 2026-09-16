@@ -1,0 +1,171 @@
+.compute-map {
+  --run-delay: 0s;
+  width: 100%;
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--background-subtle) 78%, transparent);
+  color: var(--brand);
+}
+.compute-map-diagram {
+  position: relative;
+  height: 340px;
+}
+.compute-map-paths {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+}
+.compute-map-route .run-art-route {
+  stroke-opacity: 0.25;
+}
+.compute-map-route[data-selected="true"] .run-art-route {
+  stroke: var(--brand);
+  stroke-opacity: 0.65;
+}
+.compute-map-route[data-selected="false"] .run-art-signal {
+  display: none;
+}
+.compute-map-source {
+  position: absolute;
+  top: 50%;
+  left: 6%;
+  width: 28%;
+  transform: translateY(-50%);
+  text-align: center;
+}
+.compute-map-source svg {
+  display: block;
+  width: 100%;
+  max-width: 150px;
+  margin-inline: auto;
+}
+.compute-map-source > span {
+  position: absolute;
+  top: 100%;
+  left: -10%;
+  width: 120%;
+  font-size: 13px;
+  color: var(--foreground);
+}
+.compute-map-dots {
+  fill: var(--brand);
+}
+.compute-map-destinations {
+  display: grid;
+  height: 100%;
+  margin-left: 54%;
+  grid-template-rows: repeat(3, 1fr);
+}
+.compute-map-destination {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--muted-foreground);
+}
+.compute-map-icon {
+  display: grid;
+  flex: none;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid var(--border);
+  background: var(--background-subtle);
+}
+.compute-map-icon svg {
+  width: 27px;
+  height: 27px;
+}
+.compute-map-destination[data-selected="true"] .compute-map-icon {
+  color: var(--brand);
+  border-color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 7%, var(--background-subtle));
+}
+.compute-map-destination strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.compute-map-destination[data-selected="true"] strong {
+  color: var(--foreground);
+}
+.compute-map-destination div > span {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.compute-map-caption {
+  margin: 18px 0 4px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: center;
+}
+.compute-choice {
+  display: block;
+  width: 100%;
+  padding: 14px 18px;
+  border-left: 2px solid transparent;
+  text-align: left;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease;
+}
+.compute-choice[aria-pressed="true"] {
+  border-left-color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 4%, transparent);
+}
+.compute-choice:hover {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+.compute-choice:focus-visible {
+  outline-offset: 2px;
+}
+@media (max-width: 639px) {
+  .compute-map {
+    padding: 18px 12px;
+  }
+  .compute-map-diagram {
+    height: 310px;
+  }
+  .compute-map-paths {
+    width: 80%;
+  }
+  .compute-map-source {
+    left: 0;
+  }
+  .compute-map-source > span {
+    font-size: 11px;
+  }
+  .compute-map-destinations {
+    margin-left: 44%;
+  }
+  .compute-map-destination {
+    gap: 9px;
+  }
+  .compute-map-icon {
+    width: 32px;
+    height: 38px;
+  }
+  .compute-map-icon svg {
+    width: 23px;
+    height: 23px;
+  }
+  .compute-map-destination strong {
+    font-size: 12px;
+  }
+  .compute-map-destination div > span {
+    font-size: 10px;
+  }
+  .compute-map-caption {
+    font-size: 11px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .compute-map .run-art-signal {
+    animation: none !important;
+  }
+}

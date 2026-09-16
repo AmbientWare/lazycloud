@@ -220,13 +220,6 @@
   box-shadow: none;
 }
 
-.marketing-product-bar code i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--positive);
-}
-
 .marketing-grid-field {
   position: absolute;
   inset: 0;
@@ -242,57 +235,6 @@
   mask-image: linear-gradient(to bottom, black, transparent 88%);
   opacity: 0.4;
   pointer-events: none;
-}
-
-.marketing-product-frame {
-  --product-inset: color-mix(in oklab, var(--brand) 6%, var(--card));
-  --product-header: color-mix(in oklab, var(--brand) 16%, var(--card));
-  container-name: product-preview;
-  container-type: inline-size;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  height: 100%;
-  min-height: 362px;
-  border-color: color-mix(in oklab, var(--brand) 18%, var(--border));
-  color: var(--muted-foreground);
-}
-
-.marketing-product-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 52px;
-  padding: 0 15px;
-  border-bottom: 1px solid var(--border);
-  background: var(--product-header);
-}
-
-.marketing-product-bar > div {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.marketing-product-bar strong {
-  color: var(--foreground);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.marketing-product-bar span {
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 8px;
-}
-
-.marketing-product-bar code {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--positive);
-  font-family: var(--font-mono);
-  font-size: 8px;
 }
 
 .marketing-stat-grid {
@@ -1033,14 +975,6 @@
     font-size: 15px;
   }
 
-  .marketing-product-frame {
-    min-height: 350px;
-  }
-
-  .marketing-product-bar > div span {
-    display: none;
-  }
-
   .marketing-stat-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -1066,27 +1000,6 @@
 /* Product visuals compose from their actual panel width. This keeps tablet
    split views and narrow story rails readable even on a wide viewport. */
 @container product-preview (max-width: 420px) {
-  .marketing-product-bar {
-    min-height: 48px;
-    gap: 10px;
-    padding-inline: 12px;
-  }
-
-  .marketing-product-bar > div {
-    min-width: 0;
-  }
-
-  .marketing-product-bar strong,
-  .marketing-product-bar span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .marketing-product-bar code {
-    flex: none;
-  }
-
   .marketing-timeline {
     gap: 7px;
     padding: 9px;
@@ -1218,11 +1131,6 @@
     margin-inline: 25px;
   }
 
-  .marketing-product-frame .marketing-sandbox-preview {
-    gap: 7px;
-    padding: 9px;
-  }
-
   .marketing-sandbox-preview > :first-child > span {
     display: none;
   }
@@ -1244,44 +1152,9 @@
   .marketing-sandbox-preview > :last-child > div > :last-child {
     display: none;
   }
-
-  .marketing-product-frame .marketing-compute-preview {
-    gap: 7px;
-    padding: 9px;
-  }
-
-  .marketing-compute-preview .compute-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .marketing-compute-preview .compute-overview-stat {
-    min-height: 44px;
-    padding: 7px 9px;
-  }
-
-  .marketing-compute-preview .compute-lane {
-    padding: 7px;
-  }
-
-  .compute-lane-heading > span > span {
-    display: none;
-  }
-
-  .marketing-compute-preview .compute-slot {
-    min-height: 44px;
-  }
-
-  .compute-volume > :last-child {
-    display: none;
-  }
-
-  .compute-events > :nth-child(n + 2) {
-    display: none;
-  }
 }
 
 @container product-preview (max-width: 330px) {
-  .marketing-product-bar span,
   .pipeline-run-summary code,
   .pipeline-run-metric > span,
   .timeline-head code {
@@ -1326,10 +1199,6 @@
   }
 
   .marketing-sandbox-preview > :first-child > div > span:not(:first-child) {
-    display: none;
-  }
-
-  .compute-events {
     display: none;
   }
 }

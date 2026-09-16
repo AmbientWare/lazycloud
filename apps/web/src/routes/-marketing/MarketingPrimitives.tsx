@@ -70,7 +70,10 @@ export function MarketingCard({
   return (
     <Component
       data-marketing-card=""
-      className={cn("overflow-hidden rounded-2xl border border-input bg-card", className)}
+      className={cn(
+        "overflow-hidden rounded-[var(--radius)] border border-input bg-[color-mix(in_oklab,var(--background-subtle)_78%,transparent)]",
+        className,
+      )}
       {...props}
     />
   );

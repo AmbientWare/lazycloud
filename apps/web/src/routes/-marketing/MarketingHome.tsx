@@ -11,7 +11,8 @@ import { CloudHero } from "./CloudHero";
 import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
 import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimitives";
-import { ComputePlacementPreview, StoryPreview, type StoryVisual } from "./ProductPreviews";
+import { StoryPreview, type StoryVisual } from "./ProductPreviews";
+import { ComputePlacement, computeDestinations, type ComputeDestination } from "./ComputePlacement";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
 import { RunModeArt } from "./RunModeArt";
@@ -46,6 +47,13 @@ const platformStories: PlatformStory[] = [
     title: "Keep working after the request ends.",
     body: "Submit background tasks or add a cron schedule to a function. Each run has retries, cancellation, and live logs.",
     visual: "background",
+  },
+  {
+    key: "pods",
+    label: "Pods",
+    title: "Run your own container.",
+    body: "Run web servers, model servers, and long-lived processes from a container image or command. Expose ports and manage deployments from Python.",
+    visual: "pod",
   },
   {
     key: "sandboxes",
@@ -84,6 +92,14 @@ def total_sales(amounts: list[int]) -> int:
     code: `@app.asgi()
 def web():
     return FastAPI()`,
+  },
+  {
+    key: "pods",
+    label: "Pods",
+    code: `web = app.pod(
+    command=["python", "-m", "http.server"],
+    ports={"http": 8000}, authorized=True,
+)`,
   },
   {
     key: "schedules",
@@ -131,7 +147,7 @@ function ParitySection() {
               >
                 {definitionExamples.map((example) => (
                   <TabsTrigger
-                    className="definition-tab m-0 h-9 flex-1 px-1 text-[11px] focus-visible:ring-0 sm:text-[13px]"
+                    className="definition-tab m-0 h-9 flex-auto px-1 text-[11px] focus-visible:ring-0 sm:text-[13px]"
                     key={example.key}
                     value={example.key}
                   >
@@ -187,7 +203,10 @@ export function MarketingHome() {
 
         <TypedExportSection />
 
-        <section className="border-t border-input bg-background-subtle py-18 sm:py-22 lg:py-28">
+        <section
+          id="examples"
+          className="border-t border-input bg-background py-18 sm:py-22 lg:py-28"
+        >
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
               <SectionHeading title="Example projects" />
@@ -210,19 +229,14 @@ export function MarketingHome() {
             >
               {marketingUseCases.map((useCase) => (
                 <UseCaseCard key={useCase.id} href={`${EXAMPLES_URL}/${useCase.id}`}>
-                  <MarketingExampleImage
-                    className="absolute inset-x-0 top-0 h-[56%] object-cover object-[center_72%]"
-                    src={useCase.imageSrc}
-                  />
+                  <div className="project-example-art">
+                    <MarketingExampleImage src={useCase.imageSrc} />
+                  </div>
                   <div
-                    className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,transparent_0%,color-mix(in_oklab,var(--card)_8%,transparent)_32%,color-mix(in_oklab,var(--card)_80%,transparent)_50%,var(--card)_59%)]"
-                    aria-hidden="true"
-                  />
-                  <div
-                    className="relative mt-[61%] flex flex-1 flex-col p-4 text-foreground xl:p-5"
+                    className="relative flex flex-1 flex-col px-5 pt-3 pb-5 text-foreground"
                     data-marketing-example-copy
                   >
-                    <h3 className="max-w-[390px] text-[clamp(1.1rem,1.55vw,1.4rem)] leading-[1.12] font-medium">
+                    <h3 className="max-w-[390px] text-[19px] leading-[1.2] font-medium tracking-[-0.025em]">
                       {useCase.title}
                     </h3>
                     <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-muted-foreground">
@@ -252,7 +266,7 @@ export function MarketingHome() {
 }
 
 const useCaseCard =
-  "relative flex min-h-80 w-full flex-col text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
+  "project-example-card relative flex min-h-80 w-full flex-col text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
 
 function UseCaseCard({ children, href }: { children: ReactNode; href: string }) {
   return (
@@ -389,7 +403,7 @@ function PlatformStoryRail() {
                 Ship the <em>whole product.</em>
               </>
             }
-            body="Cloud functions, HTTP endpoints, full ASGI apps, background jobs, and cron jobs. Define them in Python alongside your code."
+            body="APIs, services, jobs, pods, and agent sandboxes. Define your workloads in Python alongside your code."
           />
           <nav aria-label="Platform use cases" className="relative border-t border-border">
             <ol className="m-0 list-none p-0">
@@ -420,12 +434,24 @@ function PlatformStoryRail() {
           {platformStories.map((story, index) => (
             <article
               aria-labelledby={`platform-story-${story.key}-title`}
-              className="scroll-mt-28 pb-6 last:pb-0 lg:first:pt-16 lg:last:pb-16"
+              className="scroll-mt-28 pb-12 last:pb-0 lg:first:pt-16 lg:last:pb-16"
               data-platform-story={story.key}
               id={`platform-story-${story.key}`}
               key={story.key}
               ref={(node) => registerStory(index, node)}
             >
+              <div className="mb-6">
+                <p className="text-sm font-medium text-brand">{story.label}</p>
+                <h3
+                  className="mt-3 text-2xl leading-tight font-medium tracking-[-0.025em] sm:text-[28px]"
+                  id={`platform-story-${story.key}-title`}
+                >
+                  {story.title}
+                </h3>
+                <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground">
+                  {story.body}
+                </p>
+              </div>
               <div className="platform-example-card">
                 <div
                   aria-label={`${story.label} preview`}
@@ -433,18 +459,6 @@ function PlatformStoryRail() {
                   role="region"
                 >
                   <StoryPreview visual={story.visual} />
-                </div>
-                <div className="platform-example-copy">
-                  <p className="text-sm font-medium text-brand">{story.label}</p>
-                  <h3
-                    className="mt-3 text-2xl leading-tight font-medium tracking-[-0.025em] sm:text-[28px]"
-                    id={`platform-story-${story.key}-title`}
-                  >
-                    {story.title}
-                  </h3>
-                  <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground">
-                    {story.body}
-                  </p>
                 </div>
               </div>
             </article>
@@ -455,22 +469,8 @@ function PlatformStoryRail() {
   );
 }
 
-const computePaths = [
-  {
-    title: "LazyCloud",
-    body: "Run CPU workloads without managing servers. Capacity scales down when idle.",
-  },
-  {
-    title: "Your AWS account",
-    body: "Run CPU and GPU workloads in your own AWS account.",
-  },
-  {
-    title: "Your own machines",
-    body: "Connect supported Linux servers, VMs, or GPU machines you already own.",
-  },
-];
-
 function ComputeSection() {
+  const [selected, setSelected] = useState<ComputeDestination>("managed");
   return (
     <section id="compute" className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
       <div
@@ -486,21 +486,27 @@ function ComputeSection() {
                 Choose where <em>your code runs.</em>
               </>
             }
-            body="Start on LazyCloud. Connect AWS or your own Linux machines when you need control of the infrastructure."
+            body="Use managed compute or bring your own infrastructure. Keep your deployments in Python either way."
           />
-          <MarketingReveal className="border-t border-border" delay={80}>
-            {computePaths.map((path) => (
-              <article className="border-b border-border py-5" key={path.title}>
-                <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
-                <p className="mt-2 max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
+          <MarketingReveal className="space-y-2" delay={80}>
+            {computeDestinations.map((path) => (
+              <button
+                className="compute-choice"
+                type="button"
+                key={path.key}
+                aria-pressed={selected === path.key}
+                onClick={() => setSelected(path.key)}
+              >
+                <span className="block text-lg font-medium tracking-[-0.02em]">{path.title}</span>
+                <span className="mt-2 block max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
                   {path.body}
-                </p>
-              </article>
+                </span>
+              </button>
             ))}
           </MarketingReveal>
         </div>
         <MarketingReveal className="flex min-w-0 [&>div]:flex-1" delay={140}>
-          <ComputePlacementPreview />
+          <ComputePlacement selected={selected} />
         </MarketingReveal>
       </div>
     </section>
