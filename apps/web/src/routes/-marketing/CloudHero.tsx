@@ -43,10 +43,7 @@ export function CloudHero() {
             development.
           </em>
         </h1>
-        <p>
-          Your agents build the application. LazyCloud makes deploying and running it just as
-          programmable.
-        </p>
+        <p>Building with agents is fast. Deploying with LazyCloud is too.</p>
         <div className="cloud-actions">
           <GetStartedButton />
           <Button asChild size="lg" variant="secondary" className="marketing-button-link">
