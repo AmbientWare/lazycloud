@@ -3,13 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from database.repositories.common import (
-    TableRepositoryConfig,
-    UserTableRepository,
-)
+from database.mappers.custom_domains import custom_domain_from_table, write_custom_domain
+from database.repositories.identity import UserRepository
 from database.tables.custom_domains import CustomDomainTable
 from shared.custom_domains import CustomDomain, CustomDomainPhase
-from shared.errors import ConflictError
+from shared.errors import ConflictError, NotFoundError
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -31,34 +29,40 @@ class CustomDomainRepository:
             or 0
         )
 
-    @property
-    def records(self) -> UserTableRepository[CustomDomain]:
-        return UserTableRepository(
-            self.session,
-            TableRepositoryConfig(CustomDomainTable, CustomDomain),
-        )
-
     def create(self, domain: CustomDomain, *, user_id: str) -> CustomDomain:
+        if domain.user_id != user_id:
+            raise NotFoundError("domain does not belong to the account")
+        UserRepository(self.session).lock_active(user_id)
+        row = CustomDomainTable(id=domain.id, user_id=user_id, created_at=domain.created_at)
+        write_custom_domain(row, domain)
         try:
-            return self.records.upsert(
-                domain,
-                user_id=user_id,
-                status=domain.phase.value,
-            )
+            self.session.add(row)
+            self.session.flush()
         except IntegrityError as exc:
             raise ConflictError(f"domain is already registered: {domain.hostname}") from exc
+        return custom_domain_from_table(row)
 
     def upsert(self, domain: CustomDomain, *, user_id: str) -> CustomDomain:
-        return self.records.upsert(
-            domain,
-            user_id=user_id,
-            status=domain.phase.value,
+        UserRepository(self.session).lock_active(user_id)
+        row = self.session.scalar(
+            select(CustomDomainTable).where(
+                CustomDomainTable.id == domain.id,
+                CustomDomainTable.user_id == user_id,
+            )
         )
+        if row is None or domain.user_id != user_id:
+            raise NotFoundError("domain does not belong to the account")
+        write_custom_domain(row, domain)
+        self.session.flush()
+        return custom_domain_from_table(row)
 
     def list(self, *, user_id: str) -> list[CustomDomain]:
-        return [
-            domain for domain in self.records.list(user_id=user_id) if domain.deleted_at is None
-        ]
+        rows = self.session.scalars(
+            select(CustomDomainTable)
+            .where(CustomDomainTable.user_id == user_id, CustomDomainTable.deleted_at.is_(None))
+            .order_by(CustomDomainTable.created_at.desc(), CustomDomainTable.id)
+        )
+        return [custom_domain_from_table(row) for row in rows]
 
     def get_by_hostname(self, hostname: str, *, user_id: str) -> CustomDomain | None:
         row = self.session.execute(
@@ -68,7 +72,7 @@ class CustomDomainRepository:
             .where(CustomDomainTable.deleted_at.is_(None))
             .limit(1)
         ).scalar_one_or_none()
-        return CustomDomain.model_validate(row.payload) if row is not None else None
+        return custom_domain_from_table(row) if row is not None else None
 
     def due_for_check(self, *, before: datetime, limit: int = 50) -> list[CustomDomain]:
         """Registrations the reconciler should re-read from the provider.
@@ -91,7 +95,7 @@ class CustomDomainRepository:
             .order_by(CustomDomainTable.last_checked_at.asc().nulls_first())
             .limit(limit)
         ).scalars()
-        return [CustomDomain.model_validate(row.payload) for row in rows]
+        return [custom_domain_from_table(row) for row in rows]
 
     def soft_delete(self, domain: CustomDomain, *, user_id: str) -> CustomDomain:
         now = utc_now()

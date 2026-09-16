@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 from typing import overload
 from uuid import uuid4
 
-from database.records.apps import StubRecord
+from database.mappers.apps import stub_from_table
+from database.mappers.identity import workspace_record_from_table
 from database.repositories.cleanup import (
     CleanupRepository,
     object_location_lock_key,
@@ -35,6 +36,7 @@ from shared.volumes import VolumeRecord
 from sqlalchemy import (
     CompoundSelect,
     String,
+    any_,
     case,
     cast,
     delete,
@@ -43,10 +45,8 @@ from sqlalchemy import (
     literal,
     or_,
     select,
-    type_coerce,
     update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import InstrumentedAttribute, Session
@@ -743,21 +743,10 @@ class ObjectReferenceRepository:
                     StubTable.id.in_(live_stub_ids),
                     StubTable.workspace_id == workspace_id,
                     or_(
-                        _stub_json_text(self.session, "config", "object_id") == object_id,
-                        _stub_json_text(
-                            self.session,
-                            "config",
-                            "image",
-                            "context_object_id",
-                        )
-                        == object_id,
-                        _stub_payload_contains(
-                            self.session, {"metadata": {"copied_object_ids": [object_id]}}
-                        ),
-                        _stub_payload_contains(
-                            self.session,
-                            {"config": {"metadata": {"copied_object_ids": [object_id]}}},
-                        ),
+                        StubTable.object_id == object_id,
+                        StubTable.image_context_object_id == object_id,
+                        any_(StubTable.copied_object_ids) == object_id,
+                        any_(StubTable.config_copied_object_ids) == object_id,
                     ),
                 )
             )
@@ -969,7 +958,7 @@ class VolumeRepository:
 
     def unreleased_mounts(self, name: str, *, workspace_id: str) -> tuple[ContainerRecord, ...]:
         rows = self.session.execute(
-            select(ContainerTable.payload, StubTable.payload)
+            select(ContainerTable.payload, StubTable)
             .join(StubTable, StubTable.id == ContainerTable.stub_id)
             .where(
                 ContainerTable.workspace_id == workspace_id,
@@ -977,8 +966,8 @@ class VolumeRepository:
             )
         )
         records: list[ContainerRecord] = []
-        for container_payload, payload in rows:
-            stub = StubRecord.model_validate(payload)
+        for container_payload, stub_row in rows:
+            stub = stub_from_table(stub_row)
             if any((volume.name or volume.id) == name for volume in stub.config.volumes):
                 records.append(ContainerRecord.model_validate(container_payload))
         return tuple(records)
@@ -1036,7 +1025,7 @@ class VolumeRepository:
             .limit(limit)
         )
         return tuple(
-            self._metering_target(row, WorkspaceRecord.model_validate(workspace.payload))
+            self._metering_target(row, workspace_record_from_table(workspace))
             for row, workspace in self.session.execute(statement).tuples()
         )
 
@@ -1060,7 +1049,7 @@ class VolumeRepository:
         row, workspace = result
         return self._metering_target(
             row,
-            WorkspaceRecord.model_validate(workspace.payload),
+            workspace_record_from_table(workspace),
         )
 
     def lock_metering_checkpoint(self, volume_id: str) -> VolumeMeteringCheckpoint | None:
@@ -1314,22 +1303,10 @@ def _source_object_reference_exists(
             StubTable.id.in_(live_stub_ids),
             StubTable.workspace_id == ObjectTable.workspace_id,
             or_(
-                _uuid_text_without_hyphens(_stub_json_text(session, "config", "object_id"))
-                == object_id,
-                _uuid_text_without_hyphens(
-                    _stub_json_text(session, "config", "image", "context_object_id")
-                )
-                == object_id,
-                _stub_json_array_contains(
-                    session,
-                    ("metadata", "copied_object_ids"),
-                    object_id,
-                ),
-                _stub_json_array_contains(
-                    session,
-                    ("config", "metadata", "copied_object_ids"),
-                    object_id,
-                ),
+                StubTable.object_id == ObjectTable.id,
+                StubTable.image_context_object_id == ObjectTable.id,
+                ObjectTable.id == any_(StubTable.copied_object_ids),
+                ObjectTable.id == any_(StubTable.config_copied_object_ids),
             ),
         )
         .correlate(ObjectTable)
@@ -1386,45 +1363,6 @@ def _image_reference_exists(
     return or_(direct_reference, build_reference)
 
 
-def _stub_json_array_contains(
-    session: Session,
-    path: tuple[str, ...],
-    value: ColumnElement[str],
-) -> ColumnElement[bool]:
-    if session.get_bind().dialect.name == "postgresql":
-        payload = type_coerce(StubTable.payload, JSONB)
-        array_value = func.jsonb_extract_path(payload, *path, type_=JSONB)
-        safe_array = case(
-            (func.jsonb_typeof(array_value) == "array", array_value),
-            else_=cast(literal("[]"), JSONB),
-        )
-        values = func.jsonb_array_elements_text(safe_array).table_valued("value").alias()
-    else:
-        json_path = "$." + ".".join(path)
-        safe_array = case(
-            (
-                func.json_type(StubTable.payload, json_path) == "array",
-                func.json_extract(StubTable.payload, json_path),
-            ),
-            else_=literal("[]"),
-        )
-        values = func.json_each(safe_array).table_valued("key", "value").alias()
-    return exists(
-        select(literal(True))
-        .select_from(values)
-        .where(_uuid_text_without_hyphens(values.c.value) == value)
-    ).correlate(StubTable, ObjectTable)
-
-
-def _stub_payload_contains(
-    session: Session,
-    value: dict[str, JsonValue],
-) -> ColumnElement[bool]:
-    if session.get_bind().dialect.name == "postgresql":
-        return type_coerce(StubTable.payload, JSONB).contains(value)
-    return StubTable.payload.contains(value)
-
-
 def _direct_image_reference_clause(
     session: Session,
     live_stub_ids: CompoundSelect[tuple[str | None]],
@@ -1443,12 +1381,10 @@ def _direct_image_reference_clause(
         | InstrumentedAttribute[str | None]
     ),
 ) -> ColumnElement[bool]:
-    stub_image_id = _stub_json_text(session, "config", "image", "image_id")
-    runtime_image_id = _stub_json_text(session, "config", "runtime", "image_id")
     stub_reference = exists().where(
         StubTable.id.in_(live_stub_ids),
         StubTable.workspace_id == workspace_id,
-        or_(stub_image_id == image_id, runtime_image_id == image_id),
+        or_(StubTable.image_id == image_id, StubTable.runtime_image_id == image_id),
     )
     container_reference = exists().where(
         ContainerTable.workspace_id == workspace_id,
@@ -1457,12 +1393,6 @@ def _direct_image_reference_clause(
         ContainerTable.image != "",
     )
     return or_(stub_reference, container_reference)
-
-
-def _stub_json_text(session: Session, *path: str) -> ColumnElement[str]:
-    if session.get_bind().dialect.name == "postgresql":
-        return func.jsonb_extract_path_text(StubTable.payload, *path, type_=String)
-    return func.json_extract(StubTable.payload, "$." + ".".join(path), type_=String)
 
 
 def _image_build_json_text(session: Session, *path: str) -> ColumnElement[str]:

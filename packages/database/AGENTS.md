@@ -7,12 +7,12 @@ wherever the schema can hold it: a rule enforced only in Python is enforced only
 where someone remembered to call it. Repositories map and query; services decide.
 Redis hot state stays out unless the history itself has to be durable.
 
-There is a deployed installation holding data nobody can reconstruct, so the
-schema moves by migration. Every change to a table adds a revision chained onto
-the one before it, and `0001_initial` is frozen: a deployed database records the
-revision it reached, and editing the file it points at makes that record a lie.
-Local databases are still disposable and recreating one is ordinary work. Never
-reset external, deployed, or production data.
+The owner authorized the relational schema release to replace the old migration
+chain and reset production and local Compose after acceptance. Follow
+`database-cleanup-plan.md` for that one reset. `0001_relational_baseline` becomes
+frozen when deployed. Later schema changes require forward migrations; editing a
+deployed revision invalidates the database's history. Local databases remain
+disposable. This release does not authorize subsequent production resets.
 
 The revisions are explicit DDL, never `create_all`. A migration generated from
 the live metadata always agrees with it, which sounds like safety and is the
@@ -29,11 +29,10 @@ through a `before_create` listener that fires for `create_all` and never for a
 migration, so a schema built by migration would reach the first exclusion
 constraint without the operator class it needs.
 
-Two foreign keys carry `use_alter`, `apps.stub_id` and `containers.task_id`,
-because apps and stubs point at each other and so do containers and tasks. A
-schema with a cycle has no order that creates both tables with their keys
-inline. The nullable pointer is the edge broken out in each case, and the
-migration adds it once every table exists.
+Foreign keys that close dependency cycles carry `use_alter`. These include the
+app's current stub, the stub's deployment, the container's task, and the
+workspace's primary token and concurrency limit. The baseline adds those
+nullable pointers after creating every table.
 
 A ledger segment states one component's quantity, and whether that quantity is
 capacity held or capacity measured. The component is what decides which unit the

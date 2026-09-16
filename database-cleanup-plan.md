@@ -1,7 +1,7 @@
 # Database cleanup and reset plan
 
-Status: proposed implementation plan. No schema or deployed state has changed.
-Branch: `plan/database-schema-reset`, based on `a257b2e18`.
+Status: implementation in progress. No installation has been reset or deployed.
+Branch: `refactor/relational-database`, based on `a257b2e18`.
 
 ## Outcome
 
@@ -10,12 +10,13 @@ tables and services, eliminate serialized copies of entire records, and retain J
 only where the data needs it. Ship one explicit initial Alembic revision and rebuild
 the selected installation from an empty database during a planned maintenance window.
 
-The owner has authorized planning a full database reset and replacing the migration
+The owner has authorized a full database reset and replacing the migration
 history for this change, with no requirement to preserve existing application data.
 The administrator's GitHub account ID is already configured. This is a one-time
 exception to the frozen-baseline rule.
 Identify the exact installation and affected resources before executing it. Future
 deployed schema changes return to forward migrations.
+Both production and local Compose are selected for the reset after acceptance.
 
 There are 81 application tables and 42 tables with a `payload` column at this commit.
 Those 42 are not all equivalent: for example, the app mapper already uses explicit
@@ -87,6 +88,7 @@ references against the implementation branch:
 | `pod_processes` | Remove the unused accessor and record type with the table. Preserve the working pod execution and URL services. |
 | `routes` | Remove the unused SQL route repository, service, and composition. Keep route publication and lookup through their current Redis owner. |
 | `queue_messages` | Remove the unused SQL collection service, repository, composition, and scheduler protocol. Resolve the obsolete `cron_job_runs.message_id` relationship and every public consumer. Preserve the current Redis queues and scheduled function execution. |
+| `credentials` | Exact class references have no production consumers. The active compute join credentials and provider authorization records have separate owners and remain. |
 
 Remove tests that exist only to exercise these retired implementations. Additional
 removals need evidence that the production behavior no longer depends on them; an
@@ -234,3 +236,62 @@ installation has working administrator access and no unaccounted external resour
 
 The exact deployment target and external resource dispositions are execution inputs,
 not blockers to writing this plan or implementing and validating the refactor locally.
+
+## Implementation evidence
+
+Five obsolete tables and their unused services have been removed. Active routing and
+queues use Redis. The SQL routing fallback had an indirect consumer; that consumer
+now reads the active Redis route owner directly.
+
+Workspaces, memberships, audits, concurrency limits, custom domains, apps, deployments,
+cron schedules, cron runs, logs and events have explicit mappers. Workspace storage
+settings are columns. Deployment specifications remain validated immutable documents.
+App metadata and event details remain named JSON documents. Event container attribution
+is a column used directly by its lookup. Log attribution remains protected by a trigger.
+The unused cron queue, invocation payload and SQL message ID fields are removed from
+the shared contracts and scheduler. Cron names are unique per workspace.
+
+Scoped PostgreSQL/Redis evidence so far:
+
+- Schema bootstrap, repeat bootstrap, incompatible revision rejection, and metadata
+  comparison pass against the explicit new baseline.
+- Identity ownership, custom-domain isolation and workspace deletion: 24 checks pass.
+- Deployments, version history, app lifecycle and scheduler: 73 checks pass.
+- Log attribution, ingestion, retention, usage pricing and scheduler: 72 checks pass.
+- Changed identity, deployment, scheduler, execution and observability source files
+  pass the scoped type checks performed so far.
+
+Query measurements use production repositories with 202 synthetic records in an
+isolated PostgreSQL database. Bytes count serialized returned rows, not wire traffic.
+Before measurements use `a257b2e18`; after measurements use this branch.
+
+- Custom-domain list with 200 deleted and two active records: one query in both;
+  returned rows 202 to 2; bytes 142,686 to 484. Active reconciliation remains one query
+  and two rows, bytes 1,298 to 484. Idle reconciliation remains one query, zero rows.
+- Logs with 200 old records and two in the requested window: one query and two rows
+  in both; bytes 1,992 to 942. Idle follow query returns zero rows in both.
+- Events under the same history: one query and two rows in both; bytes 1,420 to 984.
+  Idle query returns zero rows in both.
+
+Tasks, attempts and dependencies now use explicit columns. Opaque inputs and
+results remain documents. Retry settings have checked columns, and commands and
+retry statuses use PostgreSQL arrays. Runtime limits, scaling policy and artifact
+references are explicit stub fields; configuration documents retain the remaining
+authored launch declarations. Unused stub aliases and version fields are removed.
+Configuration fingerprints normalize equivalent integer/float values so database
+round trips preserve revision reuse. Existing reuse coverage includes a timeout.
+
+- Task retry, timeout, claim, cancellation, progress and rerun: 15 checks pass.
+- Stub preparation, concurrent reuse, cloning, artifact access and deployment
+  defaults: 22 checks pass.
+- Schema, workspace deletion races and scheduler integration after these changes:
+  73 checks pass. Database, control and observability packages pass type checking.
+- Task lists with two pending tasks and 200 finished tasks: one query, two rows;
+  serialized bytes 2,274 to 1,158. Idle scans remain one query and zero rows.
+- Autoscaler projections for two selected stubs: one query, two rows; serialized
+  bytes 332 to 468. The 136-byte increase comes from separate nullable policy
+  columns replacing compact empty policy objects. It adds no query or fetched
+  configuration document. Empty target sets issue no query in either version.
+
+Containers, compute, storage, images and usage still require their remaining
+refactors. These scoped results are not release acceptance.

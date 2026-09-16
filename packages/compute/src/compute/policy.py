@@ -294,7 +294,7 @@ class WorkspaceComputePolicyService:
             workspace_id = self.context.workspace(session, workspace).id
             return self._policy_in_session(session, workspace_id).default_pool
 
-    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str:
+    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> MachinePool:
         """Pin the pool a deployment runs in for as long as it exists."""
         return self.resolve_machine_pool(_deployment_pool_name(spec), workspace=workspace)
 

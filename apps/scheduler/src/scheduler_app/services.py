@@ -29,7 +29,6 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from execution.collections.service import CollectionService
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
@@ -148,7 +147,6 @@ class SchedulerAppServices:
     apps: AppService
     deployments: DeploymentService
     cron_jobs: CronJobService
-    collections: CollectionService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     scheduler_workloads: SchedulerWorkloadDirectory
@@ -431,7 +429,6 @@ class SchedulerAppServices:
             apps=apps,
             deployments=deployments,
             cron_jobs=cron_jobs,
-            collections=CollectionService(context),
             containers=containers,
             container_shutdowns=container_shutdowns,
             scheduler_workloads=scheduler_workloads,

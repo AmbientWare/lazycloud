@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 
 from croniter import croniter
-from pydantic import Field, JsonValue
+from pydantic import Field
 
 from shared.contracts import ContractModel
 from shared.timestamps import utc_now
@@ -66,7 +66,6 @@ class CronJobRun(ContractModel):
     workspace_id: str
     cron_job: str
     enqueued: bool
-    message_id: str | None = None
     task_id: str | None = None
     reason: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -77,8 +76,6 @@ class CronJobRecord(ContractModel):
     name: str
     cron: str
     deployment_id: str
-    queue: str = "tasks"
-    payload: JsonValue = None
     enabled: bool = True
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None

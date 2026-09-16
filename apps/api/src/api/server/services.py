@@ -29,7 +29,6 @@ from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
-from control.routes import RouteService
 from control.service import ControlPlaneService, WorkspaceBucketClient
 from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
@@ -40,7 +39,6 @@ from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
-from execution.collections.service import CollectionService
 from execution.containers.preemption import PreemptedContainerService
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
@@ -457,7 +455,6 @@ class ApiServiceCore:
     deployment_resources: DeploymentResourceService
     custom_domains: CustomDomainService
     cron_jobs: CronJobService
-    collections: CollectionService
     secrets: SecretService
     volumes: VolumeService
     compute: ComputeService
@@ -477,7 +474,6 @@ class ApiServiceCore:
     metrics: MetricsService
     worker_events: WorkerEventService
     usage: UsageService
-    routes: RouteService
     checkpoints: CheckpointService
     autoscaler_states: AutoscalerStateService
     volume_metering: PersistentVolumeMeteringService
@@ -662,7 +658,6 @@ class ApiServices(ApiServiceCore):
             context,
             available_catalog=aws_compute_catalog,
         )
-        routes = RouteService(context)
         cache_storage = CacheStorage(context)
         if object_storage is not None and object_store_client is not None:
             raise ValueError("object_storage and object_store_client are mutually exclusive")
@@ -939,7 +934,6 @@ class ApiServices(ApiServiceCore):
             platform_base_domain=gateway_config.public_base_domain,
             admission=DatabaseBillingAdmission(),
         )
-        collections = CollectionService(context)
         volumes = VolumeService(context, workspace_changes=workspace_changes)
         scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
         agents = AgentService(context, workspace_changes=workspace_changes)
@@ -1001,7 +995,6 @@ class ApiServices(ApiServiceCore):
             deployment_resources=deployment_resources,
             custom_domains=custom_domains,
             cron_jobs=cron_jobs,
-            collections=collections,
             secrets=secrets,
             volumes=volumes,
             compute=compute,
@@ -1021,7 +1014,6 @@ class ApiServices(ApiServiceCore):
             metrics=metrics,
             worker_events=worker_events,
             usage=usage,
-            routes=routes,
             checkpoints=checkpoints,
             autoscaler_states=autoscaler_states,
             volume_metering=volume_metering_service,
@@ -1110,7 +1102,7 @@ def _compose_api_services(
     scheduler_workers = core.scheduler_workers
     scheduler_containers = core.scheduler_containers
     scheduler_pool_states = core.scheduler_pool_states
-    route_resolver = SchedulerBackendRouteResolver(core.routes, scheduler_containers)
+    route_resolver = SchedulerBackendRouteResolver(scheduler_containers)
     route_dialer = BackendRouteDialer(core.agent_tunnel_client, route_resolver)
     transport_factory = HttpContainerServiceTransportFactory(
         route_dialer=route_dialer,
@@ -1292,7 +1284,6 @@ def _compose_api_services(
         deployment_resources=core.deployment_resources,
         custom_domains=core.custom_domains,
         cron_jobs=core.cron_jobs,
-        collections=core.collections,
         secrets=core.secrets,
         volumes=core.volumes,
         compute=core.compute,
@@ -1312,7 +1303,6 @@ def _compose_api_services(
         metrics=core.metrics,
         worker_events=core.worker_events,
         usage=core.usage,
-        routes=core.routes,
         checkpoints=core.checkpoints,
         autoscaler_states=core.autoscaler_states,
         volume_metering=core.volume_metering,

@@ -301,16 +301,10 @@ def _require_active(resource: DeploymentResource) -> None:
 
 
 def _deployment_resource(row: DeploymentResourceRow) -> DeploymentResource:
-    deployment = Deployment.model_validate(row.deployment_payload).model_copy(
-        update={
-            "app_id": row.deployment_app_id,
-            "stub_id": row.deployment_stub_id,
-        }
-    )
     return DeploymentResource(
         app=row.app,
-        deployment=deployment,
-        stub=StubRecord.model_validate(row.stub_payload),
+        deployment=row.deployment,
+        stub=row.stub,
     )
 
 

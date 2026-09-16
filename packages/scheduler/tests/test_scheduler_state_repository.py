@@ -694,9 +694,7 @@ def test_scheduler_tick_skips_cron_function_when_lock_is_held(
     assert len(runs) == 1
     assert not runs[0].enqueued
     assert runs[0].task_id is None
-    assert runs[0].message_id is None
     assert runs[0].reason == "cron job lock not acquired"
-    assert isolated_services.collections.queue_depth("tasks") == 0
     assert isolated_services.tasks.list() == []
     assert container_scheduler.requests == []
 
@@ -743,11 +741,9 @@ def test_inactive_cron_deployment_never_enqueues(
     deployment.active = False
     workspace_id = ControlPlaneService(isolated_services.context).get_workspace("default").id
     with isolated_services.context.database.session() as session:
-        DeploymentRepository(session).records.upsert(
+        DeploymentRepository(session).upsert(
             deployment,
             workspace_id=workspace_id,
-            name=deployment.name,
-            status="inactive",
         )
     assert cron_job.next_run_at is not None
 

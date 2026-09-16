@@ -403,11 +403,9 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
         session.add(
             StubTable(
                 id=stub_id,
-                external_id=str(uuid4()),
                 workspace_id=workspace_id,
                 name="releasable",
                 type="function",
-                payload={},
             )
         )
         for container_id in container_ids:
@@ -499,11 +497,9 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
         session.add(
             StubTable(
                 id=stub_id,
-                external_id=str(uuid4()),
                 workspace_id=workspace_id,
                 name="finished",
                 type="function",
-                payload={},
             )
         )
         session.add(
@@ -574,11 +570,9 @@ def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
         session.add(
             StubTable(
                 id=stub_id,
-                external_id=str(uuid4()),
                 workspace_id=workspace_id,
                 name="claimable",
                 type="function",
-                payload={},
             )
         )
         for container_id in container_ids:

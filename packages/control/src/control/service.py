@@ -15,12 +15,8 @@ from billing.admission import DatabaseBillingAdmission
 from database.records.apps import AutoscalingStubRecord, StubKind, StubRecord
 from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.cleanup import CleanupRepository
-from database.repositories.common import (
-    GlobalTableRepository,
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
-)
 from database.repositories.identity import (
+    ConcurrencyLimitRepository,
     SecretRepository,
     WorkspaceMemberRepository,
     WorkspaceRepository,
@@ -28,8 +24,6 @@ from database.repositories.identity import (
 )
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
-from database.tables.apps import StubTable
-from database.tables.identity import ConcurrencyLimitTable, WorkspaceTable
 from foundation.ids import try_uuid
 from identity.auth import AuthService
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -148,13 +142,6 @@ _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 type StubConfigUpdateValue = JsonValue | ContractModel
 
 
-def _workspace_records(session: Session) -> GlobalTableRepository[WorkspaceRecord]:
-    return GlobalTableRepository(
-        session,
-        TableRepositoryConfig(WorkspaceTable, WorkspaceRecord),
-    )
-
-
 def _upsert_workspace_row(
     session: Session,
     name: str,
@@ -165,26 +152,24 @@ def _upsert_workspace_row(
     labels: dict[str, str] | None = None,
     metadata: Mapping[str, JsonValue] | None = None,
 ) -> WorkspaceRecord:
-    repository = _workspace_records(session)
+    repository = WorkspaceRepository(session)
     existing = WorkspaceRepository(session).by_name(name)
     now = utc_now()
     metadata_payload = dict(metadata) if metadata is not None else {}
     if existing is None:
-        return repository.create(
-            {
-                "name": name,
-                "status": WorkspaceStatus.Active.value,
-                "signing_key_prefix": signing_key_prefix,
-                "signing_key": new_signing_key(signing_key_prefix),
-                "primary_token_id": primary_token_id,
-                "storage": (storage or WorkspaceStorageConfig()).model_dump(mode="json"),
-                "labels": labels or {},
-                "metadata": metadata_payload,
-                "created_at": now,
-                "updated_at": now,
-            },
-            name=name,
-            status=WorkspaceStatus.Active.value,
+        return repository.upsert(
+            WorkspaceRecord(
+                id=str(uuid4()),
+                name=name,
+                signing_key_prefix=signing_key_prefix,
+                signing_key=new_signing_key(signing_key_prefix),
+                primary_token_id=primary_token_id,
+                storage=storage or WorkspaceStorageConfig(),
+                labels=labels or {},
+                metadata=metadata_payload,
+                created_at=now,
+                updated_at=now,
+            )
         )
     if existing.status is not WorkspaceStatus.Active:
         raise ConflictError(f"workspace is not active: {name}")
@@ -202,22 +187,7 @@ def _upsert_workspace_row(
     existing.labels.update(labels or {})
     existing.metadata.update(metadata_payload)
     existing.updated_at = now
-    return repository.upsert(
-        existing,
-        name=existing.name,
-        status=existing.status.value,
-    )
-
-
-def _stub_records(session: Session) -> WorkspaceTableRepository[StubRecord]:
-    return WorkspaceTableRepository(session, TableRepositoryConfig(StubTable, StubRecord))
-
-
-def _limit_records(session: Session) -> WorkspaceTableRepository[ConcurrencyLimitRecord]:
-    return WorkspaceTableRepository(
-        session,
-        TableRepositoryConfig(ConcurrencyLimitTable, ConcurrencyLimitRecord),
-    )
+    return repository.upsert(existing)
 
 
 def _stub_config_payload(config: StubConfig) -> dict[str, JsonValue]:
@@ -228,8 +198,29 @@ def _stub_config_payload(config: StubConfig) -> dict[str, JsonValue]:
 
 def _stub_preparation_fingerprint(stub: StubRecord) -> str:
     payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at"})
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    config = _stub_config_payload(stub.config)
+    if not config.get("object_id"):
+        config.pop("object_id", None)
+    for section in ("runtime", "autoscaler", "task_policy", "image"):
+        values = config.get(section)
+        if isinstance(values, dict):
+            config[section] = {key: value for key, value in values.items() if value is not None}
+    payload["config"] = config
+    encoded = json.dumps(
+        _fingerprint_value(payload), sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
     return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _fingerprint_value(value: JsonValue) -> JsonValue:
+    # SQL floating-point columns preserve the value, but not JSON's integer spelling.
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _fingerprint_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_fingerprint_value(item) for item in value]
+    return value
 
 
 def _masked_config(value: JsonValue) -> JsonValue:
@@ -490,10 +481,8 @@ class ControlPlaneService:
         record.storage = storage
         record.updated_at = utc_now()
         with self.context.database.session() as session:
-            return _workspace_records(session).upsert(
+            return WorkspaceRepository(session).upsert(
                 record,
-                name=record.name,
-                status=record.status.value,
             )
 
     def ensure_workspace_storage(self, workspace: str) -> WorkspaceRecord:
@@ -650,7 +639,7 @@ class ControlPlaneService:
         include_deleting: bool = False,
     ) -> list[WorkspaceRecord]:
         with self.context.database.session() as session:
-            records = _workspace_records(session).list()
+            records = WorkspaceRepository(session).list()
         if not include_deleted:
             visible_statuses = {WorkspaceStatus.Active}
             if include_deleting:
@@ -765,7 +754,7 @@ class ControlPlaneService:
         workspace_id = (
             self.context.workspace(session, workspace).id if workspace is not None else None
         )
-        repository = _stub_records(session)
+        repository = StubRepository(session)
         stub_id = try_uuid(stub_id_or_name)
         if stub_id is not None:
             record = (
@@ -801,7 +790,7 @@ class ControlPlaneService:
     ) -> list[StubRecord]:
         workspace_id = self.get_workspace(workspace).id if workspace is not None else None
         with self.context.database.session() as session:
-            repository = _stub_records(session)
+            repository = StubRepository(session)
             records = (
                 repository.list(workspace_id=workspace_id, app_id=app_id)
                 if workspace_id is not None
@@ -903,11 +892,7 @@ class ControlPlaneService:
         stub.config = StubConfig.model_validate(config)
         stub.updated_at = utc_now()
         with self.context.database.session() as session:
-            updated_stub = _stub_records(session).upsert(
-                stub,
-                workspace_id=stub.workspace_id,
-                name=stub.name,
-            )
+            updated_stub = StubRepository(session).upsert(stub)
             StubRepository(session).set_preparation_fingerprint(
                 stub.id, workspace_id=stub.workspace_id, fingerprint=None
             )
@@ -1235,26 +1220,24 @@ class ControlPlaneService:
     ) -> ConcurrencyLimitRecord:
         workspace_record = self.get_workspace(workspace)
         with self.context.database.session() as session:
-            repository = _limit_records(session)
-            existing = _limit_by_name(repository.list(workspace_id=workspace_record.id), name)
+            repository = ConcurrencyLimitRepository(session)
+            existing = repository.by_name(name, workspace_id=workspace_record.id)
             now = utc_now()
             metadata_payload = dict(metadata) if metadata is not None else {}
             if existing is None:
-                record = repository.create(
-                    {
-                        "workspace_id": workspace_record.id,
-                        "name": name,
-                        "limit": limit,
-                        "in_flight": 0,
-                        "resource_type": resource_type,
-                        "resource_id": resource_id,
-                        "metadata": metadata_payload,
-                        "created_at": now,
-                        "updated_at": now,
-                    },
+                record = repository.upsert(
+                    ConcurrencyLimitRecord(
+                        id=str(uuid4()),
+                        workspace_id=workspace_record.id,
+                        name=name,
+                        limit=limit,
+                        resource_type=resource_type,
+                        resource_id=resource_id,
+                        metadata=metadata_payload,
+                        created_at=now,
+                        updated_at=now,
+                    ),
                     workspace_id=workspace_record.id,
-                    name=name,
-                    status=resource_type,
                 )
             else:
                 existing.limit = limit
@@ -1266,15 +1249,11 @@ class ControlPlaneService:
                 record = repository.upsert(
                     existing,
                     workspace_id=workspace_record.id,
-                    name=name,
-                    status=resource_type,
                 )
             workspace_record.concurrency_limit_id = record.id
             workspace_record.updated_at = now
-            _workspace_records(session).upsert(
+            WorkspaceRepository(session).upsert(
                 workspace_record,
-                name=workspace_record.name,
-                status=workspace_record.status.value,
             )
         self._publish_concurrency_change(
             record,
@@ -1289,7 +1268,7 @@ class ControlPlaneService:
     ) -> list[ConcurrencyLimitRecord]:
         workspace_id = self.get_workspace(workspace).id if workspace is not None else None
         with self.context.database.session() as session:
-            repository = _limit_records(session)
+            repository = ConcurrencyLimitRepository(session)
             records = (
                 repository.list(workspace_id=workspace_id)
                 if workspace_id is not None
@@ -1304,7 +1283,7 @@ class ControlPlaneService:
             msg = f"current concurrency limit not found for workspace: {workspace}"
             raise NotFoundError(msg)
         with self.context.database.session() as session:
-            record = _limit_records(session).get(
+            record = ConcurrencyLimitRepository(session).get(
                 workspace_record.concurrency_limit_id,
                 workspace_id=workspace_record.id,
             )
@@ -1319,10 +1298,8 @@ class ControlPlaneService:
         workspace_record.concurrency_limit_id = None
         workspace_record.updated_at = utc_now()
         with self.context.database.session() as session:
-            _workspace_records(session).upsert(
+            WorkspaceRepository(session).upsert(
                 workspace_record,
-                name=workspace_record.name,
-                status=workspace_record.status.value,
             )
         if self.workspace_changes is not None and previous_limit_id is not None:
             self.workspace_changes.emit_change(
@@ -1347,10 +1324,8 @@ class ControlPlaneService:
         workspace_record.concurrency_limit_id = chosen.id
         workspace_record.updated_at = utc_now()
         with self.context.database.session() as session:
-            _workspace_records(session).upsert(
+            WorkspaceRepository(session).upsert(
                 workspace_record,
-                name=workspace_record.name,
-                status=workspace_record.status.value,
             )
         self._publish_concurrency_change(chosen, WorkspaceChangeType.Updated)
         return chosen
@@ -1527,7 +1502,7 @@ class ControlPlaneService:
     ) -> ConcurrencyAcquireResult:
         workspace_record = self.get_workspace(workspace)
         with self.context.database.session() as session:
-            repository = _limit_records(session)
+            repository = ConcurrencyLimitRepository(session)
             record = _limit_by_id_or_name(
                 repository,
                 limit_id_or_name,
@@ -1566,8 +1541,6 @@ class ControlPlaneService:
             record = repository.upsert(
                 record,
                 workspace_id=record.workspace_id,
-                name=record.name,
-                status=record.resource_type,
             )
             result = ConcurrencyAcquireResult(
                 status=status,
@@ -1604,15 +1577,8 @@ def _workspace_storage_available(storage: WorkspaceStorageConfig) -> bool:
     return bool(storage.bucket and storage.backend != "local")
 
 
-def _limit_by_name(
-    records: list[ConcurrencyLimitRecord],
-    name: str,
-) -> ConcurrencyLimitRecord | None:
-    return next((item for item in records if item.name == name), None)
-
-
 def _limit_by_id_or_name(
-    repository: WorkspaceTableRepository[ConcurrencyLimitRecord],
+    repository: ConcurrencyLimitRepository,
     limit_id_or_name: str,
     *,
     workspace_id: str,
@@ -1622,7 +1588,7 @@ def _limit_by_id_or_name(
         record = repository.get(limit_id, workspace_id=workspace_id)
         if record is not None:
             return record
-    record = _limit_by_name(repository.list(workspace_id=workspace_id), limit_id_or_name)
+    record = repository.by_name(limit_id_or_name, workspace_id=workspace_id)
     if record is None:
         msg = f"concurrency limit not found: {limit_id_or_name}"
         raise NotFoundError(msg)

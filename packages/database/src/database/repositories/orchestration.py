@@ -24,7 +24,6 @@ from database.tables.orchestration import (
     AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
-    RouteTable,
     WorkerTable,
 )
 from foundation.ids import try_uuid
@@ -42,7 +41,6 @@ from shared.container_requests import (
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
-from shared.routing import AgentBackendRoute
 from sqlalchemy import Select, and_, case, func, or_, select, text, union_all
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -1136,37 +1134,3 @@ class AgentLeaseRepository:
 
     def list(self, *, status: str | None = None) -> list[AgentLease]:
         return self.records.list(status=status)
-
-
-@dataclass(slots=True)
-class RouteRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[AgentBackendRoute]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(RouteTable, AgentBackendRoute, key_field="route_id"),
-        )
-
-    def upsert(self, route: AgentBackendRoute) -> AgentBackendRoute:
-        return self.records.upsert(
-            route,
-            key=route.route_id,
-            workspace_id=route.workspace_id,
-            status=str(route.state),
-        )
-
-    def get(self, route_id: str, *, workspace_id: str) -> AgentBackendRoute | None:
-        return self.records.get(route_id, workspace_id=workspace_id)
-
-    def get_across_workspaces(self, route_id: str) -> AgentBackendRoute | None:
-        """System lookup for request routing over every workspace's routes."""
-        return self.records.get_across_workspaces(route_id)
-
-    def list(self, *, workspace_id: str) -> list[AgentBackendRoute]:
-        return self.records.list(workspace_id=workspace_id)
-
-    def list_across_workspaces(self) -> list[AgentBackendRoute]:
-        """System listing for route reconciliation."""
-        return self.records.list_across_workspaces()

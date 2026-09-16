@@ -52,16 +52,13 @@ from database.tables.execution import (
     CronJobRunTable,
     EventTable,
     LogTable,
-    PodProcessTable,
     PodUrlTable,
-    QueueMessageTable,
     TaskAttemptTable,
     TaskDependencyTable,
     TaskTable,
 )
 from database.tables.identity import (
     ConcurrencyLimitTable,
-    CredentialTable,
     IdentityAdminRecoveryRequestTable,
     IdentityBootstrapClaimTable,
     SecretTable,
@@ -70,7 +67,6 @@ from database.tables.identity import (
     UserTable,
     WorkspaceInvitationTable,
     WorkspaceMemberTable,
-    WorkspaceStorageTable,
     WorkspaceTable,
 )
 from database.tables.images import (
@@ -90,7 +86,6 @@ from database.tables.orchestration import (
     AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
-    RouteTable,
     WorkerTable,
 )
 from database.tables.provider_launches import ProviderNodeLaunchTable
@@ -135,7 +130,6 @@ __all__ = [
     "ContainerBillingShapeTable",
     "ContainerRolloutDrainTable",
     "ContainerTable",
-    "CredentialTable",
     "CreditPurchaseTable",
     "CronJobRunTable",
     "CronJobTable",
@@ -157,11 +151,8 @@ __all__ = [
     "ObjectTable",
     "PayloadMixin",
     "PlatformRateTable",
-    "PodProcessTable",
     "PodUrlTable",
     "ProviderNodeLaunchTable",
-    "QueueMessageTable",
-    "RouteTable",
     "SecretTable",
     "SourceCacheCleanupTargetTable",
     "StorageAccessTable",
@@ -182,7 +173,6 @@ __all__ = [
     "WorkspaceComputePolicyTable",
     "WorkspaceInvitationTable",
     "WorkspaceMemberTable",
-    "WorkspaceStorageTable",
     "WorkspaceTable",
     "json_type",
     "utc_now",

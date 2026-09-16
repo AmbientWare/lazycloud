@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from database.records.apps import StubRecord
+from database.mappers.apps import stub_from_table
 from database.tables.apps import StubTable
 from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
 from database.tables.storage import ObjectTable
@@ -130,7 +130,7 @@ class CleanupRepository:
         row = self.session.get(StubTable, stub_id)
         if row is None:
             return
-        stub = StubRecord.model_validate(row.payload)
+        stub = stub_from_table(row)
         self.assert_stub_config_available(
             stub.config,
             workspace_id=str(row.workspace_id),

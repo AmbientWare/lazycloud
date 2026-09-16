@@ -2373,7 +2373,6 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         )
     )
     resolved = SchedulerBackendRouteResolver(
-        isolated_services.routes,
         containers,
     ).get_backend_route(route.route_id)
 

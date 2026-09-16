@@ -326,34 +326,6 @@ FOR EACH ROW EXECUTE FUNCTION enforce_container_assignment_ownership();
 )
 
 
-class RouteTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "routes"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("route_id", name="uq_routes_route_id"),
-        Index("ix_routes_workspace_machine", "workspace_id", "machine_id"),
-        Index("ix_routes_container", "container_id"),
-    )
-
-    workspace_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    pool: Mapped[str | None] = mapped_column(String(240), nullable=True)
-    machine_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("machines.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    container_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("containers.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    route_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    state: Mapped[str] = mapped_column(String(80), nullable=False, default="opening")
-
-
 class AgentTable(IdPayloadTable, DatabaseBase):
     __tablename__ = "agents"
     __table_args__: tuple[SchemaItem, ...] = (

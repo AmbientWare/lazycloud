@@ -6,37 +6,43 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from database.mappers.execution import pod_url_record_from_table
-from database.records.execution import PodUrlRecord
-from database.repositories.common import (
-    GlobalTableRepository,
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
+from database.mappers.execution import (
+    cron_job_run_from_table,
+    event_from_table,
+    log_entry_from_table,
+    pod_url_record_from_table,
+    task_attempt_from_table,
+    task_dependency_from_table,
+    task_from_table,
+    write_event_row,
+    write_log_row,
+    write_task_attempt_row,
+    write_task_row,
 )
+from database.records.execution import PodUrlRecord
 from database.repositories.container_rollouts import ContainerRolloutRepository
+from database.repositories.identity import WorkspaceRepository
 from database.tables.apps import AppTable, DeploymentTable, StubTable
 from database.tables.billing import BillingAccountTable
 from database.tables.execution import (
     CronJobRunTable,
     EventTable,
     LogTable,
-    PodProcessTable,
     PodUrlTable,
-    QueueMessageTable,
     TaskAttemptTable,
     TaskDependencyTable,
     TaskTable,
 )
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import ContainerTable
-from pydantic import BaseModel, JsonValue, field_validator
+from pydantic import BaseModel, field_validator
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
 from shared.deployment_records import DEFAULT_FUNCTION_TIMEOUT_SECONDS
 from shared.deployments import StubKind
+from shared.errors import ConflictError
 from shared.events import Event
 from shared.logs import LogEntry
-from shared.queue_messages import QueueMessage
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import (
     IN_FLIGHT_TASK_STATUSES,
@@ -63,19 +69,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
-
-
-class PodProcessRecord(BaseModel):
-    id: str
-    container_id: str
-    pid: int
-    task_id: str = ""
-    command: str = ""
-    status: TaskStatus = TaskStatus.Running
-    exit_code: int = 0
-    stdout: str = ""
-    stderr: str = ""
 
 
 class TaskDurationSample(BaseModel):
@@ -181,31 +174,62 @@ DEFAULT_DURATION_SAMPLE_LIMIT = 10_000
 class TaskRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[Task]:
-        return WorkspaceTableRepository(self.session, TableRepositoryConfig(TaskTable, Task))
-
     def upsert(self, task: Task, *, workspace_id: str | None = None) -> Task:
         """System-authority write keyed by task id; ownership comes from the record."""
-        return self.records.upsert_across_workspaces(
-            task,
-            workspace_id=workspace_id or task.workspace_id,
-            name=task.name,
-            status=task.status.value,
-        )
+        owner_id = workspace_id or task.workspace_id
+        if task.workspace_id is not None and owner_id != task.workspace_id:
+            raise ConflictError("task ownership cannot change")
+        if owner_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(owner_id)
+        task = Task.model_validate(dict(task) | {"workspace_id": owner_id})
+        row = self.session.get(TaskTable, task.id)
+        if row is None:
+            row = TaskTable(id=task.id)
+            self.session.add(row)
+        elif row.workspace_id != owner_id:
+            raise ConflictError("task ownership cannot change")
+        write_task_row(row, task)
+        self.session.flush()
+        return task_from_table(row)
 
     def get(self, task_id: str, *, workspace_id: str) -> Task | None:
-        return self.records.get(task_id, workspace_id=workspace_id)
+        if not _is_uuid_text(task_id):
+            return None
+        row = self.session.scalar(
+            select(TaskTable).where(
+                TaskTable.id == task_id,
+                TaskTable.workspace_id == workspace_id,
+            )
+        )
+        return task_from_table(row) if row is not None else None
 
     def get_across_workspaces(self, task_id: str) -> Task | None:
         """System lookup for scheduler/worker/runner paths acting on placed work."""
-        return self.records.get_across_workspaces(task_id)
+        if not _is_uuid_text(task_id):
+            return None
+        row = self.session.get(TaskTable, task_id)
+        return task_from_table(row) if row is not None else None
+
+    def delete(self, task_id: str, *, workspace_id: str) -> bool:
+        if not _is_uuid_text(task_id):
+            return False
+        return (
+            self.session.scalar(
+                delete(TaskTable)
+                .where(
+                    TaskTable.id == task_id,
+                    TaskTable.workspace_id == workspace_id,
+                )
+                .returning(TaskTable.id)
+            )
+            is not None
+        )
 
     def get_for_update_across_workspaces(self, task_id: str) -> Task | None:
         """System claim path; locks the row regardless of owning workspace."""
         statement = select(TaskTable).where(TaskTable.id == task_id).with_for_update()
         row = self.session.scalars(statement).first()
-        return Task.model_validate(row.payload) if row is not None else None
+        return task_from_table(row) if row is not None else None
 
     def mark_claimable(self, task_id: str, *, at: datetime) -> Task | None:
         """Record that this task's inputs have resolved, once.
@@ -220,7 +244,7 @@ class TaskRepository:
         ).first()
         if row is None:
             return None
-        task = Task.model_validate(row.payload)
+        task = task_from_table(row)
         if task.claimable_at is not None:
             return task
         task.claimable_at = at
@@ -272,7 +296,7 @@ class TaskRepository:
         )
         claimed: list[Task] = []
         for row in rows:
-            task = Task.model_validate(row.payload)
+            task = task_from_table(row)
             task.container_id = container_id
             claimed.append(self.upsert(task))
         return claimed
@@ -296,7 +320,7 @@ class TaskRepository:
         ).first()
         if row is None:
             return None
-        task = Task.model_validate(row.payload)
+        task = task_from_table(row)
         if is_terminal_task_status(task.status) or task.container_id != container_id:
             return None
         task.container_id = None
@@ -339,7 +363,7 @@ class TaskRepository:
         )
         cancelled: list[Task] = []
         for row in rows:
-            task = Task.model_validate(row.payload)
+            task = task_from_table(row)
             task.status = TaskStatus.Cancelled
             task.error = error
             task.finished_at = datetime.now(UTC)
@@ -383,7 +407,7 @@ class TaskRepository:
                 TaskTable.status.in_([status.value for status in IN_FLIGHT_TASK_STATUSES]),
             )
         )
-        return [Task.model_validate(row.payload) for row in rows]
+        return [task_from_table(row) for row in rows]
 
     def list_unclaimed_claimable(self, *, limit: int, stub_id: str | None = None) -> list[Task]:
         """Runnable work nobody has taken, oldest first, across every workspace.
@@ -409,7 +433,7 @@ class TaskRepository:
             .order_by(TaskTable.claimable_at, TaskTable.id)
             .limit(limit)
         )
-        return [Task.model_validate(row.payload) for row in rows]
+        return [task_from_table(row) for row in rows]
 
     def list_unclaimed_claimable_for_update(
         self,
@@ -437,7 +461,7 @@ class TaskRepository:
             .unique()
             .all()
         )
-        return [Task.model_validate(row.payload) for row in rows]
+        return [task_from_table(row) for row in rows]
 
     def count_unclaimed_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
         """Runnable, unclaimed work for several stubs in one grouped query."""
@@ -477,7 +501,7 @@ class TaskRepository:
             .order_by(due_at, TaskTable.created_at, TaskTable.id)
             .limit(limit)
         )
-        return [Task.model_validate(row.payload) for row in rows]
+        return [task_from_table(row) for row in rows]
 
     def count_inflight_for_stub(self, stub_id: str) -> int:
         """Everything for this stub that has not finished, claimed or not.
@@ -505,11 +529,27 @@ class TaskRepository:
         workspace_id: str,
         status: str | None = None,
     ) -> list[Task]:
-        return self.records.list(status=status, workspace_id=workspace_id)
+        statement = select(TaskTable).where(TaskTable.workspace_id == workspace_id)
+        if status is not None:
+            statement = statement.where(TaskTable.status == status)
+        return [
+            task_from_table(row)
+            for row in self.session.scalars(
+                statement.order_by(TaskTable.created_at.desc(), TaskTable.id)
+            )
+        ]
 
     def list_across_workspaces(self, *, status: str | None = None) -> list[Task]:
         """System listing for reconcilers and schedulers over every workspace."""
-        return self.records.list_across_workspaces(status=status)
+        statement = select(TaskTable)
+        if status is not None:
+            statement = statement.where(TaskTable.status == status)
+        return [
+            task_from_table(row)
+            for row in self.session.scalars(
+                statement.order_by(TaskTable.created_at.desc(), TaskTable.id)
+            )
+        ]
 
     def page_with_related(
         self,
@@ -565,7 +605,7 @@ class TaskRepository:
         return RelatedTaskPage(
             data=[
                 RelatedTaskRecord(
-                    task=Task.model_validate(task_payload),
+                    task=task_from_table(task_row),
                     app_name=app_name,
                     workload_name=stub_name,
                     workload_kind=StubKind(stub_type) if stub_type is not None else None,
@@ -576,7 +616,7 @@ class TaskRepository:
                     ),
                 )
                 for (
-                    task_payload,
+                    task_row,
                     app_name,
                     stub_name,
                     stub_type,
@@ -601,7 +641,7 @@ class TaskRepository:
         if row is None:
             return None
         (
-            task_payload,
+            task_row,
             app_name,
             stub_name,
             stub_type,
@@ -611,7 +651,7 @@ class TaskRepository:
             container_payload,
         ) = row
         return DetailedTaskRecord(
-            task=Task.model_validate(task_payload),
+            task=task_from_table(task_row),
             app_name=app_name,
             workload_name=stub_name,
             workload_kind=StubKind(stub_type) if stub_type is not None else None,
@@ -627,7 +667,7 @@ class TaskRepository:
 
     def ids_for_container(self, container_id: str) -> list[str]:
         """Ids of tasks bound to a container via the indexed column or kwargs."""
-        conditions = [_task_json_text(self.session, "kwargs", "container_id") == container_id]
+        conditions = [TaskTable.input_container_id == container_id]
         if _is_uuid_text(container_id):
             conditions.append(TaskTable.container_id == container_id)
         statement = select(TaskTable.id).where(or_(*conditions))
@@ -804,7 +844,7 @@ def _narrowed_tasks[StatementT: Select[Any]](
     return statement
 
 
-def _related_task_statement() -> Select[tuple[dict[str, JsonValue], str, str, str, str, int, str]]:
+def _related_task_statement() -> Select[tuple[TaskTable, str, str, str, str, int, str]]:
     """Tasks joined to the columns that name their app, workload, and container.
 
     Columns rather than the joined rows' payload documents. Every fact a reader
@@ -816,7 +856,7 @@ def _related_task_statement() -> Select[tuple[dict[str, JsonValue], str, str, st
 
     return (
         select(
-            TaskTable.payload,
+            TaskTable,
             AppTable.name,
             StubTable.name,
             StubTable.type,
@@ -850,7 +890,7 @@ class TaskAttemptRepository:
 
     def expired_function_attempts(self, *, now: datetime, limit: int) -> list[TaskAttempt]:
         timeout = func.coalesce(
-            StubTable.payload["config"]["runtime"]["timeout_seconds"].as_float(),
+            StubTable.runtime_timeout_seconds,
             DEFAULT_FUNCTION_TIMEOUT_SECONDS,
         )
         statement = (
@@ -869,7 +909,7 @@ class TaskAttemptRepository:
             .order_by(TaskAttemptTable.started_at, TaskAttemptTable.id)
             .limit(limit)
         )
-        return [TaskAttempt.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [task_attempt_from_table(row) for row in self.session.scalars(statement)]
 
     def containers_with_timed_out_attempts(self, *, limit: int) -> list[str]:
         statement = (
@@ -896,27 +936,29 @@ class TaskAttemptRepository:
             )
         )
 
-    @property
-    def records(self) -> WorkspaceTableRepository[TaskAttempt]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(TaskAttemptTable, TaskAttempt),
-        )
-
     def create(self, attempt: TaskAttempt) -> TaskAttempt:
         """System-authority write; ownership comes from the attempt record."""
-        return self.records.create_across_workspaces(
-            attempt.model_dump(mode="json", exclude={"id"}),
-            status=attempt.status.value,
-        )
+        if attempt.workspace_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(attempt.workspace_id)
+        row = TaskAttemptTable(id=attempt.id)
+        write_task_attempt_row(row, attempt)
+        self.session.add(row)
+        self.session.flush()
+        return task_attempt_from_table(row)
 
     def upsert(self, attempt: TaskAttempt) -> TaskAttempt:
         """System-authority write keyed by attempt id; ownership comes from the record."""
-        return self.records.upsert_across_workspaces(
-            attempt,
-            workspace_id=attempt.workspace_id,
-            status=attempt.status.value,
-        )
+        if attempt.workspace_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(attempt.workspace_id)
+        row = self.session.get(TaskAttemptTable, attempt.id)
+        if row is None:
+            row = TaskAttemptTable(id=attempt.id)
+            self.session.add(row)
+        elif row.workspace_id != attempt.workspace_id or row.task_id != attempt.task_id:
+            raise ConflictError("task attempt ownership cannot change")
+        write_task_attempt_row(row, attempt)
+        self.session.flush()
+        return task_attempt_from_table(row)
 
     def list_for_task(self, task_id: str) -> list[TaskAttempt]:
         statement = (
@@ -924,7 +966,7 @@ class TaskAttemptRepository:
             .where(TaskAttemptTable.task_id == task_id)
             .order_by(TaskAttemptTable.attempt_number.asc(), TaskAttemptTable.created_at.asc())
         )
-        return [TaskAttempt.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [task_attempt_from_table(row) for row in self.session.scalars(statement)]
 
     def latest_task_id_for_container(self, container_id: str) -> str:
         """Which task this container most recently attempted.
@@ -953,7 +995,7 @@ class TaskAttemptRepository:
             .limit(1)
         )
         row = self.session.scalars(statement).first()
-        return TaskAttempt.model_validate(row.payload) if row is not None else None
+        return task_attempt_from_table(row) if row is not None else None
 
     def latest_for_tasks(self, task_ids: Sequence[str]) -> dict[str, TaskAttempt]:
         if not task_ids:
@@ -969,7 +1011,7 @@ class TaskAttemptRepository:
             )
         )
         return {
-            str(row.task_id): TaskAttempt.model_validate(row.payload)
+            str(row.task_id): task_attempt_from_table(row)
             for row in self.session.scalars(statement)
         }
 
@@ -978,18 +1020,23 @@ class TaskAttemptRepository:
 class TaskDependencyRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[TaskDependency]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(TaskDependencyTable, TaskDependency),
-        )
-
     def create(self, dependency: TaskDependency) -> TaskDependency:
         """System-authority write; ownership comes from the dependency record."""
-        return self.records.create_across_workspaces(
-            dependency.model_dump(mode="json", exclude={"id"}),
+        if dependency.workspace_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(dependency.workspace_id)
+        row = TaskDependencyTable(
+            id=dependency.id or str(uuid4()),
+            workspace_id=dependency.workspace_id,
+            task_id=dependency.task_id,
+            upstream_task_id=dependency.upstream_task_id,
+            parent_task_id=dependency.parent_task_id,
+            root_task_id=dependency.root_task_id,
+            edge_type=dependency.edge_type,
+            created_at=dependency.created_at,
         )
+        self.session.add(row)
+        self.session.flush()
+        return task_dependency_from_table(row)
 
     def list_for_task(self, task_id: str) -> list[TaskDependency]:
         statement = (
@@ -997,9 +1044,7 @@ class TaskDependencyRepository:
             .where(TaskDependencyTable.task_id == task_id)
             .order_by(TaskDependencyTable.created_at.asc(), TaskDependencyTable.id.asc())
         )
-        return [
-            TaskDependency.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [task_dependency_from_table(row) for row in self.session.scalars(statement)]
 
     def list_for_upstream(self, upstream_task_id: str) -> list[TaskDependency]:
         statement = (
@@ -1007,9 +1052,7 @@ class TaskDependencyRepository:
             .where(TaskDependencyTable.upstream_task_id == upstream_task_id)
             .order_by(TaskDependencyTable.created_at.asc(), TaskDependencyTable.id.asc())
         )
-        return [
-            TaskDependency.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [task_dependency_from_table(row) for row in self.session.scalars(statement)]
 
     def list_for_root(
         self,
@@ -1026,9 +1069,7 @@ class TaskDependencyRepository:
             TaskDependencyTable.created_at.asc(),
             TaskDependencyTable.id.asc(),
         )
-        return [
-            TaskDependency.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [task_dependency_from_table(row) for row in self.session.scalars(statement)]
 
 
 @dataclass(slots=True)
@@ -1075,13 +1116,20 @@ class LogRepository:
             )
         )
 
-    @property
-    def records(self) -> WorkspaceTableRepository[LogEntry]:
-        return WorkspaceTableRepository(self.session, TableRepositoryConfig(LogTable, LogEntry))
-
     def append(self, entry: LogEntry, *, workspace_id: str | None = None) -> LogEntry:
         """System-authority write; runner/worker logs may be cluster-level."""
-        return self.records.upsert_across_workspaces(entry, workspace_id=workspace_id)
+        if workspace_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        row = self.session.get(LogTable, entry.id)
+        if row is None:
+            row = LogTable(id=entry.id, workspace_id=workspace_id)
+            self.session.add(row)
+        elif row.workspace_id != workspace_id:
+            raise ConflictError("log ownership cannot change")
+        write_log_row(row, entry)
+        self.session.flush()
+        self.session.refresh(row)
+        return log_entry_from_table(row)
 
     def append_batch(self, entries: Sequence[LogEntry], *, workspace_id: str) -> None:
         if not entries:
@@ -1093,7 +1141,6 @@ class LogRepository:
                     {
                         **entry.model_dump(),
                         "workspace_id": workspace_id,
-                        "payload": entry.model_dump(mode="json"),
                     }
                     for entry in entries
                 ]
@@ -1215,7 +1262,7 @@ class LogRepository:
     @staticmethod
     def _record_from_row(log: LogTable) -> LogPageRecord:
         return LogPageRecord(
-            entry=LogEntry.model_validate(log.payload),
+            entry=log_entry_from_table(log),
             cursor=LogPageCursor(
                 created_at=_utc_datetime(log.created_at),
                 id=str(log.id),
@@ -1234,13 +1281,19 @@ class LogRepository:
 class EventRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[Event]:
-        return WorkspaceTableRepository(self.session, TableRepositoryConfig(EventTable, Event))
-
     def append(self, event: Event, *, workspace_id: str | None = None) -> Event:
         """System-authority write; cluster-level events carry no workspace."""
-        return self.records.upsert_across_workspaces(event, workspace_id=workspace_id)
+        if workspace_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        row = self.session.get(EventTable, event.id)
+        if row is None:
+            row = EventTable(id=event.id, workspace_id=workspace_id)
+            self.session.add(row)
+        elif row.workspace_id != workspace_id:
+            raise ConflictError("event ownership cannot change")
+        write_event_row(row, event)
+        self.session.flush()
+        return event_from_table(row)
 
     def list(
         self,
@@ -1388,7 +1441,7 @@ class EventRepository:
             statement = statement.offset(offset)
         if limit is not None:
             statement = statement.limit(limit)
-        return [Event.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [event_from_table(row) for row in self.session.scalars(statement)]
 
     def _count(
         self,
@@ -1465,7 +1518,7 @@ class EventRepository:
                 EventTable.resource_type == CONTAINER_EVENT_RESOURCE_TYPE,
                 EventTable.resource_id == container_id,
             ),
-            _event_json_text(self.session, "data", "container_id") == container_id,
+            EventTable.container_id == container_id,
         ]
         if related_task_ids:
             conditions.append(
@@ -1493,116 +1546,10 @@ class EventRepository:
             if fetch is not None:
                 statement = statement.limit(fetch)
             for row in self.session.scalars(statement):
-                merged[row.id] = (row.created_at, row.id, Event.model_validate(row.payload))
+                merged[row.id] = (row.created_at, row.id, event_from_table(row))
         ranked = sorted(merged.values(), key=lambda item: item[1])
         ranked.sort(key=lambda item: item[0], reverse=True)
         return [event for _, _, event in ranked]
-
-
-def _task_json_text(session: Session, *path: str) -> ColumnElement[str]:
-    if session.get_bind().dialect.name == "postgresql":
-        return func.jsonb_extract_path_text(TaskTable.payload, *path, type_=String)
-    return func.json_extract(TaskTable.payload, "$." + ".".join(path), type_=String)
-
-
-def _event_json_text(session: Session, *path: str) -> ColumnElement[str]:
-    if session.get_bind().dialect.name == "postgresql":
-        return func.jsonb_extract_path_text(EventTable.payload, *path, type_=String)
-    return func.json_extract(EventTable.payload, "$." + ".".join(path), type_=String)
-
-
-@dataclass(slots=True)
-class QueueRepository:
-    session: Session
-
-    @property
-    def messages(self) -> WorkspaceTableRepository[QueueMessage]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(QueueMessageTable, QueueMessage),
-        )
-
-    def claim_available_message(
-        self,
-        queue: str,
-        *,
-        workspace_id: str,
-        now: datetime,
-        lease_until: datetime,
-    ) -> QueueMessage | None:
-        statement = (
-            select(QueueMessageTable)
-            .where(
-                QueueMessageTable.workspace_id == workspace_id,
-                QueueMessageTable.queue == queue,
-                QueueMessageTable.available_at <= now,
-                or_(
-                    QueueMessageTable.leased_until.is_(None),
-                    QueueMessageTable.leased_until <= now,
-                ),
-            )
-            .order_by(QueueMessageTable.created_at, QueueMessageTable.id)
-            .with_for_update(skip_locked=True)
-            .limit(1)
-        )
-        row = self.session.scalars(statement).first()
-        if row is None:
-            return None
-        return self._lease_message(row, lease_until=lease_until)
-
-    def queue_depth(self, queue: str, *, workspace_id: str, now: datetime) -> int:
-        statement = (
-            select(func.count())
-            .select_from(QueueMessageTable)
-            .where(
-                QueueMessageTable.workspace_id == workspace_id,
-                QueueMessageTable.queue == queue,
-                or_(
-                    QueueMessageTable.expires_at.is_(None),
-                    QueueMessageTable.expires_at > now,
-                ),
-            )
-        )
-        return int(self.session.scalar(statement) or 0)
-
-    def oldest_pending_at(
-        self,
-        queue: str,
-        *,
-        workspace_id: str,
-        now: datetime,
-    ) -> datetime | None:
-        statement = select(func.min(QueueMessageTable.created_at)).where(
-            QueueMessageTable.workspace_id == workspace_id,
-            QueueMessageTable.queue == queue,
-            QueueMessageTable.available_at <= now,
-            or_(
-                QueueMessageTable.leased_until.is_(None),
-                QueueMessageTable.leased_until <= now,
-            ),
-            or_(
-                QueueMessageTable.expires_at.is_(None),
-                QueueMessageTable.expires_at > now,
-            ),
-        )
-        oldest = self.session.scalar(statement)
-        return _utc_datetime(oldest) if oldest is not None else None
-
-    def _lease_message(
-        self,
-        row: QueueMessageTable,
-        *,
-        lease_until: datetime,
-    ) -> QueueMessage:
-        message = QueueMessage.model_validate(row.payload)
-        message.attempts = row.attempts + 1
-        message.leased_until = lease_until
-        row.attempts = message.attempts
-        row.leased_until = lease_until
-        row.payload = message.model_dump(mode="json")
-        flag_modified(row, "payload")
-        self.session.flush()
-        return message
 
 
 @dataclass(slots=True)
@@ -1662,31 +1609,23 @@ class PodUrlRepository:
 
 
 @dataclass(slots=True)
-class PodExecutionRepository:
-    session: Session
-
-    @property
-    def processes(self) -> GlobalTableRepository[PodProcessRecord]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(PodProcessTable, PodProcessRecord),
-        )
-
-    @property
-    def urls(self) -> PodUrlRepository:
-        return PodUrlRepository(self.session)
-
-
-@dataclass(slots=True)
 class CronJobRunRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[CronJobRun]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(CronJobRunTable, CronJobRun),
+    def append(self, run: CronJobRun) -> CronJobRun:
+        WorkspaceRepository(self.session).lock_active_owner(run.workspace_id)
+        row = CronJobRunTable(
+            id=run.id,
+            workspace_id=run.workspace_id,
+            cron_job=run.cron_job,
+            enqueued=run.enqueued,
+            task_id=run.task_id,
+            reason=run.reason,
+            created_at=run.created_at,
         )
+        self.session.add(row)
+        self.session.flush()
+        return cron_job_run_from_table(row)
 
     def page(
         self,
@@ -1725,7 +1664,7 @@ class CronJobRunRepository:
                 id=str(last.id),
             )
         return CronJobRunPage(
-            data=tuple(CronJobRun.model_validate(row.payload) for row in page_rows),
+            data=tuple(cron_job_run_from_table(row) for row in page_rows),
             next=next_cursor,
         )
 
