@@ -18,6 +18,8 @@ export type LedgerComponent = (typeof ledgerComponents)[number];
 export const usageCostGroupKeys = ["app", "workload", "task"] as const;
 export type UsageCostGroupKey = (typeof usageCostGroupKeys)[number];
 
+export type UsageCostCategory = "image-build" | "unattributed";
+
 /**
  * One resource's share of a row, and the invoice line it rolls up into.
  *
@@ -109,6 +111,7 @@ export type UsageCostBucketRow = z.infer<typeof usageCostBucketSchema>;
  * fortnight of something. `cost_nanos` is those intervals summed.
  */
 export const usageCostSeriesSchema = z.object({
+  subscription_credit_nanos: z.number().int().nonnegative(),
   start: z.string(),
   end: z.string(),
   currency: z.string().regex(/^[A-Z]{3}$/),

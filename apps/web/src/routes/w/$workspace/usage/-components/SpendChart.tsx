@@ -35,14 +35,8 @@ export function SpendChart({
   if (series.isError) {
     return <PanelError message={series.error.message} layout="centered" />;
   }
-  if (series.data.cost_nanos === 0) {
-    return (
-      <PanelEmpty
-        message={`Nothing was billed during ${caption}`}
-        detail="Spend appears a few minutes after a workload runs."
-        className="h-full min-h-40"
-      />
-    );
+  if (!series.data.data.some((interval) => interval.dimensions.length > 0)) {
+    return <PanelEmpty message={`No usage during ${caption}`} className="h-full" />;
   }
 
   const currency = series.data.currency;
@@ -78,6 +72,9 @@ export function SpendChart({
           tick={{ fontSize: 10 }}
         />
         <YAxis
+          dataKey="cost"
+          domain={series.data.cost_nanos === 0 ? [0, 1_000_000_000] : [0, "auto"]}
+          ticks={series.data.cost_nanos === 0 ? [0, 500_000_000, 1_000_000_000] : undefined}
           stroke="var(--muted-foreground)"
           tickLine={false}
           axisLine={false}

@@ -39,6 +39,7 @@ from shared.http.pricing import PlanEntitlementsResponse
 from shared.http.usage import (
     UsageCostBucket,
     UsageCostBucketResponse,
+    UsageCostCategory,
     UsageCostDimensionTotalResponse,
     UsageCostGroupKey,
     UsageCostListResponse,
@@ -204,6 +205,8 @@ def account_costs(
     user_id: read_user,
     group_by: UsageCostGroupKey = UsageCostGroupKey.App,
     app_id: str | None = None,
+    workspace_id: str | None = None,
+    category: UsageCostCategory | None = None,
     limit: int = Query(50, ge=1, le=MAX_COST_PAGE),
     cursor: str | None = None,
     services: ApiServices = Depends(current_services),
@@ -235,6 +238,8 @@ def account_costs(
             end=end,
             group_by=group_by,
             app_id=app_id,
+            workspace_id=workspace_id,
+            category=category,
             limit=limit,
             cursor=cursor,
         )
@@ -413,6 +418,7 @@ def start_billing_portal(
 
 def _series_response(series: UsageCostSeries) -> UsageCostSeriesResponse:
     return UsageCostSeriesResponse(
+        subscription_credit_nanos=series.subscription_credit_nanos,
         start=series.start,
         end=series.end,
         currency=BILLING_CURRENCY,

@@ -10,13 +10,18 @@ from database.repositories.apps import StubRepository
 from database.repositories.billing_costs import (
     BillingLedgerCostRepository,
     LedgerCostCursor,
+    PayerCostScope,
     WorkspaceCostScope,
 )
+from database.repositories.billing_credits import BillingCreditRepository
+from database.repositories.billing_ledger import BillingLedgerRepository
 from database.repositories.billing_rates import PlatformRateRepository
+from database.repositories.observability import UsageRepository
 from observability.usage import UsageService
 from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
+from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
-from shared.http.usage import UsageCostGroupKey
+from shared.http.usage import UsageCostCategory, UsageCostGroupKey
 from shared.timestamps import utc_now
 from shared.usage import (
     IMAGE_BUILD_WORKLOAD_ID,
@@ -26,6 +31,7 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
+from tests.workspaces import unfunded_billing_account
 
 _RATE_AT = timedelta(minutes=1)
 _WINDOW_AT = timedelta(minutes=2)
@@ -209,3 +215,87 @@ def test_app_level_costs_keep_image_builds_apart_from_other_unattributed_usage(
         ("", IMAGE_BUILD_WORKLOAD_ID, 300),
         ("", "", 100),
     ]
+    with service_context.database.session() as session:
+        repository = BillingLedgerCostRepository(session)
+        scope = WorkspaceCostScope(workspace_ids=(workspace_id,))
+        runs = repository.page(
+            scope=scope,
+            start=started_at,
+            end=ended_at + _WINDOW,
+            group_by=UsageCostGroupKey.Task,
+            workspace_id=workspace_id,
+            category=UsageCostCategory.Unattributed,
+            limit=10,
+        )
+        total = repository.window_cost_nanos(
+            scope=scope,
+            start=started_at,
+            end=ended_at + _WINDOW,
+            workspace_id=workspace_id,
+            category=UsageCostCategory.Unattributed,
+        )
+    assert [(row.workload_id, row.cost_nanos) for row in runs.rows] == [("", 100)]
+    assert total == 100
+
+
+def test_subscription_coverage_counts_allocations_for_the_payer_and_usage_window(
+    service_context: ServiceContext,
+) -> None:
+    now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
+    start = now + _WINDOW_AT
+    end = start + _WINDOW
+    accounts = [
+        unfunded_billing_account(
+            service_context, period_started_at=now, period_ended_at=end + timedelta(days=1)
+        )
+        for _ in range(2)
+    ]
+    with service_context.database.session() as session:
+        PlatformRateRepository(session).publish(
+            pricing_version="test.subscription-coverage",
+            effective_at=now + _RATE_AT,
+            nanos_per_egress_byte=Decimal(1),
+            nanos_per_volume_byte_second=Decimal(0),
+        )
+        credits = BillingCreditRepository(session)
+        for user_id, workspace_id in accounts:
+            credits.issue(
+                user_id=user_id,
+                grant=CreditGrant(str(uuid4()), CreditKind.Subscription, 60, now, end),
+            )
+            credits.issue(
+                user_id=user_id,
+                grant=CreditGrant(str(uuid4()), CreditKind.Purchased, 100, now, None),
+            )
+            for window_start, quantity in ((start, 100), (end, 20)):
+                record = UsageRecord(
+                    id=str(uuid4()),
+                    workspace_id=workspace_id,
+                    resource_type="workspace",
+                    resource_id=workspace_id,
+                    metric=UsageMetric.NetworkEgressBytes,
+                    quantity=quantity,
+                    unit=UsageUnit.Bytes,
+                    metadata={
+                        METERING_WINDOW_STARTED_AT_METADATA_KEY: window_start.isoformat(),
+                        METERING_WINDOW_ENDED_AT_METADATA_KEY: (window_start + _WINDOW).isoformat(),
+                    },
+                )
+                UsageRepository(session).append(record)
+                BillingLedgerRepository(session).price_record(record)
+            credits.issue(
+                user_id=user_id,
+                grant=CreditGrant(str(uuid4()), CreditKind.Subscription, 500, now, end),
+            )
+        repository = BillingLedgerCostRepository(session)
+        user_id, workspace_id = accounts[0]
+        scope = PayerCostScope(owner_user_id=user_id)
+        assert repository.subscription_credit_nanos(scope=scope, start=start, end=end) == 60
+        assert repository.subscription_credit_nanos(scope=scope, start=end, end=end + _WINDOW) == 0
+        assert repository.window_cost_nanos(scope=scope, start=start, end=end) == 100
+        assert (
+            repository.window_cost_nanos(
+                scope=scope, start=start, end=end, workspace_id=accounts[1][1]
+            )
+            == 0
+        )
