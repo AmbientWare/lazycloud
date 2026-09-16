@@ -1,24 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
+import { SpaceshipHero } from "./SpaceshipHero";
 import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
-import {
-  FinalCta,
-  GetStartedButton,
-  MarketingCard,
-  MarketingHero,
-  SectionHeading,
-  StatusDot,
-  shell,
-} from "./MarketingPrimitives";
+import { FinalCta, MarketingCard, SectionHeading, StatusDot, shell } from "./MarketingPrimitives";
 import { ComputePlacementPreview, StoryPreview, type StoryVisual } from "./ProductPreviews";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
@@ -242,84 +234,73 @@ export function MarketingHome() {
   return (
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
-        <MarketingHero>
-          <div className="relative">
-            <h1 className="max-w-[620px] text-balance">
-              Deploy as fast <em>as you develop.</em>
-            </h1>
-            <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-              Your coding agent helps you build faster. LazyCloud runs your product in the cloud.
-              Use the same Python code locally, for a one-off cloud run, or as a deployed app.
-            </p>
-            <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-              <GetStartedButton />
-              <Button
-                asChild
-                size="lg"
-                variant="secondary"
-                className="marketing-button-link justify-between [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full"
-              >
-                <a href={`${EXAMPLES_URL}/index`}>
-                  <span>Explore examples</span>
-                  <ArrowUpRight aria-hidden="true" />
-                </a>
-              </Button>
+        <SpaceshipHero />
+        <section className="bg-background py-16 sm:py-24" aria-labelledby="cloud-code-title">
+          <div
+            className={cn(shell, "grid items-center gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:gap-16")}
+          >
+            <div>
+              <h2 id="cloud-code-title" className="text-4xl font-medium tracking-tight sm:text-5xl">
+                Your cloud, in Python.
+              </h2>
+              <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
+                Your coding agent helps you build faster. LazyCloud runs your product in the cloud.
+                Use the same Python code locally, for a one-off cloud run, or as a deployed app.
+              </p>
             </div>
-          </div>
 
-          <div className="relative min-w-0">
-            <MarketingCard className="relative z-[2] min-w-0">
-              <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
-                <TabsList
-                  /* The split hero keeps a stable 3×2 control through compact
-                     desktop widths; only the full-width canvas uses one row. */
-                  className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
-                  aria-label="Hero code examples"
-                >
+            <div className="relative min-w-0">
+              <MarketingCard className="relative z-[2] min-w-0">
+                <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
+                  <TabsList
+                    className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
+                    aria-label="Python code examples"
+                  >
+                    {heroStories.map((story) => (
+                      <TabsTrigger
+                        className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
+                        key={story.key}
+                        value={story.key}
+                      >
+                        {story.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
                   {heroStories.map((story) => (
-                    <TabsTrigger
-                      className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
-                      key={story.key}
-                      value={story.key}
-                    >
-                      {story.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                {heroStories.map((story) => (
-                  <TabsContent key={story.key} value={story.key}>
-                    <CodeBlock
-                      className="rounded-none border-0 bg-transparent"
-                      tone="paper"
-                      /* Fixed body height so switching examples never resizes the
+                    <TabsContent key={story.key} value={story.key}>
+                      <CodeBlock
+                        className="rounded-none border-0 bg-transparent"
+                        tone="paper"
+                        /* Fixed body height so switching examples never resizes the
                          panel; sized to the tallest snippet. On narrow screens the
                          type eases down a notch so wrapped lines still fit without
                          a scroll. */
-                      bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
-                      footer={
-                        <div
-                          className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                          data-marketing-terminal-surface=""
-                        >
-                          <span className="text-brand">$</span>
-                          <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                            {story.command}
-                          </span>
-                          <i className="marketing-cursor" aria-hidden="true" />
-                          <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                            <StatusDot /> {story.status}
-                          </strong>
-                        </div>
-                      }
-                    >
-                      {story.code}
-                    </CodeBlock>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            </MarketingCard>
+                        bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
+                        footer={
+                          <div
+                            className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
+                            data-marketing-terminal-surface=""
+                          >
+                            <span className="text-brand">$</span>
+                            <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+                              {story.command}
+                            </span>
+                            <i className="marketing-cursor" aria-hidden="true" />
+                            <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
+                              <StatusDot /> {story.status}
+                            </strong>
+                          </div>
+                        }
+                      >
+                        {story.code}
+                      </CodeBlock>
+                    </TabsContent>
+                  ))}
+                </Tabs>
+              </MarketingCard>
+            </div>
           </div>
-        </MarketingHero>
+        </section>
 
         <ParitySection />
 
