@@ -17,7 +17,6 @@
 }
 
 .flight-copy {
-  grid-row: 1 / 3;
   text-align: left;
   padding-block: 32px;
 }
@@ -68,39 +67,6 @@
   font-size: 14px;
   color: #9db5c7;
 }
-.flight-footer {
-  grid-column: 2;
-  justify-self: end;
-}
-.flight-controls {
-  display: flex;
-  gap: 12px;
-}
-.flight-controls button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 44px;
-  min-width: 44px;
-  color: #a4b4c2;
-  cursor: pointer;
-}
-.flight-controls button:hover {
-  color: #edf4fa;
-}
-.flight-controls button:focus-visible {
-  outline: 2px solid #76d6f5;
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-.flight-controls button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.flight-controls span {
-  font-size: 12px;
-}
 
 @media (max-width: 900px) {
   .marketing-site main > .spaceship-hero {
@@ -108,7 +74,6 @@
     padding: calc(var(--marketing-header-height) + 36px) 24px 20px;
   }
   .flight-copy {
-    grid-row: auto;
     padding: 0;
   }
   .flight-copy h1 {
@@ -123,9 +88,6 @@
     height: 480px;
     width: calc(100% + 48px);
     margin: 0 -24px;
-  }
-  .flight-footer {
-    grid-column: 1;
   }
 }
 
@@ -142,11 +104,5 @@
   }
   .flight-stage {
     height: 390px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .flight-controls {
-    display: none;
   }
 }

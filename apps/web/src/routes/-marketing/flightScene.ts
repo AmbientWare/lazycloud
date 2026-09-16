@@ -4,8 +4,6 @@ import { createShip } from "./shipModel";
 import { createLaunchPlatform } from "./launchPlatform";
 import { createAbstractEarth } from "./abstractEarth";
 
-export type FlightPhase = "Assembling" | "Ignition" | "Liftoff" | "In orbit";
-
 const ease = (value: number) => {
   const t = THREE.MathUtils.clamp(value, 0, 1);
   return t * t * (3 - 2 * t);
@@ -17,10 +15,7 @@ const orbitStart = 4.2;
 const earthRadius = 12;
 const orbitRadius = 17.6;
 
-export function createFlightScene(
-  canvas: HTMLCanvasElement,
-  onPhase: (phase: FlightPhase) => void,
-) {
+export function createFlightScene(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
@@ -94,9 +89,7 @@ export function createFlightScene(
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let elapsed = reducedMotion.matches ? orbitStart : 0;
   let previousTime = 0;
-  let paused = false;
   let visible = true;
-  let phase: FlightPhase | undefined;
   let pointerX = 0;
   let pointerY = 0;
   let cameraDistance = 12.8;
@@ -112,18 +105,6 @@ export function createFlightScene(
     const launch = Math.pow(THREE.MathUtils.clamp((elapsed - launchStart) / 1.2, 0, 1), 2);
     const bank = ease((elapsed - 2) / (orbitStart - 2));
     const ignition = ease((elapsed - assemblyEnd) / (launchStart - assemblyEnd));
-    const currentPhase =
-      elapsed < assemblyEnd
-        ? "Assembling"
-        : elapsed < launchStart
-          ? "Ignition"
-          : elapsed < orbitStart
-            ? "Liftoff"
-            : "In orbit";
-    if (currentPhase !== phase) {
-      phase = currentPhase;
-      onPhase(phase);
-    }
     for (const part of parts) {
       const remaining = 1 - ease((elapsed - part.delay) / 0.44);
       part.group.position.copy(part.offset).multiplyScalar(remaining);
@@ -177,7 +158,7 @@ export function createFlightScene(
   function syncMotion() {
     previousTime = 0;
     renderer.setAnimationLoop(
-      !paused && visible && !document.hidden && !reducedMotion.matches ? animate : null,
+      visible && !document.hidden && !reducedMotion.matches ? animate : null,
     );
     render();
   }
@@ -219,15 +200,6 @@ export function createFlightScene(
   syncMotion();
 
   return {
-    setPaused(value: boolean) {
-      paused = value;
-      syncMotion();
-    },
-    replay() {
-      elapsed = reducedMotion.matches ? orbitStart : 0;
-      paused = false;
-      syncMotion();
-    },
     dispose() {
       renderer.setAnimationLoop(null);
       observer.disconnect();

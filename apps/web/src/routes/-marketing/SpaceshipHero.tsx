@@ -1,19 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, Pause, Play, RotateCcw } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EXAMPLES_URL } from "@/lib/env";
 import { GetStartedButton } from "./MarketingPrimitives";
-import type { createFlightScene, FlightPhase } from "./flightScene";
+import type { createFlightScene } from "./flightScene";
 import "./spaceship.css";
 
-type Flight = Awaited<ReturnType<typeof createFlightScene>>;
+type Flight = ReturnType<typeof createFlightScene>;
 
 export function SpaceshipHero() {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const flight = useRef<Flight | null>(null);
-  const [phase, setPhase] = useState<FlightPhase>("Assembling");
   const [ready, setReady] = useState(false);
-  const [paused, setPaused] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
@@ -24,9 +21,7 @@ export function SpaceshipHero() {
     void import("./flightScene")
       .then(({ createFlightScene }) => {
         if (disposed) return;
-        return createFlightScene(target, (next) => {
-          if (!disposed) setPhase(next);
-        });
+        return createFlightScene(target);
       })
       .then((result) => {
         if (!result) return;
@@ -35,7 +30,6 @@ export function SpaceshipHero() {
           return;
         }
         instance = result;
-        flight.current = result;
         setReady(true);
       })
       .catch((cause: unknown) => {
@@ -45,7 +39,6 @@ export function SpaceshipHero() {
     return () => {
       disposed = true;
       instance?.dispose();
-      flight.current = null;
     };
   }, []);
 
@@ -81,35 +74,6 @@ export function SpaceshipHero() {
               : "Preparing for liftoff…"}
           </p>
         )}
-      </div>
-      <div className="flight-footer">
-        <span className="sr-only" role="status">
-          {ready ? `Animation: ${phase}` : "Loading animation"}
-        </span>
-        <div className="flight-controls">
-          <button
-            type="button"
-            disabled={!ready}
-            aria-label="Replay launch"
-            onClick={() => {
-              flight.current?.replay();
-              setPaused(false);
-            }}
-          >
-            <RotateCcw size={14} /> <span>Replay</span>
-          </button>
-          <button
-            type="button"
-            disabled={!ready}
-            aria-label={paused ? "Play animation" : "Pause animation"}
-            onClick={() => {
-              flight.current?.setPaused(!paused);
-              setPaused(!paused);
-            }}
-          >
-            {paused ? <Play size={14} /> : <Pause size={14} />}
-          </button>
-        </div>
       </div>
     </section>
   );
