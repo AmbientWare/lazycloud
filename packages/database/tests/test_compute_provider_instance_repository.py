@@ -83,15 +83,18 @@ def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
                 status="deleted",
                 source="pooled",
                 launch_attempt=7,
-                metadata={
-                    "missing_since": utc_now().isoformat(),
-                    "provider_storage_destroyed_at": utc_now().isoformat(),
-                },
+                missing_since=utc_now(),
+                provider_storage_destroyed_at=utc_now(),
             )
         )
         unproved = repository.upsert(
             complete.model_copy(
-                update={"id": str(uuid4()), "instance_id": "i-unproved", "metadata": {}}
+                update={
+                    "id": str(uuid4()),
+                    "instance_id": "i-unproved",
+                    "missing_since": None,
+                    "provider_storage_destroyed_at": None,
+                }
             )
         )
         active = repository.upsert(
@@ -101,7 +104,8 @@ def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
                     "instance_id": "i-active",
                     "status": "active",
                     "launch_attempt": 1,
-                    "metadata": {},
+                    "missing_since": None,
+                    "provider_storage_destroyed_at": None,
                 }
             )
         )
@@ -120,13 +124,6 @@ def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
             )
         } == {complete.id, unproved.id, active.id}
         assert repository.highest_launch_attempt(pool.id) == 7
-        for record in (complete, unproved, active):
-            session.execute(
-                update(ComputeProviderInstanceTable)
-                .where(ComputeProviderInstanceTable.id == record.id)
-                .values(payload=record.model_dump(mode="json", exclude={"launch_attempt"}))
-            )
-        assert repository.highest_launch_attempt(pool.id, default=7) == 1
         assert repository.highest_launch_attempt(str(uuid4()), default=7) == 7
 
 

@@ -1500,7 +1500,7 @@ class GatewayControlService:
                 ),
                 workspace_id=enrollment.workspace_id,
             )
-            enrollments.records.delete(current.id, workspace_id=enrollment.workspace_id)
+            enrollments.delete(current.id, workspace_id=enrollment.workspace_id)
         self.compute_states.delete_agent_machine_state_for_machine(
             enrollment.workspace_id,
             enrollment.machine_id,

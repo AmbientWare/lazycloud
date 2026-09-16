@@ -17,7 +17,7 @@ from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.functions.service import FunctionControlService
 from observability.stream_state import AsyncTaskChangeReader
-from shared.capacity import CapacityFailureCode, CapacityOperationStatus
+from shared.capacity import CapacityAcquisitionShape, CapacityFailureCode, CapacityOperationStatus
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.function_payloads import FunctionJsonInvocation, FunctionJsonResult
@@ -79,6 +79,7 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
             operation_id = str(uuid4())
             ComputeCapacityOperationRepository(session).upsert(
                 ComputeCapacityOperationRecord(
+                    shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32_768),
                     id=operation_id,
                     workspace_id=platform.id,
                     pool_id=unit.id,

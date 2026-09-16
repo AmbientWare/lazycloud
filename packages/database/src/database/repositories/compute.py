@@ -6,10 +6,6 @@ from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.common import (
-    GlobalTableRepository,
-    TableRepositoryConfig,
-)
 from database.repositories.identity import WorkspaceRepository
 from database.tables.base import IdPayloadTable
 from database.tables.compute import (
@@ -30,6 +26,7 @@ from shared.aws_connections import (
 )
 from shared.capacity import (
     TERMINAL_REASON_MAX_LENGTH,
+    CapacityAcquisitionShape,
     CapacityFailureCode,
     CapacityOperationStatus,
     CapacityOwnerKind,
@@ -73,12 +70,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session, load_only
+from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
-_DATETIME_ADAPTER = TypeAdapter(datetime)
 
 
 def _model_json(model: BaseModel) -> dict[str, JsonValue]:
@@ -102,7 +97,7 @@ class ComputeCapacityOperationRecord(ContractModel):
     release_desired_unit: int | None = Field(default=None, ge=0)
     owns_capacity: bool = False
     join_attempt: int = Field(default=1, ge=1)
-    shape: dict[str, JsonValue] = Field(default_factory=dict)
+    shape: CapacityAcquisitionShape
     failure_code: CapacityFailureCode | None = None
     failure_count: int = Field(default=0, ge=0)
     last_error: str = Field(default="", max_length=TERMINAL_REASON_MAX_LENGTH)
@@ -164,7 +159,18 @@ class ComputeProviderInstanceRecord(ContractModel):
     last_served_at: datetime | None = None
     unserved_observations: int = Field(default=0, ge=0)
     launch_attempt: int = Field(default=1, ge=1)
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    architecture: str = ""
+    runtime: str = ""
+    region: str = ""
+    availability_zone: str = ""
+    storage_volume_ids: tuple[str, ...] = ()
+    booted_template_version: str = ""
+    missing_since: datetime | None = None
+    provider_storage_destroyed_at: datetime | None = None
+    terminating_reason: str = ""
+    terminated_reason: str = ""
+    status_message: str = ""
+    last_error: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -377,8 +383,70 @@ def _locked_claimed_row[RowT: IdPayloadTable, RecordT: _ClaimedRecord](
 def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
     return ComputeUnitRecord.model_validate(
         {
-            **row.payload,
+            "capacity_owner_id": row.capacity_owner_id,
+            "capacity_owner_kind": row.capacity_owner_kind,
+            "capacity_owner_source": row.capacity_owner_source,
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "name": row.name,
+            "pool": row.pool,
+            "provider": row.provider,
+            "selector": row.selector,
+            "status": row.status,
+            "source": row.source,
+            "expires_at": to_utc_or_none(row.expires_at),
+            "provider_ref": row.provider_ref,
+            "provider_connection_id": row.provider_connection_id,
+            "platform_fleet": row.platform_fleet,
+            "capacity_mode": row.capacity_mode,
+            "visibility": row.visibility,
+            "region": row.region,
+            "offer_id": row.offer_id,
+            "capability_key": row.capability_key,
+            "offer_cost_terms": SupplierCostTerms.model_validate(row.offer_cost_terms)
+            if row.offer_cost_terms is not None
+            else None,
+            "offer_storage_mib": row.offer_storage_mib,
+            "offer_availability_zone": row.offer_availability_zone,
+            "supplier_cpu_unit": row.supplier_cpu_unit,
+            "supplier_cpu_count": row.supplier_cpu_count,
+            "desired_machines": row.desired_machines,
+            "initial_machines": row.initial_machines,
+            "min_machines": row.min_machines,
+            "max_machines": row.max_machines,
+            "observed_machines": row.observed_machines,
+            "replacement_machine_id": row.replacement_machine_id,
+            "replacement_template_version": row.replacement_template_version,
             "warm_handoff_from": row.warm_handoff_from,
+            "generation": row.generation,
+            "phase": row.phase,
+            "provider_state": ComputeUnitProviderState(
+                resource_id=row.provider_resource_id,
+                attributes=row.provider_attributes,
+                degraded_reason=row.degraded_reason,
+                degraded_at=to_utc_or_none(row.degraded_at),
+                last_capacity_failure_at=to_utc_or_none(row.last_capacity_failure_at),
+                launch_attempt_baseline=row.launch_attempt_baseline,
+            ),
+            "scaling_enabled": row.scaling_enabled,
+            "default_eligible": row.default_eligible,
+            "priority": row.priority,
+            "min_free_cpu_millicores": row.min_free_cpu_millicores,
+            "min_free_memory_mib": row.min_free_memory_mib,
+            "min_free_gpu_count": row.min_free_gpu_count,
+            "worker_cpu_millicores": row.worker_cpu_millicores,
+            "worker_memory_mib": row.worker_memory_mib,
+            "worker_gpu_type": row.worker_gpu_type,
+            "worker_gpu_count": row.worker_gpu_count,
+            "worker_runtimes": row.worker_runtimes,
+            "worker_preemptible": row.worker_preemptible,
+            "idle_drain_timeout_seconds": row.idle_drain_timeout_seconds,
+            "scale_up_cooldown_seconds": row.scale_up_cooldown_seconds,
+            "scale_down_cooldown_seconds": row.scale_down_cooldown_seconds,
+            "registration_timeout_seconds": row.registration_timeout_seconds,
+            "root_volume_gib": row.root_volume_gib,
+            "fallback": row.fallback,
+            "created_at": to_utc(row.created_at),
         }
     )
 
@@ -418,13 +486,9 @@ class ComputeUnitRepository:
         row.source = record.source
         row.expires_at = record.expires_at
         row.updated_at = utc_now()
-        row.payload = _JSON_OBJECT_ADAPTER.validate_json(
-            record.model_dump_json(exclude={"warm_handoff_from"})
-        )
-        flag_modified(row, "payload")
         row.warm_handoff_from = list(record.warm_handoff_from)
         self._write_columns(row, record)
-        return record
+        return _compute_unit_record(row)
 
     def delete(self, pool_id: str, *, workspace_id: str) -> None:
         self.session.execute(
@@ -455,13 +519,6 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -484,13 +541,6 @@ class ComputeUnitRepository:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).one_or_none()
         return _compute_unit_record(row) if row is not None else None
 
@@ -531,13 +581,6 @@ class ComputeUnitRepository:
             statement = statement.where(ComputeUnitTable.workspace_id == workspace_id)
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -568,13 +611,6 @@ class ComputeUnitRepository:
         )
         if for_update:
             statement = statement.with_for_update()
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         row = self.session.scalars(statement).first()
         return _compute_unit_record(row) if row is not None else None
 
@@ -583,18 +619,13 @@ class ComputeUnitRepository:
     ) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
-                )
-            )
             .where(ComputeUnitTable.workspace_id == workspace_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         if not include_retired_platform:
             statement = statement.where(
                 ~and_(
-                    ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+                    ComputeUnitTable.platform_fleet.is_(True),
                     ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
                     ComputeUnitTable.phase == ComputeUnitPhase.Deleted.value,
                 )
@@ -631,11 +662,6 @@ class ComputeUnitRepository:
                     ),
                 )
             )
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
-                )
-            )
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
@@ -665,13 +691,6 @@ class ComputeUnitRepository:
             statement = statement.where(
                 ComputeUnitTable.capacity_owner_kind == capacity_owner_kind.value
             )
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def claim_reconciliation_batch(
@@ -734,7 +753,7 @@ class ComputeUnitRepository:
     ) -> list[ComputeUnitRecord]:
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
-            ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+            ComputeUnitTable.platform_fleet.is_(True),
             ComputeUnitTable.phase != ComputeUnitPhase.Deleted.value,
         )
         if preemptible is not None:
@@ -745,9 +764,7 @@ class ComputeUnitRepository:
                 if gpu
                 else ComputeUnitTable.worker_gpu_count == 0
             )
-        statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id).options(
-            load_only(ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True)
-        )
+        statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_internal(self, *, workspace_id: str) -> list[ComputeUnitRecord]:
@@ -756,23 +773,11 @@ class ComputeUnitRepository:
             ComputeUnitTable.workspace_id == workspace_id,
         )
         statement = statement.order_by(ComputeUnitTable.updated_at, ComputeUnitTable.id)
-        statement = statement.options(
-            load_only(
-                ComputeUnitTable.payload,
-                ComputeUnitTable.warm_handoff_from,
-                raiseload=True,
-            )
-        )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
     def list_for_provider_connection(self, connection_id: str) -> list[ComputeUnitRecord]:
         statement = (
             select(ComputeUnitTable)
-            .options(
-                load_only(
-                    ComputeUnitTable.payload, ComputeUnitTable.warm_handoff_from, raiseload=True
-                )
-            )
             .where(ComputeUnitTable.provider_connection_id == connection_id)
             .order_by(ComputeUnitTable.created_at, ComputeUnitTable.id)
         )
@@ -822,9 +827,7 @@ class ComputeUnitRepository:
                     or_(
                         ComputeProviderInstanceTable.machine_id.is_(None),
                         cast(ComputeProviderInstanceTable.machine_id, String)
-                        != func.coalesce(
-                            ComputeUnitTable.payload["replacement_machine_id"].as_string(), ""
-                        ),
+                        != func.coalesce(ComputeUnitTable.replacement_machine_id, ""),
                     ),
                 )
                 .label("retiring_count"),
@@ -836,8 +839,7 @@ class ComputeUnitRepository:
         )
         surge = case(
             (
-                func.coalesce(ComputeUnitTable.payload["replacement_machine_id"].as_string(), "")
-                != "",
+                func.coalesce(ComputeUnitTable.replacement_machine_id, "") != "",
                 1,
             ),
             else_=0,
@@ -856,7 +858,7 @@ class ComputeUnitRepository:
             .outerjoin(live_instances, live_instances.c.pool_id == ComputeUnitTable.id)
             .where(
                 ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
-                ComputeUnitTable.payload["platform_fleet"].as_boolean().is_(True),
+                ComputeUnitTable.platform_fleet.is_(True),
                 or_(
                     ComputeUnitTable.desired_machines > 0,
                     ComputeUnitTable.observed_machines > 0,
@@ -952,8 +954,24 @@ class ComputeUnitRepository:
         row.observed_machines = record.observed_machines
         row.generation = record.generation
         row.phase = record.phase.value
-        row.provider_state = _model_json(record.provider_state)
-        flag_modified(row, "provider_state")
+        row.provider_resource_id = record.provider_state.resource_id
+        row.provider_attributes = dict(record.provider_state.attributes)
+        row.degraded_reason = record.provider_state.degraded_reason
+        row.degraded_at = record.provider_state.degraded_at
+        row.last_capacity_failure_at = record.provider_state.last_capacity_failure_at
+        row.launch_attempt_baseline = record.provider_state.launch_attempt_baseline
+        row.platform_fleet = record.platform_fleet
+        row.offer_cost_terms = (
+            record.offer_cost_terms.model_dump(mode="json")
+            if record.offer_cost_terms is not None
+            else None
+        )
+        row.offer_storage_mib = record.offer_storage_mib
+        row.offer_availability_zone = record.offer_availability_zone
+        row.supplier_cpu_unit = record.supplier_cpu_unit.value
+        row.supplier_cpu_count = record.supplier_cpu_count
+        row.replacement_machine_id = record.replacement_machine_id
+        row.replacement_template_version = record.replacement_template_version
         row.scaling_enabled = record.scaling_enabled
         row.default_eligible = record.default_eligible
         row.priority = record.priority
@@ -965,7 +983,6 @@ class ComputeUnitRepository:
         row.worker_gpu_type = record.worker_gpu_type
         row.worker_gpu_count = record.worker_gpu_count
         row.worker_runtimes = list(record.worker_runtimes)
-        flag_modified(row, "worker_runtimes")
         row.worker_preemptible = record.worker_preemptible
         row.idle_drain_timeout_seconds = record.idle_drain_timeout_seconds
         row.scale_up_cooldown_seconds = record.scale_up_cooldown_seconds
@@ -1067,9 +1084,35 @@ def _capacity_operation_record(
 ) -> ComputeCapacityOperationRecord:
     return ComputeCapacityOperationRecord.model_validate(
         {
-            **row.payload,
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "pool_id": row.pool_id,
+            "capacity_owner_id": row.capacity_owner_id,
+            "reservation_id": row.reservation_id,
+            "operation_id": row.operation_id,
             "demand_container_id": row.demand_container_id,
-            "fulfilled_at": row.fulfilled_at,
+            "desired_unit": row.desired_unit,
+            "status": row.status,
+            "target_machine_id": row.target_machine_id,
+            "fulfilled_at": to_utc_or_none(row.fulfilled_at),
+            "provider_instance_id": row.provider_instance_id,
+            "previous_desired_unit": row.previous_desired_unit,
+            "release_desired_unit": row.release_desired_unit,
+            "owns_capacity": row.owns_capacity,
+            "join_attempt": row.join_attempt,
+            "shape": CapacityAcquisitionShape(
+                cpu_millicores=row.cpu_millicores,
+                memory_mib=row.memory_mib,
+                gpu_type=row.gpu_type,
+                gpu_count=row.gpu_count,
+                runtime=row.runtime,
+                preemptible=row.preemptible,
+            ),
+            "failure_code": row.failure_code,
+            "failure_count": row.failure_count,
+            "last_error": row.last_error,
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
         }
     )
 
@@ -1087,7 +1130,7 @@ class ComputeCapacityOperationRepository:
         failures = (
             select(
                 table.demand_container_id.label("container_id"),
-                table.payload["failure_code"].as_string().label("failure_code"),
+                table.failure_code.label("failure_code"),
                 func.row_number()
                 .over(
                     partition_by=table.demand_container_id,
@@ -1097,7 +1140,7 @@ class ComputeCapacityOperationRepository:
             )
             .where(
                 table.demand_container_id.in_(container_ids),
-                table.payload["failure_code"].as_string().is_not(None),
+                table.failure_code.is_not(None),
             )
             .subquery()
         )
@@ -1144,7 +1187,7 @@ class ComputeCapacityOperationRepository:
                 ComputeCapacityOperationTable.status.not_in(
                     tuple(status.value for status in CapacityOperationStatus if status.terminal)
                 ),
-                ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean().is_(True),
+                ComputeCapacityOperationTable.owns_capacity.is_(True),
             )
             .order_by(ComputeCapacityOperationTable.created_at, ComputeCapacityOperationTable.id)
         )
@@ -1160,21 +1203,21 @@ class ComputeCapacityOperationRepository:
                 ComputeCapacityOperationTable.desired_unit,
                 ComputeCapacityOperationTable.status,
                 func.coalesce(
-                    ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean(),
+                    ComputeCapacityOperationTable.owns_capacity,
                     False,
                 ),
                 func.coalesce(
-                    ComputeCapacityOperationTable.payload["failure_count"].as_integer(),
+                    ComputeCapacityOperationTable.failure_count,
                     0,
                 ),
-                ComputeCapacityOperationTable.payload["updated_at"].as_string(),
+                ComputeCapacityOperationTable.updated_at,
             )
             .where(
                 ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id,
                 ComputeCapacityOperationTable.status.not_in(
                     tuple(status.value for status in CapacityOperationStatus if status.terminal)
                 ),
-                ComputeCapacityOperationTable.payload["owns_capacity"].as_boolean().is_(True),
+                ComputeCapacityOperationTable.owns_capacity.is_(True),
             )
             .order_by(
                 ComputeCapacityOperationTable.created_at,
@@ -1188,7 +1231,7 @@ class ComputeCapacityOperationRepository:
                 status=CapacityOperationStatus(status),
                 owns_capacity=owns_capacity,
                 failure_count=failure_count,
-                updated_at=to_utc(_DATETIME_ADAPTER.validate_python(updated_at)),
+                updated_at=to_utc(updated_at),
             )
             for (
                 operation_id,
@@ -1212,7 +1255,7 @@ class ComputeCapacityOperationRepository:
         self,
         capacity_owner_id: str,
     ) -> ComputeCapacityOperationHistorySummary:
-        """Summarize all requests without loading their durable JSON payloads.
+        """Summarize the retained request history.
 
         Released operations stay in the aggregate so the peak remains monotonic.
         That stops the sizer from buying back every machine the drain controller
@@ -1221,15 +1264,13 @@ class ComputeCapacityOperationRepository:
         peak_desired_unit, last_requested_at = self.session.execute(
             select(
                 func.max(ComputeCapacityOperationTable.desired_unit),
-                func.max(ComputeCapacityOperationTable.payload["created_at"].as_string()),
+                func.max(ComputeCapacityOperationTable.created_at),
             ).where(ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id)
         ).one()
         return ComputeCapacityOperationHistorySummary(
             peak_desired_unit=int(peak_desired_unit or 0),
             last_requested_at=(
-                to_utc(_DATETIME_ADAPTER.validate_python(last_requested_at))
-                if last_requested_at is not None
-                else None
+                to_utc(last_requested_at) if last_requested_at is not None else None
             ),
         )
 
@@ -1278,47 +1319,142 @@ class ComputeCapacityOperationRepository:
         row.target_machine_id = record.target_machine_id
         row.demand_container_id = record.demand_container_id
         row.fulfilled_at = record.fulfilled_at
-        row.payload = _JSON_OBJECT_ADAPTER.validate_json(
-            record.model_dump_json(exclude={"demand_container_id", "fulfilled_at"})
-        )
-        flag_modified(row, "payload")
-        row.updated_at = utc_now()
+        row.provider_instance_id = record.provider_instance_id
+        row.previous_desired_unit = record.previous_desired_unit
+        row.release_desired_unit = record.release_desired_unit
+        row.owns_capacity = record.owns_capacity
+        row.join_attempt = record.join_attempt
+        row.failure_code = record.failure_code.value if record.failure_code is not None else None
+        row.failure_count = record.failure_count
+        row.last_error = record.last_error
+        row.cpu_millicores = record.shape.cpu_millicores
+        row.memory_mib = record.shape.memory_mib
+        row.gpu_type = record.shape.gpu_type
+        row.gpu_count = record.shape.gpu_count
+        row.runtime = record.shape.runtime
+        row.preemptible = record.shape.preemptible
+        row.updated_at = record.updated_at
         self.session.flush()
-        return record
+        return _capacity_operation_record(row)
 
 
-def _provider_instance_record(
-    row: ComputeProviderInstanceTable,
-) -> ComputeProviderInstanceRecord:
-    """Read one provider instance, taking its machine from the enforced column.
-
-    The payload is the record and the column is the constraint, and only the
-    column is maintained by the database: deleting a machine nulls it through
-    `ON DELETE SET NULL` and cannot reach into the JSON beside it. A reader that
-    trusted the payload would hand back a machine that no longer exists, and the
-    next write would offer it to the foreign key that had just removed it —
-    which every pass then fails on identically, so the pool degrades on an error
-    it can never get past.
-    """
-    record = ComputeProviderInstanceRecord.model_validate(row.payload)
-    if record.machine_id == row.machine_id:
-        return record
-    return record.model_copy(update={"machine_id": row.machine_id})
+def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProviderInstanceRecord:
+    return ComputeProviderInstanceRecord.model_validate(
+        {
+            "id": row.id,
+            "provider": row.provider,
+            "offer_id": row.offer_id,
+            "status": row.status,
+            "source": row.source,
+            "pool_id": row.pool_id,
+            "instance_type": row.instance_type,
+            "instance_id": row.instance_id,
+            "machine_id": row.machine_id,
+            "gpu": row.gpu,
+            "gpu_count": row.gpu_count,
+            "cpu_millicores": row.cpu_millicores,
+            "memory_mb": row.memory_mb,
+            "cost_terms": SupplierCostTerms.model_validate(row.cost_terms),
+            "storage_mib": row.storage_mib,
+            "supplier_cpu_unit": row.supplier_cpu_unit,
+            "supplier_cpu_count": row.supplier_cpu_count,
+            "committed_micros": row.committed_micros,
+            "expires_at": to_utc_or_none(row.expires_at),
+            "billing_renewal_at": to_utc_or_none(row.billing_renewal_at),
+            "billing_started_at": to_utc_or_none(row.billing_started_at),
+            "bootstrap_phase": row.bootstrap_phase,
+            "bootstrap_failure_reason": row.bootstrap_failure_reason,
+            "bootstrap_failure_detail": row.bootstrap_failure_detail,
+            "bootstrap_observed_at": to_utc(row.bootstrap_observed_at),
+            "bootstrap_phase_started_at": to_utc_or_none(row.bootstrap_phase_started_at),
+            "first_enrolled_at": to_utc_or_none(row.first_enrolled_at),
+            "first_served_at": to_utc_or_none(row.first_served_at),
+            "last_served_at": to_utc_or_none(row.last_served_at),
+            "unserved_observations": row.unserved_observations,
+            "launch_attempt": row.launch_attempt,
+            "architecture": row.architecture,
+            "runtime": row.runtime,
+            "region": row.region,
+            "availability_zone": row.availability_zone,
+            "storage_volume_ids": row.storage_volume_ids,
+            "booted_template_version": row.booted_template_version,
+            "missing_since": to_utc_or_none(row.missing_since),
+            "provider_storage_destroyed_at": to_utc_or_none(row.provider_storage_destroyed_at),
+            "terminating_reason": row.terminating_reason,
+            "terminated_reason": row.terminated_reason,
+            "status_message": row.status_message,
+            "last_error": row.last_error,
+            "created_at": to_utc(row.created_at),
+            "updated_at": to_utc(row.updated_at),
+        }
+    )
 
 
 @dataclass(slots=True)
 class ComputeProviderInstanceRepository:
     session: Session
 
-    @property
-    def records(self) -> GlobalTableRepository[ComputeProviderInstanceRecord]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(ComputeProviderInstanceTable, ComputeProviderInstanceRecord),
-        )
+    def get(self, instance_id: str) -> ComputeProviderInstanceRecord | None:
+        row = self.session.get(ComputeProviderInstanceTable, instance_id)
+        return _provider_instance_record(row) if row is not None else None
 
     def upsert(self, record: ComputeProviderInstanceRecord) -> ComputeProviderInstanceRecord:
-        return self.records.upsert(record, status=record.status)
+        record = ComputeProviderInstanceRecord.model_validate(dict(record))
+        row = self.session.get(ComputeProviderInstanceTable, record.id)
+        if row is None:
+            row = ComputeProviderInstanceTable(id=record.id, created_at=record.created_at)
+            self.session.add(row)
+        elif row.pool_id != record.pool_id or row.provider != record.provider:
+            raise ConflictError("provider instance owner cannot change")
+        row.provider = record.provider
+        row.offer_id = record.offer_id
+        row.status = record.status
+        row.source = record.source
+        row.pool_id = record.pool_id
+        row.instance_type = record.instance_type
+        row.instance_id = record.instance_id
+        row.machine_id = record.machine_id
+        row.gpu = record.gpu
+        row.gpu_count = record.gpu_count
+        row.cpu_millicores = record.cpu_millicores
+        row.memory_mb = record.memory_mb
+        row.cost_terms = record.cost_terms.model_dump(mode="json")
+        row.storage_mib = record.storage_mib
+        row.supplier_cpu_unit = record.supplier_cpu_unit.value
+        row.supplier_cpu_count = record.supplier_cpu_count
+        row.committed_micros = record.committed_micros
+        row.expires_at = record.expires_at
+        row.billing_renewal_at = record.billing_renewal_at
+        row.billing_started_at = record.billing_started_at
+        row.bootstrap_phase = record.bootstrap_phase.value
+        row.bootstrap_failure_reason = (
+            record.bootstrap_failure_reason.value
+            if record.bootstrap_failure_reason is not None
+            else None
+        )
+        row.bootstrap_failure_detail = record.bootstrap_failure_detail
+        row.bootstrap_observed_at = record.bootstrap_observed_at
+        row.bootstrap_phase_started_at = record.bootstrap_phase_started_at
+        row.first_enrolled_at = record.first_enrolled_at
+        row.first_served_at = record.first_served_at
+        row.last_served_at = record.last_served_at
+        row.unserved_observations = record.unserved_observations
+        row.launch_attempt = record.launch_attempt
+        row.architecture = record.architecture
+        row.runtime = record.runtime
+        row.region = record.region
+        row.availability_zone = record.availability_zone
+        row.storage_volume_ids = list(record.storage_volume_ids)
+        row.booted_template_version = record.booted_template_version
+        row.missing_since = record.missing_since
+        row.provider_storage_destroyed_at = record.provider_storage_destroyed_at
+        row.terminating_reason = record.terminating_reason
+        row.terminated_reason = record.terminated_reason
+        row.status_message = record.status_message
+        row.last_error = record.last_error
+        row.updated_at = utc_now()
+        self.session.flush()
+        return _provider_instance_record(row)
 
     def list_for_pool(
         self,
@@ -1330,13 +1466,6 @@ class ComputeProviderInstanceRepository:
     ) -> list[ComputeProviderInstanceRecord]:
         statement = (
             select(ComputeProviderInstanceTable)
-            .options(
-                load_only(
-                    ComputeProviderInstanceTable.payload,
-                    ComputeProviderInstanceTable.machine_id,
-                    raiseload=True,
-                )
-            )
             .where(ComputeProviderInstanceTable.pool_id == pool_id)
             .order_by(
                 ComputeProviderInstanceTable.created_at.desc(),
@@ -1362,17 +1491,15 @@ class ComputeProviderInstanceRepository:
         for_update: bool = False,
     ) -> list[ComputeProviderInstanceRecord]:
         table = ComputeProviderInstanceTable
-        metadata = table.payload["metadata"]
         statement = (
             select(table)
-            .options(load_only(table.payload, table.machine_id, raiseload=True))
             .where(
                 table.pool_id == pool_id,
                 or_(
                     table.status.not_in(terminal_statuses),
                     table.instance_id.in_(observed_instance_ids),
-                    metadata["missing_since"].as_string().is_(None),
-                    metadata["provider_storage_destroyed_at"].as_string().is_(None),
+                    table.missing_since.is_(None),
+                    table.provider_storage_destroyed_at.is_(None),
                 ),
             )
             .order_by(table.created_at.desc(), table.id.asc())
@@ -1383,13 +1510,9 @@ class ComputeProviderInstanceRepository:
 
     def highest_launch_attempt(self, pool_id: str, *, default: int = 0) -> int:
         highest = self.session.scalar(
-            select(
-                func.max(
-                    func.coalesce(
-                        ComputeProviderInstanceTable.payload["launch_attempt"].as_integer(), 1
-                    )
-                )
-            ).where(ComputeProviderInstanceTable.pool_id == pool_id)
+            select(func.max(func.coalesce(ComputeProviderInstanceTable.launch_attempt, 1))).where(
+                ComputeProviderInstanceTable.pool_id == pool_id
+            )
         )
         return highest if highest is not None else default
 
@@ -1447,12 +1570,10 @@ class ComputeProviderInstanceRepository:
             return None
         if current.machine_id == machine_id:
             return current
-        bound = current.model_copy(update={"machine_id": machine_id, "updated_at": utc_now()})
         row.machine_id = machine_id
-        row.payload = _model_json(bound)
-        flag_modified(row, "payload")
+        row.updated_at = utc_now()
         self.session.flush()
-        return bound
+        return _provider_instance_record(row)
 
     def get_for_pool_instance(
         self,
@@ -1774,6 +1895,15 @@ def _write_machine_enrollment_row(
 @dataclass(slots=True)
 class ComputeMachineEnrollmentRepository:
     session: Session
+
+    def delete(self, enrollment_id: str, *, workspace_id: str) -> None:
+        self.session.execute(
+            delete(ComputeMachineEnrollmentTable).where(
+                ComputeMachineEnrollmentTable.id == enrollment_id,
+                ComputeMachineEnrollmentTable.workspace_id == workspace_id,
+            )
+        )
+        self.session.flush()
 
     def create(self, enrollment: ComputeMachineEnrollmentCreate) -> ComputeMachineEnrollmentRecord:
         WorkspaceRepository(self.session).lock_active_owner(enrollment.workspace_id)

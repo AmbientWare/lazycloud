@@ -48,7 +48,6 @@ from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION, AwsComputeConfi
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
-from compute.provider_machines import _provider_booted_template_version
 from database import AsyncDatabaseClient
 
 LOGGER = logging.getLogger(__name__)
@@ -618,7 +617,7 @@ def _compute_instance_view(
         bootstrap_failure_reason=failure_reason,
         bootstrap_failure_detail=failure_detail,
         bootstrap_observed_at=observed_at,
-        booted_template_version=_provider_booted_template_version(record),
+        booted_template_version=record.booted_template_version,
     )
 
 

@@ -342,5 +342,25 @@ workspace configuration.
 - Volume metering with 200 deleting and two active volumes keeps one query and
   two rows; bytes drop from 2,066 to 478. Idle metering remains one query, zero rows.
 
-Containers and compute still require their remaining refactors. These scoped
-results are not release acceptance.
+Compute policy, enrollment, join credentials, capacity operations, provider
+instances and compute units use explicit columns. Capacity request shapes are
+typed through their production caller. The terminal ownership trigger uses the
+same columns as the service. Provider storage destruction, missing-instance
+timestamps, launch attempts and termination evidence no longer live in metadata.
+Immutable supplier quotes remain validated documents. Compute units retain only
+provider-owned attributes and supplier quotes as JSON; their unused configuration
+bag is removed and scheduler drain timing reads the canonical timeout field.
+
+- Enrollment authority, pooled capacity, workspace deletion and schema checks
+  pass. The integrated compute and scheduler drain slice passes 105 checks.
+- Machine retirement revealed one remaining generic enrollment deletion caller;
+  its scoped repository operation and both retirement checks now pass.
+- Database, shared, compute and scheduler source type checks pass.
+- Provider reconciliation with 200 settled and two active instances keeps one
+  query and two rows; serialized bytes drop from 2,702 to 1,574. Idle scans return
+  zero rows. Reading a compute unit keeps one query and one row, bytes 1,679 to 541.
+- Capacity sizing keeps one query and two rows, bytes 192 to 202 due to datetime
+  serialization. Idle sizing returns zero rows. Neither path fetches history.
+
+Cloud authorization, runtime and container tables still require their remaining
+refactors. These scoped results are not release acceptance.
