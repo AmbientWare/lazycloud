@@ -55,7 +55,7 @@ export function SpaceshipHero() {
         <h1 id="flight-headline">
           Ship as fast
           <br />
-          as you develop.
+          <span>as you develop.</span>
         </h1>
         <p>Run your Python apps, APIs, and background jobs in the cloud.</p>
         <div className="flight-actions">

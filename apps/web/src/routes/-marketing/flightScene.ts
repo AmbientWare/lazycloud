@@ -11,6 +11,12 @@ const ease = (value: number) => {
   return t * t * (3 - 2 * t);
 };
 
+const assemblyEnd = 1.15;
+const launchStart = 1.4;
+const orbitStart = 4.2;
+const earthRadius = 12;
+const orbitRadius = 17.6;
+
 export function createFlightScene(
   canvas: HTMLCanvasElement,
   onPhase: (phase: FlightPhase) => void,
@@ -25,7 +31,7 @@ export function createFlightScene(
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.1;
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
+  const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 350);
   camera.position.set(0, 3.2, 12.8);
   const environment = new RoomEnvironment();
   const pmrem = new THREE.PMREMGenerator(renderer);
@@ -44,15 +50,19 @@ export function createFlightScene(
   const { ship, parts, exhaust } = createShip();
   scene.add(ship);
   const { platform, clamps, wash } = createLaunchPlatform();
+  platform.position.y = -1;
   scene.add(platform);
   const { earth, texture } = createAbstractEarth();
+  earth.scale.setScalar(earthRadius / 2.4);
+  earth.position.set(0, -earthRadius - 1.07, 0);
   scene.add(earth);
 
   const orbit = new THREE.Group();
-  orbit.rotation.set(0.9, 0.15, -0.3);
+  orbit.rotation.y = -0.55;
+  orbit.position.copy(earth.position);
   const orbitPoints = Array.from({ length: 161 }, (_, i) => {
     const angle = (i / 160) * Math.PI * 2;
-    return new THREE.Vector3(Math.cos(angle) * 3.4, Math.sin(angle) * 3.4, 0);
+    return new THREE.Vector3(Math.cos(angle) * orbitRadius, Math.sin(angle) * orbitRadius, 0);
   });
   const orbitMaterial = new THREE.LineBasicMaterial({
     color: "#70b6d1",
@@ -63,32 +73,34 @@ export function createFlightScene(
   scene.add(orbit);
 
   const starsGeometry = new THREE.BufferGeometry();
-  const starPositions = new Float32Array(90 * 3);
+  const starPositions = new Float32Array(160 * 3);
   let seed = 29;
   const random = () => {
     seed = (seed * 16807) % 2147483647;
     return (seed - 1) / 2147483646;
   };
   for (let i = 0; i < starPositions.length; i += 3) {
-    starPositions[i] = (random() - 0.5) * 32;
-    starPositions[i + 1] = (random() - 0.5) * 18;
-    starPositions[i + 2] = -5 - random() * 8;
+    starPositions[i] = (random() - 0.5) * 180;
+    starPositions[i + 1] = (random() - 0.5) * 120;
+    starPositions[i + 2] = -70 - random() * 50;
   }
   starsGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
   const stars = new THREE.Points(
     starsGeometry,
-    new THREE.PointsMaterial({ color: "#a8cddd", size: 0.016, transparent: true, opacity: 0.4 }),
+    new THREE.PointsMaterial({ color: "#a8cddd", size: 0.075, transparent: true, opacity: 0.4 }),
   );
   scene.add(stars);
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let elapsed = reducedMotion.matches ? 13 : 0;
+  let elapsed = reducedMotion.matches ? orbitStart : 0;
   let previousTime = 0;
   let paused = false;
   let visible = true;
   let phase: FlightPhase | undefined;
   let pointerX = 0;
   let pointerY = 0;
+  let cameraDistance = 12.8;
+  const viewOffset = new THREE.Vector2();
   const orbitPosition = new THREE.Vector3();
   const orbitRotation = new THREE.Quaternion();
   const shipUp = new THREE.Vector3(0, 1, 0);
@@ -96,62 +108,69 @@ export function createFlightScene(
   const initialRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -0.45, 0));
 
   function render() {
-    const pullback = ease((elapsed - 8) / 3.8);
-    const launch = ease((elapsed - 6.2) / 3.2);
-    const ignition = ease((elapsed - 4.8) / 1.4);
+    const pullback = ease((elapsed - 1.7) / (orbitStart - 1.7));
+    const launch = Math.pow(THREE.MathUtils.clamp((elapsed - launchStart) / 1.2, 0, 1), 2);
+    const bank = ease((elapsed - 2) / (orbitStart - 2));
+    const ignition = ease((elapsed - assemblyEnd) / (launchStart - assemblyEnd));
     const currentPhase =
-      elapsed < 4.8
+      elapsed < assemblyEnd
         ? "Assembling"
-        : elapsed < 6.2
+        : elapsed < launchStart
           ? "Ignition"
-          : elapsed < 11.8
+          : elapsed < orbitStart
             ? "Liftoff"
             : "In orbit";
     if (currentPhase !== phase) {
       phase = currentPhase;
       onPhase(phase);
     }
-    for (const part of parts)
-      part.group.position.copy(part.offset).multiplyScalar(1 - ease((elapsed - part.delay) / 2.5));
-    exhaust.visible = elapsed > 4.8;
-    exhaust.scale.y = ignition * (0.08 + launch * 0.9) * (1 - pullback * 0.8);
-    platform.visible = pullback < 0.99;
-    platform.position.set(0, -1 - pullback * 6, 0);
-    platform.scale.setScalar(1 - pullback * 0.6);
-    const release = ease((elapsed - 5.3) / 0.7);
+    for (const part of parts) {
+      const remaining = 1 - ease((elapsed - part.delay) / 0.44);
+      part.group.position.copy(part.offset).multiplyScalar(remaining);
+      part.group.rotation.set(
+        part.spin.x * remaining,
+        part.spin.y * remaining,
+        part.spin.z * remaining,
+      );
+    }
+    exhaust.visible = elapsed > assemblyEnd;
+    exhaust.scale.y = ignition * (0.08 + launch * 1.3) * (1 - bank * 0.8);
+    platform.scale.setScalar(THREE.MathUtils.lerp(1, 0.06, pullback));
+    const release = ease((elapsed - 1.18) / 0.2);
     for (let i = 0; i < clamps.length; i++) {
       const angle = (i / 3) * Math.PI * 2;
       clamps[i].position.set(Math.sin(angle) * release * 0.5, 0, Math.cos(angle) * release * 0.5);
     }
     wash.material.uniforms.strength.value = ignition * (1 - launch);
-    earth.visible = pullback > 0;
-    earth.position.set(0, THREE.MathUtils.lerp(-4.5, -0.3, pullback), -0.8);
-    earth.scale.setScalar(THREE.MathUtils.lerp(0.65, 1, pullback));
-    earth.rotation.set(0.1, 0.7 + elapsed * 0.02, -0.1);
-    orbit.position.copy(earth.position);
-    orbitMaterial.opacity = pullback * 0.35;
-    const angle = 0.95 + Math.max(0, elapsed - 11.8) * 0.18;
+    earth.rotation.set(0.1, 0.7 + Math.max(0, elapsed - orbitStart) * 0.015, -0.1);
+    orbitMaterial.opacity = ease((elapsed - 3.2) / (orbitStart - 3.2)) * 0.3;
+    const angle = Math.PI / 2 - bank * 0.72 - Math.max(0, elapsed - orbitStart) * 0.23;
+    const radius = THREE.MathUtils.lerp(0.6 - earth.position.y, orbitRadius, launch);
     orbitPosition
-      .set(Math.cos(angle) * 3.4, Math.sin(angle) * 3.4, 0)
+      .set(Math.cos(angle) * radius, Math.sin(angle) * radius, 0)
       .applyEuler(orbit.rotation)
       .add(earth.position);
-    ship.position.set(0, 0.6 + launch * 2.4, 0).lerp(orbitPosition, pullback);
-    ship.scale.setScalar(THREE.MathUtils.lerp(0.9, 0.4, pullback));
-    tangent.set(-Math.sin(angle), Math.cos(angle), 0).applyEuler(orbit.rotation).normalize();
+    ship.position.copy(orbitPosition);
+    ship.scale.setScalar(0.9);
+    tangent.set(Math.sin(angle), -Math.cos(angle), 0).applyEuler(orbit.rotation).normalize();
     orbitRotation.setFromUnitVectors(shipUp, tangent);
-    ship.quaternion.copy(initialRotation).slerp(orbitRotation, pullback);
+    ship.quaternion.copy(initialRotation).slerp(orbitRotation, bank);
     if (!reducedMotion.matches) {
-      camera.position.x += (pointerX * 0.35 - camera.position.x) * 0.035;
-      camera.position.y +=
-        (THREE.MathUtils.lerp(3.2, 1.3, pullback) + pointerY * 0.2 - camera.position.y) * 0.035;
+      viewOffset.x += (pointerX * 0.35 - viewOffset.x) * 0.035;
+      viewOffset.y += (pointerY * 0.2 - viewOffset.y) * 0.035;
     } else {
-      camera.position.y = 1.3;
+      viewOffset.set(0, 0);
     }
-    camera.lookAt(0, 0.25, -0.4);
+    camera.position.set(
+      viewOffset.x,
+      THREE.MathUtils.lerp(3.2, earth.position.y + 7, pullback) + viewOffset.y,
+      cameraDistance * THREE.MathUtils.lerp(1, 4.4, pullback),
+    );
+    camera.lookAt(0, THREE.MathUtils.lerp(0.25, earth.position.y, pullback), 0);
     renderer.render(scene, camera);
   }
   function animate(now: number) {
-    if (previousTime) elapsed += Math.min((now - previousTime) / 1000, 0.1);
+    if (previousTime) elapsed += (now - previousTime) / 1000;
     previousTime = now;
     render();
   }
@@ -167,7 +186,7 @@ export function createFlightScene(
     if (!width || !height) return;
     camera.aspect = width / height;
     camera.fov = 36;
-    camera.position.z = Math.max(12.8, 11 / camera.aspect);
+    cameraDistance = Math.max(12.8, 11 / camera.aspect);
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
     render();
@@ -182,7 +201,7 @@ export function createFlightScene(
     pointerY = 0;
   }
   function motionPreference() {
-    if (reducedMotion.matches) elapsed = 13;
+    if (reducedMotion.matches) elapsed = orbitStart;
     syncMotion();
   }
   const observer = new ResizeObserver(resize);
@@ -205,7 +224,7 @@ export function createFlightScene(
       syncMotion();
     },
     replay() {
-      elapsed = reducedMotion.matches ? 13 : 0;
+      elapsed = reducedMotion.matches ? orbitStart : 0;
       paused = false;
       syncMotion();
     },

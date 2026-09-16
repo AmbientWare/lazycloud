@@ -26,13 +26,19 @@ export function createShip() {
     metalness: 0.6,
     roughness: 0.3,
   });
-  const parts: { group: THREE.Group; offset: THREE.Vector3; delay: number }[] = [];
+  const parts: { group: THREE.Group; offset: THREE.Vector3; spin: THREE.Vector3; delay: number }[] =
+    [];
   const exhaust = new THREE.Group();
 
   function part(x: number, y: number, z: number, delay: number) {
     const group = new THREE.Group();
     ship.add(group);
-    parts.push({ group, offset: new THREE.Vector3(x, y, z), delay });
+    parts.push({
+      group,
+      offset: new THREE.Vector3(x, y, z).multiplyScalar(0.25),
+      spin: new THREE.Vector3(),
+      delay: delay * 0.12,
+    });
     return group;
   }
   function plate(
@@ -42,18 +48,53 @@ export function createShip() {
     material: THREE.Material,
     z = 0,
   ) {
-    const shape = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
-    const geometry = new THREE.ExtrudeGeometry(shape, {
-      depth,
-      bevelEnabled: true,
-      bevelSegments: 2,
-      bevelSize: 0.025,
-      bevelThickness: 0.025,
-    });
-    geometry.translate(0, 0, z - depth / 2);
-    const mesh = new THREE.Mesh(geometry, material);
-    parent.add(mesh);
-    return mesh;
+    const panels = new THREE.Group();
+    parent.add(panels);
+    const low = Math.min(...points.map((point) => point[1]));
+    const high = Math.max(...points.map((point) => point[1]));
+    const count = Math.ceil((high - low) / 0.38);
+    for (let index = 0; index < count; index++) {
+      const bottom = low + ((high - low) * index) / count + 0.012;
+      const top = low + ((high - low) * (index + 1)) / count - 0.012;
+      const polygon = clipHorizontal(clipHorizontal(points, bottom, true), top, false);
+      if (polygon.length < 3) continue;
+      const center = new THREE.Vector3(
+        polygon.reduce((sum, point) => sum + point[0], 0) / polygon.length,
+        (bottom + top) / 2,
+        z,
+      );
+      const shape = new THREE.Shape(
+        polygon.map(([x, y]) => new THREE.Vector2(x - center.x, y - center.y)),
+      );
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth,
+        bevelEnabled: true,
+        bevelSegments: 2,
+        bevelSize: 0.01,
+        bevelThickness: 0.012,
+      });
+      geometry.translate(0, 0, -depth / 2);
+      const panel = new THREE.Mesh(geometry, material);
+      const pivot = new THREE.Group();
+      pivot.position.copy(center);
+      const chunk = new THREE.Group();
+      chunk.add(panel);
+      pivot.add(chunk);
+      panels.add(pivot);
+      const serial = parts.length;
+      const direction = center.x > 0.05 ? 1 : serial % 2 ? 1 : -1;
+      parts.push({
+        group: chunk,
+        offset: new THREE.Vector3(
+          direction * (0.8 + (serial % 5) * 0.23),
+          (serial % 4) * 0.24,
+          0.3 + (serial % 3) * 0.27,
+        ),
+        spin: new THREE.Vector3(((serial % 3) - 1) * 0.3, direction * 0.55, direction * 0.22),
+        delay: 0.1 + ((serial * 7) % 17) * 0.032,
+      });
+    }
+    return panels;
   }
 
   const spine = part(0, 0.3, -0.7, 0);
@@ -199,4 +240,24 @@ export function createShip() {
   exhaust.position.y = -1.49;
   engine.add(exhaust);
   return { ship, parts, exhaust };
+}
+
+function clipHorizontal(
+  polygon: [number, number][],
+  height: number,
+  keepAbove: boolean,
+): [number, number][] {
+  const result: [number, number][] = [];
+  for (let index = 0; index < polygon.length; index++) {
+    const a = polygon[index];
+    const b = polygon[(index + 1) % polygon.length];
+    const insideA = keepAbove ? a[1] >= height : a[1] <= height;
+    const insideB = keepAbove ? b[1] >= height : b[1] <= height;
+    if (insideA) result.push(a);
+    if (insideA !== insideB) {
+      const t = (height - a[1]) / (b[1] - a[1]);
+      result.push([a[0] + (b[0] - a[0]) * t, height]);
+    }
+  }
+  return result;
 }
