@@ -131,12 +131,12 @@ function ParitySection() {
           <MarketingCard>
             <Tabs defaultValue={definitionExamples[0].key}>
               <TabsList
-                className="grid h-8 w-full grid-cols-5 gap-0 px-1"
+                className="flex h-8 w-full gap-0 px-1"
                 aria-label="Python definitions"
               >
                 {definitionExamples.map((example) => (
                   <TabsTrigger
-                    className="h-8 px-1 text-[11px] sm:text-xs"
+                    className="h-8 flex-auto px-1 text-[11px] sm:text-xs"
                     key={example.key}
                     value={example.key}
                   >
