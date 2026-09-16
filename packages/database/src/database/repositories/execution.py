@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from database.mappers.containers import container_from_row
 from database.mappers.execution import (
     cron_job_run_from_table,
     event_from_table,
@@ -634,7 +635,7 @@ class TaskRepository:
             return None
         statement = (
             _related_task_statement()
-            .add_columns(ContainerTable.payload)
+            .add_columns(ContainerTable)
             .where(TaskTable.workspace_id == workspace_id, TaskTable.id == task_id)
         )
         row = self.session.execute(statement).tuples().first()
@@ -648,7 +649,7 @@ class TaskRepository:
             deployment_name,
             deployment_version,
             container_status,
-            container_payload,
+            container_row,
         ) = row
         return DetailedTaskRecord(
             task=task_from_table(task_row),
@@ -660,9 +661,7 @@ class TaskRepository:
             container_status=(
                 ContainerStatus(container_status) if container_status is not None else None
             ),
-            container=(
-                ContainerRecord.model_validate(container_payload) if container_payload else None
-            ),
+            container=(container_from_row(container_row) if container_row else None),
         )
 
     def ids_for_container(self, container_id: str) -> list[str]:

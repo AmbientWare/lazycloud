@@ -89,12 +89,7 @@ def test_function_retry_reuses_a_warm_container_and_leaves_replacement_to_the_au
     first_container.exit_code = 1
     first_container.finished_at = datetime.now(UTC)
     with isolated_services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            first_container,
-            workspace_id=first_container.workspace_id,
-            name=first_container.name,
-            status=first_container.status.value,
-        )
+        ContainerRepository(session).upsert(first_container)
 
     assert functions.schedule_due_retries(now=datetime.now(UTC)) == []
     assert len(scheduler.requests) == 1

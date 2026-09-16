@@ -14,9 +14,6 @@ from database.tables.aws_connections import (
 )
 from database.tables.base import (
     DatabaseBase,
-    IdPayloadTable,
-    NamedWorkspacePayloadTable,
-    PayloadMixin,
     TimestampMixin,
     json_type,
     utc_now,
@@ -145,7 +142,6 @@ __all__ = [
     "EmailOutboxTable",
     "EndpointDispatchTable",
     "EventTable",
-    "IdPayloadTable",
     "IdentityAdminRecoveryRequestTable",
     "IdentityBootstrapClaimTable",
     "ImageArchiveTable",
@@ -153,9 +149,7 @@ __all__ = [
     "ImageTable",
     "LogTable",
     "MachineTable",
-    "NamedWorkspacePayloadTable",
     "ObjectTable",
-    "PayloadMixin",
     "PlatformRateTable",
     "PodUrlTable",
     "ProviderNodeLaunchTable",

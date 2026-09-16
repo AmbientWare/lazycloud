@@ -426,7 +426,7 @@ class TaskService:
                 f"not {resolved_container_id}"
             )
         container = (
-            ContainerRepository(session).records.get_across_workspaces(resolved_container_id)
+            ContainerRepository(session).get_across_workspaces(resolved_container_id)
             if resolved_container_id
             else None
         )
@@ -1036,7 +1036,7 @@ def _task_event_level(status: TaskStatus) -> EventLevel:
 def _container_exists(session: DatabaseSession, container_id: str | None) -> bool:
     if not container_id:
         return False
-    return ContainerRepository(session).records.get_across_workspaces(container_id) is not None
+    return ContainerRepository(session).get_across_workspaces(container_id) is not None
 
 
 def _task_retry_policy(

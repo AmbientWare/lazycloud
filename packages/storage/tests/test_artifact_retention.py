@@ -595,7 +595,7 @@ def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
 ) -> None:
     workspace = owned_workspace(ControlPlaneService(service_context), "default")
     with service_context.database.session() as session:
-        container = ContainerRepository(session).records.upsert(
+        container = ContainerRepository(session).upsert(
             ContainerRecord(
                 id=str(uuid4()),
                 name="checkpoint-source",
@@ -603,8 +603,7 @@ def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
                 command=["sleep", "60"],
                 workspace_id=workspace.id,
                 status=ContainerStatus.Stopped,
-            ),
-            workspace_id=workspace.id,
+            )
         )
     service = CheckpointService(
         service_context,

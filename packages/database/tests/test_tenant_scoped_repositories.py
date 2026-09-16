@@ -88,7 +88,7 @@ def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
         containers = ContainerRepository(session)
         assert containers.get(container_id, workspace_id=intruder.id) is None
         assert containers.list(workspace_id=intruder.id) == []
-        assert containers.records.delete(container_id, workspace_id=intruder.id) is False
+        assert containers.delete(container_id, workspace_id=intruder.id) is False
         assert containers.get(container_id, workspace_id=owner.id) is not None
 
         # Explicit system access still sees the rows; the name marks the authority.

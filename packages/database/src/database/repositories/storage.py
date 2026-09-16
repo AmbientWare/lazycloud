@@ -6,6 +6,7 @@ from typing import overload
 from uuid import uuid4
 
 from database.mappers.apps import stub_from_table
+from database.mappers.containers import container_from_row
 from database.mappers.images import image_build_from_table, image_from_table
 from database.mappers.storage import object_from_table, volume_from_table, write_object_row
 from database.repositories.cleanup import (
@@ -931,7 +932,7 @@ class VolumeRepository:
 
     def unreleased_mounts(self, name: str, *, workspace_id: str) -> tuple[ContainerRecord, ...]:
         rows = self.session.execute(
-            select(ContainerTable.payload, StubTable)
+            select(ContainerTable, StubTable)
             .join(StubTable, StubTable.id == ContainerTable.stub_id)
             .where(
                 ContainerTable.workspace_id == workspace_id,
@@ -939,10 +940,10 @@ class VolumeRepository:
             )
         )
         records: list[ContainerRecord] = []
-        for container_payload, stub_row in rows:
+        for container_row, stub_row in rows:
             stub = stub_from_table(stub_row)
             if any((volume.name or volume.id) == name for volume in stub.config.volumes):
-                records.append(ContainerRecord.model_validate(container_payload))
+                records.append(container_from_row(container_row))
         return tuple(records)
 
     def retain_cleanup(self, row: VolumeTable) -> None:

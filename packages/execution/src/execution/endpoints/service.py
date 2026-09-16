@@ -286,12 +286,7 @@ class EndpointControlService:
             with self.services.context.database.session() as session:
                 container.status = ContainerStatus.Failed
                 container.finished_at = utc_now()
-                ContainerRepository(session).records.upsert(
-                    container,
-                    workspace_id=container.workspace_id,
-                    name=container.name,
-                    status=container.status.value,
-                )
+                ContainerRepository(session).upsert(container)
             self.services.containers.publish_lifecycle_change(
                 container,
                 WorkspaceChangeType.Updated,

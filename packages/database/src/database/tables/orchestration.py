@@ -18,12 +18,12 @@ from sqlalchemy import (
     event,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
 from database.tables.base import (
     DatabaseBase,
-    IdPayloadTable,
     IdTable,
     TimestampMixin,
     json_type,
@@ -170,10 +170,9 @@ class WorkerTable(IdTable, DatabaseBase):
     labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
 
 
-class ContainerTable(IdPayloadTable, DatabaseBase):
+class ContainerTable(IdTable, DatabaseBase):
     __tablename__ = "containers"
     workload_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    scheduling_request: Mapped[dict[str, JsonValue] | None] = mapped_column(json_type)
     scheduling_reconcile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduling_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduling_assignment_token: Mapped[str | None] = mapped_column(String(240))
@@ -191,8 +190,8 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "ix_containers_scheduling_due",
             "scheduling_reconcile_at",
             "id",
-            postgresql_where=text("scheduling_request IS NOT NULL AND status = 'pending'"),
-            sqlite_where=text("scheduling_request IS NOT NULL AND status = 'pending'"),
+            postgresql_where=text("scheduling_requested_at IS NOT NULL AND status = 'pending'"),
+            sqlite_where=text("scheduling_requested_at IS NOT NULL AND status = 'pending'"),
         ),
         # Concurrency is counted on the path that starts every container, so the
         # cost of asking has to be bounded by the answer rather than by how much
@@ -254,6 +253,18 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "'MEMORY_EVICTED', 'UNKNOWN')",
             name="ck_containers_termination_reason",
         ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'exited', 'failed', 'stopped')",
+            name="ck_containers_status",
+        ),
+        CheckConstraint("gpu_count >= 0", name="ck_containers_gpu_count"),
+        CheckConstraint("timeout_seconds >= -1", name="ck_containers_timeout"),
+        CheckConstraint(
+            "scheduling_cpu_millicores >= 0 AND scheduling_memory_mib >= 0 "
+            "AND scheduling_gpu_count >= 0 AND scheduling_workspace_gpu_quota >= 0 "
+            "AND scheduling_workspace_cpu_quota_millicores >= 0 AND scheduling_retry_count >= 0",
+            name="ck_containers_scheduling_quantities",
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -310,10 +321,52 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
     )
     gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    command: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    runtime_machine_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    runtime_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    pid: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
+    startup_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cwd: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    env: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False, default=dict)
+    ports: Mapped[dict[str, int]] = mapped_column(json_type, nullable=False, default=dict)
+    network_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    network_allow_list: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    timeout_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_stub_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_deployment_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_required_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    scheduling_gpu_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_pool_selector: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_architecture: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_provider_runtime: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_runtime_class: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_docker_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scheduling_preemptible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scheduling_workspace_gpu_quota: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    scheduling_workspace_cpu_quota_millicores: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    scheduling_retry_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    scheduling_payload: Mapped[dict[str, JsonValue]] = mapped_column(
+        json_type, nullable=False, default=dict, deferred=True, deferred_raiseload=True
+    )
+    scheduling_backfill: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scheduling_region: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    scheduling_availability_zone: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
 
 Index(
     "ix_containers_pending_storage_worker",
-    ContainerTable.payload.op("->>")("runtime_worker_id"),
+    ContainerTable.runtime_worker_id,
     ContainerTable.id,
     postgresql_where=ContainerTable.storage_released_at.is_(None),
     sqlite_where=ContainerTable.storage_released_at.is_(None),
@@ -332,15 +385,15 @@ BEGIN
         RAISE EXCEPTION 'container status cannot be reopened'
             USING ERRCODE = '23514';
     END IF;
-    IF COALESCE(OLD.payload->>'runtime_worker_id', '') <> '' AND (
-        COALESCE(NEW.payload->>'runtime_worker_id', '')
-            <> COALESCE(OLD.payload->>'runtime_worker_id', '')
-        OR COALESCE(NEW.payload->>'runtime_machine_id', '')
-            <> COALESCE(OLD.payload->>'runtime_machine_id', '')
+    IF OLD.runtime_worker_id <> '' AND (
+        NEW.runtime_worker_id
+            <> OLD.runtime_worker_id
+        OR NEW.runtime_machine_id
+            <> OLD.runtime_machine_id
     ) AND NOT (
         OLD.status = 'pending' AND NEW.status = 'pending'
-        AND COALESCE(NEW.payload->>'runtime_worker_id', '') = ''
-        AND COALESCE(NEW.payload->>'runtime_machine_id', '') = ''
+        AND NEW.runtime_worker_id = ''
+        AND NEW.runtime_machine_id = ''
         AND OLD.scheduling_assignment_token IS NOT NULL
         AND NEW.scheduling_assignment_token IS NULL
     ) THEN

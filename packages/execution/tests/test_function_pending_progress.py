@@ -52,12 +52,7 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
         invocation=FunctionJsonInvocation(),
     )
     with services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            container,
-            workspace_id=stub.workspace_id,
-            name=container.name,
-            status=container.status.value,
-        )
+        ContainerRepository(session).upsert(container)
         TaskRepository(session).mark_claimable(task.id, at=now)
         platform = WorkspaceRepository(session).create(name="capacity-owner")
         unit = ComputeUnitRepository(session).upsert(

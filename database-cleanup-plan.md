@@ -397,5 +397,20 @@ guardrails remain diagnostic data. Scheduling target writes use PostgreSQL only.
   source returns zero rows instead of fetching all 202. Machine listing keeps one
   query and two rows, bytes 1,040 to 486; idle returns no rows.
 
-Containers still require their remaining refactor. These scoped results are not
-release acceptance.
+Containers and durable scheduling requests use explicit lifecycle, assignment,
+resource and retry columns. Prepared worker messages, environment maps and port
+maps remain documents. Capacity scans project only scheduling fields and exclude
+the prepared message; normal container reads also exclude that message. Assignment
+ownership and log attribution triggers read the canonical columns. All consumers
+use the typed container repository. Generic payload repositories and mixins are
+deleted, leaving 78 application tables and no whole-record payload stores.
+
+- Scheduler recovery and preemption pass. Execution and worker API checks pass
+  45 cases; schema, ownership, rollout, retention, billing and pod routes pass 58.
+- Database, execution and scheduler source type checks pass. An obsolete autoscaler
+  integration fixture found by CI now uses the current contract and passes.
+- With 200 terminal and two pending containers, capacity scanning keeps one query
+  and two rows; serialized bytes drop from 10,318 to 528. Listing all 202 containers
+  keeps one query and 202 rows, bytes 1,253,796 to 111,394. Idle scans return no rows.
+
+Remaining JSON review, integrated release acceptance and both resets are pending.

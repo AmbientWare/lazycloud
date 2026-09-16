@@ -1003,13 +1003,7 @@ def _create_container(
         ports={"http": 8080},
     )
     with services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            container,
-            key=container.id,
-            workspace_id=stub.workspace_id,
-            name=container.name,
-            status=container.status.value,
-        )
+        ContainerRepository(session).upsert(container)
     return container
 
 

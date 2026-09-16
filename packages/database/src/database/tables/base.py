@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import JsonValue
-from sqlalchemy import DDL, DateTime, ForeignKey, String, Uuid, event, func, text
+from sqlalchemy import DDL, DateTime, Uuid, event, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -54,10 +53,6 @@ class TimestampMixin:
     )
 
 
-class PayloadMixin:
-    payload: Mapped[dict[str, JsonValue]] = mapped_column(json_type, nullable=False)
-
-
 class IdTable(TimestampMixin):
     __abstract__ = True
 
@@ -65,24 +60,4 @@ class IdTable(TimestampMixin):
         uuid_type,
         primary_key=True,
         server_default=text("gen_random_uuid()"),
-    )
-
-
-class IdPayloadTable(IdTable, PayloadMixin):
-    __abstract__ = True
-
-
-class NamedWorkspacePayloadTable(TimestampMixin, PayloadMixin):
-    __abstract__ = True
-
-    id: Mapped[str] = mapped_column(
-        uuid_type,
-        primary_key=True,
-        server_default=text("gen_random_uuid()"),
-    )
-    name: Mapped[str] = mapped_column(String(240), nullable=False)
-    workspace_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
     )

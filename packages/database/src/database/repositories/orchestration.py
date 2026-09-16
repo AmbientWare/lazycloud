@@ -4,9 +4,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
-from typing import Any
 
 from database.mappers.autoscaling import autoscaler_state_from_row
+from database.mappers.containers import container_from_row, write_container
 from database.mappers.fleet import (
     agent_from_row,
     agent_lease_from_row,
@@ -19,10 +19,6 @@ from database.mappers.fleet import (
 )
 from database.records.autoscaling import AutoscalingTargetClaim
 from database.repositories.cleanup import CleanupRepository
-from database.repositories.common import (
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
-)
 from database.repositories.identity import WorkspaceRepository
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.identity import WorkspaceMemberTable
@@ -52,7 +48,6 @@ from shared.timestamps import utc_now
 from sqlalchemy import Select, and_, case, delete, func, or_, select, text, union_all
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
 
 
@@ -63,7 +58,7 @@ def container_storage_release_pending() -> ColumnElement[bool]:
             ContainerTable.storage_released_at.is_(None),
             or_(
                 ContainerTable.worker_id.is_not(None),
-                ContainerTable.payload["runtime_worker_id"].as_string() != "",
+                ContainerTable.runtime_worker_id != "",
             ),
         ),
     )
@@ -482,7 +477,7 @@ class ContainerRepository:
     session: Session
 
     def list_pending_storage_cleanup(self, worker_id: str) -> list[str]:
-        runtime_worker_id = ContainerTable.payload.op("->>")("runtime_worker_id")
+        runtime_worker_id = ContainerTable.runtime_worker_id
         assigned_worker = runtime_worker_id == worker_id
         physical_worker_id = try_uuid(worker_id)
         if physical_worker_id is not None:
@@ -510,7 +505,7 @@ class ContainerRepository:
         )
         if row is None:
             return
-        assigned_worker = ContainerRecord.model_validate(row.payload).runtime_worker_id
+        assigned_worker = container_from_row(row).runtime_worker_id
         if assigned_worker and assigned_worker != worker_id:
             raise ConflictError("container storage release belongs to another worker")
         if row.status in {status.value for status in LIVE_CONTAINER_STATUSES}:
@@ -522,7 +517,7 @@ class ContainerRepository:
         row = self.session.get(ContainerTable, container_id)
         if row is None or row.storage_released_at is None:
             return False
-        record = ContainerRecord.model_validate(row.payload)
+        record = container_from_row(row)
         return (record.runtime_worker_id or record.worker_id or "") == worker_id
 
     def lock_reservation(self, container_id: str) -> None:
@@ -531,29 +526,49 @@ class ContainerRepository:
             {"lock_key": f"container-reservation:{container_id}"},
         )
 
-    @property
-    def records(self) -> WorkspaceTableRepository[ContainerRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ContainerTable, ContainerRecord),
-        )
+    def create(self, container: ContainerRecord) -> ContainerRecord:
+        container = ContainerRecord.model_validate(dict(container))
+        WorkspaceRepository(self.session).lock_active_owner(container.workspace_id)
+        self._assert_admission(container)
+        row = ContainerTable(id=container.id, created_at=container.created_at)
+        write_container(row, container)
+        self.session.add(row)
+        self.session.flush()
+        return container_from_row(row)
 
     def upsert(self, container: ContainerRecord) -> ContainerRecord:
+        container = ContainerRecord.model_validate(dict(container))
+        WorkspaceRepository(self.session).lock_active_owner(container.workspace_id)
+        row = self.session.get(ContainerTable, container.id)
+        if row is None:
+            self._assert_admission(container)
+            row = ContainerTable(id=container.id, created_at=container.created_at)
+            self.session.add(row)
+        elif row.workspace_id != container.workspace_id:
+            raise ConflictError("container workspace cannot change")
+        write_container(row, container)
+        row.updated_at = utc_now()
+        self.session.flush()
+        return container_from_row(row)
+
+    def _assert_admission(self, container: ContainerRecord) -> None:
         cleanup = CleanupRepository(self.session)
         if container.stub_id is not None:
             cleanup.assert_stub_available(container.stub_id)
         if container.image:
             cleanup.assert_references_available(
-                workspace_id=container.workspace_id,
-                object_ids=set(),
-                image_ids={container.image},
+                workspace_id=container.workspace_id, object_ids=set(), image_ids={container.image}
             )
-        return self.records.upsert(
-            container,
-            workspace_id=container.workspace_id,
-            name=container.name,
-            status=container.status.value,
+
+    def delete(self, container_id: str, *, workspace_id: str) -> bool:
+        if try_uuid(container_id) is None:
+            return False
+        deleted = self.session.scalar(
+            delete(ContainerTable)
+            .where(ContainerTable.id == container_id, ContainerTable.workspace_id == workspace_id)
+            .returning(ContainerTable.id)
         )
+        return deleted is not None
 
     def stop_for_workspace_deletion(
         self,
@@ -567,7 +582,7 @@ class ContainerRepository:
             raise ConflictError(
                 f"workspace cleanup requires deleting state: {container.workspace_id}"
             )
-        current = self.records.get(container.id, workspace_id=container.workspace_id)
+        current = self.get(container.id, workspace_id=container.workspace_id)
         if current is None:
             raise ConflictError(f"container disappeared during workspace deletion: {container.id}")
         stopped = current.model_copy(
@@ -579,19 +594,27 @@ class ContainerRepository:
         row = self.session.get(ContainerTable, current.id)
         if row is None or str(row.workspace_id) != current.workspace_id:
             raise ConflictError(f"container disappeared during workspace deletion: {current.id}")
-        row.payload = stopped.model_dump(mode="json")
         row.status = ContainerStatus.Stopped.value
         row.finished_at = stopped.finished_at
-        flag_modified(row, "payload")
         self.session.flush()
         return stopped
 
     def get(self, container_id: str, *, workspace_id: str) -> ContainerRecord | None:
-        return self.records.get(container_id, workspace_id=workspace_id)
+        if try_uuid(container_id) is None:
+            return None
+        row = self.session.scalar(
+            select(ContainerTable).where(
+                ContainerTable.id == container_id, ContainerTable.workspace_id == workspace_id
+            )
+        )
+        return container_from_row(row) if row is not None else None
 
     def get_across_workspaces(self, container_id: str) -> ContainerRecord | None:
         """System lookup for scheduler/worker/reconciler container control."""
-        return self.records.get_across_workspaces(container_id)
+        if try_uuid(container_id) is None:
+            return None
+        row = self.session.get(ContainerTable, container_id)
+        return container_from_row(row) if row is not None else None
 
     def lock(self, container_id: str, *, workspace_id: str) -> ContainerRecord | None:
         row = self.session.scalar(
@@ -599,25 +622,25 @@ class ContainerRepository:
             .where(ContainerTable.id == container_id, ContainerTable.workspace_id == workspace_id)
             .with_for_update()
         )
-        return ContainerRecord.model_validate(row.payload) if row is not None else None
+        return container_from_row(row) if row is not None else None
 
     def lock_across_workspaces(self, container_id: str) -> ContainerRecord | None:
         row = self.session.scalar(
             select(ContainerTable).where(ContainerTable.id == container_id).with_for_update()
         )
-        return ContainerRecord.model_validate(row.payload) if row is not None else None
+        return container_from_row(row) if row is not None else None
 
     def list_live_runtime_assignments(self, worker_id: str) -> list[ContainerRecord]:
         rows = self.session.scalars(
             select(ContainerTable)
             .where(
-                ContainerTable.payload["runtime_worker_id"].as_string() == worker_id,
+                ContainerTable.runtime_worker_id == worker_id,
                 ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
             )
             .order_by(ContainerTable.id)
             .with_for_update()
         )
-        return [ContainerRecord.model_validate(row.payload) for row in rows]
+        return [container_from_row(row) for row in rows]
 
     def list(
         self,
@@ -701,22 +724,18 @@ class ContainerRepository:
     def live_gpu_containers_for_owner(self, *, owner_user_id: str) -> list[ContainerRecord]:
         """Every container holding a card for this account, with what it asked for.
 
-        Whole records, because the question asked of them is which models they
-        named and that lives in the payload. Few rows: bounded by the plan's GPU
+        The requested GPU models are needed to assess the plan change.
+        Few rows: bounded by the plan's GPU
         pool, and read when a plan change has to know what is still running.
         """
 
         statement = self._live_for_owner(select(ContainerTable), owner_user_id=owner_user_id).where(
             ContainerTable.gpu_count > 0
         )
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     @staticmethod
-    def _live_for_owner[TStatement: Select[Any]](
-        statement: TStatement, *, owner_user_id: str
-    ) -> TStatement:
+    def _live_for_owner[T](statement: Select[tuple[T]], *, owner_user_id: str) -> Select[tuple[T]]:
         return statement.join(
             WorkspaceMemberTable,
             WorkspaceMemberTable.workspace_id == ContainerTable.workspace_id,
@@ -795,7 +814,7 @@ class ContainerRepository:
                 select(func.count(ContainerTable.id)).where(
                     or_(
                         ContainerTable.machine_id == machine_id,
-                        ContainerTable.payload["runtime_machine_id"].as_string() == machine_id,
+                        ContainerTable.runtime_machine_id == machine_id,
                     ),
                     ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
                 )
@@ -854,15 +873,13 @@ class ContainerRepository:
             candidate.created_at.desc(),
             candidate.id.desc(),
         )
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def live_container_ids_for_owner(self, *, owner_user_id: str, limit: int) -> list[str]:
         """Which containers this account is holding capacity for, oldest first.
 
         Ids rather than records: the caller stops them, and building a full
-        `ContainerRecord` for each would validate a payload nothing reads.
+        `ContainerRecord` for each would load fields nothing reads.
 
         Oldest first so a bounded pass makes progress in the same order every
         time. An account over the limit is stopped across as many passes as it
@@ -892,7 +909,7 @@ class ContainerRepository:
         workspace_id: str,
     ) -> list[ContainerShutdownTarget]:
         containers = [
-            ContainerRecord.model_validate(row.payload)
+            container_from_row(row)
             for row in self.session.scalars(
                 select(ContainerTable).where(
                     ContainerTable.workspace_id == workspace_id, container_storage_release_pending()
@@ -925,9 +942,7 @@ class ContainerRepository:
         if stub_ids:
             statement = statement.where(ContainerTable.stub_id.in_(stub_ids))
         statement = statement.order_by(ContainerTable.created_at.desc(), ContainerTable.id.desc())
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def unsettled_preemptions_across_workspaces(self, *, limit: int) -> list[ContainerRecord]:
         """System recovery input: preempted containers whose retry intent never settled.
@@ -944,9 +959,7 @@ class ContainerRepository:
             .order_by(ContainerTable.finished_at.asc(), ContainerTable.id.asc())
             .limit(limit)
         )
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def mark_preemption_settled(
         self,
@@ -958,13 +971,11 @@ class ContainerRepository:
         row = self.session.get(ContainerTable, container_id)
         if row is None:
             return None
-        record = ContainerRecord.model_validate(row.payload)
+        record = container_from_row(row)
         if record.preemption_settled_at is not None:
             return record
         settled = record.model_copy(update={"preemption_settled_at": now})
-        row.payload = settled.model_dump(mode="json")
         row.preemption_settled_at = now
-        flag_modified(row, "payload")
         self.session.flush()
         return settled
 
@@ -980,9 +991,7 @@ class ContainerRepository:
             ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
         )
         statement = statement.order_by(ContainerTable.expires_at.asc(), ContainerTable.id.asc())
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def get_for_stub(
         self,
@@ -998,7 +1007,7 @@ class ContainerRepository:
                 ContainerTable.stub_id == stub_id,
             )
         ).first()
-        return ContainerRecord.model_validate(row.payload) if row is not None else None
+        return container_from_row(row) if row is not None else None
 
     def latest_for_stubs(
         self,
@@ -1035,9 +1044,7 @@ class ContainerRepository:
             .where(ranked.c.position == 1)
         )
         return {
-            str(stub_id): ContainerRecord.model_validate(row.payload)
-            for row, stub_id in rows
-            if stub_id is not None
+            str(stub_id): container_from_row(row) for row, stub_id in rows if stub_id is not None
         }
 
     def page(
@@ -1088,7 +1095,7 @@ class ContainerRepository:
             )
             next_cursor = ContainerPageCursor(created_at=created_at, id=str(last.id))
         return ContainerPage(
-            data=[ContainerRecord.model_validate(row.payload) for row in page_rows],
+            data=[container_from_row(row) for row in page_rows],
             next=next_cursor,
         )
 

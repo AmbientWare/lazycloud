@@ -45,12 +45,7 @@ def test_rollout_admission_preserves_claimed_work_and_bounds_replacement_capacit
                 stub_id=stub.id,
                 status=ContainerStatus.Running,
             )
-            ContainerRepository(session).records.upsert(
-                old,
-                workspace_id=workspace.id,
-                name=old.name,
-                status=old.status.value,
-            )
+            ContainerRepository(session).upsert(old)
             task = TaskRepository(session).upsert(
                 Task(
                     id=str(uuid4()),
@@ -71,12 +66,7 @@ def test_rollout_admission_preserves_claimed_work_and_bounds_replacement_capacit
             assert rollouts.ready_container_ids([old.id]) == {old.id}
         with database.session() as session:
             replacement = old.model_copy(update={"id": str(uuid4()), "name": "replacement"})
-            ContainerRepository(session).records.upsert(
-                replacement,
-                workspace_id=workspace.id,
-                name=replacement.name,
-                status=replacement.status.value,
-            )
+            ContainerRepository(session).upsert(replacement)
             assert ContainerRepository(session).count_live_for_stub(stub.id) == 1
             rollouts = ContainerRolloutRepository(session)
             assert rollouts.close_admission(old.id, now=now)

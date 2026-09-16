@@ -402,13 +402,7 @@ class PodControlService:
             container.exit_code = 1
             container.finished_at = utc_now()
             with self.services.context.database.session() as session:
-                ContainerRepository(session).records.upsert(
-                    container,
-                    key=container.id,
-                    workspace_id=container.workspace_id,
-                    name=container.name,
-                    status=container.status.value,
-                )
+                ContainerRepository(session).upsert(container)
             self.services.containers.publish_lifecycle_change(
                 container,
                 WorkspaceChangeType.Updated,
@@ -1118,13 +1112,7 @@ class PodControlService:
                 seconds=container.timeout_seconds
             )
         with self.services.context.database.session() as session:
-            ContainerRepository(session).records.upsert(
-                container,
-                key=container.id,
-                workspace_id=container.workspace_id,
-                name=container.name,
-                status=container.status.value,
-            )
+            ContainerRepository(session).upsert(container)
         self.services.containers.publish_lifecycle_change(
             container,
             WorkspaceChangeType.Updated,

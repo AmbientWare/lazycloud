@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.execution import TaskRepository
@@ -35,19 +37,19 @@ def _running_task(
         retry_policy=RetryPolicy(max_attempts=2),
     )
     with services.context.database.session() as session:
-        container = ContainerRepository(session).records.create(
-            {
-                "name": name,
-                "image": "image-preemption-test",
-                "command": ["python", "-m", "runner"],
-                "workspace_id": stub.workspace_id,
-                "stub_id": stub.id,
-                **({} if kind is StubKind.Function else {"task_id": task.id}),
-                "status": ContainerStatus.Running.value,
-            },
-            workspace_id=stub.workspace_id,
-            name=name,
-            status=ContainerStatus.Running.value,
+        container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": name,
+                    "image": "image-preemption-test",
+                    "command": ["python", "-m", "runner"],
+                    "workspace_id": stub.workspace_id,
+                    "stub_id": stub.id,
+                    **({} if kind is StubKind.Function else {"task_id": task.id}),
+                    "status": ContainerStatus.Running.value,
+                }
+            )
         )
     # Started through the service rather than by hand, so the attempt row exists.
     # It is the durable record that this container ran this task, and settling a
@@ -127,12 +129,7 @@ def test_unsettled_preemption_recovers_once_after_a_crash(
                 "preemption_settled_at": None,
             }
         )
-        repository.records.upsert(
-            stranded,
-            workspace_id=stranded.workspace_id,
-            name=stranded.name,
-            status=stranded.status.value,
-        )
+        repository.upsert(stranded)
     service = PreemptedContainerService(
         services=isolated_services,
         stubs=isolated_services.control_plane_service,

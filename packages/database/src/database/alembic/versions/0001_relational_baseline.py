@@ -2091,7 +2091,6 @@ CREATE INDEX ix_autoscaling_targets_workspace ON autoscaling_targets (workspace_
     op.execute("""
 CREATE TABLE containers (
 	workload_ready_at TIMESTAMP WITH TIME ZONE,
-	scheduling_request JSONB,
 	scheduling_reconcile_at TIMESTAMP WITH TIME ZONE,
 	scheduling_assigned_at TIMESTAMP WITH TIME ZONE,
 	scheduling_assignment_token VARCHAR(240),
@@ -2113,12 +2112,48 @@ CREATE TABLE containers (
 	storage_released_at TIMESTAMP WITH TIME ZONE,
 	preemption_settled_at TIMESTAMP WITH TIME ZONE,
 	gpu_count INTEGER NOT NULL,
+	command TEXT[] NOT NULL,
+	runtime_machine_id TEXT NOT NULL,
+	runtime_worker_id TEXT NOT NULL,
+	pid BIGINT,
+	startup_error TEXT NOT NULL,
+	cwd TEXT,
+	env JSONB NOT NULL,
+	ports JSONB NOT NULL,
+	network_blocked BOOLEAN NOT NULL,
+	network_allow_list TEXT[] NOT NULL,
+	gpu TEXT[] NOT NULL,
+	timeout_seconds BIGINT NOT NULL,
+	scheduling_stub_id TEXT NOT NULL,
+	scheduling_deployment_id TEXT NOT NULL,
+	scheduling_cpu_millicores BIGINT NOT NULL,
+	scheduling_required_worker_id TEXT NOT NULL,
+	scheduling_memory_mib BIGINT NOT NULL,
+	scheduling_gpu TEXT[] NOT NULL,
+	scheduling_gpu_count BIGINT NOT NULL,
+	scheduling_pool_selector TEXT NOT NULL,
+	scheduling_architecture TEXT NOT NULL,
+	scheduling_provider_runtime TEXT NOT NULL,
+	scheduling_runtime_class TEXT NOT NULL,
+	scheduling_docker_enabled BOOLEAN NOT NULL,
+	scheduling_preemptible BOOLEAN NOT NULL,
+	scheduling_workspace_gpu_quota BIGINT NOT NULL,
+	scheduling_workspace_cpu_quota_millicores BIGINT NOT NULL,
+	scheduling_retry_count BIGINT NOT NULL,
+	scheduling_requested_at TIMESTAMP WITH TIME ZONE,
+	scheduling_payload JSONB NOT NULL,
+	scheduling_backfill BOOLEAN NOT NULL,
+	scheduling_region TEXT,
+	scheduling_availability_zone TEXT NOT NULL,
 	id UUID DEFAULT gen_random_uuid() NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-	payload JSONB NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT ck_containers_termination_reason CHECK (termination_reason IN ('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', 'MEMORY_EVICTED', 'UNKNOWN')),
+	CONSTRAINT ck_containers_status CHECK (status IN ('pending', 'running', 'exited', 'failed', 'stopped')),
+	CONSTRAINT ck_containers_gpu_count CHECK (gpu_count >= 0),
+	CONSTRAINT ck_containers_timeout CHECK (timeout_seconds >= -1),
+	CONSTRAINT ck_containers_scheduling_quantities CHECK (scheduling_cpu_millicores >= 0 AND scheduling_memory_mib >= 0 AND scheduling_gpu_count >= 0 AND scheduling_workspace_gpu_quota >= 0 AND scheduling_workspace_cpu_quota_millicores >= 0 AND scheduling_retry_count >= 0),
 	FOREIGN KEY(workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
 	FOREIGN KEY(stub_id) REFERENCES stubs (id) ON DELETE SET NULL,
 	FOREIGN KEY(app_id) REFERENCES apps (id) ON DELETE SET NULL,
@@ -2136,10 +2171,10 @@ CREATE INDEX ix_containers_live_expiry ON containers (expires_at, id) WHERE expi
 CREATE INDEX ix_containers_machine_status ON containers (machine_id, status)
 """)
     op.execute("""
-CREATE INDEX ix_containers_pending_storage_worker ON containers ((payload ->> 'runtime_worker_id'), id) WHERE storage_released_at IS NULL
+CREATE INDEX ix_containers_pending_storage_worker ON containers (runtime_worker_id, id) WHERE storage_released_at IS NULL
 """)
     op.execute("""
-CREATE INDEX ix_containers_scheduling_due ON containers (scheduling_reconcile_at, id) WHERE scheduling_request IS NOT NULL AND status = 'pending'
+CREATE INDEX ix_containers_scheduling_due ON containers (scheduling_reconcile_at, id) WHERE scheduling_requested_at IS NOT NULL AND status = 'pending'
 """)
     op.execute("""
 CREATE INDEX ix_containers_status_created ON containers (status, created_at, id)
@@ -2643,15 +2678,15 @@ BEGIN
         RAISE EXCEPTION 'container status cannot be reopened'
             USING ERRCODE = '23514';
     END IF;
-    IF COALESCE(OLD.payload->>'runtime_worker_id', '') <> '' AND (
-        COALESCE(NEW.payload->>'runtime_worker_id', '')
-            <> COALESCE(OLD.payload->>'runtime_worker_id', '')
-        OR COALESCE(NEW.payload->>'runtime_machine_id', '')
-            <> COALESCE(OLD.payload->>'runtime_machine_id', '')
+    IF OLD.runtime_worker_id <> '' AND (
+        NEW.runtime_worker_id
+            <> OLD.runtime_worker_id
+        OR NEW.runtime_machine_id
+            <> OLD.runtime_machine_id
     ) AND NOT (
         OLD.status = 'pending' AND NEW.status = 'pending'
-        AND COALESCE(NEW.payload->>'runtime_worker_id', '') = ''
-        AND COALESCE(NEW.payload->>'runtime_machine_id', '') = ''
+        AND NEW.runtime_worker_id = ''
+        AND NEW.runtime_machine_id = ''
         AND OLD.scheduling_assignment_token IS NOT NULL
         AND NEW.scheduling_assignment_token IS NULL
     ) THEN
@@ -2694,12 +2729,12 @@ BEGIN
         WHERE id = NEW.container_id AND workspace_id IS NOT DISTINCT FROM NEW.workspace_id;
         NEW.machine_id := COALESCE(
             NEW.machine_id,
-            NULLIF(source_container.payload->>'runtime_machine_id', ''),
+            NULLIF(source_container.runtime_machine_id, ''),
             source_container.machine_id::text
         );
         NEW.worker_id := COALESCE(
             NEW.worker_id,
-            NULLIF(source_container.payload->>'runtime_worker_id', ''),
+            NULLIF(source_container.runtime_worker_id, ''),
             source_container.worker_id::text
         );
     END IF;

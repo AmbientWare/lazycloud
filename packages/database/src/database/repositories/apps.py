@@ -17,6 +17,7 @@ from database.mappers.apps import (
     write_deployment_row,
     write_stub_row,
 )
+from database.mappers.containers import container_from_row
 from database.records.apps import (
     AppContainerShutdownIntentRecord,
     AppDeploymentIntentRecord,
@@ -49,7 +50,7 @@ from shared.app_lifecycle import (
     AppDeploymentIntentTarget,
     AppLifecycleState,
 )
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, StubKind
@@ -396,7 +397,7 @@ class AppContainerShutdownIntentRepository:
         )
         known = {str(row.container_id): row for row in rows}
         containers = [
-            ContainerRecord.model_validate(row.payload)
+            container_from_row(row)
             for row in self.session.scalars(
                 select(ContainerTable).where(
                     ContainerTable.workspace_id == workspace_id,

@@ -234,15 +234,10 @@ def test_worker_update_preempts_only_eligible_inflight_work_after_grace(
                     command=[],
                     workspace_id=workspace.id,
                     stub_id=stub.id,
-                    worker_id="worker-1",
+                    runtime_worker_id="worker-1",
                     status=ContainerStatus.Running,
                 )
-                ContainerRepository(session).records.upsert(
-                    container,
-                    workspace_id=workspace.id,
-                    name=container.name,
-                    status=container.status.value,
-                )
+                ContainerRepository(session).upsert(container)
                 containers.set_container_state(
                     _container(container.id, SchedulerContainerStatus.Running).model_copy(
                         update={
@@ -321,15 +316,10 @@ def test_interruption_drains_workload_admission_until_provider_deadline(
                     command=[],
                     workspace_id=workspace.id,
                     stub_id=stub.id,
-                    worker_id="worker-1",
+                    runtime_worker_id="worker-1",
                     status=ContainerStatus.Running,
                 )
-                ContainerRepository(session).records.upsert(
-                    container,
-                    workspace_id=workspace.id,
-                    name=container.name,
-                    status=container.status.value,
-                )
+                ContainerRepository(session).upsert(container)
                 workloads.append(container)
                 containers.set_container_state(
                     _container(container.id, SchedulerContainerStatus.Running).model_copy(
