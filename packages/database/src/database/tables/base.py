@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from sqlalchemy import DDL, DateTime, Uuid, event, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import JSON
 
 
 def utc_now() -> datetime:
@@ -16,7 +15,7 @@ class DatabaseBase(DeclarativeBase):
     pass
 
 
-json_type = JSON().with_variant(JSONB(), "postgresql")
+json_type = JSONB()
 uuid_type = Uuid(as_uuid=False)
 
 

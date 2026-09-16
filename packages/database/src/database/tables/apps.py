@@ -34,7 +34,6 @@ class AppTable(IdTable, DatabaseBase):
             "name",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
         Index("ix_apps_workspace_updated", "workspace_id", "updated_at", "id"),
         Index("ix_apps_name", "name"),
@@ -358,7 +357,6 @@ class DeploymentTable(IdTable, DatabaseBase):
             "version",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
         # Same reasoning for a claimed hostname. Nulls do not collide, so resources
         # that claimed nothing are not treated as claiming the same thing.
@@ -368,7 +366,6 @@ class DeploymentTable(IdTable, DatabaseBase):
             "version",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
     )
 
@@ -407,7 +404,6 @@ class CronJobTable(IdTable, DatabaseBase):
             "next_run_at",
             "id",
             postgresql_where=text("enabled IS TRUE"),
-            sqlite_where=text("enabled = 1"),
         ),
     )
 

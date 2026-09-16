@@ -172,9 +172,7 @@ def test_log_retention_deletes_only_expired_rows_under_each_owners_plan(
         DatabaseSettings(url=url, application_name=DatabaseApplicationName.Test)
     )
     now = utc_now()
-    service = LogRetentionService(
-        ServiceContext.create(database, root=tmp_path, create_schema=False)
-    )
+    service = LogRetentionService(ServiceContext.create(database, root=tmp_path))
     try:
         workspaces: dict[BillingPlanId, str] = {}
         with database.session() as session:

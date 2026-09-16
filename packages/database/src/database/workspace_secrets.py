@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from cryptography.exceptions import InvalidTag
@@ -34,11 +34,11 @@ class WorkspaceSecretMaterial(Protocol):
 @dataclass(frozen=True, slots=True)
 class WorkspaceSecretCipher:
     workspace_id: str
-    signing_key: str
+    key_material: str = field(repr=False)
 
     @classmethod
     def from_workspace(cls, workspace: WorkspaceSecretMaterial) -> WorkspaceSecretCipher:
-        return cls(workspace_id=workspace.id, signing_key=workspace.signing_key)
+        return cls(workspace_id=workspace.id, key_material=workspace.signing_key)
 
     def encrypt(self, name: str, plaintext: str) -> str:
         nonce = secrets.token_bytes(_NONCE_LENGTH)
@@ -81,15 +81,15 @@ class WorkspaceSecretCipher:
             raise SecretDecryptionError(msg) from exc
 
     def _key(self) -> bytes:
-        if not self.workspace_id or not self.signing_key:
-            msg = "workspace secret encryption requires a workspace id and signing key"
+        if not self.workspace_id or not self.key_material:
+            msg = "workspace secret encryption requires a workspace id and key material"
             raise SecretEncryptionError(msg)
         return HKDF(
             algorithm=hashes.SHA256(),
             length=_KEY_LENGTH,
             salt=self.workspace_id.encode("utf-8"),
             info=_HKDF_INFO,
-        ).derive(self.signing_key.encode("utf-8"))
+        ).derive(self.key_material.encode("utf-8"))
 
 
 def is_encrypted_secret_value(value: str) -> bool:

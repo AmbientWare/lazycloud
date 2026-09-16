@@ -417,7 +417,6 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
                     name=f"container-{container_id}",
                     image="python:3.12-slim",
                     status="running",
-                    payload={},
                 )
             )
         session.flush()
@@ -510,7 +509,6 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
                 name="container-finished",
                 image="python:3.12-slim",
                 status="running",
-                payload={},
             )
         )
         session.flush()
@@ -584,7 +582,6 @@ def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
                     name=f"container-{container_id}",
                     image="python:3.12-slim",
                     status="running",
-                    payload={},
                 )
             )
         session.flush()

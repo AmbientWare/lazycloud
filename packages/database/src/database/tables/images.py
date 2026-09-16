@@ -180,7 +180,6 @@ class ImageBuildTable(IdTable, DatabaseBase):
             "fingerprint",
             unique=True,
             postgresql_where=text("status IN ('pending', 'running')"),
-            sqlite_where=text("status IN ('pending', 'running')"),
         ),
     )
 

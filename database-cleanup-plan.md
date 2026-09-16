@@ -414,3 +414,20 @@ deleted, leaving 78 application tables and no whole-record payload stores.
   keeps one query and 202 rows, bytes 1,253,796 to 111,394. Idle scans return no rows.
 
 Remaining JSON review, integrated release acceptance and both resets are pending.
+
+External workspace storage credentials are encrypted with the existing workspace
+cipher, now owned by the database package. Their key lives until storage cleanup
+finishes, independently of signing-key revocation. Removing the storage configuration
+removes its key and ciphertexts. PostgreSQL enforces complete credential pairs.
+The package now declares its existing foundation dependency explicitly.
+
+PostgreSQL is the only persistence path. SQLite insert branches, partial-index
+options, UUID emulation and process-local deletion locking are removed. Service
+composition no longer creates schemas through metadata. Token scopes use a text
+array. Fresh bootstrap remains the explicit Alembic baseline.
+
+- Storage credential encryption and cleanup lifetime, existing secret behavior,
+  provider launch authorization, workspace deletion, schema, cache cleanup, pod URL
+  concurrency and rate publication pass 45 focused checks.
+- The wider database run found three remaining direct container fixtures using
+  `payload`; those now use columns. Its deletion concurrency cases pass.

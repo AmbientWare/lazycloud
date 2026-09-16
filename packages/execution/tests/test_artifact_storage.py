@@ -45,7 +45,7 @@ def test_plan_artifacts_expire_and_cleanup_preserves_later_uploads(
     complimentary: bool,
     days: int,
 ) -> None:
-    context = ServiceContext.create(workspace_database, root=tmp_path, create_schema=False)
+    context = ServiceContext.create(workspace_database, root=tmp_path)
     objects = ObjectStorage(context, object_client=FakeObjectClient(), default_bucket="objects")
     artifacts = ArtifactStorageService(context, object_storage=objects)
     stored_at = utc_now()
@@ -108,7 +108,7 @@ def test_short_lived_artifact_deletion_settles_storage_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = ServiceContext.create(workspace_database, root=tmp_path, create_schema=False)
+    context = ServiceContext.create(workspace_database, root=tmp_path)
     artifacts = ArtifactStorageService(
         context,
         object_storage=ObjectStorage(

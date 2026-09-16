@@ -184,14 +184,12 @@ class ContainerTable(IdTable, DatabaseBase):
             "capacity_retry_at",
             "id",
             postgresql_where=text("capacity_retry_at IS NOT NULL AND status = 'pending'"),
-            sqlite_where=text("capacity_retry_at IS NOT NULL AND status = 'pending'"),
         ),
         Index(
             "ix_containers_scheduling_due",
             "scheduling_reconcile_at",
             "id",
             postgresql_where=text("scheduling_requested_at IS NOT NULL AND status = 'pending'"),
-            sqlite_where=text("scheduling_requested_at IS NOT NULL AND status = 'pending'"),
         ),
         # Concurrency is counted on the path that starts every container, so the
         # cost of asking has to be bounded by the answer rather than by how much
@@ -202,7 +200,6 @@ class ContainerTable(IdTable, DatabaseBase):
             "ix_containers_workspace_live",
             "workspace_id",
             postgresql_where=text("status IN ('pending', 'running')"),
-            sqlite_where=text("status IN ('pending', 'running')"),
         ),
         Index("ix_containers_status_created", "status", "created_at", "id"),
         Index("ix_containers_stub", "stub_id"),
@@ -212,7 +209,6 @@ class ContainerTable(IdTable, DatabaseBase):
             "created_at",
             "id",
             postgresql_where=text("status IN ('pending', 'running')"),
-            sqlite_where=text("status IN ('pending', 'running')"),
         ),
         Index(
             "ix_containers_stub_failed_created",
@@ -220,7 +216,6 @@ class ContainerTable(IdTable, DatabaseBase):
             "created_at",
             "id",
             postgresql_where=text("status = 'failed'"),
-            sqlite_where=text("status = 'failed'"),
         ),
         Index(
             "ix_containers_stub_failed_finished",
@@ -228,7 +223,6 @@ class ContainerTable(IdTable, DatabaseBase):
             "finished_at",
             "id",
             postgresql_where=text("status = 'failed' AND finished_at IS NOT NULL"),
-            sqlite_where=text("status = 'failed' AND finished_at IS NOT NULL"),
         ),
         Index("ix_containers_worker_status", "worker_id", "status"),
         Index("ix_containers_machine_status", "machine_id", "status"),
@@ -237,7 +231,6 @@ class ContainerTable(IdTable, DatabaseBase):
             "expires_at",
             "id",
             postgresql_where=text("expires_at IS NOT NULL AND status IN ('pending', 'running')"),
-            sqlite_where=text("expires_at IS NOT NULL AND status IN ('pending', 'running')"),
         ),
         Index(
             "ix_containers_unsettled_preemption",
@@ -245,7 +238,6 @@ class ContainerTable(IdTable, DatabaseBase):
             postgresql_where=text(
                 "termination_reason = 'PREEMPTED' AND preemption_settled_at IS NULL"
             ),
-            sqlite_where=text("termination_reason = 'PREEMPTED' AND preemption_settled_at IS NULL"),
         ),
         CheckConstraint(
             "termination_reason IN "
@@ -369,7 +361,6 @@ Index(
     ContainerTable.runtime_worker_id,
     ContainerTable.id,
     postgresql_where=ContainerTable.storage_released_at.is_(None),
-    sqlite_where=ContainerTable.storage_released_at.is_(None),
 )
 
 

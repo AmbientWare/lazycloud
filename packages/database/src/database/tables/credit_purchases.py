@@ -44,7 +44,6 @@ class CreditPurchaseTable(TimestampMixin, DatabaseBase):
             postgresql_where=text(
                 "kind = 'automatic' AND status IN ('pending', 'action_required')"
             ),
-            sqlite_where=text("kind = 'automatic' AND status IN ('pending', 'action_required')"),
         ),
     )
 

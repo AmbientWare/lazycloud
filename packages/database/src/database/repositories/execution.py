@@ -68,7 +68,6 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 
@@ -1565,13 +1564,7 @@ class PodUrlRepository:
             "created_at": now,
             "updated_at": now,
         }
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            insert = postgresql_insert(PodUrlTable).values(**values)
-        elif dialect == "sqlite":
-            insert = sqlite_insert(PodUrlTable).values(**values)
-        else:
-            raise RuntimeError("pod URLs require PostgreSQL or SQLite")
+        insert = postgresql_insert(PodUrlTable).values(**values)
         statement = (
             insert.on_conflict_do_update(
                 index_elements=[PodUrlTable.container_id, PodUrlTable.port],

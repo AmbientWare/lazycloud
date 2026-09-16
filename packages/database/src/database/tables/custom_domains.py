@@ -35,7 +35,6 @@ class CustomDomainTable(IdTable, DatabaseBase):
             "hostname",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
-            sqlite_where=text("deleted_at IS NULL"),
         ),
         Index("ix_custom_domains_user", "user_id", "hostname"),
         Index("ix_custom_domains_reconcile_due", "phase", "last_checked_at"),

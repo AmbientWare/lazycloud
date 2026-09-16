@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Durable SQL persistence for the compute platform."
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=50,<51",
+    "foundation",
     "alembic>=1.17,<2",
     "anyio>=4,<5",
     "lazycloud-shared==0.1.0",

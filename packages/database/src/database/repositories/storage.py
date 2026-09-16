@@ -45,7 +45,6 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import InstrumentedAttribute, Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -1075,69 +1074,36 @@ class CacheEntryRepository:
         CleanupRepository(self.session).lock_keys({f"cache:{key}"})
 
     def upsert(self, record: CacheEntry) -> CacheEntry:
-        if self.session.get_bind().dialect.name == "postgresql":
-            statement = (
-                postgresql_insert(CacheEntryTable)
-                .values(
-                    key=record.key,
-                    path=record.path,
-                    size=record.size,
-                    sha256=record.sha256,
-                    hits=record.hits,
-                    expires_at=record.expires_at,
-                    created_at=record.created_at,
-                    updated_at=record.updated_at,
-                )
-                .on_conflict_do_update(
-                    index_elements=[CacheEntryTable.key],
-                    set_={
-                        "path": record.path,
-                        "size": record.size,
-                        "sha256": record.sha256,
-                        "hits": record.hits,
-                        "expires_at": record.expires_at,
-                        "updated_at": case(
-                            (CacheEntryTable.updated_at < record.updated_at, record.updated_at),
-                            else_=CacheEntryTable.updated_at,
-                        ),
-                    },
-                )
-                .returning(CacheEntryTable)
-                .execution_options(populate_existing=True)
+        statement = (
+            postgresql_insert(CacheEntryTable)
+            .values(
+                key=record.key,
+                path=record.path,
+                size=record.size,
+                sha256=record.sha256,
+                hits=record.hits,
+                expires_at=record.expires_at,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
             )
-            return _cache_entry_from_row(self.session.scalars(statement).one())
-        if self.session.get_bind().dialect.name == "sqlite":
-            statement = (
-                sqlite_insert(CacheEntryTable)
-                .values(
-                    key=record.key,
-                    path=record.path,
-                    size=record.size,
-                    sha256=record.sha256,
-                    hits=record.hits,
-                    expires_at=record.expires_at,
-                    created_at=record.created_at,
-                    updated_at=record.updated_at,
-                )
-                .on_conflict_do_update(
-                    index_elements=[CacheEntryTable.key],
-                    set_={
-                        "path": record.path,
-                        "size": record.size,
-                        "sha256": record.sha256,
-                        "hits": record.hits,
-                        "expires_at": record.expires_at,
-                        "updated_at": case(
-                            (CacheEntryTable.updated_at < record.updated_at, record.updated_at),
-                            else_=CacheEntryTable.updated_at,
-                        ),
-                    },
-                )
-                .returning(CacheEntryTable)
-                .execution_options(populate_existing=True)
+            .on_conflict_do_update(
+                index_elements=[CacheEntryTable.key],
+                set_={
+                    "path": record.path,
+                    "size": record.size,
+                    "sha256": record.sha256,
+                    "hits": record.hits,
+                    "expires_at": record.expires_at,
+                    "updated_at": case(
+                        (CacheEntryTable.updated_at < record.updated_at, record.updated_at),
+                        else_=CacheEntryTable.updated_at,
+                    ),
+                },
             )
-            return _cache_entry_from_row(self.session.scalars(statement).one())
-        raise RuntimeError("cache entries require PostgreSQL or SQLite")
+            .returning(CacheEntryTable)
+            .execution_options(populate_existing=True)
+        )
+        return _cache_entry_from_row(self.session.scalars(statement).one())
 
     def get(self, key: str) -> CacheEntry | None:
         row = self.session.scalars(

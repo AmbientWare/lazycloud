@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import JsonValue
 from shared.app_identity import NAME
 from sqlalchemy import (
+    ARRAY,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -145,7 +146,6 @@ class WorkspaceMemberTable(IdTable, DatabaseBase):
             "workspace_id",
             unique=True,
             postgresql_where=text("role = 'owner'"),
-            sqlite_where=text("role = 'owner'"),
         ),
         Index("ix_workspace_members_user", "user_id"),
         CheckConstraint(
@@ -241,13 +241,19 @@ class WorkspaceTable(IdTable, DatabaseBase):
             "name",
             unique=True,
             postgresql_where=text("status <> 'deleted'"),
-            sqlite_where=text("status <> 'deleted'"),
         ),
         UniqueConstraint("external_id", name="uq_workspaces_external_id"),
         Index("ix_workspaces_external_id", "external_id"),
         CheckConstraint(
             "status IN ('active', 'disabled', 'deleting', 'deleted')",
             name="ck_workspaces_status",
+        ),
+        CheckConstraint(
+            "(storage_credential_key IS NULL AND storage_access_key_ciphertext IS NULL "
+            "AND storage_secret_key_ciphertext IS NULL) OR "
+            "(storage_credential_key IS NOT NULL AND storage_access_key_ciphertext IS NOT NULL "
+            "AND storage_secret_key_ciphertext IS NOT NULL)",
+            name="ck_workspaces_storage_credentials",
         ),
     )
 
@@ -274,8 +280,9 @@ class WorkspaceTable(IdTable, DatabaseBase):
     storage_prefix: Mapped[str] = mapped_column(Text, default="")
     storage_endpoint_url: Mapped[str | None] = mapped_column(Text)
     storage_region: Mapped[str | None] = mapped_column(String(128))
-    storage_access_key: Mapped[str | None] = mapped_column(Text)
-    storage_secret_key: Mapped[str | None] = mapped_column(Text)
+    storage_access_key_ciphertext: Mapped[str | None] = mapped_column(Text)
+    storage_secret_key_ciphertext: Mapped[str | None] = mapped_column(Text)
+    storage_credential_key: Mapped[str | None] = mapped_column(Text)
     storage_force_path_style: Mapped[bool | None] = mapped_column(Boolean)
     labels: Mapped[dict[str, str]] = mapped_column(json_type, default=dict)
     metadata_json: Mapped[dict[str, JsonValue]] = mapped_column("metadata", json_type, default=dict)
@@ -358,7 +365,7 @@ class TokenTable(IdTable, DatabaseBase):
     )
     worker_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(64), nullable=False)
-    scopes: Mapped[list[str]] = mapped_column(json_type, nullable=False, default=lambda: ["*"])
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=lambda: ["*"])
     reusable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     disabled_by_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

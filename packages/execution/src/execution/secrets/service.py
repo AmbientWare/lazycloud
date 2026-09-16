@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from database.records.identity import SecretStorageRecord
 from database.repositories.identity import SecretRepository
+from database.workspace_secrets import WorkspaceSecretCipher
 from observability.events import EventService
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.errors import NotFoundError
@@ -12,7 +13,6 @@ from shared.identity import WorkspaceRecord
 from shared.secrets import SecretRecord
 
 from execution.context import ExecutionContext
-from execution.secrets.crypto import WorkspaceSecretCipher
 
 
 @dataclass(slots=True)

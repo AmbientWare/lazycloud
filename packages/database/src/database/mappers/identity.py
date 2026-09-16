@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+
 from pydantic import JsonValue
 from shared.errors import InvalidInputError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
@@ -41,6 +43,7 @@ from database.tables.identity import (
     WorkspaceMemberTable,
     WorkspaceTable,
 )
+from database.workspace_secrets import WorkspaceSecretCipher
 
 
 def concurrency_limit_from_table(row: ConcurrencyLimitTable) -> ConcurrencyLimitRecord:
@@ -82,10 +85,16 @@ def workspace_record_from_table(row: WorkspaceTable) -> WorkspaceRecord:
         config["endpoint_url"] = row.storage_endpoint_url
     if row.storage_region is not None:
         config["region"] = row.storage_region
-    if row.storage_access_key is not None:
-        config["access_key"] = row.storage_access_key
-    if row.storage_secret_key is not None:
-        config["secret_key"] = row.storage_secret_key
+    if row.storage_credential_key is not None:
+        if row.storage_access_key_ciphertext is None or row.storage_secret_key_ciphertext is None:
+            raise ValueError("workspace storage credential pair is incomplete")
+        cipher = WorkspaceSecretCipher(row.id, row.storage_credential_key)
+        config["access_key"] = cipher.decrypt(
+            "storage-access-key", row.storage_access_key_ciphertext
+        )
+        config["secret_key"] = cipher.decrypt(
+            "storage-secret-key", row.storage_secret_key_ciphertext
+        )
     if row.storage_force_path_style is not None:
         config["force_path_style"] = row.storage_force_path_style
     return WorkspaceRecord(
@@ -130,8 +139,19 @@ def write_workspace_row(row: WorkspaceTable, workspace: WorkspaceRecord) -> None
     row.storage_prefix = storage.prefix
     row.storage_endpoint_url = storage.endpoint_url if "endpoint_url" in storage.config else None
     row.storage_region = storage.region if "region" in storage.config else None
-    row.storage_access_key = storage.access_key if "access_key" in storage.config else None
-    row.storage_secret_key = storage.secret_key if "secret_key" in storage.config else None
+    if storage.access_key or storage.secret_key:
+        if not storage.access_key or not storage.secret_key:
+            raise InvalidInputError("workspace storage requires both access key and secret key")
+        # Storage cleanup can outlive signing-key revocation during workspace deletion.
+        if row.storage_credential_key is None:
+            row.storage_credential_key = secrets.token_urlsafe(32)
+        cipher = WorkspaceSecretCipher(row.id, row.storage_credential_key)
+        row.storage_access_key_ciphertext = cipher.encrypt("storage-access-key", storage.access_key)
+        row.storage_secret_key_ciphertext = cipher.encrypt("storage-secret-key", storage.secret_key)
+    else:
+        row.storage_access_key_ciphertext = None
+        row.storage_secret_key_ciphertext = None
+        row.storage_credential_key = None
     row.storage_force_path_style = (
         storage.force_path_style if "force_path_style" in storage.config else None
     )

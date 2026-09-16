@@ -221,8 +221,9 @@ CREATE TABLE workspaces (
 	storage_prefix TEXT NOT NULL,
 	storage_endpoint_url TEXT,
 	storage_region VARCHAR(128),
-	storage_access_key TEXT,
-	storage_secret_key TEXT,
+	storage_access_key_ciphertext TEXT,
+	storage_secret_key_ciphertext TEXT,
+	storage_credential_key TEXT,
 	storage_force_path_style BOOLEAN,
 	labels JSONB NOT NULL,
 	metadata JSONB NOT NULL,
@@ -231,7 +232,8 @@ CREATE TABLE workspaces (
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_workspaces_external_id UNIQUE (external_id),
-	CONSTRAINT ck_workspaces_status CHECK (status IN ('active', 'disabled', 'deleting', 'deleted'))
+	CONSTRAINT ck_workspaces_status CHECK (status IN ('active', 'disabled', 'deleting', 'deleted')),
+	CONSTRAINT ck_workspaces_storage_credentials CHECK ((storage_credential_key IS NULL AND storage_access_key_ciphertext IS NULL AND storage_secret_key_ciphertext IS NULL) OR (storage_credential_key IS NOT NULL AND storage_access_key_ciphertext IS NOT NULL AND storage_secret_key_ciphertext IS NOT NULL))
 )
 """)
     op.execute("""
@@ -742,7 +744,7 @@ CREATE TABLE tokens (
 	workspace_id UUID,
 	worker_id VARCHAR(160) NOT NULL,
 	status VARCHAR(64) NOT NULL,
-	scopes JSONB NOT NULL,
+	scopes TEXT[] NOT NULL,
 	reusable BOOLEAN NOT NULL,
 	disabled_by_admin BOOLEAN NOT NULL,
 	last_used_at TIMESTAMP WITH TIME ZONE,

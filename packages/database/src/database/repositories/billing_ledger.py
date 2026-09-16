@@ -12,7 +12,6 @@ from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
-from database.tables.base import DatabaseBase
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
@@ -48,28 +47,12 @@ from shared.usage import (
     metering_instant,
 )
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import Insert as PostgresInsert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import Insert as SqliteInsert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 _CONTAINER_SUBJECT = "container"
 
 type SegmentValue = str | int | float | Decimal | datetime | None
-
-
-def _insert(session: Session, table: type[DatabaseBase]) -> PostgresInsert | SqliteInsert:
-    """An insert statement that can be told to ignore a conflict.
-
-    Only the dialect's own constructor carries `on_conflict_do_nothing`, and
-    every write below relies on it: a placement is decided once, a segment is
-    frozen once.
-    """
-
-    if session.get_bind().dialect.name == "postgresql":
-        return postgresql_insert(table)
-    return sqlite_insert(table)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +80,7 @@ class ContainerBillingShapeRepository:
         # A placement is decided once. A retried assignment restates the same
         # shape, and accepting a differing one would reprice a live container.
         self.session.execute(
-            _insert(self.session, ContainerBillingShapeTable)
+            postgresql_insert(ContainerBillingShapeTable)
             .values(**values)
             .on_conflict_do_nothing(index_elements=[ContainerBillingShapeTable.container_id])
         )
@@ -407,7 +390,7 @@ class BillingLedgerRepository:
             for segment in pricing.segments
         ]
         inserted = self.session.execute(
-            _insert(self.session, BillingLedgerSegmentTable)
+            postgresql_insert(BillingLedgerSegmentTable)
             .values(rows)
             .on_conflict_do_nothing(
                 index_elements=[

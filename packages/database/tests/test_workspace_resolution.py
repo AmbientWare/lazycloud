@@ -14,7 +14,7 @@ from database import DatabaseClient
 def test_service_context_workspace_lookup_never_creates_missing_rows(
     database: DatabaseClient, tmp_path: Path
 ) -> None:
-    context = ServiceContext.create(database, root=tmp_path, create_schema=False)
+    context = ServiceContext.create(database, root=tmp_path)
     for missing in ("default", "missing-workspace", str(uuid4())):
         with database.session() as session:
             assert WorkspaceRepository(session).list() == []

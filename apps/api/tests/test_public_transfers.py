@@ -28,7 +28,7 @@ def test_only_verified_public_response_bytes_reach_charges(
     workspace_database: DatabaseClient, tmp_path: Path
 ) -> None:
     database = workspace_database
-    context = ServiceContext.create(database, root=tmp_path, create_schema=False)
+    context = ServiceContext.create(database, root=tmp_path)
     now = utc_now()
     _, workspace_id = unfunded_billing_account(
         context, period_started_at=now, period_ended_at=now + timedelta(days=30)

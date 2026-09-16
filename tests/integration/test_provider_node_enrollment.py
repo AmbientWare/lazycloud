@@ -654,7 +654,6 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
             replica_services = ApiServices.create(
                 replica_database,
                 root=tmp_path / "replica",
-                create_schema=False,
                 redis_client=real_redis_actors.client(),
                 binary_redis_client=real_redis_actors.client(decode_responses=False),
                 agent_binary_settings=services.agent_binary_settings,

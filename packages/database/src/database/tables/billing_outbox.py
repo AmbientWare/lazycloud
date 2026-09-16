@@ -51,13 +51,11 @@ class BillingMeterOutboxTable(TimestampMixin, DatabaseBase):
             "next_attempt_at",
             "created_at",
             postgresql_where=text("status = 'pending'"),
-            sqlite_where=text("status = 'pending'"),
         ),
         Index(
             "ix_billing_meter_outbox_stuck",
             "claimed_at",
             postgresql_where=text("status = 'sending'"),
-            sqlite_where=text("status = 'sending'"),
         ),
         Index("ix_billing_meter_outbox_settled", "status", "updated_at"),
         Index("ix_billing_meter_outbox_usage", "usage_record_id"),

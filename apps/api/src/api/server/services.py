@@ -37,6 +37,7 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
+from database.workspace_secrets import WorkspaceSecretCipher
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.containers.preemption import PreemptedContainerService
@@ -53,7 +54,6 @@ from execution.endpoints.service import (
 )
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
-from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
 from execution.task_progress import TaskProgressService
@@ -558,7 +558,6 @@ class ApiServices(ApiServiceCore):
         volume_metering_settings: VolumeMeteringSettings | None = None,
         volume_metering: PersistentVolumeMeteringService | None = None,
         root: Path | None = None,
-        create_schema: bool = True,
         redis_client: RedisClient,
         binary_redis_client: RedisClient,
         async_io: ApiAsyncIo | None = None,
@@ -569,7 +568,7 @@ class ApiServices(ApiServiceCore):
         owned_resources: tuple[ApiOwnedResource, ...] = (),
         client_release_version: str | None = None,
     ) -> ApiServices:
-        context = ServiceContext.create(database, root=root, create_schema=create_schema)
+        context = ServiceContext.create(database, root=root)
         auth_token_cache = AuthTokenCache()
         auth = AuthService(context, token_cache=auth_token_cache)
         users = UserService(context)

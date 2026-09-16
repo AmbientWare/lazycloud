@@ -42,7 +42,6 @@ class ComputeUnitTable(IdTable, DatabaseBase):
             "worker_gpu_count",
             "desired_machines",
             postgresql_where=text("provider_ref <> '' AND desired_machines > 0"),
-            sqlite_where=text("provider_ref <> '' AND desired_machines > 0"),
         ),
         Index(
             "uq_compute_units_internal_placement",
@@ -53,7 +52,6 @@ class ComputeUnitTable(IdTable, DatabaseBase):
             "root_volume_gib",
             unique=True,
             postgresql_where=text("visibility = 'internal' AND provider_ref <> ''"),
-            sqlite_where=text("visibility = 'internal' AND provider_ref <> ''"),
         ),
         CheckConstraint(
             "min_machines >= 0 AND desired_machines >= min_machines "
@@ -301,14 +299,12 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
             "instance_id",
             unique=True,
             postgresql_where=text("pool_id IS NOT NULL AND instance_id IS NOT NULL"),
-            sqlite_where=text("pool_id IS NOT NULL AND instance_id IS NOT NULL"),
         ),
         Index(
             "uq_compute_provider_instances_machine",
             "machine_id",
             unique=True,
             postgresql_where=text("machine_id IS NOT NULL"),
-            sqlite_where=text("machine_id IS NOT NULL"),
         ),
     )
 
