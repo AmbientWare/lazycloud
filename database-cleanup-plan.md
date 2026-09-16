@@ -1,6 +1,7 @@
 # Database cleanup and reset plan
 
-Status: implementation in progress. No installation has been reset or deployed.
+Status: schema implementation and CI checks pass. Local Compose reset, bootstrap
+and live acceptance pass. Production reset is pending.
 Branch: `refactor/relational-database`, based on `a257b2e18`.
 
 ## Outcome
@@ -414,7 +415,8 @@ deleted, leaving 78 application tables and no whole-record payload stores.
   keeps one query and 202 rows, bytes 1,253,796 to 111,394. Idle scans return no rows.
 
 The retained JSON review is recorded in [database-schema.md](database-schema.md).
-Integrated release acceptance and both resets are pending.
+Reset targets and execution evidence are recorded in
+[deploy/database-reset.md](deploy/database-reset.md).
 
 External workspace storage credentials are encrypted with the existing workspace
 cipher, now owned by the database package. Their key lives until storage cleanup
@@ -443,4 +445,11 @@ database owner. Oversized metadata raises the existing typed input-error boundar
 and leaves the row unchanged. SQL errors hide bound values. Machine GPU counts
 are explicit through enrollment, persistence and the HTTP machine contract.
 The gateway and compute slice, schema and document checks pass 174 cases.
-The final document and GPU changes still require the integrated release gate.
+All four PR checks pass for `351a86226`, including all affected Python owners,
+types, repository formatting and supported Python wheel installations. All local
+images and the standalone agent artifact build successfully.
+
+A separate local suite rerun reached 1,025 passing cases before the real tunnel
+test failed on a gRPC teardown error log. Its behavior assertions passed and its
+focused rerun passed. CI's complete run passed the same test. No assertion or
+production tunnel behavior was changed to hide this intermittent failure.

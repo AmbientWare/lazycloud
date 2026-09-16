@@ -4,7 +4,8 @@ This runbook applies only to the owner's approved reset of production and local
 Compose for PR #295. It destroys application data and migration history. Future
 releases use forward Alembic migrations from `0001_relational_baseline`.
 
-Status: preparation only. Neither installation has been reset.
+Status: local Compose reset, bootstrap and live acceptance completed. Production
+has not been changed.
 
 ## Targets observed before reset
 
@@ -90,3 +91,52 @@ The following observations are preliminary and must be refreshed before acting.
 There is no data-preserving rollback for this reset. If bootstrap or acceptance
 fails after deletion, keep admission closed and repair the accepted release or
 rebuild the empty installation.
+
+## Local execution
+
+On 2026-09-16 UTC, all PR checks passed for `351a86226`. The local Stripe test
+subscription `sub_1UF6y6LpRGtVfZdqvKr2p3PT` had a zero-dollar price, one paid
+zero-dollar invoice and no pending invoice items. It was canceled; its customer
+and invoice history remain at Stripe.
+
+The stopped local installation owned exactly three Garage buckets, its application
+bucket and the two active workspace buckets. All persistent volumes selected below
+had the `lazycloud` Compose project label and no container from another project
+mounted them. The reset removed these volumes:
+
+- `lazycloud_postgres-data`
+- `lazycloud_redis-data`
+- `lazycloud_garage-data`
+- `lazycloud_workload-registry-data`
+- `lazycloud_lazycloud-files`
+- `lazycloud_lazycloud-cache`
+- `lazycloud_connection-gateway-0`
+- `lazycloud_connection-gateway-1`
+
+The old agent and its worker were stopped. The worker container and its anonymous
+volume were removed, and the inventoried agent directory
+`/tmp/lazycloud-local-main-cvuhfh6c/agent` was emptied. Certificate authority,
+ingress certificate, cache credential and administrator token volumes remain.
+
+`python -m deploy.release` rebuilt and activated every local image from
+`351a86226`, whose application code matches `3203b1592`. The image tag is
+`relational-3203b1592`. The existing private Compose environment now selects this
+tag and this checkout's freshly built agent artifact directory. Bootstrap reports
+`0001_relational_baseline` and 79 public tables, including Alembic's revision table.
+The configured administrator claim and local customer were bootstrapped, and the
+agent rejoined with new authority. All services reached their health checks.
+
+The local customer billing relationship was provisioned through
+`BillingAccountService` and real Stripe test credentials, the same owner used by
+sign-in. The new free subscription is `sub_1UG8ZOLpRGtVfZdqihunqQzO`.
+The public Function invocation scenario built an image, uploaded source, returned
+49 for `square(7)` and deleted its app. Dependencies, retries, cancellation with an
+unaffected neighboring call, reruns, opaque result serialization, Sandbox exec and
+termination, mounted Volume reads/writes and Volume transfers also pass. Each
+scenario uses its public cleanup path.
+Function log streaming and attribution pass for sequential and concurrent calls.
+Repeating the database bootstrap reports the baseline already current.
+
+Production's recorded subscription was independently read. It is a live free
+subscription with one paid zero-dollar invoice and no pending invoice items.
+It has not been canceled or changed.
