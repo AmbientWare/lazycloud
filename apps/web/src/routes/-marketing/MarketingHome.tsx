@@ -115,19 +115,14 @@ function ParitySection() {
   return (
     <section className="marketing-parity bg-background py-18 sm:py-22 lg:py-28">
       <div className={shell}>
-        <div className="grid items-center gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:gap-16">
-          <div>
-            <h2 className="text-[clamp(2.2rem,3.6vw,3.2rem)] leading-[1.08] font-[550] tracking-[-0.045em]">
-              One definition.
-              <br />
-              <span className="text-brand">Three ways to run it.</span>
+        <div className="flex flex-col items-center gap-8 sm:gap-10">
+          <div className="text-center">
+            <h2 className="text-[clamp(1.85rem,3.6vw,3.2rem)] leading-[1.12] font-[550] tracking-[-0.045em]">
+              <span className="inline-block">One definition.</span>{" "}
+              <span className="inline-block text-brand">Three ways to run it.</span>
             </h2>
-            <p className="mt-6 max-w-[390px] text-base leading-relaxed text-muted-foreground sm:text-[17px]">
-              Develop locally, test on cloud compute, and deploy. Your infrastructure stays in
-              Python.
-            </p>
           </div>
-          <div className="min-w-0">
+          <div className="w-full min-w-0 max-w-[640px]">
             <Tabs defaultValue={definitionExamples[0].key}>
               <TabsList className="flex h-8 w-full gap-0 border-0" aria-label="Python definitions">
                 {definitionExamples.map((example) => (
@@ -155,7 +150,7 @@ function ParitySection() {
           </div>
         </div>
 
-        <div className="mt-10 grid gap-5 sm:grid-cols-3 lg:mt-14 lg:gap-6">
+        <div className="mt-6 grid gap-5 sm:mt-8 sm:grid-cols-3 lg:gap-6">
           {parityModes.map((mode) => (
             <article className="run-mode-card" key={mode.key}>
               <RunModeArt mode={mode.key} />
