@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Loader2, Play } from "lucide-react";
 
 import { PanelError } from "@/components/shared/PanelError";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
@@ -331,4 +332,3 @@ function TaskInvokeOutcome({
     </section>
   );
 }
-import { ContentTransition } from "@/components/shared/ContentTransition";

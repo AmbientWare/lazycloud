@@ -174,14 +174,6 @@ export function curlSnippet(url: string, body?: JsonValue, method = "POST"): str
   ].join(" \\\n");
 }
 
-/**
- * Working Python (requests) equivalent of the playground invoke.
- *
- * The token is bound before the call rather than read inline: the inline form
- * put the longest line in the snippet at 71 columns, which is what the panel
- * had to scroll sideways to show, and a named binding is what a reader would
- * have written anyway.
- */
 export function pythonSnippet(url: string, body?: JsonValue, method = "POST"): string {
   return [
     "import os",

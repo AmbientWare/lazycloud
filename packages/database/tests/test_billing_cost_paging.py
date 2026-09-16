@@ -101,14 +101,7 @@ def test_cost_breakdown_resolves_workloads_without_looking_up_billing_categories
 def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
     service_context: ServiceContext,
 ) -> None:
-    """Every priced group is read exactly once, at a level most rows do not reach.
-
-    A container that is not a task carries no `task_id`, so grouping by task puts
-    most of a workspace's cost in groups whose deepest id is empty and whose only
-    distinguishing value is the workload above it. Two of them here cost the same
-    to the nanodollar, which is the pair a cursor keyed on anything less than the
-    whole group key drops between pages.
-    """
+    """Equal costs and empty task IDs still require the whole group key in the cursor."""
 
     now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + _WINDOW_AT
@@ -171,9 +164,6 @@ def test_cost_paging_returns_every_group_once_when_the_deepest_id_is_empty(
 def test_app_level_costs_keep_image_builds_apart_from_other_unattributed_usage(
     service_context: ServiceContext,
 ) -> None:
-    """Image builds reach no app, and still are not the same thing as the rest of
-    what reached no app: a build is work someone asked for, a volume byte-second
-    is storage sitting there. Grouped by app they come back as two rows."""
     now = max(utc_now(), *(card.effective_at for card in PUBLISHED_METERED_RATE_HISTORY))
     started_at = now + _WINDOW_AT
     ended_at = started_at + _WINDOW
