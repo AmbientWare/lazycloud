@@ -92,8 +92,8 @@ function isDashboardFoundationModule(id: string): boolean {
 }
 
 /** Public routes share the shell without making lighter pages download the
- * homepage's live proof simulations. Route modules remain natural lazy chunks;
- * the shared shell and the proof-heavy homepage each receive one stable chunk.
+ * homepage's live proof simulations. Only React components enter the homepage
+ * group, so dynamically imported rendering code retains its loading boundary.
  */
 function isMarketingSharedModule(id: string): boolean {
   const normalized = id.replaceAll("\\", "/");
@@ -108,7 +108,9 @@ function isMarketingSharedModule(id: string): boolean {
 function isMarketingProofModule(id: string): boolean {
   const normalized = id.replaceAll("\\", "/");
   return (
-    normalized.includes("/apps/web/src/routes/-marketing/") && !isMarketingSharedModule(normalized)
+    normalized.includes("/apps/web/src/routes/-marketing/") &&
+    normalized.endsWith(".tsx") &&
+    !isMarketingSharedModule(normalized)
   );
 }
 

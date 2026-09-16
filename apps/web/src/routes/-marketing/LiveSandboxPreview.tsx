@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useReducedMotion } from "./useReducedMotion";
 import { usePreviewActivity } from "./usePreviewActivity";
+import { MarketingCard } from "./MarketingPrimitives";
 
 /* Live sandbox preview: an agent's terminal session replayed on a loop --
    commands typed out character by character, with a Processes / Files /
@@ -153,14 +154,14 @@ function StateCell({
   dotClass: string;
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-[var(--product-inset)] px-2.5 py-2">
+    <MarketingCard surface="raised" className="min-w-0 px-2.5 py-2">
       <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
         <i aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
         {label}
       </div>
       <div className="mt-1 truncate text-[11px] text-foreground">{state.value}</div>
       <div className="truncate text-[10px] text-muted-foreground">{state.sub}</div>
-    </div>
+    </MarketingCard>
   );
 }
 
@@ -213,8 +214,9 @@ export function LiveSandboxPreview() {
         </div>
         <span className="text-muted-foreground">coding-agent · /workspace</span>
       </div>
-      <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-md border border-border bg-[var(--product-inset)] px-3 py-2.5 text-[11px] leading-[1.55] [overflow-wrap:anywhere]"
+      <MarketingCard
+        surface="inset"
+        className="flex min-h-0 min-w-0 flex-1 flex-col justify-end px-3 py-2.5 text-[11px] leading-[1.55] [overflow-wrap:anywhere]"
         data-marketing-terminal-surface=""
       >
         {visible.map((line) => (
@@ -225,7 +227,7 @@ export function LiveSandboxPreview() {
             <LineText clock={visibleClock} line={line} />
           </div>
         ))}
-      </div>
+      </MarketingCard>
       <div className="grid grid-cols-3 gap-2">
         <StateCell
           dotClass={processes.value.startsWith("0") ? "bg-muted-foreground" : "bg-positive"}

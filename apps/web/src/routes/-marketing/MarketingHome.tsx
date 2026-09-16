@@ -1,128 +1,23 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { CodeBlock } from "@/components/ui/code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
+import { CloudHero } from "./CloudHero";
 import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
-import {
-  FinalCta,
-  GetStartedButton,
-  MarketingCard,
-  MarketingHero,
-  SectionHeading,
-  StatusDot,
-  shell,
-} from "./MarketingPrimitives";
-import { ComputePlacementPreview, StoryPreview, type StoryVisual } from "./ProductPreviews";
-import { MarketingExampleImage } from "./MarketingExampleImage";
+import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimitives";
+import { StoryPreview, type StoryVisual } from "./ProductPreviews";
+import { ComputePlacement } from "./ComputePlacement";
+import { computeDestinations } from "./computeDestinations";
+import { useComputeScroll } from "./useComputeScroll";
 import { marketingUseCases } from "./marketingUseCases";
-import { GpuPlate, LocalPlate, ProductionPlate } from "./ParityFigures";
-
-const endpointExample = `from lazycloud import App
-from pydantic import BaseModel
-
-app = App("review_api")
-
-class Review(BaseModel):
-    summary: str
-    risks: list[str]
-
-@app.endpoint(route="/review")
-def review_patch(diff: str) -> Review:
-    added = [line[1:] for line in diff.splitlines()
-             if line.startswith("+") and not line.startswith("+++")]
-    risks = ["Review added TODOs"] if any("TODO" in line for line in added) else []
-    return Review(summary=f"{len(added)} added lines", risks=risks)`;
-
-const functionExample = `from lazycloud import App
-
-app = App("sales")
-
-@app.function(cpu=1.0, memory="256Mi")
-def summarize_sales(amounts_cents: list[int]) -> dict[str, int]:
-    return {"sales": len(amounts_cents), "total_cents": sum(amounts_cents)}`;
-
-const sandboxExample = `from lazycloud import App
-
-app = App("coding_agent")
-workspace = app.sandbox(
-    name="workspace",
-    block_network=True,
-)
-
-instance = workspace.create()
-try:
-    result = instance.run("python --version")
-    print(result.stdout)
-finally:
-    instance.terminate()`;
-
-const podExample = `from lazycloud import App, Image
-
-app = App("preview")
-preview = app.pod(
-    name="web",
-    image=Image(python_version="3.12"),
-    command=["python", "-m", "http.server", "8080"],
-    ports={"http": 8080},
-    authorized=True,
-)`;
-
-const cronExample = `from datetime import datetime, timezone
-
-from lazycloud import App
-
-app = App("maintenance")
-
-@app.function(cron="0 2 * * *", retries=2)
-def heartbeat() -> str:
-    timestamp = datetime.now(timezone.utc).isoformat()
-    print(f"Scheduled run at {timestamp}", flush=True)
-    return timestamp`;
-
-const heroStories = [
-  {
-    key: "apps",
-    label: "APIs",
-    code: endpointExample,
-    command: "uv run lazycloud deploy application:app",
-    status: "deployed",
-  },
-  {
-    key: "functions",
-    label: "Functions",
-    code: functionExample,
-    command: "uv run lazycloud run application:summarize_sales '[1200, 3500, 800]'",
-    status: "complete",
-  },
-  {
-    key: "sandboxes",
-    label: "Sandboxes",
-    code: sandboxExample,
-    command: "uv run python application.py",
-    status: "sandbox stopped",
-  },
-  {
-    key: "services",
-    label: "Services",
-    code: podExample,
-    command: "uv run lazycloud deploy application:app",
-    status: "deployed",
-  },
-  {
-    key: "schedules",
-    label: "Schedules",
-    code: cronExample,
-    command: "uv run lazycloud deploy application:app",
-    status: "deployed",
-  },
-] as const;
+import { RunModePreview } from "./RunModePreview";
+import { runModeExamples } from "./runModeExamples";
+import "./platformStories.css";
 
 type PlatformStory = {
   key: string;
@@ -163,75 +58,75 @@ const platformStories: PlatformStory[] = [
   },
 ];
 
-const parityDefinition = `@app.function(gpu="A100-40", memory="16Gi")
-def embed(batch: list[str]) -> list[list[float]]:
-    return model.encode(batch)`;
-
 const parityModes = [
   {
     key: "local",
-    Plate: LocalPlate,
-    title: "Debug locally",
-    call: "embed.local(rows)",
-    body: "Use local data and your usual debugger.",
+    title: "Develop locally",
   },
   {
-    key: "gpu",
-    Plate: GpuPlate,
-    title: "Run once in the cloud",
-    call: "embed.remote(rows)",
-    body: "Send a run to cloud compute and get the result. No deployment required.",
+    key: "cloud",
+    title: "Test in the cloud",
   },
   {
     key: "production",
-    Plate: ProductionPlate,
     title: "Deploy your app",
-    call: "uv run lazycloud deploy app:app",
-    body: "Publish the function so your services can call it.",
   },
-];
+] as const;
 
 function ParitySection() {
+  const [example, setExample] = useState(runModeExamples[0]);
   return (
-    <section className="marketing-parity border-t border-input bg-background-subtle py-18 sm:py-22 lg:py-28">
+    <section className="marketing-parity py-18 sm:py-22 lg:py-28">
       <div className={shell}>
-        <SectionHeading
-          title={
-            <>
-              One function. <em>Three ways to run it.</em>
-            </>
-          }
-          body="Debug on your laptop, send a one-off cloud run, or deploy the app. The function stays the same."
-        />
-
-        <MarketingReveal className="relative max-w-[820px]" delay={80}>
-          <MarketingCard asChild>
-            <CodeBlock
-              tone="paper"
-              bodyClassName="p-4 text-[11.5px] leading-[1.75] sm:p-5 sm:text-[12.5px]"
+        <div className="flex flex-col items-center gap-8 sm:gap-10">
+          <div className="text-center">
+            <h2 className="text-[clamp(1.85rem,4.6vw,4rem)] leading-[1.12] font-[550] tracking-[-0.045em]">
+              <span className="inline-block">One definition.</span>{" "}
+              <span className="inline-block text-brand">Three ways to run it.</span>
+            </h2>
+          </div>
+          <Tabs
+            className="w-full min-w-0"
+            value={example.key}
+            onValueChange={(key) => {
+              const selected = runModeExamples.find((item) => item.key === key);
+              if (selected) setExample(selected);
+            }}
+          >
+            <TabsList
+              className="definition-tabs mx-auto flex h-9 w-full max-w-[640px] gap-0 border-0 max-[400px]:grid max-[400px]:h-auto max-[400px]:grid-cols-3"
+              aria-label="Workload examples"
             >
-              {parityDefinition}
-            </CodeBlock>
-          </MarketingCard>
-        </MarketingReveal>
-
-        <div className="mt-10 grid gap-x-5 gap-y-8 sm:grid-cols-3">
-          {parityModes.map((mode, index) => (
-            <MarketingReveal className="relative" key={mode.key} delay={index * 70}>
-              <article>
-                <mode.Plate />
-                <h3 className="mt-5 text-[19px] leading-tight font-medium sm:min-h-12">
-                  {mode.title}
-                </h3>
-                <code className="mt-2 block font-mono text-[12px] break-all text-brand">
-                  {mode.call}
-                </code>
-                <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                  {mode.body}
-                </p>
-              </article>
-            </MarketingReveal>
-          ))}
+              {runModeExamples.map((example) => (
+                <TabsTrigger
+                  className="definition-tab m-0 h-9 flex-auto px-1 text-[11px] sm:text-[13px]"
+                  key={example.key}
+                  value={example.key}
+                >
+                  <span>{example.label}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            <TabsContent value={example.key} className="definition-content mt-8 sm:mt-10">
+              <div className="grid gap-5 lg:grid-cols-3 lg:gap-6">
+                {parityModes.map((mode) => (
+                  <article className="flex min-w-0 flex-col" key={mode.key}>
+                    <h3 className="mb-4 text-[21px] leading-tight font-medium tracking-[-0.025em]">
+                      {mode.title}
+                    </h3>
+                    <MarketingCard surface="frame" className="run-mode-card flex-1">
+                      <div className="run-mode-copy">
+                        <p className="max-w-[310px] text-sm leading-relaxed text-muted-foreground">
+                          {example[mode.key === "production" ? "deployment" : mode.key].description}
+                        </p>
+                      </div>
+                      <RunModePreview mode={mode.key} example={example} />
+                    </MarketingCard>
+                  </article>
+                ))}
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </section>
@@ -242,84 +137,7 @@ export function MarketingHome() {
   return (
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
-        <MarketingHero>
-          <div className="relative">
-            <h1 className="max-w-[620px] text-balance">
-              Deploy as fast <em>as you develop.</em>
-            </h1>
-            <p className="mt-5 max-w-[540px] text-base leading-[1.58] text-muted-foreground sm:mt-6 sm:text-lg">
-              Your coding agent helps you build faster. LazyCloud runs your product in the cloud.
-              Use the same Python code locally, for a one-off cloud run, or as a deployed app.
-            </p>
-            <div className="mt-7 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap">
-              <GetStartedButton />
-              <Button
-                asChild
-                size="lg"
-                variant="secondary"
-                className="marketing-button-link justify-between [@media(pointer:coarse)]:min-h-11 max-[479px]:w-full"
-              >
-                <a href={`${EXAMPLES_URL}/index`}>
-                  <span>Explore examples</span>
-                  <ArrowUpRight aria-hidden="true" />
-                </a>
-              </Button>
-            </div>
-          </div>
-
-          <div className="relative min-w-0">
-            <MarketingCard className="relative z-[2] min-w-0">
-              <Tabs className="min-w-0 text-foreground" defaultValue={heroStories[0].key}>
-                <TabsList
-                  /* The split hero keeps a stable 3×2 control through compact
-                     desktop widths; only the full-width canvas uses one row. */
-                  className="grid h-auto w-full grid-cols-3 gap-1 p-2 xl:flex xl:min-h-12.5 xl:flex-wrap xl:justify-start"
-                  aria-label="Hero code examples"
-                >
-                  {heroStories.map((story) => (
-                    <TabsTrigger
-                      className="h-11 min-w-0 px-1 text-[11px] sm:text-xs xl:w-auto xl:shrink-0 xl:px-3"
-                      key={story.key}
-                      value={story.key}
-                    >
-                      {story.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                {heroStories.map((story) => (
-                  <TabsContent key={story.key} value={story.key}>
-                    <CodeBlock
-                      className="rounded-none border-0 bg-transparent"
-                      tone="paper"
-                      /* Fixed body height so switching examples never resizes the
-                         panel; sized to the tallest snippet. On narrow screens the
-                         type eases down a notch so wrapped lines still fit without
-                         a scroll. */
-                      bodyClassName="h-[300px] p-4 text-[11px] leading-[1.7] max-[359px]:h-[264px] max-[359px]:p-3 max-[359px]:text-[10px] max-[359px]:leading-[1.6] sm:h-[340px] sm:p-6 sm:text-[11.5px] sm:leading-[1.75]"
-                      footer={
-                        <div
-                          className="flex min-h-11 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                          data-marketing-terminal-surface=""
-                        >
-                          <span className="text-brand">$</span>
-                          <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-                            {story.command}
-                          </span>
-                          <i className="marketing-cursor" aria-hidden="true" />
-                          <strong className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-medium text-positive">
-                            <StatusDot /> {story.status}
-                          </strong>
-                        </div>
-                      }
-                    >
-                      {story.code}
-                    </CodeBlock>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            </MarketingCard>
-          </div>
-        </MarketingHero>
+        <CloudHero />
 
         <ParitySection />
 
@@ -329,7 +147,10 @@ export function MarketingHome() {
 
         <TypedExportSection />
 
-        <section className="border-t border-input bg-background-subtle py-18 sm:py-22 lg:py-28">
+        <section
+          id="examples"
+          className="border-t border-input bg-background py-18 sm:py-22 lg:py-28"
+        >
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
               <SectionHeading title="Example projects" />
@@ -345,36 +166,45 @@ export function MarketingHome() {
             </div>
             <MarketingReveal
               delay={80}
-              className="relative grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
+              className="relative grid grid-cols-1 gap-4 max-sm:mx-auto max-sm:max-w-sm sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
               role="region"
               tabIndex={0}
               aria-label="Runnable examples"
             >
               {marketingUseCases.map((useCase) => (
-                <UseCaseCard key={useCase.id} href={`${EXAMPLES_URL}/${useCase.id}`}>
-                  <MarketingExampleImage
-                    className="absolute inset-x-0 top-0 h-[56%] object-cover object-[center_72%]"
-                    src={useCase.imageSrc}
-                  />
-                  <div
-                    className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,transparent_0%,color-mix(in_oklab,var(--card)_8%,transparent)_32%,color-mix(in_oklab,var(--card)_80%,transparent)_50%,var(--card)_59%)]"
-                    aria-hidden="true"
-                  />
-                  <div
-                    className="relative mt-[61%] flex flex-1 flex-col p-4 text-foreground xl:p-5"
-                    data-marketing-example-copy
+                <MarketingCard surface="frame" asChild key={useCase.id}>
+                  <a
+                    className="project-example-card relative isolate flex min-h-[18rem] w-full flex-col text-left text-foreground xl:min-h-[21rem]"
+                    href={`${EXAMPLES_URL}/${useCase.id}`}
                   >
-                    <h3 className="max-w-[390px] text-[clamp(1.1rem,1.55vw,1.4rem)] leading-[1.12] font-medium">
-                      {useCase.title}
-                    </h3>
-                    <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-muted-foreground">
-                      {useCase.cardSummary}
-                    </p>
-                    <span className="mt-auto inline-flex pt-3 text-brand">
-                      <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
-                    </span>
-                  </div>
-                </UseCaseCard>
+                    <div className="project-example-art">
+                      <img
+                        src={useCase.imageSrc}
+                        alt=""
+                        className="h-full w-full object-contain"
+                        width={1254}
+                        height={1254}
+                        decoding="async"
+                        loading="lazy"
+                      />
+                    </div>
+                    <div
+                      className="relative z-[2] flex flex-1 flex-col px-5 pt-36 pb-5 text-foreground xl:pt-40"
+                      data-marketing-example-copy
+                    >
+                      <h3 className="max-w-[390px] text-[19px] leading-[1.2] font-medium tracking-[-0.025em]">
+                        {useCase.title}
+                      </h3>
+                      <p className="mt-3 max-w-[390px] text-[12px] leading-[1.5] text-foreground/80">
+                        {useCase.cardSummary}
+                      </p>
+                      <span className="mt-auto inline-flex items-center justify-between gap-3 pt-5 text-xs text-brand">
+                        View project
+                        <ArrowUpRight className="size-4.5 shrink-0" aria-hidden="true" />
+                      </span>
+                    </div>
+                  </a>
+                </MarketingCard>
               ))}
             </MarketingReveal>
           </div>
@@ -393,19 +223,6 @@ export function MarketingHome() {
   );
 }
 
-const useCaseCard =
-  "relative flex min-h-80 w-full flex-col text-left text-foreground sm:last:col-span-2 xl:last:col-span-1";
-
-function UseCaseCard({ children, href }: { children: ReactNode; href: string }) {
-  return (
-    <MarketingCard asChild>
-      <a className={useCaseCard} href={href}>
-        {children}
-      </a>
-    </MarketingCard>
-  );
-}
-
 /* The marketing shell scrolls inside its own element, so the story
    controller measures against that scrollport instead of assuming the window. */
 function findScrollport(node: HTMLElement): HTMLElement | null {
@@ -419,18 +236,9 @@ function findScrollport(node: HTMLElement): HTMLElement | null {
 function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
   const sectionRef = useRef<HTMLElement>(null);
   const storyRefs = useRef<Array<HTMLElement | null>>([]);
-  const [scrollDriven, setScrollDriven] = useState(false);
 
   const registerStory = useCallback((index: number, node: HTMLElement | null) => {
     storyRefs.current[index] = node;
-  }, []);
-
-  useEffect(() => {
-    const query = window.matchMedia("(min-width: 1024px)");
-    const sync = () => setScrollDriven(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
   }, []);
 
   useEffect(() => {
@@ -474,7 +282,7 @@ function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
       scrollTarget.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, [onScrollSelect, scrollDriven]);
+  }, [onScrollSelect]);
 
   const moveToStory = useCallback(
     (index: number) => {
@@ -500,7 +308,7 @@ function usePlatformStoryScroll(onScrollSelect: (index: number) => void) {
     [onScrollSelect],
   );
 
-  return { sectionRef, registerStory, moveToStory, scrollDriven };
+  return { sectionRef, registerStory, moveToStory };
 }
 
 function PlatformStoryRail() {
@@ -508,14 +316,12 @@ function PlatformStoryRail() {
   const selectByIndex = useCallback((index: number) => {
     setActiveKey(platformStories[index]?.key ?? platformStories[0].key);
   }, []);
-  const { sectionRef, registerStory, moveToStory, scrollDriven } =
-    usePlatformStoryScroll(selectByIndex);
+  const { sectionRef, registerStory, moveToStory } = usePlatformStoryScroll(selectByIndex);
 
   return (
     <section
       id="platform"
       className="relative border-t border-input bg-background"
-      data-scroll-driven={scrollDriven ? "true" : "false"}
       ref={sectionRef}
     >
       <div
@@ -531,7 +337,7 @@ function PlatformStoryRail() {
                 Ship the <em>whole product.</em>
               </>
             }
-            body="Cloud functions, HTTP endpoints, full ASGI apps, background jobs, and cron jobs. Define them in Python alongside your code."
+            body="APIs, services, jobs, and agent sandboxes. Define your workloads in Python alongside your code."
           />
           <nav aria-label="Platform use cases" className="relative border-t border-border">
             <ol className="m-0 list-none p-0">
@@ -562,33 +368,33 @@ function PlatformStoryRail() {
           {platformStories.map((story, index) => (
             <article
               aria-labelledby={`platform-story-${story.key}-title`}
-              className="scroll-mt-28 border-b border-border py-10 first:pt-0 last:border-b-0 last:pb-0 sm:py-12 lg:py-10 lg:first:pt-16 lg:last:pb-16"
+              className="scroll-mt-28 pb-12 last:pb-0 lg:first:pt-16 lg:last:pb-16"
               data-platform-story={story.key}
               id={`platform-story-${story.key}`}
               key={story.key}
               ref={(node) => registerStory(index, node)}
             >
-              <div className="relative mb-6 sm:mb-8">
+              <div className="mb-6">
                 <p className="text-sm font-medium text-brand">{story.label}</p>
                 <h3
-                  className="mt-3 text-2xl leading-tight font-medium sm:text-3xl"
+                  className="mt-3 text-2xl leading-tight font-medium tracking-[-0.025em] sm:text-[28px]"
                   id={`platform-story-${story.key}-title`}
                 >
                   {story.title}
                 </h3>
-                <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground sm:text-base">
+                <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground">
                   {story.body}
                 </p>
               </div>
-              <div
-                aria-label={`${story.label} preview`}
-                className="relative marketing-story-panel min-w-0"
-                role="region"
-              >
-                <div className="marketing-story-visual flex h-[390px] sm:h-[430px] lg:h-[clamp(380px,46dvh,430px)] [&>div]:flex-1">
+              <MarketingCard surface="frame" className="platform-example-card">
+                <div
+                  aria-label={`${story.label} preview`}
+                  className="platform-example-visual"
+                  role="region"
+                >
                   <StoryPreview visual={story.visual} />
                 </div>
-              </div>
+              </MarketingCard>
             </article>
           ))}
         </MarketingReveal>
@@ -597,53 +403,45 @@ function PlatformStoryRail() {
   );
 }
 
-const computePaths = [
-  {
-    title: "LazyCloud",
-    body: "Run CPU workloads without managing servers. Capacity scales down when idle.",
-  },
-  {
-    title: "Your AWS account",
-    body: "Run CPU and GPU workloads in your own AWS account.",
-  },
-  {
-    title: "Your own machines",
-    body: "Connect supported Linux servers, VMs, or GPU machines you already own.",
-  },
-];
-
 function ComputeSection() {
+  const { sectionRef, selectedIndex, selectExample, isDesktop } = useComputeScroll();
+  const selected = computeDestinations[selectedIndex];
   return (
-    <section id="compute" className="border-t border-input bg-background py-18 sm:py-22 lg:py-28">
-      <div
-        className={cn(
-          shell,
-          "grid items-center gap-10 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-16",
-        )}
-      >
-        <div className="min-w-0">
-          <SectionHeading
-            title={
-              <>
-                Choose where <em>your code runs.</em>
-              </>
-            }
-            body="Start on LazyCloud. Connect AWS or your own Linux machines when you need control of the infrastructure."
-          />
-          <MarketingReveal className="border-t border-border" delay={80}>
-            {computePaths.map((path) => (
-              <article className="border-b border-border py-5" key={path.title}>
-                <h3 className="text-lg font-medium tracking-[-0.02em]">{path.title}</h3>
-                <p className="mt-2 max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
-                  {path.body}
-                </p>
-              </article>
-            ))}
-          </MarketingReveal>
+    <section id="compute" ref={sectionRef} className="compute-section border-t border-input">
+      <div className="compute-sticky">
+        <div className={cn(shell, "compute-section-inner")}>
+          <div className="compute-section-copy">
+            <h2>
+              Choose where <em>your code runs.</em>
+            </h2>
+            <div className="compute-choices" aria-label="Infrastructure choices">
+              {computeDestinations.map((path, index) => (
+                <div className="compute-choice-item" key={path.key}>
+                  <button
+                    className="compute-choice"
+                    type="button"
+                    aria-expanded={selected.key === path.key}
+                    aria-controls={`compute-description-${path.key}`}
+                    onClick={() => selectExample(index)}
+                  >
+                    {path.title}
+                  </button>
+                  <div
+                    className="compute-choice-description"
+                    id={`compute-description-${path.key}`}
+                    data-expanded={selected.key === path.key}
+                    aria-hidden={selected.key !== path.key}
+                  >
+                    <div>
+                      <p>{path.body}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-        <MarketingReveal className="flex min-w-0 [&>div]:flex-1" delay={140}>
-          <ComputePlacementPreview />
-        </MarketingReveal>
+        <ComputePlacement selectedIndex={selectedIndex} isDesktop={isDesktop} />
       </div>
     </section>
   );

@@ -1,4 +1,4 @@
-export type MarketingUseCase = {
+type MarketingUseCase = {
   id: string;
   title: string;
   cardSummary: string;
@@ -9,7 +9,7 @@ export const marketingUseCases = [
   {
     id: "openai-compatible-llm",
     title: "Serve an OpenAI-compatible model",
-    cardSummary: "Host a model behind the OpenAI API.",
+    cardSummary: "Serve your model through an OpenAI-compatible API.",
     imageSrc: "/use-cases/openai-compatible-llm-dark.webp",
   },
   {

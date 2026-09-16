@@ -20,6 +20,7 @@ import {
   MarketingHero,
   shell,
 } from "./-marketing/MarketingPrimitives";
+import "./pricing.css";
 
 export const Route = createLazyFileRoute("/pricing")({
   component: MarketingPricing,
@@ -73,6 +74,7 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
       })),
     },
     {
+      heading: "CPU and memory",
       lines: [
         {
           label: "CPU",
@@ -80,10 +82,6 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
           unit: `/ CPU / ${per}`,
           fractionDigits: meter === "hour" ? 4 : 8,
         },
-      ],
-    },
-    {
-      lines: [
         {
           label: "Memory",
           figure: metered(shape.nanos_per_memory_gib_hour, meter),
@@ -98,25 +96,18 @@ function computeGroups(placement: PublishedPlacementRate, meter: Meter): readonl
 function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
   return [
     {
+      heading: "Storage and infrastructure",
       lines: [
         {
           label: "Volumes",
           figure: catalog.platform_rate.nanos_per_volume_gib_month,
           unit: "/ GiB / 30 days",
         },
-      ],
-    },
-    {
-      lines: [
         {
           label: "Egress",
           figure: catalog.platform_rate.nanos_per_egress_gib,
           unit: "/ GiB",
         },
-      ],
-    },
-    {
-      lines: [
         {
           label: "Bring your own cloud",
           figure: `${catalog.connected_cloud_management_fee_percent}%`,
@@ -147,7 +138,7 @@ function MarketingPricing() {
   return (
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
-        <MarketingHero>
+        <MarketingHero className="pricing-hero">
           <div className="flex min-w-0 flex-col">
             <h1 className="max-w-[620px] text-balance">
               Compute pricing <em>by the second.</em>
@@ -167,7 +158,7 @@ function MarketingPricing() {
             </div>
           </div>
 
-          <MarketingCard className="flex min-w-0 flex-col p-5 sm:p-6">
+          <MarketingCard surface="frame" className="flex min-w-0 flex-col p-4 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
               <h2 className="font-sans text-[clamp(1.625rem,3vw,2.125rem)] leading-[1.08] font-[550] tracking-[-0.045em]">
                 Usage rates
@@ -179,7 +170,7 @@ function MarketingPricing() {
                 onChange={setMeter}
               />
             </div>
-            <div className="mt-6 min-h-[39rem]" id={fleetRatesId} aria-busy={pricing.isPending}>
+            <div className="mt-4" id={fleetRatesId} aria-busy={pricing.isPending}>
               {catalog && placement ? (
                 <RateList
                   groups={[...computeGroups(placement, meter), ...platformGroups(catalog)]}
@@ -198,7 +189,7 @@ function MarketingPricing() {
               )}
             </div>
             <a
-              className="interactive-link mt-auto text-[12.5px] text-muted-foreground underline underline-offset-4"
+              className="interactive-link mt-5 text-[12.5px] text-muted-foreground underline underline-offset-4"
               href={new URL("/platform/plans#compute-pricing", DOCS_URL).href}
             >
               Pricing details
@@ -207,87 +198,101 @@ function MarketingPricing() {
         </MarketingHero>
 
         <section
-          className="border-b border-border bg-background-subtle py-14 sm:py-16 lg:py-20"
+          className="pricing-plans border-b border-border bg-background-subtle py-6"
           id="plans"
         >
           <div className={shell}>
-            <MarketingReveal className="mb-6 max-w-[44rem]">
+            <MarketingReveal className="mb-5 max-w-[44rem]">
               <h2 className={sectionTitle}>Pricing plans</h2>
             </MarketingReveal>
             {catalog ? (
               <>
-                <MarketingReveal className="grid grid-cols-3 gap-4 max-md:grid-cols-1" delay={100}>
+                <MarketingReveal className="grid grid-cols-1 gap-4 lg:grid-cols-3" delay={100}>
                   {catalog.plans.map((plan) => (
-                    <MarketingCard asChild key={plan.terms_version}>
-                      <article className="flex flex-col p-5 sm:p-6">
-                        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <MarketingCard surface="frame" asChild key={plan.terms_version}>
+                      <article className="flex min-w-0 flex-col p-4 sm:p-5">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
                           <h3 className="font-sans text-[24px] leading-[1.08] font-[550] tracking-[-0.045em]">
                             {plan.name}
                           </h3>
-                          <p className="flex items-baseline gap-2">
-                            <span className="font-mono text-[22px] leading-none tracking-[-0.02em]">
+                          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="font-sans text-[36px] leading-none font-medium tracking-[-0.055em] tabular-nums">
                               {formatCostNanos(plan.monthly_nanos)}
                             </span>
                             <span className="text-[12px] text-muted-foreground">per month</span>
                           </p>
                         </div>
-                        <dl className="mt-4 border-t border-border text-[13px]">
-                          <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
+                        <MarketingCard surface="raised" className="my-4 px-3 py-2.5" asChild>
+                          <dl className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-[13px]">
                             <dt className="text-muted-foreground">Monthly usage credit</dt>
                             <dd className="font-mono font-medium text-brand">
-                              {formatCostNanos(plan.included_nanos)}{" "}
-                              <span className="text-muted-foreground">/ month</span>
+                              {formatCostNanos(plan.included_nanos)}
                             </dd>
-                          </div>
-                          <PlanLimit
-                            label="CPU containers at once"
-                            value={plan.entitlements.max_concurrent_cpu_containers.toLocaleString()}
-                          />
-                          <PlanLimit
-                            label="GPU cards at once"
-                            value={plan.entitlements.max_concurrent_gpus.toLocaleString()}
-                          />
-                          <PlanLimit
-                            label="GPU models"
-                            value={gpuModelsLabel(plan.entitlements.gpu_types)}
-                          />
-                          <PlanLimit
-                            label="Workspaces"
-                            value={limitFigure(plan.entitlements.max_workspaces)}
-                          />
-                          <PlanLimit
-                            label="Members"
-                            value={memberLimitFigure(plan.entitlements.max_members)}
-                          />
-                          <PlanFeature
-                            label="Connected cloud"
-                            included={plan.entitlements.connected_cloud}
-                          />
-                          <PlanFeature
-                            label="Custom domains"
-                            included={plan.entitlements.custom_domains}
-                          />
-                          <PlanFeature
-                            label="Self-hosted"
-                            included={plan.entitlements.self_hosted}
-                          />
-                          <PlanLimit
-                            label="Log and artifact retention"
-                            value={`${plan.entitlements.retention_days} days`}
-                          />
-                        </dl>
-                        <ul className="mt-4 mb-6 grid list-none gap-2 p-0">
-                          {plan.terms.map((term) => (
-                            <PlanTerm key={term}>{term}</PlanTerm>
-                          ))}
-                        </ul>
+                          </dl>
+                        </MarketingCard>
+                        <MarketingCard
+                          surface="inset"
+                          className="px-3 py-1 text-[13px] [--surface-grain-blend:soft-light]"
+                          asChild
+                        >
+                          <dl>
+                            <PlanLimit
+                              label="CPU containers at once"
+                              value={plan.entitlements.max_concurrent_cpu_containers.toLocaleString()}
+                            />
+                            <PlanLimit
+                              label="GPU cards at once"
+                              value={plan.entitlements.max_concurrent_gpus.toLocaleString()}
+                            />
+                            <PlanLimit
+                              label="GPU models"
+                              value={gpuModelsLabel(plan.entitlements.gpu_types)}
+                            />
+                            <PlanLimit
+                              label="Workspaces"
+                              value={limitFigure(plan.entitlements.max_workspaces)}
+                            />
+                            <PlanLimit
+                              label="Members"
+                              value={memberLimitFigure(plan.entitlements.max_members)}
+                            />
+                            <PlanLimit
+                              label="Connected cloud"
+                              value={
+                                plan.entitlements.connected_cloud ? "Included" : "Not included"
+                              }
+                            />
+                            <PlanLimit
+                              label="Custom domains"
+                              value={plan.entitlements.custom_domains ? "Included" : "Not included"}
+                            />
+                            <PlanLimit
+                              label="Self-hosted"
+                              value={plan.entitlements.self_hosted ? "Included" : "Not included"}
+                            />
+                            <PlanLimit
+                              label="Log and artifact retention"
+                              value={countLabel(plan.entitlements.retention_days, "day")}
+                            />
+                          </dl>
+                        </MarketingCard>
+                        <details className="my-3 text-[12px] text-muted-foreground">
+                          <summary className="cursor-pointer py-1.5 underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand">
+                            {plan.name} plan terms
+                          </summary>
+                          <ul className="mt-2 mb-3 grid list-disc gap-2 pl-4 leading-relaxed">
+                            {plan.terms.map((term) => (
+                              <li key={term}>{term}</li>
+                            ))}
+                          </ul>
+                        </details>
                         <GetStartedButton variant="secondary" className="mt-auto w-full" />
                       </article>
                     </MarketingCard>
                   ))}
                 </MarketingReveal>
 
-                <p className="mt-4 flex max-w-[58rem] items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
+                <p className="mt-4 flex items-start gap-2.5 text-xs leading-relaxed text-muted-foreground">
                   <span className="mt-0.5 shrink-0 text-brand">
                     <CornerDownRight className="size-4 shrink-0" aria-hidden="true" />
                   </span>
@@ -315,47 +320,33 @@ function MarketingPricing() {
   );
 }
 
-/* One term of a plan, read off the catalog. The value column is monospaced
-   whether it holds a figure, a list of models, or a word, so the eye runs down
-   one column rather than two typefaces. */
 function PlanLimit({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right font-mono font-medium">{value}</dd>
+    <div className="flex items-baseline justify-between gap-3 border-b border-border/50 py-1.5 last:border-b-0">
+      <dt className="min-w-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-right font-mono text-xs font-medium">{value}</dd>
     </div>
-  );
-}
-
-function PlanFeature({ label, included }: { label: string; included: boolean }) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2.5">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-mono font-medium">{included ? "Included" : "—"}</dd>
-    </div>
-  );
-}
-
-function PlanTerm({ children }: { children: React.ReactNode }) {
-  return (
-    <li className="flex items-start gap-2.5 text-[13px] leading-relaxed">
-      <span className="mt-0.5 shrink-0 text-brand">
-        <CornerDownRight className="size-4 shrink-0" aria-hidden="true" />
-      </span>
-      <span>{children}</span>
-    </li>
   );
 }
 
 function RateList({ groups }: { groups: readonly RateGroup[] }) {
   return (
-    <>
+    <div className="space-y-3">
       {groups.map((group) => (
-        <div className="border-t border-border py-5" key={group.heading ?? group.lines[0].label}>
-          {group.heading ? <h3 className="mb-4 text-[13px] font-medium">{group.heading}</h3> : null}
-          <dl className="space-y-3">
+        <MarketingCard
+          surface="inset"
+          className="px-3 py-3 [--surface-grain-blend:soft-light]"
+          key={group.heading ?? group.lines[0].label}
+        >
+          {group.heading ? (
+            <h3 className="mb-2.5 text-[12px] font-medium">{group.heading}</h3>
+          ) : null}
+          <dl className="space-y-1.5">
             {group.lines.map((line) => (
-              <div className="flex items-baseline justify-between gap-4" key={line.label}>
+              <div
+                className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1"
+                key={line.label}
+              >
                 <dt className="min-w-0 text-[13px] leading-snug text-muted-foreground">
                   {line.label}
                 </dt>
@@ -368,15 +359,12 @@ function RateList({ groups }: { groups: readonly RateGroup[] }) {
               </div>
             ))}
           </dl>
-        </div>
+        </MarketingCard>
       ))}
-    </>
+    </div>
   );
 }
 
-/* Native radios rather than a scripted segment: arrow keys move and choose, the
-   legend names the group, and each option announces that it is the selected one
-   without any of that being reimplemented. */
 function MeterToggle({
   meter,
   onChange,
@@ -391,7 +379,7 @@ function MeterToggle({
   return (
     <fieldset className="shrink-0" disabled={disabled}>
       <legend className="sr-only">Read every rate per hour or per second</legend>
-      <div className="flex rounded-md border border-border bg-card p-1">
+      <MarketingCard surface="inset" className="flex p-1">
         {meters.map((option) => (
           <label className="cursor-pointer" key={option.value}>
             <input
@@ -408,7 +396,7 @@ function MeterToggle({
             </span>
           </label>
         ))}
-      </div>
+      </MarketingCard>
     </fieldset>
   );
 }

@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
-/**
- * Keeps decorative product telemetry from advancing when it cannot be seen.
- * Component unmounts still own replay resets; this hook only pauses a mounted
- * preview while it is outside the reading area or the document is hidden.
- */
-export function usePreviewActivity() {
-  const previewRef = useRef<HTMLDivElement>(null);
+export function usePreviewActivity<T extends HTMLElement = HTMLDivElement>({
+  threshold = 0.01,
+  rootMargin = "0px",
+}: { threshold?: number; rootMargin?: string } = {}) {
+  const previewRef = useRef<T>(null);
   const [active, setActive] = useState(false);
 
   useEffect(() => {
@@ -17,32 +15,22 @@ export function usePreviewActivity() {
     const update = () => {
       setActive(intersecting && document.visibilityState === "visible");
     };
-    const handleVisibility = () => update();
-
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    if (!("IntersectionObserver" in window)) {
-      intersecting = true;
-      update();
-      return () => {
-        document.removeEventListener("visibilitychange", handleVisibility);
-      };
-    }
+    document.addEventListener("visibilitychange", update);
 
     const observer = new IntersectionObserver(
       ([entry]) => {
         intersecting = entry.isIntersecting;
         update();
       },
-      { threshold: 0.01 },
+      { threshold, rootMargin },
     );
     observer.observe(preview);
 
     return () => {
       observer.disconnect();
-      document.removeEventListener("visibilitychange", handleVisibility);
+      document.removeEventListener("visibilitychange", update);
     };
-  }, []);
+  }, [threshold, rootMargin]);
 
   return { active, previewRef };
 }
