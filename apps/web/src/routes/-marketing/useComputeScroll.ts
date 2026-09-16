@@ -36,8 +36,8 @@ export function useComputeScroll() {
       setSelectedIndex(selectedIndex);
       cards.forEach((card, index) => {
         const phase = position - index;
-        const enter = ease(clamp(phase / 0.22));
-        const leave = ease(clamp((phase - 0.78) / 0.22));
+        const enter = index === 0 ? 1 : ease(clamp(phase / 0.22));
+        const leave = index === cards.length - 1 ? 0 : ease(clamp((phase - 0.78) / 0.22));
         const distanceFromFront = 1 - enter + leave;
         card.style.setProperty("--compute-slide", `${distanceFromFront * 64}%`);
         card.style.setProperty("--compute-docked", String(distanceFromFront));

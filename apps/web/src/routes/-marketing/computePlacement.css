@@ -220,20 +220,6 @@
   font-size: 12px;
   color: #91a6b5;
 }
-.compute-traffic {
-  position: relative;
-  padding: 0 0 6px;
-}
-.compute-traffic > span {
-  font-size: 12px;
-  color: #91a6b5;
-}
-.compute-traffic svg {
-  width: 100%;
-  height: 102px;
-  margin-top: 10px;
-  overflow: visible;
-}
 .compute-chart-grid {
   stroke: #293641;
   stroke-width: 1;
@@ -246,160 +232,220 @@
   stroke-width: 2;
   stroke-linejoin: round;
 }
-.compute-service {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr 1.3fr;
-  gap: 12px;
+.compute-agent-task {
+  display: flex;
   align-items: center;
-  border: 1px solid rgb(118 214 245 / 24%);
-  padding: 14px 18px;
-  margin-top: -14px;
-  background: linear-gradient(90deg, rgb(118 214 245 / 5%), transparent);
-  font: 13px var(--font-mono);
-  color: #cee5ee;
+  gap: 16px;
+  font-size: 13px;
 }
-.compute-service > span:nth-child(2) {
-  color: #8b9da9;
+.compute-agent-task > span {
+  color: #7b929f;
   font-size: 11px;
 }
-.compute-service-track {
+.compute-agent-task strong {
+  color: #d7e8f1;
+  font-weight: 450;
+}
+.compute-workspace {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  border: 1px solid #314550;
+  background: rgb(6 13 18 / 25%);
+}
+.compute-workspace-files {
+  padding: 18px;
+  font: 11px/1.8 var(--font-mono);
+  color: #b1c6d2;
+  border-right: 1px solid #314550;
+}
+.compute-workspace-files > span {
+  display: block;
+  margin-bottom: 12px;
+  font: 11px var(--font-sans);
+  color: #7b929f;
+}
+.compute-workspace-files > div + div {
+  margin-top: 6px;
+}
+.compute-workspace-files > div > div {
+  padding-left: 12px;
   display: flex;
-  justify-content: flex-end;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
+  color: #d2e1ea;
 }
-.compute-service-track i {
-  width: 16px;
-  height: 10px;
+.compute-workspace-files em {
+  color: #87cbb1;
+  font-size: 10px;
+  font-style: normal;
+}
+.compute-agent-actions {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  padding: 18px;
+}
+.compute-agent-actions > div {
+  border-left: 2px solid #487766;
+  padding-left: 12px;
+}
+.compute-agent-actions span {
+  display: block;
+  color: #abc5ba;
+  font-size: 12px;
+}
+.compute-agent-actions small {
+  display: block;
+  color: #7b929f;
+  font: 10px var(--font-mono);
+  margin-top: 4px;
+}
+.compute-agent-actions [data-current="true"] {
+  border-color: #76d6f5;
+}
+.compute-agent-actions [data-current="true"] span {
+  color: #76d6f5;
+}
+.compute-sandbox-terminal {
+  margin-top: -10px;
+  padding: 12px 16px;
+  background: #0b131a;
+  border: 1px solid #2b414d;
+  font: 11px/1.8 var(--font-mono);
+  color: #a7c2d1;
+}
+.compute-sandbox-terminal > span {
+  color: #d5e8f1;
+}
+.compute-sandbox-terminal > div > span {
+  color: #87cbb1;
+  margin-left: 8px;
+}
+.compute-sandbox-terminal i {
+  display: inline-block;
+  width: 6px;
+  height: 11px;
   background: #76d6f5;
-  opacity: 0.75;
-  box-shadow: 0 0 12px rgb(118 214 245 / 12%);
+  margin-left: 8px;
+  vertical-align: middle;
 }
-.compute-service-track i:last-child {
-  opacity: 0.28;
-}
-.compute-example-footer {
+.compute-route-heading {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  margin-top: auto;
+  color: #91a6b5;
   font-size: 11px;
-  color: #8eabb9;
 }
-.compute-example-footer span:last-child {
-  color: #76d6f5;
+.compute-endpoints {
+  position: relative;
+  display: grid;
+  gap: 16px;
 }
-.compute-account {
-  border: 1px solid rgb(118 214 245 / 24%);
-  padding: 22px;
-  background: rgb(118 214 245 / 2%);
+.compute-endpoint {
+  display: grid;
+  grid-template-columns: 42px 1.2fr 1fr 30px;
+  gap: 14px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid #365667;
+  background: linear-gradient(100deg, rgb(118 214 245 / 6%), transparent);
 }
-.compute-account-heading {
+.compute-http-method {
+  font: 10px var(--font-mono);
+  color: #91a6b5;
+}
+.compute-endpoint strong {
+  font: 13px var(--font-mono);
+  color: #e0edf3;
+}
+.compute-endpoint svg {
+  width: 100%;
+  height: 30px;
+}
+.compute-http-status {
+  font: 11px var(--font-mono);
+  color: #87cbb1;
+  text-align: right;
+}
+.compute-route-footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  color: #a8bdc8;
-  font-size: 12px;
-  margin-bottom: 22px;
+  font-size: 10px;
+  color: #7b929f;
+  margin-top: auto;
 }
-.compute-account-heading span:last-child {
-  color: #76d6f5;
+.compute-route-footer > div {
+  display: flex;
+  align-items: end;
+  gap: 5px;
+  height: 18px;
 }
-.compute-capacity-pool {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 20px;
+.compute-route-footer i {
+  display: block;
+  width: 6px;
+  height: 10px;
+  background: #456b7b;
 }
-.compute-gpu,
-.compute-cpu {
-  padding: 18px;
-  border: 1px solid #355364;
-  background: linear-gradient(140deg, #1e3441, #14212a);
-  position: relative;
+.compute-route-footer i:nth-child(3n) {
+  height: 18px;
+  background: #76d6f5;
 }
-.compute-cpu {
-  background: linear-gradient(140deg, #27323b, #172029);
-  border-color: #48555f;
+.compute-route-footer i:nth-child(4n) {
+  height: 14px;
 }
-.compute-gpu > span,
-.compute-cpu > span {
+.compute-training-summary {
+  display: flex;
+  gap: 60px;
+}
+.compute-training-summary span {
   display: block;
   font-size: 11px;
-  color: #76d6f5;
-  margin-bottom: 10px;
+  color: #91a6b5;
+  margin-bottom: 8px;
 }
-.compute-cpu > span {
-  color: #c0ced8;
-}
-.compute-gpu > strong,
-.compute-cpu > strong {
-  font: 14px var(--font-mono);
+.compute-training-summary strong {
+  font: 400 28px var(--font-mono);
   color: #e0edf3;
 }
-.compute-core-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
-  margin-top: 22px;
+.compute-training-summary small {
+  font-size: 15px;
+  color: #738d9d;
 }
-.compute-core-grid i {
-  height: 13px;
-  background: #6dbad3;
-  opacity: 0.6;
+.compute-training-chart svg {
+  display: block;
+  width: 100%;
+  height: 130px;
 }
-.compute-core-grid i:nth-child(3n) {
-  opacity: 0.22;
-}
-.compute-cpu .compute-core-grid {
-  grid-template-columns: repeat(4, 1fr);
-}
-.compute-cpu .compute-core-grid i {
-  background: #a9bcc9;
-}
-.compute-fleet {
-  display: grid;
-  gap: 14px;
-}
-.compute-machine {
-  padding: 14px 18px;
-  border: 1px solid #364b58;
-  background: linear-gradient(100deg, #1b2a34, rgb(18 27 34 / 50%));
-}
-.compute-machine-heading {
+.compute-training-chart > div {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  color: #7b929f;
+  margin-top: 8px;
+  font-size: 10px;
 }
-.compute-machine-heading strong {
-  font: 13px var(--font-mono);
-  color: #e0edf3;
-}
-.compute-machine-heading > span {
-  font: 10px var(--font-mono);
-  color: #94b6c8;
-}
-.compute-machine-allocation {
+.compute-checkpoint {
   display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 14px;
+  font-size: 11px;
+  color: #91a6b5;
 }
-.compute-machine-allocation > span {
-  color: #8cabbc;
+.compute-checkpoint strong {
   font: 11px var(--font-mono);
+  color: #b5d8e8;
 }
-.compute-machine-allocation > div {
-  display: flex;
-  gap: 4px;
-}
-.compute-machine-allocation i {
-  width: 12px;
-  height: 9px;
+.compute-training-progress {
+  height: 3px;
   background: #24343f;
+  margin-top: -10px;
 }
-.compute-machine-allocation i[data-filled="true"] {
+.compute-training-progress i {
+  display: block;
+  width: 60%;
+  height: 100%;
   background: #76d6f5;
-  opacity: 0.65;
 }
 @media (min-width: 1800px) {
   .compute-stage,
@@ -492,9 +538,6 @@
     min-height: 0;
     gap: 24px;
   }
-  .compute-example-footer {
-    padding-top: 6px;
-  }
 }
 @media (max-width: 479px) {
   .compute-scene {
@@ -524,64 +567,82 @@
     font-size: 10px;
     text-align: right;
   }
-  .compute-service {
-    padding: 12px 10px;
-    gap: 8px;
+  .compute-agent-task {
+    gap: 12px;
     font-size: 11px;
   }
-  .compute-service > span:nth-child(2) {
-    font-size: 9px;
-  }
-  .compute-service-track {
-    gap: 3px;
-  }
-  .compute-service-track i {
-    width: 9px;
-    height: 8px;
-  }
-  .compute-account {
-    padding: 14px 10px;
-  }
-  .compute-account-heading {
-    font-size: 10px;
-    margin-bottom: 16px;
-  }
-  .compute-capacity-pool {
-    gap: 10px;
+  .compute-workspace {
     grid-template-columns: 1.2fr 1fr;
   }
-  .compute-gpu,
-  .compute-cpu {
-    padding: 12px 10px;
-  }
-  .compute-gpu > strong,
-  .compute-cpu > strong {
-    font-size: 11px;
-  }
-  .compute-core-grid {
-    gap: 3px;
-    margin-top: 16px;
-  }
-  .compute-core-grid i {
-    height: 10px;
-  }
-  .compute-machine {
-    padding: 12px;
-  }
-  .compute-machine-allocation {
-    gap: 8px;
-  }
-  .compute-machine-allocation > span {
+  .compute-workspace-files {
+    padding: 12px 8px;
     font-size: 9px;
   }
-  .compute-machine-allocation > div {
+  .compute-workspace-files > div > div {
+    padding-left: 6px;
+    gap: 4px;
+  }
+  .compute-workspace-files em {
+    font-size: 8px;
+  }
+  .compute-agent-actions {
+    padding: 12px 8px;
+    gap: 14px;
+  }
+  .compute-agent-actions > div {
+    padding-left: 7px;
+  }
+  .compute-agent-actions span {
+    font-size: 10px;
+  }
+  .compute-agent-actions small {
+    font-size: 8px;
+  }
+  .compute-sandbox-terminal {
+    padding: 10px;
+    font-size: 9px;
+  }
+  .compute-endpoint {
+    grid-template-columns: 30px 1.4fr 1fr 24px;
+    gap: 8px;
+    padding: 12px 10px;
+  }
+  .compute-http-method {
+    font-size: 8px;
+  }
+  .compute-endpoint strong {
+    font-size: 10px;
+  }
+  .compute-http-status {
+    font-size: 9px;
+  }
+  .compute-route-heading,
+  .compute-route-footer {
+    font-size: 9px;
+  }
+  .compute-route-footer {
+    gap: 8px;
+  }
+  .compute-route-footer > div {
     gap: 3px;
   }
-  .compute-machine-allocation i {
-    width: 7px;
-    height: 8px;
+  .compute-route-footer i {
+    width: 3px;
   }
-  .compute-example-footer {
+  .compute-training-summary {
+    gap: 40px;
+  }
+  .compute-training-summary strong {
+    font-size: 25px;
+  }
+  .compute-training-chart svg {
+    height: 110px;
+  }
+  .compute-checkpoint {
+    gap: 8px;
+    font-size: 9px;
+  }
+  .compute-checkpoint strong {
     font-size: 9px;
   }
 }

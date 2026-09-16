@@ -32,46 +32,53 @@ function ComputeExample({
     return (
       <div className="compute-example">
         <div className="compute-example-heading">
-          <strong>support-agent</strong>
-          <span>Managed CPU</span>
+          <strong>coding-agent</strong>
+          <span>Sandbox</span>
         </div>
-        <div className="compute-traffic">
-          <span>Incoming requests</span>
-          <svg viewBox="0 0 520 96" fill="none" aria-hidden="true">
-            <path className="compute-chart-grid" d="M0 24H520M0 56H520M0 88H520" />
-            <path
-              className="compute-chart-fill"
-              d="M0 80L32 79L58 64L82 72L110 54L136 61L168 28L192 40L220 18L250 36L276 32L302 56L330 44L358 65L392 59L420 77L452 72L484 83L520 82V96H0Z"
-            />
-            <path
-              className="compute-chart-line"
-              d="M0 80L32 79L58 64L82 72L110 54L136 61L168 28L192 40L220 18L250 36L276 32L302 56L330 44L358 65L392 59L420 77L452 72L484 83L520 82"
-            />
-          </svg>
+        <div className="compute-agent-task">
+          <span>Task</span>
+          <strong>Add search to the API</strong>
         </div>
-        <div className="compute-service">
-          <span>/chat</span>
-          <span>API</span>
-          <span className="compute-service-track">
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
+        <div className="compute-workspace">
+          <div className="compute-workspace-files">
+            <span>Workspace</span>
+            <div>
+              app/
+              <div>
+                api.py <em>+8</em>
+              </div>
+              <div>
+                search.py <em>+32</em>
+              </div>
+            </div>
+            <div>
+              tests/
+              <div>
+                test_search.py <em>+24</em>
+              </div>
+            </div>
+          </div>
+          <div className="compute-agent-actions">
+            <div>
+              <span>Read files</span>
+              <small>app/api.py</small>
+            </div>
+            <div>
+              <span>Edit source</span>
+              <small>app/search.py</small>
+            </div>
+            <div data-current="true">
+              <span>Run tests</span>
+              <small>uv run pytest</small>
+            </div>
+          </div>
         </div>
-        <div className="compute-service">
-          <span>summarize</span>
-          <span>Function</span>
-          <span className="compute-service-track">
-            <i />
-            <i />
-            <i />
-          </span>
-        </div>
-        <div className="compute-example-footer">
-          <span>Capacity follows demand</span>
-          <span>Scale to zero</span>
+        <div className="compute-sandbox-terminal">
+          <span>$ uv run pytest</span>
+          <div>
+            tests/test_search.py <span>···</span>
+            <i aria-hidden="true" />
+          </div>
         </div>
       </div>
     );
@@ -80,38 +87,58 @@ function ComputeExample({
     return (
       <div className="compute-example">
         <div className="compute-example-heading">
-          <strong>document-search</strong>
+          <strong>product-api</strong>
+          <span>Endpoints</span>
+        </div>
+        <div className="compute-route-heading">
           <span>Your AWS account</span>
+          <span>Request activity</span>
         </div>
-        <div className="compute-account">
-          <div className="compute-account-heading">
-            <span>Compute capacity</span>
-            <span>CPU + GPU</span>
-          </div>
-          <div className="compute-capacity-pool">
-            <div className="compute-gpu">
-              <span>GPU</span>
-              <strong>embed</strong>
-              <div className="compute-core-grid" aria-hidden="true">
-                {Array.from({ length: 24 }, (_, i) => (
-                  <i key={i} />
-                ))}
-              </div>
+        <div className="compute-endpoints">
+          {[
+            {
+              method: "POST",
+              path: "/search",
+              trace: "M0 25H18L24 12L30 29L37 20L44 25H66L72 7L79 29L86 19L93 25H120",
+            },
+            {
+              method: "POST",
+              path: "/chat",
+              trace: "M0 25H12L19 18L25 28L33 25H47L53 8L60 30L68 16L75 25H98L104 20L111 25H120",
+            },
+            {
+              method: "GET",
+              path: "/documents",
+              trace: "M0 25H24L30 17L36 28L42 25H74L80 13L87 29L94 21L101 25H120",
+            },
+          ].map((route) => (
+            <div className="compute-endpoint" key={route.path}>
+              <span className="compute-http-method">{route.method}</span>
+              <strong>{route.path}</strong>
+              <svg viewBox="0 0 120 36" fill="none" aria-hidden="true">
+                <path className="compute-chart-line" d={route.trace} />
+              </svg>
+              <span className="compute-http-status">200</span>
             </div>
-            <div className="compute-cpu">
-              <span>CPU</span>
-              <strong>search-api</strong>
-              <div className="compute-core-grid" aria-hidden="true">
-                {Array.from({ length: 12 }, (_, i) => (
-                  <i key={i} />
-                ))}
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
-        <div className="compute-example-footer">
-          <span>Deploy through LazyCloud</span>
-          <span>Run in your account</span>
+        <div className="compute-route-footer">
+          <span>HTTPS requests</span>
+          <div aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
+          <span>Responses</span>
         </div>
       </div>
     );
@@ -119,34 +146,50 @@ function ComputeExample({
   return (
     <div className="compute-example">
       <div className="compute-example-heading">
-        <strong>research-agent</strong>
-        <span>Your machines</span>
+        <strong>model-training</strong>
+        <span>gpu-server-01</span>
       </div>
-      <div className="compute-fleet">
-        {[
-          { name: "gpu-01", kind: "GPU", job: "inference", blocks: 7 },
-          { name: "worker-02", kind: "CPU", job: "process-documents", blocks: 5 },
-          { name: "server-03", kind: "CPU", job: "agent-api", blocks: 3 },
-        ].map((machine) => (
-          <div className="compute-machine" key={machine.name}>
-            <div className="compute-machine-heading">
-              <strong>{machine.name}</strong>
-              <span>{machine.kind}</span>
-            </div>
-            <div className="compute-machine-allocation">
-              <span>{machine.job}</span>
-              <div aria-hidden="true">
-                {Array.from({ length: 8 }, (_, i) => (
-                  <i key={i} data-filled={i < machine.blocks} />
-                ))}
-              </div>
-            </div>
-          </div>
-        ))}
+      <div className="compute-training-summary">
+        <div>
+          <span>Training loss</span>
+          <strong>0.24</strong>
+        </div>
+        <div>
+          <span>Epoch</span>
+          <strong>
+            06 <small>/ 10</small>
+          </strong>
+        </div>
       </div>
-      <div className="compute-example-footer">
-        <span>Connected Linux machines</span>
-        <span>One deployment API</span>
+      <div className="compute-training-chart">
+        <svg
+          viewBox="0 0 520 130"
+          fill="none"
+          role="img"
+          aria-label="Training loss decreases as the run progresses"
+        >
+          <path className="compute-chart-grid" d="M0 12H520M0 48H520M0 84H520M0 120H520" />
+          <path
+            className="compute-chart-fill"
+            d="M0 8L18 32L34 23L52 46L68 40L86 64L104 55L122 75L140 68L160 84L182 79L204 93L225 88L248 99L270 94L294 104L320 101L346 110L370 105L396 113L422 110L448 117L476 115L502 120L520 118V130H0Z"
+          />
+          <path
+            className="compute-chart-line"
+            d="M0 8L18 32L34 23L52 46L68 40L86 64L104 55L122 75L140 68L160 84L182 79L204 93L225 88L248 99L270 94L294 104L320 101L346 110L370 105L396 113L422 110L448 117L476 115L502 120L520 118"
+          />
+        </svg>
+        <div>
+          <span>0</span>
+          <span>Training steps</span>
+          <span>6,000</span>
+        </div>
+      </div>
+      <div className="compute-checkpoint">
+        <span>Checkpoint</span>
+        <strong>epoch-05.safetensors</strong>
+      </div>
+      <div className="compute-training-progress" aria-hidden="true">
+        <i />
       </div>
     </div>
   );
