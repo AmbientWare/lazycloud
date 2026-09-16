@@ -26,7 +26,11 @@ export function BillingSettings({
   return (
     <>
       <div className="grid shrink-0 gap-3 lg:min-h-0 lg:flex-1 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
-        <Panel title="Plan and payment" contentClassName="flex flex-col gap-3 p-3">
+        <Panel
+          title="Plan and payment"
+          pending={controller.isLoading}
+          contentClassName="flex flex-col gap-3 p-3"
+        >
           {controller.isLoading ? (
             <div className="space-y-2" aria-hidden="true">
               <Skeleton className="h-4 w-56" />

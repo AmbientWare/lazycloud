@@ -34,7 +34,10 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
       <div className="min-w-0">
         <h3 className="text-sm font-medium">Available balance</h3>
         {balance.data?.ready ? (
-          <p className="mt-1 font-mono text-2xl font-medium tracking-tight" aria-live="polite">
+          <p
+            className="content-transition mt-1 font-mono text-2xl font-medium tracking-tight"
+            aria-live="polite"
+          >
             {formatCostNanos(balance.data.balance_nanos)}
           </p>
         ) : balance.isPending ? (

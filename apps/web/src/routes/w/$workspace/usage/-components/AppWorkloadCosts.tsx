@@ -55,7 +55,7 @@ export function AppWorkloadCosts({
   }
 
   return (
-    <div className="flex min-h-0 flex-col">
+    <div className="content-transition flex min-h-0 flex-col">
       <ul className="divide-y divide-border/40">
         {rows.map((row) => {
           const share = appCostNanos > 0 ? row.cost_nanos / appCostNanos : 0;

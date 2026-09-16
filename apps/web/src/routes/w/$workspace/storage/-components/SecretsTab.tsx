@@ -6,6 +6,7 @@ import { CopyButton } from "@/components/shared/CopyButton";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -38,7 +39,10 @@ export function SecretsTab({
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
-    <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
+    <ContentTransition
+      pending={query.isPending}
+      className="flex min-h-full flex-col lg:h-full lg:min-h-0"
+    >
       <div className="min-h-[24rem] flex-1 divide-y divide-border overflow-visible lg:min-h-0 lg:overflow-y-auto">
         <div
           aria-hidden="true"
@@ -91,7 +95,7 @@ export function SecretsTab({
           )
         )}
       </div>
-    </div>
+    </ContentTransition>
   );
 }
 

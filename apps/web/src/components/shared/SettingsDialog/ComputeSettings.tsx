@@ -20,7 +20,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { AwsConnection, CustomerComputeInstance, UnitMachine } from "@/lib/api/schemas";
 import {
   awsConnectionQueryOptions,
@@ -356,6 +355,7 @@ function SelfHostedPanel({
   return (
     <Panel
       title="Self-hosted machines"
+      pending={loading}
       action={
         <Button size="sm" variant="outline" onClick={onJoin}>
           <Server />
@@ -402,8 +402,16 @@ function SelfHostedPanel({
 function SettingsSkeleton() {
   return (
     <div className="flex min-h-full flex-col gap-4 sm:min-h-0 sm:flex-1 sm:overflow-hidden">
-      <Skeleton className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1" />
-      <Skeleton className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1" />
+      <Panel pending title="Connected clouds" className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1">
+        <RowsSkeleton rows={2} height="h-10" />
+      </Panel>
+      <Panel
+        pending
+        title="Self-hosted machines"
+        className="min-h-56 shrink-0 sm:min-h-0 sm:flex-1"
+      >
+        <RowsSkeleton rows={2} height="h-10" />
+      </Panel>
     </div>
   );
 }

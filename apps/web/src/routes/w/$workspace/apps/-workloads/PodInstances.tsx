@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
+import { ContentTransition } from "@/components/shared/ContentTransition";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import {
@@ -86,7 +87,12 @@ export function PodInstances({
       </div>
       <div className="flex min-h-0 flex-1 flex-col bg-muted/10">
         <InstanceListHeader />
-        <div className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label="Pod instances">
+        <ContentTransition
+          pending={loading}
+          className="min-h-0 flex-1 overflow-y-auto"
+          role="list"
+          aria-label="Pod instances"
+        >
           {loading ? (
             <InstanceListSkeleton />
           ) : error ? (
@@ -123,7 +129,7 @@ export function PodInstances({
               className="h-full min-h-36 px-6"
             />
           )}
-        </div>
+        </ContentTransition>
       </div>
     </div>
   );

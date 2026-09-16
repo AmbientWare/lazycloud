@@ -63,11 +63,27 @@ export function deleteArtifact(workspaceId: string, id: string) {
 export async function fetchArtifactBlob(
   workspaceId: string,
   artifact: { id: string; task_id: string; filename: string },
+  signal?: AbortSignal,
 ): Promise<Blob> {
   const query = new URLSearchParams({
     id: artifact.id,
     task_id: artifact.task_id,
     filename: artifact.filename,
   });
-  return apiBlob(withWorkspace(`/api/v1/artifacts/content?${query.toString()}`, workspaceId));
+  return apiBlob(
+    withWorkspace(`/api/v1/artifacts/content?${query.toString()}`, workspaceId),
+    signal,
+  );
+}
+
+export function artifactContentQueryOptions(
+  workspaceId: string,
+  artifact: { id: string; task_id: string; filename: string },
+) {
+  return queryOptions({
+    queryKey: [...workspaceQueryKeys.storage.artifacts(workspaceId), "content", artifact.id],
+    queryFn: ({ signal }) => fetchArtifactBlob(workspaceId, artifact, signal),
+    staleTime: Infinity,
+    gcTime: 60_000,
+  });
 }

@@ -21,7 +21,7 @@ export function SpendTotals({
               —
             </span>
           ) : series ? (
-            <span className="readout break-all text-3xl leading-none sm:text-4xl">
+            <span className="content-transition readout break-all text-3xl leading-none sm:text-4xl">
               {formatCostNanos(series.cost_nanos, series.currency)}
             </span>
           ) : (
@@ -48,7 +48,7 @@ export function SpendTotals({
                 ) : !series ? (
                   <Skeleton className="h-5 w-20" />
                 ) : totals?.length ? (
-                  <span className="mono text-sm tabular-nums">
+                  <span className="content-transition mono text-sm tabular-nums">
                     {formatCostNanos(
                       totals.reduce((sum, total) => sum + total.cost_nanos, 0),
                       series.currency,

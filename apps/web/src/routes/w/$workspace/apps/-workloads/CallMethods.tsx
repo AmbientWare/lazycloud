@@ -30,7 +30,7 @@ export function CallMethods({
   const body = exampleBody(manifest.data);
 
   return (
-    <div className="min-w-0 divide-y divide-border/70">
+    <div className="content-transition min-w-0 divide-y divide-border/70">
       <p className="px-4 py-3 text-xs text-muted-foreground">
         Set LAZYCLOUD_TOKEN to your access token before running these examples.
       </p>

@@ -188,7 +188,7 @@ function ContainerCapacity({ sample }: { sample: ContainerMetricsPoint | undefin
     },
   ];
   return (
-    <FactGrid columns={3} className="mt-3 gap-y-3">
+    <FactGrid columns={3} className="content-transition mt-3 gap-y-3">
       {capacity.map((item) => (
         <Fact key={item.label} label={item.label} value={item.value} mono />
       ))}

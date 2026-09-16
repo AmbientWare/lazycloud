@@ -62,7 +62,7 @@ export function SpendChart({
   return (
     <ChartContainer
       config={COST_DIMENSIONS}
-      className="aspect-auto h-full w-full"
+      className="content-transition aspect-auto h-full w-full"
       aria-label="Spend over time by category"
     >
       <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>

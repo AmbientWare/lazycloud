@@ -1,5 +1,5 @@
 import { Download, File, FileImage, FileText, Loader2, Trash2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 
@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { fetchArtifactBlob } from "@/lib/queries/artifacts";
+import { ArtifactPreview, type PreviewKind } from "./ArtifactPreview";
 import type { ArtifactSummary } from "@/lib/api/schemas";
 
 export function ArtifactDeletionTime({ artifact }: { artifact: ArtifactSummary }) {
@@ -32,8 +33,6 @@ export function ArtifactDeletionTime({ artifact }: { artifact: ArtifactSummary }
     </time>
   );
 }
-
-type PreviewKind = "image" | "pdf" | "text" | "none";
 
 /**
  * Types that are plain text but are not spelled `text/*`. These are what
@@ -54,106 +53,11 @@ const TEXTUAL_CONTENT_TYPES = new Set([
  * How to render an artifact. The stored content type decides, which is why the
  * SDK infers it at save time rather than leaving everything octet-stream.
  */
-function previewKind(contentType: string): PreviewKind {
+function previewKind(contentType: string): PreviewKind | "none" {
   if (contentType.startsWith("image/")) return "image";
   if (contentType === "application/pdf") return "pdf";
   if (contentType.startsWith("text/") || TEXTUAL_CONTENT_TYPES.has(contentType)) return "text";
   return "none";
-}
-
-/**
- * Renders the fetched bytes according to what they are. Every branch fills the
- * dialog's fixed body and scrolls inside it, so the dialog is the same size
- * whatever the artifact turns out to be.
- */
-function PreviewBody({
-  artifact,
-  workspaceId,
-  kind,
-}: {
-  artifact: ArtifactSummary;
-  workspaceId: string;
-  kind: PreviewKind;
-}): ReactNode {
-  const [url, setUrl] = useState<string | null>(null);
-  const [text, setText] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [undecodable, setUndecodable] = useState(false);
-  // Depend on the identifying fields rather than the artifact object: the
-  // list query hands back a fresh object on every refetch, and re-running
-  // this effect would revoke a URL the rendered element is still showing.
-  const { id, task_id: taskId, filename } = artifact;
-
-  useEffect(() => {
-    let objectUrl: string | null = null;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const blob = await fetchArtifactBlob(workspaceId, { id, task_id: taskId, filename });
-        const decoded = kind === "text" ? await blob.text() : null;
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        if (cancelled) {
-          // Cleanup already ran, so nothing else will revoke this one.
-          URL.revokeObjectURL(objectUrl);
-          objectUrl = null;
-          return;
-        }
-        if (decoded !== null) setText(decoded);
-        setUrl(objectUrl);
-      } catch (error) {
-        if (!cancelled) setFailure(error instanceof Error ? error.message : "unknown error");
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [workspaceId, id, taskId, filename, kind]);
-
-  if (failure) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-        {failure}
-      </div>
-    );
-  }
-  if (!url) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-  if (kind === "image") {
-    // A file can carry an image content type and still not decode. Saying so
-    // beats an empty dialog that looks like the fetch silently failed.
-    if (undecodable) {
-      return (
-        <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-          This image could not be decoded. Download it to inspect the file.
-        </div>
-      );
-    }
-    return (
-      <div className="flex flex-1 items-center justify-center overflow-auto rounded-md bg-muted p-3">
-        <img
-          src={url}
-          alt={artifact.filename}
-          onError={() => setUndecodable(true)}
-          className="max-h-full max-w-full object-contain"
-        />
-      </div>
-    );
-  }
-  if (kind === "pdf") {
-    return <iframe src={url} title={artifact.filename} className="flex-1 rounded-md border-0" />;
-  }
-  return (
-    <pre className="mono flex-1 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
-      {text ?? ""}
-    </pre>
-  );
 }
 
 export function ArtifactRow({
@@ -174,6 +78,8 @@ export function ArtifactRow({
   onDelete: () => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const previewButton = useRef<HTMLButtonElement>(null);
+  const previewTitle = useRef<HTMLHeadingElement>(null);
   const [downloading, setDownloading] = useState(false);
   const now = useLiveNow(true);
   const kind = previewKind(artifact.content_type);
@@ -222,6 +128,7 @@ export function ArtifactRow({
     <div className="flex min-w-0 items-center gap-2.5">
       <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <button
+        ref={previewButton}
         type="button"
         className="min-w-0 truncate rounded-sm text-left text-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:no-underline disabled:opacity-60"
         title={artifact.filename}
@@ -308,16 +215,37 @@ export function ArtifactRow({
         </TableRow>
       )}
       <Dialog open={open} onOpenChange={setOpen}>
-        {/* One size for every artifact: the content scrolls or scales inside
-            it rather than the dialog resizing around the content. */}
-        <DialogContent className="flex h-[80vh] flex-col gap-3 sm:max-w-3xl">
-          <DialogHeader className="shrink-0">
-            <DialogTitle className="mono truncate pr-6 text-sm">{artifact.filename}</DialogTitle>
+        <DialogContent
+          className="flex h-[min(40rem,80svh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            previewTitle.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            previewButton.current?.focus();
+          }}
+        >
+          <DialogHeader className="shrink-0 gap-1 border-b px-4 py-3 text-left">
+            <DialogTitle
+              ref={previewTitle}
+              tabIndex={-1}
+              className="mono truncate pr-6 text-sm outline-none"
+            >
+              {artifact.filename}
+            </DialogTitle>
             <DialogDescription className="text-xs">
               {artifact.content_type} · {formatBytes(artifact.size)}
             </DialogDescription>
           </DialogHeader>
-          {open && <PreviewBody artifact={artifact} workspaceId={workspaceId} kind={kind} />}
+          {kind !== "none" && (
+            <ArtifactPreview
+              key={artifact.id}
+              artifact={artifact}
+              workspaceId={workspaceId}
+              kind={kind}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </>

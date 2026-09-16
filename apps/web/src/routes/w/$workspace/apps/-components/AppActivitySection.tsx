@@ -27,6 +27,7 @@ export function AppActivitySection({
       className="min-h-[16rem] lg:h-full lg:min-h-0"
     >
       <Panel
+        pending={pending}
         title={<span id="app-activity-heading">Activity</span>}
         action={<AppActivityLegend activity={activity} />}
         className="h-full"

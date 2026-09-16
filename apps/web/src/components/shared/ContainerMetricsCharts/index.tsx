@@ -60,7 +60,12 @@ export function ContainerMetricsCharts({
       : undefined;
 
   return (
-    <div className={cn("grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2", className)}>
+    <div
+      className={cn(
+        "content-transition grid grid-cols-1 gap-x-6 gap-y-5 lg:grid-cols-2",
+        className,
+      )}
+    >
       <CpuChart data={data} readout={readout?.cpu} />
       <MemoryChart
         title="Memory"

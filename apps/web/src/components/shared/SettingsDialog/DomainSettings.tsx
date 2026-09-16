@@ -52,6 +52,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
 
   return (
     <Panel
+      pending={domains.isPending}
       title="Domains"
       className="min-h-0 flex-1"
       headerClassName="flex-wrap"

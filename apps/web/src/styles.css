@@ -295,6 +295,52 @@
   letter-spacing: 0;
 }
 
+@keyframes content-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes loading-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.content-transition {
+  animation: content-reveal 180ms ease-out backwards;
+}
+
+.view-enter {
+  animation: view-enter 180ms ease-out backwards;
+}
+
+.content-transition[data-pending="true"],
+.loading-placeholder {
+  animation: loading-reveal 160ms ease-out 140ms backwards;
+}
+
+.loading-placeholder {
+  background: color-mix(in oklab, var(--muted-foreground) 10%, var(--card));
+}
+
 /* Soft pulse for live status dots. */
 @keyframes pulse-soft {
   0%,
@@ -312,6 +358,14 @@
 
 @media (prefers-reduced-motion: reduce) {
   .pulse-live,
+  .content-transition,
+  .content-transition[data-pending="true"],
+  .loading-placeholder,
+  .view-enter,
+  [data-slot="dialog-overlay"],
+  [data-slot="dialog-content"],
+  .animate-spin,
+  .animate-pulse,
   .interactive-panel,
   .interactive-row,
   .interactive-link {

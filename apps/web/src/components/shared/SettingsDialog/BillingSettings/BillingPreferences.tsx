@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { BillingPreferences as Preferences } from "@/lib/api/schemas";
 import { formatCostNanos } from "@/lib/money";
 import {
@@ -18,7 +19,7 @@ import { AmountSelect } from "./AmountSelect";
 
 export function BillingPreferences({ paymentMethodOnFile }: { paymentMethodOnFile: boolean }) {
   const query = useQuery(billingPreferencesQueryOptions());
-  if (query.isPending) return <p role="status">Loading billing settings…</p>;
+  if (query.isPending) return <Skeleton className="h-24 w-full" />;
   if (query.error)
     return (
       <p role="alert" className="text-sm text-destructive">
@@ -95,7 +96,7 @@ function PreferencesForm({
 
   return (
     <form
-      className="space-y-2"
+      className="content-transition space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (valid && dirty && !busy)

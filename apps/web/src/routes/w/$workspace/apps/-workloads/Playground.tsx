@@ -114,7 +114,7 @@ function PlaygroundForm({
   };
 
   return (
-    <div className="min-w-0 space-y-4 p-4">
+    <div className="content-transition min-w-0 space-y-4 p-4">
       <div className="min-w-0 space-y-3">
         {fields !== null && fields.length > 0 ? (
           <div className="space-y-2.5">
@@ -312,20 +312,23 @@ function TaskInvokeOutcome({
           <ArrowUpRight className="size-3" aria-hidden="true" />
         </Link>
       </div>
-      {task.isPending ? (
-        <div className="space-y-2 p-3" aria-label="Loading task result">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-16 w-full" />
-        </div>
-      ) : task.isError ? (
-        <PanelError message={task.error.message} />
-      ) : task.data.error || (task.data.result !== null && task.data.result !== undefined) ? (
-        <ResultBody error={task.data.error} result={task.data.result} />
-      ) : (
-        <p className="p-3 text-xs text-muted-foreground">
-          {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
-        </p>
-      )}
+      <ContentTransition pending={task.isPending}>
+        {task.isPending ? (
+          <div className="space-y-2 p-3" aria-label="Loading task result">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ) : task.isError ? (
+          <PanelError message={task.error.message} />
+        ) : task.data.error || (task.data.result !== null && task.data.result !== undefined) ? (
+          <ResultBody error={task.data.error} result={task.data.result} />
+        ) : (
+          <p className="p-3 text-xs text-muted-foreground">
+            {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
+          </p>
+        )}
+      </ContentTransition>
     </section>
   );
 }
+import { ContentTransition } from "@/components/shared/ContentTransition";

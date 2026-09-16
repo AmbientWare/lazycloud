@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 /**
  * The placeholder a list region shows while its rows load.
  *
- * `aria-hidden` is unconditional: a pulsing bar carries nothing a reader can
+ * `aria-hidden` is unconditional: a placeholder carries nothing a reader can
  * use, and announcing one per pending row reports noise instead of progress.
  *
  * `height` stays a prop because it is what makes the placeholder match the rows

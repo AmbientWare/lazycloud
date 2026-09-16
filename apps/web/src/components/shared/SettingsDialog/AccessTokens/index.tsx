@@ -39,6 +39,7 @@ export function AccessTokens() {
 
   return (
     <Panel
+      pending={controller.isLoading}
       title="Access tokens"
       action={
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">

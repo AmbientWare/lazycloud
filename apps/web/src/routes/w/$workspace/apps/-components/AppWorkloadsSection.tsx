@@ -73,6 +73,7 @@ export function AppWorkloadsSection({
       className="min-h-[26rem] lg:h-full lg:min-h-0"
     >
       <Panel
+        pending={pending}
         title={<span id="app-workloads-heading">Workloads</span>}
         action={
           <Select

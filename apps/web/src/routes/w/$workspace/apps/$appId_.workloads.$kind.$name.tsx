@@ -308,6 +308,7 @@ function WorkloadRuns({
 function WorkloadSkeleton() {
   return (
     <WorkspacePage
+      pending
       title={<Skeleton className="h-7 w-64" />}
       headerDetails={<Skeleton className="h-12 w-full" />}
       contentClassName="grid gap-3 overflow-y-auto xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"

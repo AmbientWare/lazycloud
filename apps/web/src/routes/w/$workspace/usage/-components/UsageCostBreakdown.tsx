@@ -48,7 +48,7 @@ export function UsageCostBreakdown({
   ];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <div className="content-transition flex min-h-0 flex-1 flex-col overflow-y-auto">
       {sections
         .filter((section) => section.rows.length > 0)
         .map((section) => (

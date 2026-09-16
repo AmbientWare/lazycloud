@@ -108,7 +108,7 @@ export function WorkspaceMembersDialog({
             {members.error.message}
           </p>
         ) : (
-          <ul className="divide-y divide-border border-y border-border">
+          <ul className="content-transition divide-y divide-border border-y border-border">
             {(members.data?.data ?? []).map((member) => (
               <MemberRow
                 key={member.user_id}

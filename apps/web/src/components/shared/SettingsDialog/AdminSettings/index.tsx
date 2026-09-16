@@ -111,6 +111,7 @@ export function AdminSettings() {
   return (
     <>
       <Panel
+        pending={controller.isLoading}
         title="Accounts"
         className="min-h-0 flex-1"
         contentClassName="flex flex-col overflow-hidden"
