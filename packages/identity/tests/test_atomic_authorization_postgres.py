@@ -43,7 +43,7 @@ def _postgres_test_context(
         )
     )
     try:
-        yield ServiceContext.create(database, root=tmp_path, create_schema=False), database
+        yield ServiceContext.create(database, root=tmp_path), database
     finally:
         database.dispose()
 

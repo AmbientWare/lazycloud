@@ -253,7 +253,7 @@ class UsageService:
         app_id: str = "",
         deployment_id: str = "",
     ) -> UsageRecord:
-        labels, metadata = _task_count_labels(
+        labels = _task_count_labels(
             resource_id=resource_id,
             task_id=task_id,
             kind=kind,
@@ -269,7 +269,6 @@ class UsageService:
             quantity=1,
             unit=UsageUnit.Count,
             labels=labels,
-            metadata=metadata,
         )
 
     async def record_task_count_async(
@@ -283,7 +282,7 @@ class UsageService:
         app_id: str = "",
         deployment_id: str = "",
     ) -> UsageRecord:
-        labels, metadata = _task_count_labels(
+        labels = _task_count_labels(
             resource_id=resource_id,
             task_id=task_id,
             kind=kind,
@@ -299,7 +298,6 @@ class UsageService:
             quantity=1,
             unit=UsageUnit.Count,
             labels=labels,
-            metadata=metadata,
         )
 
     def _publish_change(self, record: UsageRecord) -> None:
@@ -369,16 +367,13 @@ def _task_count_labels(
     kind: str,
     app_id: str,
     deployment_id: str,
-) -> tuple[dict[str, str], dict[str, JsonValue]]:
-    metadata: dict[str, JsonValue] = {"task_id": task_id}
-    labels = {"kind": kind, UsageGroupKey.Workload.value: resource_id}
+) -> dict[str, str]:
+    labels = {"kind": kind, "stub_id": resource_id, "task_id": task_id}
     if app_id:
-        metadata["app_id"] = app_id
         labels["app_id"] = app_id
     if deployment_id:
-        metadata[UsageGroupKey.Version.value] = deployment_id
-        labels[UsageGroupKey.Version.value] = deployment_id
-    return labels, metadata
+        labels["deployment_id"] = deployment_id
+    return labels
 
 
 def _encode_usage_record_cursor(cursor: UsageRecordCursor) -> str:
@@ -390,7 +385,7 @@ def _encode_usage_record_cursor(cursor: UsageRecordCursor) -> str:
 
 
 def _usage_identity(record: UsageRecord, key: str) -> str | None:
-    value = record.metadata.get(key, record.labels.get(key))
+    value = record.labels.get(key)
     return value if isinstance(value, str) and value else None
 
 

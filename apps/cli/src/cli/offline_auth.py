@@ -180,7 +180,7 @@ def _provision_workspace_storage(
     free of object-store I/O: a process that cannot reach storage should fail
     at the operation that needs it, not refuse to serve the routes that do not.
     """
-    context = ServiceContext.create(database, create_schema=False)
+    context = ServiceContext.create(database)
     service = ControlPlaneService(
         context,
         workspace_storage_client=storage_client,

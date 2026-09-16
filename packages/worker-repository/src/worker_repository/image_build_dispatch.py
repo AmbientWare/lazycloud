@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.images import ImageBuildRepository
-from execution.secrets.crypto import WorkspaceSecretCipher
+from database.workspace_secrets import WorkspaceSecretCipher
 from execution.services import ExecutionContainerService
 from identity.auth import AuthorizationDeniedError
 from images.building import registry_auth_file_entry, unmarshal_registry_credentials

@@ -12,7 +12,6 @@ from cli.offline_auth import _read_configured_token
 from control.service import WorkspaceStorageError
 from identity.auth import AuthService, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError
-from shared.errors import ConflictError
 from shared.identity import TokenKind
 from storage_client.s3 import S3ObjectStoreClient
 from typer.testing import CliRunner
@@ -104,7 +103,7 @@ def test_offline_recovery_refuses_non_postgresql_authority(
     )
 
     assert result.exit_code == 1
-    assert isinstance(result.exception, ConflictError)
+    assert isinstance(result.exception, ValueError)
     assert "requires PostgreSQL" in str(result.exception)
     assert "rt_" not in result.output
     assert not output.exists()

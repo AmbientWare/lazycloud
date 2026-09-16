@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
+from uuid import uuid4
 
 from database.repositories.apps import (
     AppRepository,
@@ -14,6 +15,7 @@ from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
+from shared.compute_policy import MachinePool
 from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
 from shared.deployment_records import (
     Deployment,
@@ -78,7 +80,7 @@ class DeploymentRegistrar(Protocol):
 
 
 class DeploymentPoolResolver(Protocol):
-    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str: ...
+    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> MachinePool: ...
 
 
 class DeploymentScheduleWriter(Protocol):
@@ -170,22 +172,20 @@ class DeploymentService:
                 workspace_id=workspace_record.id,
                 admission=self.custom_domain_admission,
             )
-            deployment = repository.records.create(
-                {
-                    "name": normalized_spec.name,
-                    "kind": normalized_spec.kind,
-                    "app_id": app_id,
-                    "stub_id": None,
-                    "version": version,
-                    "spec": normalized_spec.model_dump(mode="json"),
-                    "subdomain": subdomain,
-                    "custom_hostname": custom_hostname,
-                    "pool": resolved_pool,
-                    "active": deployment_active,
-                },
+            deployment = repository.upsert(
+                Deployment(
+                    id=str(uuid4()),
+                    name=normalized_spec.name,
+                    kind=normalized_spec.kind,
+                    app_id=app_id,
+                    version=version,
+                    spec=normalized_spec,
+                    subdomain=subdomain,
+                    custom_hostname=custom_hostname,
+                    pool=resolved_pool,
+                    active=deployment_active,
+                ),
                 workspace_id=workspace_record.id,
-                name=normalized_spec.name,
-                status="active" if deployment_active else "inactive",
             )
         try:
             if self.placement_resources is not None and deployment.active:
@@ -203,11 +203,9 @@ class DeploymentService:
                 }
             )
             with self.context.database.session() as session:
-                deployment = DeploymentRepository(session).records.upsert(
+                deployment = DeploymentRepository(session).upsert(
                     deployment,
                     workspace_id=workspace_record.id,
-                    name=deployment.name,
-                    status="active" if deployment.active else "inactive",
                 )
             # Unconditional, because a spec without a schedule is stating that
             # this resource has none — and the row a prior version wrote is
@@ -306,11 +304,9 @@ class DeploymentService:
             if workspace_id is None:
                 msg = f"deployment workspace not found: {deployment.id}"
                 raise NotFoundError(msg)
-            updated = repository.records.upsert(
+            updated = repository.upsert(
                 deployment,
                 workspace_id=workspace_id,
-                name=deployment.name,
-                status="inactive",
             )
             delete_deployment_cron_jobs(
                 session,
@@ -346,11 +342,9 @@ class DeploymentService:
             update={"active": False, "deleted_at": now, "updated_at": now}
         )
         with self.context.database.session() as session:
-            DeploymentRepository(session).records.upsert(
+            DeploymentRepository(session).upsert(
                 failed,
                 workspace_id=workspace_id,
-                name=failed.name,
-                status="inactive",
             )
 
     def _publish_change(
@@ -566,11 +560,8 @@ class CronJobService:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             repository = CronJobRepository(session)
-            record = next(
-                (item for item in repository.list(workspace_id=workspace_id) if item.name == name),
-                None,
-            )
-            repository.records.delete(name, workspace_id=workspace_id)
+            record = repository.get(name, workspace_id=workspace_id)
+            repository.delete(name, workspace_id=workspace_id)
         if record is not None:
             self.publish_change(record, WorkspaceChangeType.Deleted)
 

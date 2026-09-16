@@ -50,7 +50,6 @@ def services_with_redis_container_control(
     return ApiServices.create(
         services.database,
         root=services.root,
-        create_schema=False,
         workspace_storage_issuer=services.workspace_storage_issuer,
         tcp_ingress_settings=services.tcp_ingress_settings,
         agent_route_reconciliation_settings=services.agent_route_reconciliation_settings,

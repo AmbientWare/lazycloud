@@ -120,7 +120,7 @@ def test_endpoint_autoscaler_scales_up_from_active_dispatch_pressure(
     assert state.signal_value == 3
     assert state.decision == "scale-up"
     assert state.lock_acquired is True
-    assert state.last_sample["active_requests"] == 3
+    assert state.signal_name == "active_requests" and state.signal_value == 3
     assert len(state.last_actions) == 3
 
 

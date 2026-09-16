@@ -22,7 +22,6 @@ class StorageRetentionPeriodTable(IdTable, DatabaseBase):
             "user_id",
             unique=True,
             postgresql_where=text("ended_at IS NULL"),
-            sqlite_where=text("ended_at IS NULL"),
         ),
     )
 

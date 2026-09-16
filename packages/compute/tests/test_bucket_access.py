@@ -10,7 +10,7 @@ from compute.bucket_access import (
     ConnectedBucketAccessGrant,
 )
 from compute.policy import WorkspaceComputePolicyService
-from database.repositories.compute import AwsAccountConnectionRepository
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,

@@ -134,7 +134,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     selector: str = Field(default="", max_length=255)
     status: str = Field(default=ComputeUnitPhase.Ready.value, max_length=80)
     source: str = Field(default="autosolver", max_length=80)
-    config: dict[str, JsonValue] = Field(default_factory=dict)
     expires_at: datetime | None = None
     provider_ref: str = Field(default="", max_length=160)
     provider_connection_id: str | None = Field(default=None, pattern=_UUID_PATTERN)

@@ -48,7 +48,6 @@ def service_graph(
 
     services = ApiServices.create(
         database,
-        create_schema=False,
         root=tmp_path,
         redis_client=redis_client,
         binary_redis_client=binary_redis_client,
@@ -119,7 +118,6 @@ def services_with_object_storage(
     replacement = ApiServices.create(
         services.database,
         root=services.root,
-        create_schema=False,
         workspace_storage_issuer=services.workspace_storage_issuer,
         object_storage=object_storage,
         redis_client=services.redis_client,

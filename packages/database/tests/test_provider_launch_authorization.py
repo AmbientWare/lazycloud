@@ -13,7 +13,7 @@ from compute.providers import ProviderUnitBootstrap, ProviderUnitRequest
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.provider_launches import ProviderNodeLaunchRepository
-from execution.secrets.crypto import WorkspaceSecretCipher
+from database.workspace_secrets import WorkspaceSecretCipher
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import (
     ComputeCapacityMode,

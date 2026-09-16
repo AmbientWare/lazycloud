@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
+from uuid import uuid4
 
 from database.repositories.compute import (
     ComputeCapacityOperationRepository,
@@ -114,26 +115,6 @@ def _reservation_status_from_provider(status: str) -> ReservationStatus:
     if status == ProviderMachineStatus.Terminated:
         return ReservationStatus.Deleted
     return ReservationStatus.Pending
-
-
-def _provider_storage_volume_ids(record: ComputeProviderInstanceRecord) -> tuple[str, ...]:
-    value = record.metadata.get("storage_volume_ids")
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, str) and item)
-
-
-def _provider_booted_template_version(record: ComputeProviderInstanceRecord) -> str:
-    value = record.metadata.get("booted_template_version")
-    return value if isinstance(value, str) else ""
-
-
-def _metadata_time(metadata: Mapping[str, JsonValue], key: str) -> datetime | None:
-    value = metadata.get(key)
-    if not isinstance(value, str) or not value:
-        return None
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return _utc(parsed)
 
 
 def _reservation_open(status: str) -> bool:
@@ -298,18 +279,6 @@ class ProviderMachineReconciler:
             # instance identity, so the closed row restarts as a fresh launch
             # attempt instead of resurrecting the reclaimed record's state.
             relaunched = existing is not None and not _reservation_open(existing.status)
-            metadata: dict[str, JsonValue] = dict(existing.metadata) if existing is not None else {}
-            metadata.pop("missing_since", None)
-            if relaunched:
-                for stale_key in (
-                    "terminating_reason",
-                    "terminated_reason",
-                    "status_message",
-                    "last_error",
-                    "provider_storage_destroyed_at",
-                    "capacity_release_target",
-                ):
-                    metadata.pop(stale_key, None)
             settled_existing = existing if existing is not None and not relaunched else None
             provider_status = _reservation_status_from_provider(instance.status).value
             if (
@@ -427,35 +396,45 @@ class ProviderMachineReconciler:
                     settled_existing.unserved_observations if settled_existing is not None else 0
                 ),
                 "launch_attempt": launch_attempt,
-                "metadata": {
-                    **metadata,
-                    "architecture": offer.architecture,
-                    "runtime": offer.runtime,
-                    "region": offer.region,
-                    "availability_zone": instance.availability_zone,
-                    "storage_volume_ids": list(instance.storage_volume_ids),
-                    "booted_template_version": instance.booted_template_version,
-                },
+                "architecture": offer.architecture,
+                "runtime": offer.runtime,
+                "region": offer.region,
+                "availability_zone": instance.availability_zone,
+                "storage_volume_ids": list(instance.storage_volume_ids),
+                "booted_template_version": instance.booted_template_version,
+                "missing_since": None,
+                "provider_storage_destroyed_at": settled_existing.provider_storage_destroyed_at
+                if settled_existing
+                else None,
+                "terminating_reason": settled_existing.terminating_reason
+                if settled_existing
+                else "",
+                "terminated_reason": settled_existing.terminated_reason if settled_existing else "",
+                "status_message": settled_existing.status_message if settled_existing else "",
+                "last_error": settled_existing.last_error if settled_existing else "",
+                "updated_at": now,
             }
-            if existing is None:
-                repository.records.create(payload, status=provider_status)
-            else:
-                repository.upsert(
-                    ComputeProviderInstanceRecord.model_validate(
-                        {**existing.model_dump(), **payload}
-                    )
+            repository.upsert(
+                ComputeProviderInstanceRecord.model_validate(
+                    {
+                        **(
+                            existing.model_dump()
+                            if existing
+                            else {"id": str(uuid4()), "created_at": now}
+                        ),
+                        **payload,
+                    }
                 )
+            )
         for existing in current:
             if existing.instance_id is not None and existing.instance_id in observed:
                 continue
-            existing_metadata = dict(existing.metadata)
-            missing_since = _metadata_time(existing_metadata, "missing_since")
+            missing_since = existing.missing_since
             if missing_since is None:
-                existing_metadata["missing_since"] = now.isoformat()
                 missing_since = now
             elif (
                 not _reservation_open(existing.status)
-                and _metadata_time(existing_metadata, "provider_storage_destroyed_at") is not None
+                and existing.provider_storage_destroyed_at is not None
             ):
                 # A terminal status alone does not prove storage destruction.
                 # Fully settled rows must keep their original release timestamp.
@@ -466,13 +445,13 @@ class ProviderMachineReconciler:
                 and not _provider_zero_capacity_converged(snapshot)
             ):
                 repository.upsert(
-                    existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
+                    existing.model_copy(update={"missing_since": missing_since, "updated_at": now})
                 )
                 continue
             destroyed_at = destruction_observations.get(existing.id)
             if destroyed_at is None:
                 repository.upsert(
-                    existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
+                    existing.model_copy(update={"missing_since": missing_since, "updated_at": now})
                 )
                 continue
             if (
@@ -484,18 +463,16 @@ class ProviderMachineReconciler:
                 )
             ):
                 repository.upsert(
-                    existing.model_copy(update={"metadata": existing_metadata, "updated_at": now})
+                    existing.model_copy(update={"missing_since": missing_since, "updated_at": now})
                 )
                 continue
             repository.upsert(
                 existing.model_copy(
                     update={
                         "status": ReservationStatus.Deleted.value,
-                        "metadata": {
-                            **existing_metadata,
-                            "terminated_reason": "provider_instance_missing",
-                            "provider_storage_destroyed_at": destroyed_at.isoformat(),
-                        },
+                        "missing_since": missing_since,
+                        "terminated_reason": "provider_instance_missing",
+                        "provider_storage_destroyed_at": destroyed_at,
                         "updated_at": now,
                     }
                 )
@@ -569,15 +546,11 @@ class ProviderMachineReconciler:
         for instance in prior_instances:
             if instance.instance_id is not None and instance.instance_id in observed_instance_ids:
                 continue
-            metadata = instance.metadata
-            destroyed_at = _metadata_time(metadata, "provider_storage_destroyed_at")
+            destroyed_at = instance.provider_storage_destroyed_at
             if destroyed_at is not None:
                 destruction_observations[instance.id] = destroyed_at
                 continue
-            missing_since = _metadata_time(
-                metadata,
-                "missing_since",
-            )
+            missing_since = instance.missing_since
             settled = (
                 authoritative_zero
                 or snapshot.phase is ProviderCapacityPhase.Deleted
@@ -588,7 +561,7 @@ class ProviderMachineReconciler:
             )
             if not settled:
                 continue
-            storage_volume_ids = _provider_storage_volume_ids(instance)
+            storage_volume_ids = instance.storage_volume_ids
             if instance.instance_id is None:
                 if authoritative_zero and not storage_volume_ids:
                     destruction_observations[instance.id] = utc_now()
@@ -733,7 +706,7 @@ class ProviderMachineReconciler:
                 client.terminate_machine(provider_instance_id)
                 if client.machine_storage_destroyed(
                     provider_instance_id,
-                    _provider_storage_volume_ids(record),
+                    record.storage_volume_ids,
                 ):
                     provider_storage_destroyed_at = utc_now()
                     cache_retired = (
@@ -748,26 +721,18 @@ class ProviderMachineReconciler:
                         status = ReservationStatus.Deleted.value
             except Exception as exc:
                 last_error = str(exc)
-        metadata: dict[str, JsonValue] = {
-            **record.metadata,
-            "terminating_reason": reason,
-            "status_message": message,
-            "last_error": last_error,
-        }
-        if provider_storage_destroyed_at is not None:
-            metadata["provider_storage_destroyed_at"] = provider_storage_destroyed_at.isoformat()
         updated = record.model_copy(
             update={
                 "status": status,
-                "metadata": metadata,
+                "terminating_reason": reason,
+                "status_message": message,
+                "last_error": last_error,
+                "provider_storage_destroyed_at": provider_storage_destroyed_at
+                or record.provider_storage_destroyed_at,
+                "updated_at": utc_now(),
             }
         )
         ComputeProviderInstanceRepository(session).upsert(updated)
-        self._revoke_provider_join_credential(
-            session,
-            record,
-            deleting_workspace_id=deleting_workspace_id,
-        )
         if record.machine_id and self.scheduler_hooks is not None:
             self.scheduler_hooks.disable_machine(record.machine_id, reason)
         if record.machine_id:
@@ -1112,22 +1077,3 @@ class ProviderMachineReconciler:
                     f"compute pool {unit.name!r} zero-capacity repair was superseded"
                 )
             return intent
-
-    def _revoke_provider_join_credential(
-        self,
-        session: DatabaseSession,
-        record: ComputeProviderInstanceRecord,
-        *,
-        deleting_workspace_id: str | None = None,
-    ) -> None:
-        token_hash = str(record.metadata.get("registration_token_hash") or "")
-        if token_hash == "":
-            return
-        credentials = ComputeJoinCredentialRepository(session)
-        credential = credentials.get_by_hash(token_hash, for_update=True)
-        if credential is not None and credential.status is ComputeCredentialStatus.Active:
-            revoked = credential.revoke(now=utc_now())
-            if deleting_workspace_id is not None:
-                credentials.save_for_workspace_deletion(revoked)
-            else:
-                credentials.save(revoked)

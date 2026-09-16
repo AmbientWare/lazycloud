@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
 from database.repositories.orchestration import AgentLeaseRepository, AgentRepository
 from database.types import DatabaseSession
@@ -60,20 +61,19 @@ class AgentService:
     ) -> AgentRecord:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            agent = AgentRepository(session).records.create(
-                {
-                    "name": name,
-                    "pool": pool,
-                    "version": version,
-                    "capacity": capacity or {},
-                    "labels": labels or {},
-                    "status": ResourceStatus.Running.value,
-                    "last_seen_at": utc_now().isoformat(),
-                    "install_command": f"{ADMIN_CLI_NAME} agent join --name {name} --pool {pool}",
-                },
+            agent = AgentRepository(session).upsert(
+                AgentRecord(
+                    id=str(uuid4()),
+                    name=name,
+                    pool=pool,
+                    version=version,
+                    capacity=capacity or {},
+                    labels=labels or {},
+                    status=ResourceStatus.Running,
+                    last_seen_at=utc_now(),
+                    install_command=f"{ADMIN_CLI_NAME} agent join --name {name} --pool {pool}",
+                ),
                 workspace_id=workspace_id,
-                name=name,
-                status=ResourceStatus.Running.value,
             )
         self._publish_change(
             workspace_id=workspace_id,
@@ -104,11 +104,9 @@ class AgentService:
             agent.updated_at = utc_now()
             if capacity is not None:
                 agent.capacity = capacity
-            updated = repository.records.upsert(
+            updated = repository.upsert(
                 agent,
                 workspace_id=workspace_id,
-                name=agent.name,
-                status=agent.status.value,
             )
         if changed:
             self._publish_change(
@@ -132,13 +130,7 @@ class AgentService:
             if agent_repository.get(agent_id, workspace_id=workspace_id) is None:
                 msg = f"agent not found: {agent_id}"
                 raise KeyError(msg)
-            leases = AgentLeaseRepository(session)
-            for lease in leases.list():
-                if lease.agent_id == agent_id and lease.status is LeaseStatus.Active:
-                    lease.status = LeaseStatus.Released
-                    lease.released_at = utc_now()
-                    leases.upsert(lease)
-            agent_repository.records.delete(agent_id, workspace_id=workspace_id)
+            agent_repository.delete(agent_id, workspace_id=workspace_id)
         self._publish_change(
             workspace_id=workspace_id,
             change=WorkspaceChangeType.Deleted,
@@ -161,15 +153,15 @@ class AgentService:
             if repository.get(resolved_agent_id, workspace_id=workspace_id) is None:
                 msg = f"agent not found: {agent_id}"
                 raise KeyError(msg)
-            return AgentLeaseRepository(session).records.create(
-                {
-                    "agent_id": resolved_agent_id,
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "status": LeaseStatus.Active.value,
-                    "expires_at": (utc_now() + timedelta(seconds=ttl_seconds)).isoformat(),
-                },
-                status=LeaseStatus.Active.value,
+            return AgentLeaseRepository(session).upsert(
+                AgentLease(
+                    id=str(uuid4()),
+                    agent_id=resolved_agent_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    expires_at=utc_now() + timedelta(seconds=ttl_seconds),
+                ),
+                workspace_id=workspace_id,
             )
 
     def release(self, lease_id: str, *, workspace: str = "default") -> AgentLease:
@@ -185,7 +177,7 @@ class AgentService:
                 raise KeyError(msg)
             lease.status = LeaseStatus.Released
             lease.released_at = utc_now()
-            return repository.upsert(lease)
+            return repository.upsert(lease, workspace_id=workspace_id)
 
     def list_leases(
         self,
@@ -196,17 +188,15 @@ class AgentService:
         now = utc_now()
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            agent_ids = {
-                agent.id for agent in AgentRepository(session).list(workspace_id=workspace_id)
-            }
             repository = AgentLeaseRepository(session)
             records: list[AgentLease] = []
-            for record in repository.records.list():
-                if str(record.agent_id) not in agent_ids:
-                    continue
+            for record in repository.list_for_workspace(
+                workspace_id,
+                status=None if include_inactive else LeaseStatus.Active.value,
+            ):
                 if record.status is LeaseStatus.Active and record.expires_at <= now:
                     record.status = LeaseStatus.Expired
-                    record = repository.upsert(record)
+                    record = repository.upsert(record, workspace_id=workspace_id)
                 if include_inactive or record.status is LeaseStatus.Active:
                     records.append(record)
         records.sort(key=lambda item: item.created_at, reverse=True)

@@ -1,12 +1,53 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from database.mappers.containers import (
+    container_from_row,
+    scheduling_request_from_row,
+    write_container,
+    write_scheduling_request,
+)
 from database.tables.orchestration import ContainerTable
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.scheduling import SchedulerWorkerRequest
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, func, select, update
+from sqlalchemy.orm import Session, load_only, undefer
+
+
+def _request_statement(*, include_payload: bool = True) -> Select[tuple[ContainerTable]]:
+    projection = load_only(
+        ContainerTable.capacity_retry_at,
+        ContainerTable.id,
+        ContainerTable.scheduling_architecture,
+        ContainerTable.scheduling_availability_zone,
+        ContainerTable.scheduling_backfill,
+        ContainerTable.scheduling_cpu_millicores,
+        ContainerTable.scheduling_deployment_id,
+        ContainerTable.scheduling_docker_enabled,
+        ContainerTable.scheduling_gpu,
+        ContainerTable.scheduling_gpu_count,
+        ContainerTable.scheduling_memory_mib,
+        ContainerTable.scheduling_pool_selector,
+        ContainerTable.scheduling_preemptible,
+        ContainerTable.scheduling_provider_runtime,
+        ContainerTable.scheduling_region,
+        ContainerTable.scheduling_requested_at,
+        ContainerTable.scheduling_required_worker_id,
+        ContainerTable.scheduling_retry_count,
+        ContainerTable.scheduling_runtime_class,
+        ContainerTable.scheduling_stub_id,
+        ContainerTable.scheduling_workspace_cpu_quota_millicores,
+        ContainerTable.scheduling_workspace_gpu_quota,
+        ContainerTable.workspace_id,
+        ContainerTable.status,
+        ContainerTable.runtime_worker_id,
+        raiseload=True,
+    )
+    statement = select(ContainerTable).options(projection)
+    if include_payload:
+        statement = statement.options(undefer(ContainerTable.scheduling_payload))
+    return statement
 
 
 @dataclass(slots=True)
@@ -15,40 +56,36 @@ class ContainerSchedulingRepository:
 
     def submit(self, request: SchedulerWorkerRequest, *, now: datetime) -> bool:
         row = self.session.scalar(
-            select(ContainerTable)
-            .where(ContainerTable.id == request.container_id)
-            .with_for_update()
+            _request_statement().where(ContainerTable.id == request.container_id).with_for_update()
         )
         if row is None or row.workspace_id != request.workspace_id:
             raise ConflictError("scheduling request does not own the container")
-        if row.scheduling_request is not None:
-            persisted = SchedulerWorkerRequest.model_validate(row.scheduling_request)
+        if row.scheduling_requested_at is not None:
+            persisted = scheduling_request_from_row(row)
             transient = {"retry_count", "capacity_retry_at", "backfill", "timestamp"}
             if persisted.model_dump(exclude=transient) != request.model_dump(exclude=transient):
                 raise ConflictError("a container's scheduling request cannot change")
-            return row.status == ContainerStatus.Pending.value and not row.payload.get(
-                "runtime_worker_id"
-            )
-        if row.status != ContainerStatus.Pending.value or row.payload.get("runtime_worker_id"):
+            return row.status == ContainerStatus.Pending.value and not row.runtime_worker_id
+        if row.status != ContainerStatus.Pending.value or row.runtime_worker_id:
             raise ConflictError("container is no longer awaiting scheduling")
-        row.scheduling_request = request.model_dump(mode="json")
+        write_scheduling_request(row, request)
         row.scheduling_reconcile_at = now
         self.session.flush()
         return True
 
     def recoverable(self, *, now: datetime, limit: int) -> list[SchedulerWorkerRequest]:
         rows = self.session.scalars(
-            select(ContainerTable.scheduling_request)
+            _request_statement()
             .where(
-                ContainerTable.scheduling_request.is_not(None),
+                ContainerTable.scheduling_requested_at.is_not(None),
                 ContainerTable.scheduling_reconcile_at <= now,
                 ContainerTable.status == ContainerStatus.Pending.value,
-                ContainerTable.payload["runtime_worker_id"].as_string() == "",
+                ContainerTable.runtime_worker_id == "",
             )
             .order_by(ContainerTable.scheduling_reconcile_at, ContainerTable.id)
             .limit(limit)
         )
-        return [SchedulerWorkerRequest.model_validate(row) for row in rows]
+        return [scheduling_request_from_row(row) for row in rows]
 
     def reconciled(self, container_id: str, *, retry_at: datetime) -> None:
         self.session.execute(
@@ -61,55 +98,47 @@ class ContainerSchedulingRepository:
         self, request: SchedulerWorkerRequest, *, now: datetime
     ) -> SchedulerWorkerRequest:
         row = self.session.scalar(
-            select(ContainerTable)
-            .where(ContainerTable.id == request.container_id)
-            .with_for_update()
+            _request_statement().where(ContainerTable.id == request.container_id).with_for_update()
         )
         if row is None or row.workspace_id != request.workspace_id:
             raise ConflictError("capacity demand does not own the container")
-        if row.status != ContainerStatus.Pending.value or row.payload.get("runtime_worker_id"):
+        if row.status != ContainerStatus.Pending.value or row.runtime_worker_id:
             raise ConflictError("container no longer needs capacity")
-        if row.scheduling_request is None:
-            row.scheduling_request = request.model_dump(mode="json")
+        if row.scheduling_requested_at is None:
+            write_scheduling_request(row, request)
             row.scheduling_reconcile_at = now
         if row.capacity_retry_at is None:
             row.capacity_retry_at = now
             self.session.flush()
-        return SchedulerWorkerRequest.model_validate(row.scheduling_request)
+        return scheduling_request_from_row(row)
 
     def capacity_due(self, *, now: datetime, limit: int) -> list[SchedulerWorkerRequest]:
         rows = self.session.scalars(
-            select(ContainerTable.scheduling_request)
+            _request_statement(include_payload=False)
             .where(
-                ContainerTable.scheduling_request.is_not(None),
+                ContainerTable.scheduling_requested_at.is_not(None),
                 ContainerTable.capacity_retry_at <= now,
                 ContainerTable.status == ContainerStatus.Pending.value,
-                ContainerTable.payload["runtime_worker_id"].as_string() == "",
+                ContainerTable.runtime_worker_id == "",
             )
             .order_by(ContainerTable.capacity_retry_at, ContainerTable.id)
             .limit(limit)
         )
-        return [
-            SchedulerWorkerRequest.model_validate(row).model_copy(update={"payload": {}})
-            for row in rows
-        ]
+        return [scheduling_request_from_row(row, include_payload=False) for row in rows]
 
     def capacity_due_request(
         self, container_id: str, *, now: datetime
     ) -> SchedulerWorkerRequest | None:
-        payload = self.session.scalar(
-            select(ContainerTable.scheduling_request).where(
+        row = self.session.scalar(
+            _request_statement(include_payload=False).where(
                 ContainerTable.id == container_id,
+                ContainerTable.scheduling_requested_at.is_not(None),
                 ContainerTable.capacity_retry_at <= now,
                 ContainerTable.status == ContainerStatus.Pending.value,
-                ContainerTable.payload["runtime_worker_id"].as_string() == "",
+                ContainerTable.runtime_worker_id == "",
             )
         )
-        return (
-            SchedulerWorkerRequest.model_validate(payload).model_copy(update={"payload": {}})
-            if payload is not None
-            else None
-        )
+        return scheduling_request_from_row(row, include_payload=False) if row is not None else None
 
     def record_capacity_attempt(
         self, request: SchedulerWorkerRequest, *, retry_at: datetime
@@ -120,19 +149,13 @@ class ContainerSchedulingRepository:
                 ContainerTable.id == request.container_id,
                 ContainerTable.workspace_id == request.workspace_id,
                 ContainerTable.status == ContainerStatus.Pending.value,
-                ContainerTable.payload["runtime_worker_id"].as_string() == "",
+                ContainerTable.runtime_worker_id == "",
             )
             .with_for_update()
         )
-        if row is None or row.scheduling_request is None:
+        if row is None or row.scheduling_requested_at is None:
             return
-        durable = SchedulerWorkerRequest.model_validate(row.scheduling_request)
-        row.scheduling_request = durable.model_copy(
-            update={
-                "retry_count": request.retry_count,
-                "capacity_retry_at": retry_at,
-            }
-        ).model_dump(mode="json")
+        row.scheduling_retry_count = request.retry_count
         row.capacity_retry_at = retry_at
 
     def assigned_at(self, container_id: str) -> datetime | None:
@@ -141,10 +164,13 @@ class ContainerSchedulingRepository:
         )
 
     def request_for(self, container_id: str) -> SchedulerWorkerRequest | None:
-        payload = self.session.scalar(
-            select(ContainerTable.scheduling_request).where(ContainerTable.id == container_id)
+        row = self.session.scalar(
+            _request_statement().where(
+                ContainerTable.id == container_id,
+                ContainerTable.scheduling_requested_at.is_not(None),
+            )
         )
-        return SchedulerWorkerRequest.model_validate(payload) if payload is not None else None
+        return scheduling_request_from_row(row) if row is not None else None
 
     def expired_assignments(
         self, *, before: datetime, limit: int
@@ -156,13 +182,13 @@ class ContainerSchedulingRepository:
             select(ContainerTable, assigned_at)
             .where(
                 ContainerTable.status == ContainerStatus.Pending.value,
-                ContainerTable.payload["runtime_worker_id"].as_string() != "",
+                ContainerTable.runtime_worker_id != "",
                 assigned_at <= before,
             )
             .order_by(assigned_at, ContainerTable.id)
             .limit(limit)
         )
-        return [(ContainerRecord.model_validate(row.payload), timestamp) for row, timestamp in rows]
+        return [(container_from_row(row), timestamp) for row, timestamp in rows]
 
     def owns_assignment(self, container_id: str, *, token: str) -> bool:
         return (
@@ -182,10 +208,10 @@ class ContainerSchedulingRepository:
             raise ConflictError("assignment container is unavailable")
         row.scheduling_assigned_at = now
         row.scheduling_assignment_token = token
-        row.payload = container.model_dump(mode="json")
-        row.worker_id = container.worker_id
-        row.machine_id = container.machine_id
+        if row.workspace_id != container.workspace_id:
+            raise ConflictError("assignment does not own the container")
+        write_container(row, container)
         row.capacity_retry_at = None
-        if row.scheduling_request is not None:
-            row.scheduling_request = {**row.scheduling_request, "backfill": backfill}
+        if row.scheduling_requested_at is not None:
+            row.scheduling_backfill = backfill
         self.session.flush()

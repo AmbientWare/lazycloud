@@ -52,13 +52,11 @@ class EmailOutboxTable(IdTable, DatabaseBase):
             "next_attempt_at",
             "created_at",
             postgresql_where=text("status = 'pending'"),
-            sqlite_where=text("status = 'pending'"),
         ),
         Index(
             "ix_email_outbox_stuck",
             "claimed_at",
             postgresql_where=text("status = 'sending'"),
-            sqlite_where=text("status = 'sending'"),
         ),
         # What a delivery event names. Unique because two rows answering to one
         # provider id would make "which message bounced" have two answers.
@@ -67,7 +65,6 @@ class EmailOutboxTable(IdTable, DatabaseBase):
             "provider_message_id",
             unique=True,
             postgresql_where=text("provider_message_id <> ''"),
-            sqlite_where=text("provider_message_id <> ''"),
         ),
         CheckConstraint(
             "delivery_state IN ('queued', 'sent', 'delivered', 'bounced', 'complained', 'failed')",

@@ -16,6 +16,7 @@ from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.identity import AuthScope, TokenKind
+from shared.objects import ObjectWriteCommand
 from storage.service import ObjectStorage
 from tests.fakes import FakeObjectClient
 from tests.workspaces import owned_workspace
@@ -276,17 +277,18 @@ def _create_object(
     metadata: dict[str, str],
 ):
     with isolated_services.context.database.session() as session:
-        return ObjectRepository(session).records.create(
-            {
-                "bucket": bucket,
-                "key": key,
-                "path": path,
-                "size": len(content),
-                "sha256": hashlib.sha256(content).hexdigest(),
-                "content_type": "application/octet-stream",
-                "metadata": metadata,
-            },
+        return ObjectRepository(session).reserve(
+            ObjectWriteCommand(
+                bucket=bucket,
+                key=key,
+                path=path,
+                size=len(content),
+                sha256=hashlib.sha256(content).hexdigest(),
+                content_type="application/octet-stream",
+                metadata=metadata,
+            ),
             workspace_id=workspace_id,
+            overwrite=False,
         )
 
 

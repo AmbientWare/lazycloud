@@ -6,9 +6,9 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from database.context import ServiceContext
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
-from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import (
     UserRepository,

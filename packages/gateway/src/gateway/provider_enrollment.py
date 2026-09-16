@@ -14,8 +14,8 @@ from compute.provider_nodes import ProviderNodeIdentityProof, ProviderNodeIdenti
 from compute.service import ComputeService
 from coordination.rate_limit import release_slot, try_acquire_slot, try_consume
 from coordination.redis_client import RedisClient
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeJoinCredentialRepository,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,

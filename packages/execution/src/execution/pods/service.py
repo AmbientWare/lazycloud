@@ -15,7 +15,7 @@ from control.service import ControlPlaneService, StubKind
 from control.tcp_ingress import tcp_pod_url
 from coordination.redis_client import RedisClient
 from database.records.apps import StubRecord
-from database.repositories.execution import PodExecutionRepository
+from database.repositories.execution import PodUrlRepository
 from database.repositories.images import CheckpointRepository
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.types import DatabaseSession
@@ -402,13 +402,7 @@ class PodControlService:
             container.exit_code = 1
             container.finished_at = utc_now()
             with self.services.context.database.session() as session:
-                ContainerRepository(session).records.upsert(
-                    container,
-                    key=container.id,
-                    workspace_id=container.workspace_id,
-                    name=container.name,
-                    status=container.status.value,
-                )
+                ContainerRepository(session).upsert(container)
             self.services.containers.publish_lifecycle_change(
                 container,
                 WorkspaceChangeType.Updated,
@@ -1118,13 +1112,7 @@ class PodControlService:
                 seconds=container.timeout_seconds
             )
         with self.services.context.database.session() as session:
-            ContainerRepository(session).records.upsert(
-                container,
-                key=container.id,
-                workspace_id=container.workspace_id,
-                name=container.name,
-                status=container.status.value,
-            )
+            ContainerRepository(session).upsert(container)
         self.services.containers.publish_lifecycle_change(
             container,
             WorkspaceChangeType.Updated,
@@ -1404,7 +1392,7 @@ class PodControlService:
         container = ContainerRepository(session).get(container_id, workspace_id=workspace_id)
         if kind is StubKind.Pod:
             return container, container is not None and port in container.ports.values()
-        exposure = PodExecutionRepository(session).urls.get(
+        exposure = PodUrlRepository(session).get(
             container_id=container_id,
             port=port,
         )
@@ -1447,7 +1435,7 @@ class PodControlService:
         if not url:
             return
         with self.services.context.database.session() as session:
-            PodExecutionRepository(session).urls.upsert(
+            PodUrlRepository(session).upsert(
                 container_id=container_id,
                 port=port,
                 url=url,
@@ -1455,7 +1443,7 @@ class PodControlService:
 
     def _stored_urls(self, container_id: str) -> dict[int, str]:
         with self.services.context.database.session() as session:
-            records = PodExecutionRepository(session).urls.list_for_container(container_id)
+            records = PodUrlRepository(session).list_for_container(container_id)
         return {item.port: item.url for item in records}
 
 

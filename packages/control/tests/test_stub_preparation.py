@@ -83,7 +83,7 @@ def test_source_and_runtime_changes_prepare_distinct_reusable_revisions(
     original_config = StubConfig(
         object_id=sources[0].id,
         image=StubImageConfig(image_id="image-v1"),
-        runtime=StubRuntimeConfig(cpu=1, memory="256Mi"),
+        runtime=StubRuntimeConfig(cpu=1, memory="256Mi", timeout_seconds=300),
     )
     original = control.create_stub("hello", handler="main:hello", config=original_config)
     source_config = original_config.model_copy(update={"object_id": sources[1].id}, deep=True)

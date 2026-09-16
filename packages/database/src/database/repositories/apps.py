@@ -3,13 +3,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 from database.mappers.apps import (
     app_container_shutdown_intent_from_table,
     app_deployment_intent_from_table,
     app_record_from_table,
+    cron_job_from_table,
+    deployment_from_table,
+    stub_from_table,
     write_app_row,
+    write_cron_job_row,
+    write_deployment_row,
+    write_stub_row,
 )
+from database.mappers.containers import container_from_row
 from database.records.apps import (
     AppContainerShutdownIntentRecord,
     AppDeploymentIntentRecord,
@@ -20,8 +28,6 @@ from database.records.apps import (
     StubRecord,
 )
 from database.repositories.common import (
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
     bucket_index,
     names_by_id,
 )
@@ -44,7 +50,7 @@ from shared.app_lifecycle import (
     AppDeploymentIntentTarget,
     AppLifecycleState,
 )
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, StubKind
@@ -54,17 +60,14 @@ from shared.identity import WorkspaceStatus
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
-from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
 
 
 class DeploymentResourceRow(BaseModel):
     app: AppRecord
-    deployment_payload: dict[str, JsonValue]
-    deployment_app_id: str | None = None
-    deployment_stub_id: str | None = None
-    stub_payload: dict[str, JsonValue]
+    deployment: Deployment
+    stub: StubRecord
 
 
 class AppRunningResult(BaseModel):
@@ -394,7 +397,7 @@ class AppContainerShutdownIntentRepository:
         )
         known = {str(row.container_id): row for row in rows}
         containers = [
-            ContainerRecord.model_validate(row.payload)
+            container_from_row(row)
             for row in self.session.scalars(
                 select(ContainerTable).where(
                     ContainerTable.workspace_id == workspace_id,
@@ -609,34 +612,55 @@ def _app_execution_summary(app_id: str, bucket_count: int) -> AppExecutionSummar
 class StubRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[StubRecord]:
-        return WorkspaceTableRepository(self.session, TableRepositoryConfig(StubTable, StubRecord))
-
     def upsert(self, stub: StubRecord) -> StubRecord:
-        return self.records.upsert(stub, workspace_id=stub.workspace_id, name=stub.name)
+        WorkspaceRepository(self.session).lock_active_owner(stub.workspace_id)
+        stub = StubRecord.model_validate(dict(stub))
+        row = self.session.get(StubTable, stub.id)
+        if row is None:
+            row = StubTable(id=stub.id)
+            self.session.add(row)
+        elif row.workspace_id != stub.workspace_id:
+            raise ConflictError("stub ownership cannot change")
+        write_stub_row(row, stub)
+        self.session.flush()
+        return stub_from_table(row)
 
     def get(self, stub_id: str, *, workspace_id: str) -> StubRecord | None:
-        return self.records.get(stub_id, workspace_id=workspace_id)
+        try:
+            UUID(stub_id)
+        except ValueError:
+            return None
+        row = self.session.scalar(
+            select(StubTable).where(
+                StubTable.id == stub_id,
+                StubTable.workspace_id == workspace_id,
+            )
+        )
+        return stub_from_table(row) if row is not None else None
 
     def get_across_workspaces(self, stub_id: str) -> StubRecord | None:
         """System lookup for scheduler/worker/runner paths resolving placed work."""
-        return self.records.get_across_workspaces(stub_id)
+        try:
+            UUID(stub_id)
+        except ValueError:
+            return None
+        row = self.session.get(StubTable, stub_id)
+        return stub_from_table(row) if row is not None else None
 
     def get_by_name(self, name: str, *, workspace_id: str | None) -> StubRecord | None:
-        statement = select(StubTable.payload).where(StubTable.name == name).limit(2)
+        statement = select(StubTable).where(StubTable.name == name).limit(2)
         if workspace_id is not None:
             statement = statement.where(StubTable.workspace_id == workspace_id)
-        payloads = list(self.session.scalars(statement))
-        if len(payloads) > 1:
+        rows = list(self.session.scalars(statement))
+        if len(rows) > 1:
             raise ConflictError(f"stub name is ambiguous; use a stub ID: {name}")
-        return StubRecord.model_validate(payloads[0]) if payloads else None
+        return stub_from_table(rows[0]) if rows else None
 
     def get_for_deployment(
         self, deployment_id: str, *, workspace_id: str | None
     ) -> StubRecord | None:
         statement = (
-            select(StubTable.payload)
+            select(StubTable)
             .join(DeploymentTable, DeploymentTable.stub_id == StubTable.id)
             .where(
                 DeploymentTable.id == deployment_id,
@@ -645,11 +669,30 @@ class StubRepository:
         )
         if workspace_id is not None:
             statement = statement.where(StubTable.workspace_id == workspace_id)
-        payload = self.session.scalar(statement)
-        return StubRecord.model_validate(payload) if payload is not None else None
+        row = self.session.scalar(statement)
+        return stub_from_table(row) if row is not None else None
 
-    def list(self, *, workspace_id: str) -> list[StubRecord]:
-        return self.records.list(workspace_id=workspace_id)
+    def list(self, *, workspace_id: str, app_id: str | None = None) -> list[StubRecord]:
+        statement = select(StubTable).where(StubTable.workspace_id == workspace_id)
+        if app_id is not None:
+            statement = statement.where(StubTable.app_id == app_id)
+        return [
+            stub_from_table(row)
+            for row in self.session.scalars(
+                statement.order_by(StubTable.created_at.desc(), StubTable.id)
+            )
+        ]
+
+    def list_across_workspaces(self, *, app_id: str | None = None) -> list[StubRecord]:
+        statement = select(StubTable)
+        if app_id is not None:
+            statement = statement.where(StubTable.app_id == app_id)
+        return [
+            stub_from_table(row)
+            for row in self.session.scalars(
+                statement.order_by(StubTable.created_at.desc(), StubTable.id)
+            )
+        ]
 
     def find_reusable(
         self,
@@ -669,7 +712,7 @@ class StubRepository:
             )
             .with_for_update()
         ).first()
-        return StubRecord.model_validate(row.payload) if row is not None else None
+        return stub_from_table(row) if row is not None else None
 
     def set_preparation_fingerprint(
         self,
@@ -689,87 +732,109 @@ class StubRepository:
         *,
         stub_ids: Sequence[str] | None = None,
     ) -> list[AutoscalingStubRecord]:
-        statement = select(
-            StubTable.id,
-            StubTable.workspace_id,
-            StubTable.type,
-            StubTable.app_id,
-            StubTable.payload["deployment_id"].as_string(),
-            StubTable.payload["config"]["runtime"]["cpu"],
-            StubTable.payload["config"]["runtime"]["cpu_millicores"],
-            StubTable.payload["config"]["runtime"]["gpu"],
-            StubTable.payload["config"]["runtime"]["gpu_count"],
-            StubTable.payload["config"]["runtime"]["timeout_seconds"],
-            StubTable.payload["config"]["runtime"]["keep_warm"],
-            StubTable.payload["config"]["runtime"]["workspace_gpu_quota"],
-            StubTable.payload["config"]["runtime"]["workspace_cpu_quota_millicores"],
-            StubTable.payload["config"]["autoscaler"],
-            StubTable.payload["config"]["task_policy"],
-            StubTable.payload["config"]["metadata"]["autoscaling_enabled"].as_boolean(),
+        statement = select(StubTable).options(
+            load_only(
+                StubTable.id,
+                StubTable.workspace_id,
+                StubTable.type,
+                StubTable.app_id,
+                StubTable.deployment_id,
+                StubTable.autoscaling_enabled,
+                StubTable.runtime_cpu,
+                StubTable.runtime_cpu_millicores,
+                StubTable.runtime_gpu,
+                StubTable.runtime_gpu_count,
+                StubTable.runtime_timeout_seconds,
+                StubTable.runtime_keep_warm,
+                StubTable.runtime_workspace_gpu_quota,
+                StubTable.runtime_workspace_cpu_quota_millicores,
+                StubTable.autoscaler_type,
+                StubTable.autoscaler_max_containers,
+                StubTable.autoscaler_min_containers,
+                StubTable.autoscaler_tasks_per_container,
+                StubTable.autoscaler_failed_container_threshold,
+                StubTable.autoscaler_max_failed_containers,
+                StubTable.autoscaler_failure_threshold,
+                StubTable.autoscaler_failed_container_window_seconds,
+                StubTable.autoscaler_failure_window_seconds,
+                StubTable.task_policy_timeout,
+                StubTable.task_policy_timeout_seconds,
+                StubTable.task_policy_ttl,
+                StubTable.task_policy_ttl_seconds,
+            )
         )
         if stub_ids is not None:
-            wanted = list(dict.fromkeys(stub_ids))
+            wanted = tuple(dict.fromkeys(stub_ids))
             if not wanted:
                 return []
             statement = statement.where(StubTable.id.in_(wanted))
-        rows = self.session.execute(
-            statement.order_by(StubTable.created_at.desc(), StubTable.id.asc())
-        ).tuples()
-        return [
-            AutoscalingStubRecord(
-                id=id_,
-                workspace_id=workspace_id,
-                kind=StubKind(type_),
-                app_id=app_id,
-                deployment_id=deployment_id,
-                config=AutoscalingStubConfig(
-                    runtime=AutoscalingStubRuntimeConfig.model_validate(
-                        {
-                            field: value
-                            for field, value in (
-                                ("cpu", cpu),
-                                ("cpu_millicores", cpu_millicores),
-                                ("gpu", gpu),
-                                ("gpu_count", gpu_count),
-                                ("timeout_seconds", timeout_seconds),
-                                ("keep_warm", keep_warm),
-                                ("workspace_gpu_quota", workspace_gpu_quota),
-                                (
-                                    "workspace_cpu_quota_millicores",
-                                    workspace_cpu_quota_millicores,
-                                ),
-                            )
-                            if value is not None
-                        }
+        records: list[AutoscalingStubRecord] = []
+        for row in self.session.scalars(
+            statement.order_by(StubTable.created_at.desc(), StubTable.id)
+        ):
+            runtime_values: dict[str, JsonValue | list[str]] = {
+                "cpu": row.runtime_cpu,
+                "cpu_millicores": row.runtime_cpu_millicores,
+                "gpu": row.runtime_gpu,
+                "gpu_count": row.runtime_gpu_count,
+                "timeout_seconds": row.runtime_timeout_seconds,
+                "keep_warm": row.runtime_keep_warm,
+                "workspace_gpu_quota": row.runtime_workspace_gpu_quota,
+                "workspace_cpu_quota_millicores": row.runtime_workspace_cpu_quota_millicores,
+            }
+            autoscaler_values: dict[str, str | int | None] = {
+                "type": row.autoscaler_type,
+                "max_containers": row.autoscaler_max_containers,
+                "min_containers": row.autoscaler_min_containers,
+                "tasks_per_container": row.autoscaler_tasks_per_container,
+                "failed_container_threshold": row.autoscaler_failed_container_threshold,
+                "max_failed_containers": row.autoscaler_max_failed_containers,
+                "failure_threshold": row.autoscaler_failure_threshold,
+                "failed_container_window_seconds": row.autoscaler_failed_container_window_seconds,
+                "failure_window_seconds": row.autoscaler_failure_window_seconds,
+            }
+            task_policy_values: dict[str, float | None] = {
+                "timeout": row.task_policy_timeout,
+                "timeout_seconds": row.task_policy_timeout_seconds,
+                "ttl": row.task_policy_ttl,
+                "ttl_seconds": row.task_policy_ttl_seconds,
+            }
+            records.append(
+                AutoscalingStubRecord(
+                    id=str(row.id),
+                    workspace_id=str(row.workspace_id),
+                    kind=StubKind(row.type),
+                    app_id=row.app_id,
+                    deployment_id=row.deployment_id,
+                    config=AutoscalingStubConfig(
+                        runtime=AutoscalingStubRuntimeConfig.model_validate(
+                            {
+                                key: value
+                                for key, value in runtime_values.items()
+                                if value is not None
+                            }
+                        ),
+                        autoscaler=StubAutoscalerConfig.model_validate(
+                            {
+                                key: value
+                                for key, value in autoscaler_values.items()
+                                if value is not None
+                            }
+                        ),
+                        task_policy=StubTaskPolicy.model_validate(
+                            {
+                                key: value
+                                for key, value in task_policy_values.items()
+                                if value is not None
+                            }
+                        ),
+                        metadata={"autoscaling_enabled": row.autoscaling_enabled}
+                        if row.autoscaling_enabled is not None
+                        else {},
                     ),
-                    autoscaler=StubAutoscalerConfig.model_validate(autoscaler or {}),
-                    task_policy=StubTaskPolicy.model_validate(task_policy or {}),
-                    metadata=(
-                        {"autoscaling_enabled": autoscaling_enabled}
-                        if autoscaling_enabled is not None
-                        else {}
-                    ),
-                ),
+                )
             )
-            for (
-                id_,
-                workspace_id,
-                type_,
-                app_id,
-                deployment_id,
-                cpu,
-                cpu_millicores,
-                gpu,
-                gpu_count,
-                timeout_seconds,
-                keep_warm,
-                workspace_gpu_quota,
-                workspace_cpu_quota_millicores,
-                autoscaler,
-                task_policy,
-                autoscaling_enabled,
-            ) in rows
-        ]
+        return records
 
     def app_ids_by_id(
         self,
@@ -803,7 +868,7 @@ class StubRepository:
             StubTable.workspace_id == workspace_id,
             StubTable.app_id == app_id,
         )
-        return [StubRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [stub_from_table(row) for row in self.session.scalars(statement)]
 
     def list_for_deployments(
         self,
@@ -823,7 +888,7 @@ class StubRepository:
                 StubTable.workspace_id == workspace_id,
             )
         )
-        return [StubRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [stub_from_table(row) for row in self.session.scalars(statement)]
 
     def get_for_update(self, stub_id: str, *, workspace_id: str) -> StubRecord | None:
         # Serialize admission without blocking concurrent container foreign-key checks.
@@ -832,7 +897,7 @@ class StubRepository:
             .where(StubTable.id == stub_id, StubTable.workspace_id == workspace_id)
             .with_for_update(key_share=True)
         ).first()
-        return StubRecord.model_validate(row.payload) if row is not None else None
+        return stub_from_table(row) if row is not None else None
 
     def get_by_name_for_update(self, name: str, *, workspace_id: str) -> StubRecord | None:
         rows = list(
@@ -847,7 +912,7 @@ class StubRepository:
         if len(rows) > 1:
             raise ConflictError(f"stub name is ambiguous; use a stub ID: {name}")
         row = rows[0] if rows else None
-        return StubRecord.model_validate(row.payload) if row is not None else None
+        return stub_from_table(row) if row is not None else None
 
     def registration_is_bound(self, stub_id: str) -> bool:
         statements = (
@@ -860,7 +925,17 @@ class StubRepository:
         return any(self.session.scalar(statement) is not None for statement in statements)
 
     def delete(self, stub_id: str, *, workspace_id: str) -> bool:
-        return self.records.delete(stub_id, workspace_id=workspace_id)
+        return (
+            self.session.scalar(
+                delete(StubTable)
+                .where(
+                    StubTable.id == stub_id,
+                    StubTable.workspace_id == workspace_id,
+                )
+                .returning(StubTable.id)
+            )
+            is not None
+        )
 
 
 @dataclass(slots=True)
@@ -877,22 +952,19 @@ class DeploymentRepository:
             )
             .with_for_update()
         ).first()
-        return Deployment.model_validate(row.payload) if row is not None else None
-
-    @property
-    def records(self) -> WorkspaceTableRepository[Deployment]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(DeploymentTable, Deployment),
-        )
+        return deployment_from_table(row) if row is not None else None
 
     def upsert(self, deployment: Deployment, *, workspace_id: str) -> Deployment:
-        return self.records.upsert(
-            deployment,
-            workspace_id=workspace_id,
-            name=deployment.name,
-            status="active" if deployment.active else "inactive",
-        )
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        row = self.session.get(DeploymentTable, deployment.id)
+        if row is None:
+            row = DeploymentTable(id=deployment.id, workspace_id=workspace_id)
+            self.session.add(row)
+        elif str(row.workspace_id) != workspace_id:
+            raise ConflictError("deployment ownership cannot change")
+        write_deployment_row(row, deployment)
+        self.session.flush()
+        return deployment_from_table(row)
 
     def assert_subdomain_unclaimed(
         self,
@@ -940,7 +1012,7 @@ class DeploymentRepository:
         workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
         if workspace.status is not WorkspaceStatus.Deleting:
             raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
-        deployment = self.records.get(deployment_id, workspace_id=workspace_id)
+        deployment = self.get(deployment_id, workspace_id=workspace_id, include_deleted=True)
         if deployment is None:
             return None
         deployment.active = False
@@ -950,10 +1022,8 @@ class DeploymentRepository:
             raise ConflictError(
                 f"deployment disappeared during workspace deletion: {deployment_id}"
             )
-        row.payload = deployment.model_dump(mode="json")
         row.active = False
         row.updated_at = now
-        flag_modified(row, "payload")
         self.session.flush()
         return deployment
 
@@ -964,8 +1034,18 @@ class DeploymentRepository:
         workspace_id: str,
         include_deleted: bool = False,
     ) -> Deployment | None:
-        deployment = self.records.get(deployment_id, workspace_id=workspace_id)
-        return _visible_deployment(deployment, include_deleted=include_deleted)
+        try:
+            UUID(deployment_id)
+        except ValueError:
+            return None
+        statement = select(DeploymentTable).where(
+            DeploymentTable.id == deployment_id,
+            DeploymentTable.workspace_id == workspace_id,
+        )
+        if not include_deleted:
+            statement = statement.where(DeploymentTable.deleted_at.is_(None))
+        row = self.session.scalar(statement)
+        return deployment_from_table(row) if row is not None else None
 
     def get_across_workspaces(
         self,
@@ -974,8 +1054,15 @@ class DeploymentRepository:
         include_deleted: bool = False,
     ) -> Deployment | None:
         """System lookup for scheduler/worker paths acting under their own authority."""
-        deployment = self.records.get_across_workspaces(deployment_id)
-        return _visible_deployment(deployment, include_deleted=include_deleted)
+        try:
+            UUID(deployment_id)
+        except ValueError:
+            return None
+        statement = select(DeploymentTable).where(DeploymentTable.id == deployment_id)
+        if not include_deleted:
+            statement = statement.where(DeploymentTable.deleted_at.is_(None))
+        row = self.session.scalar(statement)
+        return deployment_from_table(row) if row is not None else None
 
     def workspace_id(self, deployment_id: str) -> str | None:
         value = self.session.scalar(
@@ -1050,19 +1137,7 @@ class DeploymentRepository:
             DeploymentTable.created_at.desc(),
             DeploymentTable.id.asc(),
         )
-        return [Deployment.model_validate(row.payload) for row in self.session.scalars(statement)]
-
-
-def _visible_deployment(
-    deployment: Deployment | None,
-    *,
-    include_deleted: bool,
-) -> Deployment | None:
-    if deployment is None:
-        return None
-    if deployment.deleted_at is not None and not include_deleted:
-        return None
-    return deployment
+        return [deployment_from_table(row) for row in self.session.scalars(statement)]
 
 
 @dataclass(slots=True)
@@ -1117,10 +1192,8 @@ class DeploymentResourceRepository:
         return [
             DeploymentResourceRow(
                 app=app_record_from_table(app_row),
-                deployment_payload=deployment_row.payload,
-                deployment_app_id=str(deployment_row.app_id) if deployment_row.app_id else None,
-                deployment_stub_id=str(deployment_row.stub_id) if deployment_row.stub_id else None,
-                stub_payload=stub_row.payload,
+                deployment=deployment_from_table(deployment_row),
+                stub=stub_from_table(stub_row),
             )
             for app_row, deployment_row, stub_row in self.session.execute(statement).tuples()
         ]
@@ -1192,10 +1265,8 @@ class DeploymentResourceRepository:
         app_row, deployment_row, stub_row = row
         return DeploymentResourceRow(
             app=app_record_from_table(app_row),
-            deployment_payload=deployment_row.payload,
-            deployment_app_id=str(deployment_row.app_id) if deployment_row.app_id else None,
-            deployment_stub_id=str(deployment_row.stub_id) if deployment_row.stub_id else None,
-            stub_payload=stub_row.payload,
+            deployment=deployment_from_table(deployment_row),
+            stub=stub_from_table(stub_row),
         )
 
 
@@ -1203,31 +1274,70 @@ class DeploymentResourceRepository:
 class CronJobRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[CronJobRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(CronJobTable, CronJobRecord, key_field="name"),
-        )
+    def delete_for_deployments(
+        self, deployment_ids: set[str], *, workspace_id: str | None = None
+    ) -> None:
+        statement = delete(CronJobTable).where(CronJobTable.deployment_id.in_(deployment_ids))
+        if workspace_id is not None:
+            statement = statement.where(CronJobTable.workspace_id == workspace_id)
+        self.session.execute(statement)
 
     def upsert(self, cron_job: CronJobRecord, *, workspace_id: str) -> CronJobRecord:
-        return self.records.upsert(
-            cron_job,
-            key=cron_job.name,
-            workspace_id=workspace_id,
-            name=cron_job.name,
-            status="enabled" if cron_job.enabled else "disabled",
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        if cron_job.workspace_id != workspace_id:
+            raise ConflictError("cron job ownership cannot change")
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"cron-job:{workspace_id}:{cron_job.name}"},
         )
+        row = self.session.scalar(
+            select(CronJobTable).where(
+                CronJobTable.workspace_id == workspace_id,
+                CronJobTable.name == cron_job.name,
+            )
+        )
+        if row is None:
+            row = CronJobTable(workspace_id=workspace_id)
+            self.session.add(row)
+        write_cron_job_row(row, cron_job)
+        self.session.flush()
+        return cron_job_from_table(row)
 
     def get(self, name: str, *, workspace_id: str) -> CronJobRecord | None:
-        return self.records.get(name, workspace_id=workspace_id)
+        row = self.session.scalar(
+            select(CronJobTable).where(
+                CronJobTable.workspace_id == workspace_id,
+                CronJobTable.name == name,
+            )
+        )
+        return cron_job_from_table(row) if row is not None else None
 
     def list(self, *, workspace_id: str) -> list[CronJobRecord]:
-        return self.records.list(workspace_id=workspace_id)
+        return [
+            cron_job_from_table(row)
+            for row in self.session.scalars(
+                select(CronJobTable)
+                .where(CronJobTable.workspace_id == workspace_id)
+                .order_by(CronJobTable.created_at.desc(), CronJobTable.id)
+            )
+        ]
 
     def list_across_workspaces(self) -> list[CronJobRecord]:
         """Scheduler-owned listing over every workspace's cron jobs."""
-        return self.records.list_across_workspaces()
+        return [
+            cron_job_from_table(row)
+            for row in self.session.scalars(
+                select(CronJobTable).order_by(CronJobTable.created_at.desc(), CronJobTable.id)
+            )
+        ]
+
+    def delete(self, name: str, *, workspace_id: str) -> None:
+        self.session.execute(
+            delete(CronJobTable).where(
+                CronJobTable.workspace_id == workspace_id,
+                CronJobTable.name == name,
+            )
+        )
 
     def due_across_workspaces(
         self,
@@ -1250,6 +1360,4 @@ class CronJobRepository:
             )
             .limit(limit)
         )
-        return [
-            CronJobRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [cron_job_from_table(row) for row in self.session.scalars(statement)]

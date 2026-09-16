@@ -142,10 +142,6 @@ class SchedulerCronJobService(Protocol):
     ) -> None: ...
 
 
-class SchedulerCollectionService(Protocol):
-    def queue_depth(self, queue: str, *, workspace_id: str | None = None) -> int: ...
-
-
 class SchedulerContainerService(Protocol):
     def expire_containers(self, *, now: datetime | None = None) -> list[ContainerRecord]: ...
 
@@ -214,9 +210,6 @@ class SchedulerServices(Protocol):
 
     @property
     def cron_jobs(self) -> SchedulerCronJobService: ...
-
-    @property
-    def collections(self) -> SchedulerCollectionService: ...
 
     @property
     def containers(self) -> SchedulerContainerService: ...

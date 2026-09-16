@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 from pydantic import ValidationError
 from shared.app_identity import (
@@ -12,32 +10,7 @@ from shared.app_identity import (
 from shared.cache_records import CacheEntry
 from shared.http.objects import ObjectMetadata, PutObjectRequest
 from shared.objects import ObjectWriteCommand
-from shared.queue_messages import QueueMessage
 from shared.secrets import SecretRecord
-
-
-def test_queue_message_round_trip_preserves_json_body_and_claim_state() -> None:
-    now = datetime(2026, 7, 19, tzinfo=timezone.utc)
-    message = QueueMessage(
-        id="message-1",
-        queue="inference",
-        body={"args": [0, 1.5, None], "options": {"stream": False}},
-        attempts=1,
-        available_at=now,
-        leased_until=now,
-        expires_at=now,
-        created_at=now,
-    )
-
-    assert QueueMessage.model_validate_json(message.model_dump_json()) == message
-    with pytest.raises(ValidationError):
-        QueueMessage.model_validate(
-            {
-                "id": "message-invalid",
-                "queue": "inference",
-                "body": {"created_at": now},
-            }
-        )
 
 
 def test_secret_record_masks_values_and_excludes_them_from_representations() -> None:

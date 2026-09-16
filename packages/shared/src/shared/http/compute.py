@@ -121,6 +121,7 @@ class MachineCreateRequest(HttpModel):
     cpu: float | None = None
     memory: str | None = None
     gpu: str | None = None
+    gpu_count: int = Field(default=0, ge=0)
     address: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
 
@@ -133,6 +134,7 @@ class MachineResponse(HttpModel):
     cpu: float | None = None
     memory: str | None = None
     gpu: str | None = None
+    gpu_count: int = Field(default=0, ge=0)
     address: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
     created_at: datetime

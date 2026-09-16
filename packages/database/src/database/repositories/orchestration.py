@@ -4,16 +4,21 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
-from typing import Any
-from uuid import uuid4
 
+from database.mappers.autoscaling import autoscaler_state_from_row
+from database.mappers.containers import container_from_row, write_container
+from database.mappers.fleet import (
+    agent_from_row,
+    agent_lease_from_row,
+    machine_from_row,
+    worker_from_row,
+    write_agent,
+    write_agent_lease,
+    write_machine,
+    write_worker,
+)
 from database.records.autoscaling import AutoscalingTargetClaim
 from database.repositories.cleanup import CleanupRepository
-from database.repositories.common import (
-    GlobalTableRepository,
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
-)
 from database.repositories.identity import WorkspaceRepository
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.identity import WorkspaceMemberTable
@@ -24,15 +29,12 @@ from database.tables.orchestration import (
     AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
-    RouteTable,
     WorkerTable,
 )
 from foundation.ids import try_uuid
-from pydantic import JsonValue, TypeAdapter
 from shared.autoscaler_state import (
     AutoscalerStateRecord,
     AutoscalerTargetKind,
-    autoscaler_state_name,
 )
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, ResourceStatus, Worker
 from shared.container_requests import (
@@ -42,15 +44,11 @@ from shared.container_requests import (
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
-from shared.routing import AgentBackendRoute
-from sqlalchemy import Select, and_, case, func, or_, select, text, union_all
+from shared.timestamps import utc_now
+from sqlalchemy import Select, and_, case, delete, func, or_, select, text, union_all
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
-
-_JSON_OBJECT_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
 
 
 def container_storage_release_pending() -> ColumnElement[bool]:
@@ -60,7 +58,7 @@ def container_storage_release_pending() -> ColumnElement[bool]:
             ContainerTable.storage_released_at.is_(None),
             or_(
                 ContainerTable.worker_id.is_not(None),
-                ContainerTable.payload["runtime_worker_id"].as_string() != "",
+                ContainerTable.runtime_worker_id != "",
             ),
         ),
     )
@@ -90,13 +88,7 @@ class AutoscalingTargetRepository:
             "created_at": current_time,
             "updated_at": current_time,
         }
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            insert = postgresql_insert(AutoscalingTargetTable).values(**values)
-        elif dialect == "sqlite":
-            insert = sqlite_insert(AutoscalingTargetTable).values(**values)
-        else:
-            raise RuntimeError("autoscaling targets require PostgreSQL or SQLite")
+        insert = postgresql_insert(AutoscalingTargetTable).values(**values)
         earlier_due_at = case(
             (AutoscalingTargetTable.due_at > insert.excluded.due_at, insert.excluded.due_at),
             else_=AutoscalingTargetTable.due_at,
@@ -214,115 +206,164 @@ class AutoscalingTargetRepository:
 class AutoscalerStateRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[AutoscalerStateRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(
-                AutoscalerStateTable,
-                AutoscalerStateRecord,
-                key_field="name",
-            ),
-        )
-
     def upsert(self, state: AutoscalerStateRecord) -> AutoscalerStateRecord:
+        state = AutoscalerStateRecord.model_validate(dict(state))
         WorkspaceRepository(self.session).lock_active_owner(state.workspace_id)
-        validated = AutoscalerStateRecord.model_validate(dict(state))
-        payload = _JSON_OBJECT_ADAPTER.validate_json(validated.model_dump_json())
-        now = datetime.now(UTC)
-        values: dict[str, str | datetime | dict[str, JsonValue]] = {
-            "id": str(uuid4()),
-            "workspace_id": validated.workspace_id,
-            "name": validated.name,
-            "source": validated.source,
-            "target_kind": validated.target_kind.value,
-            "target_id": validated.target_id,
-            "decision": validated.decision,
-            "payload": payload,
-            "created_at": now,
-            "updated_at": now,
-        }
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            insert = postgresql_insert(AutoscalerStateTable).values(**values)
-        elif dialect == "sqlite":
-            insert = sqlite_insert(AutoscalerStateTable).values(**values)
-        else:
-            raise RuntimeError("autoscaler state requires PostgreSQL or SQLite")
+        insert = postgresql_insert(AutoscalerStateTable).values(
+            workspace_id=state.workspace_id,
+            source=state.source,
+            target_kind=state.target_kind.value,
+            target_id=state.target_id,
+            deployment_id=state.deployment_id,
+            app_id=state.app_id,
+            current_count=state.current_count,
+            desired_count=state.desired_count,
+            signal_name=state.signal_name,
+            signal_value=state.signal_value,
+            decision=state.decision,
+            reason=state.reason,
+            active=state.active,
+            valid=state.valid,
+            lock_acquired=state.lock_acquired,
+            owner_lock_key=state.owner_lock_key,
+            cooldown_until=state.cooldown_until,
+            failed_container_count=state.failed_container_count,
+            pending_count=state.pending_count,
+            guardrails=state.guardrails,
+            last_actions=[action.model_dump(mode="json") for action in state.last_actions],
+            updated_at=state.updated_at,
+        )
         statement = (
             insert.on_conflict_do_update(
                 index_elements=[
                     AutoscalerStateTable.workspace_id,
-                    AutoscalerStateTable.name,
+                    AutoscalerStateTable.target_kind,
+                    AutoscalerStateTable.target_id,
                 ],
                 set_={
                     "source": insert.excluded.source,
-                    "target_kind": insert.excluded.target_kind,
-                    "target_id": insert.excluded.target_id,
+                    "deployment_id": insert.excluded.deployment_id,
+                    "app_id": insert.excluded.app_id,
+                    "current_count": insert.excluded.current_count,
+                    "desired_count": insert.excluded.desired_count,
+                    "signal_name": insert.excluded.signal_name,
+                    "signal_value": insert.excluded.signal_value,
                     "decision": insert.excluded.decision,
-                    "payload": insert.excluded.payload,
+                    "reason": insert.excluded.reason,
+                    "active": insert.excluded.active,
+                    "valid": insert.excluded.valid,
+                    "lock_acquired": insert.excluded.lock_acquired,
+                    "owner_lock_key": insert.excluded.owner_lock_key,
+                    "cooldown_until": insert.excluded.cooldown_until,
+                    "failed_container_count": insert.excluded.failed_container_count,
+                    "pending_count": insert.excluded.pending_count,
+                    "guardrails": insert.excluded.guardrails,
+                    "last_actions": insert.excluded.last_actions,
                     "updated_at": insert.excluded.updated_at,
                 },
             )
             .returning(AutoscalerStateTable)
             .execution_options(populate_existing=True)
         )
-        row = self.session.scalars(statement).one()
-        return AutoscalerStateRecord.model_validate(row.payload)
+        return autoscaler_state_from_row(self.session.scalars(statement).one())
 
     def get(
-        self,
-        *,
-        workspace_id: str,
-        target_kind: AutoscalerTargetKind,
-        target_id: str,
+        self, *, workspace_id: str, target_kind: AutoscalerTargetKind, target_id: str
     ) -> AutoscalerStateRecord | None:
-        return self.records.get(
-            autoscaler_state_name(target_kind, target_id),
-            workspace_id=workspace_id,
+        row = self.session.get(AutoscalerStateTable, (workspace_id, target_kind.value, target_id))
+        return autoscaler_state_from_row(row) if row is not None else None
+
+    def list(self, *, workspace_id: str, source: str | None = None) -> list[AutoscalerStateRecord]:
+        statement = select(AutoscalerStateTable).where(
+            AutoscalerStateTable.workspace_id == workspace_id
         )
+        if source is not None:
+            statement = statement.where(AutoscalerStateTable.source == source)
+        return [
+            autoscaler_state_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(AutoscalerStateTable.target_kind, AutoscalerStateTable.target_id)
+            )
+        ]
 
-    def list(
-        self,
-        *,
-        workspace_id: str,
-        source: str | None = None,
-    ) -> list[AutoscalerStateRecord]:
-        return _filtered_by_source(self.records.list(workspace_id=workspace_id), source)
-
-    def list_across_workspaces(
-        self,
-        *,
-        source: str | None = None,
-    ) -> list[AutoscalerStateRecord]:
-        """Scheduler-owned listing over every workspace's autoscaler targets."""
-        return _filtered_by_source(self.records.list_across_workspaces(), source)
-
-
-def _filtered_by_source(
-    records: list[AutoscalerStateRecord],
-    source: str | None,
-) -> list[AutoscalerStateRecord]:
-    if source is None:
-        return records
-    return [item for item in records if item.source == source]
+    def list_across_workspaces(self, *, source: str | None = None) -> list[AutoscalerStateRecord]:
+        statement = select(AutoscalerStateTable)
+        if source is not None:
+            statement = statement.where(AutoscalerStateTable.source == source)
+        return [
+            autoscaler_state_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(
+                    AutoscalerStateTable.workspace_id,
+                    AutoscalerStateTable.target_kind,
+                    AutoscalerStateTable.target_id,
+                )
+            )
+        ]
 
 
 @dataclass(slots=True)
 class MachineRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[Machine]:
-        return WorkspaceTableRepository(self.session, TableRepositoryConfig(MachineTable, Machine))
-
     def upsert(self, machine: Machine, *, workspace_id: str | None = None) -> Machine:
-        """System-authority write; shared-pool machines carry no workspace."""
-        return self.records.upsert_across_workspaces(
-            machine,
-            workspace_id=workspace_id,
-            status=machine.status.value,
+        machine = Machine.model_validate(dict(machine))
+        row = self.session.get(MachineTable, machine.id)
+        owner_id = workspace_id if workspace_id is not None else row.workspace_id if row else None
+        if owner_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(owner_id)
+        if row is None:
+            row = MachineTable(id=machine.id, workspace_id=owner_id, created_at=machine.created_at)
+            self.session.add(row)
+        elif row.workspace_id != owner_id:
+            raise ConflictError("machine workspace cannot change")
+        write_machine(row, machine)
+        row.updated_at = utc_now()
+        self.session.flush()
+        return machine_from_row(row)
+
+    def get(self, machine_id: str, *, workspace_id: str) -> Machine | None:
+        if try_uuid(machine_id) is None:
+            return None
+        row = self.session.scalar(
+            select(MachineTable).where(
+                MachineTable.id == machine_id, MachineTable.workspace_id == workspace_id
+            )
         )
+        return machine_from_row(row) if row is not None else None
+
+    def get_across_workspaces(self, machine_id: str) -> Machine | None:
+        if try_uuid(machine_id) is None:
+            return None
+        row = self.session.get(MachineTable, machine_id)
+        return machine_from_row(row) if row is not None else None
+
+    def workspace_id(self, machine_id: str) -> str | None:
+        return self.session.scalar(
+            select(MachineTable.workspace_id).where(MachineTable.id == machine_id)
+        )
+
+    def list(self, *, workspace_id: str, status: str | None = None) -> list[Machine]:
+        statement = select(MachineTable).where(MachineTable.workspace_id == workspace_id)
+        if status is not None:
+            statement = statement.where(MachineTable.status == status)
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(MachineTable.created_at.desc(), MachineTable.id)
+            )
+        ]
+
+    def list_across_workspaces(self, *, status: str | None = None) -> list[Machine]:
+        statement = select(MachineTable)
+        if status is not None:
+            statement = statement.where(MachineTable.status == status)
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(MachineTable.created_at.desc(), MachineTable.id)
+            )
+        ]
 
     def mark_deleted_for_workspace_deletion(
         self,
@@ -338,78 +379,85 @@ class MachineRepository:
             return None
         if str(row.workspace_id) != workspace_id:
             raise ConflictError(f"machine is not owned by deleting workspace: {machine_id}")
-        machine = Machine.model_validate(row.payload).model_copy(
-            update={"status": ResourceStatus.Deleted}
-        )
-        row.payload = machine.model_dump(mode="json")
         row.status = ResourceStatus.Deleted.value
-        flag_modified(row, "payload")
+        row.updated_at = utc_now()
         self.session.flush()
-        return machine
-
-    def get(self, machine_id: str, *, workspace_id: str) -> Machine | None:
-        return self.records.get(machine_id, workspace_id=workspace_id)
-
-    def get_across_workspaces(self, machine_id: str) -> Machine | None:
-        """System lookup for scheduler/provider reconcilers over the whole fleet."""
-        return self.records.get_across_workspaces(machine_id)
-
-    def workspace_id(self, machine_id: str) -> str | None:
-        value = self.session.scalar(
-            select(MachineTable.workspace_id).where(MachineTable.id == machine_id)
-        )
-        return str(value) if value is not None else None
-
-    def list(self, *, workspace_id: str, status: str | None = None) -> list[Machine]:
-        return self.records.list(workspace_id=workspace_id, status=status)
+        return machine_from_row(row)
 
     def list_for_capacity_owner(self, workspace_id: str, capacity_owner_id: str) -> list[Machine]:
         statement = select(MachineTable).where(
             MachineTable.workspace_id == workspace_id,
             MachineTable.capacity_owner_id == capacity_owner_id,
         )
-        return [Machine.model_validate(row.payload) for row in self.session.scalars(statement)]
-
-    def list_across_workspaces(self, *, status: str | None = None) -> list[Machine]:
-        """System listing over the whole fleet, including unowned pool machines."""
-        return self.records.list_across_workspaces(status=status)
+        return [machine_from_row(row) for row in self.session.scalars(statement)]
 
 
 @dataclass(slots=True)
 class WorkerRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[Worker]:
-        return WorkspaceTableRepository(self.session, TableRepositoryConfig(WorkerTable, Worker))
-
     def upsert(self, worker: Worker, *, workspace_id: str | None = None) -> Worker:
-        """System-authority write; shared-pool workers carry no workspace."""
-        return self.records.upsert_across_workspaces(
-            worker,
-            workspace_id=workspace_id,
-            status=worker.status.value,
-        )
+        worker = Worker.model_validate(dict(worker))
+        row = self.session.get(WorkerTable, worker.id)
+        owner_id = workspace_id if workspace_id is not None else row.workspace_id if row else None
+        if owner_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(owner_id)
+        if row is None:
+            row = WorkerTable(id=worker.id, workspace_id=owner_id, created_at=worker.created_at)
+            self.session.add(row)
+        elif row.workspace_id != owner_id:
+            raise ConflictError("worker workspace cannot change")
+        write_worker(row, worker)
+        row.updated_at = utc_now()
+        self.session.flush()
+        return worker_from_row(row)
 
     def get(self, worker_id: str, *, workspace_id: str) -> Worker | None:
-        return self.records.get(worker_id, workspace_id=workspace_id)
+        if try_uuid(worker_id) is None:
+            return None
+        row = self.session.scalar(
+            select(WorkerTable).where(
+                WorkerTable.id == worker_id, WorkerTable.workspace_id == workspace_id
+            )
+        )
+        return worker_from_row(row) if row is not None else None
 
     def get_across_workspaces(self, worker_id: str) -> Worker | None:
-        """System lookup for the scheduler/worker fleet over every workspace."""
-        return self.records.get_across_workspaces(worker_id)
+        if try_uuid(worker_id) is None:
+            return None
+        row = self.session.get(WorkerTable, worker_id)
+        return worker_from_row(row) if row is not None else None
 
     def workspace_id(self, worker_id: str) -> str | None:
-        value = self.session.scalar(
+        return self.session.scalar(
             select(WorkerTable.workspace_id).where(WorkerTable.id == worker_id)
         )
-        return str(value) if value is not None else None
 
     def list(self, *, workspace_id: str, status: str | None = None) -> list[Worker]:
-        return self.records.list(workspace_id=workspace_id, status=status)
+        statement = select(WorkerTable).where(WorkerTable.workspace_id == workspace_id)
+        if status is not None:
+            statement = statement.where(WorkerTable.status == status)
+        return [
+            worker_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(WorkerTable.created_at.desc(), WorkerTable.id)
+            )
+        ]
 
     def list_across_workspaces(self, *, status: str | None = None) -> list[Worker]:
-        """System listing over the whole worker fleet."""
-        return self.records.list_across_workspaces(status=status)
+        statement = select(WorkerTable)
+        if status is not None:
+            statement = statement.where(WorkerTable.status == status)
+        return [
+            worker_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(WorkerTable.created_at.desc(), WorkerTable.id)
+            )
+        ]
+
+    def delete_across_workspaces(self, worker_id: str) -> None:
+        self.session.execute(delete(WorkerTable).where(WorkerTable.id == worker_id))
+        self.session.flush()
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,7 +477,7 @@ class ContainerRepository:
     session: Session
 
     def list_pending_storage_cleanup(self, worker_id: str) -> list[str]:
-        runtime_worker_id = ContainerTable.payload.op("->>")("runtime_worker_id")
+        runtime_worker_id = ContainerTable.runtime_worker_id
         assigned_worker = runtime_worker_id == worker_id
         physical_worker_id = try_uuid(worker_id)
         if physical_worker_id is not None:
@@ -457,7 +505,7 @@ class ContainerRepository:
         )
         if row is None:
             return
-        assigned_worker = ContainerRecord.model_validate(row.payload).runtime_worker_id
+        assigned_worker = container_from_row(row).runtime_worker_id
         if assigned_worker and assigned_worker != worker_id:
             raise ConflictError("container storage release belongs to another worker")
         if row.status in {status.value for status in LIVE_CONTAINER_STATUSES}:
@@ -469,7 +517,7 @@ class ContainerRepository:
         row = self.session.get(ContainerTable, container_id)
         if row is None or row.storage_released_at is None:
             return False
-        record = ContainerRecord.model_validate(row.payload)
+        record = container_from_row(row)
         return (record.runtime_worker_id or record.worker_id or "") == worker_id
 
     def lock_reservation(self, container_id: str) -> None:
@@ -478,29 +526,49 @@ class ContainerRepository:
             {"lock_key": f"container-reservation:{container_id}"},
         )
 
-    @property
-    def records(self) -> WorkspaceTableRepository[ContainerRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ContainerTable, ContainerRecord),
-        )
+    def create(self, container: ContainerRecord) -> ContainerRecord:
+        container = ContainerRecord.model_validate(dict(container))
+        WorkspaceRepository(self.session).lock_active_owner(container.workspace_id)
+        self._assert_admission(container)
+        row = ContainerTable(id=container.id, created_at=container.created_at)
+        write_container(row, container)
+        self.session.add(row)
+        self.session.flush()
+        return container_from_row(row)
 
     def upsert(self, container: ContainerRecord) -> ContainerRecord:
+        container = ContainerRecord.model_validate(dict(container))
+        WorkspaceRepository(self.session).lock_active_owner(container.workspace_id)
+        row = self.session.get(ContainerTable, container.id)
+        if row is None:
+            self._assert_admission(container)
+            row = ContainerTable(id=container.id, created_at=container.created_at)
+            self.session.add(row)
+        elif row.workspace_id != container.workspace_id:
+            raise ConflictError("container workspace cannot change")
+        write_container(row, container)
+        row.updated_at = utc_now()
+        self.session.flush()
+        return container_from_row(row)
+
+    def _assert_admission(self, container: ContainerRecord) -> None:
         cleanup = CleanupRepository(self.session)
         if container.stub_id is not None:
             cleanup.assert_stub_available(container.stub_id)
         if container.image:
             cleanup.assert_references_available(
-                workspace_id=container.workspace_id,
-                object_ids=set(),
-                image_ids={container.image},
+                workspace_id=container.workspace_id, object_ids=set(), image_ids={container.image}
             )
-        return self.records.upsert(
-            container,
-            workspace_id=container.workspace_id,
-            name=container.name,
-            status=container.status.value,
+
+    def delete(self, container_id: str, *, workspace_id: str) -> bool:
+        if try_uuid(container_id) is None:
+            return False
+        deleted = self.session.scalar(
+            delete(ContainerTable)
+            .where(ContainerTable.id == container_id, ContainerTable.workspace_id == workspace_id)
+            .returning(ContainerTable.id)
         )
+        return deleted is not None
 
     def stop_for_workspace_deletion(
         self,
@@ -514,7 +582,7 @@ class ContainerRepository:
             raise ConflictError(
                 f"workspace cleanup requires deleting state: {container.workspace_id}"
             )
-        current = self.records.get(container.id, workspace_id=container.workspace_id)
+        current = self.get(container.id, workspace_id=container.workspace_id)
         if current is None:
             raise ConflictError(f"container disappeared during workspace deletion: {container.id}")
         stopped = current.model_copy(
@@ -526,19 +594,27 @@ class ContainerRepository:
         row = self.session.get(ContainerTable, current.id)
         if row is None or str(row.workspace_id) != current.workspace_id:
             raise ConflictError(f"container disappeared during workspace deletion: {current.id}")
-        row.payload = stopped.model_dump(mode="json")
         row.status = ContainerStatus.Stopped.value
         row.finished_at = stopped.finished_at
-        flag_modified(row, "payload")
         self.session.flush()
         return stopped
 
     def get(self, container_id: str, *, workspace_id: str) -> ContainerRecord | None:
-        return self.records.get(container_id, workspace_id=workspace_id)
+        if try_uuid(container_id) is None:
+            return None
+        row = self.session.scalar(
+            select(ContainerTable).where(
+                ContainerTable.id == container_id, ContainerTable.workspace_id == workspace_id
+            )
+        )
+        return container_from_row(row) if row is not None else None
 
     def get_across_workspaces(self, container_id: str) -> ContainerRecord | None:
         """System lookup for scheduler/worker/reconciler container control."""
-        return self.records.get_across_workspaces(container_id)
+        if try_uuid(container_id) is None:
+            return None
+        row = self.session.get(ContainerTable, container_id)
+        return container_from_row(row) if row is not None else None
 
     def lock(self, container_id: str, *, workspace_id: str) -> ContainerRecord | None:
         row = self.session.scalar(
@@ -546,25 +622,25 @@ class ContainerRepository:
             .where(ContainerTable.id == container_id, ContainerTable.workspace_id == workspace_id)
             .with_for_update()
         )
-        return ContainerRecord.model_validate(row.payload) if row is not None else None
+        return container_from_row(row) if row is not None else None
 
     def lock_across_workspaces(self, container_id: str) -> ContainerRecord | None:
         row = self.session.scalar(
             select(ContainerTable).where(ContainerTable.id == container_id).with_for_update()
         )
-        return ContainerRecord.model_validate(row.payload) if row is not None else None
+        return container_from_row(row) if row is not None else None
 
     def list_live_runtime_assignments(self, worker_id: str) -> list[ContainerRecord]:
         rows = self.session.scalars(
             select(ContainerTable)
             .where(
-                ContainerTable.payload["runtime_worker_id"].as_string() == worker_id,
+                ContainerTable.runtime_worker_id == worker_id,
                 ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
             )
             .order_by(ContainerTable.id)
             .with_for_update()
         )
-        return [ContainerRecord.model_validate(row.payload) for row in rows]
+        return [container_from_row(row) for row in rows]
 
     def list(
         self,
@@ -648,22 +724,18 @@ class ContainerRepository:
     def live_gpu_containers_for_owner(self, *, owner_user_id: str) -> list[ContainerRecord]:
         """Every container holding a card for this account, with what it asked for.
 
-        Whole records, because the question asked of them is which models they
-        named and that lives in the payload. Few rows: bounded by the plan's GPU
+        The requested GPU models are needed to assess the plan change.
+        Few rows: bounded by the plan's GPU
         pool, and read when a plan change has to know what is still running.
         """
 
         statement = self._live_for_owner(select(ContainerTable), owner_user_id=owner_user_id).where(
             ContainerTable.gpu_count > 0
         )
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     @staticmethod
-    def _live_for_owner[TStatement: Select[Any]](
-        statement: TStatement, *, owner_user_id: str
-    ) -> TStatement:
+    def _live_for_owner[T](statement: Select[tuple[T]], *, owner_user_id: str) -> Select[tuple[T]]:
         return statement.join(
             WorkspaceMemberTable,
             WorkspaceMemberTable.workspace_id == ContainerTable.workspace_id,
@@ -742,7 +814,7 @@ class ContainerRepository:
                 select(func.count(ContainerTable.id)).where(
                     or_(
                         ContainerTable.machine_id == machine_id,
-                        ContainerTable.payload["runtime_machine_id"].as_string() == machine_id,
+                        ContainerTable.runtime_machine_id == machine_id,
                     ),
                     ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
                 )
@@ -801,15 +873,13 @@ class ContainerRepository:
             candidate.created_at.desc(),
             candidate.id.desc(),
         )
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def live_container_ids_for_owner(self, *, owner_user_id: str, limit: int) -> list[str]:
         """Which containers this account is holding capacity for, oldest first.
 
         Ids rather than records: the caller stops them, and building a full
-        `ContainerRecord` for each would validate a payload nothing reads.
+        `ContainerRecord` for each would load fields nothing reads.
 
         Oldest first so a bounded pass makes progress in the same order every
         time. An account over the limit is stopped across as many passes as it
@@ -839,7 +909,7 @@ class ContainerRepository:
         workspace_id: str,
     ) -> list[ContainerShutdownTarget]:
         containers = [
-            ContainerRecord.model_validate(row.payload)
+            container_from_row(row)
             for row in self.session.scalars(
                 select(ContainerTable).where(
                     ContainerTable.workspace_id == workspace_id, container_storage_release_pending()
@@ -872,9 +942,7 @@ class ContainerRepository:
         if stub_ids:
             statement = statement.where(ContainerTable.stub_id.in_(stub_ids))
         statement = statement.order_by(ContainerTable.created_at.desc(), ContainerTable.id.desc())
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def unsettled_preemptions_across_workspaces(self, *, limit: int) -> list[ContainerRecord]:
         """System recovery input: preempted containers whose retry intent never settled.
@@ -891,9 +959,7 @@ class ContainerRepository:
             .order_by(ContainerTable.finished_at.asc(), ContainerTable.id.asc())
             .limit(limit)
         )
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def mark_preemption_settled(
         self,
@@ -905,13 +971,11 @@ class ContainerRepository:
         row = self.session.get(ContainerTable, container_id)
         if row is None:
             return None
-        record = ContainerRecord.model_validate(row.payload)
+        record = container_from_row(row)
         if record.preemption_settled_at is not None:
             return record
         settled = record.model_copy(update={"preemption_settled_at": now})
-        row.payload = settled.model_dump(mode="json")
         row.preemption_settled_at = now
-        flag_modified(row, "payload")
         self.session.flush()
         return settled
 
@@ -927,9 +991,7 @@ class ContainerRepository:
             ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
         )
         statement = statement.order_by(ContainerTable.expires_at.asc(), ContainerTable.id.asc())
-        return [
-            ContainerRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [container_from_row(row) for row in self.session.scalars(statement)]
 
     def get_for_stub(
         self,
@@ -945,7 +1007,7 @@ class ContainerRepository:
                 ContainerTable.stub_id == stub_id,
             )
         ).first()
-        return ContainerRecord.model_validate(row.payload) if row is not None else None
+        return container_from_row(row) if row is not None else None
 
     def latest_for_stubs(
         self,
@@ -982,9 +1044,7 @@ class ContainerRepository:
             .where(ranked.c.position == 1)
         )
         return {
-            str(stub_id): ContainerRecord.model_validate(row.payload)
-            for row, stub_id in rows
-            if stub_id is not None
+            str(stub_id): container_from_row(row) for row, stub_id in rows if stub_id is not None
         }
 
     def page(
@@ -1035,7 +1095,7 @@ class ContainerRepository:
             )
             next_cursor = ContainerPageCursor(created_at=created_at, id=str(last.id))
         return ContainerPage(
-            data=[ContainerRecord.model_validate(row.payload) for row in page_rows],
+            data=[container_from_row(row) for row in page_rows],
             next=next_cursor,
         )
 
@@ -1075,98 +1135,123 @@ class ContainerRepository:
 class AgentRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[AgentRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(AgentTable, AgentRecord),
-        )
-
     def upsert(self, agent: AgentRecord, *, workspace_id: str | None = None) -> AgentRecord:
-        """System-authority write; cluster agents may carry no workspace."""
-        return self.records.upsert_across_workspaces(
-            agent,
-            workspace_id=workspace_id,
-            name=agent.name,
-            status=agent.status.value,
-        )
+        agent = AgentRecord.model_validate(dict(agent))
+        row = self.session.get(AgentTable, agent.id)
+        owner_id = workspace_id if workspace_id is not None else row.workspace_id if row else None
+        if owner_id is not None:
+            WorkspaceRepository(self.session).lock_active_owner(owner_id)
+        if row is None:
+            row = AgentTable(id=agent.id, workspace_id=owner_id, created_at=agent.created_at)
+            self.session.add(row)
+        elif row.workspace_id != owner_id:
+            raise ConflictError("agent workspace cannot change")
+        write_agent(row, agent)
+        row.updated_at = utc_now()
+        self.session.flush()
+        return agent_from_row(row)
 
     def get(self, agent_id: str, *, workspace_id: str) -> AgentRecord | None:
-        return self.records.get(agent_id, workspace_id=workspace_id)
+        if try_uuid(agent_id) is None:
+            return None
+        row = self.session.scalar(
+            select(AgentTable).where(
+                AgentTable.id == agent_id, AgentTable.workspace_id == workspace_id
+            )
+        )
+        return agent_from_row(row) if row is not None else None
 
     def get_across_workspaces(self, agent_id: str) -> AgentRecord | None:
-        """System lookup over the whole agent fleet."""
-        return self.records.get_across_workspaces(agent_id)
+        if try_uuid(agent_id) is None:
+            return None
+        row = self.session.get(AgentTable, agent_id)
+        return agent_from_row(row) if row is not None else None
 
     def workspace_id(self, agent_id: str) -> str | None:
-        value = self.session.scalar(
-            select(AgentTable.workspace_id).where(AgentTable.id == agent_id)
-        )
-        return str(value) if value is not None else None
+        return self.session.scalar(select(AgentTable.workspace_id).where(AgentTable.id == agent_id))
 
-    def list(
-        self,
-        *,
-        workspace_id: str,
-        status: str | None = None,
-    ) -> list[AgentRecord]:
-        return self.records.list(workspace_id=workspace_id, status=status)
+    def list(self, *, workspace_id: str, status: str | None = None) -> list[AgentRecord]:
+        statement = select(AgentTable).where(AgentTable.workspace_id == workspace_id)
+        if status is not None:
+            statement = statement.where(AgentTable.status == status)
+        return [
+            agent_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(AgentTable.created_at.desc(), AgentTable.id)
+            )
+        ]
 
     def list_across_workspaces(self, *, status: str | None = None) -> list[AgentRecord]:
-        """System listing over the whole agent fleet."""
-        return self.records.list_across_workspaces(status=status)
+        statement = select(AgentTable)
+        if status is not None:
+            statement = statement.where(AgentTable.status == status)
+        return [
+            agent_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(AgentTable.created_at.desc(), AgentTable.id)
+            )
+        ]
+
+    def delete(self, agent_id: str, *, workspace_id: str) -> None:
+        self.session.execute(
+            delete(AgentTable).where(
+                AgentTable.id == agent_id, AgentTable.workspace_id == workspace_id
+            )
+        )
+        self.session.flush()
 
 
 @dataclass(slots=True)
 class AgentLeaseRepository:
     session: Session
 
-    @property
-    def records(self) -> GlobalTableRepository[AgentLease]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(AgentLeaseTable, AgentLease),
+    def upsert(self, lease: AgentLease, *, workspace_id: str) -> AgentLease:
+        lease = AgentLease.model_validate(dict(lease))
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        agent = self.session.scalar(
+            select(AgentTable.id)
+            .where(
+                AgentTable.id == lease.agent_id,
+                AgentTable.workspace_id == workspace_id,
+            )
+            .with_for_update(read=True, key_share=True)
         )
-
-    def upsert(self, lease: AgentLease) -> AgentLease:
-        return self.records.upsert(lease, status=lease.status.value)
+        if agent is None:
+            raise ConflictError("agent lease requires an agent in its workspace")
+        row = self.session.get(AgentLeaseTable, lease.id)
+        if row is None:
+            row = AgentLeaseTable(id=lease.id, created_at=lease.created_at)
+            self.session.add(row)
+        elif (row.agent_id, row.resource_type, row.resource_id) != (
+            lease.agent_id,
+            lease.resource_type,
+            lease.resource_id,
+        ):
+            raise ConflictError("agent lease ownership cannot change")
+        write_agent_lease(row, lease)
+        row.updated_at = utc_now()
+        self.session.flush()
+        return agent_lease_from_row(row)
 
     def get(self, lease_id: str) -> AgentLease | None:
-        return self.records.get(lease_id)
+        if try_uuid(lease_id) is None:
+            return None
+        row = self.session.get(AgentLeaseTable, lease_id)
+        return agent_lease_from_row(row) if row is not None else None
 
-    def list(self, *, status: str | None = None) -> list[AgentLease]:
-        return self.records.list(status=status)
-
-
-@dataclass(slots=True)
-class RouteRepository:
-    session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[AgentBackendRoute]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(RouteTable, AgentBackendRoute, key_field="route_id"),
+    def list_for_workspace(
+        self, workspace_id: str, *, status: str | None = None
+    ) -> list[AgentLease]:
+        statement = (
+            select(AgentLeaseTable)
+            .join(AgentTable, AgentTable.id == AgentLeaseTable.agent_id)
+            .where(AgentTable.workspace_id == workspace_id)
         )
-
-    def upsert(self, route: AgentBackendRoute) -> AgentBackendRoute:
-        return self.records.upsert(
-            route,
-            key=route.route_id,
-            workspace_id=route.workspace_id,
-            status=str(route.state),
-        )
-
-    def get(self, route_id: str, *, workspace_id: str) -> AgentBackendRoute | None:
-        return self.records.get(route_id, workspace_id=workspace_id)
-
-    def get_across_workspaces(self, route_id: str) -> AgentBackendRoute | None:
-        """System lookup for request routing over every workspace's routes."""
-        return self.records.get_across_workspaces(route_id)
-
-    def list(self, *, workspace_id: str) -> list[AgentBackendRoute]:
-        return self.records.list(workspace_id=workspace_id)
-
-    def list_across_workspaces(self) -> list[AgentBackendRoute]:
-        """System listing for route reconciliation."""
-        return self.records.list_across_workspaces()
+        if status is not None:
+            statement = statement.where(AgentLeaseTable.status == status)
+        return [
+            agent_lease_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(AgentLeaseTable.created_at.desc(), AgentLeaseTable.id)
+            )
+        ]

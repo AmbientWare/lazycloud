@@ -13,7 +13,6 @@ import grpc.aio
 import pytest
 from compute.state import RedisComputeStateRepository
 from compute.tunnel_authority import AgentTunnelAuthority
-from control.routes import RouteService
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from database.context import ServiceContext
 from database.repositories.compute import (
@@ -195,9 +194,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
         client = TunnelRouteClient(directory, control_credentials, "localhost")
         containers = RedisSchedulerContainerRepository(redis)
         containers.set_worker_address(container_id, route.local_target, route=route)
-        dialer = BackendRouteDialer(
-            client, SchedulerBackendRouteResolver(RouteService(context), containers)
-        )
+        dialer = BackendRouteDialer(client, SchedulerBackendRouteResolver(containers))
         replacement: AgentTunnelClient | None = None
         replacement_gateway: AgentTunnelGateway | None = None
         replacement_server = None

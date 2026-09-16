@@ -242,12 +242,7 @@ class ContainerSchedulingPersistenceService:
             container.exit_code = 1
             container.finished_at = container.finished_at or current_time
             release_container_runtime_state(self.runtime_state, container)
-            ContainerRepository(session).records.upsert(
-                container,
-                workspace_id=container.workspace_id,
-                name=container.name,
-                status=container.status.value,
-            )
+            ContainerRepository(session).upsert(container)
             if container.task_id:
                 task = TaskRepository(session).get_across_workspaces(container.task_id)
                 if task is not None and not is_terminal_task_status(task.status):

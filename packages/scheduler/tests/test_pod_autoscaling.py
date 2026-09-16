@@ -107,7 +107,7 @@ def test_pod_autoscaler_scales_immediately_idle_deployment_to_zero(
     assert state.signal_value == 0
     assert state.decision == "hold"
     assert state.lock_acquired is True
-    assert state.last_sample["total_connections"] == 0
+    assert state.signal_name == "total_connections" and state.signal_value == 0
     assert state.last_actions == []
 
 

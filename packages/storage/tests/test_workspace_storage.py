@@ -376,7 +376,8 @@ def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
         overwrite=False,
     )
 
-    assert repaired == first
+    assert repaired.model_dump(exclude={"updated_at"}) == first.model_dump(exclude={"updated_at"})
+    assert repaired.updated_at > first.updated_at
     assert len(client.file_uploads) == 2
     assert storage.object_is_complete(repaired)
 

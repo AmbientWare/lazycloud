@@ -24,7 +24,6 @@ from shared.source_cache_cleanup import (
 )
 from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 type SourceCacheInsertValue = str | int | datetime | None
@@ -549,23 +548,12 @@ class SourceCacheCleanupRepository:
             "created_at": now,
             "updated_at": now,
         }
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            statement = (
-                postgresql_insert(WorkerCacheGenerationTable)
-                .values(**values)
-                .on_conflict_do_nothing()
-                .returning(WorkerCacheGenerationTable.id)
-            )
-        elif dialect == "sqlite":
-            statement = (
-                sqlite_insert(WorkerCacheGenerationTable)
-                .values(**values)
-                .on_conflict_do_nothing()
-                .returning(WorkerCacheGenerationTable.id)
-            )
-        else:
-            raise RuntimeError(f"unsupported source cache cleanup database dialect: {dialect}")
+        statement = (
+            postgresql_insert(WorkerCacheGenerationTable)
+            .values(**values)
+            .on_conflict_do_nothing()
+            .returning(WorkerCacheGenerationTable.id)
+        )
         inserted_id = self.session.scalar(statement)
         self.session.flush()
         return str(inserted_id) if inserted_id is not None else None
@@ -576,23 +564,10 @@ class SourceCacheCleanupRepository:
     ) -> int:
         if not values:
             return 0
-        dialect = self.session.get_bind().dialect.name
-        if dialect == "postgresql":
-            statement = postgresql_insert(SourceCacheCleanupTargetTable).values(values)
-            statement = statement.on_conflict_do_nothing(
-                constraint="uq_source_cache_cleanup_target"
-            ).returning(SourceCacheCleanupTargetTable.id)
-        elif dialect == "sqlite":
-            statement = sqlite_insert(SourceCacheCleanupTargetTable).values(values)
-            statement = statement.on_conflict_do_nothing(
-                index_elements=[
-                    SourceCacheCleanupTargetTable.workspace_id,
-                    SourceCacheCleanupTargetTable.cache_generation_id,
-                    SourceCacheCleanupTargetTable.source_object_id,
-                ]
-            ).returning(SourceCacheCleanupTargetTable.id)
-        else:
-            raise RuntimeError(f"unsupported source cache cleanup database dialect: {dialect}")
+        statement = postgresql_insert(SourceCacheCleanupTargetTable).values(values)
+        statement = statement.on_conflict_do_nothing(
+            constraint="uq_source_cache_cleanup_target"
+        ).returning(SourceCacheCleanupTargetTable.id)
         return len(self.session.scalars(statement).all())
 
     def _current_generation_row(

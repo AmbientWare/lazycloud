@@ -176,6 +176,5 @@ def _record_state(services: ApiServices, stub: StubRecord) -> AutoscalerStateRec
         signal_value=4,
         decision="scale-up",
         reason="queue-pending",
-        last_sample={"queue_length": 4},
     )
     return services.autoscaler_states.upsert(state)

@@ -4,11 +4,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from database.records.apps import StubRecord
+from database.mappers.apps import stub_from_table
+from database.mappers.images import checkpoint_from_table, image_build_from_table, image_from_table
+from database.mappers.storage import object_from_table
 from database.tables.apps import StubTable
 from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
 from database.tables.storage import ObjectTable
-from pydantic import BaseModel, JsonValue
+from pydantic import JsonValue
 from shared.checkpoints import CheckpointRecord
 from shared.errors import ConflictError
 from shared.image_building.records import ImageBuildRecord, ImageRecord
@@ -17,7 +19,6 @@ from shared.runtime_paths import archive_path_digest, normalize_runtime_path
 from shared.workload_config import StubConfig
 from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
 
 OBJECT_CLEANUP_CHECKPOINT = "checkpoint-retention"
@@ -130,7 +131,7 @@ class CleanupRepository:
         row = self.session.get(StubTable, stub_id)
         if row is None:
             return
-        stub = StubRecord.model_validate(row.payload)
+        stub = stub_from_table(row)
         self.assert_stub_config_available(
             stub.config,
             workspace_id=str(row.workspace_id),
@@ -259,20 +260,13 @@ class CleanupRepository:
         if row.write_claimed_at is not None:
             raise ConflictError(f"object write is in progress: {row.bucket}/{row.key}")
         if row.cleanup_claimed_at is not None:
-            current = ObjectRecord.model_validate(row.payload)
+            current = object_from_table(row)
             if current.cleanup_kind != cleanup_kind:
                 raise ConflictError(f"object cleanup is in progress: {row.bucket}/{row.key}")
             return current
-        payload: dict[str, JsonValue] = {
-            **row.payload,
-            "cleanup_claimed_at": claimed_at.isoformat(),
-            "cleanup_kind": cleanup_kind,
-        }
-        row.payload = payload
         row.cleanup_claimed_at = claimed_at
         row.cleanup_kind = cleanup_kind
-        flag_modified(row, "payload")
-        return ObjectRecord.model_validate(payload)
+        return object_from_table(row)
 
     def mark_image_claimed(
         self,
@@ -287,13 +281,15 @@ class CleanupRepository:
                 ImageTable.image_id == image_id,
             )
         ).one()
-        return _mark_claimed(row, ImageRecord, claimed_at)
+        row.cleanup_claimed_at = claimed_at
+        return image_from_table(row)
 
     def mark_build_claimed(self, build_id: str, *, claimed_at: datetime) -> ImageBuildRecord:
         row = self.session.get(ImageBuildTable, build_id)
         if row is None:
             raise KeyError(build_id)
-        return _mark_claimed(row, ImageBuildRecord, claimed_at)
+        row.cleanup_claimed_at = claimed_at
+        return image_build_from_table(row)
 
     def mark_builds_claimed(
         self,
@@ -313,7 +309,9 @@ class CleanupRepository:
                 .order_by(ImageBuildTable.created_at.asc(), ImageBuildTable.id.asc())
             )
         )
-        return [_mark_claimed(row, ImageBuildRecord, claimed_at) for row in rows]
+        for row in rows:
+            row.cleanup_claimed_at = claimed_at
+        return [image_build_from_table(row) for row in rows]
 
     def mark_checkpoint_claimed(
         self,
@@ -324,7 +322,8 @@ class CleanupRepository:
         row = self.session.scalars(
             select(CheckpointTable).where(CheckpointTable.checkpoint_id == checkpoint_id)
         ).one()
-        return _mark_claimed(row, CheckpointRecord, claimed_at)
+        row.cleanup_claimed_at = claimed_at
+        return checkpoint_from_table(row)
 
     def list_claimed_objects(
         self,
@@ -338,11 +337,11 @@ class CleanupRepository:
         statement = statement.order_by(
             ObjectTable.cleanup_claimed_at.asc(), ObjectTable.id.asc()
         ).limit(limit)
-        return [ObjectRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [object_from_table(row) for row in self.session.scalars(statement)]
 
     def list_claimed_images(self, *, limit: int) -> list[ImageRecord]:
         return [
-            ImageRecord.model_validate(row.payload)
+            image_from_table(row)
             for row in self.session.scalars(
                 select(ImageTable)
                 .where(ImageTable.cleanup_claimed_at.is_not(None))
@@ -353,7 +352,7 @@ class CleanupRepository:
 
     def list_claimed_builds(self, *, limit: int) -> list[ImageBuildRecord]:
         return [
-            ImageBuildRecord.model_validate(row.payload)
+            image_build_from_table(row)
             for row in self.session.scalars(
                 select(ImageBuildTable)
                 .where(ImageBuildTable.cleanup_claimed_at.is_not(None))
@@ -364,7 +363,7 @@ class CleanupRepository:
 
     def list_claimed_checkpoints(self, *, limit: int) -> list[CheckpointRecord]:
         return [
-            CheckpointRecord.model_validate(row.payload)
+            checkpoint_from_table(row)
             for row in self.session.scalars(
                 select(CheckpointTable)
                 .where(CheckpointTable.cleanup_claimed_at.is_not(None))
@@ -372,21 +371,6 @@ class CleanupRepository:
                 .limit(limit)
             )
         ]
-
-
-def _mark_claimed[TModel: BaseModel](
-    row: ImageTable | ImageBuildTable | CheckpointTable,
-    model_type: type[TModel],
-    claimed_at: datetime,
-) -> TModel:
-    payload: dict[str, JsonValue] = {
-        **row.payload,
-        "cleanup_claimed_at": claimed_at.isoformat(),
-    }
-    row.payload = payload
-    row.cleanup_claimed_at = claimed_at
-    flag_modified(row, "payload")
-    return model_type.model_validate(payload)
 
 
 def _stub_object_ids(

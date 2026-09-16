@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import (
     BillingAllowanceRepository,
@@ -19,7 +20,6 @@ from database.repositories.billing_costs import (
 )
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
-from database.repositories.compute import AwsAccountConnectionRepository
 from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import ContainerRepository

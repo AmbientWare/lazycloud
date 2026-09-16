@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
-from threading import RLock
-from uuid import uuid4
 
 from anyio import CancelScope
 from anyio.lowlevel import checkpoint_if_cancelled
 from psycopg import Capabilities
 from shared.errors import UpstreamUnavailableError
-from sqlalchemy import Connection, Engine, create_engine, event, literal, select, text
+from sqlalchemy import Connection, Engine, create_engine, event, literal, select
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
@@ -21,10 +19,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import Pool, QueuePool, StaticPool
+from sqlalchemy.pool import Pool, QueuePool
 
 from database.settings import DatabaseApplicationName, DatabaseSettings
-from database.tables import DatabaseBase
 
 LOGGER = logging.getLogger(__name__)
 
@@ -49,7 +46,6 @@ class DatabaseClient:
     settings: DatabaseSettings
     engine: Engine
     sessions: sessionmaker[Session]
-    session_lock: AbstractContextManager[object] | None = None
     _direct_engine: Engine | None = field(default=None, repr=False)
     _pool_exhaustions: int = field(default=0, init=False, repr=False)
 
@@ -57,13 +53,11 @@ class DatabaseClient:
     def from_settings(cls, settings: DatabaseSettings) -> DatabaseClient:
         config = settings
         engine = create_engine(config.url, **_engine_kwargs(config))
-        _install_sqlite_uuid_function(engine, config.url)
         _install_transaction_settings(engine, config)
         return cls(
             settings=config,
             engine=engine,
             sessions=sessionmaker(bind=engine, expire_on_commit=False),
-            session_lock=RLock() if config.url.startswith("sqlite") else None,
             _direct_engine=(
                 create_engine(config.direct_url, **_direct_engine_kwargs(config))
                 if config.direct_url
@@ -73,16 +67,15 @@ class DatabaseClient:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        with _optional_lock(self.session_lock):
-            session = self._checkout()
-            try:
-                yield session
-                session.commit()
-            except Exception:
-                session.rollback()
-                raise
-            finally:
-                session.close()
+        session = self._checkout()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def _checkout(self) -> Session:
         session = self.sessions()
@@ -99,14 +92,6 @@ class DatabaseClient:
     def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
         self._pool_exhaustions += 1
         return _pool_exhausted_error(self.settings, self.engine.pool.status(), exc)
-
-    def create_schema(self) -> None:
-        if self.engine.dialect.name == "postgresql":
-            with self.engine.begin() as connection:
-                connection.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
-                DatabaseBase.metadata.create_all(connection)
-            return
-        DatabaseBase.metadata.create_all(self.engine)
 
     def ping(self) -> bool:
         try:
@@ -155,7 +140,6 @@ class AsyncDatabaseClient:
     def from_settings(cls, settings: DatabaseSettings) -> AsyncDatabaseClient:
         config = settings
         engine = create_async_engine(config.url, **_engine_kwargs(config))
-        _install_sqlite_uuid_function(engine.sync_engine, config.url)
         _install_transaction_settings(engine.sync_engine, config)
         return cls(
             settings=config,
@@ -212,12 +196,6 @@ class AsyncDatabaseClient:
     def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
         self._pool_exhaustions += 1
         return _pool_exhausted_error(self.settings, self.engine.sync_engine.pool.status(), exc)
-
-    async def create_schema(self) -> None:
-        async with self.engine.begin() as connection:
-            if self.engine.dialect.name == "postgresql":
-                await connection.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
-            await connection.run_sync(DatabaseBase.metadata.create_all)
 
     async def ping(self) -> bool:
         return await self.run_transaction(lambda session: session.scalar(select(literal(1))) == 1)
@@ -295,19 +273,10 @@ def _pool_exhausted_error(
 
 
 def _engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
-    if settings.url.startswith("sqlite"):
-        # A file database serves a sync and an async engine at once; SQLite has
-        # one writer, so the second waits rather than failing on a busy lock.
-        kwargs: dict[str, object] = {
-            "connect_args": {"check_same_thread": False, "timeout": 30},
-        }
-        if settings.url.endswith(":memory:"):
-            kwargs["poolclass"] = StaticPool
-        return kwargs
-
     return {
         "connect_args": _connection_args(settings),
         "echo": settings.echo,
+        "hide_parameters": True,
         "pool_size": settings.pool_size,
         "max_overflow": settings.max_overflow,
         "pool_timeout": settings.pool_timeout_seconds,
@@ -337,12 +306,13 @@ def _direct_engine_kwargs(settings: DatabaseSettings) -> dict[str, object]:
         "pool_timeout": settings.pool_timeout_seconds,
         "pool_pre_ping": True,
         "isolation_level": "AUTOCOMMIT",
+        "hide_parameters": True,
     }
 
 
 def _install_transaction_settings(engine: Engine, settings: DatabaseSettings) -> None:
     if engine.dialect.name != "postgresql":
-        return
+        raise ValueError("durable state requires PostgreSQL")
 
     @event.listens_for(engine, "begin")
     def begin(connection: Connection) -> None:
@@ -352,23 +322,3 @@ def _install_transaction_settings(engine: Engine, settings: DatabaseSettings) ->
             )
         if settings.application_name is DatabaseApplicationName.Wait:
             connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-
-
-def _optional_lock(
-    lock: AbstractContextManager[object] | None,
-) -> AbstractContextManager[object | None]:
-    return nullcontext() if lock is None else lock
-
-
-def _install_sqlite_uuid_function(engine: Engine, url: str) -> None:
-    if not url.startswith("sqlite"):
-        return
-
-    @event.listens_for(engine, "connect")
-    def connect(dbapi_connection: object, _connection_record: object) -> None:
-        execute = getattr(dbapi_connection, "execute", None)
-        if execute is not None:
-            execute("PRAGMA foreign_keys=ON")
-        create_function = getattr(dbapi_connection, "create_function", None)
-        if create_function is not None:
-            create_function("gen_random_uuid", 0, lambda: uuid4().hex)

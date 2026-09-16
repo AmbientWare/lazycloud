@@ -39,7 +39,6 @@ class BillingPreferencesTable(TimestampMixin, DatabaseBase):
             "reload_checked_at",
             "user_id",
             postgresql_where=text("reload_enabled AND reload_paused_purchase_id IS NULL"),
-            sqlite_where=text("reload_enabled AND reload_paused_purchase_id IS NULL"),
         ),
     )
 

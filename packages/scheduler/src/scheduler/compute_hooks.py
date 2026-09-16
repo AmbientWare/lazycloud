@@ -161,10 +161,7 @@ def _internal_compute_unit_state(
             },
             "drain": {
                 "scale_down_enabled": "true",
-                "scale_down_idle_seconds": pool.config.get(
-                    "idle_timeout_seconds",
-                    300,
-                ),
+                "scale_down_idle_seconds": pool.idle_drain_timeout_seconds,
             },
         },
     )

@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,
@@ -27,7 +27,7 @@ from database.repositories.orchestration import (
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
@@ -68,7 +68,6 @@ from shared.compute_reconciliation import (
 )
 from shared.container_requests import OciRuntimeName
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
-from shared.contracts import ContractModel
 from shared.errors import (
     CapacityLimitReachedError,
     ConflictError,
@@ -106,8 +105,6 @@ from compute.offers import (
 from compute.provider_machines import (
     ProviderMachineReconciler,
     ProviderUnitBootstrapFactory,
-    _metadata_time,
-    _provider_storage_volume_ids,
     _provider_zero_capacity_converged,
     _require_internal_pooled_unit,
     _reservation_open,
@@ -135,7 +132,6 @@ from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
 
-_JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 _UNCONFIRMED_OPERATION_STATUSES = frozenset(
     {
@@ -1279,7 +1275,7 @@ class ComputeService:
                 for record in provider_instances.list_for_pool(compute_pool.id):
                     if not _reservation_open(record.status):
                         continue
-                    detail = str(record.metadata.get("last_error") or "provider unavailable")
+                    detail = record.last_error or "provider unavailable"
                     termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if not termination_errors:
                     compute_pool_repository.delete(
@@ -1289,7 +1285,7 @@ class ComputeService:
             if not termination_errors:
                 machine_repository = MachineRepository(session)
                 owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
-                for machine in machine_repository.records.list(workspace_id=workspace_id):
+                for machine in machine_repository.list(workspace_id=workspace_id):
                     if (
                         machine.capacity_owner_id != owner
                         or machine.status is ResourceStatus.Deleted
@@ -1416,7 +1412,7 @@ class ComputeService:
                     )
                 for record in provider_instances.list_for_pool(compute_pool.id):
                     if _reservation_open(record.status):
-                        detail = str(record.metadata.get("last_error") or "provider unavailable")
+                        detail = record.last_error or "provider unavailable"
                         termination_errors.append(f"{record.provider}/{record.id}: {detail}")
                 if (
                     _owns_provider_pool_capacity(compute_pool)
@@ -1443,7 +1439,7 @@ class ComputeService:
                 )
             machine_repository = MachineRepository(session)
             owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
-            for machine in machine_repository.records.list(workspace_id=workspace_id):
+            for machine in machine_repository.list(workspace_id=workspace_id):
                 if machine.capacity_owner_id != owner or machine.status is ResourceStatus.Deleted:
                     continue
                 machine_repository.mark_deleted_for_workspace_deletion(
@@ -1802,8 +1798,8 @@ class ComputeService:
                 ) and not any(
                     _reservation_open(record.status)
                     or (
-                        (record.instance_id is not None or _provider_storage_volume_ids(record))
-                        and _metadata_time(record.metadata, "provider_storage_destroyed_at") is None
+                        (record.instance_id is not None or record.storage_volume_ids)
+                        and record.provider_storage_destroyed_at is None
                     )
                     for record in records
                 ):
@@ -2005,7 +2001,6 @@ class ComputeService:
                 provider=provider.ref,
                 selector=unit_name,
                 source="workspace_policy",
-                config=current.config if current is not None else {},
                 provider_ref=provider.ref,
                 provider_connection_id=provider.connection_id,
                 capacity_mode=ComputeCapacityMode.Pooled,
@@ -2375,10 +2370,7 @@ class ComputeService:
             instance = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
         if instance is None or instance.pool_id != unit.id:
             raise ConflictError("worker has no provider instance in its capacity unit")
-        zone = instance.metadata.get("availability_zone", "")
-        if not isinstance(zone, str):
-            raise UpstreamUnavailableError("worker provider reported an invalid availability zone")
-        return zone
+        return instance.availability_zone
 
     def worker_egress_policy(
         self, *, workspace_id: str, capacity_owner_id: str, machine_id: str
@@ -2748,12 +2740,12 @@ class ComputeService:
                 raise KeyError(f"provider instance for machine not found: {machine_id}")
             if not _reservation_open(record.status):
                 return current
-            if record.metadata.get("terminating_reason") != "idle_pool_scale_down":
+            if record.terminating_reason != "idle_pool_scale_down":
                 replacement = current.replacement_machine_id == machine_id
                 live = sum(
                     _reservation_open(item.status)
                     and item.status != ReservationStatus.Terminating.value
-                    and "missing_since" not in item.metadata
+                    and item.missing_since is None
                     for item in records
                 )
                 operational, _maximum = provider_unit_operational_capacity(current)
@@ -3362,7 +3354,7 @@ class ComputeService:
                     current.id, status=ReservationStatus.Terminating.value
                 )
             for record in retiring:
-                if record.instance_id is None or "missing_since" in record.metadata:
+                if record.instance_id is None or record.missing_since is not None:
                     continue
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
                     pooled.release_machine(
@@ -3490,8 +3482,8 @@ class ComputeService:
             if any(
                 _reservation_open(record.status)
                 or (
-                    (record.instance_id is not None or _provider_storage_volume_ids(record))
-                    and _metadata_time(record.metadata, "provider_storage_destroyed_at") is None
+                    (record.instance_id is not None or record.storage_volume_ids)
+                    and record.provider_storage_destroyed_at is None
                 )
                 for record in records
             ):
@@ -3838,24 +3830,25 @@ class ComputeService:
         cpu: float | None = None,
         memory: str | None = None,
         gpu: str | None = None,
+        gpu_count: int = 0,
         address: str | None = None,
         labels: dict[str, str] | None = None,
     ) -> Machine:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            machine = MachineRepository(session).records.create(
-                {
-                    "pool": pool,
-                    "provider": provider,
-                    "cpu": cpu,
-                    "memory": memory,
-                    "gpu": gpu,
-                    "address": address,
-                    "labels": labels or {},
-                    "status": ResourceStatus.Created.value,
-                },
+            machine = MachineRepository(session).upsert(
+                Machine(
+                    id=str(uuid4()),
+                    pool=pool,
+                    provider=provider,
+                    cpu=cpu,
+                    memory=memory,
+                    gpu=gpu,
+                    gpu_count=gpu_count,
+                    address=address,
+                    labels=labels or {},
+                ),
                 workspace_id=workspace_id,
-                status=ResourceStatus.Created.value,
             )
         self._publish_change(
             workspace_id=workspace_id,
@@ -3870,7 +3863,7 @@ class ComputeService:
             workspace_id = self.context.workspace(session, workspace).id
             records = [
                 machine
-                for machine in MachineRepository(session).records.list(workspace_id=workspace_id)
+                for machine in MachineRepository(session).list(workspace_id=workspace_id)
                 if machine.status is not ResourceStatus.Deleted
             ]
         records.sort(key=lambda item: item.created_at, reverse=True)
@@ -3913,7 +3906,7 @@ class ComputeService:
         with self.context.database.session() as session:
             repository = WorkerRepository(session)
             workspace_id = repository.workspace_id(worker_id)
-            repository.records.delete_across_workspaces(worker_id)
+            repository.delete_across_workspaces(worker_id)
         if workspace_id is not None:
             self._publish_change(
                 workspace_id=workspace_id,
@@ -4118,7 +4111,7 @@ class ComputeService:
             return request
         with self.context.database.session() as session:
             surviving = sum(
-                record.instance_id is not None and "missing_since" not in record.metadata
+                record.instance_id is not None and record.missing_since is None
                 for record in ComputeProviderInstanceRepository(session).list_for_pool(
                     pool.id,
                     excluded_statuses=(
@@ -4144,11 +4137,7 @@ class ComputeService:
             if (
                 record.machine_id
                 and record.status == ReservationStatus.Deleted.value
-                and _metadata_time(
-                    record.metadata,
-                    "provider_storage_destroyed_at",
-                )
-                is not None
+                and record.provider_storage_destroyed_at is not None
             ):
                 self.provider_machines.retire_provider_pool_machine(
                     pool.workspace_id,
@@ -4231,7 +4220,7 @@ def _new_capacity_operation(
         target_machine_id=target_machine_id,
         previous_desired_unit=previous_desired_unit,
         owns_capacity=owns_capacity,
-        shape=_json_object(request.shape),
+        shape=request.shape,
         last_error=last_error,
         created_at=now,
         updated_at=now,
@@ -4251,7 +4240,7 @@ def _validate_capacity_operation(
             and operation.demand_container_id != request.demand_container_id
         )
         or operation.desired_unit != desired_unit
-        or operation.shape != _json_object(request.shape)
+        or operation.shape != request.shape
     ):
         raise ConflictError(f"capacity operation request is immutable: {request.operation_id}")
 
@@ -4266,7 +4255,7 @@ def _validate_capacity_operation_plan(
             operation.demand_container_id is not None
             and operation.demand_container_id != request.demand_container_id
         )
-        or operation.shape != _json_object(request.shape)
+        or operation.shape != request.shape
     ):
         raise ConflictError(f"capacity operation request is immutable: {request.operation_id}")
 
@@ -4337,10 +4326,6 @@ def _operation_result(
     )
 
 
-def _json_object(model: ContractModel) -> dict[str, JsonValue]:
-    return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
-
-
 def _without_warm_floor(unit: ComputeUnitRecord) -> ComputeUnitRecord:
     return _with_warm_floor(unit, 0).model_copy(update={"warm_handoff_from": ()})
 
@@ -4353,9 +4338,6 @@ def _with_warm_floor(unit: ComputeUnitRecord, minimum: int) -> ComputeUnitRecord
             "min_free_cpu_millicores": 0,
             "min_free_memory_mib": 0,
             "min_free_gpu_count": 0,
-            "config": {
-                key: value for key, value in unit.config.items() if key != "warm_lower_since"
-            },
         }
     )
 
@@ -4423,7 +4405,7 @@ def _provider_machine_can_be_replaced(record: ComputeProviderInstanceRecord) -> 
     return (
         bool(record.instance_id)
         and record.status in {ReservationStatus.Pending.value, ReservationStatus.Active.value}
-        and "missing_since" not in record.metadata
+        and record.missing_since is None
     )
 
 

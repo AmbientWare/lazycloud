@@ -77,7 +77,6 @@ def test_dependency_failure_degrades_readiness_but_preserves_liveness(
     services = ApiServices.create(
         isolated_services.database,
         root=isolated_services.root,
-        create_schema=False,
         redis_client=redis,
         binary_redis_client=redis,
         async_io=isolated_services.require_async_io(),

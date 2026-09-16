@@ -1016,8 +1016,7 @@ class ObjectStorage:
             repository = ArtifactRepository(session)
             current = repository.get(record.id, workspace_id=owned.workspace_id, lock=True)
             if current is not None:
-                current.artifact_deletion_failed = True
-                repository.update(current)
+                repository.mark_deletion_failed(record.id, workspace_id=owned.workspace_id)
 
     def reconcile_operations(
         self,

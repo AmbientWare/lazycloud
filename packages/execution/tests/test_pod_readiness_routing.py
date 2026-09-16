@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
-from database.repositories.execution import PodExecutionRepository
+from database.repositories.execution import PodUrlRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.planning import PodProxyProtocol
 from execution.pods.proxy import PodProxyUnavailable
@@ -164,7 +164,7 @@ async def test_pinned_sandbox_route_uses_durable_runtime_assignment(
     )
     with async_services.context.database.session() as session:
         ContainerRepository(session).upsert(container)
-        PodExecutionRepository(session).urls.upsert(
+        PodUrlRepository(session).upsert(
             container_id=container.id, port=PORT, url="https://sandbox.example.test"
         )
     service = replace(

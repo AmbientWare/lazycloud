@@ -897,13 +897,7 @@ def _create_running_container(
         status=ContainerStatus.Running,
     )
     with isolated_services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            container,
-            key=container.id,
-            workspace_id=workspace_id,
-            name=container.name,
-            status=container.status.value,
-        )
+        ContainerRepository(session).upsert(container)
     return container
 
 

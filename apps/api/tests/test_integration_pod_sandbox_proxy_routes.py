@@ -14,7 +14,7 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.records.apps import AppRecord
 from database.repositories.apps import AppRepository, StubRepository
-from database.repositories.execution import PodExecutionRepository
+from database.repositories.execution import PodUrlRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.proxy import (
     PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS,
@@ -1003,13 +1003,7 @@ def _create_container(
         ports={"http": 8080},
     )
     with services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            container,
-            key=container.id,
-            workspace_id=stub.workspace_id,
-            name=container.name,
-            status=container.status.value,
-        )
+        ContainerRepository(session).upsert(container)
     return container
 
 
@@ -1023,7 +1017,7 @@ def _store_sandbox_exposure(
     access = "public" if public else "id"
     url = f"{BASE_URL}/sandbox/{access}/{container.id}/{port}"
     with services.context.database.session() as session:
-        PodExecutionRepository(session).urls.upsert(
+        PodUrlRepository(session).upsert(
             container_id=container.id,
             port=port,
             url=url,

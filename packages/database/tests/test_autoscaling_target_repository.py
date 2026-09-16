@@ -17,7 +17,7 @@ def test_activation_during_claim_is_not_lost(
     database: DatabaseClient,
     tmp_path: Path,
 ) -> None:
-    context = ServiceContext.create(database, root=tmp_path, create_schema=False)
+    context = ServiceContext.create(database, root=tmp_path)
     with database.session() as session:
         workspace = WorkspaceRepository(session).create(name="target-owner")
     stub = ControlPlaneService(context).create_stub(

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from pydantic import JsonValue
 from shared.app_identity import NAME
 from sqlalchemy import (
+    ARRAY,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -20,9 +22,7 @@ from sqlalchemy.sql.schema import SchemaItem
 
 from database.tables.base import (
     DatabaseBase,
-    IdPayloadTable,
     IdTable,
-    NamedWorkspacePayloadTable,
     TimestampMixin,
     json_type,
     uuid_type,
@@ -132,7 +132,7 @@ class UserIdentityTable(IdTable, DatabaseBase):
     )
 
 
-class WorkspaceMemberTable(IdPayloadTable, DatabaseBase):
+class WorkspaceMemberTable(IdTable, DatabaseBase):
     """Which users reach a workspace, and with how much authority."""
 
     __tablename__ = "workspace_members"
@@ -146,7 +146,6 @@ class WorkspaceMemberTable(IdPayloadTable, DatabaseBase):
             "workspace_id",
             unique=True,
             postgresql_where=text("role = 'owner'"),
-            sqlite_where=text("role = 'owner'"),
         ),
         Index("ix_workspace_members_user", "user_id"),
         CheckConstraint(
@@ -230,7 +229,7 @@ class WorkspaceInvitationTable(IdTable, DatabaseBase):
     """
 
 
-class WorkspaceTable(IdPayloadTable, DatabaseBase):
+class WorkspaceTable(IdTable, DatabaseBase):
     __tablename__ = "workspaces"
     __table_args__: tuple[SchemaItem, ...] = (
         # A workspace is never removed, so uniqueness on the bare name would retain
@@ -242,13 +241,19 @@ class WorkspaceTable(IdPayloadTable, DatabaseBase):
             "name",
             unique=True,
             postgresql_where=text("status <> 'deleted'"),
-            sqlite_where=text("status <> 'deleted'"),
         ),
         UniqueConstraint("external_id", name="uq_workspaces_external_id"),
         Index("ix_workspaces_external_id", "external_id"),
         CheckConstraint(
             "status IN ('active', 'disabled', 'deleting', 'deleted')",
             name="ck_workspaces_status",
+        ),
+        CheckConstraint(
+            "(storage_credential_key IS NULL AND storage_access_key_ciphertext IS NULL "
+            "AND storage_secret_key_ciphertext IS NULL) OR "
+            "(storage_credential_key IS NOT NULL AND storage_access_key_ciphertext IS NOT NULL "
+            "AND storage_secret_key_ciphertext IS NOT NULL)",
+            name="ck_workspaces_storage_credentials",
         ),
     )
 
@@ -263,33 +268,27 @@ class WorkspaceTable(IdPayloadTable, DatabaseBase):
     frees a name and every query that hides an inactive workspace filter on it."""
 
     signing_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    storage_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("workspace_storage.id", ondelete="SET NULL", use_alter=True),
-        nullable=True,
+    signing_key_prefix: Mapped[str | None] = mapped_column(String(120))
+    primary_token_id: Mapped[str | None] = mapped_column(
+        uuid_type, ForeignKey("tokens.id", ondelete="SET NULL", use_alter=True)
     )
-    volume_cache_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    multi_gpu_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-
-class WorkspaceStorageTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "workspace_storage"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("workspace_id", name="uq_workspace_storage_workspace"),
-        Index("ix_workspace_storage_workspace", "workspace_id"),
+    concurrency_limit_id: Mapped[str | None] = mapped_column(
+        uuid_type, ForeignKey("concurrency_limits.id", ondelete="SET NULL", use_alter=True)
     )
+    storage_backend: Mapped[str] = mapped_column(String(80), default="local")
+    storage_bucket: Mapped[str | None] = mapped_column(String(255))
+    storage_prefix: Mapped[str] = mapped_column(Text, default="")
+    storage_endpoint_url: Mapped[str | None] = mapped_column(Text)
+    storage_region: Mapped[str | None] = mapped_column(String(128))
+    storage_access_key_ciphertext: Mapped[str | None] = mapped_column(Text)
+    storage_secret_key_ciphertext: Mapped[str | None] = mapped_column(Text)
+    storage_credential_key: Mapped[str | None] = mapped_column(Text)
+    storage_force_path_style: Mapped[bool | None] = mapped_column(Boolean)
+    labels: Mapped[dict[str, str]] = mapped_column(json_type, default=dict)
+    metadata_json: Mapped[dict[str, JsonValue]] = mapped_column("metadata", json_type, default=dict)
 
-    workspace_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    bucket_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    region: Mapped[str] = mapped_column(String(128), nullable=False, default="")
 
-
-class WorkspaceAuditEventTable(IdPayloadTable, DatabaseBase):
+class WorkspaceAuditEventTable(IdTable, DatabaseBase):
     __tablename__ = "workspace_audit_events"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_workspace_audit_workspace_created", "workspace_id", "created_at", "id"),
@@ -316,6 +315,11 @@ class WorkspaceAuditEventTable(IdPayloadTable, DatabaseBase):
     action: Mapped[str] = mapped_column(String(80), nullable=False)
     target_type: Mapped[str] = mapped_column(String(40), nullable=False)
     target_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    actor_name: Mapped[str] = mapped_column(Text)
+    target_name: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    previous_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
 
 
 class TokenTable(IdTable, DatabaseBase):
@@ -361,7 +365,7 @@ class TokenTable(IdTable, DatabaseBase):
     )
     worker_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(64), nullable=False)
-    scopes: Mapped[list[str]] = mapped_column(json_type, nullable=False, default=lambda: ["*"])
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=lambda: ["*"])
     reusable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     disabled_by_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -406,7 +410,7 @@ class DeviceAuthorizationTable(IdTable, DatabaseBase):
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ConcurrencyLimitTable(IdPayloadTable, DatabaseBase):
+class ConcurrencyLimitTable(IdTable, DatabaseBase):
     __tablename__ = "concurrency_limits"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_concurrency_limits_workspace_name_created", "workspace_id", "name", "created_at"),
@@ -424,6 +428,7 @@ class ConcurrencyLimitTable(IdPayloadTable, DatabaseBase):
     in_flight: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     resource_type: Mapped[str] = mapped_column(String(120), nullable=False, default=NAME)
     resource_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    metadata_json: Mapped[dict[str, JsonValue]] = mapped_column("metadata", json_type, default=dict)
 
 
 class SecretTable(IdTable, DatabaseBase):
@@ -440,14 +445,3 @@ class SecretTable(IdTable, DatabaseBase):
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
-
-
-class CredentialTable(NamedWorkspacePayloadTable, DatabaseBase):
-    __tablename__ = "credentials"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("workspace_id", "name", name="uq_credentials_workspace_name"),
-        Index("ix_credentials_workspace", "workspace_id"),
-    )
-
-    token_prefix: Mapped[str] = mapped_column(String(80), nullable=False)
-    labels_key: Mapped[str] = mapped_column(Text, nullable=False, default="")

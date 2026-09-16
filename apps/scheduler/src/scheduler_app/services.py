@@ -29,11 +29,10 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from execution.collections.service import CollectionService
+from database.workspace_secrets import WorkspaceSecretCipher
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
-from execution.secrets.crypto import WorkspaceSecretCipher
 from execution.task_progress import TaskProgressService
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import PoolBootstrapProvisioner
@@ -148,7 +147,6 @@ class SchedulerAppServices:
     apps: AppService
     deployments: DeploymentService
     cron_jobs: CronJobService
-    collections: CollectionService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     scheduler_workloads: SchedulerWorkloadDirectory
@@ -182,7 +180,7 @@ class SchedulerAppServices:
         storage: SchedulerStorageSettings,
         capacity: SchedulerCapacitySettings,
     ) -> SchedulerAppServices:
-        context = ServiceContext.create(database, create_schema=False)
+        context = ServiceContext.create(database)
         image_archive_config = storage.image_archive
         object_client = S3ObjectStoreClient.from_settings(storage.object_store)
         redis = redis_client
@@ -431,7 +429,6 @@ class SchedulerAppServices:
             apps=apps,
             deployments=deployments,
             cron_jobs=cron_jobs,
-            collections=CollectionService(context),
             containers=containers,
             container_shutdowns=container_shutdowns,
             scheduler_workloads=scheduler_workloads,

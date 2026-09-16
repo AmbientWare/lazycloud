@@ -1752,19 +1752,19 @@ def test_worker_repository_lifecycle_failure_marks_container_and_task_failed(
     task = isolated_services.tasks.create("startup-task")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        container = ContainerRepository(session).records.create(
-            {
-                "name": "function-startup-task",
-                "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runtime"],
-                "workspace_id": workspace_id,
-                "task_id": task.id,
-                "runtime_worker_id": "worker-1",
-                "status": ContainerStatus.Pending.value,
-            },
-            workspace_id=workspace_id,
-            name="function-startup-task",
-            status=ContainerStatus.Pending.value,
+        container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": "function-startup-task",
+                    "image": FUNCTION_IMAGE,
+                    "command": ["python", "-m", "runtime"],
+                    "workspace_id": workspace_id,
+                    "task_id": task.id,
+                    "runtime_worker_id": "worker-1",
+                    "status": ContainerStatus.Pending.value,
+                }
+            )
         )
     containers = RedisSchedulerContainerRepository(redis)
     containers.set_container_state(
@@ -1825,18 +1825,18 @@ def test_worker_exit_retains_pooled_startup_failure_when_detail_arrives_after_ex
     service = isolated_services.worker_repository_service
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        container = ContainerRepository(session).records.create(
-            {
-                "name": "pooled-startup-failure",
-                "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runner.function"],
-                "workspace_id": workspace_id,
-                "runtime_worker_id": "worker-1",
-                "status": ContainerStatus.Pending.value,
-            },
-            workspace_id=workspace_id,
-            name="pooled-startup-failure",
-            status=ContainerStatus.Pending.value,
+        container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": "pooled-startup-failure",
+                    "image": FUNCTION_IMAGE,
+                    "command": ["python", "-m", "runner.function"],
+                    "workspace_id": workspace_id,
+                    "runtime_worker_id": "worker-1",
+                    "status": ContainerStatus.Pending.value,
+                }
+            )
         )
     principal = WorkerRepositoryPrincipal(worker_id="worker-1")
     exit_report = SetContainerExitCodeRequest(
@@ -1872,19 +1872,19 @@ def test_worker_repository_exit_preserves_function_retry_state(
     task = isolated_services.tasks.create("function-retry")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        container = ContainerRepository(session).records.create(
-            {
-                "name": "function-retry",
-                "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runner.function"],
-                "workspace_id": workspace_id,
-                "task_id": task.id,
-                "runtime_worker_id": "worker-1",
-                "status": ContainerStatus.Running.value,
-            },
-            workspace_id=workspace_id,
-            name="function-retry",
-            status=ContainerStatus.Running.value,
+        container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": "function-retry",
+                    "image": FUNCTION_IMAGE,
+                    "command": ["python", "-m", "runner.function"],
+                    "workspace_id": workspace_id,
+                    "task_id": task.id,
+                    "runtime_worker_id": "worker-1",
+                    "status": ContainerStatus.Running.value,
+                }
+            )
         )
     task.container_id = container.id
     task.status = TaskStatus.Retry
@@ -1907,32 +1907,32 @@ def test_worker_repository_stale_container_exit_does_not_fail_new_attempt(
     task = isolated_services.tasks.create("function-new-attempt")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        old_container = ContainerRepository(session).records.create(
-            {
-                "name": "function-old-attempt",
-                "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runner.function"],
-                "workspace_id": workspace_id,
-                "task_id": task.id,
-                "runtime_worker_id": "worker-1",
-                "status": ContainerStatus.Running.value,
-            },
-            workspace_id=workspace_id,
-            name="function-old-attempt",
-            status=ContainerStatus.Running.value,
+        old_container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": "function-old-attempt",
+                    "image": FUNCTION_IMAGE,
+                    "command": ["python", "-m", "runner.function"],
+                    "workspace_id": workspace_id,
+                    "task_id": task.id,
+                    "runtime_worker_id": "worker-1",
+                    "status": ContainerStatus.Running.value,
+                }
+            )
         )
-        new_container = ContainerRepository(session).records.create(
-            {
-                "name": "function-new-attempt",
-                "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runner.function"],
-                "workspace_id": workspace_id,
-                "task_id": task.id,
-                "status": ContainerStatus.Running.value,
-            },
-            workspace_id=workspace_id,
-            name="function-new-attempt",
-            status=ContainerStatus.Running.value,
+        new_container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": "function-new-attempt",
+                    "image": FUNCTION_IMAGE,
+                    "command": ["python", "-m", "runner.function"],
+                    "workspace_id": workspace_id,
+                    "task_id": task.id,
+                    "status": ContainerStatus.Running.value,
+                }
+            )
         )
     task.container_id = new_container.id
     task.status = TaskStatus.Running
@@ -1960,19 +1960,19 @@ def test_worker_repository_late_exit_preserves_user_stopped_container(
     task = isolated_services.tasks.create("stopped-task")
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-        container = ContainerRepository(session).records.create(
-            {
-                "name": "preview-function",
-                "image": FUNCTION_IMAGE,
-                "command": ["python", "-m", "runner.function"],
-                "workspace_id": workspace_id,
-                "task_id": task.id,
-                "runtime_worker_id": "worker-1",
-                "status": ContainerStatus.Running.value,
-            },
-            workspace_id=workspace_id,
-            name="preview-function",
-            status=ContainerStatus.Running.value,
+        container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": "preview-function",
+                    "image": FUNCTION_IMAGE,
+                    "command": ["python", "-m", "runner.function"],
+                    "workspace_id": workspace_id,
+                    "task_id": task.id,
+                    "runtime_worker_id": "worker-1",
+                    "status": ContainerStatus.Running.value,
+                }
+            )
         )
     containers = RedisSchedulerContainerRepository(redis)
     container_service = replace(
@@ -2373,7 +2373,6 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         )
     )
     resolved = SchedulerBackendRouteResolver(
-        isolated_services.routes,
         containers,
     ).get_backend_route(route.route_id)
 
@@ -3378,19 +3377,19 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
 
     def crashing_container(name: str) -> ContainerRecord:
         with isolated_services.context.database.session() as session:
-            return ContainerRepository(session).records.create(
-                {
-                    "name": name,
-                    "image": FUNCTION_IMAGE,
-                    "command": ["python", "-m", "runner.function"],
-                    "workspace_id": workspace_id,
-                    "stub_id": stub.id,
-                    "runtime_worker_id": "worker-1",
-                    "status": ContainerStatus.Running.value,
-                },
-                workspace_id=workspace_id,
-                name=name,
-                status=ContainerStatus.Running.value,
+            return ContainerRepository(session).create(
+                ContainerRecord.model_validate(
+                    {
+                        "id": str(uuid4()),
+                        "name": name,
+                        "image": FUNCTION_IMAGE,
+                        "command": ["python", "-m", "runner.function"],
+                        "workspace_id": workspace_id,
+                        "stub_id": stub.id,
+                        "runtime_worker_id": "worker-1",
+                        "status": ContainerStatus.Running.value,
+                    }
+                )
             )
 
     claimed = isolated_services.tasks.create(
@@ -3441,7 +3440,7 @@ def _pending_image_build(services: ApiServices, image: ImageSpec) -> ImageBuildR
                 image_id=plan.image_id,
                 fingerprint=plan.cache_key,
                 cache_key=plan.cache_key,
-                cache_metadata={"build_container_required": "true", "build_container_id": build_id},
+                cache_metadata={"build_container_required": "true"},
             ),
             workspace_id=workspace_id,
         )

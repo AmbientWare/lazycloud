@@ -374,7 +374,6 @@ class CronJobRunDraft(ContractModel):
     workspace_id: str
     cron_job: str
     enqueued: bool
-    message_id: str | None = None
     task_id: str | None = None
     reason: str | None = None
 
@@ -1689,9 +1688,15 @@ class Scheduler:
         cron_job.updated_at = utc_now()
         with self.runtime_services.context.database.session() as session:
             CronJobRepository(session).upsert(cron_job, workspace_id=cron_job.workspace_id)
-            saved_run = CronJobRunRepository(session).records.create(
-                run.model_dump(mode="json"),
-                workspace_id=cron_job.workspace_id,
+            saved_run = CronJobRunRepository(session).append(
+                CronJobRun(
+                    id=str(uuid4()),
+                    workspace_id=run.workspace_id,
+                    cron_job=run.cron_job,
+                    enqueued=run.enqueued,
+                    task_id=run.task_id,
+                    reason=run.reason,
+                )
             )
         self.runtime_services.cron_jobs.publish_change(
             cron_job,

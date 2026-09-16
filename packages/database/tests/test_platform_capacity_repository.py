@@ -3,8 +3,8 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
     ComputeProviderInstanceRecord,
@@ -15,7 +15,12 @@ from database.repositories.identity import UserRepository, WorkspaceRepository
 from database.repositories.orchestration import MachineRepository
 from database.tables.compute import ComputeCapacityOperationTable, ComputeUnitTable
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
-from shared.capacity import CapacityOperationStatus, CapacityOwnerKind, CapacityOwnerSource
+from shared.capacity import (
+    CapacityAcquisitionShape,
+    CapacityOperationStatus,
+    CapacityOwnerKind,
+    CapacityOwnerSource,
+)
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -39,6 +44,7 @@ def test_terminal_capacity_handoff_rejects_a_stale_writer(database: DatabaseClie
         operation_id = str(uuid4())
         operation = ComputeCapacityOperationRepository(session).upsert(
             ComputeCapacityOperationRecord(
+                shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32_768),
                 id=operation_id,
                 workspace_id=workspace.id,
                 pool_id=unit.id,

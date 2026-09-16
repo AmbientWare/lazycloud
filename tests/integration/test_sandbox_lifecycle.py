@@ -161,10 +161,13 @@ def test_sandbox_restore_resolves_source_stub_and_schedules_typed_checkpoint(
     )
     stub = _sandbox_stub(services, keep_warm_seconds=60)
     workspace = ControlPlaneService(services.context).get_workspace(stub.workspace_id)
+    source = service.create_pod(
+        CreatePodRequest(stub_id=stub.id), authorized_workspace_id=workspace.id
+    )
     checkpoint = CheckpointService(services.context).save_state(
         create_checkpoint_state_payload(
             checkpoint_id="checkpoint-warm",
-            source_container_id="container-source",
+            source_container_id=source.container_id,
             status=WorkerCheckpointStatus.Available,
             workspace_id=workspace.id,
             stub_id=stub.id,

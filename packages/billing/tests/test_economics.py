@@ -190,7 +190,8 @@ def test_report_keeps_cash_out_of_revenue_and_requires_reconciled_actual_costs(
                     resource_id=str(uuid4()),
                     metric="container_duration_milliseconds",
                     quantity=1000,
-                    payload={},
+                    unit="milliseconds",
+                    labels={"cpu_millicores": "1000", "mem_mb": "2048", "gpu_count": "0"},
                     created_at=start,
                     updated_at=start,
                 )

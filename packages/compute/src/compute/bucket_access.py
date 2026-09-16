@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
-from database.repositories.compute import AwsAccountConnectionRepository
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from pydantic import BaseModel, ConfigDict
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase

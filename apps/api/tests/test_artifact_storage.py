@@ -78,7 +78,7 @@ def test_artifact_retention_and_access_survive_task_deletion_without_crossing_wo
         == 204
     )
     with services.context.database.session() as session:
-        TaskRepository(session).records.delete(task_id, workspace_id=workspace.id)
+        TaskRepository(session).delete(task_id, workspace_id=workspace.id)
     assert client.get(f"{base}/content", params=content_params).content == b"report"
     assert client.delete(f"{base}/{saved.id}").status_code == 204
     assert client.get(f"{base}/content", params=content_params).status_code == 404

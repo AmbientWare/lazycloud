@@ -4,27 +4,27 @@ import secrets
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from database.mappers.identity import (
     auth_token_record_from_table,
+    concurrency_limit_from_table,
     device_authorization_record_from_table,
     secret_storage_record_from_table,
     user_identity_record_from_table,
     user_record_from_table,
+    workspace_audit_from_table,
     workspace_invitation_record_from_table,
     workspace_member_record_from_table,
+    workspace_record_from_table,
+    write_workspace_row,
 )
 from database.records.identity import (
     DeviceAuthorizationRecord as _DeviceAuthorizationRecord,
 )
 from database.records.identity import (
     SecretStorageRecord,
-)
-from database.repositories.common import (
-    GlobalTableRepository,
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
+    WorkspaceAuditRecord,
 )
 from database.tables.base import DatabaseBase
 from database.tables.billing_ledger import (
@@ -45,7 +45,6 @@ from database.tables.identity import (
     WorkspaceAuditEventTable,
     WorkspaceInvitationTable,
     WorkspaceMemberTable,
-    WorkspaceStorageTable,
     WorkspaceTable,
 )
 from database.tables.observability import (
@@ -57,12 +56,12 @@ from database.tables.source_cache import (
 )
 from database.tables.storage import VolumeCleanupTable
 from database.tables.storage_access import StorageAccessTable
-from pydantic import Field, JsonValue, TypeAdapter
-from shared.contracts import ContractModel
+from pydantic import TypeAdapter
 from shared.errors import ConflictError, NotFoundError
 from shared.http.workspaces import WorkspaceAuditAction, WorkspaceAuditTarget
 from shared.identity import (
     AuthTokenRecord,
+    ConcurrencyLimitRecord,
     DeviceAuthorizationStatus,
     IdentityProvider,
     PlatformRole,
@@ -239,24 +238,6 @@ class IdentityAdminRecoveryRequestRepository:
         row.published_at = published_at
         row.updated_at = published_at
         self.session.flush()
-
-
-class WorkspaceAuditRecord(ContractModel):
-    id: str
-    workspace_id: str
-    action: WorkspaceAuditAction
-    actor_token_id: str | None = None
-    actor_user_id: str | None = None
-    """Account behind the change, kept because a token can be revoked and a person cannot."""
-
-    actor_name: str
-    target_type: WorkspaceAuditTarget
-    target_id: str
-    target_name: str
-    summary: str
-    previous_value: str | None = None
-    new_value: str | None = None
-    created_at: datetime = Field(default_factory=utc_now)
 
 
 @dataclass(frozen=True, slots=True)
@@ -611,7 +592,6 @@ class WorkspaceMemberRepository:
             workspace_id=workspace_id,
             user_id=user_id,
             role=role.value,
-            payload={},
         )
         self.session.add(row)
         try:
@@ -620,10 +600,7 @@ class WorkspaceMemberRepository:
             raise ConflictError(
                 f"workspace membership conflicts with an existing row: {workspace_id}"
             ) from exc
-        record = workspace_member_record_from_table(row)
-        row.payload = record.model_dump(mode="json")
-        self.session.flush()
-        return record
+        return workspace_member_record_from_table(row)
 
     def membership(self, *, workspace_id: str, user_id: str) -> WorkspaceMemberRecord | None:
         """The single row that decides whether this person reaches this workspace."""
@@ -724,7 +701,7 @@ class WorkspaceMemberRepository:
             )
             .order_by(WorkspaceTable.created_at.asc())
         )
-        return [WorkspaceRecord.model_validate(row.payload) for row in rows]
+        return [workspace_record_from_table(row) for row in rows]
 
     def owned_workspace(self, user_id: str) -> WorkspaceRecord | None:
         """The workspace this account owns, which is the one it was given.
@@ -744,7 +721,7 @@ class WorkspaceMemberRepository:
             )
             .order_by(WorkspaceMemberTable.created_at.asc())
         ).first()
-        return None if row is None else WorkspaceRecord.model_validate(row.payload)
+        return None if row is None else workspace_record_from_table(row)
 
     def set_role(self, *, workspace_id: str, user_id: str, role: WorkspaceRole) -> None:
         self.session.execute(
@@ -959,26 +936,29 @@ class WorkspaceInvitationRepository:
 class WorkspaceRepository:
     session: Session
 
-    @property
-    def records(self) -> GlobalTableRepository[WorkspaceRecord]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(WorkspaceTable, WorkspaceRecord),
+    def create(self, *, name: str, signing_key: str | None = None) -> WorkspaceRecord:
+        return self.upsert(
+            WorkspaceRecord(
+                id=str(uuid4()), name=name, signing_key=signing_key or new_signing_key()
+            )
         )
 
-    def create(self, *, name: str, signing_key: str | None = None) -> WorkspaceRecord:
-        payload: dict[str, JsonValue] = {
-            "name": name,
-            "signing_key": signing_key or new_signing_key(),
-            "status": WorkspaceStatus.Active.value,
-        }
-        return self.records.create(payload, name=name)
-
     def upsert(self, workspace: WorkspaceRecord) -> WorkspaceRecord:
-        return self.records.upsert(workspace, name=workspace.name)
+        row = self.session.get(WorkspaceTable, workspace.id)
+        if row is None:
+            row = WorkspaceTable(id=workspace.id)
+            self.session.add(row)
+        write_workspace_row(row, workspace)
+        self.session.flush()
+        return workspace_record_from_table(row)
 
     def get(self, workspace_id: str) -> WorkspaceRecord | None:
-        return self.records.get(workspace_id)
+        try:
+            workspace_id = str(UUID(workspace_id))
+        except ValueError:
+            return None
+        row = self.session.get(WorkspaceTable, workspace_id)
+        return workspace_record_from_table(row) if row is not None else None
 
     def by_name(self, name: str) -> WorkspaceRecord | None:
         """The workspace that currently holds this name, in whatever state.
@@ -994,7 +974,7 @@ class WorkspaceRepository:
                 WorkspaceTable.status != WorkspaceStatus.Deleted.value,
             )
         ).first()
-        return WorkspaceRecord.model_validate(row.payload) if row is not None else None
+        return workspace_record_from_table(row) if row is not None else None
 
     def resolve_for_deletion(self, workspace_id_or_name: str) -> WorkspaceRecord | None:
         """System lookup by id that retains tombstones, or by whoever holds the name."""
@@ -1011,7 +991,10 @@ class WorkspaceRepository:
         return _workspace_record(row, workspace_id)
 
     def list(self) -> list[WorkspaceRecord]:
-        return self.records.list()
+        rows = self.session.scalars(
+            select(WorkspaceTable).order_by(WorkspaceTable.created_at.desc(), WorkspaceTable.id)
+        )
+        return [workspace_record_from_table(row) for row in rows]
 
     def lock_active_owner(self, workspace_id: str) -> WorkspaceRecord:
         """Fence a tenant-owned write against irreversible workspace deletion.
@@ -1168,14 +1151,6 @@ class WorkspaceRepository:
             ConcurrencyLimitTable,
         ):
             self.session.execute(delete(table).where(table.workspace_id == workspace_id))
-        if not self.session.scalar(
-            select(exists().where(VolumeCleanupTable.workspace_id == workspace_id))
-        ):
-            self.session.execute(
-                delete(WorkspaceStorageTable).where(
-                    WorkspaceStorageTable.workspace_id == workspace_id
-                )
-            )
         self.session.execute(
             delete(WorkspaceMemberTable).where(WorkspaceMemberTable.workspace_id == workspace_id)
         )
@@ -1203,7 +1178,6 @@ def _workspace_purge_excluded_tables() -> set[str]:
         _mapped_table_name(EventTable),
         _mapped_table_name(WorkspaceAuditEventTable),
         _mapped_table_name(WorkspaceTable),
-        _mapped_table_name(WorkspaceStorageTable),
         _mapped_table_name(TokenTable),
         _mapped_table_name(DeviceAuthorizationTable),
         _mapped_table_name(ConcurrencyLimitTable),
@@ -1224,7 +1198,7 @@ def _workspace_record(
 ) -> WorkspaceRecord:
     if row is None:
         raise NotFoundError(f"workspace not found: {workspace_id}")
-    return WorkspaceRecord.model_validate(row.payload)
+    return workspace_record_from_table(row)
 
 
 def _mapped_table_name(model: type[DatabaseBase]) -> str:
@@ -1236,15 +1210,75 @@ def _mapped_table_name(model: type[DatabaseBase]) -> str:
 
 
 @dataclass(slots=True)
-class WorkspaceAuditRepository:
+class ConcurrencyLimitRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[WorkspaceAuditRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(WorkspaceAuditEventTable, WorkspaceAuditRecord),
+    def upsert(
+        self, record: ConcurrencyLimitRecord, *, workspace_id: str
+    ) -> ConcurrencyLimitRecord:
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        if record.workspace_id != workspace_id:
+            raise NotFoundError("concurrency limit does not belong to the workspace")
+        row = self.session.get(ConcurrencyLimitTable, record.id)
+        if row is None:
+            row = ConcurrencyLimitTable(
+                id=record.id, workspace_id=workspace_id, created_at=record.created_at
+            )
+            self.session.add(row)
+        elif row.workspace_id != workspace_id:
+            raise NotFoundError("concurrency limit does not belong to the workspace")
+        row.name = record.name
+        row.limit = record.limit
+        row.in_flight = record.in_flight
+        row.resource_type = record.resource_type
+        row.resource_id = record.resource_id
+        row.metadata_json = dict(record.metadata)
+        row.updated_at = record.updated_at
+        self.session.flush()
+        return concurrency_limit_from_table(row)
+
+    def get(self, limit_id: str, *, workspace_id: str) -> ConcurrencyLimitRecord | None:
+        row = self.session.scalar(
+            select(ConcurrencyLimitTable).where(
+                ConcurrencyLimitTable.id == limit_id,
+                ConcurrencyLimitTable.workspace_id == workspace_id,
+            )
         )
+        return concurrency_limit_from_table(row) if row is not None else None
+
+    def by_name(self, name: str, *, workspace_id: str) -> ConcurrencyLimitRecord | None:
+        row = self.session.scalar(
+            select(ConcurrencyLimitTable).where(
+                ConcurrencyLimitTable.name == name,
+                ConcurrencyLimitTable.workspace_id == workspace_id,
+            )
+        )
+        return concurrency_limit_from_table(row) if row is not None else None
+
+    def list(self, *, workspace_id: str) -> list[ConcurrencyLimitRecord]:
+        return [
+            concurrency_limit_from_table(row)
+            for row in self.session.scalars(
+                select(ConcurrencyLimitTable)
+                .where(ConcurrencyLimitTable.workspace_id == workspace_id)
+                .order_by(ConcurrencyLimitTable.created_at.desc(), ConcurrencyLimitTable.id)
+            )
+        ]
+
+    def list_across_workspaces(self) -> list[ConcurrencyLimitRecord]:
+        return [
+            concurrency_limit_from_table(row)
+            for row in self.session.scalars(
+                select(ConcurrencyLimitTable).order_by(
+                    ConcurrencyLimitTable.created_at.desc(), ConcurrencyLimitTable.id
+                )
+            )
+        ]
+
+
+@dataclass(slots=True)
+class WorkspaceAuditRepository:
+    session: Session
 
     def append(
         self,
@@ -1259,21 +1293,22 @@ class WorkspaceAuditRepository:
         previous_value: str | None = None,
         new_value: str | None = None,
     ) -> WorkspaceAuditRecord:
-        return self.records.create(
-            {
-                "workspace_id": workspace_id,
-                "action": action.value,
-                "actor_token_id": actor.id,
-                "actor_user_id": actor.user_id or None,
-                "actor_name": actor.name,
-                "target_type": target_type.value,
-                "target_id": target_id,
-                "target_name": target_name,
-                "summary": summary,
-                "previous_value": previous_value,
-                "new_value": new_value,
-            },
-            workspace_id=workspace_id,
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        return self._insert(
+            WorkspaceAuditRecord(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                action=action,
+                actor_token_id=actor.id,
+                actor_user_id=actor.user_id or None,
+                actor_name=actor.name,
+                target_type=target_type,
+                target_id=target_id,
+                target_name=target_name,
+                summary=summary,
+                previous_value=previous_value,
+                new_value=new_value,
+            )
         )
 
     def append_workspace_deleted(
@@ -1301,22 +1336,28 @@ class WorkspaceAuditRepository:
             previous_value=WorkspaceStatus.Active.value,
             new_value=WorkspaceStatus.Deleted.value,
         )
-        self.session.add(
-            WorkspaceAuditEventTable(
-                id=record.id,
-                workspace_id=workspace_id,
-                actor_token_id=actor.id,
-                actor_user_id=actor.user_id or None,
-                action=record.action.value,
-                target_type=record.target_type.value,
-                target_id=record.target_id,
-                payload=record.model_dump(mode="json"),
-                created_at=record.created_at,
-                updated_at=record.created_at,
-            )
+        return self._insert(record)
+
+    def _insert(self, record: WorkspaceAuditRecord) -> WorkspaceAuditRecord:
+        row = WorkspaceAuditEventTable(
+            id=record.id,
+            workspace_id=record.workspace_id,
+            actor_token_id=record.actor_token_id,
+            actor_user_id=record.actor_user_id,
+            action=record.action.value,
+            actor_name=record.actor_name,
+            target_type=record.target_type.value,
+            target_id=record.target_id,
+            target_name=record.target_name,
+            summary=record.summary,
+            previous_value=record.previous_value,
+            new_value=record.new_value,
+            created_at=record.created_at,
+            updated_at=record.created_at,
         )
+        self.session.add(row)
         self.session.flush()
-        return record
+        return workspace_audit_from_table(row)
 
     def page(
         self,
@@ -1347,7 +1388,7 @@ class WorkspaceAuditRepository:
             )
         )
         page_rows = rows[:limit]
-        records = tuple(WorkspaceAuditRecord.model_validate(row.payload) for row in page_rows)
+        records = tuple(workspace_audit_from_table(row) for row in page_rows)
         next_cursor = None
         if len(rows) > limit and page_rows:
             last = page_rows[-1]

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from control.releases import DeploymentReleaseService
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
@@ -247,11 +247,8 @@ class ContainerService:
         values["status"] = ContainerStatus.Pending.value
         values["gpu"] = gpu
         values["gpu_count"] = gpu_count_for_capacity(gpu, reservation.gpu_count)
-        return ContainerRepository(session).records.create(
-            values,
-            workspace_id=reservation.workspace_id,
-            name=reservation.name,
-            status=ContainerStatus.Pending.value,
+        return ContainerRepository(session).create(
+            ContainerRecord.model_validate({"id": reservation.id or str(uuid4()), **values})
         )
 
     def reserve_image_build_container(
@@ -414,12 +411,7 @@ class ContainerService:
             record.finished_at = utc_now()
             release_container_runtime_state(self.runtime_state, record)
             with self.context.database.session() as session:
-                failed = ContainerRepository(session).records.upsert(
-                    record,
-                    workspace_id=record.workspace_id,
-                    name=record.name,
-                    status=record.status.value,
-                )
+                failed = ContainerRepository(session).upsert(record)
             self.events.emit(
                 "container.schedule.failed",
                 resource_type="container",
@@ -808,12 +800,7 @@ class ContainerService:
                 # Unknown, matching the worker-report writer.
                 if reason is not None and reason is not StopContainerReason.Unknown:
                     current.termination_reason = reason
-                updated = containers.records.upsert(
-                    current,
-                    workspace_id=current.workspace_id,
-                    name=current.name,
-                    status=current.status.value,
-                )
+                updated = containers.upsert(current)
         # Settlement runs whether or not this call was the one that wrote the
         # terminal row. It is the only thing that cancels the claims a `User`,
         # `Admin` or `Unfunded` stop is asked to cancel, and losing the race to
@@ -906,10 +893,7 @@ class ContainerService:
                 [ContainerShutdownTarget(container_id=record.id, worker_id=worker_id)]
             )
         with self.context.database.session() as session:
-            ContainerRepository(session).records.delete(
-                container_id,
-                workspace_id=record.workspace_id,
-            )
+            ContainerRepository(session).delete(container_id, workspace_id=record.workspace_id)
         self.publish_lifecycle_change(record, WorkspaceChangeType.Deleted)
 
     def publish_lifecycle_change(

@@ -77,11 +77,9 @@ class AppDeploymentLifecycleService:
                     raise ConflictError("app lifecycle intent deployment ownership changed")
                 change = _apply_deployment_target(deployment, intent.target, now=now)
                 if change is not None:
-                    deployment = deployments.records.upsert(
+                    deployment = deployments.upsert(
                         deployment,
                         workspace_id=workspace_id,
-                        name=deployment.name,
-                        status="active" if deployment.active else "inactive",
                     )
                 action = _deployment_action(intent.target)
                 event_id = intent.event_id or str(
@@ -119,7 +117,7 @@ class AppDeploymentLifecycleService:
                 if cron_job is None:
                     continue
                 if intent.target is AppDeploymentIntentTarget.Deleted:
-                    cron_jobs.records.delete(cron_job.name, workspace_id=workspace_id)
+                    cron_jobs.delete(cron_job.name, workspace_id=workspace_id)
                     continue
                 enabled = intent.target is AppDeploymentIntentTarget.Active
                 if cron_job.enabled is enabled:
@@ -228,15 +226,7 @@ def delete_deployment_cron_jobs(
 ) -> None:
     if not deployment_ids:
         return
-    repository = CronJobRepository(session)
-    records = (
-        repository.list(workspace_id=workspace_id)
-        if workspace_id is not None
-        else repository.list_across_workspaces()
-    )
-    for record in records:
-        if record.deployment_id in deployment_ids:
-            repository.records.delete(record.name, workspace_id=record.workspace_id)
+    CronJobRepository(session).delete_for_deployments(deployment_ids, workspace_id=workspace_id)
 
 
 __all__ = [

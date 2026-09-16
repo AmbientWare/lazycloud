@@ -62,20 +62,17 @@ class BillingPlanChangeIntentTable(TimestampMixin, DatabaseBase):
             "user_id",
             unique=True,
             postgresql_where=text("status IN ('pending', 'settling')"),
-            sqlite_where=text("status IN ('pending', 'settling')"),
         ),
         Index(
             "ix_billing_plan_change_intents_ready",
             "next_attempt_at",
             "created_at",
             postgresql_where=text("status = 'pending'"),
-            sqlite_where=text("status = 'pending'"),
         ),
         Index(
             "ix_billing_plan_change_intents_stuck",
             "claimed_at",
             postgresql_where=text("status = 'settling'"),
-            sqlite_where=text("status = 'settling'"),
         ),
     )
 

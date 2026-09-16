@@ -39,7 +39,7 @@ from database import DatabaseClient
 def test_reviewed_cutover_prices_both_sides_and_preserves_completed_charges(
     workspace_database: DatabaseClient, tmp_path: Path, existing_installation: bool
 ) -> None:
-    service_context = ServiceContext.create(workspace_database, root=tmp_path, create_schema=False)
+    service_context = ServiceContext.create(workspace_database, root=tmp_path)
     old = PUBLISHED_METERED_RATE_HISTORY[0]
     assert old.platform_rate is not None
     transfer_boundary = next(

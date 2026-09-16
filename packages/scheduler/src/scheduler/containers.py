@@ -531,12 +531,12 @@ class SchedulerContainerRequestService:
                 labels={
                     "workspace_id": request.workspace_id,
                     "stub_id": request.stub_id,
+                    "container_id": request.container_id,
                     # What was asked for, not what ran: the worker's own card is
                     # what billing reads, at the shape below.
                     "gpu_request": ",".join(request.gpu),
                 },
                 metadata={
-                    "container_id": request.container_id,
                     "pool_selector": request.pool_selector,
                 },
             )

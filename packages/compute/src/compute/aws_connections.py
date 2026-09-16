@@ -7,9 +7,11 @@ from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.compute import (
+from database.repositories.aws_connections import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
+)
+from database.repositories.compute import (
     ComputeUnitRepository,
 )
 from database.repositories.identity import WorkspaceMemberRepository

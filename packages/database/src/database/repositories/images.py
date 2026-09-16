@@ -3,11 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from database.repositories.cleanup import CleanupRepository
-from database.repositories.common import (
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
+from database.mappers.images import (
+    checkpoint_from_table,
+    image_archive_from_table,
+    image_build_from_table,
+    image_from_table,
+    write_checkpoint_row,
+    write_image_build_row,
 )
+from database.repositories.cleanup import CleanupRepository
 from database.repositories.identity import WorkspaceRepository
 from database.tables.images import (
     CheckpointTable,
@@ -21,14 +25,14 @@ from shared.checkpoints import (
     CheckpointRecord,
     CheckpointStatus,
 )
-from shared.errors import NotFoundError
+from shared.errors import ConflictError, NotFoundError
 from shared.image_building.records import (
     BuildStatus,
     ImageArchiveRecord,
     ImageBuildRecord,
     ImageRecord,
 )
-from shared.runtime_paths import archive_path_digest, normalize_runtime_path
+from shared.runtime_paths import archive_path_digest
 from shared.timestamps import utc_now
 from sqlalchemy import delete, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.engine import CursorResult
@@ -40,37 +44,28 @@ from sqlalchemy.orm import Session
 class ImageRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[ImageRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ImageTable, ImageRecord, key_field="image_id"),
-        )
-
     def upsert(self, image: ImageRecord) -> ImageRecord:
+        image = ImageRecord.model_validate(dict(image))
+        WorkspaceRepository(self.session).lock_active_owner(image.workspace_id)
         CleanupRepository(self.session).assert_image_write_available(
-            image.image_id,
-            workspace_id=image.workspace_id,
+            image.image_id, workspace_id=image.workspace_id
         )
-        existing = self.get(
-            image.image_id,
-            workspace_id=image.workspace_id,
-            include_cleaned=True,
+        row = self.session.scalar(
+            select(ImageTable).where(
+                ImageTable.workspace_id == image.workspace_id,
+                ImageTable.image_id == image.image_id,
+            )
         )
-        if existing is None:
-            saved = self.records.create(
-                image.model_dump(mode="json", exclude={"id"}, exclude_none=True),
-                workspace_id=image.workspace_id,
-                name=image.image_id,
-            )
-        else:
-            saved = self.records.upsert(
-                image.model_copy(update={"id": existing.id}),
-                workspace_id=image.workspace_id,
-                key=image.image_id,
-                name=image.image_id,
-            )
-        return saved
+        if row is None:
+            row = ImageTable(workspace_id=image.workspace_id, image_id=image.image_id)
+            self.session.add(row)
+        row.clip_version = image.clip_version
+        row.aliases = list(image.aliases)
+        row.cleanup_claimed_at = image.cleanup_claimed_at
+        row.cleanup_completed_at = image.cleanup_completed_at
+        row.updated_at = utc_now()
+        self.session.flush()
+        return image_from_table(row)
 
     def get(
         self,
@@ -79,7 +74,13 @@ class ImageRepository:
         workspace_id: str,
         include_cleaned: bool = False,
     ) -> ImageRecord | None:
-        record = self.records.get(image_id, workspace_id=workspace_id)
+        row = self.session.scalar(
+            select(ImageTable).where(
+                ImageTable.workspace_id == workspace_id,
+                ImageTable.image_id == image_id,
+            )
+        )
+        record = image_from_table(row) if row is not None else None
         if record is not None and record.cleanup_completed_at is not None and not include_cleaned:
             return None
         return record
@@ -98,10 +99,17 @@ class ImageRepository:
                 ImageTable.updated_at < updated_before,
             )
         ).first()
-        return ImageRecord.model_validate(row.payload) if row is not None else None
+        return image_from_table(row) if row is not None else None
 
     def delete(self, image_id: str, *, workspace_id: str) -> bool:
-        return self.records.delete(image_id, workspace_id=workspace_id)
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        result = self.session.execute(
+            delete(ImageTable).where(
+                ImageTable.workspace_id == workspace_id,
+                ImageTable.image_id == image_id,
+            )
+        )
+        return _one_row_changed(result)
 
     def finalize_cleanup(
         self,
@@ -118,14 +126,6 @@ class ImageRepository:
         ).first()
         if row is None:
             return False
-        current = ImageRecord.model_validate(row.payload)
-        completed = current.model_copy(
-            update={
-                "cleanup_claimed_at": None,
-                "cleanup_completed_at": completed_at,
-            }
-        )
-        row.payload = completed.model_dump(mode="json")
         row.cleanup_claimed_at = None
         row.cleanup_completed_at = completed_at
         self.session.flush()
@@ -136,8 +136,8 @@ class ImageRepository:
 class ImageArchiveRepository:
     """System-authority access to the one archive per image id.
 
-    Not a `WorkspaceTableRepository`: the archive has no workspace. Tenant access
-    goes through `get_authorized`, which requires the caller's own `images` row.
+    Tenant access goes through `get_authorized`, which requires the caller's
+    own `images` row.
     """
 
     session: Session
@@ -146,7 +146,7 @@ class ImageArchiveRepository:
         row = self.session.scalars(
             select(ImageArchiveTable).where(ImageArchiveTable.image_id == image_id)
         ).first()
-        return _image_archive_record(row) if row is not None else None
+        return image_archive_from_table(row) if row is not None else None
 
     def get_authorized(self, image_id: str, *, workspace_id: str) -> ImageArchiveRecord | None:
         """The archive, only if this workspace holds a live authorization for it.
@@ -165,7 +165,7 @@ class ImageArchiveRepository:
                 ImageTable.cleanup_completed_at.is_(None),
             )
         ).first()
-        return _image_archive_record(row) if row is not None else None
+        return image_archive_from_table(row) if row is not None else None
 
     def reserve(
         self,
@@ -195,12 +195,10 @@ class ImageArchiveRepository:
             object_key=object_key,
             size_bytes=size_bytes,
             sha256=sha256,
-            payload={
-                "registry_ref": registry_ref,
-                "manifest_digest": manifest_digest,
-                "architecture": architecture,
-                "format_version": format_version,
-            },
+            registry_ref=registry_ref,
+            manifest_digest=manifest_digest,
+            architecture=architecture,
+            format_version=format_version,
         )
         try:
             with self.session.begin_nested():
@@ -218,7 +216,7 @@ class ImageArchiveRepository:
             if conflicting is None:
                 raise
             return conflicting, False
-        return _image_archive_record(row), True
+        return image_archive_from_table(row), True
 
     def take_over(
         self,
@@ -256,12 +254,10 @@ class ImageArchiveRepository:
                 object_key=object_key,
                 size_bytes=size_bytes,
                 sha256=sha256,
-                payload={
-                    "registry_ref": registry_ref,
-                    "manifest_digest": manifest_digest,
-                    "architecture": architecture,
-                    "format_version": format_version,
-                },
+                registry_ref=registry_ref,
+                manifest_digest=manifest_digest,
+                architecture=architecture,
+                format_version=format_version,
                 updated_at=utc_now(),
             )
         )
@@ -318,7 +314,7 @@ class ImageArchiveRepository:
             .order_by(ImageArchiveTable.updated_at.asc())
             .limit(limit)
         )
-        return [_image_archive_record(row) for row in rows]
+        return [image_archive_from_table(row) for row in rows]
 
     def claim_cleanup(self, image_id: str, *, claimed_at: datetime) -> ImageArchiveRecord | None:
         result = self.session.execute(
@@ -338,7 +334,7 @@ class ImageArchiveRepository:
         rows = self.session.scalars(
             select(ImageArchiveTable).where(ImageArchiveTable.cleanup_claimed_at.is_not(None))
         )
-        return [_image_archive_record(row) for row in rows]
+        return [image_archive_from_table(row) for row in rows]
 
     def release_claim(self, image_id: str) -> None:
         self.session.execute(
@@ -363,37 +359,9 @@ def _one_row_changed(result: object) -> bool:
     return int(result.rowcount) == 1 if isinstance(result, CursorResult) else False
 
 
-def _image_archive_record(row: ImageArchiveTable) -> ImageArchiveRecord:
-    format_version = row.payload.get("format_version")
-    return ImageArchiveRecord(
-        id=str(row.id),
-        image_id=row.image_id,
-        bucket=row.bucket,
-        object_key=row.object_key,
-        size_bytes=row.size_bytes,
-        sha256=row.sha256,
-        registry_ref=str(row.payload.get("registry_ref") or ""),
-        manifest_digest=str(row.payload.get("manifest_digest") or ""),
-        architecture=str(row.payload.get("architecture") or ""),
-        format_version=(
-            format_version
-            if isinstance(format_version, int) and not isinstance(format_version, bool)
-            else 1
-        ),
-        cleanup_claimed_at=row.cleanup_claimed_at,
-    )
-
-
 @dataclass(slots=True)
 class ImageBuildRepository:
     session: Session
-
-    @property
-    def records(self) -> WorkspaceTableRepository[ImageBuildRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(ImageBuildTable, ImageBuildRecord),
-        )
 
     def upsert(
         self,
@@ -402,35 +370,40 @@ class ImageBuildRepository:
         workspace_id: str | None = None,
     ) -> ImageBuildRecord:
         """System-authority write keyed by build id; workers update placed builds."""
-        resolved_workspace_id = workspace_id
-        if resolved_workspace_id is None:
-            row = self.session.get(ImageBuildTable, build.id)
-            resolved_workspace_id = str(row.workspace_id) if row is not None else None
-        if resolved_workspace_id is None:
-            raise ValueError("image build persistence requires workspace ownership")
-        CleanupRepository(self.session).assert_build_available(
-            build,
-            workspace_id=resolved_workspace_id,
-        )
-        saved = self.records.upsert_across_workspaces(
-            build,
-            workspace_id=resolved_workspace_id,
-            status=build.status.value,
-        )
+        build = ImageBuildRecord.model_validate(dict(build))
         row = self.session.get(ImageBuildTable, build.id)
+        owner_id = (
+            workspace_id
+            if workspace_id is not None
+            else (row.workspace_id if row is not None else None)
+        )
+        if owner_id is None:
+            raise ValueError("image build persistence requires workspace ownership")
+        if row is not None and row.workspace_id != owner_id:
+            raise ConflictError("image build ownership cannot change")
+        WorkspaceRepository(self.session).lock_active_owner(owner_id)
+        CleanupRepository(self.session).assert_build_available(build, workspace_id=owner_id)
         if row is None:
-            raise RuntimeError(f"image build persistence failed: {build.id}")
-        _sync_image_build_row(row, build)
+            row = ImageBuildTable(id=build.id, workspace_id=owner_id)
+            self.session.add(row)
+        write_image_build_row(row, build)
+        row.updated_at = utc_now()
         if build.status not in {BuildStatus.Pending, BuildStatus.Running}:
             row.publication_claim_id = ""
             row.publication_claimed_at = None
             row.dispatch_payload = None
             row.dispatch_claim_id = None
         self.session.flush()
-        return saved
+        return image_build_from_table(row)
 
     def get(self, build_id: str, *, workspace_id: str) -> ImageBuildRecord | None:
-        return self.records.get(build_id, workspace_id=workspace_id)
+        row = self.session.scalar(
+            select(ImageBuildTable).where(
+                ImageBuildTable.id == build_id,
+                ImageBuildTable.workspace_id == workspace_id,
+            )
+        )
+        return image_build_from_table(row) if row is not None else None
 
     def lock_build(self, build_id: str, *, workspace_id: str) -> ImageBuildRecord:
         row = self.session.scalar(
@@ -440,11 +413,12 @@ class ImageBuildRepository:
         )
         if row is None:
             raise NotFoundError("image build not found")
-        return ImageBuildRecord.model_validate(row.payload)
+        return image_build_from_table(row)
 
     def get_across_workspaces(self, build_id: str) -> ImageBuildRecord | None:
         """System lookup for workers/reconcilers acting on placed builds."""
-        return self.records.get_across_workspaces(build_id)
+        row = self.session.get(ImageBuildTable, build_id)
+        return image_build_from_table(row) if row is not None else None
 
     def workspace_id(self, build_id: str) -> str | None:
         value = self.session.scalar(
@@ -458,11 +432,27 @@ class ImageBuildRepository:
         workspace_id: str,
         status: str | None = None,
     ) -> list[ImageBuildRecord]:
-        return self.records.list(status=status, workspace_id=workspace_id)
+        statement = select(ImageBuildTable).where(ImageBuildTable.workspace_id == workspace_id)
+        if status is not None:
+            statement = statement.where(ImageBuildTable.status == status)
+        return [
+            image_build_from_table(row)
+            for row in self.session.scalars(
+                statement.order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id)
+            )
+        ]
 
     def list_across_workspaces(self, *, status: str | None = None) -> list[ImageBuildRecord]:
         """System listing for build reconciliation and retention."""
-        return self.records.list_across_workspaces(status=status)
+        statement = select(ImageBuildTable)
+        if status is not None:
+            statement = statement.where(ImageBuildTable.status == status)
+        return [
+            image_build_from_table(row)
+            for row in self.session.scalars(
+                statement.order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id)
+            )
+        ]
 
     def protected_artifact_resources(
         self,
@@ -533,7 +523,7 @@ class ImageBuildRepository:
             .limit(1)
         )
         row = self.session.scalars(statement).first()
-        return ImageBuildRecord.model_validate(row.payload) if row is not None else None
+        return image_build_from_table(row) if row is not None else None
 
     def get_active_by_fingerprint(
         self,
@@ -551,7 +541,7 @@ class ImageBuildRepository:
             .order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id.asc())
             .limit(1)
         ).first()
-        return ImageBuildRecord.model_validate(row.payload) if row is not None else None
+        return image_build_from_table(row) if row is not None else None
 
     def list_completed_by_fingerprint(
         self,
@@ -570,9 +560,7 @@ class ImageBuildRepository:
             .order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id.asc())
             .limit(max(limit, 0))
         )
-        return [
-            ImageBuildRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [image_build_from_table(row) for row in self.session.scalars(statement)]
 
     def get_latest_by_image_id(
         self,
@@ -589,7 +577,7 @@ class ImageBuildRepository:
             .order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id.asc())
             .limit(1)
         ).first()
-        return ImageBuildRecord.model_validate(row.payload) if row is not None else None
+        return image_build_from_table(row) if row is not None else None
 
     def list_completed_by_image_id(
         self,
@@ -608,9 +596,7 @@ class ImageBuildRepository:
             .order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id.asc())
             .limit(max(limit, 0))
         )
-        return [
-            ImageBuildRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [image_build_from_table(row) for row in self.session.scalars(statement)]
 
     def claim_publication(
         self,
@@ -661,6 +647,8 @@ class ImageBuildRepository:
         clip_version: int,
         archive_published: bool = False,
     ) -> ImageBuildRecord:
+        build = ImageBuildRecord.model_validate(dict(build))
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
         row = self.session.scalars(
             select(ImageBuildTable)
             .where(
@@ -673,12 +661,11 @@ class ImageBuildRepository:
         ).first()
         if row is None:
             raise RuntimeError("image build publication ownership was lost before completion")
-        _sync_image_build_row(row, build)
+        write_image_build_row(row, build)
         row.status = build.status.value
         row.phase = build.phase.value
         row.finished_at = build.finished_at
         row.updated_at = utc_now()
-        row.payload = build.model_dump(mode="json")
         row.publication_claim_id = ""
         row.publication_claimed_at = None
         if archive_published:
@@ -719,7 +706,7 @@ class ImageBuildRepository:
                 ImageBuildTable.publication_claim_id == claim_id,
             )
         ).first()
-        return ImageBuildRecord.model_validate(row.payload) if row is not None else None
+        return image_build_from_table(row) if row is not None else None
 
     def list_for_image_cleanup(
         self,
@@ -744,9 +731,7 @@ class ImageBuildRepository:
             .order_by(ImageBuildTable.created_at.asc(), ImageBuildTable.id.asc())
             .limit(limit)
         )
-        return [
-            ImageBuildRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [image_build_from_table(row) for row in self.session.scalars(statement)]
 
     def has_for_image(self, image_id: str, *, workspace_id: str) -> bool:
         return bool(
@@ -775,7 +760,8 @@ class ImageBuildRepository:
 
     def delete_across_workspaces(self, build_id: str) -> bool:
         """System retention deletion regardless of owning workspace."""
-        return self.records.delete_across_workspaces(build_id)
+        result = self.session.execute(delete(ImageBuildTable).where(ImageBuildTable.id == build_id))
+        return _one_row_changed(result)
 
     def delete_claimed_for_image(
         self,
@@ -798,23 +784,6 @@ class ImageBuildRepository:
         return int(result.rowcount) if isinstance(result, CursorResult) else 0
 
 
-def _sync_image_build_row(row: ImageBuildTable, build: ImageBuildRecord) -> None:
-    row.created_at = build.created_at
-    row.archive_path_value = normalize_runtime_path(build.artifact_path)
-    row.archive_path_digest = archive_path_digest(row.archive_path_value)
-    row.manifest_path_value = normalize_runtime_path(build.manifest_path)
-    row.manifest_path_digest = archive_path_digest(row.manifest_path_value)
-    row.dockerfile_path_value = normalize_runtime_path(
-        build.cache_metadata.get("dockerfile_path", "")
-    )
-    row.dockerfile_path_digest = archive_path_digest(row.dockerfile_path_value)
-    row.cache_manifest_path_value = normalize_runtime_path(
-        build.cache_metadata.get("manifest_path", "")
-    )
-    row.cache_manifest_path_digest = archive_path_digest(row.cache_manifest_path_value)
-    row.cache_publish_key = build.cache_metadata.get("cache_publish_key", "")
-
-
 def _visible_checkpoint(
     record: CheckpointRecord | None,
     *,
@@ -830,47 +799,27 @@ def _visible_checkpoint(
     return record
 
 
-def _visible_checkpoints(
-    records: list[CheckpointRecord],
-    *,
-    include_deleted: bool,
-    include_claimed: bool,
-) -> list[CheckpointRecord]:
-    if not include_deleted:
-        records = [record for record in records if record.deleted_at is None]
-    if not include_claimed:
-        records = [record for record in records if record.cleanup_claimed_at is None]
-    records.sort(key=lambda item: (item.created_at, item.checkpoint_id), reverse=True)
-    return records
-
-
 @dataclass(slots=True)
 class CheckpointRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[CheckpointRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(CheckpointTable, CheckpointRecord, key_field="checkpoint_id"),
-        )
-
     def upsert(self, checkpoint: CheckpointRecord) -> CheckpointRecord:
         """System-authority write keyed by checkpoint id; workers own checkpoint state."""
+        checkpoint = CheckpointRecord.model_validate(dict(checkpoint))
+        if checkpoint.workspace_id:
+            WorkspaceRepository(self.session).lock_active_owner(checkpoint.workspace_id)
         CleanupRepository(self.session).assert_checkpoint_available(checkpoint.checkpoint_id)
-        saved = self.records.upsert_across_workspaces(
-            checkpoint,
-            key=checkpoint.checkpoint_id,
-            workspace_id=checkpoint.workspace_id or None,
-            status=checkpoint.status.value,
-        )
-        row = self.session.scalars(
+        row = self.session.scalar(
             select(CheckpointTable).where(CheckpointTable.checkpoint_id == checkpoint.checkpoint_id)
-        ).one()
-        row.stub_id = saved.stub_id or None
-        row.retention_expires_at = checkpoint.retention_expires_at
+        )
+        if row is None:
+            row = CheckpointTable(checkpoint_id=checkpoint.checkpoint_id)
+            self.session.add(row)
+        elif row.workspace_id != (checkpoint.workspace_id or None):
+            raise ConflictError("checkpoint ownership cannot change")
+        write_checkpoint_row(row, checkpoint)
         self.session.flush()
-        return saved
+        return checkpoint_from_table(row)
 
     def create(self, checkpoint: CheckpointRecord) -> CheckpointRecord:
         if not checkpoint.checkpoint_id:
@@ -886,8 +835,14 @@ class CheckpointRepository:
         include_deleted: bool = False,
         include_claimed: bool = False,
     ) -> CheckpointRecord | None:
+        row = self.session.scalar(
+            select(CheckpointTable).where(
+                CheckpointTable.checkpoint_id == checkpoint_id,
+                CheckpointTable.workspace_id == workspace_id,
+            )
+        )
         return _visible_checkpoint(
-            self.records.get(checkpoint_id, workspace_id=workspace_id),
+            checkpoint_from_table(row) if row is not None else None,
             include_deleted=include_deleted,
             include_claimed=include_claimed,
         )
@@ -900,8 +855,11 @@ class CheckpointRepository:
         include_claimed: bool = False,
     ) -> CheckpointRecord | None:
         """System lookup for worker restore/cleanup paths."""
+        row = self.session.scalar(
+            select(CheckpointTable).where(CheckpointTable.checkpoint_id == checkpoint_id)
+        )
         return _visible_checkpoint(
-            self.records.get_across_workspaces(checkpoint_id),
+            checkpoint_from_table(row) if row is not None else None,
             include_deleted=include_deleted,
             include_claimed=include_claimed,
         )
@@ -913,11 +871,15 @@ class CheckpointRepository:
         include_deleted: bool = False,
         include_claimed: bool = False,
     ) -> list[CheckpointRecord]:
-        return _visible_checkpoints(
-            self.records.list(workspace_id=workspace_id),
-            include_deleted=include_deleted,
-            include_claimed=include_claimed,
+        statement = select(CheckpointTable).where(CheckpointTable.workspace_id == workspace_id)
+        if not include_deleted:
+            statement = statement.where(CheckpointTable.deleted_at.is_(None))
+        if not include_claimed:
+            statement = statement.where(CheckpointTable.cleanup_claimed_at.is_(None))
+        statement = statement.order_by(
+            CheckpointTable.created_at.desc(), CheckpointTable.checkpoint_id.desc()
         )
+        return [checkpoint_from_table(row) for row in self.session.scalars(statement)]
 
     def list_across_workspaces(
         self,
@@ -926,11 +888,15 @@ class CheckpointRepository:
         include_claimed: bool = False,
     ) -> list[CheckpointRecord]:
         """System listing for retention and worker restore paths."""
-        return _visible_checkpoints(
-            self.records.list_across_workspaces(),
-            include_deleted=include_deleted,
-            include_claimed=include_claimed,
+        statement = select(CheckpointTable)
+        if not include_deleted:
+            statement = statement.where(CheckpointTable.deleted_at.is_(None))
+        if not include_claimed:
+            statement = statement.where(CheckpointTable.cleanup_claimed_at.is_(None))
+        statement = statement.order_by(
+            CheckpointTable.created_at.desc(), CheckpointTable.checkpoint_id.desc()
         )
+        return [checkpoint_from_table(row) for row in self.session.scalars(statement)]
 
     def latest_available_for_stub(
         self,
@@ -950,7 +916,7 @@ class CheckpointRepository:
             .order_by(CheckpointTable.created_at.desc(), CheckpointTable.id.desc())
             .limit(1)
         ).first()
-        return CheckpointRecord.model_validate(row.payload) if row is not None else None
+        return checkpoint_from_table(row) if row is not None else None
 
     def list_expired_for_retention(
         self,
@@ -990,9 +956,7 @@ class CheckpointRepository:
                 )
             )
         statement = statement.limit(limit)
-        return [
-            CheckpointRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [checkpoint_from_table(row) for row in self.session.scalars(statement)]
 
     def origin_is_referenced_elsewhere(
         self,
@@ -1018,7 +982,9 @@ class CheckpointRepository:
         status: CheckpointStatus | None = None,
         last_restored_at: datetime | None = None,
     ) -> CheckpointRecord:
-        current = self.records.get_across_workspaces(checkpoint_id)
+        current = self.get_across_workspaces(
+            checkpoint_id, include_deleted=True, include_claimed=True
+        )
         if current is None:
             msg = f"checkpoint not found: {checkpoint_id}"
             raise KeyError(msg)
@@ -1030,7 +996,9 @@ class CheckpointRepository:
         return self.upsert(current.model_copy(update=update))
 
     def set_status(self, checkpoint_id: str, status: CheckpointStatus) -> CheckpointRecord:
-        current = self.records.get_across_workspaces(checkpoint_id)
+        current = self.get_across_workspaces(
+            checkpoint_id, include_deleted=True, include_claimed=True
+        )
         if current is None:
             msg = f"checkpoint not found: {checkpoint_id}"
             raise KeyError(msg)
@@ -1048,7 +1016,7 @@ class CheckpointRepository:
             ).first()
             if row is None:
                 continue
-            current = CheckpointRecord.model_validate(row.payload)
+            current = checkpoint_from_table(row)
             if current.deleted_at is not None:
                 continue
             updated = current.model_copy(
@@ -1058,7 +1026,7 @@ class CheckpointRepository:
                     "cleanup_claimed_at": None,
                 }
             )
-            row.payload = updated.model_dump(mode="json")
+            row.updated_at = now
             row.deleted_at = now
             row.cleanup_claimed_at = None
             self.session.flush()

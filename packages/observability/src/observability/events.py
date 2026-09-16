@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from database.repositories.execution import EventRepository, TaskRepository
 from database.repositories.orchestration import ContainerRepository
@@ -98,15 +99,16 @@ class EventService:
         workspace_id: str | None = None,
     ) -> Event:
         """Write the event on the caller's session so it commits with the caller's change."""
-        return EventRepository(session).records.create_across_workspaces(
-            {
-                "action": action,
-                "level": level.value,
-                "resource_type": resource_type,
-                "resource_id": resource_id,
-                "message": message,
-                "data": data or {},
-            },
+        return EventRepository(session).append(
+            Event(
+                id=str(uuid4()),
+                action=action,
+                level=level,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                message=message,
+                data=data or {},
+            ),
             workspace_id=workspace_id,
         )
 
@@ -264,7 +266,7 @@ class EventService:
         with self.context.database.session() as session:
             if not resolved_container_id and task_id:
                 try:
-                    task = TaskRepository(session).records.get_across_workspaces(task_id)
+                    task = TaskRepository(session).get_across_workspaces(task_id)
                 except KeyError:
                     return None
                 if task is None:

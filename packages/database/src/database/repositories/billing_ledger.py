@@ -6,19 +6,18 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from database.mappers.observability import usage_record_from_table
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
-from database.tables.base import DatabaseBase
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
 )
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
-from pydantic import JsonValue
 from shared.billing_quotes import (
     BILLED_METRICS,
     BilledDimension,
@@ -45,30 +44,15 @@ from shared.usage import (
     METERING_WINDOW_STARTED_AT_METADATA_KEY,
     UsageBillingOwner,
     UsageRecord,
+    metering_instant,
 )
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import Insert as PostgresInsert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import Insert as SqliteInsert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 _CONTAINER_SUBJECT = "container"
 
 type SegmentValue = str | int | float | Decimal | datetime | None
-
-
-def _insert(session: Session, table: type[DatabaseBase]) -> PostgresInsert | SqliteInsert:
-    """An insert statement that can be told to ignore a conflict.
-
-    Only the dialect's own constructor carries `on_conflict_do_nothing`, and
-    every write below relies on it: a placement is decided once, a segment is
-    frozen once.
-    """
-
-    if session.get_bind().dialect.name == "postgresql":
-        return postgresql_insert(table)
-    return sqlite_insert(table)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +80,7 @@ class ContainerBillingShapeRepository:
         # A placement is decided once. A retried assignment restates the same
         # shape, and accepting a differing one would reprice a live container.
         self.session.execute(
-            _insert(self.session, ContainerBillingShapeTable)
+            postgresql_insert(ContainerBillingShapeTable)
             .values(**values)
             .on_conflict_do_nothing(index_elements=[ContainerBillingShapeTable.container_id])
         )
@@ -224,7 +208,7 @@ class BillingLedgerRepository:
 
         priced = 0
         for row in rows:
-            if isinstance(self.price_record(UsageRecord.model_validate(row.payload)), PricedSpan):
+            if isinstance(self.price_record(usage_record_from_table(row)), PricedSpan):
                 priced += 1
         return priced, len(rows) - priced
 
@@ -406,7 +390,7 @@ class BillingLedgerRepository:
             for segment in pricing.segments
         ]
         inserted = self.session.execute(
-            _insert(self.session, BillingLedgerSegmentTable)
+            postgresql_insert(BillingLedgerSegmentTable)
             .values(rows)
             .on_conflict_do_nothing(
                 index_elements=[
@@ -485,7 +469,7 @@ def _segment_values(
         "app_id": record.labels.get("app_id", ""),
         "workload_id": record.labels.get("stub_id", ""),
         "task_id": record.labels.get("task_id", ""),
-        "worker_id": _text(record.metadata.get("worker_id")) or record.labels.get("worker_id", ""),
+        "worker_id": record.labels.get("worker_id", ""),
         "billing_owner": shape.billing_owner.value if shape is not None else "",
         "rate_class": (
             shape.rate_class
@@ -508,33 +492,11 @@ def _segment_values(
 
 
 def _metering_window(record: UsageRecord) -> tuple[datetime, datetime] | None:
-    started_at = _instant(record.metadata.get(METERING_WINDOW_STARTED_AT_METADATA_KEY))
-    ended_at = _instant(record.metadata.get(METERING_WINDOW_ENDED_AT_METADATA_KEY))
+    started_at = metering_instant(record.metadata.get(METERING_WINDOW_STARTED_AT_METADATA_KEY))
+    ended_at = metering_instant(record.metadata.get(METERING_WINDOW_ENDED_AT_METADATA_KEY))
     if started_at is None or ended_at is None or ended_at <= started_at:
         return None
     return started_at, ended_at
-
-
-def _instant(value: JsonValue) -> datetime | None:
-    """An interval bound a producer stated, or nothing.
-
-    A naive timestamp is refused rather than assumed to be UTC: it names no
-    instant, and guessing one is how a charge lands in the wrong period.
-    """
-
-    if not isinstance(value, str):
-        return None
-    try:
-        moment = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if moment.tzinfo is None or moment.utcoffset() is None:
-        return None
-    return to_utc(moment)
-
-
-def _text(value: JsonValue) -> str:
-    return value if isinstance(value, str) else ""
 
 
 def _is_uuid(value: str) -> bool:

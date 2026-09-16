@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import uuid4
 
 from database.repositories.billing_ledger import BillingLedgerRepository, FrozenSpan
 from database.repositories.execution import EventRepository
 from database.types import DatabaseSession
 from pydantic import JsonValue
 from shared.billing_quotes import UnpricedSpan
-from shared.events import EventLevel
+from shared.events import Event, EventLevel
 from shared.usage import UsageRecord
 
 UNPRICED_SPAN_ACTION = "billing.span.unpriced"
@@ -62,17 +63,18 @@ class MeteredUsagePricer:
             "gap_started_at": span.gap_started_at.isoformat(),
             "gap_ended_at": span.gap_ended_at.isoformat(),
         }
-        EventRepository(self.session).records.create_across_workspaces(
-            {
-                "action": UNPRICED_SPAN_ACTION,
-                "level": EventLevel.Error.value,
-                "resource_type": record.resource_type,
-                "resource_id": record.resource_id,
-                "message": (
+        EventRepository(self.session).append(
+            Event(
+                id=str(uuid4()),
+                action=UNPRICED_SPAN_ACTION,
+                level=EventLevel.Error,
+                resource_type=record.resource_type,
+                resource_id=record.resource_id,
+                message=(
                     f"{span.dimension.value} usage was metered but not priced: {span.reason.value}"
                 ),
-                "data": data,
-            }
+                data=data,
+            )
         )
 
     def _report_reprice_refused(self, record: UsageRecord, span: FrozenSpan) -> None:
@@ -93,19 +95,20 @@ class MeteredUsagePricer:
             "frozen_cost_nanos": span.cost_nanos,
             "recomputed_cost_nanos": span.recomputed_cost_nanos,
         }
-        EventRepository(self.session).records.create_across_workspaces(
-            {
-                "action": REPRICE_REFUSED_ACTION,
-                "level": EventLevel.Error.value,
-                "resource_type": record.resource_type,
-                "resource_id": record.resource_id,
-                "message": (
+        EventRepository(self.session).append(
+            Event(
+                id=str(uuid4()),
+                action=REPRICE_REFUSED_ACTION,
+                level=EventLevel.Error,
+                resource_type=record.resource_type,
+                resource_id=record.resource_id,
+                message=(
                     f"{record.id} was re-recorded and now prices at "
                     f"{span.recomputed_cost_nanos} nanodollars; the ledger keeps the "
                     f"{span.cost_nanos} it froze"
                 ),
-                "data": data,
-            }
+                data=data,
+            )
         )
 
 

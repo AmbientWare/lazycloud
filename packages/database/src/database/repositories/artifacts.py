@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from database.mappers.storage import object_from_table
 from database.repositories.cleanup import OBJECT_CLEANUP_DELETE, CleanupRepository
 from database.repositories.identity import WorkspaceRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
@@ -10,9 +11,8 @@ from database.tables.storage import ObjectTable
 from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
 from shared.errors import ConflictError
 from shared.objects import ObjectRecord
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
 
 @dataclass(slots=True)
@@ -31,17 +31,37 @@ class ArtifactRepository:
             CleanupRepository(self.session).lock_keys({f"object:{artifact_id}"})
             query = query.with_for_update()
         row = self.session.scalar(query.execution_options(populate_existing=True))
-        return ObjectRecord.model_validate(row.payload) if row is not None else None
+        return object_from_table(row) if row is not None else None
 
-    def update(self, record: ObjectRecord) -> None:
-        row = self.session.get(ObjectTable, record.id)
-        if row is None:
-            raise RuntimeError(f"artifact disappeared while locked: {record.id}")
-        row.payload = record.model_dump(mode="json")
-        row.artifact_expires_at = record.artifact_expires_at
-        row.artifact_metered_at = record.artifact_metered_at
-        flag_modified(row, "payload")
-        self.session.flush()
+    def advance_metering_checkpoint(
+        self, artifact_id: str, *, workspace_id: str, metered_at: datetime
+    ) -> None:
+        updated = self.session.scalar(
+            update(ObjectTable)
+            .where(
+                ObjectTable.id == artifact_id,
+                ObjectTable.workspace_id == workspace_id,
+                ObjectTable.artifact_task_id.is_not(None),
+            )
+            .values(artifact_metered_at=metered_at)
+            .returning(ObjectTable.id)
+        )
+        if updated is None:
+            raise RuntimeError(f"artifact disappeared while locked: {artifact_id}")
+
+    def mark_deletion_failed(self, artifact_id: str, *, workspace_id: str) -> None:
+        updated = self.session.scalar(
+            update(ObjectTable)
+            .where(
+                ObjectTable.id == artifact_id,
+                ObjectTable.workspace_id == workspace_id,
+                ObjectTable.artifact_task_id.is_not(None),
+            )
+            .values(artifact_deletion_failed=True)
+            .returning(ObjectTable.id)
+        )
+        if updated is None:
+            raise RuntimeError(f"artifact disappeared while locked: {artifact_id}")
 
     def delete_claimed(self, artifact_id: str, *, workspace_id: str) -> bool:
         WorkspaceRepository(self.session).lock_storage_accounting_owner(workspace_id)
@@ -80,11 +100,7 @@ class ArtifactRepository:
         if app_id:
             query = query.where(ObjectTable.artifact_app_id == app_id)
         if search:
-            query = query.where(
-                ObjectTable.payload["artifact_filename"]
-                .as_string()
-                .icontains(search, autoescape=True)
-            )
+            query = query.where(ObjectTable.artifact_filename.icontains(search, autoescape=True))
         if content_type:
             query = query.where(ObjectTable.content_type.startswith(content_type, autoescape=True))
         if created_after:
@@ -100,7 +116,7 @@ class ArtifactRepository:
                 )
             )
         return [
-            ObjectRecord.model_validate(row.payload)
+            object_from_table(row)
             for row in self.session.scalars(
                 query.order_by(ObjectTable.created_at.desc(), ObjectTable.id.desc()).limit(limit)
             )

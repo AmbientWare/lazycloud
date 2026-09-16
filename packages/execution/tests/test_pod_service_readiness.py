@@ -7,7 +7,7 @@ import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import RedisClient
-from database.repositories.execution import PodExecutionRepository
+from database.repositories.execution import PodUrlRepository
 from database.repositories.orchestration import (
     ContainerRepository,
     MachineRepository,
@@ -183,6 +183,4 @@ def test_sandbox_exposure_rejects_cross_workspace_stub_before_worker_callback(
 
     assert callback_called is False
     with isolated_services.context.database.session() as session:
-        assert (
-            PodExecutionRepository(session).urls.get(container_id=container.id, port=8080) is None
-        )
+        assert PodUrlRepository(session).get(container_id=container.id, port=8080) is None

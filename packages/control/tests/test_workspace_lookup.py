@@ -16,7 +16,7 @@ def test_control_workspace_reads_are_empty_or_not_found_without_creating_rows(
     database: DatabaseClient,
     tmp_path: Path,
 ) -> None:
-    context = ServiceContext.create(database, root=tmp_path, create_schema=False)
+    context = ServiceContext.create(database, root=tmp_path)
     service = ControlPlaneService(context)
     assert service.list_workspaces() == []
     for missing in ("default", "missing-workspace"):

@@ -330,6 +330,8 @@ class WorkerSupervisionService:
     ) -> UsageRecord:
         metric, unit = usage_record_kind(plan.name)
         labels = {key: str(value) for key, value in plan.labels.items()}
+        labels["worker_id"] = self.worker_id
+        labels["container_id"] = request.container_id
         return UsageRecord(
             id=usage_record_id(
                 metric.value,
@@ -347,7 +349,6 @@ class WorkerSupervisionService:
             unit=unit,
             labels=labels,
             metadata={
-                "worker_id": self.worker_id,
                 "worker_metric": plan.name.value,
                 "window_start_ms": window_start_ms,
                 "window_end_ms": window_end_ms,

@@ -380,9 +380,10 @@ def test_workspace_deletion_keeps_the_priced_ledger_and_the_unsent_meter_events(
                 workspace_id=workspace.id,
                 resource_type="container",
                 resource_id=container_id,
-                metric="container_runtime_seconds",
-                quantity=60.0,
-                payload={},
+                metric="container_duration_milliseconds",
+                quantity=60000.0,
+                unit="milliseconds",
+                labels={"cpu_millicores": "1000", "mem_mb": "1024", "gpu_count": "0"},
             )
         )
         session.flush()

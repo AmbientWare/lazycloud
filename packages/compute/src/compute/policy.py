@@ -9,8 +9,8 @@ from typing import Protocol
 from uuid import uuid4
 
 from database.repositories.apps import DeploymentRepository
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
-    AwsAccountConnectionRepository,
     ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
@@ -48,7 +48,6 @@ from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION, AwsComputeConfi
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
-from compute.provider_machines import _provider_booted_template_version
 from database import AsyncDatabaseClient
 
 LOGGER = logging.getLogger(__name__)
@@ -294,7 +293,7 @@ class WorkspaceComputePolicyService:
             workspace_id = self.context.workspace(session, workspace).id
             return self._policy_in_session(session, workspace_id).default_pool
 
-    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> str:
+    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> MachinePool:
         """Pin the pool a deployment runs in for as long as it exists."""
         return self.resolve_machine_pool(_deployment_pool_name(spec), workspace=workspace)
 
@@ -618,7 +617,7 @@ def _compute_instance_view(
         bootstrap_failure_reason=failure_reason,
         bootstrap_failure_detail=failure_detail,
         bootstrap_observed_at=observed_at,
-        booted_template_version=_provider_booted_template_version(record),
+        booted_template_version=record.booted_template_version,
     )
 
 

@@ -1,11 +1,12 @@
 from datetime import timedelta
+from uuid import uuid4
 
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.execution import TaskAttemptRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.functions.service import FunctionControlService
-from shared.containers import ContainerStatus
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.tasks import RetryPolicy, TaskStatus
 
 
@@ -17,17 +18,18 @@ def test_timeout_fences_retried_attempts_and_recovers_the_container_stop(
         "timed-function", kind=StubKind.Function, config={"runtime": {"timeout_seconds": 2}}
     )
     with services.context.database.session() as session:
-        container = ContainerRepository(session).records.create(
-            {
-                "name": "timed-function",
-                "stub_id": stub.id,
-                "image": "timeout-test",
-                "command": ["python", "-m", "runner.function"],
-                "status": "running",
-            },
-            workspace_id=stub.workspace_id,
-            name="timed-function",
-            status="running",
+        container = ContainerRepository(session).create(
+            ContainerRecord.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "name": "timed-function",
+                    "workspace_id": stub.workspace_id,
+                    "stub_id": stub.id,
+                    "image": "timeout-test",
+                    "command": ["python", "-m", "runner.function"],
+                    "status": "running",
+                }
+            )
         )
     task = services.tasks.create(
         "timed-function",

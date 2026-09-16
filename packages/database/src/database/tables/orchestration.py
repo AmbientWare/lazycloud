@@ -6,45 +6,69 @@ from pydantic import JsonValue
 from sqlalchemy import (
     DDL,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
-    UniqueConstraint,
+    Text,
     event,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
 from database.tables.base import (
     DatabaseBase,
-    IdPayloadTable,
-    NamedWorkspacePayloadTable,
+    IdTable,
     TimestampMixin,
     json_type,
     uuid_type,
 )
 
 
-class AutoscalerStateTable(NamedWorkspacePayloadTable, DatabaseBase):
+class AutoscalerStateTable(TimestampMixin, DatabaseBase):
     __tablename__ = "autoscaler_states"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint(
-            "workspace_id",
-            "name",
-            name="uq_autoscaler_states_workspace_name",
-        ),
+    __table_args__ = (
         Index("ix_autoscaler_states_workspace_source", "workspace_id", "source"),
         Index("ix_autoscaler_states_target", "target_kind", "target_id"),
+        CheckConstraint(
+            "current_count >= 0 AND desired_count >= 0 AND pending_count >= 0 "
+            "AND failed_container_count >= 0",
+            name="ck_autoscaler_states_counts",
+        ),
+        CheckConstraint(
+            "target_kind IN ('function', 'endpoint', 'pod')",
+            name="ck_autoscaler_states_target_kind",
+        ),
     )
-
-    source: Mapped[str] = mapped_column(String(120), nullable=False)
-    target_kind: Mapped[str] = mapped_column(String(80), nullable=False)
-    target_id: Mapped[str] = mapped_column(String(160), nullable=False)
-    decision: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    target_kind: Mapped[str] = mapped_column(String(80), primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    deployment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    app_id: Mapped[str] = mapped_column(Text, nullable=False)
+    current_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    desired_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    signal_name: Mapped[str] = mapped_column(Text, nullable=False)
+    signal_value: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    valid: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    lock_acquired: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    owner_lock_key: Mapped[str] = mapped_column(Text, nullable=False)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_container_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pending_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    guardrails: Mapped[dict[str, JsonValue]] = mapped_column(json_type, nullable=False)
+    last_actions: Mapped[list[dict[str, JsonValue]]] = mapped_column(json_type, nullable=False)
 
 
 class AutoscalingTargetTable(TimestampMixin, DatabaseBase):
@@ -86,13 +110,14 @@ class AutoscalingTargetTable(TimestampMixin, DatabaseBase):
     )
 
 
-class MachineTable(IdPayloadTable, DatabaseBase):
+class MachineTable(IdTable, DatabaseBase):
     __tablename__ = "machines"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_machines_workspace_created", "workspace_id", "created_at"),
         Index("ix_machines_pool_status", "pool", "status"),
         Index("ix_machines_workspace_owner", "workspace_id", "capacity_owner_id"),
         Index("ix_machines_provider_status", "provider", "status"),
+        CheckConstraint("gpu_count >= 0", name="ck_machines_gpu_count"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -106,8 +131,14 @@ class MachineTable(IdPayloadTable, DatabaseBase):
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     address: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    cpu: Mapped[float | None] = mapped_column(Float, nullable=True)
+    memory: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
 
-class WorkerTable(IdPayloadTable, DatabaseBase):
+
+class WorkerTable(IdTable, DatabaseBase):
     __tablename__ = "workers"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_workers_workspace_created", "workspace_id", "created_at"),
@@ -129,7 +160,7 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
     )
     pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     admitted_release_generation: Mapped[int] = mapped_column(BigInteger, server_default="0")
     admitted_runtime_image: Mapped[str] = mapped_column(String(1024), server_default="")
     admitted_agent_sha256: Mapped[str] = mapped_column(String(64), server_default="")
@@ -138,11 +169,12 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
     update_agent_sha256: Mapped[str] = mapped_column(String(64), server_default="")
     update_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
 
-class ContainerTable(IdPayloadTable, DatabaseBase):
+
+class ContainerTable(IdTable, DatabaseBase):
     __tablename__ = "containers"
     workload_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    scheduling_request: Mapped[dict[str, JsonValue] | None] = mapped_column(json_type)
     scheduling_reconcile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduling_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduling_assignment_token: Mapped[str | None] = mapped_column(String(240))
@@ -154,14 +186,12 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "capacity_retry_at",
             "id",
             postgresql_where=text("capacity_retry_at IS NOT NULL AND status = 'pending'"),
-            sqlite_where=text("capacity_retry_at IS NOT NULL AND status = 'pending'"),
         ),
         Index(
             "ix_containers_scheduling_due",
             "scheduling_reconcile_at",
             "id",
-            postgresql_where=text("scheduling_request IS NOT NULL AND status = 'pending'"),
-            sqlite_where=text("scheduling_request IS NOT NULL AND status = 'pending'"),
+            postgresql_where=text("scheduling_requested_at IS NOT NULL AND status = 'pending'"),
         ),
         # Concurrency is counted on the path that starts every container, so the
         # cost of asking has to be bounded by the answer rather than by how much
@@ -172,7 +202,6 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "ix_containers_workspace_live",
             "workspace_id",
             postgresql_where=text("status IN ('pending', 'running')"),
-            sqlite_where=text("status IN ('pending', 'running')"),
         ),
         Index("ix_containers_status_created", "status", "created_at", "id"),
         Index("ix_containers_stub", "stub_id"),
@@ -182,7 +211,6 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "created_at",
             "id",
             postgresql_where=text("status IN ('pending', 'running')"),
-            sqlite_where=text("status IN ('pending', 'running')"),
         ),
         Index(
             "ix_containers_stub_failed_created",
@@ -190,7 +218,6 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "created_at",
             "id",
             postgresql_where=text("status = 'failed'"),
-            sqlite_where=text("status = 'failed'"),
         ),
         Index(
             "ix_containers_stub_failed_finished",
@@ -198,7 +225,6 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "finished_at",
             "id",
             postgresql_where=text("status = 'failed' AND finished_at IS NOT NULL"),
-            sqlite_where=text("status = 'failed' AND finished_at IS NOT NULL"),
         ),
         Index("ix_containers_worker_status", "worker_id", "status"),
         Index("ix_containers_machine_status", "machine_id", "status"),
@@ -207,7 +233,6 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             "expires_at",
             "id",
             postgresql_where=text("expires_at IS NOT NULL AND status IN ('pending', 'running')"),
-            sqlite_where=text("expires_at IS NOT NULL AND status IN ('pending', 'running')"),
         ),
         Index(
             "ix_containers_unsettled_preemption",
@@ -215,13 +240,24 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
             postgresql_where=text(
                 "termination_reason = 'PREEMPTED' AND preemption_settled_at IS NULL"
             ),
-            sqlite_where=text("termination_reason = 'PREEMPTED' AND preemption_settled_at IS NULL"),
         ),
         CheckConstraint(
             "termination_reason IN "
             "('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', "
             "'MEMORY_EVICTED', 'UNKNOWN')",
             name="ck_containers_termination_reason",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'exited', 'failed', 'stopped')",
+            name="ck_containers_status",
+        ),
+        CheckConstraint("gpu_count >= 0", name="ck_containers_gpu_count"),
+        CheckConstraint("timeout_seconds >= -1", name="ck_containers_timeout"),
+        CheckConstraint(
+            "scheduling_cpu_millicores >= 0 AND scheduling_memory_mib >= 0 "
+            "AND scheduling_gpu_count >= 0 AND scheduling_workspace_gpu_quota >= 0 "
+            "AND scheduling_workspace_cpu_quota_millicores >= 0 AND scheduling_retry_count >= 0",
+            name="ck_containers_scheduling_quantities",
         ),
     )
 
@@ -279,13 +315,54 @@ class ContainerTable(IdPayloadTable, DatabaseBase):
     )
     gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    command: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    runtime_machine_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    runtime_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    pid: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
+    startup_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cwd: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    env: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False, default=dict)
+    ports: Mapped[dict[str, int]] = mapped_column(json_type, nullable=False, default=dict)
+    network_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    network_allow_list: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    timeout_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_stub_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_deployment_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_required_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    scheduling_gpu_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_pool_selector: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_architecture: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_provider_runtime: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_runtime_class: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_docker_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scheduling_preemptible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scheduling_workspace_gpu_quota: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    scheduling_workspace_cpu_quota_millicores: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    scheduling_retry_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    scheduling_payload: Mapped[dict[str, JsonValue]] = mapped_column(
+        json_type, nullable=False, default=dict, deferred=True, deferred_raiseload=True
+    )
+    scheduling_backfill: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scheduling_region: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    scheduling_availability_zone: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
 
 Index(
     "ix_containers_pending_storage_worker",
-    ContainerTable.payload.op("->>")("runtime_worker_id"),
+    ContainerTable.runtime_worker_id,
     ContainerTable.id,
     postgresql_where=ContainerTable.storage_released_at.is_(None),
-    sqlite_where=ContainerTable.storage_released_at.is_(None),
 )
 
 
@@ -301,15 +378,15 @@ BEGIN
         RAISE EXCEPTION 'container status cannot be reopened'
             USING ERRCODE = '23514';
     END IF;
-    IF COALESCE(OLD.payload->>'runtime_worker_id', '') <> '' AND (
-        COALESCE(NEW.payload->>'runtime_worker_id', '')
-            <> COALESCE(OLD.payload->>'runtime_worker_id', '')
-        OR COALESCE(NEW.payload->>'runtime_machine_id', '')
-            <> COALESCE(OLD.payload->>'runtime_machine_id', '')
+    IF OLD.runtime_worker_id <> '' AND (
+        NEW.runtime_worker_id
+            <> OLD.runtime_worker_id
+        OR NEW.runtime_machine_id
+            <> OLD.runtime_machine_id
     ) AND NOT (
         OLD.status = 'pending' AND NEW.status = 'pending'
-        AND COALESCE(NEW.payload->>'runtime_worker_id', '') = ''
-        AND COALESCE(NEW.payload->>'runtime_machine_id', '') = ''
+        AND NEW.runtime_worker_id = ''
+        AND NEW.runtime_machine_id = ''
         AND OLD.scheduling_assignment_token IS NOT NULL
         AND NEW.scheduling_assignment_token IS NULL
     ) THEN
@@ -326,35 +403,7 @@ FOR EACH ROW EXECUTE FUNCTION enforce_container_assignment_ownership();
 )
 
 
-class RouteTable(IdPayloadTable, DatabaseBase):
-    __tablename__ = "routes"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint("route_id", name="uq_routes_route_id"),
-        Index("ix_routes_workspace_machine", "workspace_id", "machine_id"),
-        Index("ix_routes_container", "container_id"),
-    )
-
-    workspace_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    pool: Mapped[str | None] = mapped_column(String(240), nullable=True)
-    machine_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("machines.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    container_id: Mapped[str | None] = mapped_column(
-        uuid_type,
-        ForeignKey("containers.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    route_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    state: Mapped[str] = mapped_column(String(80), nullable=False, default="opening")
-
-
-class AgentTable(IdPayloadTable, DatabaseBase):
+class AgentTable(IdTable, DatabaseBase):
     __tablename__ = "agents"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_agents_workspace_created", "workspace_id", "created_at"),
@@ -372,8 +421,12 @@ class AgentTable(IdPayloadTable, DatabaseBase):
     version: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    capacity: Mapped[dict[str, int | float | str]] = mapped_column(json_type, nullable=False)
+    labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
+    install_command: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-class AgentLeaseTable(IdPayloadTable, DatabaseBase):
+
+class AgentLeaseTable(IdTable, DatabaseBase):
     __tablename__ = "agent_leases"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_agent_leases_agent_status", "agent_id", "status"),

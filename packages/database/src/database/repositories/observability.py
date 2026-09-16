@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import uuid4
 
-from database.repositories.common import (
-    GlobalTableRepository,
-    TableRepositoryConfig,
-    WorkspaceTableRepository,
+from database.mappers.observability import (
+    usage_record_from_table,
+    worker_event_from_table,
+    write_usage_row,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.observability import (
@@ -24,9 +25,8 @@ from shared.usage import (
 )
 from shared.usage_query import UsageQuery
 from shared.worker_events import WorkerEventFilter, WorkerEventRecord
-from sqlalchemy import CursorResult, Float, String, and_, delete, func, or_, select
+from sqlalchemy import CursorResult, Float, and_, delete, func, or_, select
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
@@ -43,15 +43,18 @@ class UsageAggregationResult(BaseModel):
 class WorkerEventRepository:
     session: Session
 
-    @property
-    def records(self) -> GlobalTableRepository[WorkerEventRecord]:
-        return GlobalTableRepository(
-            self.session,
-            TableRepositoryConfig(WorkerEventTable, WorkerEventRecord),
-        )
-
     def append(self, record: WorkerEventRecord) -> WorkerEventRecord:
-        return self.records.upsert(record)
+        row = self.session.get(WorkerEventTable, record.id)
+        if row is None:
+            row = WorkerEventTable(id=record.id)
+            self.session.add(row)
+        row.worker_id = record.worker_id
+        row.event_type = record.event_type
+        row.resource_id = record.resource_id
+        row.event_data = dict(record.payload)
+        row.created_at = record.created_at
+        self.session.flush()
+        return worker_event_from_table(row)
 
     def list(
         self,
@@ -78,9 +81,7 @@ class WorkerEventRepository:
         )
         if limit is not None:
             statement = statement.limit(limit)
-        return [
-            WorkerEventRecord.model_validate(row.payload) for row in self.session.scalars(statement)
-        ]
+        return [worker_event_from_table(row) for row in self.session.scalars(statement)]
 
     def prune(self, *, older_than: datetime) -> int:
         result = self.session.execute(
@@ -106,18 +107,9 @@ class UsageRecordPage:
 class UsageRepository:
     session: Session
 
-    @property
-    def records(self) -> WorkspaceTableRepository[UsageRecord]:
-        return WorkspaceTableRepository(
-            self.session,
-            TableRepositoryConfig(UsageRecordTable, UsageRecord),
-        )
-
     def append(self, record: UsageRecord) -> UsageRecord:
-        return self.records.upsert(
-            record,
-            workspace_id=record.workspace_id,
-        )
+        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
+        return self._save(record)
 
     def append_storage(self, record: UsageRecord) -> UsageRecord:
         if record.metric not in (
@@ -126,29 +118,19 @@ class UsageRepository:
         ):
             raise ConflictError("storage accounting requires a storage metric")
         WorkspaceRepository(self.session).lock_storage_accounting_owner(record.workspace_id)
+        return self._save(record)
+
+    def _save(self, record: UsageRecord) -> UsageRecord:
+        record = UsageRecord.model_validate(dict(record))
         row = self.session.get(UsageRecordTable, record.id)
         if row is None:
-            row = UsageRecordTable(
-                id=record.id,
-                workspace_id=record.workspace_id,
-                resource_type=record.resource_type,
-                resource_id=record.resource_id,
-                metric=record.metric.value,
-                quantity=record.quantity,
-                payload=record.model_dump(mode="json"),
-                created_at=record.created_at,
-                updated_at=record.created_at,
-            )
+            row = UsageRecordTable(id=record.id)
             self.session.add(row)
-        else:
-            row.resource_type = record.resource_type
-            row.resource_id = record.resource_id
-            row.metric = record.metric.value
-            row.quantity = record.quantity
-            row.payload = record.model_dump(mode="json")
-            flag_modified(row, "payload")
+        elif row.workspace_id != record.workspace_id:
+            raise ConflictError("usage ownership cannot change")
+        write_usage_row(row, record)
         self.session.flush()
-        return record
+        return usage_record_from_table(row)
 
     def record(
         self,
@@ -163,35 +145,18 @@ class UsageRepository:
         labels: dict[str, str] | None = None,
         metadata: dict[str, JsonValue] | None = None,
     ) -> UsageRecord:
-        if id:
-            return self.append(
-                UsageRecord(
-                    id=id,
-                    workspace_id=workspace_id,
-                    resource_type=resource_type,
-                    resource_id=resource_id,
-                    metric=metric,
-                    quantity=quantity,
-                    unit=unit,
-                    labels=labels or {},
-                    metadata=metadata or {},
-                )
+        return self.append(
+            UsageRecord(
+                id=id or str(uuid4()),
+                workspace_id=workspace_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                metric=metric,
+                quantity=quantity,
+                unit=unit,
+                labels=labels or {},
+                metadata=metadata or {},
             )
-        json_labels: dict[str, JsonValue] = {}
-        json_labels.update(labels or {})
-        payload: dict[str, JsonValue] = {
-            "workspace_id": workspace_id,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "metric": metric,
-            "quantity": quantity,
-            "unit": unit,
-            "labels": json_labels,
-            "metadata": metadata or {},
-        }
-        return self.records.create(
-            payload,
-            workspace_id=workspace_id,
         )
 
     def list(
@@ -229,12 +194,12 @@ class UsageRepository:
             if query.created_before is not None:
                 statement = statement.where(UsageRecordTable.created_at < query.created_before)
             for key, value in query.labels.items():
-                statement = statement.where(_usage_json_text(self.session, "labels", key) == value)
+                statement = statement.where(_usage_label_expression(key) == value)
         statement = statement.order_by(
             UsageRecordTable.created_at.desc(),
             UsageRecordTable.id.asc(),
         )
-        return [UsageRecord.model_validate(row.payload) for row in self.session.scalars(statement)]
+        return [usage_record_from_table(row) for row in self.session.scalars(statement)]
 
     def page(
         self,
@@ -246,6 +211,8 @@ class UsageRepository:
         cursor: UsageRecordCursor | None = None,
     ) -> UsageRecordPage:
         statement = select(UsageRecordTable).where(UsageRecordTable.workspace_id == workspace_id)
+        for key, value in query.labels.items():
+            statement = statement.where(_usage_label_expression(key) == value)
         if query.resource_type is not None:
             statement = statement.where(UsageRecordTable.resource_type == query.resource_type)
         if query.resource_id is not None:
@@ -285,7 +252,7 @@ class UsageRepository:
             )
             next_cursor = UsageRecordCursor(created_at=created_at, id=str(last.id))
         return UsageRecordPage(
-            data=tuple(UsageRecord.model_validate(row.payload) for row in page_rows),
+            data=tuple(usage_record_from_table(row) for row in page_rows),
             next=next_cursor,
         )
 
@@ -296,8 +263,8 @@ class UsageRepository:
         metric: UsageMetric | None = None,
         group_by: tuple[UsageGroupKey, ...] = (),
     ) -> list[UsageAggregation]:
-        unit = _usage_json_text(self.session, "unit").label("unit")
-        group_values = tuple(_usage_group_expression(self.session, key) for key in group_by)
+        unit = UsageRecordTable.unit.label("unit")
+        group_values = tuple(_usage_group_expression(key) for key in group_by)
         statement = select(
             UsageRecordTable.workspace_id,
             UsageRecordTable.metric,
@@ -317,7 +284,7 @@ class UsageRepository:
             if query.created_before is not None:
                 statement = statement.where(UsageRecordTable.created_at < query.created_before)
             for key, value in query.labels.items():
-                statement = statement.where(_usage_json_text(self.session, "labels", key) == value)
+                statement = statement.where(_usage_label_expression(key) == value)
         if metric is not None:
             statement = statement.where(UsageRecordTable.metric == metric.value)
         statement = statement.group_by(
@@ -347,17 +314,26 @@ class UsageRepository:
         return results
 
 
-def _usage_group_expression(session: Session, group_by: UsageGroupKey) -> ColumnElement[str]:
-    label = _usage_json_text(session, "labels", group_by.value)
-    metadata = _usage_json_text(session, "metadata", group_by.value)
-    return func.coalesce(func.nullif(label, ""), metadata, "").label(group_by.value)
+def _usage_label_expression(key: str) -> ColumnElement[str | None]:
+    columns = {
+        "app_id": UsageRecordTable.app_id,
+        "stub_id": UsageRecordTable.stub_id,
+        "deployment_id": UsageRecordTable.deployment_id,
+        "gpu": UsageRecordTable.gpu,
+        "task_id": UsageRecordTable.task_id,
+        "worker_id": UsageRecordTable.worker_id,
+        "container_id": UsageRecordTable.container_id,
+    }
+    column = columns.get(key)
+    return (
+        column.__clause_element__()
+        if column is not None
+        else UsageRecordTable.labels[key].as_string()
+    )
 
 
-def _usage_json_text(session: Session, *path: str) -> ColumnElement[str]:
-    if session.get_bind().dialect.name == "postgresql":
-        return func.jsonb_extract_path_text(UsageRecordTable.payload, *path, type_=String)
-    json_path = "$." + ".".join(path)
-    return func.json_extract(UsageRecordTable.payload, json_path, type_=String)
+def _usage_group_expression(group_by: UsageGroupKey) -> ColumnElement[str | None]:
+    return func.coalesce(_usage_label_expression(group_by.value), "").label(group_by.value)
 
 
 def _optional_text(value: JsonValue) -> str:

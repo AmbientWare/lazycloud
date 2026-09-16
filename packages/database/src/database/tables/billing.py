@@ -69,14 +69,12 @@ class BillingAccountTable(IdTable, DatabaseBase):
             "provider_customer_id",
             unique=True,
             postgresql_where=text("provider_customer_id <> ''"),
-            sqlite_where=text("provider_customer_id <> ''"),
         ),
         Index(
             "uq_billing_accounts_provider_subscription",
             "provider_subscription_id",
             unique=True,
             postgresql_where=text("provider_subscription_id <> ''"),
-            sqlite_where=text("provider_subscription_id <> ''"),
         ),
     )
 

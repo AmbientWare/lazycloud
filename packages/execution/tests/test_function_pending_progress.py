@@ -17,7 +17,7 @@ from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.functions.service import FunctionControlService
 from observability.stream_state import AsyncTaskChangeReader
-from shared.capacity import CapacityFailureCode, CapacityOperationStatus
+from shared.capacity import CapacityAcquisitionShape, CapacityFailureCode, CapacityOperationStatus
 from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.function_payloads import FunctionJsonInvocation, FunctionJsonResult
@@ -52,12 +52,7 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
         invocation=FunctionJsonInvocation(),
     )
     with services.context.database.session() as session:
-        ContainerRepository(session).records.upsert(
-            container,
-            workspace_id=stub.workspace_id,
-            name=container.name,
-            status=container.status.value,
-        )
+        ContainerRepository(session).upsert(container)
         TaskRepository(session).mark_claimable(task.id, at=now)
         platform = WorkspaceRepository(session).create(name="capacity-owner")
         unit = ComputeUnitRepository(session).upsert(
@@ -79,6 +74,7 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
             operation_id = str(uuid4())
             ComputeCapacityOperationRepository(session).upsert(
                 ComputeCapacityOperationRecord(
+                    shape=CapacityAcquisitionShape(cpu_millicores=4_000, memory_mib=32_768),
                     id=operation_id,
                     workspace_id=platform.id,
                     pool_id=unit.id,
