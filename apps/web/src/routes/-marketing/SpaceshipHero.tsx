@@ -6,7 +6,7 @@ import { GetStartedButton } from "./MarketingPrimitives";
 import type { createFlightScene } from "./flightScene";
 import "./spaceship.css";
 
-type Flight = ReturnType<typeof createFlightScene>;
+type FlightScene = ReturnType<typeof createFlightScene>;
 
 export function SpaceshipHero() {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -17,7 +17,7 @@ export function SpaceshipHero() {
     const target = canvas.current;
     if (!target) return;
     let disposed = false;
-    let instance: Flight | undefined;
+    let instance: FlightScene | undefined;
     void import("./flightScene")
       .then(({ createFlightScene }) => {
         if (disposed) return;
@@ -46,11 +46,11 @@ export function SpaceshipHero() {
     <section className="spaceship-hero" aria-labelledby="flight-headline">
       <div className="flight-copy">
         <h1 id="flight-headline">
-          Ship as fast
+          Deploy as fast
           <br />
           <span>as you develop.</span>
         </h1>
-        <p>Run your Python apps, APIs, and background jobs in the cloud.</p>
+        <p>Your agents build the software. LazyCloud runs it.</p>
         <div className="flight-actions">
           <GetStartedButton />
           <Button asChild size="lg" variant="secondary" className="marketing-button-link">
@@ -65,13 +65,13 @@ export function SpaceshipHero() {
           ref={canvas}
           className="flight-canvas"
           role="img"
-          aria-label="An angular spacecraft assembles on a circular launch platform, lifts off, and orbits an abstract globe."
+          aria-label="A detailed spacecraft assembles on a launch platform, lifts off, and accelerates through streaks of blue and white stars."
         />
         {!ready && (
           <p className="flight-loading" role="status">
             {error
               ? "The 3D animation could not load. Please check that WebGL is enabled and reload."
-              : "Preparing for liftoff…"}
+              : "Loading animation…"}
           </p>
         )}
       </div>

@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "LazyCloud | Ship as fast as you develop" },
+      { title: "LazyCloud | Deploy as fast as you develop" },
       {
         name: "description",
         content:

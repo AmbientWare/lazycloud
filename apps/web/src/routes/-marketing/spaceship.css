@@ -28,7 +28,7 @@
   line-height: 1.04;
 }
 .flight-copy p {
-  max-width: 380px;
+  max-width: 430px;
   margin-top: 26px;
   font-size: 17px;
   line-height: 1.65;
@@ -44,6 +44,7 @@
   margin-top: 30px;
 }
 .flight-stage {
+  position: relative;
   width: calc(100% + 55px);
   height: clamp(480px, 68svh, 690px);
   margin-left: -10px;

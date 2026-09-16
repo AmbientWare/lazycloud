@@ -212,6 +212,78 @@ export function createShip() {
     0.03,
   );
   const engine = part(0, -0.65, 0, 0.2);
+  const cockpit = part(0, 0.8, 1.3, 0.7);
+  plate(
+    cockpit,
+    [
+      [0, 1.08],
+      [0.19, 0.54],
+      [0.16, 0.04],
+      [0, -0.12],
+      [-0.16, 0.04],
+      [-0.19, 0.54],
+    ],
+    0.14,
+    edge,
+    0.34,
+  );
+  plate(
+    cockpit,
+    [
+      [0, 0.94],
+      [0.12, 0.51],
+      [0.1, 0.1],
+      [0, -0.02],
+      [-0.1, 0.1],
+      [-0.12, 0.51],
+    ],
+    0.08,
+    blue,
+    0.43,
+  );
+  for (const side of [-1, 1]) {
+    const pod = part(side * 3.1, -0.8, 0.8, 1.2);
+    const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.2, 0.95, 8), shell);
+    housing.position.set(side * 0.97, -0.9, 0.12);
+    pod.add(housing);
+    for (let index = 0; index < 5; index++) {
+      const collar = new THREE.Mesh(
+        new THREE.TorusGeometry(0.17 + index * 0.006, 0.025, 4, 8),
+        edge,
+      );
+      collar.rotation.x = Math.PI / 2;
+      collar.position.set(side * 0.97, -0.97 - index * 0.09, 0.12);
+      pod.add(collar);
+    }
+    const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.16, 12), inner);
+    nozzle.position.set(side * 0.97, -1.46, 0.12);
+    pod.add(nozzle);
+    const nozzleLight = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.018, 6, 32), energy);
+    nozzleLight.rotation.x = Math.PI / 2;
+    nozzleLight.position.set(side * 0.97, -1.55, 0.12);
+    pod.add(nozzleLight);
+    const stabilizer = part(side * 2, 0.4, -1.2, 1.3);
+    const blade = plate(
+      stabilizer,
+      [
+        [0.42, -0.25],
+        [0.58, 0.65],
+        [0.72, 0.22],
+        [0.72, -0.95],
+      ],
+      0.08,
+      shell,
+      -0.24,
+    );
+    blade.scale.x = side;
+    for (let index = 0; index < 5; index++) {
+      const ventPart = part(side * 1.4, 0.3, 1.8, index * 0.5);
+      const vent = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.026, 0.025), inner);
+      vent.position.set(side * (0.5 + index * 0.045), -0.39 - index * 0.1, 0.265);
+      vent.rotation.z = side * -0.4;
+      ventPart.add(vent);
+    }
+  }
   const engineShell = new THREE.Mesh(
     new THREE.CylinderGeometry(0.29, 0.35, 0.42, 8, 1, true),
     edge,
@@ -237,6 +309,12 @@ export function createShip() {
   );
   plume.position.y = -1.3;
   exhaust.add(plume);
+  for (const side of [-1, 1]) {
+    const sidePlume = plume.clone();
+    sidePlume.scale.set(0.48, 0.72, 0.48);
+    sidePlume.position.set(side * 0.97, -1, 0.12);
+    exhaust.add(sidePlume);
+  }
   exhaust.position.y = -1.49;
   engine.add(exhaust);
   return { ship, parts, exhaust };
