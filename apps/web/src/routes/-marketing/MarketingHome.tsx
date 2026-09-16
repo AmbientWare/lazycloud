@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight } from "lucide-react";
 
-import { CodeBlock } from "@/components/ui/code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EXAMPLES_URL } from "@/lib/env";
 import { cn } from "@/lib/utils";
@@ -17,7 +16,8 @@ import { computeDestinations } from "./computeDestinations";
 import { useComputeScroll } from "./useComputeScroll";
 import { MarketingExampleImage } from "./MarketingExampleImage";
 import { marketingUseCases } from "./marketingUseCases";
-import { RunModeArt } from "./RunModeArt";
+import { RunModePreview } from "./RunModePreview";
+import { runModeExamples } from "./runModeExamples";
 import "./platformStories.css";
 
 type PlatformStory = {
@@ -59,73 +59,25 @@ const platformStories: PlatformStory[] = [
   },
 ];
 
-const definitionExamples = [
-  {
-    key: "apis",
-    label: "APIs",
-    code: `@app.endpoint(route="/count")
-def count_words(text: str) -> dict[str, int]:
-    return {"words": len(text.split())}`,
-  },
-  {
-    key: "functions",
-    label: "Functions",
-    code: `@app.function(cpu=1, memory="256Mi")
-def total_sales(amounts: list[int]) -> int:
-    return sum(amounts)`,
-  },
-  {
-    key: "sandboxes",
-    label: "Sandboxes",
-    code: `workspace = app.sandbox(
-    name="workspace", cpu=2, memory="2Gi",
-)`,
-  },
-  {
-    key: "services",
-    label: "Services",
-    code: `@app.asgi()
-def web():
-    return FastAPI()`,
-  },
-  {
-    key: "pods",
-    label: "Pods",
-    code: `web = app.pod(
-    command=["python", "-m", "http.server"],
-    ports={"http": 8000}, authorized=True,
-)`,
-  },
-  {
-    key: "schedules",
-    label: "Schedules",
-    code: `@app.function(cron="0 2 * * *", retries=2)
-def heartbeat() -> str:
-    return "ok"`,
-  },
-] as const;
-
 const parityModes = [
   {
     key: "local",
     title: "Develop locally",
-    body: "Use local data and your usual debugger.",
   },
   {
     key: "cloud",
     title: "Test in the cloud",
-    body: "Send a run to cloud compute and get the result. No deployment required.",
   },
   {
     key: "production",
     title: "Deploy your app",
-    body: "Publish APIs, services, and scheduled jobs from your Python definitions.",
   },
 ] as const;
 
 function ParitySection() {
+  const [example, setExample] = useState(runModeExamples[0]);
   return (
-    <section className="marketing-parity bg-background py-18 sm:py-22 lg:py-28">
+    <section className="marketing-parity py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <div className="flex flex-col items-center gap-8 sm:gap-10">
           <div className="text-center">
@@ -134,50 +86,48 @@ function ParitySection() {
               <span className="inline-block text-brand">Three ways to run it.</span>
             </h2>
           </div>
-          <div className="definition-panel w-full min-w-0 max-w-[640px]">
-            <Tabs defaultValue={definitionExamples[0].key}>
-              <TabsList
-                className="definition-tabs flex h-9 w-full gap-0 border-0"
-                aria-label="Python definitions"
-              >
-                {definitionExamples.map((example) => (
-                  <TabsTrigger
-                    className="definition-tab m-0 h-9 flex-auto px-1 text-[11px] focus-visible:ring-0 sm:text-[13px]"
-                    key={example.key}
-                    value={example.key}
-                  >
-                    {example.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-              {definitionExamples.map((example) => (
-                <TabsContent key={example.key} value={example.key}>
-                  <CodeBlock
-                    className="rounded-none border-0 bg-transparent shadow-none"
-                    tone="paper"
-                    lineNumbers
-                    bodyClassName="min-h-[140px] px-3 py-7 text-[11px] leading-[2] sm:min-h-[150px] sm:px-6 sm:text-[13px] xl:text-[14px]"
-                  >
-                    {example.code}
-                  </CodeBlock>
-                </TabsContent>
+          <Tabs
+            className="w-full min-w-0"
+            value={example.key}
+            onValueChange={(key) => {
+              const selected = runModeExamples.find((item) => item.key === key);
+              if (selected) setExample(selected);
+            }}
+          >
+            <TabsList
+              className="definition-tabs mx-auto flex h-9 w-full max-w-[640px] gap-0 border-0"
+              aria-label="Workload examples"
+            >
+              {runModeExamples.map((example) => (
+                <TabsTrigger
+                  className="definition-tab m-0 h-9 flex-auto px-1 text-[11px] sm:text-[13px]"
+                  key={example.key}
+                  value={example.key}
+                >
+                  <span>{example.label}</span>
+                </TabsTrigger>
               ))}
-            </Tabs>
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-5 sm:mt-8 sm:grid-cols-3 lg:gap-6">
-          {parityModes.map((mode) => (
-            <article className="run-mode-card" key={mode.key}>
-              <RunModeArt mode={mode.key} />
-              <h3 className="text-[21px] leading-tight font-medium tracking-[-0.025em]">
-                {mode.title}
-              </h3>
-              <p className="mt-3 max-w-[310px] text-sm leading-relaxed text-muted-foreground">
-                {mode.body}
-              </p>
-            </article>
-          ))}
+            </TabsList>
+            <TabsContent value={example.key} className="definition-content mt-8 sm:mt-10">
+              <div className="grid gap-5 lg:grid-cols-3 lg:gap-6">
+                {parityModes.map((mode) => (
+                  <article className="flex min-w-0 flex-col" key={mode.key}>
+                    <h3 className="mb-4 text-[21px] leading-tight font-medium tracking-[-0.025em]">
+                      {mode.title}
+                    </h3>
+                    <MarketingCard surface="frame" className="run-mode-card flex-1">
+                      <div className="run-mode-copy">
+                        <p className="max-w-[310px] text-sm leading-relaxed text-muted-foreground">
+                          {example[mode.key === "production" ? "deployment" : mode.key].description}
+                        </p>
+                      </div>
+                      <RunModePreview mode={mode.key} example={example} />
+                    </MarketingCard>
+                  </article>
+                ))}
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </section>
