@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { containerEventSummaryOrNullSchema } from "@/lib/api/schemas";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { containerEventsBatchSchema, containerEventSummaryOrNullSchema } from "@/lib/api/schemas";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -14,6 +14,27 @@ import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
  * when one happens; between them, asking is the only way the phases fill in.
  */
 const LIFECYCLE_SUMMARY_POLL_INTERVAL_MS = 15_000;
+
+export function callGraphLifecycleQueryOptions(
+  workspaceId: string,
+  rootTaskId: string,
+  containerIds: string[],
+  live: boolean,
+) {
+  const ids = [...new Set(containerIds)].sort();
+  return queryOptions({
+    queryKey: [...workspaceQueryKeys.tasks.callGraph(workspaceId, rootTaskId), "lifecycle", ids],
+    queryFn: () =>
+      postJson(
+        withWorkspace("/api/v1/events/containers/batch", workspaceId),
+        containerEventsBatchSchema,
+        { container_ids: ids },
+      ),
+    enabled: ids.length > 0,
+    meta: workspaceLiveQueryMeta(false),
+    refetchInterval: live ? LIFECYCLE_SUMMARY_POLL_INTERVAL_MS : false,
+  });
+}
 
 export function containerEventSummaryQueryOptions(workspaceId: string, containerId: string) {
   return queryOptions({

@@ -103,7 +103,6 @@ function WorkloadDetailPage() {
   );
   const isPublic = Boolean(app.data?.public || currentStub?.public);
   const isPod = group.kind === "pod";
-  const supportsInvoke = PLAYGROUND_KINDS.has(group.kind);
   const showsInvoke = group.active && PLAYGROUND_KINDS.has(group.kind);
 
   return (
@@ -140,13 +139,13 @@ function WorkloadDetailPage() {
       contentClassName={
         isPod
           ? "flex flex-col overflow-y-auto lg:overflow-hidden"
-          : "grid gap-3 overflow-y-auto xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"
+          : "flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"
       }
     >
       <Tabs
         key={JSON.stringify([appId, group.kind, group.name])}
         defaultValue={defaultInspectorTab(group, showsInvoke)}
-        className="panel flex flex-col overflow-hidden rounded-md max-lg:shrink-0 lg:min-h-0 lg:flex-1"
+        className={`panel flex flex-col overflow-hidden rounded-md ${isPod ? "min-h-0 flex-1" : "shrink-0 xl:min-h-0"}`}
       >
         <LinearTabsList
           ariaLabel="Workload inspector views"
@@ -154,9 +153,9 @@ function WorkloadDetailPage() {
         >
           {showsInvoke ? <LinearTab value="invoke">Invoke</LinearTab> : null}
           {isPod ? <LinearTab value="instances">Instances</LinearTab> : null}
-          {supportsInvoke ? <LinearTab value="call">Call</LinearTab> : null}
           <LinearTab value="versions">Versions</LinearTab>
           <LinearTab value="configuration">Configuration</LinearTab>
+          {OBSERVABLE_KINDS.has(group.kind) ? <LinearTab value="call">Call</LinearTab> : null}
         </LinearTabsList>
 
         {showsInvoke ? (
@@ -170,14 +169,6 @@ function WorkloadDetailPage() {
                 workloadKind={group.kind}
                 deploymentId={current.id}
               />
-            </PanelErrorBoundary>
-          </TabsContent>
-        ) : null}
-
-        {supportsInvoke ? (
-          <TabsContent value="call" className="m-0 min-h-0 flex-1 overflow-auto">
-            <PanelErrorBoundary title="Call methods could not be displayed">
-              <CallMethods workspaceId={workspace.id} deploymentId={current.id} />
             </PanelErrorBoundary>
           </TabsContent>
         ) : null}
@@ -203,7 +194,10 @@ function WorkloadDetailPage() {
           </TabsContent>
         ) : null}
 
-        <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">
+        <TabsContent
+          value="versions"
+          className={`m-0 min-h-0 flex-1 overflow-auto ${isPod ? "" : "max-xl:flex-none"}`}
+        >
           <VersionHistory
             group={group}
             appId={appId}
@@ -216,16 +210,31 @@ function WorkloadDetailPage() {
           />
         </TabsContent>
 
-        <TabsContent value="configuration" className="m-0 min-h-0 flex-1 overflow-auto">
+        <TabsContent
+          value="configuration"
+          className={`m-0 min-h-0 flex-1 overflow-auto ${isPod ? "" : "max-xl:flex-none"}`}
+        >
           <WorkloadConfiguration deployment={current} kind={group.kind} />
         </TabsContent>
+        {OBSERVABLE_KINDS.has(group.kind) && (
+          <TabsContent value="call" className="m-0 min-h-0 flex-1 overflow-auto max-xl:flex-none">
+            <PanelErrorBoundary title="Call methods could not be displayed">
+              <CallMethods
+                workspaceId={workspace.id}
+                workspaceName={workspace.name}
+                deploymentId={current.id}
+                handler={currentStub?.handler}
+              />
+            </PanelErrorBoundary>
+          </TabsContent>
+        )}
       </Tabs>
 
       {!isPod ? (
         <Panel
           title="Activity"
           contentClassName="flex flex-col overflow-hidden p-0"
-          className="min-h-[24rem] lg:min-h-0"
+          className="min-h-[24rem] shrink-0 xl:min-h-0"
         >
           <WorkloadLatency workspaceId={workspace.id} group={group} />
           <WorkloadRuns

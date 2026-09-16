@@ -3,21 +3,23 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps } from "@tanstack/react-router";
 
 import { useLiveNow } from "@/hooks/use-live-now";
-
-import {
-  axisTicks,
-  flattenCallGraph,
-  rowSegments,
-  statusColor,
-  timelineDomain,
-  type TimelineRow,
-} from "./timeline";
+import { ContentTransition } from "@/components/shared/ContentTransition";
+import { PanelError } from "@/components/shared/PanelError";
+import { Skeleton } from "@/components/ui/skeleton";
+import { flattenCallGraph, statusColor, timelineDomain, type TimelineRow } from "./timeline";
+import { LifecycleStrip } from "./LifecycleStrip";
+import { executionPhases } from "./phases";
 import { useWorkspaceLiveUpdates } from "@/lib/workspace-context";
-import { isTerminalTaskStatus, type CallGraphNode, type Task } from "@/lib/api/schemas";
+import {
+  isTerminalTaskStatus,
+  type CallGraphNode,
+  type ContainerLifecycleMetric,
+  type Task,
+} from "@/lib/api/schemas";
+import { callGraphLifecycleQueryOptions } from "@/lib/queries/events";
 import { formatDuration } from "@/lib/format";
 import { callGraphQueryOptions } from "@/lib/queries/tasks";
 import { cn } from "@/lib/utils";
-import { AxisLabels } from "./AxisLabels";
 
 /** Parent and child tasks aligned on one elapsed-time axis. */
 export function TaskTimeline({
@@ -26,79 +28,71 @@ export function TaskTimeline({
   task,
 }: {
   workspaceId: string;
-  /** Builds the drawer route for a timeline row, keeping page context. */
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   task: Task;
 }) {
   const rootId = task.root_task_id || task.id;
   const graph = useQuery(callGraphQueryOptions(workspaceId, rootId));
-
   const rows = useMemo<TimelineRow[]>(() => {
     const flattened = flattenCallGraph(graph.data?.nodes ?? []);
     return flattened.length > 0
       ? flattened
       : [{ node: taskAsNode(task), depth: 0, ancestorContinues: [], isLastSibling: true }];
   }, [graph.data, task]);
-
   const live = rows.some((row) => !isTerminalTaskStatus(row.node.status));
+  const containerIds = rows.flatMap(({ node }) => (node.container_id ? [node.container_id] : []));
+  const summaries = useQuery({
+    ...callGraphLifecycleQueryOptions(workspaceId, rootId, containerIds, live),
+    enabled: !graph.isPending && containerIds.length > 0,
+  });
+  const lifecycleByContainer = new Map(
+    summaries.data?.items.map((item) => [item.container_id, item.lifecycle]),
+  );
   const nowMs = useLiveNow(live);
-
   const { status: streamStatus } = useWorkspaceLiveUpdates();
-
   const domain = timelineDomain(rows, nowMs);
+  if (graph.isPending || (containerIds.length > 0 && summaries.isPending)) {
+    return (
+      <ContentTransition pending className="space-y-3 p-4">
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-4 w-36" />
+      </ContentTransition>
+    );
+  }
+  if (graph.isError && !graph.data) return <PanelError message={graph.error.message} />;
+  if (summaries.isError && !summaries.data) return <PanelError message={summaries.error.message} />;
   if (!domain) {
     return <div className="p-3 text-sm text-muted-foreground">Not scheduled yet</div>;
   }
-  const ticks = axisTicks(domain);
 
   return (
-    <div className="min-w-0 overflow-hidden">
-      <div className="min-w-0">
-        <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
-          <span>
-            {rows.length === 1 ? "1 call" : `${rows.length} calls`} ·{" "}
-            {formatDuration(domain.endMs - domain.startMs)} total
+    <ContentTransition className="min-w-0">
+      <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2 text-[11px] text-muted-foreground">
+        <span>
+          {rows.length === 1 ? "1 call" : `${rows.length} calls`} ·{" "}
+          {formatDuration(domain.endMs - domain.startMs)} total
+        </span>
+        {live && streamStatus !== "open" ? (
+          <span className="text-warning" data-stream-stale="">
+            {streamStatus === "reconnecting" ? "Reconnecting" : "Connecting"}
           </span>
-          {live && streamStatus !== "open" ? (
-            <span className="ml-3 flex items-center gap-1.5 text-warning" data-stream-stale="">
-              <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />
-              {streamStatus === "reconnecting" ? "Reconnecting" : "Connecting"}
-            </span>
-          ) : null}
-          <span className="ml-auto flex flex-wrap items-center gap-3" aria-label="Timeline legend">
-            <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-3 bg-muted-foreground/40" aria-hidden="true" />
-              Queued
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-3 bg-brand" aria-hidden="true" />
-              Execution
-            </span>
-          </span>
-        </div>
-
-        <div className="grid min-w-0 grid-cols-[minmax(8rem,12rem)_minmax(8rem,1fr)] px-3 pb-3 text-xs">
-          <div className="flex h-8 items-end border-b border-border/60 pb-1 text-[10px] text-muted-foreground">
-            Task
-          </div>
-          <div className="relative h-8 border-b border-border/60" aria-label="Elapsed time axis">
-            <AxisLabels ticks={ticks} className="bottom-1" />
-          </div>
-
-          {rows.map((row) => (
-            <TimelineBarRow
-              key={row.node.task_id}
-              row={row}
-              highlighted={row.node.task_id === task.id}
-              taskLink={taskLink}
-              domain={domain}
-              ticks={ticks}
-              nowMs={nowMs}
-            />
-          ))}
-        </div>
+        ) : null}
       </div>
-    </div>
+      <div className="divide-y divide-border/60">
+        {rows.map((row) => (
+          <TimelineBarRow
+            key={row.node.task_id}
+            row={row}
+            highlighted={row.node.task_id === task.id}
+            taskLink={taskLink}
+            domain={domain}
+            nowMs={nowMs}
+            lifecycle={lifecycleByContainer.get(row.node.container_id ?? "") ?? []}
+          />
+        ))}
+      </div>
+    </ContentTransition>
   );
 }
 
@@ -107,107 +101,44 @@ function TimelineBarRow({
   highlighted,
   taskLink,
   domain,
-  ticks,
   nowMs,
+  lifecycle,
 }: {
   row: TimelineRow;
   highlighted: boolean;
-  /** Builds the drawer route for a timeline row, keeping page context. */
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   domain: NonNullable<ReturnType<typeof timelineDomain>>;
-  ticks: ReturnType<typeof axisTicks>;
   nowMs: number;
+  lifecycle: ContainerLifecycleMetric[];
 }) {
   const { node, depth, ancestorContinues, isLastSibling } = row;
-  const segments = rowSegments(node, domain, nowMs);
-  const runSegment = segments.find((item) => item.kind === "run");
-  const queuedSegment = segments.find((item) => item.kind === "queued");
+  const phases = executionPhases(node, lifecycle, nowMs, domain);
   const sourceLabel = node.function_name || node.name || "Task";
   const label = taskLabel(sourceLabel);
-  const elapsed = runSegment
-    ? formatDuration(runSegment.durationMs)
-    : queuedSegment
-      ? `${formatDuration(queuedSegment.durationMs)} queued`
-      : "Not started";
   const status = statusLabel(node.status);
 
   return (
-    <Link
-      {...taskLink(node.task_id)}
-      aria-current={highlighted ? "page" : undefined}
-      aria-label={`${label}, ${status}, ${elapsed}`}
-      data-selected={highlighted}
-      className={cn(
-        "interactive-row group col-span-2 grid min-w-0 grid-cols-subgrid border-b border-border/50",
-      )}
-      title={`${sourceLabel} · ${status} · ${elapsed}`}
-    >
-      <span className="flex h-12 min-w-0 items-center pr-3">
+    <div className={cn("min-w-0 px-4 py-2.5", highlighted && "bg-muted/25")}>
+      <div className="flex h-6 min-w-0 items-center gap-2">
         <TreeBranch
           depth={depth}
           ancestorContinues={ancestorContinues}
           isLastSibling={isLastSibling}
         />
-        <span className="flex min-w-0 flex-1 flex-col justify-center">
-          <span
-            className={cn(
-              "mono truncate text-[11px]",
-              highlighted ? "font-medium text-foreground" : "text-foreground/90",
-            )}
-          >
-            {label}
-          </span>
-          <span className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
-            <span
-              className={cn(
-                "size-1.5 shrink-0 rounded-full",
-                node.status === "running" && "pulse-live",
-              )}
-              style={{ background: statusColor(node.status) }}
-              aria-hidden="true"
-            />
-            <span className="truncate">{status}</span>
-            <span aria-hidden="true">·</span>
-            <span className="shrink-0 tabular-nums">{elapsed}</span>
-          </span>
+        <Link
+          {...taskLink(node.task_id)}
+          aria-current={highlighted ? "page" : undefined}
+          className="interactive-link mono min-w-0 truncate text-xs font-medium"
+          title={sourceLabel}
+        >
+          {label}
+        </Link>
+        <span className="ml-auto shrink-0 text-[11px]" style={{ color: statusColor(node.status) }}>
+          {status}
         </span>
-      </span>
-
-      <span className="relative h-12 min-w-0 overflow-hidden">
-        {ticks.map((tick) => (
-          <span
-            key={tick.timestampMs}
-            className="absolute inset-y-0 border-l border-border/40"
-            style={{ left: `${tick.leftPct}%` }}
-            aria-hidden="true"
-          />
-        ))}
-        {segments.map((segment) => (
-          <span
-            key={segment.kind}
-            className={cn(
-              "absolute top-[18px] h-3",
-              segment.kind === "run" ? "bg-brand" : "bg-muted-foreground/40",
-            )}
-            style={{
-              left: `${segment.leftPct}%`,
-              width: `${segment.widthPct}%`,
-              minWidth: segment.durationMs > 0 ? "2px" : undefined,
-            }}
-            title={`${segment.kind === "run" ? "Execution" : "Queued"}: ${formatDuration(segment.durationMs)}`}
-            aria-label={`${segment.kind === "run" ? "Execution" : "Queued"} ${formatDuration(segment.durationMs)}`}
-          >
-            {segment.kind === "run" && isTerminalTaskStatus(node.status) ? (
-              <span
-                className="absolute -right-px -top-0.5 h-4 w-0.5"
-                style={{ background: statusColor(node.status) }}
-                aria-hidden="true"
-              />
-            ) : null}
-          </span>
-        ))}
-      </span>
-    </Link>
+      </div>
+      <LifecycleStrip phases={phases} domain={domain} showLegend={false} />
+    </div>
   );
 }
 
@@ -263,6 +194,7 @@ function taskLabel(value: string): string {
 function taskAsNode(task: Task): CallGraphNode {
   return {
     task_id: task.id,
+    container_id: task.container_id ?? null,
     parent_task_id: task.parent_task_id ?? "",
     root_task_id: task.root_task_id ?? task.id,
     status: task.status,

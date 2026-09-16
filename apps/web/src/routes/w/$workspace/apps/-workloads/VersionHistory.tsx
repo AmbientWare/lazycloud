@@ -37,7 +37,7 @@ export function VersionHistory({
   onLoadMore: () => void;
 }) {
   return (
-    <div className="min-w-0">
+    <div className="@container min-w-0">
       <VersionListHeader />
       <div className="divide-y divide-border/70">
         {group.deployments.map((deployment) => (
@@ -63,9 +63,7 @@ export function VersionHistory({
   );
 }
 
-/** The same column rule the instance list follows, so two lists on one page
-    do not read as two different kinds of list. */
-const VERSION_COLUMNS = "lg:grid lg:grid-cols-[7rem_7rem_minmax(0,1fr)_auto] lg:items-center";
+const VERSION_COLUMNS = "@2xl:grid @2xl:grid-cols-[6rem_6rem_minmax(0,1fr)_auto] @2xl:items-center";
 
 function VersionListHeader() {
   return (
@@ -136,17 +134,19 @@ function VersionRow({
 
   return (
     <div
-      className={`flex min-h-12 flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-sm ${VERSION_COLUMNS}`}
+      className={`grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-3 text-sm ${VERSION_COLUMNS}`}
     >
       <span className="flex min-w-0 items-center gap-2">
         <span className="mono font-medium">v{deployment.version}</span>
         {latest ? <span className="micro-label text-muted-foreground">Latest</span> : null}
       </span>
-      <span className="flex min-w-0">
-        <StatusChip status={deployment.active ? "active" : "stopped"} live={deployment.active} />
+      <span className="flex min-w-0 justify-end @2xl:justify-start">
+        <StatusChip status={deployment.active ? "active" : "stopped"} />
       </span>
-      <span className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
-        <LiveRelativeTime value={deployment.created_at} />
+      <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span className="whitespace-nowrap">
+          <LiveRelativeTime value={deployment.created_at} />
+        </span>
         <Link
           to="/w/$workspace/tasks"
           params={{ workspace: workspaceName }}
@@ -157,7 +157,7 @@ function VersionRow({
         </Link>
       </span>
       {hasActions ? (
-        <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+        <span className="flex min-w-0 flex-wrap items-center justify-end gap-1">
           {confirmingDelete ? (
             <>
               <Button
@@ -228,10 +228,7 @@ function VersionRow({
         <span />
       )}
       {error ? (
-        <span
-          className="basis-full text-xs text-destructive lg:col-span-4 lg:text-right"
-          role="alert"
-        >
+        <span className="col-span-full text-xs text-destructive @2xl:text-right" role="alert">
           {error.message}
         </span>
       ) : null}
