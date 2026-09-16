@@ -72,7 +72,7 @@
   opacity: 0.18;
 }
 
-.marketing-site main > section > :not(.marketing-grid-field),
+.marketing-site main > section > :not(.marketing-grid-field, [data-marketing-overlay]),
 .marketing-site > main > :not(section),
 .marketing-site > footer > * {
   position: relative;

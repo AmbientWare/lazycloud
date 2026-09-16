@@ -8,18 +8,20 @@ import "./cloudHero.css";
 export function CloudHero() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const stage = useRef<HTMLDivElement>(null);
+  const fireworks = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     const target = canvas.current;
     const frame = stage.current;
-    if (!target || !frame) return;
+    const sparks = fireworks.current;
+    if (!target || !frame || !sparks) return;
     let disposed = false;
     let instance: { dispose: () => void } | undefined;
     void import("./cloudMascotScene")
       .then(({ createCloudMascotScene }) => {
         if (disposed) return;
-        instance = createCloudMascotScene(target, frame);
+        instance = createCloudMascotScene(target, frame, sparks);
       })
       .catch((cause: unknown) => {
         console.error("Hero animation could not load", cause);
@@ -32,7 +34,17 @@ export function CloudHero() {
   }, []);
 
   return (
-    <MarketingHero className="cloud-hero">
+    <MarketingHero
+      className="cloud-hero"
+      overlay={
+        <canvas
+          ref={fireworks}
+          className="pointer-events-none absolute inset-0 z-[3] h-full w-full"
+          data-marketing-overlay=""
+          aria-hidden="true"
+        />
+      }
+    >
       <div className="cloud-copy">
         <h1>
           Infrastructure
@@ -57,7 +69,7 @@ export function CloudHero() {
         ref={stage}
         className="cloud-stage"
         role="img"
-        aria-label="A soft blue cloud friend rendered in ASCII. Its eyes blink and follow your cursor as it floats."
+        aria-label="A blue ASCII cloud friend. It follows your cursor and laughs at fireworks when you click the hero background."
       >
         <canvas ref={canvas} aria-hidden="true" />
         {error && (

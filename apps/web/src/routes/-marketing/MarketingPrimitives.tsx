@@ -19,9 +19,11 @@ export const shell =
 export function MarketingHero({
   children,
   className,
+  overlay,
 }: {
   children: ReactNode;
   className?: string;
+  overlay?: ReactNode;
 }) {
   const [entered, setEntered] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
@@ -58,6 +60,7 @@ export function MarketingHero({
       >
         {children}
       </div>
+      {overlay}
     </section>
   );
 }
