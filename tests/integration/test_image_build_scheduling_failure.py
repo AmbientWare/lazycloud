@@ -29,7 +29,8 @@ def test_scheduling_failure_finishes_image_build_stream_and_cleans_execution(
     assert failed.error == failure.reason
     assert failed.started_at is None
     assert failed.finished_at is not None
-    assert services.containers.get(build.id).status is ContainerStatus.Failed
+    assert failed.execution_container_id is not None
+    assert services.containers.get(failed.execution_container_id).status is ContainerStatus.Failed
     events = list(services.image_service.follow_build(build.id, workspace_id=workspace_id))
     assert events[-1].response.done
     assert not events[-1].response.success
