@@ -6,13 +6,15 @@ from pydantic import JsonValue
 from sqlalchemy import (
     DDL,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
-    UniqueConstraint,
+    Text,
     event,
     text,
 )
@@ -22,29 +24,51 @@ from sqlalchemy.sql.schema import SchemaItem
 from database.tables.base import (
     DatabaseBase,
     IdPayloadTable,
-    NamedWorkspacePayloadTable,
+    IdTable,
     TimestampMixin,
     json_type,
     uuid_type,
 )
 
 
-class AutoscalerStateTable(NamedWorkspacePayloadTable, DatabaseBase):
+class AutoscalerStateTable(TimestampMixin, DatabaseBase):
     __tablename__ = "autoscaler_states"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint(
-            "workspace_id",
-            "name",
-            name="uq_autoscaler_states_workspace_name",
-        ),
+    __table_args__ = (
         Index("ix_autoscaler_states_workspace_source", "workspace_id", "source"),
         Index("ix_autoscaler_states_target", "target_kind", "target_id"),
+        CheckConstraint(
+            "current_count >= 0 AND desired_count >= 0 AND pending_count >= 0 "
+            "AND failed_container_count >= 0",
+            name="ck_autoscaler_states_counts",
+        ),
+        CheckConstraint(
+            "target_kind IN ('function', 'endpoint', 'pod')",
+            name="ck_autoscaler_states_target_kind",
+        ),
     )
-
-    source: Mapped[str] = mapped_column(String(120), nullable=False)
-    target_kind: Mapped[str] = mapped_column(String(80), nullable=False)
-    target_id: Mapped[str] = mapped_column(String(160), nullable=False)
-    decision: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    target_kind: Mapped[str] = mapped_column(String(80), primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    deployment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    app_id: Mapped[str] = mapped_column(Text, nullable=False)
+    current_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    desired_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    signal_name: Mapped[str] = mapped_column(Text, nullable=False)
+    signal_value: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    valid: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    lock_acquired: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    owner_lock_key: Mapped[str] = mapped_column(Text, nullable=False)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_container_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pending_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    guardrails: Mapped[dict[str, JsonValue]] = mapped_column(json_type, nullable=False)
+    last_actions: Mapped[list[dict[str, JsonValue]]] = mapped_column(json_type, nullable=False)
 
 
 class AutoscalingTargetTable(TimestampMixin, DatabaseBase):
@@ -86,7 +110,7 @@ class AutoscalingTargetTable(TimestampMixin, DatabaseBase):
     )
 
 
-class MachineTable(IdPayloadTable, DatabaseBase):
+class MachineTable(IdTable, DatabaseBase):
     __tablename__ = "machines"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_machines_workspace_created", "workspace_id", "created_at"),
@@ -106,8 +130,13 @@ class MachineTable(IdPayloadTable, DatabaseBase):
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     address: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    cpu: Mapped[float | None] = mapped_column(Float, nullable=True)
+    memory: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu: Mapped[str | None] = mapped_column(Text, nullable=True)
+    labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
 
-class WorkerTable(IdPayloadTable, DatabaseBase):
+
+class WorkerTable(IdTable, DatabaseBase):
     __tablename__ = "workers"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_workers_workspace_created", "workspace_id", "created_at"),
@@ -129,7 +158,7 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
     )
     pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     admitted_release_generation: Mapped[int] = mapped_column(BigInteger, server_default="0")
     admitted_runtime_image: Mapped[str] = mapped_column(String(1024), server_default="")
     admitted_agent_sha256: Mapped[str] = mapped_column(String(64), server_default="")
@@ -137,6 +166,8 @@ class WorkerTable(IdPayloadTable, DatabaseBase):
     update_runtime_image: Mapped[str] = mapped_column(String(1024), server_default="")
     update_agent_sha256: Mapped[str] = mapped_column(String(64), server_default="")
     update_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
 
 
 class ContainerTable(IdPayloadTable, DatabaseBase):
@@ -326,7 +357,7 @@ FOR EACH ROW EXECUTE FUNCTION enforce_container_assignment_ownership();
 )
 
 
-class AgentTable(IdPayloadTable, DatabaseBase):
+class AgentTable(IdTable, DatabaseBase):
     __tablename__ = "agents"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_agents_workspace_created", "workspace_id", "created_at"),
@@ -344,8 +375,12 @@ class AgentTable(IdPayloadTable, DatabaseBase):
     version: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    capacity: Mapped[dict[str, int | float | str]] = mapped_column(json_type, nullable=False)
+    labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
+    install_command: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-class AgentLeaseTable(IdPayloadTable, DatabaseBase):
+
+class AgentLeaseTable(IdTable, DatabaseBase):
     __tablename__ = "agent_leases"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_agent_leases_agent_status", "agent_id", "status"),

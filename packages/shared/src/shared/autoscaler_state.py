@@ -16,6 +16,12 @@ class AutoscalerTargetKind(StringEnum):
     Pod = "pod"
 
 
+class AutoscaleAction(ContractModel):
+    container_id: str = ""
+    action: str
+    reason: str = ""
+
+
 class AutoscalerStateRecord(ContractModel):
     name: str
     workspace_id: str
@@ -36,9 +42,9 @@ class AutoscalerStateRecord(ContractModel):
     owner_lock_key: str = ""
     cooldown_until: datetime | None = None
     failed_container_count: int = 0
-    error: str = ""
-    last_sample: dict[str, JsonValue] = Field(default_factory=dict)
-    last_actions: list[dict[str, JsonValue]] = Field(default_factory=list)
+    pending_count: int = 0
+    guardrails: dict[str, JsonValue] = Field(default_factory=dict)
+    last_actions: list[AutoscaleAction] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utc_now)
 
 
@@ -57,6 +63,7 @@ def autoscaler_state_name(target_kind: AutoscalerTargetKind, target_id: str) -> 
 
 
 __all__ = [
+    "AutoscaleAction",
     "AutoscalerStateRecord",
     "AutoscalerTargetKind",
     "autoscaler_state_name",

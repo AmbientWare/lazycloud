@@ -380,5 +380,22 @@ dedicated AWS connection owner; every consumer imports that owner directly.
   one SELECT and zero rows. The extra reads enforce independently owned generations
   and regional networks; they do not grow with the number of claimed connections.
 
-Runtime and container tables still require their remaining refactors. These
-scoped results are not release acceptance.
+Machines, workers, agents and agent leases use explicit mappers and columns.
+Agent capacity reports and caller labels remain named documents. Lease writes
+lock their workspace and agent owner; listing filters by workspace in SQL.
+Agent deletion relies on the lease foreign key cascade. Autoscaler state uses
+its workspace/target composite key, typed counts, timestamps and decisions.
+Duplicate sample/error fields are removed. Actions are validated shared contracts;
+guardrails remain diagnostic data. Scheduling target writes use PostgreSQL only.
+
+- Fleet lifecycle, provider enrollment, workspace deletion and schema: 40 checks
+  pass. Autoscaling, scheduler state, deletion races and schema: 92 checks pass.
+- A focused agent service check proves workspace isolation, lease release and
+  cascading deletion against PostgreSQL. Database, scheduler and agent types pass.
+- Autoscaler source selection with 200 other targets and two selected targets
+  keeps one query; rows drop from 202 to 2 and bytes from 171,510 to 494. An absent
+  source returns zero rows instead of fetching all 202. Machine listing keeps one
+  query and two rows, bytes 1,040 to 486; idle returns no rows.
+
+Containers still require their remaining refactor. These scoped results are not
+release acceptance.

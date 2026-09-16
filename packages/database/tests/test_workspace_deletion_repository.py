@@ -267,7 +267,7 @@ def _prove_deletion_before_writer(
     def write() -> None:
         writer_started.set()
         with database.session() as session:
-            AutoscalerStateRepository(session).records.upsert_across_workspaces(state)
+            AutoscalerStateRepository(session).upsert(state)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         deletion = executor.submit(delete_workspace)

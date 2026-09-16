@@ -1285,7 +1285,7 @@ class ComputeService:
             if not termination_errors:
                 machine_repository = MachineRepository(session)
                 owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
-                for machine in machine_repository.records.list(workspace_id=workspace_id):
+                for machine in machine_repository.list(workspace_id=workspace_id):
                     if (
                         machine.capacity_owner_id != owner
                         or machine.status is ResourceStatus.Deleted
@@ -1439,7 +1439,7 @@ class ComputeService:
                 )
             machine_repository = MachineRepository(session)
             owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
-            for machine in machine_repository.records.list(workspace_id=workspace_id):
+            for machine in machine_repository.list(workspace_id=workspace_id):
                 if machine.capacity_owner_id != owner or machine.status is ResourceStatus.Deleted:
                     continue
                 machine_repository.mark_deleted_for_workspace_deletion(
@@ -3835,19 +3835,18 @@ class ComputeService:
     ) -> Machine:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            machine = MachineRepository(session).records.create(
-                {
-                    "pool": pool,
-                    "provider": provider,
-                    "cpu": cpu,
-                    "memory": memory,
-                    "gpu": gpu,
-                    "address": address,
-                    "labels": labels or {},
-                    "status": ResourceStatus.Created.value,
-                },
+            machine = MachineRepository(session).upsert(
+                Machine(
+                    id=str(uuid4()),
+                    pool=pool,
+                    provider=provider,
+                    cpu=cpu,
+                    memory=memory,
+                    gpu=gpu,
+                    address=address,
+                    labels=labels or {},
+                ),
                 workspace_id=workspace_id,
-                status=ResourceStatus.Created.value,
             )
         self._publish_change(
             workspace_id=workspace_id,
@@ -3862,7 +3861,7 @@ class ComputeService:
             workspace_id = self.context.workspace(session, workspace).id
             records = [
                 machine
-                for machine in MachineRepository(session).records.list(workspace_id=workspace_id)
+                for machine in MachineRepository(session).list(workspace_id=workspace_id)
                 if machine.status is not ResourceStatus.Deleted
             ]
         records.sort(key=lambda item: item.created_at, reverse=True)
@@ -3905,7 +3904,7 @@ class ComputeService:
         with self.context.database.session() as session:
             repository = WorkerRepository(session)
             workspace_id = repository.workspace_id(worker_id)
-            repository.records.delete_across_workspaces(worker_id)
+            repository.delete_across_workspaces(worker_id)
         if workspace_id is not None:
             self._publish_change(
                 workspace_id=workspace_id,
