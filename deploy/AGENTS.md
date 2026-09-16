@@ -16,14 +16,13 @@ substitutes, and gives every service an explicit owner and health check.
   the test operator role does not block a platform deployment or authorize IAM
   repairs. GitHub deployment jobs retain their configured OIDC identity.
 - Deployed databases are persistent. Append Alembic revisions; never rewrite
-  the baseline or reset production data during an upgrade. The owner-authorized
-  relational reset is a one-time exception documented in
-  `database-cleanup-plan.md` and `deploy/database-reset.md`.
+  the baseline or reset production data during an upgrade. The completed
+  owner-authorized relational reset is recorded in `deploy/database-reset.md`;
+  it does not authorize another reset.
 - Run migrations before starting new application pods. Previous replicas keep
   serving during migration, so new ownership columns must preserve their reads
   and valid writes. Test that older writers cannot erase ownership recorded by
-  the new repository. For the authorized reset, stop every old writer before
-  replacing the schema and start only the accepted new release.
+  the new repository.
 - A deployment value is usually read on several independent paths, so correcting
   one place proves nothing about the rest. When a name, origin, or credential
   changes, find every consumer of it in the same change.
