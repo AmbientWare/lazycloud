@@ -216,7 +216,7 @@ def render_error(details: ClientErrorDetails, *, console: Console = error_consol
     body = Text()
     body.append(mask_secrets(details.message), style=theme.EMPHASIS)
     if details.hint:
-        body.append("\n\n")
+        body.append("\n")
         body.append("Next step  ", style=theme.MUTED)
         body.append(mask_secrets(details.hint))
     console.print(card(details.title, body, tone="error"))
