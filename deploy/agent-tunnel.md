@@ -73,10 +73,7 @@ workers. Exercise the boundaries affected by the change:
 - API replacement, gateway drain, and agent replacement as separate scenarios.
 
 Record terminal task outcomes, ownership, latency, and recovery time while
-polling both ends' logs and provider state. The original design targets were
-ten seconds for revocation and controlled gateway-failure recovery, plus no
-warm-call p95 regression against equivalent hardware and traffic. Treat these
-as acceptance targets until a named run proves them.
+polling both ends' logs and provider state.
 
 Run only against authorized targets. Remove the test workloads and temporary
 credentials through their owners, then verify their absence. Healthy pods and
