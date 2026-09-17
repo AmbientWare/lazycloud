@@ -131,6 +131,10 @@ def test_task_rows_name_their_resources_and_only_the_detail_read_carries_the_con
 ) -> None:
     services, client = api_runtime
     task = _deployed_task(services, api_workspace.id)
+    task.args = ["input" * 10_000]
+    task.kwargs = {"mode": "full"}
+    task.result = {"output": "result" * 10_000}
+    services.tasks.save(task)
     headers = _headers(services, api_workspace.id, "task-row-reader", scopes=["read"])
 
     page = client.get("/api/v1/tasks", headers=headers, params={"limit": 100})
@@ -144,11 +148,16 @@ def test_task_rows_name_their_resources_and_only_the_detail_read_carries_the_con
     assert row.workload is not None and row.workload.kind is StubKind.Function
     assert row.deployment is not None and row.deployment.version == 1
     assert "container" not in page.json()["data"][0]
+    assert {"command", "args", "kwargs", "result", "error"}.isdisjoint(page.json()["data"][0])
+    assert row.pending_progress is None
 
     detail_payload = TaskDetailResponse.model_validate_json(detail.content)
     assert detail_payload.container is not None
     assert detail_payload.container.id == task.container_id
     assert detail_payload.workload == row.workload
+    assert detail_payload.args == task.args
+    assert detail_payload.kwargs == task.kwargs
+    assert detail_payload.result == task.result
 
 
 def test_pending_call_reports_shared_capacity_and_discards_stale_or_foreign_observations(

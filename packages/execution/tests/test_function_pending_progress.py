@@ -191,4 +191,5 @@ async def test_completed_invocation_drains_all_log_pages(async_services: ApiServ
         ]
     assert [response.output.rstrip("\n") for response in responses if response.output] == messages
     assert responses[-1].done
+    assert responses[-1].result == FunctionJsonResult(value=7)
     assert async_services.require_async_io().realtime.status().sources == 0

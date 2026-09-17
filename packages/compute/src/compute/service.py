@@ -3314,18 +3314,13 @@ class ComputeService:
         self, unit: ComputeUnitRecord, *, mutations: CapacityOwnerMutationLease, now: datetime
     ) -> None:
         with self.context.database.session() as session:
-            operations = ComputeCapacityOperationRepository(session).list_for_owner(
-                unit.capacity_owner_id
+            operations = ComputeCapacityOperationRepository(session).expired_for_owner(
+                unit.capacity_owner_id,
+                created_before=now - timedelta(seconds=unit.registration_timeout_seconds),
             )
             recovery_operations = CapacityRecoveryRepository(session).active_operations(unit.id)
         for operation in operations:
             if operation.operation_id in recovery_operations:
-                continue
-            if operation.status.terminal or not operation.owns_capacity:
-                continue
-            if now < to_utc(operation.created_at) + timedelta(
-                seconds=unit.registration_timeout_seconds
-            ):
                 continue
             with mutations.dispatch_lock(unit.capacity_owner_id):
                 if mutations.has_open_reservations(unit.capacity_owner_id):
@@ -3333,17 +3328,17 @@ class ComputeService:
                 with self.context.database.session() as session:
                     containers = ContainerRepository(session)
                     if operation.demand_container_id is not None:
-                        demand = containers.get_across_workspaces(operation.demand_container_id)
-                        if demand is not None and demand.status in LIVE_CONTAINER_STATUSES:
+                        if containers.any_with_status(
+                            tuple(LIVE_CONTAINER_STATUSES),
+                            container_id=operation.demand_container_id,
+                        ):
                             continue
-                        if containers.list_across_workspaces(
-                            statuses=(ContainerStatus.Pending.value,)
+                        if containers.any_with_status(
+                            (ContainerStatus.Pending,)
                         ) or self._machines_holding_active_work(session, pool_id=unit.id):
                             # Another request may share an acquisition whose lease was lost.
                             continue
-                    elif containers.list_across_workspaces(
-                        statuses=tuple(status.value for status in LIVE_CONTAINER_STATUSES)
-                    ):
+                    elif containers.any_with_status(tuple(LIVE_CONTAINER_STATUSES)):
                         # Historical acquisitions cannot be attributed safely.
                         continue
                 LOGGER.info(

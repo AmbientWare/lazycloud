@@ -190,6 +190,23 @@ def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
         )
         == 1
     )
+    started = images.get(build.id, workspace_id=workspace_id)
+    assert started.status is BuildStatus.Running and started.started_at is not None
+    assert (
+        images.record_worker_progress(
+            build.id, workspace_id=workspace_id, container_id=original, after=1, messages=[]
+        )
+        == 1
+    )
+    assert images.get(build.id, workspace_id=workspace_id).started_at == started.started_at
+    with pytest.raises(ConflictError):
+        images.record_worker_progress(
+            build.id,
+            workspace_id=str(uuid4()),
+            container_id=original,
+            after=1,
+            messages=["foreign"],
+        )
     now = utc_now()
     unit_id, machine_id = str(uuid4()), str(uuid4())
     pool = MachinePool("interrupted-build")

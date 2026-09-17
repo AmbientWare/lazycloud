@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Task } from "@/lib/api/schemas";
+import type { TaskSummary } from "@/lib/api/schemas";
 import { startupBetween } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -31,7 +31,7 @@ export function TaskTable({
   className,
   continuation,
 }: {
-  tasks: Task[] | undefined;
+  tasks: TaskSummary[] | undefined;
   /** Builds the drawer route for a task; keeps the drawer nested in the page context. */
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   showApp?: boolean;

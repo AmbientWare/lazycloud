@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
 from database.context import ServiceContext
-from database.repositories.images import ImageArchiveRepository
+from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
 from images.control import ImageControlService
 from images.publication import (
     ArchiveImageBuildPublicationPublisher,
@@ -19,11 +21,62 @@ from shared.http.images import (
     VerifyImageBuildResponse,
 )
 from shared.image_building.authoring import ImageSpec
-from shared.image_building.records import ImageBuildRecord
+from shared.image_building.records import BuildStatus, ImageBuildRecord
+from shared.timestamps import utc_now
 from storage.image_archive import ImageArchiveSettings
 from storage_client.s3 import S3ObjectInfo
 
 _TEST_BASE_IMAGE_DIGEST = f"sha256:{'a' * 64}"
+
+
+def test_image_reuse_finds_eligible_history_and_preserves_workspace_scope(
+    isolated_services: ApiServices,
+) -> None:
+    workspace_id = _default_workspace_id(isolated_services)
+    eligible = ImageBuildRecord(
+        id=str(uuid4()),
+        image=ImageSpec(ignore_python=True),
+        fingerprint="reuse-history",
+        image_id="reusable-image",
+        status=BuildStatus.Complete,
+        created_at=utc_now() - timedelta(hours=1),
+        cache_metadata={"build_container_required": "true", "image_archive_format_version": "2"},
+    )
+    with isolated_services.context.database.session() as session:
+        repository = ImageBuildRepository(session)
+        repository.upsert(eligible, workspace_id=workspace_id)
+        for index in range(20):
+            repository.upsert(
+                eligible.model_copy(
+                    update={
+                        "id": str(uuid4()),
+                        "created_at": utc_now(),
+                        "cache_metadata": {
+                            "build_container_required": "false",
+                            "image_archive_format_version": "2",
+                        }
+                        if index % 2
+                        else {
+                            "build_container_required": "true",
+                            "image_archive_format_version": "1",
+                        },
+                    }
+                ),
+                workspace_id=workspace_id,
+            )
+    images = isolated_services.images
+    by_fingerprint = images.find_reusable_by_fingerprint(
+        eligible.fingerprint, workspace_id=workspace_id
+    )
+    by_image = images.find_reusable_by_image_id(eligible.image_id or "", workspace_id=workspace_id)
+    assert by_fingerprint is not None and by_fingerprint.id == eligible.id
+    assert by_image is not None and by_image.id == eligible.id
+    assert (
+        images.find_reusable_by_fingerprint(eligible.fingerprint, workspace_id=str(uuid4())) is None
+    )
+    assert (
+        images.find_reusable_by_image_id(eligible.image_id or "", workspace_id=str(uuid4())) is None
+    )
 
 
 def _archive_settings() -> ImageArchiveSettings:

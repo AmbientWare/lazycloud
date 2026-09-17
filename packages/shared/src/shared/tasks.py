@@ -185,7 +185,7 @@ def is_inflight_task_status(status: TaskStatus) -> bool:
     return status in IN_FLIGHT_TASK_STATUSES
 
 
-class Task(ContractModel):
+class TaskSummary(ContractModel):
     id: str
     name: str
     status: TaskStatus = TaskStatus.Pending
@@ -197,6 +197,27 @@ class Task(ContractModel):
     parent_task_id: str | None = None
     root_task_id: str | None = None
     handler: str | None = None
+    attempt_number: int = Field(default=0, ge=0)
+    max_attempts: int = Field(default=1, ge=1)
+    next_retry_at: datetime | None = None
+    exit_code: int | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class TaskProgressSnapshot(TaskSummary):
+    is_function: bool
+    claimable_at: datetime | None = None
+
+
+class TaskResultSnapshot(ContractModel):
+    id: str
+    function_result: FunctionResultPayload | None
+    error: str | None
+
+
+class Task(TaskSummary):
     command: list[str] = Field(default_factory=list)
     args: list[JsonValue] = Field(default_factory=list)
     kwargs: dict[str, JsonValue] = Field(default_factory=dict)
@@ -204,9 +225,6 @@ class Task(ContractModel):
     dependency_bindings: list[FunctionDependencyBinding] = Field(default_factory=list)
     function_result: FunctionResultPayload | None = None
     retry_policy: RetryPolicy | None = None
-    attempt_number: int = Field(default=0, ge=0)
-    max_attempts: int = Field(default=1, ge=1)
-    next_retry_at: datetime | None = None
     claimable_at: datetime | None = None
     """When this task's inputs resolved and it became eligible to run.
 
@@ -217,10 +235,10 @@ class Task(ContractModel):
 
     result: JsonValue = None
     error: str | None = None
-    exit_code: int | None = None
-    created_at: datetime = Field(default_factory=utc_now)
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
+
+    @property
+    def is_function(self) -> bool:
+        return self.invocation is not None
 
     @model_validator(mode="after")
     def validate_bindings(self) -> Task:

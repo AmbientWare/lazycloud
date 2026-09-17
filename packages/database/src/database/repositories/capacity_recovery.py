@@ -9,7 +9,7 @@ from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import ComputeCapacityOperationTable, ComputeProviderInstanceTable
 from shared.contracts import ContractModel
 from shared.timestamps import to_utc
-from sqlalchemy import delete, exists, func, or_, select
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -127,24 +127,29 @@ class CapacityRecoveryRepository:
         self.session.flush()
 
     def claim_due(self, *, now: datetime, limit: int) -> list[str]:
-        rows = self.session.scalars(
-            select(CapacityRecoveryTable)
-            .where(
-                CapacityRecoveryTable.completed_at.is_(None),
-                CapacityRecoveryTable.next_action_at <= now,
+        identities = list(
+            self.session.scalars(
+                select(CapacityRecoveryTable.id)
+                .where(
+                    CapacityRecoveryTable.completed_at.is_(None),
+                    CapacityRecoveryTable.next_action_at <= now,
+                )
+                .order_by(
+                    CapacityRecoveryTable.deadline.asc().nulls_last(),
+                    CapacityRecoveryTable.next_action_at,
+                    CapacityRecoveryTable.id,
+                )
+                .limit(limit)
+                .with_for_update(skip_locked=True)
             )
-            .order_by(
-                CapacityRecoveryTable.deadline.asc().nulls_last(),
-                CapacityRecoveryTable.next_action_at,
-                CapacityRecoveryTable.id,
+        )
+        if identities:
+            self.session.execute(
+                update(CapacityRecoveryTable)
+                .where(CapacityRecoveryTable.id.in_(identities))
+                .values(next_action_at=now + timedelta(seconds=15))
             )
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-        ).all()
-        for row in rows:
-            row.next_action_at = now + timedelta(seconds=15)
-        self.session.flush()
-        return [row.id for row in rows]
+        return identities
 
     def active_source_units(self) -> set[str]:
         return set(
