@@ -3041,28 +3041,35 @@ class ComputeService:
             return
         for unit in units:
             self._release_unclaimed_failed_capacity(unit, now=now)
-        with self.context.database.session() as session:
-            units = ComputeUnitRepository(session).list_platform_internal(
-                preemptible=preemptible, gpu=False
-            )
-        unavailable_owners = {
-            unit.capacity_owner_id
-            for unit in units
-            if (
-                unit.phase is ComputeUnitPhase.Degraded
-                or unit.provider_state.degraded_reason is not None
-            )
-            and not self._failed_market_retry_ready(unit, now=now)
-        }
-        units_by_identity = {
+        request = OfferRequest(nodes=1, preemptible=preemptible)
+        identities = {
             (
-                unit.workspace_id,
-                unit.provider_ref,
-                unit.region,
-                unit.capability_key,
-                unit.root_volume_gib,
-            ): unit
-            for unit in units
+                provider.policy.workspace_id,
+                provider.ref,
+                offer.region,
+                offer.capability_key,
+                provider.policy.root_volume_gib,
+            ): (provider, offer)
+            for provider, offer in offers
+            if provider.policy is not None
+            and offer.preemptible is preemptible
+            and filter_offers([offer], request)
+        }
+        with self.context.database.session() as session:
+            repository = ComputeUnitRepository(session)
+            units = repository.list_platform_internal(preemptible=preemptible, gpu=False)
+            states = repository.offer_states(tuple(identities))
+        unavailable_owners = {
+            unit.id
+            for unit in states.values()
+            if unit.phase is ComputeUnitPhase.Deleting
+            or (
+                (
+                    unit.phase is ComputeUnitPhase.Degraded
+                    or unit.provider_state.degraded_reason is not None
+                )
+                and not self._failed_market_retry_ready(unit, now=now)
+            )
         }
         handoff_owners = {unit.capacity_owner_id for unit in units if unit.warm_handoff_from}
         warm_owners = {
@@ -3070,24 +3077,13 @@ class ComputeService:
             for unit in units
             if unit.min_machines > 0 and unit.capacity_owner_id not in unavailable_owners
         }
-        request = OfferRequest(nodes=1, preemptible=preemptible)
         candidates: list[tuple[ResolvedComputeProvider, ComputeOffer, str]] = []
-        for provider, offer in offers:
-            if offer.preemptible is not preemptible or not filter_offers([offer], request):
-                continue
+        for identity, (provider, offer) in identities.items():
             policy = provider.policy
             assert policy is not None
-            current = units_by_identity.get(
-                (
-                    policy.workspace_id,
-                    provider.ref,
-                    offer.region,
-                    offer.capability_key,
-                    policy.root_volume_gib,
-                )
-            )
+            current = states.get(identity)
             if current is not None:
-                owner_id = current.capacity_owner_id
+                owner_id = current.id
             else:
                 owner_id, _ = internal_unit_identity(
                     workspace_id=policy.workspace_id,

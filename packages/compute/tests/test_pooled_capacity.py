@@ -1154,7 +1154,7 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
         assert CapacityRecoveryRepository(session).protected_sources(source.id) == set()
 
 
-def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
+def test_fleet_warm_targets_reuse_retired_identity_and_keep_serving_floor(
     service_context: ServiceContext,
 ) -> None:
     with service_context.database.session() as session:
@@ -1217,6 +1217,25 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
             warm_cpu_preemptible_min=1, warm_cpu_non_preemptible_min=1
         ),
     )
+    prepared = compute.prepare_pooled_offer(
+        provider=providers[1],
+        offer=suppliers["cheap"].offer,
+        requirements=ComputeResourceRequirements(preemptible=True),
+    )
+    adopted_id = str(uuid4())
+    with service_context.database.session() as session:
+        repository = ComputeUnitRepository(session)
+        repository.delete(prepared.id, workspace_id=workspace_id)
+        repository.upsert(
+            prepared.model_copy(
+                update={
+                    "id": adopted_id,
+                    "capacity_owner_id": adopted_id,
+                    "phase": ComputeUnitPhase.Deleted,
+                    "status": ComputeUnitPhase.Deleted.value,
+                }
+            )
+        )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)
     with service_context.database.session() as session:
@@ -1226,6 +1245,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         "hetzner:regular": 1,
     }
     assert {unit.worker_preemptible for unit in units} == {False, True}
+    assert next(unit.id for unit in units if unit.provider_ref == "hetzner:cheap") == adopted_id
 
     compute.fleet_policy = FleetCapacityPolicy(warm_cpu_preemptible_min=1)
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
