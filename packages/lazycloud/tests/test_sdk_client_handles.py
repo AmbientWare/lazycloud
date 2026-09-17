@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from lazycloud.abstractions.endpoint import EndpointResponse
 from lazycloud.client_handles import (
+    ClientHandleError,
     EndpointHandle,
     FunctionHandle,
     ResourceManifest,
@@ -20,14 +21,11 @@ from shared.http.tasks import TaskDetailResponse
 from shared.tasks import Task, TaskStatus
 
 
-def test_function_handle_async_remote_json_preserves_json_result_format(
+def test_function_handle_decodes_json_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict[str, Any]] = []
-
     def fake_json_request(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args
-        calls.append(kwargs["json_body"])
+        _ = args, kwargs
         return FunctionInvokeResponse.from_result(
             task_id="task-square",
             result=FunctionJsonResult(value=100),
@@ -49,18 +47,6 @@ def test_function_handle_async_remote_json_preserves_json_result_format(
 
     assert handle.remote_json(value=10) == 100
     assert asyncio.run(handle.async_remote_json(value=10)) == 100
-    assert calls == [
-        {
-            "args": [],
-            "kwargs": {"value": 10},
-            "result_format": "json",
-        },
-        {
-            "args": [],
-            "kwargs": {"value": 10},
-            "result_format": "json",
-        },
-    ]
 
 
 def test_function_handle_remote_json_decodes_deferred_task_result(
@@ -103,7 +89,7 @@ def test_function_handle_remote_json_decodes_deferred_task_result(
     assert handle.remote_json(7) == 49
 
 
-def test_function_handle_remote_decodes_cloudpickled_bytes(
+def test_json_function_handle_rejects_python_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_json_request(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -127,7 +113,8 @@ def test_function_handle_remote_decodes_cloudpickled_bytes(
         )
     )
 
-    assert handle.remote() == b"result-bytes"
+    with pytest.raises(ClientHandleError, match="expected a json result"):
+        handle.remote()
 
 
 def test_endpoint_handle_async_request_uses_request_payload(

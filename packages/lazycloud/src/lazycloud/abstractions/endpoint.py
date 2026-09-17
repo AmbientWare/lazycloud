@@ -33,6 +33,7 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
+from shared.function_payloads import FunctionPayloadEncoding
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.errors import HttpTransportError
@@ -269,8 +270,16 @@ class Endpoint(Generic[P, R]):
             return serialize_result(self.func, self.func(*args, **kwargs), self.outputs)
         return self.invoke_arguments(args, kwargs)
 
-    def invoke_arguments(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> R:
-        prepared_args, prepared_kwargs = prepare_arguments(self.func, args, kwargs, self.inputs)
+    def invoke_arguments(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Json,
+    ) -> R:
+        prepared_args, prepared_kwargs = prepare_arguments(
+            self.func, args, kwargs, self.inputs, encoding=encoding
+        )
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )

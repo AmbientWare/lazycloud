@@ -71,8 +71,9 @@ class TaskOperationError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class TaskResult:
+class TaskResult(Generic[R]):
     task: shared.tasks.Task
+    value: R
 
     @property
     def id(self) -> str:
@@ -85,12 +86,6 @@ class TaskResult:
     @property
     def ok(self) -> bool:
         return self.task.status is TaskStatus.Complete and (self.task.exit_code in {None, 0})
-
-    @property
-    def value(self) -> Any:
-        if self.task.function_result is not None:
-            return self.task.function_result
-        return self.task.result
 
     @property
     def error(self) -> str:
@@ -166,20 +161,21 @@ class Task:
         wait: bool = False,
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = 1.0,
-    ) -> TaskResult:
+    ) -> TaskResult[JsonValue | FunctionResultPayload]:
         if wait:
             return self.wait(
                 timeout_seconds=timeout_seconds,
                 poll_interval_seconds=poll_interval_seconds,
             )
-        return TaskResult(self.get())
+        task = self.get()
+        return TaskResult(task, task.function_result or task.result)
 
     def wait(
         self,
         *,
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = 1.0,
-    ) -> TaskResult:
+    ) -> TaskResult[JsonValue | FunctionResultPayload]:
         deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         retry = TransientRetry(deadline=deadline)
         pending_reporter = PendingProgressReporter(terminal=Terminal(default_enabled=False))
@@ -205,7 +201,7 @@ class Task:
             retry.reset()
             pending_reporter.update(self.task_id, view.pending_progress)
             if is_terminal_task_status(task.status):
-                return TaskResult(task)
+                return TaskResult(task, task.function_result or task.result)
             if deadline is not None and time.monotonic() >= deadline:
                 msg = f"task {self.task_id} did not complete within {timeout_seconds} seconds"
                 raise TaskOperationError(msg)
@@ -216,7 +212,7 @@ class Task:
         *,
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = 1.0,
-    ) -> TaskResult:
+    ) -> TaskResult[JsonValue | FunctionResultPayload]:
         return await asyncio.to_thread(
             self.wait,
             timeout_seconds=timeout_seconds,
@@ -273,21 +269,19 @@ class FunctionCall(Generic[R]):
         wait: bool = False,
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = 1.0,
-    ) -> TaskResult:
+    ) -> TaskResult[R | None]:
         result = self.task.result(
             wait=wait,
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
         if not result.ok or result.value is None:
-            return result
+            return TaskResult(result.task, None)
         try:
             decoded = decode_function_result(result.value)
         except FunctionResultDecodeError as exc:
-            raise TaskOperationError(f"function task {self.task_id} has an invalid result") from exc
-        return TaskResult(
-            result.task.model_copy(update={"result": decoded, "function_result": None})
-        )
+            raise TaskOperationError(f"function task {self.task_id}: {exc}") from exc
+        return TaskResult(result.task, decoded)
 
     def get(
         self,
@@ -303,9 +297,7 @@ class FunctionCall(Generic[R]):
             try:
                 return cast(R, decode_function_result(self.result_payload))
             except FunctionResultDecodeError as exc:
-                raise TaskOperationError(
-                    f"function task {self.task_id} has an invalid result"
-                ) from exc
+                raise TaskOperationError(f"function task {self.task_id}: {exc}") from exc
         result = self.result(
             wait=True,
             timeout_seconds=timeout_seconds,
@@ -378,8 +370,10 @@ class TaskBatch:
         *,
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = 1.0,
-    ) -> list[TaskResult]:
-        results: list[TaskResult | None] = [None] * len(self.handles)
+    ) -> list[TaskResult[JsonValue | FunctionResultPayload]]:
+        results: list[TaskResult[JsonValue | FunctionResultPayload] | None] = [None] * len(
+            self.handles
+        )
         for index, result in self._as_completed_indexed(
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
@@ -392,7 +386,7 @@ class TaskBatch:
         *,
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = 1.0,
-    ) -> Iterator[TaskResult]:
+    ) -> Iterator[TaskResult[JsonValue | FunctionResultPayload]]:
         for _, result in self._as_completed_indexed(
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
@@ -404,7 +398,7 @@ class TaskBatch:
         *,
         timeout_seconds: float | None,
         poll_interval_seconds: float,
-    ) -> Iterator[tuple[int, TaskResult]]:
+    ) -> Iterator[tuple[int, TaskResult[JsonValue | FunctionResultPayload]]]:
         if not self.handles:
             return
         deadline = _batch_deadline(timeout_seconds)
@@ -514,7 +508,9 @@ class TaskClient(ControlClientConfigMixin):
     def detail(self, task_id: str) -> TaskDetailResponse:
         return self.control_client.task(task_id)
 
-    def result(self, task_id: str, *, wait: bool = False) -> TaskResult:
+    def result(
+        self, task_id: str, *, wait: bool = False
+    ) -> TaskResult[JsonValue | FunctionResultPayload]:
         return self.handle(task_id).result(wait=wait)
 
     def output(self, task_id: str, *, limit: int = 100, cursor: str | None = None) -> str:
