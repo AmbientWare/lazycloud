@@ -4,7 +4,7 @@ import { containerSchema } from "./compute";
 import { jsonValueSchema } from "./json";
 import { taskPendingProgressSchema } from "./task-progress";
 
-// Synced to packages/shared/src/shared/http/tasks.py (TaskResponse, TaskDetailResponse,
+// Synced to packages/shared/src/shared/http/tasks.py (TaskSummaryResponse, TaskResponse, TaskDetailResponse,
 // TaskPageResponse, TaskMetricsSummaryResponse, TaskTimeWindowBucketListResponse) and
 // packages/shared/src/shared/http/functions.py (FunctionCallGraphNode, FunctionCallGraphResponse).
 
@@ -28,18 +28,11 @@ const terminalTaskStatuses: readonly TaskStatusValue[] = [
   "cancelled",
 ];
 
-/**
- * The owning resources a task row names.
- *
- * The server sends what a reader sees — a name, a kind, a version — rather than
- * the whole app, workload, and deployment records, which a page of a hundred
- * rows would otherwise repeat a hundred times. Their ids are on the row itself.
- */
 const taskAppReferenceSchema = z.object({ name: z.string() });
 const taskWorkloadReferenceSchema = z.object({ name: z.string(), kind: z.string() });
 const taskDeploymentReferenceSchema = z.object({ name: z.string(), version: z.number() });
 
-export const taskSchema = z.object({
+export const taskSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
   status: z.string(),
@@ -54,8 +47,7 @@ export const taskSchema = z.object({
   handler: z.string().nullish(),
   attempt_number: z.number().default(0),
   max_attempts: z.number().default(1),
-  result: jsonValueSchema.nullish(),
-  error: z.string().nullish(),
+  next_retry_at: z.string().nullish(),
   exit_code: z.number().nullish(),
   created_at: z.string(),
   started_at: z.string().nullish(),
@@ -63,9 +55,6 @@ export const taskSchema = z.object({
   app: taskAppReferenceSchema.nullish(),
   workload: taskWorkloadReferenceSchema.nullish(),
   deployment: taskDeploymentReferenceSchema.nullish(),
-  // Only the single-task read (TaskDetailResponse) resolves a container; rows
-  // carry `container_id` and nothing more.
-  container: containerSchema.nullish(),
   actions: z
     .object({
       can_cancel: z.boolean().default(false),
@@ -74,10 +63,19 @@ export const taskSchema = z.object({
     })
     .default({ can_cancel: false, can_rerun: false, can_shell: false }),
 });
+export type TaskSummary = z.infer<typeof taskSummarySchema>;
+export const taskSchema = taskSummarySchema.extend({
+  command: z.array(z.string()).default([]),
+  args: z.array(jsonValueSchema).default([]),
+  kwargs: z.record(jsonValueSchema).default({}),
+  result: jsonValueSchema.nullish(),
+  error: z.string().nullish(),
+  container: containerSchema.nullish(),
+});
 export type Task = z.infer<typeof taskSchema>;
 
 export const taskPageSchema = z.object({
-  data: z.array(taskSchema).default([]),
+  data: z.array(taskSummarySchema).default([]),
   next: z.string().default(""),
 });
 

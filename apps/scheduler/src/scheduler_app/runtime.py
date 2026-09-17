@@ -14,6 +14,7 @@ from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
 from execution.services import ExecutionServices
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
+from images.changes import ImageBuildChanges
 from images.settings import ImageBuildContainerSettings
 from images.submission import ImageBuildSubmissionService
 from scheduler.adapters import (
@@ -224,6 +225,7 @@ class SchedulerRuntime:
                         image_build_container_settings,
                     ),
                     execution_services.object_storage.object_client,
+                    ImageBuildChanges(redis_client),
                 ),
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),

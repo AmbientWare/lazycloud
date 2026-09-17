@@ -1271,10 +1271,19 @@ class ComputeCapacityOperationRepository:
             ) in rows
         ]
 
-    def list_for_owner(self, capacity_owner_id: str) -> list[ComputeCapacityOperationRecord]:
+    def expired_for_owner(
+        self, capacity_owner_id: str, *, created_before: datetime
+    ) -> list[ComputeCapacityOperationRecord]:
         rows = self.session.scalars(
             select(ComputeCapacityOperationTable)
-            .where(ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id)
+            .where(
+                ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id,
+                ComputeCapacityOperationTable.created_at <= created_before,
+                ComputeCapacityOperationTable.owns_capacity.is_(True),
+                ComputeCapacityOperationTable.status.in_(
+                    tuple(status.value for status in CapacityOperationStatus if not status.terminal)
+                ),
+            )
             .order_by(ComputeCapacityOperationTable.created_at, ComputeCapacityOperationTable.id)
         )
         return [_capacity_operation_record(row) for row in rows]

@@ -757,11 +757,18 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
     assert (acquired.reservation_id == waiting.reservation_id) is not persisted_denial
     assert provider.desired == 1
     with service_context.database.session() as session:
-        operations = ComputeCapacityOperationRepository(session).list_for_owner(pool.id)
-    assert sum(operation.owns_capacity for operation in operations) == 1
+        repository = ComputeCapacityOperationRepository(session)
+        operations = [
+            repository.get(pool.id, operation_id)
+            for operation_id in {waiting.operation_id, acquired.operation_id}
+        ]
+    assert all(operation is not None for operation in operations)
+    assert sum(operation.owns_capacity for operation in operations if operation is not None) == 1
     if persisted_denial:
         denied = next(
-            operation for operation in operations if operation.operation_id == waiting.operation_id
+            operation
+            for operation in operations
+            if operation is not None and operation.operation_id == waiting.operation_id
         )
         assert denied.status is CapacityOperationStatus.Released
         assert not denied.owns_capacity
@@ -2558,10 +2565,11 @@ def test_pooled_capacity_acquisition_is_idempotent_and_releases_only_its_unit(
     durable = compute.get_internal_unit(pool.workspace_id, pool.capacity_owner_id)
     assert durable.desired_machines == 1
     with service_context.database.session() as session:
-        operations = ComputeCapacityOperationRepository(session).list_for_owner(
-            pool.capacity_owner_id
-        )
-    assert [operation.status for operation in operations] == ["released", "requested"]
+        repository = ComputeCapacityOperationRepository(session)
+        first_operation = repository.get(pool.capacity_owner_id, first.operation_id)
+        second_operation = repository.get(pool.capacity_owner_id, second.operation_id)
+    assert first_operation is not None and second_operation is not None
+    assert [first_operation.status, second_operation.status] == ["released", "requested"]
 
 
 @pytest.mark.parametrize(
@@ -2842,10 +2850,12 @@ def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
     assert concurrent_results == [CapacityAcquisitionStatus.ExistingPending]
     assert provider.desired == 1
     with service_context.database.session() as session:
-        operations = ComputeCapacityOperationRepository(session).list_for_owner(
-            pool.capacity_owner_id
-        )
-    assert [operation.owns_capacity for operation in operations] == [True, False]
+        repository = ComputeCapacityOperationRepository(session)
+        first_operation = repository.get(pool.capacity_owner_id, first.operation_id)
+        second_operation = repository.get(pool.capacity_owner_id, second.operation_id)
+    assert first_operation is not None and second_operation is not None
+    assert first_operation.owns_capacity
+    assert not second_operation.owns_capacity
 
 
 def test_disconnecting_connection_rejects_a_previously_selected_purchase(

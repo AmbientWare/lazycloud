@@ -17,6 +17,7 @@ from storage.service import ObjectByteClient
 
 from database import DatabaseClient
 from images.building import ImageBuildCredentialPlan, build_image_plan, plan_image_build_session
+from images.changes import ImageBuildChanges
 from images.execution import ImageBuildExecutionRequest
 
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class ImageBuildSubmissionService:
     database: DatabaseClient
     executor: ImageBuildDispatchExecutor
     archive_store: ObjectByteClient
+    changes: ImageBuildChanges
 
     def submit(
         self,
@@ -104,18 +106,7 @@ class ImageBuildSubmissionService:
                 if prior is not None:
                     return prior
             repository.lock_fingerprint(plan.cache_key, workspace_id=workspace_id)
-            completed = repository.list_completed_by_fingerprint(
-                plan.cache_key, workspace_id=workspace_id, limit=16
-            )
-            reusable = next(
-                (
-                    item
-                    for item in completed
-                    if item.cache_metadata.get("image_archive_format_version") == "2"
-                    and item.cache_metadata.get("build_container_required") == "true"
-                ),
-                None,
-            )
+            reusable = repository.reusable_by_fingerprint(plan.cache_key, workspace_id=workspace_id)
             if reusable is not None:
                 if request_id is not None:
                     dispatch.bind_request(
@@ -180,6 +171,7 @@ class ImageBuildSubmissionService:
             else:
                 with self.database.session() as session:
                     ImageBuildDispatchRepository(session).complete(claim, now=utc_now())
+                self.changes.publish(claim.build_id, workspace_id=claim.workspace_id)
                 completed += 1
         return completed
 
@@ -253,6 +245,7 @@ class ImageBuildSubmissionService:
                 now=now,
             )
             ImageBuildDispatchRepository(session).replace_payload(build_id, payload)
+        self.changes.publish(build_id, workspace_id=workspace_id)
         return True
 
     def _fail_interrupted(
@@ -272,6 +265,7 @@ class ImageBuildSubmissionService:
             current.finished_at = utc_now()
             repository.upsert(current, workspace_id=workspace_id)
             ImageBuildDispatchRepository(session).schedule_cleanup(current.id, after=utc_now())
+        self.changes.publish(current.id, workspace_id=workspace_id)
         return True
 
     def _fail(
@@ -295,6 +289,7 @@ class ImageBuildSubmissionService:
             record.finished_at = now
             ImageBuildRepository(session).upsert(record, workspace_id=workspace_id)
             dispatch.schedule_cleanup(build_id, after=now)
+        self.changes.publish(build_id, workspace_id=workspace_id)
         return True
 
     def cleanup(self, *, limit: int = 16, build_id: str | None = None) -> None:
@@ -362,5 +357,6 @@ class ImageBuildSubmissionService:
             record.finished_at = utc_now()
             record = repository.upsert(record, workspace_id=workspace_id)
             ImageBuildDispatchRepository(session).schedule_cleanup(build_id, after=utc_now())
+        self.changes.publish(build_id, workspace_id=workspace_id)
         self.cleanup(build_id=build_id, limit=1)
         return record

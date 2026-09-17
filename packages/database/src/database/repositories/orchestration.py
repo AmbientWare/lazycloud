@@ -45,7 +45,19 @@ from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, Containe
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.timestamps import utc_now
-from sqlalchemy import Select, and_, case, delete, func, or_, select, text, union_all
+from sqlalchemy import (
+    Select,
+    and_,
+    case,
+    delete,
+    exists,
+    func,
+    or_,
+    select,
+    text,
+    tuple_,
+    union_all,
+)
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
@@ -62,6 +74,15 @@ def container_storage_release_pending() -> ColumnElement[bool]:
             ),
         ),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerProgressSnapshot:
+    id: str
+    workspace_id: str
+    stub_id: str | None
+    status: ContainerStatus
+    worker_id: str | None
 
 
 @dataclass(slots=True)
@@ -671,6 +692,42 @@ class ContainerRepository:
             app_id=app_id,
             stub_ids=stub_ids,
         )
+
+    def any_with_status(
+        self, statuses: tuple[ContainerStatus, ...], *, container_id: str | None = None
+    ) -> bool:
+        statement = exists().where(
+            ContainerTable.status.in_(tuple(status.value for status in statuses))
+        )
+        if container_id is not None:
+            statement = statement.where(ContainerTable.id == container_id)
+        return bool(self.session.scalar(select(statement)))
+
+    def progress_for_workloads(
+        self, workloads: set[tuple[str, str]]
+    ) -> list[ContainerProgressSnapshot]:
+        if not workloads:
+            return []
+        rows = self.session.execute(
+            select(
+                ContainerTable.id,
+                ContainerTable.workspace_id,
+                ContainerTable.stub_id,
+                ContainerTable.status,
+                ContainerTable.worker_id,
+            ).where(
+                tuple_(ContainerTable.workspace_id, ContainerTable.stub_id).in_(workloads),
+                ContainerTable.status.in_(
+                    (ContainerStatus.Pending.value, ContainerStatus.Running.value)
+                ),
+            )
+        )
+        return [
+            ContainerProgressSnapshot(
+                row.id, row.workspace_id, row.stub_id, ContainerStatus(row.status), row.worker_id
+            )
+            for row in rows
+        ]
 
     def count_live_cpu_for_owner(self, *, owner_user_id: str) -> int:
         """How many containers without a GPU this account is holding, everywhere.
