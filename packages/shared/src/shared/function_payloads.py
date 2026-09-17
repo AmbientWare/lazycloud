@@ -11,6 +11,7 @@ from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
 FUNCTION_PAYLOAD_VERSION = 1
+FUNCTION_PYTHON_INVOCATION_VERSION = 2
 FUNCTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024
 FUNCTION_DEPENDENCY_MAX_COUNT = 256
 FUNCTION_BOUND_RESULTS_MAX_BYTES = 64 * 1024 * 1024
@@ -61,7 +62,7 @@ class FunctionInvocationArguments(ContractModel):
 
 
 class FunctionCloudpickleInvocation(EncodedBytesBody):
-    version: Literal[1] = FUNCTION_PAYLOAD_VERSION
+    version: Literal[2] = FUNCTION_PYTHON_INVOCATION_VERSION
     encoding: Literal[FunctionPayloadEncoding.Cloudpickle] = FunctionPayloadEncoding.Cloudpickle
     value_base64: str = Field(default="", max_length=FUNCTION_PAYLOAD_BASE64_MAX_CHARS)
     size_bytes: int = Field(ge=0, le=FUNCTION_PAYLOAD_MAX_BYTES)
@@ -98,6 +99,8 @@ FunctionInvocationPayload: TypeAlias = Annotated[
     FunctionJsonInvocation | FunctionCloudpickleInvocation,
     Field(discriminator="encoding"),
 ]
+
+FunctionCallPersistentId: TypeAlias = tuple[Literal["function_call"], str]
 
 
 class FunctionJsonResult(ContractModel):
@@ -208,6 +211,8 @@ __all__ = [
     "FUNCTION_MARKER_MAX_NODES",
     "FUNCTION_PAYLOAD_MAX_BYTES",
     "FUNCTION_PAYLOAD_VERSION",
+    "FUNCTION_PYTHON_INVOCATION_VERSION",
+    "FunctionCallPersistentId",
     "FunctionCloudpickleInvocation",
     "FunctionCloudpickleResult",
     "FunctionDependencyBinding",

@@ -92,6 +92,8 @@ Python calls bind arguments using the function's signature without converting
 them based on annotations. Explicit `inputs` and `outputs` schemas still validate
 values. `.async_remote()`, `.spawn().get()`, and `.map()` use the same result
 serialization. A function can also receive a previous `FunctionCall` as an argument.
+Dependencies can appear inside containers or custom objects. Their results replace
+the call references while preserving collection types, cycles, and shared references.
 
 HTTP calls, the JSON playground, and exported JSON client packages require
 JSON-compatible contracts. Call Python-only functions through their source SDK

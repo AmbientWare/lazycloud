@@ -12,7 +12,6 @@ from email.message import Message
 from pathlib import Path
 from typing import Any, TypeVar
 
-import cloudpickle
 import pytest
 from lazycloud.abstractions.endpoint import ASGIMessage, ASGIReceive, ASGISend
 from lazycloud.abstractions.function import FunctionOperationError
@@ -42,7 +41,6 @@ from shared.http.compute import (
     ContainerWithAppResponse,
 )
 from shared.http.functions import (
-    FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
     FunctionInvokeResponse,
 )
@@ -389,11 +387,6 @@ def test_function_spawn_serializes_call_dependencies(
     assert upstream_call.task_id == "task-1"
     assert downstream_call.task_id == "task-2"
     assert batch_downstream_call.task_id == "task-3"
-    payload = cloudpickle.loads(client.invocations[1][1])
-    assert payload == {
-        "args": ({FUNCTION_CALL_REF_MARKER: True, "task_id": "task-1"},),
-        "kwargs": {"right": 5},
-    }
     assert client.contexts[1][2] == [
         FunctionCallDependency(
             task_id="task-1",
@@ -401,11 +394,6 @@ def test_function_spawn_serializes_call_dependencies(
             edge_type="argument",
         )
     ]
-    payload = cloudpickle.loads(client.invocations[2][1])
-    assert payload == {
-        "args": ({FUNCTION_CALL_REF_MARKER: True, "task_id": "task-1"}, 8),
-        "kwargs": {},
-    }
     assert client.contexts[2][2] == [
         FunctionCallDependency(
             task_id="task-1",

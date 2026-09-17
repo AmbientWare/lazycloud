@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import os
+import pickle
 import signal
 import socket
 import sys
@@ -15,7 +17,7 @@ from typing import Any, Protocol, TextIO
 
 import cloudpickle
 from foundation.handler_loading import evict_user_code_modules, load_callable
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from shared.deployments import DeploymentKind
 from shared.env import (
     APP_ID_ENV,
@@ -35,6 +37,7 @@ from shared.errors import InvalidInputError
 from shared.function_payloads import (
     FUNCTION_MARKER_MAX_DEPTH,
     FUNCTION_MARKER_MAX_NODES,
+    FunctionCallPersistentId,
     FunctionCloudpickleResult,
     FunctionDependencyBinding,
     FunctionJsonInvocation,
@@ -91,6 +94,7 @@ from runner.worker_processes import stop_worker_processes
 # one open.
 DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS = 0.1
 _CANCELLED_WORKER_EXIT_CODE = 75
+_FUNCTION_CALL_REFERENCE_ADAPTER = TypeAdapter[FunctionCallPersistentId](FunctionCallPersistentId)
 
 
 @dataclass(frozen=True, slots=True)
@@ -677,6 +681,10 @@ class FunctionRunner:
 
 
 def decode_function_invocation(response: FunctionClaimedTask) -> FunctionInvocation:
+    values = {
+        binding.task_id: _decode_dependency_result(binding) for binding in response.dependencies
+    }
+    used: set[str] = set()
     if isinstance(response.invocation, FunctionJsonInvocation):
         invocation = FunctionInvocation(
             args=tuple(response.invocation.args),
@@ -684,35 +692,51 @@ def decode_function_invocation(response: FunctionClaimedTask) -> FunctionInvocat
             result_format=response.invocation.result_encoding,
             argument_encoding=FunctionPayloadEncoding.Json,
         )
+        state = _MarkerTraversalState()
+        invocation.args = tuple(
+            _replace_dependency_markers(item, values, used, state, depth=0)
+            for item in invocation.args
+        )
+        invocation.kwargs = {
+            key: _replace_dependency_markers(item, values, used, state, depth=0)
+            for key, item in invocation.kwargs.items()
+        }
     else:
-        payload = cloudpickle.loads(response.invocation.bytes_value())
+        unpickler = _FunctionInvocationUnpickler(
+            io.BytesIO(response.invocation.bytes_value()), values, used
+        )
+        payload = unpickler.load()
         try:
             invocation = FunctionInvocation.model_validate(payload)
         except ValidationError as exc:
             raise ValueError("invalid function invocation envelope") from exc
-    values = {
-        binding.task_id: _decode_dependency_result(binding) for binding in response.dependencies
-    }
-    used: set[str] = set()
-    state = _MarkerTraversalState()
-    invocation.args = tuple(
-        _replace_dependency_markers(item, values, used, state, depth=0) for item in invocation.args
-    )
-    invocation.kwargs = {
-        key: _replace_dependency_markers(item, values, used, state, depth=0)
-        for key, item in invocation.kwargs.items()
-    }
     if used != set(values):
         unused = sorted(set(values) - used)
         raise ValueError(f"unused function dependency bindings: {', '.join(unused)}")
     return invocation
 
 
+class _FunctionInvocationUnpickler(pickle.Unpickler):
+    def __init__(self, stream: io.BytesIO, values: dict[str, object], used: set[str]) -> None:
+        super().__init__(stream)
+        self.values = values
+        self.used = used
+
+    def persistent_load(self, value: object) -> object:
+        try:
+            _, task_id = _FUNCTION_CALL_REFERENCE_ADAPTER.validate_python(value, strict=True)
+        except ValidationError as exc:
+            raise ValueError("invalid function dependency reference") from exc
+        if task_id not in self.values:
+            raise ValueError(f"undeclared function dependency reference: {task_id}")
+        self.used.add(task_id)
+        return self.values[task_id]
+
+
 @dataclass(slots=True)
 class _MarkerTraversalState:
     nodes: int = 0
     memo: dict[int, Any] = field(default_factory=dict)
-    active_tuples: set[int] = field(default_factory=set)
 
 
 def _replace_dependency_markers(
@@ -732,8 +756,6 @@ def _replace_dependency_markers(
         return _replace_dependency_mapping(value, values, used, state, depth=depth)
     if isinstance(value, list):
         return _replace_dependency_list(value, values, used, state, depth=depth)
-    if isinstance(value, tuple):
-        return _replace_dependency_tuple(value, values, used, state, depth=depth)
     return value
 
 
@@ -787,31 +809,6 @@ def _replace_dependency_list(
     replaced.extend(
         _replace_dependency_markers(item, values, used, state, depth=depth + 1) for item in value
     )
-    return replaced
-
-
-def _replace_dependency_tuple(
-    value: Any,
-    values: dict[str, Any],
-    used: set[str],
-    state: _MarkerTraversalState,
-    *,
-    depth: int,
-) -> Any:
-    identity = id(value)
-    if identity in state.active_tuples:
-        raise ValueError("cyclic tuple in function invocation is unsupported")
-    if identity in state.memo:
-        return state.memo[identity]
-    state.active_tuples.add(identity)
-    try:
-        replaced = tuple(
-            _replace_dependency_markers(item, values, used, state, depth=depth + 1)
-            for item in value
-        )
-    finally:
-        state.active_tuples.remove(identity)
-    state.memo[identity] = replaced
     return replaced
 
 
