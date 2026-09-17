@@ -188,7 +188,7 @@ class EndpointServeRunner:
             )
         except ValueError as exc:
             return error_response(400, str(exc))
-        result = invoke_handler(self.handler(), *(payload.args or []), **payload.kwargs)
+        result = invoke_handler(self.handler(), tuple(payload.args or []), payload.kwargs)
         return response_from_endpoint_result(resolve_endpoint_result(result))
 
     def append_task_log(self, task_id: str, stream: str, message: str) -> None:

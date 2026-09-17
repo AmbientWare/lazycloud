@@ -669,7 +669,7 @@ def test_function_remote_distinguishes_none_result_from_incomplete_responses() -
             )
         ]
     )
-    with pytest.raises(FunctionOperationError, match="task-malformed has an invalid result"):
+    with pytest.raises(FunctionOperationError, match="invalid function result payload"):
         optional_result.remote()
 
 
@@ -805,6 +805,7 @@ def test_explicit_schema_overrides_inferred_client_contract_inputs() -> None:
     assert contract is not None
     assert contract.operation.name is ClientOperationName.Remote
     assert contract.operation.parameters[0].name == "value"
+    assert contract.operation.parameters[0].json_schema is not None
     assert contract.operation.parameters[0].json_schema["type"] == "integer"
 
 
@@ -820,6 +821,7 @@ def test_explicit_output_metadata_does_not_override_annotated_client_return() ->
     spec = square.spec()
 
     assert spec.client_contract is not None
+    assert spec.client_contract.operation.return_schema is not None
     assert spec.client_contract.operation.return_schema["type"] == "integer"
     outputs = _json_object(spec.metadata["outputs"], "metadata.outputs")
     fields = _json_object(outputs["fields"], "metadata.outputs.fields")

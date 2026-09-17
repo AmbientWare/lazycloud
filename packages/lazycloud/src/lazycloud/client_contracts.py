@@ -3,9 +3,14 @@ from __future__ import annotations
 import dataclasses
 import inspect
 from collections.abc import Callable, Mapping
-from typing import Any, get_type_hints
+from typing import Any, get_origin, get_type_hints
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import (
+    JsonValue,
+    PydanticInvalidForJsonSchema,
+    PydanticSchemaGenerationError,
+    TypeAdapter,
+)
 from shared.deployments import DeploymentKind
 from shared.http.client_manifests import (
     ClientContract,
@@ -37,22 +42,26 @@ def build_client_contract(
         return None
 
     hints = _type_hints(func)
+    python_function = kind is DeploymentKind.Function
     signature = inspect.signature(func)
     parameters = (
         _parameters_from_schema(schema_metadata(inputs))
         if inputs is not None
         else [
-            _parameter_from_signature(name, parameter, hints)
+            _parameter_from_signature(name, parameter, hints, python_function=python_function)
             for name, parameter in signature.parameters.items()
             if name not in {"self", "cls"}
         ]
     )
-    return_schema = _return_schema(func, hints=hints, outputs=outputs)
+    return_schema, return_python_type = _return_schema(
+        func, hints=hints, outputs=outputs, python_function=python_function
+    )
     return ClientContract(
         operation=ClientOperation(
             name=operation,
             parameters=parameters,
             return_schema=return_schema,
+            return_python_type=return_python_type,
         )
     )
 
@@ -67,6 +76,7 @@ def schema_from_contract_parameters(
             parameter.name: _metadata_from_json_schema(parameter.json_schema)
             for parameter in contract.operation.parameters
             if parameter.parameter_kind not in {"var_positional", "var_keyword"}
+            and parameter.json_schema is not None
         }
     }
 
@@ -190,15 +200,29 @@ def _parameter_from_signature(
     name: str,
     parameter: inspect.Parameter,
     hints: Mapping[str, Any],
+    *,
+    python_function: bool,
 ) -> ClientParameter:
     default = parameter.default
-    default_value, default_repr = _default_payload(default)
-    return _client_parameter(
-        name,
-        _json_schema_for_annotation(hints.get(name, Any)),
+    python_default = False
+    try:
+        default_value, default_repr = _default_payload(default)
+    except ClientContractError:
+        if not python_function:
+            raise
+        default_value, default_repr = None, ""
+        python_default = True
+    json_schema, python_type = _annotation_contract(
+        hints.get(name, Any), python_function=python_function
+    )
+    return ClientParameter(
+        name=name,
+        json_schema=json_schema,
+        python_type=python_type,
         required=default is inspect.Parameter.empty,
         default=default_value,
         default_repr=default_repr,
+        python_default=python_default,
         parameter_kind=_parameter_kind(parameter),
     )
 
@@ -238,15 +262,16 @@ def _return_schema(
     *,
     hints: Mapping[str, Any],
     outputs: SchemaInput,
-) -> dict[str, JsonValue]:
+    python_function: bool,
+) -> tuple[dict[str, JsonValue] | None, str]:
     if "return" in hints:
-        return _json_schema_for_annotation(hints["return"])
+        return _annotation_contract(hints["return"], python_function=python_function)
     if outputs is not None:
-        return _return_schema_from_explicit_schema(schema_metadata(outputs))
+        return _return_schema_from_explicit_schema(schema_metadata(outputs)), ""
     signature = inspect.signature(func)
     if signature.return_annotation is not inspect.Signature.empty:
-        return _json_schema_for_annotation(signature.return_annotation)
-    return _json_schema_for_annotation(Any)
+        return _annotation_contract(signature.return_annotation, python_function=python_function)
+    return {}, ""
 
 
 def _return_schema_from_explicit_schema(
@@ -279,20 +304,34 @@ def _client_parameter(
     )
 
 
-def _json_schema_for_annotation(annotation: Any) -> dict[str, JsonValue]:
+def _annotation_contract(
+    annotation: Any, *, python_function: bool
+) -> tuple[dict[str, JsonValue] | None, str]:
     if (
         annotation is inspect.Parameter.empty
         or annotation is inspect.Signature.empty
         or annotation is Any
     ):
-        return {}
+        return {}, ""
+    if inspect.isroutine(annotation):
+        raise ClientContractError(
+            f"invalid type annotation {annotation!r}; use a type, not a constructor or value"
+        )
     try:
         schema = TypeAdapter(annotation).json_schema(ref_template="#/$defs/{model}")
-    except Exception as exc:
+    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as exc:
+        if not (
+            isinstance(annotation, type)
+            or get_origin(annotation) is not None
+            or getattr(annotation, "__module__", "") == "typing"
+        ):
+            raise ClientContractError(f"invalid type annotation {annotation!r}") from exc
+        if python_function:
+            return None, inspect.formatannotation(annotation)
         raise ClientContractError(
             f"could not export annotation {annotation!r} as JSON Schema"
         ) from exc
-    return validate_json_object(schema)
+    return validate_json_object(schema), ""
 
 
 def _json_schema_from_metadata(value: JsonValue) -> dict[str, JsonValue]:

@@ -40,6 +40,7 @@ from shared.function_payloads import (
     FunctionCloudpickleInvocation,
     FunctionInvocationArguments,
     FunctionInvocationPayload,
+    FunctionPayloadEncoding,
 )
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.functions import (
@@ -244,8 +245,16 @@ class Function(Generic[P, R]):
             return serialize_result(self.func, self.func(*args, **kwargs), self.outputs)
         return self.invoke_arguments(args, kwargs)
 
-    def invoke_arguments(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> R:
-        prepared_args, prepared_kwargs = prepare_arguments(self.func, args, kwargs, self.inputs)
+    def invoke_arguments(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Cloudpickle,
+    ) -> R:
+        prepared_args, prepared_kwargs = prepare_arguments(
+            self.func, args, kwargs, self.inputs, encoding=encoding
+        )
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )

@@ -105,6 +105,41 @@ def _response_json(response: _HttpResponse) -> JsonValue:
     return _JSON_VALUE_ADAPTER.validate_json(response.content)
 
 
+def test_python_result_contract_survives_deployment_and_refuses_json_invocation(
+    isolated_services: ApiServices,
+) -> None:
+    contract = ClientContract(
+        operation=ClientOperation(
+            name=ClientOperationName.Remote,
+            return_schema=None,
+            return_python_type="customer.Result",
+        )
+    )
+    deployment = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="python-result",
+            kind=DeploymentKind.Function,
+            handler="customer:result",
+            metadata={"app": "demo"},
+            client_contract=contract,
+        )
+    )
+    token, _ = administrator_credential(isolated_services.context, "python-result-admin")
+    with TestClient(create_app(isolated_services)) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        response = client.get(f"/api/v1/deployments/{deployment.id}/manifest", headers=headers)
+        assert response.status_code == 200
+        manifest = _response_json(response)
+        assert _json_path(manifest, "client_contract") == contract.model_dump(mode="json")
+        response = client.post(
+            "/api/v1/functions/invoke",
+            headers=headers,
+            json={"stub_id": deployment.stub_id, "invocation": {"encoding": "json"}},
+        )
+        assert response.status_code == 400
+        assert isolated_services.tasks.list() == []
+
+
 def _json_path(value: JsonValue, *path: str | int) -> JsonValue:
     current = value
     for segment in path:

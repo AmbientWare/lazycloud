@@ -137,6 +137,7 @@ class FunctionInvocation(BaseModel):
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = Field(default_factory=dict)
     result_format: FunctionPayloadEncoding = FunctionPayloadEncoding.Cloudpickle
+    argument_encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Cloudpickle
 
 
 class FunctionControlChannel(Protocol):
@@ -454,8 +455,9 @@ class FunctionRunner:
             try:
                 return invoke_handler(
                     self.handler(),
-                    *task.invocation.args,
-                    **task.invocation.kwargs,
+                    task.invocation.args,
+                    task.invocation.kwargs,
+                    encoding=task.invocation.argument_encoding,
                 )
             finally:
                 stdout.close()
@@ -680,6 +682,7 @@ def decode_function_invocation(response: FunctionClaimedTask) -> FunctionInvocat
             args=tuple(response.invocation.args),
             kwargs=response.invocation.kwargs,
             result_format=response.invocation.result_encoding,
+            argument_encoding=FunctionPayloadEncoding.Json,
         )
     else:
         payload = cloudpickle.loads(response.invocation.bytes_value())
@@ -1048,8 +1051,20 @@ def _serialize_function_result(
     invocation: FunctionInvocation,
 ) -> FunctionResultPayload:
     if invocation.result_format is FunctionPayloadEncoding.Json:
-        return FunctionJsonResult(value=to_json_value(result))
-    payload = cloudpickle_bytes(result)
+        try:
+            value = to_json_value(result)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"return value of type {type(result).__name__} cannot be returned as JSON; "
+                "call this function through the Python SDK for Python results"
+            ) from exc
+        return FunctionJsonResult(value=value)
+    try:
+        payload = cloudpickle_bytes(result)
+    except Exception as exc:
+        raise ValueError(
+            f"return value of type {type(result).__name__} cannot be serialized as a Python result"
+        ) from exc
     try:
         preview = repr(result)
     except Exception as exc:

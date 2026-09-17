@@ -295,7 +295,7 @@ def test_completed_function_call_rejects_malformed_result() -> None:
         complete=True,
     )
 
-    with pytest.raises(TaskOperationError, match="task-invalid-result has an invalid result"):
+    with pytest.raises(TaskOperationError, match="invalid function result payload"):
         call.get()
 
 

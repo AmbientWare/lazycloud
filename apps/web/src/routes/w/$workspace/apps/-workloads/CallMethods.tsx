@@ -7,7 +7,13 @@ import { PanelError } from "@/components/shared/PanelError";
 import { highlight, type CodeLanguage } from "@/components/ui/code-syntax";
 import { Skeleton } from "@/components/ui/skeleton";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
-import { curlSnippet, exampleBody, pythonSnippet, shellSingleQuote } from "./playground-form";
+import {
+  curlSnippet,
+  exampleBody,
+  pythonOnlyReason,
+  pythonSnippet,
+  shellSingleQuote,
+} from "./playground-form";
 import { pythonCall, sourceImport, sourceSnippet } from "./call-snippets";
 
 export function CallMethods({
@@ -36,16 +42,21 @@ export function CallMethods({
   const body = asgi ? undefined : exampleBody(resource);
   const method = asgi && resource.methods.includes("GET") ? "GET" : "POST";
   const source = handler ? sourceImport(handler) : null;
+  const pythonRequired = pythonOnlyReason(resource);
 
   return (
     <div className="content-transition min-w-0 divide-y divide-border/70 px-4 py-1">
-      <CallSection title="Typed Python package">
-        <Code
-          text={`lazycloud app export ${shellSingleQuote(resource.app)} --workspace ${shellSingleQuote(workspaceName)}`}
-          language="shell"
-          label="Export typed package"
-        />
-      </CallSection>
+      {pythonRequired ? (
+        <p className="py-3 text-sm text-muted-foreground">{pythonRequired}</p>
+      ) : (
+        <CallSection title="Typed Python package">
+          <Code
+            text={`lazycloud app export ${shellSingleQuote(resource.app)} --workspace ${shellSingleQuote(workspaceName)}`}
+            language="shell"
+            label="Export typed package"
+          />
+        </CallSection>
+      )}
       {source && (
         <CallSection title="Python SDK">
           <Code text={sourceSnippet(resource, source)} language="python" label="SDK calls" />
@@ -60,20 +71,24 @@ export function CallMethods({
           />
         </CallSection>
       )}
-      <CallSection title="curl">
-        <Code
-          text={curlSnippet(resource.invoke_url, body, method)}
-          language="shell"
-          label="curl command"
-        />
-      </CallSection>
-      <CallSection title="Python requests">
-        <Code
-          text={pythonSnippet(resource.invoke_url, body, method)}
-          language="python"
-          label="Python HTTP request"
-        />
-      </CallSection>
+      {!pythonRequired && (
+        <CallSection title="curl">
+          <Code
+            text={curlSnippet(resource.invoke_url, body, method)}
+            language="shell"
+            label="curl command"
+          />
+        </CallSection>
+      )}
+      {!pythonRequired && (
+        <CallSection title="Python requests">
+          <Code
+            text={pythonSnippet(resource.invoke_url, body, method)}
+            language="python"
+            label="Python HTTP request"
+          />
+        </CallSection>
+      )}
     </div>
   );
 }

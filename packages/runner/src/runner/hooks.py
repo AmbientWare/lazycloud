@@ -52,14 +52,14 @@ def run_lifecycle_hooks(
         try:
             callback = load_callable(reference)
             if not capture_output:
-                invoke_handler(callback, context)
+                invoke_handler(callback, (context,), {})
                 continue
             stdout = _HookLogStream("stdout", log)
             stderr = _HookLogStream("stderr", log)
             # Routed per context rather than swapped process-wide: task hooks
             # run inside an invocation, and several invocations run at once.
             with routed_output(stdout, stderr):
-                invoke_handler(callback, context)
+                invoke_handler(callback, (context,), {})
             stdout.flush()
             stderr.flush()
         except BaseException as exc:

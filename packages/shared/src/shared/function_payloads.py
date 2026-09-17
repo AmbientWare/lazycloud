@@ -29,7 +29,7 @@ class FunctionJsonInvocation(ContractModel):
     encoding: Literal[FunctionPayloadEncoding.Json] = FunctionPayloadEncoding.Json
     args: list[JsonValue] = Field(default_factory=list)
     kwargs: dict[str, JsonValue] = Field(default_factory=dict)
-    result_encoding: Literal[FunctionPayloadEncoding.Json] = FunctionPayloadEncoding.Json
+    result_encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Json
 
     @model_validator(mode="after")
     def validate_size(self) -> FunctionJsonInvocation:

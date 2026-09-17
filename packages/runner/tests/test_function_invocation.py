@@ -4,14 +4,31 @@ from typing import Any
 
 import pytest
 from runner.function import decode_function_invocation
-from runner.invocation import cloudpickle_bytes
+from runner.invocation import cloudpickle_bytes, invoke_handler
 from shared.function_payloads import (
     FUNCTION_MARKER_MAX_DEPTH,
     FunctionCloudpickleInvocation,
     FunctionDependencyBinding,
     FunctionJsonResult,
+    FunctionPayloadEncoding,
 )
 from shared.http.functions import FUNCTION_CALL_REF_MARKER, FunctionClaimedTask
+
+
+class PythonValue:
+    pass
+
+
+def test_python_invocation_preserves_objects_while_json_coerces_arguments() -> None:
+    def echo(value: PythonValue) -> PythonValue:
+        return value
+
+    def number(value: int) -> int:
+        return value
+
+    value = PythonValue()
+    assert invoke_handler(echo, (value,), {}, encoding=FunctionPayloadEncoding.Cloudpickle) is value
+    assert invoke_handler(number, ("7",), {}, encoding=FunctionPayloadEncoding.Json) == 7
 
 
 def test_runner_substitutes_only_declared_exact_dependency_markers() -> None:

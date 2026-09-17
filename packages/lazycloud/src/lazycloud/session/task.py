@@ -284,7 +284,7 @@ class FunctionCall(Generic[R]):
         try:
             decoded = decode_function_result(result.value)
         except FunctionResultDecodeError as exc:
-            raise TaskOperationError(f"function task {self.task_id} has an invalid result") from exc
+            raise TaskOperationError(f"function task {self.task_id}: {exc}") from exc
         return TaskResult(
             result.task.model_copy(update={"result": decoded, "function_result": None})
         )
@@ -303,9 +303,7 @@ class FunctionCall(Generic[R]):
             try:
                 return cast(R, decode_function_result(self.result_payload))
             except FunctionResultDecodeError as exc:
-                raise TaskOperationError(
-                    f"function task {self.task_id} has an invalid result"
-                ) from exc
+                raise TaskOperationError(f"function task {self.task_id}: {exc}") from exc
         result = self.result(
             wait=True,
             timeout_seconds=timeout_seconds,
