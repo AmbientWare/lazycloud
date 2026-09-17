@@ -193,6 +193,49 @@ def test_handler_argument_named_json_does_not_enable_machine_output(
     assert "handler args" in captured.err
 
 
+@pytest.mark.usefixtures("isolated_imports")
+def test_run_displays_python_results_without_json_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "python_results.py").write_text(
+        "import numpy as np\n"
+        "class Result:\n"
+        "    def __repr__(self): return 'PythonResult()'\n"
+        "def main():\n"
+        "    cycle = []\n"
+        "    cycle.append(cycle)\n"
+        "    return {'array': np.array([1, 2, 3]), 'object': Result(), 'cycle': cycle}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(client_cli, ["run", "python_results:main"])
+    assert result.exit_code == 0, result.output
+    assert "array([1, 2, 3])" in result.stdout
+    assert "PythonResult()" in result.stdout
+
+
+@pytest.mark.usefixtures("isolated_imports")
+def test_run_json_preserves_values_and_reports_unsupported_results_without_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "json_results.py").write_text(
+        "import numpy as np\n"
+        "def array(): return np.array([1, 2, 3])\n"
+        "def plain(): return {'value': [1, None, 3]}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(client_cli, ["--json", "run", "json_results:plain"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {"value": [1, None, 3]}
+    with pytest.raises(SystemExit) as raised:
+        client_start(args=["--json", "run", "json_results:array"], prog_name="lazycloud")
+    assert raised.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err)["error"]["type"] == "result_not_json_serializable"
+
+
 def test_secret_show_masks_secret_value_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
