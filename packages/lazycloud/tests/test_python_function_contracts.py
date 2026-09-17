@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from typing import NewType, TypeVar
+
 import pytest
-from lazycloud.client_contracts import ClientContractError
+from lazycloud.client_contracts import ClientContractError, build_client_contract
 from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
+from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionCloudpickleResult
+from typing_extensions import TypeAliasType
 
 from lazycloud import App
 
@@ -11,6 +15,24 @@ from lazycloud import App
 class PythonValue:
     def __init__(self, number: int = 7) -> None:
         self.number = number
+
+
+PythonAlias = TypeAliasType("PythonAlias", PythonValue)
+PythonNewType = NewType("PythonNewType", PythonValue)
+PythonTypeVar = TypeVar("PythonTypeVar", bound=PythonValue)
+
+
+def test_python_contract_accepts_opaque_aliases_and_type_variables() -> None:
+    def echo(alias: PythonAlias, wrapped: PythonNewType, generic: PythonTypeVar) -> PythonTypeVar:
+        return generic
+
+    contract = build_client_contract(echo, kind=DeploymentKind.Function)
+
+    assert contract is not None
+    assert all(parameter.python_type for parameter in contract.operation.parameters)
+    assert all(parameter.json_schema is None for parameter in contract.operation.parameters)
+    assert contract.operation.return_python_type
+    assert contract.operation.return_schema is None
 
 
 def test_python_function_contract_preserves_opaque_types_and_defaults() -> None:

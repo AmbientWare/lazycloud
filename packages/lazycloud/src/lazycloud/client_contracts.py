@@ -19,6 +19,7 @@ from shared.http.client_manifests import (
     ClientParameter,
 )
 from shared.serialization import to_json_value
+from typing_inspection.typing_objects import is_newtype, is_typealiastype, is_typevar
 
 from lazycloud.abstractions.metadata import SchemaInput, schema_metadata
 from lazycloud.json_contracts import validate_json_object
@@ -323,6 +324,9 @@ def _annotation_contract(
         if not (
             isinstance(annotation, type)
             or get_origin(annotation) is not None
+            or is_newtype(annotation)
+            or is_typealiastype(annotation)
+            or is_typevar(annotation)
             or getattr(annotation, "__module__", "") == "typing"
         ):
             raise ClientContractError(f"invalid type annotation {annotation!r}") from exc

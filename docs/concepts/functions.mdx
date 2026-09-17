@@ -95,8 +95,9 @@ serialization. A function can also receive a previous `FunctionCall` as an argum
 
 HTTP calls, the JSON playground, and exported JSON client packages require
 JSON-compatible contracts. Call Python-only functions through their source SDK
-objects. Generic task inspection displays a preview without deserializing Python
-objects. Only retrieve Python objects from code you trust: unpickling can execute code.
+objects by importing the decorated function and calling `.remote()`. Generic task
+inspection displays a preview without deserializing Python objects. Only retrieve
+Python objects from code you trust. Unpickling can execute code.
 
 Serialized arguments and results are limited to 16 MiB each. Store larger outputs
 as artifacts and return a reference. Live connections, locks, and generators

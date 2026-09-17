@@ -18,6 +18,9 @@ export function pythonCall(result: string, method: string, manifest: DeploymentM
           (parameter) => !["var_positional", "var_keyword"].includes(parameter.parameter_kind),
         )
         .filter(
+          (parameter) => parameter.required || parameter.parameter_kind !== "positional_only",
+        )
+        .filter(
           (parameter) => parameter.required || !(parameter.python_type || parameter.python_default),
         )
         .map(
