@@ -478,7 +478,7 @@ class CapacityRecoveryService:
                     record = record.model_copy(
                         update={"target_unit_id": None, "operation_id": None}
                     )
-                    if failure_code in {
+                    if failure_code is not None and failure_code in {
                         CapacityFailureCode.ProviderQuotaExceeded,
                         CapacityFailureCode.JoinAuthorityUnusable,
                         CapacityFailureCode.ProviderUnavailable,
