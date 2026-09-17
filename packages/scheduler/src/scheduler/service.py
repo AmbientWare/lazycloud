@@ -417,6 +417,8 @@ class SchedulerBuildSubmissions(Protocol):
 
     def recover(self, *, limit: int = 100) -> int: ...
 
+    def cleanup(self, *, limit: int = 16) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class SchedulerWorkloadControls:
@@ -887,6 +889,8 @@ class Scheduler:
         that decides whether work may start.
         """
 
+        if include_containers and self.workloads.image_builds is not None:
+            self.workloads.image_builds.cleanup(limit=container_limit)
         access_observed = None
         access_failures = 0
         if self.maintenance.storage_access is not None:

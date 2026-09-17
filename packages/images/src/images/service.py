@@ -672,12 +672,9 @@ class ImageBuildService:
             sequence = logs.append(
                 build_id, workspace_id=workspace_id, after=base + after, messages=messages
             )
-            repository = ImageBuildRepository(session)
-            record = repository.get(build_id, workspace_id=workspace_id)
-            if record is not None and _active_build_status(record.status):
-                record.status = BuildStatus.Running
-                record.started_at = record.started_at or utc_now()
-                repository.upsert(record, workspace_id=workspace_id)
+            ImageBuildRepository(session).record_progress(
+                build_id, workspace_id=workspace_id, now=utc_now()
+            )
             return sequence - base
 
     def stream_events(

@@ -191,14 +191,8 @@ class ImageBuildSubmissionService:
             )
         failed = 0
         for build_id, workspace_id in candidates:
-            with self.database.session() as session:
-                record = ImageBuildRepository(session).get(build_id, workspace_id=workspace_id)
-            if record is None:
-                continue
             try:
                 if self.retry_interrupted(build_id, workspace_id=workspace_id):
-                    continue
-                if record.started_at is None and record.created_at > now - timedelta(minutes=5):
                     continue
                 if self._fail(build_id, workspace_id, "image build worker progress lease expired"):
                     failed += 1
@@ -206,7 +200,6 @@ class ImageBuildSubmissionService:
                 LOGGER.warning(
                     "image build recovery failed for %s (%s)", build_id, type(exc).__name__
                 )
-        self.cleanup(limit=limit)
         return failed
 
     def retry_interrupted(self, build_id: str, *, workspace_id: str) -> bool:
@@ -214,9 +207,6 @@ class ImageBuildSubmissionService:
         with self.database.session() as session:
             attempts = ImageBuildAttemptRepository(session)
             record = attempts.interrupted(build_id, workspace_id=workspace_id, now=now)
-            payload = ImageBuildDispatchRepository(session).payload(
-                build_id, workspace_id=workspace_id
-            )
         if record is None:
             return False
         if record.attempt_number != 1:
@@ -225,17 +215,21 @@ class ImageBuildSubmissionService:
                 workspace_id=workspace_id,
                 reason="image build interrupted after its automatic retry",
             )
-        if payload is None:
-            return self._fail_interrupted(
-                record,
-                workspace_id=workspace_id,
-                reason="interrupted image build inputs are unavailable",
-            )
         if record.created_at < now - timedelta(minutes=5):
             return self._fail_interrupted(
                 record,
                 workspace_id=workspace_id,
                 reason="interrupted image build exceeded its original submission deadline",
+            )
+        with self.database.session() as session:
+            payload = ImageBuildDispatchRepository(session).payload(
+                build_id, workspace_id=workspace_id
+            )
+        if payload is None:
+            return self._fail_interrupted(
+                record,
+                workspace_id=workspace_id,
+                reason="interrupted image build inputs are unavailable",
             )
         container_id = str(uuid4())
         try:

@@ -363,6 +363,23 @@ def _one_row_changed(result: object) -> bool:
 class ImageBuildRepository:
     session: Session
 
+    def record_progress(self, build_id: str, *, workspace_id: str, now: datetime) -> None:
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        self.session.execute(
+            update(ImageBuildTable)
+            .where(
+                ImageBuildTable.id == build_id,
+                ImageBuildTable.workspace_id == workspace_id,
+                ImageBuildTable.status.in_(("pending", "running")),
+                ImageBuildTable.cleanup_claimed_at.is_(None),
+            )
+            .values(
+                status=BuildStatus.Running.value,
+                started_at=func.coalesce(ImageBuildTable.started_at, now),
+                updated_at=now,
+            )
+        )
+
     def upsert(
         self,
         build: ImageBuildRecord,
