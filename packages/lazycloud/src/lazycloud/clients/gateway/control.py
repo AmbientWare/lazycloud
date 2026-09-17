@@ -184,7 +184,7 @@ class GatewayControlClient:
 
 
 def _payload(request: ContractModel) -> dict[str, Any]:
-    return request.model_dump(mode="json", exclude_none=True)
+    return request.model_dump(mode="json", exclude_unset=True)
 
 
 def _sse_json_events(lines: Iterator[str]) -> Iterator[tuple[str, object]]:
