@@ -538,6 +538,8 @@ class ObjectStorage:
         self._validate_bucket(bucket)
         if not 0 <= size <= MAX_OBJECT_BYTES:
             raise InvalidInputError("object uploads must be between 0 bytes and 5115 GiB")
+        if size == 0 and sha256 != hashlib.sha256(b"").hexdigest():
+            raise InvalidInputError("empty object checksum is invalid")
         physical_bucket = self.physical_bucket(bucket)
         physical_key = self.physical_key_for_workspace(workspace_id, bucket=bucket, key=key)
         command = ObjectWriteCommand(
@@ -564,6 +566,19 @@ class ObjectStorage:
             return BeginObjectUploadResponse(object_id=claim.record.id)
         upload_id = ""
         try:
+            if size == 0:
+                self.object_client.put_bytes(
+                    physical_key,
+                    b"",
+                    bucket=physical_bucket,
+                    content_type=content_type,
+                    metadata={**metadata, OBJECT_SHA256_METADATA_KEY: sha256},
+                )
+                with self.context.database.session() as session:
+                    record = ObjectRepository(session).complete_write(
+                        claim, workspace_id=workspace_id
+                    )
+                return BeginObjectUploadResponse(object_id=record.id)
             upload_id = self.object_client.create_multipart_upload(
                 physical_key,
                 bucket=physical_bucket,
