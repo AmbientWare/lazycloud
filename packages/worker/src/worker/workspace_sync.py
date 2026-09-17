@@ -24,28 +24,34 @@ def apply_workspace_batch(root: str, batch: WorkspaceSyncBatch) -> int:
     reader = WorkspaceSyncReader(batch.data)
     staging = Path(root).parent / ".source-sync"
     staging.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for entry in batch.manifest.entries:
-        temporary = staging / entry.transfer_id
-        if entry.operation is WorkspaceSyncOperation.Abort:
-            temporary.unlink(missing_ok=True)
-            continue
-        with _parent_directory(
-            Path(root), entry.path, create=entry.operation is WorkspaceSyncOperation.Write
-        ) as parent:
-            name = entry.path.rsplit("/", 1)[-1]
-            if parent is None:
+    staging_descriptor = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for entry in batch.manifest.entries:
+            temporary = entry.transfer_id
+            if entry.operation is WorkspaceSyncOperation.Abort:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary, dir_fd=staging_descriptor)
                 continue
-            if entry.operation is WorkspaceSyncOperation.Delete:
-                with suppress(FileNotFoundError, IsADirectoryError):
-                    os.unlink(name, dir_fd=parent)
-            else:
-                _write_chunk(temporary, parent, name, entry, reader)
+            with _parent_directory(
+                Path(root), entry.path, create=entry.operation is WorkspaceSyncOperation.Write
+            ) as parent:
+                name = entry.path.rsplit("/", 1)[-1]
+                if parent is None:
+                    continue
+                if entry.operation is WorkspaceSyncOperation.Delete:
+                    with suppress(FileNotFoundError, IsADirectoryError):
+                        os.unlink(name, dir_fd=parent)
+                else:
+                    _write_chunk(staging_descriptor, temporary, parent, name, entry, reader)
+    finally:
+        os.close(staging_descriptor)
     reader.finish()
     return len(batch.manifest.entries)
 
 
 def _write_chunk(
-    temporary: Path,
+    staging: int,
+    temporary: str,
     parent: int,
     name: str,
     entry: WorkspaceSyncEntry,
@@ -55,7 +61,7 @@ def _write_chunk(
     if entry.offset == 0:
         flags |= os.O_CREAT
     try:
-        descriptor = os.open(temporary, flags, 0o600)
+        descriptor = os.open(temporary, flags, 0o600, dir_fd=staging)
     except FileNotFoundError:
         # Completion may have reached disk before the acknowledgement reached the client.
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
@@ -64,7 +70,7 @@ def _write_chunk(
         return
     with os.fdopen(descriptor, "r+b") as destination:
         fcntl.flock(destination.fileno(), fcntl.LOCK_EX)
-        if not _owns_temporary(temporary, destination):
+        if not _owns_temporary(staging, temporary, destination):
             _accept_completed_chunk(destination, entry, reader)
             return
         current_size = os.fstat(destination.fileno()).st_size
@@ -84,17 +90,18 @@ def _write_chunk(
         destination.truncate(entry.file_size)
         destination.seek(0)
         if _file_digest(destination) != entry.sha256:
-            temporary.unlink(missing_ok=True)
+            with suppress(FileNotFoundError):
+                os.unlink(temporary, dir_fd=staging)
             raise ValueError("workspace file checksum mismatch")
         os.fchmod(destination.fileno(), entry.mode)
         with suppress(FileNotFoundError, NotADirectoryError):
             os.rmdir(name, dir_fd=parent)
-        os.replace(temporary, name, dst_dir_fd=parent)
+        os.replace(temporary, name, src_dir_fd=staging, dst_dir_fd=parent)
 
 
-def _owns_temporary(path: Path, source: BinaryIO) -> bool:
+def _owns_temporary(staging: int, name: str, source: BinaryIO) -> bool:
     try:
-        named = path.stat(follow_symlinks=False)
+        named = os.stat(name, dir_fd=staging, follow_symlinks=False)
     except FileNotFoundError:
         return False
     opened = os.fstat(source.fileno())
