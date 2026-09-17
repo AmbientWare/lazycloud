@@ -1308,11 +1308,6 @@ class ComputeService:
                         continue
                     detail = record.last_error or "provider unavailable"
                     termination_errors.append(f"{record.provider}/{record.id}: {detail}")
-                if not termination_errors:
-                    compute_pool_repository.delete(
-                        compute_pool.id,
-                        workspace_id=workspace_id,
-                    )
             if not termination_errors:
                 machine_repository = MachineRepository(session)
                 owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
@@ -1328,7 +1323,8 @@ class ComputeService:
                     )
                     deleted_machine_ids.append(machine.id)
                 unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
-                if unit is not None:
+                # Pooled units retain terminal ownership and recovery history.
+                if unit is not None and not _owns_provider_pool_capacity(unit):
                     ComputeUnitRepository(session).delete(
                         unit.id,
                         workspace_id=workspace_id,
@@ -1355,10 +1351,8 @@ class ComputeService:
     def _release_provider_pool_capacity(self, pool: ComputeUnitRecord) -> str:
         """Delete this pool's provider-side capacity, answering why it is still held.
 
-        An empty answer is the only state in which the durable record may be
-        deleted. Once the row is gone nothing in the product can name the pool's
-        provider resources again, so a pool that outlives its record keeps
-        launching billable machines that no reconciler will ever take back.
+        An empty answer proves provider resources are gone. The terminal unit
+        remains as the owner of its machine and recovery history.
 
         The deleting intent is persisted before the provider is asked, because a
         failure after the provider call would otherwise leave a pool the

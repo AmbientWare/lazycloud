@@ -278,7 +278,11 @@ class ProviderMachineReconciler:
             # launch settled terminally. One durable row exists per pool
             # instance identity, so the closed row restarts as a fresh launch
             # attempt instead of resurrecting the reclaimed record's state.
-            relaunched = existing is not None and not _reservation_open(existing.status)
+            relaunched = (
+                existing is not None
+                and not _reservation_open(existing.status)
+                and existing.provider_storage_destroyed_at is not None
+            )
             settled_existing = existing if existing is not None and not relaunched else None
             provider_status = _reservation_status_from_provider(instance.status).value
             if (
@@ -500,6 +504,8 @@ class ProviderMachineReconciler:
     ) -> ComputeUnitRecord:
         current_time = _utc(now)
         phase = _compute_pool_phase(snapshot.phase)
+        if pool.phase is ComputeUnitPhase.Deleting and phase is not ComputeUnitPhase.Deleted:
+            phase = ComputeUnitPhase.Deleting
         if phase is ComputeUnitPhase.Deleted and pool.phase not in ENDED_UNIT_PHASES:
             # An account with no autoscaling group in it is what a torn-down unit
             # and an unbuilt one both look like, and the provider is asked about
@@ -585,7 +591,14 @@ class ProviderMachineReconciler:
         unproved = {
             item.id
             for item in prior_instances
-            if _reservation_open(item.status) and item.id not in destruction_observations
+            if item.id not in destruction_observations
+            and (
+                _reservation_open(item.status)
+                or (
+                    (item.instance_id is not None or item.storage_volume_ids)
+                    and item.provider_storage_destroyed_at is None
+                )
+            )
         }
         if unproved:
             if (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid5
@@ -8,7 +9,7 @@ from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import ComputeCapacityOperationTable, ComputeProviderInstanceTable
 from shared.contracts import ContractModel
 from shared.timestamps import to_utc
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -54,6 +55,18 @@ def _record(row: CapacityRecoveryTable) -> CapacityRecoveryRecord:
 @dataclass(slots=True)
 class CapacityRecoveryRepository:
     session: Session
+
+    def delete_completed_for_units(self, unit_ids: Sequence[str]) -> None:
+        self.session.execute(
+            delete(CapacityRecoveryTable).where(
+                CapacityRecoveryTable.completed_at.is_not(None),
+                CapacityRecoveryTable.source_unit_id.in_(unit_ids),
+                or_(
+                    CapacityRecoveryTable.target_unit_id.is_(None),
+                    CapacityRecoveryTable.target_unit_id.in_(unit_ids),
+                ),
+            )
+        )
 
     def record_signal(
         self,

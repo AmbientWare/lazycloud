@@ -46,6 +46,7 @@ from .managed_pool import (
     AwsManagedPoolSpec,
 )
 from .network_egress import same_region_storage_destinations
+from .provider_control import AwsProviderControlError, AwsProviderControlErrorCode
 from .spot_prices import load_aws_spot_quotes
 from .supplier_prices import AwsRegionalPrices
 
@@ -291,8 +292,16 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
         if not request.purchases_enabled:
             observed = provisioner.ensure(spec, self._resource_ids(request))
             desired_nodes = min(desired_nodes, observed.desired_nodes)
-        provisioner.scale(spec, desired_nodes=desired_nodes, max_nodes=spec.max_nodes)
-        provisioner.release_instance(spec, provider_instance_id)
+        try:
+            provisioner.scale(spec, desired_nodes=desired_nodes, max_nodes=spec.max_nodes)
+            provisioner.release_instance(spec, provider_instance_id)
+        except AwsProviderControlError as exc:
+            if exc.code is not AwsProviderControlErrorCode.ResourceNotFound:
+                raise
+            observed = provisioner.describe(spec, self._resource_ids(request))
+            if observed.resource_ids.autoscaling_group_name is not None:
+                raise
+            return self._snapshot(provisioner, observed, namespace_id=self._namespace_id(request))
         return self._snapshot(
             provisioner,
             provisioner.describe(spec, self._resource_ids(request)),

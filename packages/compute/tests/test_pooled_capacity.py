@@ -17,7 +17,7 @@ from compute.capacity_errors import (
 )
 from compute.capacity_recovery import record_capacity_risk
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
-from compute.offers import ComputeOffer
+from compute.offers import ComputeOffer, ReservationStatus
 from compute.policy import WorkspaceComputePolicyService
 from compute.providers import (
     ComputeProviderResolver,
@@ -2962,13 +2962,35 @@ def test_pool_delete_takes_the_provider_pool_with_it_or_keeps_the_pool_owned(
     assert retained is not None
     assert provider.delete_calls == []
 
+    recovery_id = str(uuid4())
+    now = datetime.now(UTC)
+    with service_context.database.session() as session:
+        session.add(
+            CapacityRecoveryTable(
+                id=recovery_id,
+                workspace_id=pool.workspace_id,
+                source_unit_id=pool.id,
+                source_machine_id=str(uuid4()),
+                target_unit_id=pool.id,
+                operation_id=str(uuid4()),
+                observed_at=now,
+                next_action_at=now,
+                completed_at=now,
+                reason="replacement accepted work",
+            )
+        )
+
     provider.delete_failure = None
     compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
 
     with service_context.database.session() as session:
         deleted = ComputeUnitRepository(session).get(pool.id)
+        recovery = CapacityRecoveryRepository(session).get(recovery_id)
     assert [request.unit_id for request in provider.delete_calls] == [pool.id]
-    assert deleted is None
+    assert deleted is not None and deleted.phase is ComputeUnitPhase.Deleted
+    assert recovery is not None and recovery.completed_at == now
+
+    compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
 
 
 def test_pooled_scale_down_waits_for_exact_volume_absence(
@@ -3038,6 +3060,16 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     assert updating_pool is not None
     assert updating_pool.phase is ComputeUnitPhase.Updating
 
+    with service_context.database.session() as session:
+        ComputeProviderInstanceRepository(session).upsert(
+            lingering.model_copy(update={"status": ReservationStatus.Failed.value})
+        )
+    with pytest.raises(UpstreamUnavailableError, match="capacity release is in progress"):
+        compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
+    with service_context.database.session() as session:
+        deleting_pool = ComputeUnitRepository(session).get(pool.id)
+    assert deleting_pool is not None and deleting_pool.phase is ComputeUnitPhase.Deleting
+
     provider.lingering_storage.clear()
     compute.reconcile_unit_capacity(pool.id, now=started_at)
     with service_context.database.session() as session:
@@ -3051,16 +3083,10 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
     assert retired_generation is not None
     assert retired_generation.state is WorkerCacheGenerationState.Retired
     assert ready_pool is not None
-    assert ready_pool.phase is ComputeUnitPhase.Ready
+    assert ready_pool.phase is ComputeUnitPhase.Deleted
 
     provider.storage_failure = RuntimeError("provider storage API unavailable")
-    settled = compute.scale_internal_unit(
-        pool.workspace_id,
-        pool.capacity_owner_id,
-        0,
-        before_mutation=_allow_scale,
-    )
-    assert settled.phase is ComputeUnitPhase.Ready
+    assert compute.reconcile_unit_capacity(pool.id) is None
     with service_context.database.session() as session:
         [preserved] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
         preserved_generation = SourceCacheCleanupRepository(session).get_generation(generation_id)
@@ -3104,6 +3130,17 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
     with service_context.database.session() as session:
         [retiring] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert retiring.storage_volume_ids == ("vol-00000000000000000",)
+    with service_context.database.session() as session:
+        ComputeProviderInstanceRepository(session).upsert(
+            retiring.model_copy(update={"status": ReservationStatus.Failed.value})
+        )
+    compute.scale_internal_unit(
+        pool.workspace_id, pool.capacity_owner_id, 0, before_mutation=_allow_scale
+    )
+    with service_context.database.session() as session:
+        [retained] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+    assert retained.storage_volume_ids == retiring.storage_volume_ids
+    assert retained.launch_attempt == retiring.launch_attempt
     with pytest.raises(UpstreamUnavailableError, match="capacity release is in progress"):
         compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
     with service_context.database.session() as session:
