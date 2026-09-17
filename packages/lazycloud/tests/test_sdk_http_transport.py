@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from lazycloud.cli.main import build_public_cli
+from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.http_transport import request_raw
 from lazycloud.session import Client
 from lazycloud.session.deployment import DeploymentClient
@@ -21,7 +22,14 @@ from pydantic import JsonValue
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
 from shared.deployment_records import DeploymentSpec
+from shared.http.client_manifests import (
+    ClientContract,
+    ClientOperation,
+    ClientOperationName,
+    ClientParameter,
+)
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
+from shared.http.gateway import GetOrCreateStubRequest
 from shared.http_transport import HttpChannel
 from tests.http_server import running_http_server
 from typer.testing import CliRunner
@@ -55,6 +63,18 @@ class _TransportHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/gateway/stubs/get-or-create":
+            request = GetOrCreateStubRequest.model_validate_json(
+                self.rfile.read(int(self.headers["Content-Length"]))
+            )
+            assert request.client_contract is not None
+            operation = request.client_contract.operation
+            assert operation.return_schema is None
+            assert operation.parameters[0].json_schema is None
+            assert "authorized" not in request.model_fields_set
+            assert "retries" in request.model_fields_set and request.retries == 0
+            self._respond(200, b'{"stub_id":"python-function"}', content_type="application/json")
+            return
         if parsed.path == "/api/v1/workspaces":
             self._respond(200, b'{"workspaces": []}', content_type="application/json")
             return
@@ -181,6 +201,26 @@ def test_raw_transport_sends_a_bounded_readable_body_without_json_encoding() -> 
 
     assert json.loads(response.content)["body"] == "streamed"
     assert len(reads) > 1
+
+
+def test_gateway_preserves_python_schemas_and_omitted_workload_defaults() -> None:
+    request = GetOrCreateStubRequest(
+        name="matrix",
+        retries=0,
+        client_contract=ClientContract(
+            operation=ClientOperation(
+                name=ClientOperationName.Remote,
+                parameters=[
+                    ClientParameter(name="value", json_schema=None, python_type="numpy.ndarray")
+                ],
+                return_schema=None,
+                return_python_type="numpy.ndarray",
+            )
+        ),
+    )
+    with _http_server() as endpoint, HttpChannel(endpoint=endpoint) as channel:
+        response = GatewayControlClient(channel).get_or_create_stub(request)
+    assert response.stub_id == "python-function"
 
 
 def test_cli_version_advice_keeps_json_stdout_clean(monkeypatch: pytest.MonkeyPatch) -> None:
