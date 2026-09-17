@@ -167,6 +167,57 @@ class _BenchmarkObjectClient:
     def delete(self, key: str, *, bucket: str | None = None) -> None:
         self.objects.pop((bucket or "default", key), None)
 
+    def create_multipart_upload(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+    ) -> str:
+        raise NotImplementedError("direct uploads require a real object store benchmark")
+
+    def generate_presigned_upload_part_url(
+        self,
+        key: str,
+        *,
+        upload_id: str,
+        part_number: int,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        checksum_sha256: str = "",
+        content_length: int | None = None,
+    ) -> str:
+        raise NotImplementedError("direct uploads require a real object store benchmark")
+
+    def complete_multipart_upload(
+        self,
+        key: str,
+        *,
+        upload_id: str,
+        completed_parts: list[tuple[int, str]] | tuple[tuple[int, str], ...],
+        bucket: str | None = None,
+    ) -> None:
+        raise NotImplementedError("direct uploads require a real object store benchmark")
+
+    def abort_multipart_upload(
+        self,
+        key: str,
+        *,
+        upload_id: str,
+        bucket: str | None = None,
+    ) -> None:
+        raise NotImplementedError("direct uploads require a real object store benchmark")
+
+    def abort_multipart_uploads(
+        self,
+        prefix: str,
+        *,
+        bucket: str | None = None,
+        exact: bool = False,
+    ) -> None:
+        raise NotImplementedError("direct uploads require a real object store benchmark")
+
 
 def _measure(
     action: Callable[[], dict[str, JsonValue]],

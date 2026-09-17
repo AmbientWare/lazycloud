@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import sys
-from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field, replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from urllib.parse import quote, unquote
+from contextlib import ExitStack
+from dataclasses import replace
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
@@ -25,8 +20,6 @@ from shared.compute_policy import (
 )
 from shared.identity import TokenKind
 from storage.service import ObjectStorage
-from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
-from tests.http_server import running_http_server
 from tests.redis_fakes import FakeRedis
 from tests.workspaces import owned_workspace
 
@@ -179,172 +172,54 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
         assert denied.status_code == 403
 
 
-def test_gateway_raw_object_upload_streams_to_object_store_and_download_redirect(
+def test_object_upload_authorizes_before_creating_or_completing_a_claim(
     isolated_services: ApiServices,
 ) -> None:
-    with ExitStack() as client_stack:
-        object_client = _ObjectClient()
-        object_client.upload_origin = client_stack.enter_context(
-            _serve_object_uploads(object_client)
+    from database.repositories.storage import ObjectRepository
+    from tests.fakes import FakeObjectClient
+
+    object_storage = ObjectStorage(isolated_services.context, object_client=FakeObjectClient())
+    gateway = replace(isolated_services.gateway_service, object_storage=object_storage)
+    token, _ = AuthService(isolated_services.context).create_token(
+        "source-upload", kind=TokenKind.Workspace
+    )
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    other = owned_workspace(ControlPlaneService(isolated_services.context), "other-upload-owner")
+    request: dict[str, JsonValue] = {
+        "object_metadata": {"name": "source.zip", "size": 3},
+        "hash": hashlib.sha256(b"abc").hexdigest(),
+    }
+    with TestClient(create_app(isolated_services, gateway_service=gateway)) as client:
+        assert client.post("/gateway/objects/uploads", json=request).status_code == 401
+        started = client.post("/gateway/objects/uploads", json=request, headers=_auth(token))
+        assert started.status_code == 200
+        payload = _response_object(started)
+        object_id = _required_string(payload, "object_id")
+        upload = payload["upload"]
+        assert isinstance(upload, dict)
+        claim_id = _required_string(upload, "claim_id")
+        denied = client.post(
+            f"/gateway/objects/uploads/{object_id}/complete?workspace={other.id}",
+            json={"claim_id": claim_id, "etag": "part"},
+            headers=_auth(token),
         )
-        object_storage = ObjectStorage(isolated_services.context, object_client=object_client)
-        gateway_service = replace(
-            isolated_services.gateway_service,
-            compute_state=RedisComputeStateRepository(_redis()),
-            object_storage=object_storage,
-        )
-        client = client_stack.enter_context(
-            TestClient(
-                create_app(
-                    isolated_services,
-                    gateway_service=gateway_service,
-                )
-            )
-        )
-        admin_token = _offline_admin_token(isolated_services, "object-stream")
+        assert denied.status_code == 403
         with isolated_services.context.database.session() as session:
-            workspace_id = isolated_services.context.default_workspace_id(session)
-        physical_key = object_storage.physical_key_for_workspace(
-            workspace_id,
-            bucket="default",
-            key="payload.bin",
+            assert ObjectRepository(session).get(object_id, workspace_id=workspace_id) is None
+        aborted = client.post(
+            f"/gateway/objects/uploads/{object_id}/abort",
+            json={"claim_id": claim_id},
+            headers=_auth(token),
         )
-        physical_bucket = object_storage.physical_bucket("default")
-        content = b"streamed object content"
-        digest = hashlib.sha256(content).hexdigest()
-
-        uploaded = client.post(
-            f"/gateway/objects/stream?bucket=default&name=payload.bin&hash={digest}&size={len(content)}",
-            content=content,
-            headers=_auth(admin_token)
-            | {
-                "content-type": "application/octet-stream",
-                "x-object-meta-purpose": "source",
-            },
-        )
-        repeated = client.post(
-            f"/gateway/objects/stream?bucket=default&name=payload.bin&hash={digest}&size={len(content)}",
-            content=content,
-            headers=_auth(admin_token) | {"content-type": "application/octet-stream"},
-        )
-        redirected = client.get(
-            "/gateway/objects/download?bucket=default&key=payload.bin",
-            headers=_auth(admin_token),
-            follow_redirects=False,
-        )
-
-        assert uploaded.status_code == 200
-        assert _response_string(uploaded, "object_id") == _response_string(repeated, "object_id")
-        assert object_client.http_upload_payloads == [content, content]
-        assert object_client.exists(physical_key, bucket=physical_bucket)
-        assert redirected.status_code == 307
-        assert redirected.headers["location"].endswith(f"/{physical_bucket}/{physical_key}")
-        object_client.delete(physical_key, bucket=physical_bucket)
-        assert not object_client.exists(physical_key, bucket=physical_bucket)
-
-        repaired = client.post(
-            f"/gateway/objects/stream?bucket=default&name=payload.bin&hash={digest}&size={len(content)}",
-            content=content,
-            headers=_auth(admin_token) | {"content-type": "application/octet-stream"},
-        )
-
-        assert repaired.status_code == 200
-        assert _response_string(repaired, "object_id") == _response_string(uploaded, "object_id")
-        assert object_client.http_upload_payloads == [content, content, content]
-        assert object_client.exists(physical_key, bucket=physical_bucket)
-
-
-def test_gateway_object_stream_requires_auth_and_exact_content_proof(
-    isolated_services: ApiServices,
-) -> None:
-    with ExitStack() as client_stack:
-        object_client = _ObjectClient()
-        object_client.upload_origin = client_stack.enter_context(
-            _serve_object_uploads(object_client)
-        )
-        gateway_service = replace(
-            isolated_services.gateway_service,
-            compute_state=RedisComputeStateRepository(_redis()),
-            object_storage=ObjectStorage(isolated_services.context, object_client=object_client),
-        )
-        client = client_stack.enter_context(
-            TestClient(create_app(isolated_services, gateway_service=gateway_service))
-        )
-        admin_token = _offline_admin_token(isolated_services, "object-stream-proof")
-        content = b"first payload"
-        digest = hashlib.sha256(content).hexdigest()
-        path = (
-            f"/gateway/objects/stream?bucket=default&name=proof.bin"
-            f"&hash={digest}&size={len(content)}"
-        )
-
-        assert client.post(path, content=content).status_code == 401
-        assert (
-            client.post(
-                "/gateway/objects/create",
-                headers=_auth(admin_token),
-                json={},
-            ).status_code
-            == 404
-        )
-        assert (
-            client.post(
-                path,
-                content=content,
-                headers=_auth(admin_token) | {"content-length": str(len(content) + 1)},
-            ).status_code
-            == 400
-        )
-        assert (
-            client.post(
-                path.replace("bucket=default", "bucket=platform-secrets"),
-                content=content,
-                headers=_auth(admin_token),
-            ).status_code
-            == 400
-        )
-
-        wrong_hash = hashlib.sha256(b"different").hexdigest()
-        assert (
-            client.post(
-                f"/gateway/objects/stream?bucket=default&name=proof.bin&hash={wrong_hash}&size={len(content)}",
-                content=content,
-                headers=_auth(admin_token),
-            ).status_code
-            == 400
-        )
-        assert (
-            client.post(
-                "/gateway/objects/stream"
-                f"?bucket=default&name=proof.bin&hash={digest}&size={len(content) + 1}",
-                content=content,
-                headers=_auth(admin_token),
-            ).status_code
-            == 400
-        )
-        assert (
-            client.post(
-                "/gateway/objects/stream"
-                f"?bucket=default&name=proof.bin&hash={digest}&size={len(content) - 1}",
-                content=content,
-                headers=_auth(admin_token),
-            ).status_code
-            == 400
-        )
-
-        created = client.post(path, content=content, headers=_auth(admin_token))
-        replacement = b"replacement payload"
-        replacement_hash = hashlib.sha256(replacement).hexdigest()
-        conflicted = client.post(
-            "/gateway/objects/stream"
-            f"?bucket=default&name=proof.bin&hash={replacement_hash}&size={len(replacement)}",
-            content=replacement,
-            headers=_auth(admin_token),
-        )
-
-        assert created.status_code == 200
-        assert conflicted.status_code == 409
-        assert object_client.http_upload_payloads == [content]
+        assert aborted.status_code == 204
+        with isolated_services.context.database.session() as session:
+            assert (
+                ObjectRepository(session).get(
+                    object_id, workspace_id=workspace_id, include_operations=True
+                )
+                is None
+            )
 
 
 def test_gateway_container_attach_emits_sse(
@@ -451,164 +326,3 @@ def _required_string(payload: dict[str, JsonValue], key: str) -> str:
 
 def _redis() -> RedisClient:
     return RedisClient(FakeRedis(), key_prefix="test")
-
-
-@dataclass
-class _ObjectClient:
-    http_upload_payloads: list[bytes] = field(default_factory=list)
-    objects: dict[tuple[str, str], bytes] = field(default_factory=dict)
-    object_metadata: dict[tuple[str, str], dict[str, str]] = field(default_factory=dict)
-    upload_origin: str = ""
-
-    def put_bytes(
-        self,
-        key: str,
-        data: bytes,
-        *,
-        bucket: str | None = None,
-        content_type: str = "application/octet-stream",
-        metadata: dict[str, str] | None = None,
-    ) -> S3ObjectInfo:
-        del content_type
-        location = (bucket or "default", key)
-        self.objects[location] = data
-        self.object_metadata[location] = dict(metadata or {})
-        return S3ObjectInfo(bucket=location[0], key=key, size=len(data))
-
-    def put_file(
-        self,
-        key: str,
-        source: str | Path,
-        *,
-        bucket: str | None = None,
-        content_type: str = "application/octet-stream",
-        metadata: dict[str, str] | None = None,
-    ) -> S3ObjectInfo:
-        return self.put_bytes(
-            key,
-            Path(source).read_bytes(),
-            bucket=bucket,
-            content_type=content_type,
-            metadata=metadata,
-        )
-
-    def read_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
-        return self.objects[(bucket or "default", key)]
-
-    def download_file(
-        self,
-        key: str,
-        target: str | Path,
-        *,
-        bucket: str | None = None,
-    ) -> S3ObjectInfo:
-        target_bucket = bucket or "default"
-        payload = self.read_bytes(key, bucket=target_bucket)
-        Path(target).write_bytes(payload)
-        return S3ObjectInfo(bucket=target_bucket, key=key, size=len(payload))
-
-    def head(self, key: str, *, bucket: str | None = None) -> S3ObjectInfo:
-        data = self.read_bytes(key, bucket=bucket)
-        location = (bucket or "default", key)
-        return S3ObjectInfo(
-            bucket=location[0],
-            key=key,
-            size=len(data),
-            metadata=self.object_metadata.get(location, {}),
-        )
-
-    def exists(self, key: str, *, bucket: str | None = None) -> bool:
-        return (bucket or "default", key) in self.objects
-
-    def generate_presigned_put_url(
-        self,
-        key: str,
-        *,
-        bucket: str | None = None,
-        expires_seconds: int = 3600,
-        content_length: int = 0,
-        content_type: str = "application/octet-stream",
-    ) -> str:
-        del expires_seconds, content_length, content_type
-        if not self.upload_origin:
-            raise RuntimeError("test object upload receiver is not running")
-        encoded_bucket = quote(bucket or "default", safe="")
-        encoded_key = quote(key, safe="")
-        return f"{self.upload_origin}/{encoded_bucket}/{encoded_key}"
-
-    def generate_presigned_put(
-        self,
-        key: str,
-        *,
-        bucket: str | None = None,
-        expires_seconds: int = 3600,
-        content_length: int,
-        content_type: str = "application/octet-stream",
-        metadata: dict[str, str] | None = None,
-        checksum_sha256: str = "",
-    ) -> S3PresignedUpload:
-        return S3PresignedUpload(
-            url=self.generate_presigned_put_url(
-                key,
-                bucket=bucket,
-                expires_seconds=expires_seconds,
-                content_length=content_length,
-                content_type=content_type,
-            ),
-            headers={
-                "content-length": str(content_length),
-                "content-type": content_type,
-                **({"x-amz-checksum-sha256": checksum_sha256} if checksum_sha256 else {}),
-                **{f"x-amz-meta-{name}": value for name, value in (metadata or {}).items()},
-            },
-        )
-
-    def generate_presigned_get_url(
-        self,
-        key: str,
-        *,
-        bucket: str | None = None,
-        expires_seconds: int = 3600,
-    ) -> str:
-        del expires_seconds
-        return f"https://objects.test/{bucket or 'default'}/{key}"
-
-    def delete(self, key: str, *, bucket: str | None = None) -> None:
-        location = (bucket or "default", key)
-        self.objects.pop(location, None)
-        self.object_metadata.pop(location, None)
-
-
-@contextmanager
-def _serve_object_uploads(client: _ObjectClient) -> Iterator[str]:
-    class UploadHandler(BaseHTTPRequestHandler):
-        def do_PUT(self) -> None:
-            encoded_bucket, separator, encoded_key = self.path.removeprefix("/").partition("/")
-            if not separator:
-                self.send_error(400)
-                return
-            content_length = int(self.headers.get("content-length", "0"))
-            payload = self.rfile.read(content_length)
-            checksum = self.headers.get("x-amz-checksum-sha256", "")
-            actual_checksum = base64.b64encode(hashlib.sha256(payload).digest()).decode("ascii")
-            if checksum and checksum != actual_checksum:
-                self.send_error(400)
-                return
-            location = (unquote(encoded_bucket), unquote(encoded_key))
-            client.http_upload_payloads.append(payload)
-            client.objects[location] = payload
-            client.object_metadata[location] = {
-                name.lower().removeprefix("x-amz-meta-"): value
-                for name, value in self.headers.items()
-                if name.lower().startswith("x-amz-meta-")
-            }
-            self.send_response(200)
-            self.send_header("content-length", "0")
-            self.end_headers()
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
-    with running_http_server(server):
-        yield f"http://127.0.0.1:{server.server_port}"

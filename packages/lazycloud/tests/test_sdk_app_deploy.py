@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Barrier, Lock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
@@ -16,7 +15,12 @@ from shared.http.gateway import (
     GetOrCreateStubResponse,
 )
 from shared.http.images import BuildImageRequest, BuildImageResponse, VerifyImageBuildResponse
-from shared.http.objects import HeadObjectRequest, HeadObjectResponse, PutObjectResponse
+from shared.http.objects import (
+    BeginObjectUploadResponse,
+    HeadObjectRequest,
+    HeadObjectResponse,
+    PutObjectRequest,
+)
 from tests.fakes import FakeDeploymentClient
 from tests.http_server import running_http_server
 
@@ -111,20 +115,19 @@ def test_app_deploy_overlaps_builds_and_uploads_and_shares_only_one_source_snaps
 
         def do_POST(self) -> None:
             parsed = urlsplit(self.path)
-            query = parse_qs(parsed.query)
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             response: BaseModel
-            if parsed.path == "/gateway/objects/stream":
-                bucket = query["bucket"][0]
-                digest = sha256(body).hexdigest()
-                assert query["hash"] == [digest]
+            if parsed.path == "/gateway/objects/uploads":
+                upload_request = PutObjectRequest.model_validate_json(body)
+                bucket = upload_request.bucket
+                digest = upload_request.hash
                 with lock:
                     stored[bucket, digest] = digest
                     uploads.append(bucket)
                 if bucket == SOURCE_PACKAGE_BUCKET and deployment_pass == 0:
                     source_file.write_text("next snapshot")
                     overlap.wait()
-                response = PutObjectResponse(object_id=digest)
+                response = BeginObjectUploadResponse(object_id=digest)
             elif parsed.path == "/gateway/objects/head":
                 request = HeadObjectRequest.model_validate_json(body)
                 with lock:

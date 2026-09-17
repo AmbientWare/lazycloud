@@ -77,6 +77,26 @@ class PutObjectResponse(HttpModel):
     object_id: str = Field(min_length=1)
 
 
+class ObjectUploadTarget(HttpModel):
+    claim_id: str = Field(min_length=1)
+    url: str = Field(min_length=1, repr=False)
+    headers: dict[str, str] = Field(repr=False)
+
+
+class BeginObjectUploadResponse(HttpModel):
+    object_id: str = Field(min_length=1)
+    upload: ObjectUploadTarget | None = None
+
+
+class CompleteObjectUploadRequest(HttpModel):
+    claim_id: str = Field(min_length=1, max_length=64)
+    etag: str = Field(min_length=1, max_length=256)
+
+
+class AbortObjectUploadRequest(HttpModel):
+    claim_id: str = Field(min_length=1, max_length=64)
+
+
 _METADATA_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}")
 _MAX_METADATA_BYTES = 2048
 
@@ -88,9 +108,13 @@ def _workspace_upload_bucket(value: str) -> str:
 
 
 __all__ = [
+    "AbortObjectUploadRequest",
+    "BeginObjectUploadResponse",
+    "CompleteObjectUploadRequest",
     "HeadObjectRequest",
     "HeadObjectResponse",
     "ObjectMetadata",
+    "ObjectUploadTarget",
     "PutObjectRequest",
     "PutObjectResponse",
 ]

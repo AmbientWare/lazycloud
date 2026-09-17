@@ -8,6 +8,12 @@ from threading import Event
 import pytest
 from shared.compute_policy import MachinePool
 from shared.deployments import StubKind
+from shared.http.workspace_sync import (
+    WorkspaceSyncBatch,
+    WorkspaceSyncEntry,
+    WorkspaceSyncManifest,
+    WorkspaceSyncOperation,
+)
 from worker.container_client.models import (
     ContainerCheckpointRequest,
     ContainerExecRequest,
@@ -25,8 +31,6 @@ from worker.container_client.models import (
     ContainerSandboxUpdateNetworkPermissionsRequest,
     ContainerStatusRequest,
     ContainerStreamLogsRequest,
-    ContainerWorkspaceSyncOperation,
-    SyncContainerWorkspaceRequest,
 )
 from worker.container_service.models import (
     SandboxProcessEvent,
@@ -372,27 +376,43 @@ def test_worker_container_service_kill_treats_missing_runtime_container_as_stopp
 
 def test_worker_container_service_workspace_sync(tmp_path: Path) -> None:
     service = WorkerContainerService(instances=_store(_instance(tmp_path)))
-    for request in (
-        SyncContainerWorkspaceRequest(
+    root = tmp_path / "workspace"
+    root.mkdir(exist_ok=True)
+    batch = WorkspaceSyncBatch(
+        manifest=WorkspaceSyncManifest(
             container_id="ctr-1",
-            operation=ContainerWorkspaceSyncOperation.Write,
-            path="sync/a.txt",
-            data=b"sync",
+            entries=[
+                WorkspaceSyncEntry(
+                    operation=WorkspaceSyncOperation.Write, path="sync/a.txt", size=4, mode=0o755
+                ),
+                WorkspaceSyncEntry(
+                    operation=WorkspaceSyncOperation.Write, path="sync/b.txt", size=3
+                ),
+            ],
         ),
-        SyncContainerWorkspaceRequest(
+        data=b"syncnew",
+    )
+    result = service.sync_workspace(WorkspaceSyncBatch.decode(batch.encode()))
+    assert result.ok and result.applied == 2
+    assert (root / "sync/a.txt").read_bytes() == b"sync"
+    assert (root / "sync/a.txt").stat().st_mode & 0o777 == 0o755
+    assert (root / "sync/b.txt").read_bytes() == b"new"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+    malicious = WorkspaceSyncBatch(
+        manifest=WorkspaceSyncManifest(
             container_id="ctr-1",
-            operation=ContainerWorkspaceSyncOperation.Move,
-            path="sync/a.txt",
-            new_path="sync/b.txt",
+            entries=[
+                WorkspaceSyncEntry(
+                    operation=WorkspaceSyncOperation.Write, path="escape/secret", size=3
+                ),
+            ],
         ),
-        SyncContainerWorkspaceRequest(
-            container_id="ctr-1",
-            operation=ContainerWorkspaceSyncOperation.Delete,
-            path="sync/b.txt",
-        ),
-    ):
-        assert service.sync_workspace(request).ok
-    assert not (tmp_path / "workspace" / "sync" / "b.txt").exists()
+        data=b"bad",
+    )
+    assert not service.sync_workspace(malicious).ok
+    assert not (outside / "secret").exists()
 
 
 def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Path) -> None:

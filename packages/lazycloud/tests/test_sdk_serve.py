@@ -13,9 +13,11 @@ from lazycloud.terminal import Terminal
 from shared.http.compute import ContainerResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
-    ContainerWorkspaceSyncOperation,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
+)
+from shared.http.workspace_sync import (
+    WorkspaceSyncBatch,
+    WorkspaceSyncOperation,
+    WorkspaceSyncResponse,
 )
 from tests.fakes import http_api_error
 
@@ -23,7 +25,7 @@ from tests.fakes import http_api_error
 @dataclass
 class InterruptingGatewayClient:
     stopped: list[str] = field(default_factory=list)
-    sync_requests: list[SyncContainerWorkspaceBody] = field(default_factory=list)
+    sync_requests: list[WorkspaceSyncBatch] = field(default_factory=list)
 
     def attach_to_container_events(
         self,
@@ -48,10 +50,10 @@ class InterruptingGatewayClient:
 
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse:
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse:
         self.sync_requests.append(body)
-        return SyncContainerWorkspaceResponse(path=body.path)
+        return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 
 @dataclass
@@ -60,8 +62,8 @@ class InitiallyUnpublishedGatewayClient(InterruptingGatewayClient):
 
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse:
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse:
         self.sync_requests.append(body)
         if self.failures_remaining > 0:
             self.failures_remaining -= 1
@@ -69,7 +71,7 @@ class InitiallyUnpublishedGatewayClient(InterruptingGatewayClient):
                 "worker address not published for container ctr-serve",
                 status_code=503,
             )
-        return SyncContainerWorkspaceResponse(path=body.path)
+        return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 
 @dataclass
@@ -78,13 +80,13 @@ class InitiallyMissingContainerGatewayClient(InterruptingGatewayClient):
 
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse:
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse:
         self.sync_requests.append(body)
         if self.failures_remaining > 0:
             self.failures_remaining -= 1
             raise http_api_error("Container not found: ctr-serve", status_code=404)
-        return SyncContainerWorkspaceResponse(path=body.path)
+        return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 
 @dataclass
@@ -197,10 +199,11 @@ def test_serve_workspace_syncer_writes_filtered_tree_through_gateway(tmp_path: P
         terminal=Terminal(quiet=True),
     ).sync_once()
 
-    writes = {request.path: request for request in gateway.sync_requests}
-    assert writes["app.py"].operation is ContainerWorkspaceSyncOperation.Write
-    assert writes["app.py"].data == b"print('ok')\n"
-    assert writes["pkg/worker.py"].data == b"VALUE = 1\n"
+    writes = {
+        entry.path: entry for request in gateway.sync_requests for entry in request.manifest.entries
+    }
+    assert writes["app.py"].operation is WorkspaceSyncOperation.Write
+    assert gateway.sync_requests[0].data == b"print('ok')\nVALUE = 1\n"
     assert "ignored.py" not in writes
     assert "__pycache__/skip.py" not in writes
 
@@ -226,8 +229,8 @@ def test_serve_workspace_syncer_can_seed_from_source_package_before_deltas(
     syncer._sync_delta(syncer._snapshot | {"app.py": type(syncer._snapshot["app.py"])(13, 0)})
 
     assert len(gateway.sync_requests) == 1
-    assert gateway.sync_requests[0].path == "app.py"
-    assert gateway.sync_requests[0].operation is ContainerWorkspaceSyncOperation.Write
+    assert gateway.sync_requests[0].manifest.entries[0].path == "app.py"
+    assert gateway.sync_requests[0].manifest.entries[0].operation is WorkspaceSyncOperation.Write
 
 
 def test_serve_workspace_syncer_retries_until_worker_address_is_published(
@@ -243,7 +246,7 @@ def test_serve_workspace_syncer_retries_until_worker_address_is_published(
         local_dir=str(source),
         gateway_client=gateway,
         terminal=Terminal(quiet=True),
-        poll_seconds=0,
+        debounce_seconds=0,
         initial_sync_timeout_seconds=1,
     )
 
@@ -265,7 +268,7 @@ def test_serve_workspace_syncer_retries_until_container_service_is_ready(
         local_dir=str(source),
         gateway_client=gateway,
         terminal=Terminal(quiet=True),
-        poll_seconds=0,
+        debounce_seconds=0,
         initial_sync_timeout_seconds=1,
     )
 

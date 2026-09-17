@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import logging
@@ -14,7 +13,11 @@ from uuid import uuid4
 
 from billing.admission import DatabaseBillingAdmission
 from database.repositories.artifacts import ArtifactRepository
-from database.repositories.cleanup import OBJECT_CLEANUP_DELETE, CleanupRepository
+from database.repositories.cleanup import (
+    OBJECT_CLEANUP_DELETE,
+    CleanupRepository,
+    object_location_lock_key,
+)
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.storage import (
     CacheEntryRepository,
@@ -38,6 +41,7 @@ from shared.errors import (
     NotFoundError,
     UpstreamUnavailableError,
 )
+from shared.http.objects import BeginObjectUploadResponse, ObjectUploadTarget
 from shared.objects import ObjectRecord, ObjectWriteCommand
 from shared.paths import state_home
 from shared.timestamps import utc_now
@@ -48,7 +52,6 @@ from storage_client.s3 import (
     S3PresignedUpload,
 )
 
-from database import AsyncDatabaseClient
 from storage.artifact_metering import meter_artifact
 from storage.context import StorageContext
 
@@ -152,6 +155,44 @@ class ObjectByteClient(Protocol):
         checksum_sha256: str = "",
     ) -> S3PresignedUpload: ...
 
+    def create_multipart_upload(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+    ) -> str: ...
+
+    def generate_presigned_upload_part_url(
+        self,
+        key: str,
+        *,
+        upload_id: str,
+        part_number: int,
+        bucket: str | None = None,
+        expires_seconds: int = 3600,
+        checksum_sha256: str = "",
+        content_length: int | None = None,
+    ) -> str: ...
+
+    def complete_multipart_upload(
+        self,
+        key: str,
+        *,
+        upload_id: str,
+        completed_parts: list[tuple[int, str]] | tuple[tuple[int, str], ...],
+        bucket: str | None = None,
+    ) -> None: ...
+
+    def abort_multipart_upload(
+        self, key: str, *, upload_id: str, bucket: str | None = None
+    ) -> None: ...
+
+    def abort_multipart_uploads(
+        self, prefix: str, *, bucket: str | None = None, exact: bool = False
+    ) -> None: ...
+
     def delete(self, key: str, *, bucket: str | None = None) -> None: ...
 
 
@@ -177,13 +218,6 @@ class CacheMaterialization:
 class CacheReconciliationResult:
     records_removed: int = 0
     objects_removed: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ObjectStreamUpload:
-    workspace_id: str
-    claim: ObjectWriteClaim
-    upload: S3PresignedUpload
 
 
 class MountedCacheSettings(BaseSettings):
@@ -480,9 +514,8 @@ class ObjectStorage:
         with self.context.database.session() as session:
             return ObjectRepository(session).complete_write(claim, workspace_id=workspace_id)
 
-    async def prepare_stream_upload(
+    def begin_direct_upload(
         self,
-        database: AsyncDatabaseClient,
         *,
         workspace_id: str,
         bucket: str,
@@ -490,10 +523,12 @@ class ObjectStorage:
         size: int,
         sha256: str,
         content_type: str,
-        metadata: dict[str, str] | None,
+        metadata: dict[str, str],
         overwrite: bool,
-    ) -> ObjectStreamUpload:
+    ) -> BeginObjectUploadResponse:
         self._validate_bucket(bucket)
+        if size > 5 * 1024**3:
+            raise InvalidInputError("object uploads cannot exceed 5 GiB")
         physical_bucket = self.physical_bucket(bucket)
         physical_key = self.physical_key_for_workspace(workspace_id, bucket=bucket, key=key)
         command = ObjectWriteCommand(
@@ -503,86 +538,156 @@ class ObjectStorage:
             size=size,
             sha256=sha256,
             content_type=content_type,
-            metadata=metadata or {},
+            metadata=metadata,
         )
-        claim = await database.run_transaction(
-            lambda session: ObjectRepository(session).begin_write(
-                command,
-                workspace_id=workspace_id,
-                overwrite=overwrite,
+        reuse = False
+        if not overwrite:
+            with self.context.database.session() as session:
+                existing = ObjectRepository(session).get_by_bucket_key(
+                    bucket, key, workspace_id=workspace_id
+                )
+            reuse = existing is not None and self._stored_object(existing, physical_key) is not None
+        with self.context.database.session() as session:
+            claim = ObjectRepository(session).begin_write(
+                command, workspace_id=workspace_id, overwrite=overwrite, reuse_existing=reuse
             )
-        )
+        if not claim.write_required:
+            return BeginObjectUploadResponse(object_id=claim.record.id)
+        upload_id = ""
         try:
-            upload = await asyncio.to_thread(
-                self.object_client.generate_presigned_put,
+            upload_id = self.object_client.create_multipart_upload(
                 physical_key,
                 bucket=physical_bucket,
-                expires_seconds=3600,
-                content_length=size,
                 content_type=content_type,
-                metadata={**(metadata or {}), OBJECT_SHA256_METADATA_KEY: sha256},
-                checksum_sha256=base64.b64encode(bytes.fromhex(sha256)).decode("ascii"),
+                metadata={**metadata, OBJECT_SHA256_METADATA_KEY: sha256},
+            )
+            with self.context.database.session() as session:
+                ObjectRepository(session).bind_upload(claim, upload_id, workspace_id=workspace_id)
+            checksum = base64.b64encode(bytes.fromhex(sha256)).decode("ascii")
+            url = self.object_client.generate_presigned_upload_part_url(
+                physical_key,
+                bucket=physical_bucket,
+                upload_id=upload_id,
+                part_number=1,
+                expires_seconds=900,
+                checksum_sha256=checksum,
+                content_length=size,
+            )
+            return BeginObjectUploadResponse(
+                object_id=claim.record.id,
+                upload=ObjectUploadTarget(
+                    claim_id=claim.claim_id,
+                    url=url,
+                    headers={"Content-Length": str(size), "x-amz-checksum-sha256": checksum},
+                ),
             )
         except BaseException:
-            await self._abort_stream_claim(database, workspace_id=workspace_id, claim=claim)
+            if upload_id:
+                self.object_client.abort_multipart_upload(
+                    physical_key, bucket=physical_bucket, upload_id=upload_id
+                )
+            else:
+                self.object_client.abort_multipart_uploads(
+                    physical_key, bucket=physical_bucket, exact=True
+                )
+            with self.context.database.session() as session:
+                ObjectRepository(session).abort_write(claim, workspace_id=workspace_id)
             raise
-        return ObjectStreamUpload(workspace_id=workspace_id, claim=claim, upload=upload)
 
-    async def complete_stream_upload(
+    def finish_direct_upload(
         self,
-        database: AsyncDatabaseClient,
-        upload: ObjectStreamUpload,
-    ) -> ObjectRecord:
-        return await database.run_transaction(
-            lambda session: ObjectRepository(session).complete_write(
-                upload.claim,
-                workspace_id=upload.workspace_id,
-            )
-        )
-
-    async def abort_stream_upload(
-        self,
-        database: AsyncDatabaseClient,
-        upload: ObjectStreamUpload,
-    ) -> None:
-        await self._abort_stream_claim(
-            database,
-            workspace_id=upload.workspace_id,
-            claim=upload.claim,
-        )
-
-    @staticmethod
-    async def _abort_stream_claim(
-        database: AsyncDatabaseClient,
         *,
         workspace_id: str,
-        claim: ObjectWriteClaim,
-    ) -> None:
-        await database.run_transaction(
-            lambda session: ObjectRepository(session).abort_write(
-                claim,
-                workspace_id=workspace_id,
+        object_id: str,
+        claim_id: str,
+        etag: str | None,
+    ) -> ObjectRecord | None:
+        with self.context.database.session() as session:
+            WorkspaceRepository(session).lock_object_write_completion_owner(workspace_id)
+            repository = ObjectRepository(session)
+            location = repository.get_location(object_id, workspace_id=workspace_id)
+            if location is None:
+                if etag is None:
+                    return None
+                raise NotFoundError("object upload not found")
+            CleanupRepository(session).lock_keys(
+                {
+                    f"object:{object_id}",
+                    object_location_lock_key(workspace_id, *location),
+                }
             )
-        )
+            session.expire_all()
+            record = repository.get(object_id, workspace_id=workspace_id, include_operations=True)
+            if record is None:
+                raise NotFoundError("object upload not found")
+            if not record.write_claim_id:
+                return record
+            if record.write_claim_id != claim_id or (
+                etag is not None and not record.write_upload_id
+            ):
+                raise ConflictError("object upload claim is no longer active")
+            target = record.write_target
+            if target is None:
+                raise ConflictError("object upload target is missing")
+            claim = ObjectWriteClaim(
+                record=record.model_copy(update=target.model_dump()),
+                claim_id=claim_id,
+                created=record.write_created,
+            )
+            key = self.physical_key_for_workspace(
+                workspace_id, bucket=record.bucket, key=record.key
+            )
+            bucket = self.physical_bucket(record.bucket)
+            if etag is None:
+                if record.write_upload_id:
+                    self.object_client.abort_multipart_upload(
+                        key, bucket=bucket, upload_id=record.write_upload_id
+                    )
+                else:
+                    self.object_client.abort_multipart_uploads(key, bucket=bucket, exact=True)
+                # Storage may have committed before the writer's database transaction failed.
+                info = self._stored_object(claim.record, key)
+                if info is not None:
+                    return repository.complete_write(
+                        claim, workspace_id=workspace_id, stored_at=info.last_modified
+                    )
+                repository.abort_write(claim, workspace_id=workspace_id)
+                return None
+            try:
+                self.object_client.complete_multipart_upload(
+                    key,
+                    bucket=bucket,
+                    upload_id=record.write_upload_id,
+                    completed_parts=[(1, etag)],
+                )
+            except NotFoundError:
+                if self._stored_object(claim.record, key) is None:
+                    raise
+            if self._stored_object(claim.record, key) is None:
+                raise InvalidInputError("uploaded object does not match its declared content")
+            return repository.complete_write(claim, workspace_id=workspace_id)
 
     def object_is_complete(self, record: ObjectRecord) -> bool:
-        """Confirm physical bytes match the durable immutable object identity."""
-        physical_key = self.physical_key_for_record(record)
+        return self._stored_object(record, self.physical_key_for_record(record)) is not None
+
+    def _stored_object(self, record: ObjectRecord, physical_key: str) -> S3ObjectInfo | None:
         try:
             physical_bucket = self.physical_bucket(record.bucket)
             if not self.object_client.exists(physical_key, bucket=physical_bucket):
-                return False
+                return None
             info = self.object_client.head(physical_key, bucket=physical_bucket)
         except (KeyError, FileNotFoundError):
-            return False
+            return None
         except Exception as exc:
             raise UpstreamUnavailableError(
                 f"object completeness check failed: {record.bucket}/{record.key}"
             ) from exc
-        return (
-            info.size == record.size
-            and info.metadata.get(OBJECT_SHA256_METADATA_KEY) == record.sha256
-        )
+        if (
+            info.size != record.size
+            or info.metadata.get(OBJECT_SHA256_METADATA_KEY) != record.sha256
+        ):
+            return None
+        return info
 
     def get(self, bucket: str, key: str) -> ObjectRecord:
         return self.get_for_workspace(
@@ -1039,47 +1144,15 @@ class ObjectStorage:
             )
         reconciled = 0
         for owned in stale_writes:
-            record = owned.record
-            target = record.write_target
-            matches_target = False
-            stored_at: datetime | None = None
-            physical_key = (
-                self.physical_key_for_workspace(
-                    owned.workspace_id,
-                    bucket=target.bucket,
-                    key=target.key,
+            try:
+                self.finish_direct_upload(
+                    workspace_id=owned.workspace_id,
+                    object_id=owned.record.id,
+                    claim_id=owned.record.write_claim_id,
+                    etag=None,
                 )
-                if target is not None
-                else ""
-            )
-            if target is not None and self.object_client.exists(
-                physical_key,
-                bucket=self.physical_bucket(target.bucket),
-            ):
-                info = self.object_client.head(
-                    physical_key,
-                    bucket=self.physical_bucket(target.bucket),
-                )
-                matches_target = (
-                    info.size == target.size
-                    and info.metadata.get(OBJECT_SHA256_METADATA_KEY) == target.sha256
-                )
-                stored_at = info.last_modified
-            claim = ObjectWriteClaim(
-                record=(
-                    record.model_copy(update=target.model_dump()) if target is not None else record
-                ),
-                claim_id=record.write_claim_id,
-                created=record.write_created,
-            )
-            with self.context.database.session() as session:
-                repository = ObjectRepository(session)
-                if matches_target:
-                    repository.complete_write(
-                        claim, workspace_id=owned.workspace_id, stored_at=stored_at
-                    )
-                else:
-                    repository.abort_write(claim, workspace_id=owned.workspace_id)
+            except ConflictError:
+                continue
             reconciled += 1
         for owned in stale_deletes:
             reconciled += int(self._delete_claimed_object(owned.record))

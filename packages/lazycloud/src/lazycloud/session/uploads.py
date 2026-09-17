@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 from typing import BinaryIO, TypeAlias
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from shared.http.errors import HttpResponseDecodeError
-from shared.http.objects import ObjectMetadata, PutObjectRequest, PutObjectResponse
+import httpx
+from pydantic import ValidationError
+from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
+from shared.http.objects import (
+    BeginObjectUploadResponse,
+    ObjectMetadata,
+    PutObjectRequest,
+    PutObjectResponse,
+)
 from shared.http_transport import HttpChannel
 
 from lazycloud.terminal import ProgressCallback
@@ -32,7 +40,7 @@ def stream_object_bytes(
     progress: ProgressCallback | None,
     chunk_size: int = 1024 * 1024,
 ) -> PutObjectResponse:
-    """Upload one authenticated raw body and validate its committed object response."""
+    """Upload bytes directly to storage and validate the API's committed object response."""
     body = _ProgressBytesReader(data, progress=progress, chunk_size=chunk_size)
     return _stream_object(
         channel=channel,
@@ -106,37 +114,60 @@ def _stream_object(
         content_type=content_type,
         metadata=metadata or {},
     )
-    headers = {
-        "Content-Length": str(size),
-        "Content-Type": upload.content_type,
-        **_metadata_headers(upload.metadata),
-    }
-    query = urlencode(
-        {
-            "workspace": workspace,
-            "bucket": upload.bucket,
-            "name": upload.object_metadata.name,
-            "hash": upload.hash,
-            "size": upload.object_metadata.size,
-            "overwrite": "true" if upload.overwrite else "false",
-        }
-    )
-    response = channel.request_bytes(
-        "POST",
-        f"/gateway/objects/stream?{query}",
-        data=iter(body.read, b""),
-        headers=headers,
-        timeout_seconds=timeout_seconds,
-    )
-    body.finish()
+    scope = urlencode({"workspace": workspace})
     try:
-        return PutObjectResponse.model_validate_json(response)
-    except ValueError as exc:
+        prepared = BeginObjectUploadResponse.model_validate(
+            channel.post(
+                f"/gateway/objects/uploads?{scope}",
+                upload.model_dump(mode="json"),
+            )
+        )
+    except ValidationError as exc:
         raise HttpResponseDecodeError("object upload response contained invalid JSON") from exc
-
-
-def _metadata_headers(metadata: dict[str, str]) -> dict[str, str]:
-    return {f"x-object-meta-{key}": value for key, value in metadata.items()}
+    if prepared.upload is None:
+        body.finish(size)
+        return PutObjectResponse(object_id=prepared.object_id)
+    target = prepared.upload
+    parsed = urlsplit(target.url)
+    public_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    try:
+        try:
+            with httpx.Client(
+                follow_redirects=False, trust_env=False, timeout=timeout_seconds
+            ) as client:
+                response = client.put(
+                    target.url, headers=target.headers, content=iter(body.read, b"")
+                )
+        except httpx.HTTPError:
+            raise HttpTransportError(
+                "PUT", public_url, "object storage upload transport failed"
+            ) from None
+        if not response.is_success:
+            raise HttpApiError("object storage rejected upload", status_code=response.status_code)
+        etag = response.headers.get("etag", "")
+        if not etag:
+            raise HttpResponseDecodeError("object storage upload did not return an ETag")
+        try:
+            completed = PutObjectResponse.model_validate(
+                channel.post(
+                    f"/gateway/objects/uploads/{prepared.object_id}/complete?{scope}",
+                    {"claim_id": target.claim_id, "etag": etag},
+                )
+            )
+        except ValidationError as exc:
+            raise HttpResponseDecodeError(
+                "object completion response contained invalid JSON"
+            ) from exc
+    except BaseException:
+        # The durable claim keeps cleanup retryable if the API is unreachable.
+        with suppress(Exception):
+            channel.post(
+                f"/gateway/objects/uploads/{prepared.object_id}/abort?{scope}",
+                {"claim_id": target.claim_id},
+            )
+        raise
+    body.finish(size)
+    return completed
 
 
 class _ProgressBytesReader:
@@ -165,8 +196,8 @@ class _ProgressBytesReader:
         self._report(self._offset)
         return chunk
 
-    def finish(self) -> None:
-        self._report(len(self._data))
+    def finish(self, size: int) -> None:
+        self._report(size)
 
     def _report(self, completed: int) -> None:
         if self._progress is not None and completed != self._last_reported:
@@ -197,8 +228,8 @@ class _ProgressFileReader:
         self._report(self._completed)
         return chunk
 
-    def finish(self) -> None:
-        self._report(self._completed)
+    def finish(self, size: int) -> None:
+        self._report(size)
 
     def _report(self, completed: int) -> None:
         if self._progress is not None and completed != self._last_reported:

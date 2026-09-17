@@ -209,6 +209,7 @@ class ObjectRepository:
         completed = claim.record.model_copy(
             update={
                 "write_claim_id": "",
+                "write_upload_id": "",
                 "write_claimed_at": None,
                 "write_created": False,
                 "write_target": None,
@@ -255,10 +256,25 @@ class ObjectRepository:
             self.session.flush()
             return
         row.write_claim_id = ""
+        row.write_upload_id = ""
         row.write_claimed_at = None
         row.write_created = False
         current = object_from_table(row)
         write_object_row(row, current)
+        self.session.flush()
+
+    def bind_upload(self, claim: ObjectWriteClaim, upload_id: str, *, workspace_id: str) -> None:
+        row = self.session.scalar(
+            select(ObjectTable)
+            .where(
+                ObjectTable.id == claim.record.id,
+                ObjectTable.workspace_id == workspace_id,
+            )
+            .with_for_update()
+        )
+        if row is None or row.write_claim_id != claim.claim_id:
+            raise ConflictError("object write claim was replaced")
+        row.write_upload_id = upload_id
         self.session.flush()
 
     def list_stale_write_claims(
@@ -424,6 +440,14 @@ class ObjectRepository:
         row.cleanup_claimed_at = None
         self.session.flush()
         return True
+
+    def get_location(self, object_id: str, *, workspace_id: str) -> tuple[str, str] | None:
+        row = self.session.execute(
+            select(ObjectTable.bucket, ObjectTable.key).where(
+                ObjectTable.id == object_id, ObjectTable.workspace_id == workspace_id
+            )
+        ).one_or_none()
+        return (row.bucket, row.key) if row is not None else None
 
     def get(
         self,

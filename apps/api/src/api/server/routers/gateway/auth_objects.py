@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import RedirectResponse
 from gateway.http import (
     AuthorizeRequest,
@@ -9,13 +9,13 @@ from gateway.http import (
     SignPayloadResponse,
 )
 from gateway.service import GatewayControlService
-from pydantic import ValidationError
 from shared.app_identity import WORKSPACE_OBJECT_BUCKET
-from shared.errors import InvalidInputError
 from shared.http.objects import (
+    AbortObjectUploadRequest,
+    BeginObjectUploadResponse,
+    CompleteObjectUploadRequest,
     HeadObjectRequest,
     HeadObjectResponse,
-    ObjectMetadata,
     PutObjectRequest,
     PutObjectResponse,
 )
@@ -24,10 +24,8 @@ from api.server.auth import read_transfer, read_workspace, write_transfer, write
 from api.server.dependencies import (
     AuthorizationCredentials,
     authorization_header,
-    current_services,
 )
 from api.server.service_dependencies import gateway_service
-from api.server.services import ApiServices
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
@@ -59,49 +57,33 @@ def head_object(
     return service.head_object(request, workspace_id=workspace_id)
 
 
-@router.post("/objects/stream", response_model=PutObjectResponse)
-async def put_object_stream(
-    request: Request,
+@router.post("/objects/uploads", response_model=BeginObjectUploadResponse)
+def begin_object_upload(
+    request: PutObjectRequest,
     workspace_id: write_transfer,
-    name: str = Query("", max_length=1024),
-    object_hash: str = Query(
-        ...,
-        alias="hash",
-        min_length=64,
-        max_length=64,
-        pattern="^[0-9a-f]{64}$",
-    ),
-    size: int = Query(..., ge=0),
-    bucket: str = Query(WORKSPACE_OBJECT_BUCKET, min_length=1, max_length=63),
-    overwrite: bool = Query(False),
-    content_length: int | None = Header(None, ge=0),
     service: GatewayControlService = Depends(gateway_service),
-    services: ApiServices = Depends(current_services),
+) -> BeginObjectUploadResponse:
+    return service.begin_object_upload(request, workspace_id=workspace_id)
+
+
+@router.post("/objects/uploads/{object_id}/complete", response_model=PutObjectResponse)
+def complete_object_upload(
+    object_id: str,
+    request: CompleteObjectUploadRequest,
+    workspace_id: write_transfer,
+    service: GatewayControlService = Depends(gateway_service),
 ) -> PutObjectResponse:
-    if content_length is not None and content_length != size:
-        raise InvalidInputError("content length does not match object size")
-    media_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
-    try:
-        upload_request = PutObjectRequest(
-            object_metadata=ObjectMetadata(
-                name=name,
-                size=size,
-            ),
-            hash=object_hash,
-            bucket=bucket,
-            overwrite=overwrite,
-            content_type=media_type or "application/octet-stream",
-            metadata=_metadata_from_headers(request),
-        )
-    except ValidationError as exc:
-        raise InvalidInputError("invalid object upload metadata") from exc
-    return await service.put_object_chunks(
-        upload_request,
-        request.stream(),
-        workspace_id=workspace_id,
-        database=services.require_async_io().database,
-        http=services.require_async_io().object_upload_http,
-    )
+    return service.complete_object_upload(object_id, request, workspace_id=workspace_id)
+
+
+@router.post("/objects/uploads/{object_id}/abort", status_code=204)
+def abort_object_upload(
+    object_id: str,
+    request: AbortObjectUploadRequest,
+    workspace_id: write_transfer,
+    service: GatewayControlService = Depends(gateway_service),
+) -> None:
+    service.abort_object_upload(object_id, request, workspace_id=workspace_id)
 
 
 @router.get("/objects/download", response_class=RedirectResponse)
@@ -122,13 +104,3 @@ def download_object(
         ),
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
     )
-
-
-def _metadata_from_headers(request: Request) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    prefix = "x-object-meta-"
-    for key, value in request.headers.items():
-        lowered = key.lower()
-        if lowered.startswith(prefix):
-            metadata[lowered.removeprefix(prefix)] = value
-    return metadata

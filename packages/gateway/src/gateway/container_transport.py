@@ -13,6 +13,7 @@ from networking.dialer import (
 from pydantic import JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import UpstreamTimeoutError, UpstreamUnavailableError
+from shared.http.workspace_sync import WORKSPACE_SYNC_CONTENT_TYPE, WorkspaceSyncBatch
 from worker.container_client.control import ContainerServiceTransport
 from worker.container_client.models import (
     ContainerClientConnectionOptions,
@@ -83,13 +84,19 @@ class HttpContainerServiceTransport:
         path = f"{_CONTAINER_SERVICE_HTTP_PREFIX}/{method.value}"
         if stream:
             path = f"{path}/stream"
-        payload = json.dumps(
-            _encode_container_service_wire_value(request.model_dump(mode="python")),
-            separators=(",", ":"),
-        ).encode("utf-8")
+        payload = (
+            request.encode()
+            if isinstance(request, WorkspaceSyncBatch)
+            else json.dumps(
+                _encode_container_service_wire_value(request.model_dump(mode="python")),
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
         headers = {
             "accept": "application/json",
-            "content-type": "application/json",
+            "content-type": WORKSPACE_SYNC_CONTENT_TYPE
+            if isinstance(request, WorkspaceSyncBatch)
+            else "application/json",
             "content-length": str(len(payload)),
             **self.options.auth_metadata,
         }

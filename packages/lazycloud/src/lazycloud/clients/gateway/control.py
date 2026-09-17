@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlencode
 
+from pydantic import ValidationError
 from shared.checkpoints import CHECKPOINT_REQUEST_TIMEOUT_SECONDS
 from shared.contracts import ContractModel
 from shared.http.client_manifests import ClientManifestRequest, ClientManifestResponse
+from shared.http.errors import HttpResponseDecodeError
 from shared.http.gateway import (
     AttachToContainerRequest,
     AttachToContainerResponse,
@@ -22,8 +24,11 @@ from shared.http.gateway import (
     GetUrlResponse,
     ResolveDeploymentTargetRequest,
     ResolveDeploymentTargetResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
+)
+from shared.http.workspace_sync import (
+    WORKSPACE_SYNC_CONTENT_TYPE,
+    WorkspaceSyncBatch,
+    WorkspaceSyncResponse,
 )
 from shared.http_transport import HttpChannel
 
@@ -31,6 +36,16 @@ from lazycloud.control import workspace_path
 
 
 class GatewayControlChannel(Protocol):
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: bytes | Iterable[bytes],
+        headers: Mapping[str, str],
+        timeout_seconds: float | None = None,
+    ) -> bytes: ...
+
     def get(self, path: str) -> Any: ...
 
     def stream_get(self, path: str) -> Iterator[str]: ...
@@ -114,11 +129,19 @@ class GatewayControlClient:
 
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse:
-        return SyncContainerWorkspaceResponse.model_validate(
-            self.channel.post(self._scoped("/gateway/containers/sync-workspace"), _payload(body))
-        )
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse:
+        try:
+            return WorkspaceSyncResponse.model_validate_json(
+                self.channel.request_bytes(
+                    "POST",
+                    self._scoped("/gateway/containers/sync-workspace"),
+                    data=body.encode(),
+                    headers={"Content-Type": WORKSPACE_SYNC_CONTENT_TYPE},
+                )
+            )
+        except ValidationError as exc:
+            raise HttpResponseDecodeError("workspace sync response contained invalid JSON") from exc
 
     def get_or_create_stub(
         self,

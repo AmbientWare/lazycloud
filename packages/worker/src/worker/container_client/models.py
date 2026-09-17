@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import StrEnum
 
-from pydantic import Field, JsonValue
+from pydantic import Field
 from shared.contracts import ContractModel
 
 CONTAINER_CLIENT_SANDBOX_EXEC_TIMEOUT_SECONDS = 15.0
@@ -61,12 +61,6 @@ class ContainerTransportSecurity(StrEnum):
 
 class ContainerClientInterceptor(StrEnum):
     Auth = "auth"
-
-
-class ContainerWorkspaceSyncOperation(StrEnum):
-    Delete = "delete"
-    Write = "write"
-    Move = "move"
 
 
 class ContainerClientConnectionOptions(ContractModel):
@@ -373,17 +367,7 @@ class ContainerCheckpointResponse(ContractModel):
     checkpoint_id: str = ""
 
 
-class SyncContainerWorkspaceRequest(ContractModel):
-    container_id: str
-    operation: ContainerWorkspaceSyncOperation
-    path: str = ""
-    new_path: str = ""
-    data: bytes = b""
-    mode: int = 0o644
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
 class SyncContainerWorkspaceResponse(ContractModel):
     ok: bool = True
     error_msg: str = ""
-    path: str = ""
+    applied: int = 0

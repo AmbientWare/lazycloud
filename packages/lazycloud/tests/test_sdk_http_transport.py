@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import urllib.parse
@@ -16,6 +17,7 @@ from lazycloud.session import Client
 from lazycloud.session.deployment import DeploymentClient
 from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.session.uploads import stream_object_bytes
+from pydantic import JsonValue
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
 from shared.deployment_records import DeploymentSpec
@@ -31,6 +33,18 @@ class _TransportHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._handle()
+
+    def do_PUT(self) -> None:
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        assert self.headers.get("Authorization") is None
+        assert (
+            base64.b64encode(hashlib.sha256(body).digest()).decode()
+            == self.headers["x-amz-checksum-sha256"]
+        )
+        self.send_response(200)
+        self.send_header("ETag", "part")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:
         _ = format, args
@@ -57,27 +71,37 @@ class _TransportHandler(BaseHTTPRequestHandler):
             self._respond(status, body, content_type="application/json", duplicate_header=True)
             return
 
-        if parsed.path == "/gateway/objects/stream":
-            content_length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(content_length)
-            query = urllib.parse.parse_qs(parsed.query)
-            if query.get("name") == ["denied"]:
+        if parsed.path.startswith("/gateway/objects/uploads"):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            assert self.headers.get("Authorization") == "Bearer test-token"
+            if parsed.path.endswith("/complete"):
+                self._respond(200, b'{"object_id":"obj-stream"}', content_type="application/json")
+                return
+            name = body["object_metadata"]["name"]
+            if name == "denied":
                 self._respond(
-                    409,
-                    b'{"detail":"workspace is deleting"}',
-                    content_type="application/json",
+                    409, b'{"detail":"workspace is deleting"}', content_type="application/json"
                 )
                 return
-            if query.get("name") == ["invalid-response"]:
+            if name == "invalid-response":
                 self._respond(200, b"{}", content_type="application/json")
                 return
-            assert query["hash"] == [hashlib.sha256(body).hexdigest()]
-            assert query["size"] == [str(len(body))]
-            assert query["workspace"] == ["tenant-a"]
-            assert query["bucket"] == [SOURCE_PACKAGE_BUCKET]
-            assert self.headers.get("Authorization") == "Bearer test-token"
-            assert self.headers.get("X-Object-Meta-kind") == "source"
-            self._respond(200, b'{"object_id":"obj-stream"}', content_type="application/json")
+            assert body["bucket"] == SOURCE_PACKAGE_BUCKET
+            assert body["metadata"] == {"kind": "source"}
+            target: dict[str, JsonValue] = {
+                "object_id": "obj-stream",
+                "upload": {
+                    "claim_id": "claim",
+                    "url": f"http://{self.headers['Host']}/direct-upload",
+                    "headers": {
+                        "Content-Length": str(body["object_metadata"]["size"]),
+                        "x-amz-checksum-sha256": base64.b64encode(
+                            bytes.fromhex(body["hash"])
+                        ).decode(),
+                    },
+                },
+            }
+            self._respond(200, json.dumps(target).encode(), content_type="application/json")
             return
 
         content_length = int(self.headers.get("Content-Length", "0"))
@@ -291,9 +315,8 @@ def test_preparation_checks_source_existence_in_each_workspace(tmp_path: Path) -
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             assert self.headers["Authorization"] == "Bearer test-token"
             response: dict[str, object]
-            if parsed.path == "/gateway/objects/stream":
-                digest = hashlib.sha256(body).hexdigest()
-                assert query["hash"] == [digest]
+            if parsed.path == "/gateway/objects/uploads":
+                digest = json.loads(body)["hash"]
                 object_id = f"{workspace}-object-{len(uploads)}"
                 stored[workspace, digest] = object_id
                 uploads.append(workspace)
