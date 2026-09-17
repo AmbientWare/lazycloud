@@ -183,8 +183,8 @@ def announce_device_login(
     # visible in the link's host.
     error_console.print(
         notice_card(
-            "Sign in to lazycloud",
             f"Profile {profile} at {endpoint}\n\nOpen {started.verification_uri_complete}",
+            title="Sign in to lazycloud",
             hint=(
                 f"Confirm code {started.user_code}. "
                 f"It expires in {started.expires_in_seconds // 60} minutes. "
@@ -264,15 +264,12 @@ def login(
         ctx,
         payload=payload,
         view=notice_card(
-            "Signed in" if activate else "Profile saved",
-            (
-                f"Profile {saved.name} is active at {selected_endpoint_url}."
-                if activate
-                else (
-                    f"Saved profile {saved.name} for {selected_endpoint_url} "
-                    "without making it active."
-                )
+            f"Profile {saved.name} is active at {selected_endpoint_url}."
+            if activate
+            else (
+                f"Saved profile {saved.name} for {selected_endpoint_url} without making it active."
             ),
+            title="Signed in" if activate else "Profile saved",
             hint=("" if activate else f"Run `lazycloud profile activate {saved.name}` to use it."),
             tone="success",
         ),
@@ -315,7 +312,6 @@ def profile_current(ctx: typer.Context) -> None:
         ctx,
         payload=payload,
         view=result_card(
-            "Current profile",
             {
                 "name": profile.name,
                 "endpoint": profile.resolved_endpoint(),
@@ -335,7 +331,6 @@ def profile_show(
         ctx,
         payload=profile_payload(selected),
         view=result_card(
-            "Profile",
             {
                 "name": selected.name,
                 "endpoint": selected.resolved_endpoint(),
@@ -376,12 +371,9 @@ def profile_set(
         ctx,
         payload=payload,
         view=notice_card(
-            "Profile saved",
-            (
-                f"Profile {saved.name} is active."
-                if activate
-                else f"Saved profile {saved.name} without making it active."
-            ),
+            f"Profile {saved.name} is active."
+            if activate
+            else f"Saved profile {saved.name} without making it active.",
             tone="success",
         ),
     )
@@ -395,7 +387,6 @@ def profile_activate(ctx: typer.Context, name: str) -> None:
         ctx,
         payload=payload,
         view=notice_card(
-            "Profile activated",
             f"Using profile {profile.name}.",
             tone="success",
         ),
@@ -409,7 +400,6 @@ def profile_delete(ctx: typer.Context, name: str) -> None:
         ctx,
         payload={"name": name, "deleted": True},
         view=notice_card(
-            "Profile deleted",
             f"Deleted profile {name}.",
             tone="success",
         ),
@@ -433,7 +423,6 @@ def token_set(
         ctx,
         payload={"profile": profile_name, "token": "set"},
         view=notice_card(
-            "Token saved",
             f"Saved the token for profile {profile_name}.",
             tone="success",
         ),
@@ -450,7 +439,6 @@ def token_show(
         ctx,
         payload={"profile": selected.name, "token": "set" if selected.token else "not set"},
         view=notice_card(
-            "Token status",
             f"Profile {selected.name} has "
             f"{'a saved token.' if selected.token else 'no saved token.'}",
             tone="neutral",

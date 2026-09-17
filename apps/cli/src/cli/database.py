@@ -38,7 +38,6 @@ def database_check(ctx: typer.Context) -> None:
     emit_result(
         ctx,
         payload=payload,
-        title="Database connection",
         fields={"healthy": payload["healthy"], "backend": payload["backend"]},
         tone="success" if payload["healthy"] else "warning",
     )
@@ -47,7 +46,7 @@ def database_check(ctx: typer.Context) -> None:
 @database_app.command("status")
 def database_status(ctx: typer.Context) -> None:
     inspection = inspect_database_schema()
-    _show_schema(ctx, inspection, title="Database schema")
+    _show_schema(ctx, inspection)
 
 
 @database_app.command("migrate")
@@ -136,7 +135,7 @@ def _show_schema(
     ctx: typer.Context,
     inspection: DatabaseSchemaInspection,
     *,
-    title: str,
+    title: str | None = None,
 ) -> None:
     payload = _schema_payload(inspection)
     emit_result(

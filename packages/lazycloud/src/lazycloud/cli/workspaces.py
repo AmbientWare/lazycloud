@@ -92,8 +92,8 @@ def workspace_create(ctx: typer.Context, name: str) -> None:
         ctx,
         payload=workspace.model_dump(mode="json"),
         view=notice_card(
-            "Workspace created",
             f"Using {workspace.name}.",
+            title="Workspace created",
             tone="success",
         ),
     )
@@ -125,7 +125,6 @@ def workspace_use(ctx: typer.Context, name: str) -> None:
         ctx,
         payload=payload,
         view=notice_card(
-            "Workspace selected",
             f"Using {workspace.name}.",
             tone="success",
         ),
@@ -149,8 +148,8 @@ def workspace_rename(ctx: typer.Context, name: str) -> None:
         ctx,
         payload=workspace.model_dump(mode="json"),
         view=notice_card(
-            "Workspace renamed",
             f"Using {workspace.name}.",
+            title="Workspace renamed",
             tone="success",
         ),
     )
@@ -210,7 +209,6 @@ def workspace_delete(
         ctx,
         payload={"name": name, "deleted": True, "current": fallback or current.name},
         view=notice_card(
-            "Workspace deleted",
             f"Deleted {name}." + (f" Using {fallback}." if fallback else ""),
             tone="success",
         ),

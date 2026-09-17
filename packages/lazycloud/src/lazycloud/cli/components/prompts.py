@@ -42,8 +42,8 @@ def confirm_destructive(
         return
     error_console.print(
         notice_card(
-            subject,
             consequence,
+            title=subject,
             hint=f"Enter {confirmation} to continue.",
             tone="warning",
         )

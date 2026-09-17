@@ -96,7 +96,7 @@ def dev(
     if isinstance(response, ShellSession):
         open_shell_session(ctx, response, workspace=workspace)
         return
-    print_payload(ctx, response, title="Development session")
+    print_payload(ctx, response)
 
 
 def _default_dev_pod(overrides: DeploymentOverrides) -> Pod:

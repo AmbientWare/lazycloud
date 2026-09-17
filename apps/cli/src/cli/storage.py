@@ -87,7 +87,6 @@ def object_delete(ctx: typer.Context, bucket: str, key: str) -> None:
     emit_notice(
         ctx,
         payload=payload,
-        title="Object deleted",
         message=f"Deleted {bucket}/{key}.",
     )
 
@@ -124,7 +123,6 @@ def cache_list(ctx: typer.Context) -> None:
         emit_result(
             ctx,
             payload=[item.model_dump(mode="json") for item in records],
-            title="Cache",
             fields={
                 "entries": len(records),
                 "size": humanize_bytes(sum(item.size for item in records)),
@@ -160,6 +158,5 @@ def cache_delete(ctx: typer.Context, namespace: str, key: str) -> None:
     emit_notice(
         ctx,
         payload=payload,
-        title="Cache entry deleted",
         message=f"Deleted {namespace}/{key}.",
     )

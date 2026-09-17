@@ -134,7 +134,6 @@ def queue_size(ctx: typer.Context, name: str) -> None:
     emit_result(
         ctx,
         payload=response.model_dump(mode="json"),
-        title="Queue size",
         fields={"queue": name, "messages": response.size},
     )
 
@@ -145,7 +144,6 @@ def queue_delete(ctx: typer.Context, name: str) -> None:
     emit_notice(
         ctx,
         payload={"name": name, "deleted": True},
-        title="Queue deleted",
         message=f"Deleted {name}.",
     )
 
@@ -223,7 +221,6 @@ def map_delete_key(ctx: typer.Context, name: str, key: str) -> None:
     emit_notice(
         ctx,
         payload={"map": name, "key": key, "deleted": True},
-        title="Map key deleted",
         message=f"Deleted {key} from {name}.",
     )
 
@@ -234,7 +231,6 @@ def map_delete(ctx: typer.Context, name: str) -> None:
     emit_notice(
         ctx,
         payload={"name": name, "deleted": True},
-        title="Map deleted",
         message=f"Deleted {name}.",
     )
 
@@ -350,7 +346,7 @@ def container_logs(
         print_payload(ctx, response.model_dump(mode="json"))
         return
     if not response.data:
-        console.print(empty_state("Container logs", "No log entries found."))
+        console.print(empty_state("No log entries found."))
         return
     for entry in response.data:
         print_stream_message(entry.stream, entry.message)
@@ -375,7 +371,7 @@ def container_events(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    print_events_table("Container events", list(response.data))
+    print_events_table(list(response.data))
 
 
 def container_delete(
@@ -387,7 +383,6 @@ def container_delete(
     emit_notice(
         ctx,
         payload={"container_id": container_id, "deleted": True},
-        title="Container deleted",
         message=f"Deleted {container_id}.",
     )
 
@@ -570,7 +565,6 @@ def unit_delete(ctx: typer.Context, unit_id: str) -> None:
     emit_notice(
         ctx,
         payload={"unit_id": unit_id, "deleted": True},
-        title="Unit deleted",
         message=f"Deleted {unit_id}.",
     )
 
@@ -659,8 +653,8 @@ def pool_join(
     if print_only:
         console.print(
             notice_card(
-                "Unit join command",
                 command,
+                title="Unit join command",
                 hint="This command contains a short-lived credential. Do not share it.",
                 tone="warning",
             )
@@ -716,7 +710,6 @@ def machine_delete(ctx: typer.Context, machine_id: str) -> None:
     emit_notice(
         ctx,
         payload={"machine_id": machine_id, "deleted": True},
-        title="Machine deleted",
         message=f"Deleted {machine_id}.",
     )
 
@@ -799,7 +792,6 @@ def worker_delete(ctx: typer.Context, worker_id: str) -> None:
     emit_notice(
         ctx,
         payload={"worker_id": worker_id, "deleted": True},
-        title="Worker deleted",
         message=f"Deleted {worker_id}.",
     )
 

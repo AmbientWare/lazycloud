@@ -18,9 +18,9 @@ CARD_MAX_WIDTH = 88
 
 
 def result_card(
-    title: str,
     payload: JsonValue,
     *,
+    title: str | None = None,
     tone: CardTone = "neutral",
     message: str = "",
 ) -> RenderableType:
@@ -39,13 +39,13 @@ def result_card(
 
 
 def notice_card(
-    title: str,
     message: str,
     *,
+    title: str | None = None,
     hint: str = "",
     tone: CardTone = "info",
 ) -> RenderableType:
-    body = Text(message)
+    body = Text(message, style=theme.PLAIN if tone == "neutral" else _tone_style(tone))
     if hint:
         body.append("\nNext step  ", style=theme.MUTED)
         body.append(hint)
@@ -53,11 +53,13 @@ def notice_card(
 
 
 def card(
-    title: str,
+    title: str | None,
     body: RenderableType,
     *,
     tone: CardTone = "neutral",
 ) -> RenderableType:
+    if title is None:
+        return body
     panel = Panel(
         body,
         title=Text(title, style=theme.EMPHASIS),
@@ -69,17 +71,18 @@ def card(
     return Constrain(panel, width=CARD_MAX_WIDTH)
 
 
-def empty_state(title: str, message: str) -> RenderableType:
-    return notice_card(title, message, tone="neutral")
+def empty_state(message: str) -> RenderableType:
+    return formatting.text(message, style=theme.MUTED)
 
 
 def _sequence(items: list[JsonValue]) -> RenderableType:
     if not items:
         return formatting.text(None)
     parts: list[RenderableType] = []
-    for index, item in enumerate(items, start=1):
+    for item in items:
         if isinstance(item, dict):
-            parts.append(Text(f"Result {index}", style=theme.MUTED + theme.EMPHASIS))
+            if parts:
+                parts.append(Text())
             parts.append(formatting.fields(item))
         else:
             line = Text("• ", style=theme.MUTED)

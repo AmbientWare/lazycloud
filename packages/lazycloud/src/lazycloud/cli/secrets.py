@@ -52,7 +52,7 @@ def secret_create(
     emit(
         ctx,
         payload={"id": response.id, "name": response.name},
-        view=notice_card("Secret created", f"Created {response.name}.", tone="success"),
+        view=notice_card(f"Created {response.name}.", tone="success"),
     )
 
 
@@ -67,7 +67,7 @@ def secret_modify(
     emit(
         ctx,
         payload={"name": name, "updated": True},
-        view=notice_card("Secret updated", f"Updated {name}.", tone="success"),
+        view=notice_card(f"Updated {name}.", tone="success"),
     )
 
 
@@ -81,7 +81,7 @@ def secret_delete(
     emit(
         ctx,
         payload={"name": name, "deleted": True},
-        view=notice_card("Secret deleted", f"Deleted {name}.", tone="success"),
+        view=notice_card(f"Deleted {name}.", tone="success"),
     )
 
 
@@ -103,7 +103,6 @@ def secret_show(
         ctx,
         payload=payload,
         view=result_card(
-            "Secret",
             json_default(
                 {
                     "name": response.secret.name,

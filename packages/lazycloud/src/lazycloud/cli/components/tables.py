@@ -13,15 +13,15 @@ from lazycloud.cli.components.cards import empty_state
 
 
 def resource_table(
-    title: str,
     columns: Sequence[str],
     rows: Sequence[Sequence[object]],
     *,
+    title: str | None = None,
     empty: str | None = None,
     expand: bool = False,
 ) -> RenderableType:
     if not rows and empty:
-        return empty_state(title, empty)
+        return empty_state(empty)
     output = Table(
         title=title,
         title_justify="left",

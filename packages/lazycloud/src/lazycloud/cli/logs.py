@@ -69,7 +69,7 @@ def logs(
         return
     records = [_log_record_line(item) for item in response.data]
     if not records:
-        console.print(empty_state("Logs", "No log entries found."))
+        console.print(empty_state("No log entries found."))
         return
     for timestamp, message in records:
         line = f"[{timestamp}] {message}" if show_timestamp else message

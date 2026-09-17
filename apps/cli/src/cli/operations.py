@@ -180,7 +180,6 @@ def cron_delete(ctx: typer.Context, name: str) -> None:
     emit_notice(
         ctx,
         payload={"name": name, "deleted": True},
-        title="Cron job deleted",
         message=f"Deleted {name}.",
     )
 
@@ -348,7 +347,7 @@ def autoscaler_history(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    print_events_table("Autoscaler history", response.events)
+    print_events_table(response.events)
 
 
 @autoscaler_app.command("reconcile")

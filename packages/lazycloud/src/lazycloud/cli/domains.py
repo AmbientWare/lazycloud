@@ -41,12 +41,12 @@ def _print(ctx: typer.Context, domain: CustomDomainResponse) -> None:
     emit(
         ctx,
         payload=_payload(domain),
-        view=result_card("Domain", json_default(summary)),
+        view=result_card(json_default(summary)),
     )
     if json_output_enabled(ctx):
         return
     if domain.error_message:
-        console.print(notice_card("Domain error", domain.error_message, tone="warning"))
+        console.print(notice_card(domain.error_message, title="Domain error", tone="warning"))
     if domain.phase is not CustomDomainPhase.Ready and domain.cname_target:
         _print_dns_record(domain)
 
@@ -59,6 +59,7 @@ def _print_dns_record(domain: CustomDomainResponse) -> None:
             "DNS record",
             ["type", "name", "target"],
             [["CNAME", domain.hostname, domain.cname_target]],
+            title="DNS record",
         )
     )
     if domain.required_records:
@@ -67,6 +68,7 @@ def _print_dns_record(domain: CustomDomainResponse) -> None:
                 "Ownership records",
                 ["type", "name", "value"],
                 [[r.type, r.name, r.value] for r in domain.required_records],
+                title="Ownership records",
             )
         )
 
@@ -84,8 +86,8 @@ def domain_add(
         ctx,
         payload=_payload(registered),
         view=notice_card(
-            "Domain added",
             f"{registered.hostname} is {registered.phase.value.replace('_', ' ')}.",
+            title="Domain added",
             hint=f"Run `lazycloud domain status {registered.hostname}` to check it.",
             tone="success" if registered.phase is CustomDomainPhase.Ready else "info",
         ),
@@ -93,7 +95,7 @@ def domain_add(
     if json_output_enabled(ctx):
         return
     if registered.error_message:
-        console.print(notice_card("Domain error", registered.error_message, tone="warning"))
+        console.print(notice_card(registered.error_message, title="Domain error", tone="warning"))
     if registered.phase is not CustomDomainPhase.Ready and registered.cname_target:
         _print_dns_record(registered)
 
@@ -138,7 +140,7 @@ def domain_remove(
     emit(
         ctx,
         payload={"hostname": hostname, "removed": True},
-        view=notice_card("Domain removed", f"Removed {hostname}.", tone="success"),
+        view=notice_card(f"Removed {hostname}.", tone="success"),
     )
 
 

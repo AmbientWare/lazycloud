@@ -61,7 +61,6 @@ def volume_create(
         ctx,
         payload=response.volume.model_dump(mode="json"),
         view=notice_card(
-            "Volume created",
             f"Created {response.volume.name}.",
             tone="success",
         ),
@@ -86,7 +85,6 @@ def volume_delete(
         ctx,
         payload={"name": name, "deleted": response.deleted},
         view=notice_card(
-            "Volume deleted" if response.deleted else "Volume deletion queued",
             f"Deleted {name}." if response.deleted else f"Deleting {name}. Billing has stopped.",
             tone="success",
         ),
@@ -115,9 +113,13 @@ def volume_ls(
         for item in response.path_infos
     ]
     output = table(
-        f"{selected.full_path} ({len(response.path_infos)} items, {humanize_bytes(total_size)})",
+        "files",
         ["name", "size", "modified"],
         rows,
+        title=(
+            f"{selected.full_path}, {len(response.path_infos)} items, {humanize_bytes(total_size)}"
+        ),
+        empty=f"No files at {selected.full_path}.",
     )
     console.print(output)
 
@@ -142,8 +144,8 @@ def volume_cp(
             ctx,
             payload={"source": source_remote.full_path, "destination": str(result)},
             view=result_card(
-                "Download complete",
                 {"saved_to": str(result)},
+                title="Download complete",
                 tone="success",
             ),
         )
@@ -154,8 +156,8 @@ def volume_cp(
         ctx,
         payload={"source": source, "destination": selected_destination.full_path, "copied": copied},
         view=result_card(
-            "Upload complete",
             {"destination": selected_destination.full_path, "files": len(copied)},
+            title="Upload complete",
             tone="success",
         ),
     )
@@ -174,7 +176,6 @@ def volume_rm(
         ctx,
         payload={"deleted": list(response.deleted)},
         view=notice_card(
-            "Paths deleted",
             f"Deleted {len(response.deleted)} path{'s' if len(response.deleted) != 1 else ''}.",
             tone="success",
         ),
@@ -198,7 +199,6 @@ def volume_mv(
         ctx,
         payload={"new_path": response.new_path or new.full_path},
         view=notice_card(
-            "Path moved",
             f"Moved to {response.new_path or new.full_path}.",
             tone="success",
         ),
