@@ -35,7 +35,6 @@ def example_download(
         ctx,
         payload={"name": name, "path": str(target), "files": written},
         view=result_card(
-            "Example downloaded",
             {
                 "path": str(target),
                 "files": len(written),
@@ -45,6 +44,7 @@ def example_download(
                     else "Open the project directory and follow README.md."
                 ),
             },
+            title="Example downloaded",
             tone="success",
         ),
     )

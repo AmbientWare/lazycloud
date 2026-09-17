@@ -52,7 +52,6 @@ def test_output_channels_preserve_json_cleanliness_and_restore_human_state(
 
     print_payload(_context(json_output=False), {"phase": "ready", "attempts": 2})
     captured = capsys.readouterr()
-    assert "Result" in captured.out
     assert "Phase" in captured.out
     assert "ready" in captured.out
     assert "{'phase'" not in captured.out

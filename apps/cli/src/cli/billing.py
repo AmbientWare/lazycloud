@@ -133,13 +133,13 @@ def publish_rates(
         payload=payload,
         view=Group(
             result_card(
-                "Rates published" if confirm else "Rate preview",
                 {
                     "effective": moment.isoformat(),
                     "pricing version": METERED_RATE_VERSION,
                     "compute rates": len(compute_rates),
                     "platform rate": str(payload["platform_rate_state"]),
                 },
+                title="Rates published" if confirm else "Rate preview",
                 tone="success" if confirm else "info",
                 message="No changes were written." if not confirm else "",
             ),
@@ -168,6 +168,7 @@ def publish_rates(
                     ]
                     for rate in compute_rates
                 ],
+                title="Compute rates",
             ),
             table(
                 "Platform rates",
@@ -176,6 +177,7 @@ def publish_rates(
                     ["egress/GiB", payload["nanos_per_egress_gib"]],
                     ["volume/GiB-month", payload["nanos_per_volume_gib_month"]],
                 ],
+                title="Platform rates",
             ),
         ),
     )

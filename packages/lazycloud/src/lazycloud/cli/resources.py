@@ -81,7 +81,6 @@ def compute_status(
         instance_states.append(f"{response.instances.degraded} degraded")
     console.print(
         result_card(
-            "Compute",
             {
                 "default_pool": response.policy.default_pool,
                 "cloud": connection.account_id if connection is not None else "not connected",
@@ -171,7 +170,6 @@ def compute_policy_show(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "Compute policy",
             {"default_pool": response.default_pool},
         ),
     )
@@ -196,7 +194,6 @@ def compute_policy_update(
         ctx,
         payload=response.model_dump(mode="json"),
         view=notice_card(
-            "Compute policy updated",
             f"New workloads will use pool {response.default_pool} by default.",
             tone="success",
         ),
@@ -247,8 +244,8 @@ def cloud_connect_aws(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "AWS authorization required",
             json_default(authorization),
+            title="AWS authorization required",
             tone="info",
         ),
     )
@@ -278,8 +275,8 @@ def cloud_reconnect(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "Replacement authorization required",
             json_default(authorization),
+            title="Replacement authorization required",
             tone="info",
         ),
     )
@@ -302,8 +299,8 @@ def cloud_authorize(
         ctx,
         payload={"stack_id": stack_id, "status": "CREATE_IN_PROGRESS"},
         view=result_card(
-            "AWS connection stack submitted",
             "Run `lazycloud cloud validate` after the stack finishes in CloudFormation.",
+            title="AWS connection stack submitted",
             tone="info",
         ),
     )
@@ -329,8 +326,8 @@ def cloud_validate(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "AWS authorization validated" if failure is None else "AWS validation failed",
             json_default(summary),
+            title="AWS authorization validated" if failure is None else "AWS validation failed",
             tone="success" if failure is None else "warning",
         ),
     )
@@ -361,7 +358,6 @@ def cloud_status(
             ctx,
             payload={"connection": None},
             view=notice_card(
-                "Cloud connection",
                 "No cloud account is connected.",
                 tone="neutral",
             ),
@@ -387,7 +383,7 @@ def cloud_status(
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
-        view=result_card("Cloud connection", json_default(_connection_summary(response))),
+        view=result_card(json_default(_connection_summary(response))),
     )
 
 
@@ -438,8 +434,8 @@ def cloud_disconnect(
         ctx,
         payload=payload,
         view=result_card(
-            "AWS account removed" if connection is None else "AWS disconnect status",
             json_default(summary),
+            title="AWS account removed" if connection is None else "AWS disconnect status",
             tone="success" if connection is None else "info",
         ),
     )
@@ -465,8 +461,8 @@ def cloud_cancel_reconnect(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "Reconnect cancelled",
             json_default(_connection_summary(response)),
+            title="Reconnect cancelled",
             tone="success",
         ),
     )
@@ -482,8 +478,8 @@ def cloud_retry(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "Cloud action retried",
             json_default(_connection_summary(response)),
+            title="Cloud action retried",
             tone="info",
         ),
     )
@@ -562,8 +558,8 @@ def task_stop(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "Tasks stopped",
             json_default(summary),
+            title="Tasks stopped",
             tone="warning" if response.skipped else "success",
         ),
     )
@@ -595,7 +591,7 @@ def task_show(
     emit(
         ctx,
         payload=task.model_dump(mode="json"),
-        view=result_card("Task", json_default(summary)),
+        view=result_card(json_default(summary)),
     )
 
 
@@ -625,7 +621,6 @@ def task_result(
             ctx,
             payload=task.model_dump(mode="json"),
             view=result_card(
-                "Task result",
                 json_default(task_result_human_value(task)),
                 tone="success",
             ),
@@ -642,7 +637,6 @@ def task_result(
         ctx,
         payload=task.model_dump(mode="json"),
         view=notice_card(
-            "Task pending",
             f"Task {task_id} is {task.status.value.replace('_', ' ')}.",
             hint=f"Run `lazycloud task result {task_id}` to wait for it.",
         ),
@@ -661,7 +655,7 @@ def task_logs(
         print_payload(ctx, [entry.model_dump(mode="json") for entry in logs])
         return
     if not logs:
-        console.print(empty_state("Task logs", "No log entries found."))
+        console.print(empty_state("No log entries found."))
         return
     for entry in logs:
         write_stream(entry.message if entry.message.endswith("\n") else f"{entry.message}\n")
@@ -678,7 +672,6 @@ def task_cancel(
         ctx,
         payload=response.model_dump(mode="json"),
         view=notice_card(
-            "Task cancelled",
             f"Cancelled task {task_id}.",
             tone="success",
         ),
@@ -740,8 +733,8 @@ def container_attach(
         ctx,
         payload=terminal.model_dump(mode="json"),
         view=result_card(
-            "Container finished",
             {"exit_code": terminal.exit_code if terminal.exit_code is not None else "Not reported"},
+            title="Container finished",
             tone="success" if terminal.exit_code == 0 else "warning",
         ),
     )
@@ -763,7 +756,6 @@ def container_checkpoint(
         ctx,
         payload=response.model_dump(mode="json"),
         view=notice_card(
-            "Checkpoint created",
             f"Created checkpoint {response.checkpoint_id}.",
             tone="success",
         ),
@@ -785,7 +777,6 @@ def container_stop(
         ctx,
         payload=results,
         view=notice_card(
-            "Containers stopped",
             f"Stopped {len(results)} container{'s' if len(results) != 1 else ''}.",
             tone="success",
         ),
@@ -895,7 +886,7 @@ def machine_join(
     emit(
         ctx,
         payload={"status": "running"},
-        view=notice_card("Machine joined", "The agent is running.", tone="success"),
+        view=notice_card("The agent is running.", title="Machine joined", tone="success"),
     )
 
 
@@ -910,5 +901,5 @@ def machine_remove(
     emit(
         ctx,
         payload={"machine_id": machine_id, "removed": True},
-        view=notice_card("Machine removed", f"Removed {machine_id}.", tone="success"),
+        view=notice_card(f"Removed {machine_id}.", tone="success"),
     )

@@ -49,7 +49,7 @@ def release_fetch_agent(
         emit(
             ctx,
             payload=payload,
-            view=notice_card("No release configured", "There is no agent binary to fetch."),
+            view=notice_card("There is no agent binary to fetch.", title="No release configured"),
         )
         return
 
@@ -98,7 +98,6 @@ def release_status(ctx: typer.Context) -> None:
         emit_result(
             ctx,
             payload={"release": release.model_dump(mode="json"), "workers": records},
-            title="Active release",
             fields={"version": release.target.version, "generation": release.generation},
         )
     finally:

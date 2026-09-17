@@ -56,7 +56,6 @@ def report(
     emit_result(
         ctx,
         payload=result.model_dump(mode="json"),
-        title="Economics report",
         fields={
             "status": result.status.value,
             "gross usage nanos": result.gross_usage_nanos,

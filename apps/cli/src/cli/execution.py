@@ -66,7 +66,7 @@ def events(
     if json_output_enabled(ctx):
         print_payload(ctx, result.model_dump(mode="json"))
         return
-    print_events_table("Events", list(result.data))
+    print_events_table(list(result.data))
 
 
 __all__ = ["events", "invoke"]

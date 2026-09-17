@@ -22,7 +22,7 @@ from rich.console import Console, RenderableType
 from shared.events import Event
 from shared.serialization import to_json_value
 
-from lazycloud.cli.components.cards import CardTone, empty_state, result_card
+from lazycloud.cli.components.cards import empty_state, result_card
 from lazycloud.cli.components.tables import resource_table
 from lazycloud.json_contracts import parse_json_value
 
@@ -116,21 +116,12 @@ def emit(ctx: typer.Context, *, payload: Any, view: RenderableType) -> None:
 def print_payload(
     ctx: typer.Context,
     payload: Any,
-    *,
-    title: str | None = None,
-    tone: CardTone | None = None,
-    message: str = "",
 ) -> None:
     normalized = json_default(payload)
     emit(
         ctx,
         payload=normalized,
-        view=result_card(
-            title or _command_title(ctx),
-            normalized,
-            tone=tone or _command_tone(ctx),
-            message=message,
-        ),
+        view=result_card(normalized),
     )
 
 
@@ -142,66 +133,24 @@ def write_stream(value: str, *, error: bool = False) -> None:
 
 
 def table(
-    title: str,
+    resource: str,
     columns: list[str],
     rows: list[list[Any]],
     *,
+    title: str | None = None,
     expand: bool = False,
     empty: str | None = None,
 ) -> RenderableType:
     return resource_table(
-        title,
         columns,
         rows,
-        empty=empty or f"No {title.lower()} found.",
+        title=title,
+        empty=empty or f"No {resource.lower()} found.",
         expand=expand,
     )
 
 
-def _command_title(ctx: typer.Context) -> str:
-    names = [part.replace("-", " ") for part in ctx.command_path.split()[1:]]
-    if not names:
-        return "Result"
-    return " ".join(names).capitalize()
-
-
-def _command_tone(ctx: typer.Context) -> CardTone:
-    command = (ctx.info_name or "").replace("-", "_")
-    if command in {
-        "activate",
-        "add",
-        "cancel",
-        "checkpoint",
-        "connect",
-        "cp",
-        "create",
-        "create_app",
-        "delete",
-        "deploy",
-        "disconnect",
-        "download",
-        "get",
-        "modify",
-        "move",
-        "mv",
-        "pause",
-        "quickstart",
-        "remove",
-        "rename",
-        "resume",
-        "retry",
-        "rm",
-        "scale",
-        "set",
-        "start",
-        "stop",
-        "update",
-    }:
-        return "success"
-    return "neutral"
-
-
-def event_table(title: str, events: Sequence[Event]) -> RenderableType:
+def event_table(events: Sequence[Event]) -> RenderableType:
     rows = [
         [
             item.created_at.isoformat(),
@@ -214,18 +163,18 @@ def event_table(title: str, events: Sequence[Event]) -> RenderableType:
         for item in events
     ]
     return table(
-        title,
+        "events",
         ["time", "level", "action", "type", "resource", "message"],
         rows,
         expand=True,
     )
 
 
-def print_events_table(title: str, events: Sequence[Event]) -> None:
+def print_events_table(events: Sequence[Event]) -> None:
     if not events:
-        console.print(empty_state(title, "No events found."))
+        console.print(empty_state("No events found."))
         return
-    console.print(event_table(title, events))
+    console.print(event_table(events))
 
 
 __all__ = [
