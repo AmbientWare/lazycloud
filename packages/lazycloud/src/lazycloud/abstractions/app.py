@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ParamSpec, Protocol, TypeVar, overload
@@ -51,6 +53,7 @@ from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
 from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.json_contracts import resource_payload
+from lazycloud.session.preparation import MAX_DEPLOYMENT_PREPARATIONS, DeploymentPreparation
 
 
 class AppOperationError(RuntimeError):
@@ -877,12 +880,16 @@ class App:
         deployed. With `resource`, pass either the resource name or
         `"kind:name"` when names overlap, for example `"endpoint:api"`.
 
+        Up to four resources deploy concurrently and share matching source and
+        image preparation within this call. Results retain registration order.
+        On failure, queued deployments are canceled; running deployments may finish.
+
         Args:
             resource: Optional resource selector to deploy only one item.
             name: Deployment name override when deploying one resource.
             workspace: Workspace slug or name for the deployment.
             external_url: External URL to attach to endpoint-style deployments.
-            source_root: Local source directory packaged for each selected resource.
+            source_root: Local source directory shared by the selected resources.
             image, cpu, memory, gpu, gpu_count: Runtime overrides applied before deployment.
             env, secrets, ports, keep_warm, tcp, pool, entrypoint: Additional runtime
                 overrides. Target-specific options fail explicitly when unsupported.
@@ -908,23 +915,36 @@ class App:
                 preemptible=preemptible,
                 entrypoint=entrypoint,
             )
-        results: list[object] = []
-        for item in deployable:
-            method = item.deploy
-            method_kwargs: dict[str, object] = {
-                "name": name if resource else None,
-                "workspace": workspace,
-                "external_url": external_url,
-                "source_root": source_root,
-            }
+        with (
+            DeploymentPreparation() as preparation,
+            ThreadPoolExecutor(
+                max_workers=MAX_DEPLOYMENT_PREPARATIONS, thread_name_prefix="app-deploy"
+            ) as executor,
+        ):
+            submitted = [
+                executor.submit(
+                    copy_context().run,
+                    _deploy_app_resource,
+                    item,
+                    {
+                        "name": name if resource else None,
+                        "workspace": workspace,
+                        "external_url": external_url,
+                        "source_root": source_root,
+                        "_preparation": preparation,
+                    },
+                )
+                for item in deployable
+            ]
             try:
-                results.append(_invoke_method(method, method_kwargs))
-            except RuntimeError as exc:
-                spec = item.spec()
-                raise AppOperationError(
-                    f"failed to deploy {spec.kind.value}:{spec.name}: {exc}"
-                ) from exc
-        return AppDeployResult(app=self.slug, resources=tuple(results))
+                for future in as_completed(submitted):
+                    future.result()
+                results = tuple(future.result() for future in submitted)
+            except BaseException:
+                for future in submitted:
+                    future.cancel()
+                raise
+        return AppDeployResult(app=self.slug, resources=results)
 
     def serve(
         self,
@@ -1192,6 +1212,17 @@ def _is_serveable(resource: AppResource) -> bool:
         DeploymentKind.Endpoint,
         DeploymentKind.Asgi,
     }
+
+
+def _deploy_app_resource(
+    item: Function[..., Any] | Endpoint[..., Any] | ASGI | Pod,
+    kwargs: Mapping[str, object],
+) -> object:
+    try:
+        return _invoke_method(item.deploy, kwargs)
+    except RuntimeError as exc:
+        spec = item.spec()
+        raise AppOperationError(f"failed to deploy {spec.kind.value}:{spec.name}: {exc}") from exc
 
 
 def _invoke_method(method: Callable[..., Any], kwargs: Mapping[str, object]) -> Any:
