@@ -52,7 +52,7 @@ export function CloudHero() {
           <em>
             for agentic
             <br />
-            development.
+            engineering.
           </em>
         </h1>
         <p>Building with agents is fast. Deploying with LazyCloud is too.</p>
