@@ -18,6 +18,7 @@ from execution.collections.redis import (
 )
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
+from identity.platform import PlatformNamespaceService
 from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
 from shared.identity import WorkspaceRecord
 from sqlalchemy import Engine
@@ -44,6 +45,7 @@ def service_graph(
     """Compose services over a migrated database. The caller owns async I/O."""
 
     maps = RedisMapService(binary_redis_client)
+    PlatformNamespaceService(database).initialize()
     simple_queues = RedisSimpleQueueService(binary_redis_client)
 
     services = ApiServices.create(

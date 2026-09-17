@@ -17,7 +17,6 @@ from compute.providers import (
 )
 from provider_aws import (
     AwsAccountConnectionTarget,
-    AwsConnectedAccountPooledProvider,
     AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClients,
@@ -26,6 +25,7 @@ from provider_aws import (
     AwsManagedPoolProvisioningError,
     AwsManagedPoolResourceIds,
     AwsManagedPoolSpec,
+    AwsPooledCapacityProvider,
     AwsProviderControlError,
     AwsProviderControlErrorCode,
     AwsRegionalPrices,
@@ -612,7 +612,7 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
 
 
 def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
-    provider = AwsConnectedAccountPooledProvider(
+    provider = AwsPooledCapacityProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
         networks={"us-east-1": _NETWORK},
@@ -646,10 +646,10 @@ def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
         choose_offer(list(unpriced.list_offers(root_volume_gib=200)), OfferRequest(nodes=1))
 
 
-def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> None:
+def test_pooled_provider_preserves_capacity_across_namespace_adoption() -> None:
     ec2 = _Ec2()
     autoscaling = _AutoScaling()
-    provider = AwsConnectedAccountPooledProvider(
+    provider = AwsPooledCapacityProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
         networks={"us-east-1": _NETWORK},
@@ -665,13 +665,19 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     request = _pool_request(provider.provider_ref)
 
     created = provider.set_unit_capacity(request, desired_machines=1, max_machines=3)
+    original_namespace = request.workspace_id
+    request = request.model_copy(
+        update={"workspace_id": "platform-namespace", "provider_state": created.provider_state}
+    )
     updated = provider.set_unit_capacity(
-        request.model_copy(update={"provider_state": created.provider_state}),
+        request,
         desired_machines=2,
         max_machines=3,
     )
     assert created.desired_machines == 1
     assert updated.desired_machines == 2
+    assert updated.provider_state.attributes["namespace_id"] == original_namespace
+    assert updated.resource_id == created.resource_id
     assert autoscaling.create_count == 1
     assert autoscaling.update_count == 1
     assert sorted(ec2.launch_versions) == [1]
@@ -777,10 +783,13 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
     assert {instance.booted_template_version for instance in agent_release.instances} == {
         ready.current_template_version
     }
+    provider.delete_unit(observed_request)
+    deleted = provider.delete_unit(observed_request)
+    assert deleted.phase is ProviderCapacityPhase.Deleted
 
 
 def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
-    provider = AwsConnectedAccountPooledProvider(
+    provider = AwsPooledCapacityProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         networks={},
         connection=AwsAccountConnectionTarget(

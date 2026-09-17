@@ -280,7 +280,7 @@ class BillingStandingService:
             concurrent_gpus=containers.count_live_gpus_for_owner(owner_user_id=user_id),
             workspaces=members.owned_workspace_count(user_id),
             members=members.distinct_member_count_for_owner(user_id),
-            connected_clouds=int(connection is not None and not connection.platform_fleet),
+            connected_clouds=int(connection is not None),
             custom_domains=CustomDomainRepository(self.session).count_for_user(user_id),
         )
 

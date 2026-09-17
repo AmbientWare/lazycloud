@@ -39,7 +39,7 @@ def workspace_response(record: WorkspaceRecord) -> WorkspaceResponse:
     return WorkspaceResponse.model_validate(
         record.model_dump(
             mode="json",
-            exclude={"signing_key": True, "storage": {"config"}},
+            exclude={"kind": True, "signing_key": True, "storage": {"config"}},
         )
     )
 

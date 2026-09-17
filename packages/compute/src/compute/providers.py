@@ -24,6 +24,7 @@ from shared.urls import normalize_http_origin
 
 from compute.agent_control import MachineWorkerAvailability
 from compute.offers import ComputeOffer
+from compute.provider_nodes import ProviderNodeAdmission
 
 
 class ProviderMachineStatus:
@@ -273,6 +274,7 @@ class ResolvedComputeProvider:
     direct: DirectMachineProvider | None = None
     pooled: PooledCapacityProvider | None = None
     policy: ResolvedProviderPolicy | None = None
+    node_admission: ProviderNodeAdmission | None = None
 
     def __post_init__(self) -> None:
         if self.capacity_mode is ComputeCapacityMode.Direct and (

@@ -6,6 +6,7 @@ from pydantic import JsonValue
 from shared.app_identity import NAME
 from sqlalchemy import (
     ARRAY,
+    DDL,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -232,6 +234,19 @@ class WorkspaceInvitationTable(IdTable, DatabaseBase):
 class WorkspaceTable(IdTable, DatabaseBase):
     __tablename__ = "workspaces"
     __table_args__: tuple[SchemaItem, ...] = (
+        Index(
+            "uq_workspaces_platform",
+            "kind",
+            unique=True,
+            postgresql_where=text("kind = 'platform'"),
+        ),
+        CheckConstraint("kind IN ('tenant', 'platform')", name="ck_workspaces_kind"),
+        CheckConstraint(
+            "kind <> 'platform' OR (status = 'active' AND primary_token_id IS NULL "
+            "AND concurrency_limit_id IS NULL AND storage_bucket IS NULL "
+            "AND storage_credential_key IS NULL)",
+            name="ck_workspaces_platform_namespace",
+        ),
         # A workspace is never removed, so uniqueness on the bare name would retain
         # every name any workspace ever had. Only a workspace that still exists to
         # its members holds its name; the deleted tombstone has released it, and the
@@ -263,6 +278,9 @@ class WorkspaceTable(IdTable, DatabaseBase):
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="tenant", server_default="tenant"
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     """Lifecycle state, a column rather than a payload key because the index that
     frees a name and every query that hides an inactive workspace filter on it."""
@@ -445,3 +463,49 @@ class SecretTable(IdTable, DatabaseBase):
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+event.listen(
+    WorkspaceTable.__table__,
+    "after_create",
+    DDL("""
+CREATE OR REPLACE FUNCTION protect_platform_namespace()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.kind = 'platform' THEN
+            RAISE EXCEPTION 'platform namespace cannot be deleted' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF NEW.kind IS DISTINCT FROM OLD.kind THEN
+        RAISE EXCEPTION 'namespace ownership is immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER platform_namespace_ownership_fence
+BEFORE UPDATE OR DELETE ON workspaces
+FOR EACH ROW EXECUTE FUNCTION protect_platform_namespace();
+CREATE OR REPLACE FUNCTION require_tenant_namespace()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM workspaces WHERE id = NEW.workspace_id AND kind = 'platform') THEN
+        RAISE EXCEPTION 'platform namespace cannot have tenant resources' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+""").execute_if(dialect="postgresql"),
+)
+
+for _table in (WorkspaceMemberTable, WorkspaceInvitationTable):
+    event.listen(
+        _table.__table__,
+        "after_create",
+        DDL(f"""
+CREATE TRIGGER {_table.__tablename__}_tenant_namespace
+BEFORE INSERT OR UPDATE OF workspace_id ON {_table.__tablename__}
+FOR EACH ROW EXECUTE FUNCTION require_tenant_namespace();
+""").execute_if(dialect="postgresql"),
+    )

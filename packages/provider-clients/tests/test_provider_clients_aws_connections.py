@@ -251,13 +251,11 @@ def test_draining_connection_keeps_cleanup_access_but_cannot_purchase() -> None:
             "phase": AwsAccountConnectionPhase.Ready,
             "active_authorization": generation,
             "pending_authorization": None,
-            "platform_fleet": True,
         }
     )
     workspace_id = "12345678-1234-4123-8123-123456789abf"
     resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _: (),
-        platform_connections=lambda: (connection,),
+        connections=lambda _: (connection,),
         capacity_workspace=lambda _: workspace_id,
         binaries_by_region={
             "us-east-1": AwsManagedPoolBinaries(

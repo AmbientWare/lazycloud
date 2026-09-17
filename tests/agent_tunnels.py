@@ -14,6 +14,7 @@ from coordination.agent_connections import RedisAgentConnectionDirectory
 from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -26,6 +27,7 @@ from networking.tunnel_tls import TunnelCredentials, agent_certificate_request
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.state import SchedulerContainerState
 from shared.compute_fleet import Machine, ResourceStatus, Worker
+from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.container_requests import CONTAINER_INNER_PORT
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.http.agent_identity import AgentCertificateRequest, GatewayCertificateRequest
@@ -52,6 +54,15 @@ async def enrolled_tunnel_route(
     owner = workspace_owner_user_id(services.context, stub.workspace_id)
     token = uuid4().hex + uuid4().hex
     with services.context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=worker.capacity_owner_id,
+                capacity_owner_id=worker.capacity_owner_id,
+                workspace_id=stub.workspace_id,
+                name=UnitName(f"tunnel-{worker.machine_id}"),
+                pool=worker.pool,
+            )
+        )
         MachineRepository(session).upsert(
             Machine(
                 id=worker.machine_id,

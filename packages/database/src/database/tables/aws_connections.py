@@ -147,7 +147,6 @@ class AwsAccountConnectionTable(IdTable, DatabaseBase):
         DateTime(timezone=True), nullable=True
     )
 
-    platform_fleet: Mapped[bool] = mapped_column(Boolean, nullable=False)
     node_role_arn: Mapped[str | None] = mapped_column(Text, nullable=True)
     node_instance_profile_arn: Mapped[str | None] = mapped_column(Text, nullable=True)
     drain_total_pools: Mapped[int] = mapped_column(BigInteger, nullable=False)

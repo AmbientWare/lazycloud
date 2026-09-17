@@ -61,6 +61,7 @@ from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import ComputeCapacityOperationTable
+from identity.platform import PlatformNamespaceService
 from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
@@ -111,7 +112,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
+from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerRequest, SchedulerWorkerStatus
@@ -350,17 +351,18 @@ class _Resolver(ComputeProviderResolver):
         with self.context.database.session() as session:
             connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
             workspace_id = self.context.workspace(session, "default").id
-        assert connection is not None
+        if connection is None:
+            workspace_id = PlatformNamespaceService(self.context.database).get().id
         return ResolvedComputeProvider(
             ref=f"aws:{_CONNECTION_ID}",
             capacity_mode=ComputeCapacityMode.Pooled,
-            connection_id=_CONNECTION_ID,
+            connection_id=_CONNECTION_ID if connection is not None else None,
             pooled=self.provider,
             policy=ResolvedProviderPolicy(
                 purchases_enabled=self.purchases_enabled,
                 workspace_id=workspace_id,
-                pool=connection.pool,
-                platform_fleet=connection.platform_fleet,
+                pool=connection.pool if connection is not None else MachinePool("lazycloud"),
+                platform_fleet=connection is None,
                 root_volume_gib=self.root_volume_gib,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
@@ -512,7 +514,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
     market_state: str,
 ) -> None:
     with service_context.database.session() as session:
-        workspace_id = service_context.workspace(session, "default").id
+        workspace_id = PlatformNamespaceService(service_context.database).get().id
     providers: list[ResolvedComputeProvider] = []
     for name, cost in (
         ("existing", 400_000),
@@ -560,7 +562,6 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
         )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
-        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
@@ -625,7 +626,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
     def controllers() -> tuple[ComputeUnitCapacityController, ...]:
         return tuple(
             ComputeUnitCapacityController(item.workspace_id, item, compute, workers)
-            for item in compute.list_units()
+            for item in compute.platform_units()
         )
 
     service = CapacityReservationService(reservations, controllers)
@@ -701,7 +702,7 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
     def controllers() -> tuple[ComputeUnitCapacityController, ...]:
         return tuple(
             ComputeUnitCapacityController(item.workspace_id, item, compute, workers)
-            for item in compute.list_units()
+            for item in compute.platform_units()
         )
 
     service = CapacityReservationService(reservations, controllers)
@@ -764,8 +765,7 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
 def test_platform_capacity_reconciles_without_an_aws_connection(
     service_context: ServiceContext,
 ) -> None:
-    with service_context.database.session() as session:
-        workspace_id = service_context.workspace(session, "default").id
+    workspace_id = PlatformNamespaceService(service_context.database).get().id
     offer = _offer().model_copy(update={"provider": "hetzner:platform", "cloud": "hetzner"})
     provider = _PooledProvider(offer=offer)
     resolved = ResolvedComputeProvider(
@@ -788,7 +788,6 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
-        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
@@ -876,7 +875,7 @@ def test_warm_reconciliation_propagates_lost_capacity_lease(
 
 def test_two_warm_workers_use_distinct_availability_zones(service_context: ServiceContext) -> None:
     with service_context.database.session() as session:
-        workspace_id = service_context.default_workspace_id(session)
+        workspace_id = PlatformNamespaceService(service_context.database).get().id
     providers: list[ResolvedComputeProvider] = []
     for zone in ("use1-az1", "use1-az2"):
         offer = _offer().model_copy(
@@ -916,7 +915,6 @@ def test_two_warm_workers_use_distinct_availability_zones(service_context: Servi
         )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
-        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
@@ -959,7 +957,7 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
 ) -> None:
     reject_first = failure_code is not None
     with service_context.database.session() as session:
-        workspace_id = service_context.default_workspace_id(session)
+        workspace_id = PlatformNamespaceService(service_context.database).get().id
     providers: list[ResolvedComputeProvider] = []
     capacity_providers: list[_PooledProvider] = []
     for index in range(replacement_markets + 1):
@@ -1002,7 +1000,6 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
         )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
-        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
@@ -1156,7 +1153,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
     service_context: ServiceContext,
 ) -> None:
     with service_context.database.session() as session:
-        workspace_id = service_context.default_workspace_id(session)
+        workspace_id = PlatformNamespaceService(service_context.database).get().id
     providers: list[ResolvedComputeProvider] = []
     suppliers: dict[str, _PooledProvider] = {}
     for name, cost, preemptible in (
@@ -1199,7 +1196,6 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
         )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
-        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
@@ -1312,7 +1308,7 @@ def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
 def test_authorization_revalidation_preserves_pool_floor_and_owned_acquisition(
     service_context: ServiceContext,
 ) -> None:
-    _seed_connection(service_context, platform_fleet=True)
+    _seed_connection(service_context)
     compute = ComputeService(
         service_context,
         provider_resolver=_Resolver(_PooledProvider(), service_context),
@@ -1367,7 +1363,6 @@ def test_authorization_revalidation_preserves_pool_floor_and_owned_acquisition(
 
     compute.provider_resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: load_connections(),
-        platform_connections=load_connections,
         capacity_workspace=lambda _connection: pool.workspace_id,
         binaries_by_region={
             "us-east-1": AwsManagedPoolBinaries(
@@ -1405,7 +1400,7 @@ def test_failed_warm_purchase_preserves_serving_baseline_and_releases_unused_cap
     serving_baseline: int,
 ) -> None:
     with service_context.database.session() as session:
-        workspace_id = service_context.default_workspace_id(session)
+        workspace_id = PlatformNamespaceService(service_context.database).get().id
     providers: list[ResolvedComputeProvider] = []
     suppliers: list[_PooledProvider] = []
     for name, price in (("cheap", 100_000), ("fallback", 120_000)):
@@ -1444,7 +1439,6 @@ def test_failed_warm_purchase_preserves_serving_baseline_and_releases_unused_cap
         )
     resolver = WorkspaceComputeProviderResolver(
         connections=lambda _workspace: (),
-        platform_connections=tuple,
         capacity_workspace=lambda _connection: workspace_id,
         binaries_by_region={},
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
@@ -2832,15 +2826,14 @@ def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
 def test_disconnecting_connection_rejects_a_previously_selected_purchase(
     service_context: ServiceContext,
 ) -> None:
-    _seed_connection(service_context, platform_fleet=True)
+    _seed_connection(service_context)
     with service_context.database.session() as session:
         stored_connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
         workspace_id = service_context.default_workspace_id(session)
     assert stored_connection is not None
     connection = stored_connection
     resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _: (),
-        platform_connections=lambda: (connection,),
+        connections=lambda _: (connection,),
         capacity_workspace=lambda _: workspace_id,
         binaries_by_region={
             "us-east-1": AwsManagedPoolBinaries(
@@ -2876,13 +2869,11 @@ def test_disconnecting_connection_rejects_a_previously_selected_purchase(
         assert ComputeUnitRepository(session).list_for_provider_connection(_CONNECTION_ID) == []
 
 
-@pytest.mark.parametrize("platform_fleet", [False, True])
 def test_connection_drain_deletes_hidden_capacity_idempotently(
     committed_service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
-    platform_fleet: bool,
 ) -> None:
-    _seed_connection(committed_service_context, platform_fleet=platform_fleet)
+    _seed_connection(committed_service_context)
     provider = _PooledProvider()
     mutations = RedisCapacityReservationRepository(real_redis_actors.client())
     compute = ComputeService(
@@ -2908,26 +2899,6 @@ def test_connection_drain_deletes_hidden_capacity_idempotently(
         stored = units.get(pool.id)
         assert stored is not None
         units.upsert(stored.model_copy(update={"initial_machines": 1, "min_machines": 1}))
-    if platform_fleet:
-        with pytest.raises(InvalidInputError, match="fleet policy"):
-            compute.clear_aws_default_capacity(workspace="default", release_capacity=True)
-        with committed_service_context.database.session() as session:
-            stored = ComputeUnitRepository(session).get(pool.id)
-            assert stored is not None
-            assert stored.min_machines == 1
-        with (
-            mutations.mutation_lock(pool.capacity_owner_id),
-            ThreadPoolExecutor(max_workers=1) as executor,
-        ):
-            attempt = executor.submit(
-                compute.request_connection_drain,
-                pool.provider_connection_id or "",
-                workspace_ids=[pool.workspace_id],
-            )
-            with pytest.raises(ConflictError):
-                attempt.result(timeout=5)
-        assert provider.desired == 1
-        assert provider.delete_calls == []
 
     drained = compute.request_connection_drain(
         pool.provider_connection_id or "",
@@ -3663,6 +3634,9 @@ def _allow_scale(pool: ComputeUnitRecord) -> None:
 
 
 def _seed_connection(service_context: ServiceContext, *, platform_fleet: bool = False) -> None:
+    if platform_fleet:
+        PlatformNamespaceService(service_context.database).initialize()
+        return
     now = datetime.now(UTC)
     account_id = "123456789012"
     authorization = AwsAccountAuthorizationGeneration(
@@ -3683,7 +3657,6 @@ def _seed_connection(service_context: ServiceContext, *, platform_fleet: bool = 
             AwsAccountConnection(
                 id=_CONNECTION_ID,
                 user_id=owner_id,
-                platform_fleet=platform_fleet,
                 account_id=account_id,
                 external_id="x" * 48,
                 phase=AwsAccountConnectionPhase.Ready,
@@ -4192,7 +4165,9 @@ def _seed_serving_machine(
     """Enrol one provider instance as a machine that takes work."""
 
     worker_id = agent_machine_worker_id(machine_id)
-    owner_id = workspace_owner_user_id(service_context, pool.workspace_id)
+    owner_id = (
+        None if pool.platform_fleet else workspace_owner_user_id(service_context, pool.workspace_id)
+    )
     with service_context.database.session() as session:
         MachineRepository(session).upsert(
             Machine(

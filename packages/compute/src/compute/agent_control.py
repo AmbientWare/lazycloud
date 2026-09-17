@@ -88,14 +88,13 @@ class WorkerTokenKind(StrEnum):
 
 
 _WORKER_SLOT_TOKEN_KINDS = frozenset({WorkerTokenKind.WorkerPrivate, WorkerTokenKind.Worker})
-"""Kinds a worker slot may hold. Which one it is decides whom the worker serves,
-and that is settled where the token is minted, from the connection the machine
-was provisioned through."""
+"""Worker tenancy follows the enrolled machine's capacity ownership."""
 
 
 class ComputePrincipal(ContractModel):
     workspace_id: str
     owner_token_id: str
+    platform_fleet: bool = False
 
 
 class JoinTokenCreationPlan(ContractModel):
@@ -376,7 +375,7 @@ def plan_join_token_creation(
     pool: MachinePool,
     *,
     capacity_owner_id: str,
-    owner_user_id: str,
+    owner_user_id: str | None,
     ttl: str = "",
     token: str = "",
     machine_id: str = "",
@@ -390,7 +389,9 @@ def plan_join_token_creation(
     if capacity_owner_id.strip() == "":
         msg = "join token requires the issuing capacity owner"
         raise ValueError(msg)
-    if owner_user_id.strip() == "":
+    if (owner_user_id is None) != principal.platform_fleet or (
+        owner_user_id is not None and not owner_user_id.strip()
+    ):
         msg = "join token requires the account the machine will belong to"
         raise ValueError(msg)
     if principal.workspace_id == "" or principal.owner_token_id == "":
@@ -405,7 +406,7 @@ def plan_join_token_creation(
     expires_at = current_time + timedelta(seconds=ttl_seconds)
     state = ComputeJoinTokenState(
         token_hash=hash_compute_token(raw_token),
-        owner_user_id=owner_user_id.strip(),
+        owner_user_id=owner_user_id.strip() if owner_user_id is not None else None,
         workspace_id=principal.workspace_id,
         capacity_owner_id=capacity_owner_id,
         pool=MachinePool(normalized_pool),
@@ -523,10 +524,9 @@ def plan_agent_join(
             err_msg="join token is invalid or expired",
             binding=binding,
         )
-    # A credential naming no account cannot stamp tenancy, and a machine whose
-    # owner is empty serves no workspace at all. Refusing here keeps a host from
-    # enrolling into capacity that can never be scheduled.
-    if active_token.owner_user_id == "":
+    if (
+        active_token.owner_user_id is None
+    ) != pool_state.platform_fleet or active_token.owner_user_id == "":
         return AgentJoinPlan(
             decision=JoinTokenDecision.OwnerMismatch,
             accepted=False,

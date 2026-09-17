@@ -57,10 +57,16 @@ installation that has lost every administrator gets one back.
 
 ## Accounts and membership
 
-A workspace has exactly one member with the `owner` role, held by a partial
+A tenant workspace has exactly one member with the `owner` role, held by a partial
 unique index rather than by convention. The owner is who a workspace's connected
 compute and registered domains resolve through, so a second one would make
 "whose account backs this workspace" have two answers.
+
+The deployment has one platform namespace, initialized offline before processes
+start. It has no members, billing account, tenant storage, or human credential.
+Only machine and worker credentials may name it. Public workspace authorization
+and listing exclude it, including for administrators. Platform service credentials
+do not depend on an administrator existing or retaining access.
 
 ## Invitations
 

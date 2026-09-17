@@ -71,14 +71,8 @@ class ComputeUnitState(ContractModel):
 
 class ComputeJoinTokenState(ContractModel):
     token_hash: str
-    owner_user_id: str = ""
-    """Account the machine will belong to, and the whole of the private-placement rule.
-
-    Carried from the durable credential so the join stamps tenancy from the authority
-    that decided it, never from what the joining machine claims about itself. Empty is
-    a credential that named no account: the join is refused rather than admitted to
-    capacity nothing owns.
-    """
+    owner_user_id: str | None = ""
+    """Customer account, or None for platform capacity. Empty credentials are invalid."""
     workspace_id: str
     capacity_owner_id: str = Field(min_length=1)
     """Unit that issued the credential, carried onto the machine that joins."""
@@ -105,13 +99,8 @@ class ComputeJoinTokenState(ContractModel):
 
 class ComputeAgentTokenState(ContractModel):
     token_hash: str
-    owner_user_id: str = ""
-    """Account that owns this machine; every workspace it holds may place here.
-
-    Re-stamped from the durable enrollment whenever the agent is read, so a record
-    written before the machine had an account converges instead of serving nothing
-    forever.
-    """
+    owner_user_id: str | None = ""
+    """Customer account, or None for platform capacity, from durable enrollment."""
     workspace_id: str
     capacity_owner_id: str = Field(min_length=1)
     """Unit that bought this machine.

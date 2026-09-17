@@ -11,6 +11,7 @@ from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.orchestration import MachineRepository
 from gateway.settings import TunnelCertificateSettings
@@ -26,7 +27,7 @@ from networking.tunnel_tls import agent_certificate_request
 from pydantic import SecretStr
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_fleet import Machine, ResourceStatus
-from shared.compute_policy import MachinePool
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.errors import ConflictError
 from shared.http.agent_identity import (
     AgentCertificateRequest,
@@ -71,6 +72,15 @@ def test_agent_issuance_requires_current_enrollment_and_its_bound_key(
     user_id = workspace_owner_user_id(context, workspace_id)
     machine_id, owner_id = str(uuid4()), str(uuid4())
     with context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=owner_id,
+                capacity_owner_id=owner_id,
+                workspace_id=workspace_id,
+                name=UnitName("certificate-machine"),
+                pool=MachinePool("lazycloud"),
+            )
+        )
         MachineRepository(session).upsert(
             Machine(id=machine_id, capacity_owner_id=owner_id, status=ResourceStatus.Running),
             workspace_id=workspace_id,

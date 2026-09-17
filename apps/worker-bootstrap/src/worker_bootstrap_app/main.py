@@ -11,6 +11,7 @@ from container_worker_app.settings import WorkerSettings
 from coordination.redis_client import RedisClient
 from identity.auth import AuthError, AuthService, IdentityDatabaseContext
 from identity.credential_files import CredentialFilePublication
+from identity.platform import PlatformNamespaceService
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.app_identity import WORKER_BOOTSTRAP_PROCESS_NAME
 from shared.compute_policy import MachinePool
@@ -36,7 +37,7 @@ class WorkerBootstrapArguments(argparse.Namespace):
 
 class WorkerTokenArguments(argparse.Namespace):
     name: str
-    workspace: str
+    workspace: str | None
     output: Path
 
 
@@ -70,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
 def build_worker_token_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=f"{WORKER_BOOTSTRAP_PROCESS_NAME} worker-token")
     parser.add_argument("name")
-    parser.add_argument("--workspace", default="default")
+    parser.add_argument("--workspace")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -96,18 +97,18 @@ def bootstrap_scheduler_worker(
     )
 
 
-def write_worker_token(*, name: str, output: Path, workspace_id: str = "default") -> None:
-    publication = CredentialFilePublication(
-        output,
-        f"service-token:{workspace_id}:{TokenKind.Worker.value}:{name}",
-    )
+def write_worker_token(*, name: str, output: Path, workspace_id: str | None = None) -> None:
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.WorkerBootstrap)
     )
     try:
+        platform = PlatformNamespaceService(database).get()
+        workspace_id = workspace_id or platform.id
+        publication = CredentialFilePublication(
+            output,
+            f"service-token:{workspace_id}:{TokenKind.Worker.value}:{name}",
+        )
         service = AuthService(IdentityDatabaseContext(database))
-        if not service.administrator_ready():
-            raise AuthError("offline administrator bootstrap must complete first")
         published = publication.read_published()
         if published is not None and _valid_worker_token(
             service,

@@ -8,9 +8,28 @@ from control.service import ControlPlaneService
 from database.repositories.identity import WorkspaceRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
+from identity.platform import PlatformNamespaceService
 from shared.http.workspaces import WorkspaceListResponse
 from shared.identity import WorkspaceRecord, WorkspaceStatus
 from tests.workspaces import administrator_credential, owned_workspace
+
+
+def test_administrator_cannot_select_or_list_the_platform_namespace(
+    api_runtime: tuple[ApiServices, TestClient],
+) -> None:
+    services, client = api_runtime
+    namespace = PlatformNamespaceService(services.context.database).get()
+    token, _ = administrator_credential(services.context, "platform-isolation")
+    listing = client.get("/api/v1/workspaces", headers=_auth(token))
+    assert listing.status_code == 200
+    assert namespace.name not in _projection(listing.content)
+    for reference in (namespace.id, namespace.name):
+        selected = client.get(
+            "/api/v1/workspaces/current", params={"workspace": reference}, headers=_auth(token)
+        )
+        assert selected.status_code == 404
+        units = client.get("/api/v1/units", params={"workspace": reference}, headers=_auth(token))
+        assert units.status_code == 404
 
 
 def test_admin_current_workspace_honors_explicit_workspace_override(

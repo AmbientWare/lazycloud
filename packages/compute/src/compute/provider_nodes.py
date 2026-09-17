@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Protocol
 
 from pydantic import SecretStr
-from shared.aws_connections import AwsAccountConnection
 from shared.compute_policy import ComputeUnitRecord
 from shared.contracts import ContractModel
 from shared.provider_config import ProviderKind
@@ -30,18 +29,25 @@ class VerifiedProviderNodeIdentity(ContractModel):
     verified_at: datetime
 
 
+class ProviderNodeAdmission(ContractModel):
+    account_id: str
+    machine_role_id: str
+    machine_profile_id: str
+
+
 class ProviderNodeIdentityVerifier(Protocol):
     def verify(
         self,
         proof: ProviderNodeIdentityProof,
         *,
         pool: ComputeUnitRecord,
-        connection: AwsAccountConnection | None,
+        admission: ProviderNodeAdmission | None,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity: ...
 
 
 __all__ = [
+    "ProviderNodeAdmission",
     "ProviderNodeIdentityProof",
     "ProviderNodeIdentityVerifier",
     "VerifiedProviderNodeIdentity",

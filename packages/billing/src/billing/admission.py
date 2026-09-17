@@ -227,11 +227,7 @@ class DatabaseBillingAdmission:
         if entitlements.max_members != "unlimited" and member_count > entitlements.max_members:
             violations.append(f"{member_count} members (limit {entitlements.max_members})")
         connection = AwsAccountConnectionRepository(session).get_for_user(user_id)
-        if (
-            connection is not None
-            and not connection.platform_fleet
-            and not entitlements.connected_cloud
-        ):
+        if connection is not None and not entitlements.connected_cloud:
             violations.append("a connected cloud account")
         domain_count = CustomDomainRepository(session).count_for_user(user_id)
         if domain_count and not entitlements.custom_domains:

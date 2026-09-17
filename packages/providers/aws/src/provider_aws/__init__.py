@@ -62,7 +62,7 @@ from .managed_pool import (
     AwsManagedPoolSpec,
     Boto3AwsManagedPoolClientProvider,
 )
-from .pooled_provider import AwsConnectedAccountPooledProvider
+from .pooled_provider import AwsPooledCapacityProvider
 from .provider import (
     AwsClientOptions,
     AwsCredentialSource,
@@ -134,7 +134,6 @@ __all__ = [
     "AwsCapacityImageClientFactory",
     "AwsCapacityImageEc2Client",
     "AwsClientOptions",
-    "AwsConnectedAccountPooledProvider",
     "AwsConnectionStackCleanupAction",
     "AwsCredentialSource",
     "AwsDirectInstanceMetadataTransport",
@@ -162,6 +161,7 @@ __all__ = [
     "AwsManagedPoolSpec",
     "AwsNodeBucketAccessGrant",
     "AwsPendingAccountAuthorization",
+    "AwsPooledCapacityProvider",
     "AwsProvider",
     "AwsProviderControlError",
     "AwsProviderControlErrorCode",

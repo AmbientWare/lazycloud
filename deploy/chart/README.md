@@ -5,9 +5,10 @@ cache, connection gateways, HTTP ingress, and bootstrap Jobs. Argo owns the
 installed resources; use local Helm rendering to review changes before deployment.
 
 Image archives share the application S3 bucket and workload identity.
-Infrastructure descriptor version 7 supplies its endpoint and bucket identities,
-the role that issues temporary workspace credentials, and `fleet.networks` keyed
-by AWS region. Fleet registration passes that map to `fleet ensure --networks-json`.
+Infrastructure descriptor version 8 supplies its endpoint and bucket identities,
+the workspace grant role, and the platform provider's stable reference, node IAM
+identity, and regional networks. Helm passes the AWS binding directly to platform
+initialization, the API, scheduler, and ownership migration.
 See [object storage](../platform-deployment/OBJECT_STORAGE.md) for identity,
 verification, and data-preservation requirements.
 

@@ -21,8 +21,8 @@ locals {
     )
     LAZYCLOUD_CACHE_SERVICE_TOKEN = random_password.cache_service_token.result
     # Verbatim: the whole of the tunnel's identity, which cloudflared reads as-is.
-    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS = data.terraform_remote_state.cloudflare.outputs.tunnel_credentials
-    LAZYCLOUD_FLEET_EXTERNAL_ID             = random_password.fleet_external_id.result
+    LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS      = data.terraform_remote_state.cloudflare.outputs.tunnel_credentials
+    LAZYCLOUD_PLATFORM_CAPACITY_AWS__EXTERNAL_ID = random_password.fleet_external_id.result
   }
 
 }

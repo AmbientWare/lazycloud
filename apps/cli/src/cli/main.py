@@ -29,6 +29,7 @@ from cli.identity import (
 from cli.maintenance import maintenance_app
 from cli.offline_auth import auth_app
 from cli.operations import cron_app, image_app, scheduler_app
+from cli.platform import platform_app
 from cli.release import release_app
 from cli.resources import (
     container_app,
@@ -58,6 +59,7 @@ _ADMIN_ROOT_ORDER = (
 )
 _ADMIN_GROUP_ORDER = (
     "profile",
+    "platform",
     "fleet",
     "user",
     "token",
@@ -142,6 +144,7 @@ def _register_operator_cli(registry: PublicCliRegistry) -> None:
     registry.add_group("maintenance", maintenance_app)
     registry.add_group("release", release_app)
     registry.add_group("auth", auth_app)
+    registry.add_group("platform", platform_app)
     registry.add_group("user", user_app)
     registry.add_group("usage", usage_app)
 

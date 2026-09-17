@@ -67,12 +67,14 @@ state. The same release admission code runs in Compose and Kubernetes.
 
 ### Shipping from Actions
 
-The deployment's `auth ensure` job initializes administrator access and the
-default workspace's storage. Once bootstrap is published and an administrator
-account is active, a revoked bootstrap token stays revoked and does not block
-later releases or worker credentials. If administrator access is lost, use
-offline recovery. `auth bootstrap` still requires its original live credential
-when replaying a credential publication.
+The `platform initialize` job creates the deployment namespace and validates its
+provider identities before the API and scheduler start. Deployment and worker
+credentials require no human account or token. Create administrator access
+separately with offline `auth bootstrap`; use offline recovery if access is lost.
+Revoked human credentials stay revoked during releases.
+
+The `0005_platform_namespace` upgrade requires a stopped-writer cutover. Follow
+[platform ownership migration](platform-deployment/PLATFORM_OWNERSHIP.md).
 
 The Ship workflow is the release. Run it from `main` and choose `patch`,
 `minor`, or `major`; it reads the latest `v*` tag, pushes the next one, publishes

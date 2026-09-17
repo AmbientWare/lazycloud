@@ -1,7 +1,7 @@
 output "infrastructure_configuration" {
   description = "Publish this non-secret descriptor with deploy/object_storage.py."
   value = {
-    schema_version    = 7
+    schema_version    = 8
     deployment        = var.deployment
     region            = var.region
     registry          = local.ecr_registry
@@ -28,8 +28,11 @@ output "infrastructure_configuration" {
     redis_host                 = aws_elasticache_replication_group.redis.primary_endpoint_address
     hetzner_node_images        = var.hetzner_node_images
     fleet = {
-      account_id = data.aws_caller_identity.current.account_id
-      role_arn   = aws_iam_role.fleet_connection.arn
+      provider_ref              = "aws:${random_uuid.fleet_provider.result}"
+      node_role_arn             = aws_iam_role.fleet_node.arn
+      node_instance_profile_arn = aws_iam_instance_profile.fleet_node.arn
+      account_id                = data.aws_caller_identity.current.account_id
+      role_arn                  = aws_iam_role.fleet_connection.arn
       networks = {
         (var.region) = {
           vpc_id            = aws_vpc.fleet.id

@@ -3,9 +3,6 @@ Negative sync waves finish schema, identity and billing bootstrap before the
 control plane starts. Database consumers run in separate waves, so the database
 budget includes one bootstrap Job at a time.
 
-The administrator Job requires LAZYCLOUD_TOKEN from the projected secret. Token
-generation requires an explicit output path and is reserved for offline use.
-Recover an existing installation through offline administrator recovery.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -57,7 +54,7 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: administrator-bootstrap
+  name: platform-initialize
   annotations:
     argocd.argoproj.io/sync-wave: "-2"
     # Deleted and recreated rather than patched or replaced in place. A Job's
@@ -79,17 +76,29 @@ spec:
   backoffLimit: 3
   template:
     metadata:
-      name: administrator-bootstrap
+      name: platform-initialize
     spec:
       restartPolicy: Never
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
+      volumes:
+        - name: aws-chain
+          configMap:
+            name: aws-chain
       containers:
-        - name: administrator-bootstrap
+        - name: platform-initialize
           image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
-          command: ["lazycloud-admin", "--json", "auth", "ensure"]
+          command: ["lazycloud-admin", "--json", "platform", "initialize"]
           env:
-            {{- include "lazycloud.env" (list . "administratorBootstrap") | nindent 12 }}
+            {{- include "lazycloud.env" (list . "platformInitialize") | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.bootstrap.database | nindent 12 }}
+            - name: AWS_CONFIG_FILE
+              value: /run/lazycloud/aws/config
+            - name: LAZYCLOUD_AWS_CONNECTION_PROFILE
+              value: {{ include "lazycloud.awsProfile" . | quote }}
+          volumeMounts:
+            - name: aws-chain
+              mountPath: /run/lazycloud/aws
+              readOnly: true
           resources:
             {{- toYaml .Values.bootstrap.resources | nindent 12 }}
 ---

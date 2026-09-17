@@ -32,6 +32,9 @@ class Contract(BaseModel):
 
 
 class FleetInfrastructure(Contract):
+    provider_ref: Annotated[str, Field(pattern=r"^aws:[A-Za-z0-9_-]+$")]
+    node_role_arn: Name
+    node_instance_profile_arn: Name
     account_id: Annotated[str, Field(pattern=r"^\d{12}$")]
     role_arn: Annotated[
         str, Field(pattern=r"^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+$")
@@ -65,7 +68,7 @@ class ObjectStoreInfrastructure(Contract):
 
 
 class Infrastructure(Contract):
-    schema_version: Literal[7]
+    schema_version: Literal[8]
     deployment: Name
     region: Name
     registry: Name
@@ -233,6 +236,12 @@ def render(
         "LAZYCLOUD_GITHUB_REDIRECT_URI": f"{infrastructure.public_origin}/auth/github/callback",
         "LAZYCLOUD_REDIS_URL": f"rediss://{infrastructure.redis_host}:6379/0",
         "LAZYCLOUD_RELEASE_MANIFEST_URL": release_manifest_url,
+        "LAZYCLOUD_PLATFORM_CAPACITY_AWS": json.dumps(
+            {
+                **infrastructure.fleet.model_dump(mode="json"),
+                "region": infrastructure.region,
+            }
+        ),
         "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES": TypeAdapter(dict[str, HetznerNodeImage])
         .dump_json(infrastructure.hetzner_node_images)
         .decode(),
@@ -299,7 +308,6 @@ def render(
             "apex": infrastructure.public_origin.removeprefix("https://"),
             "tunnelId": infrastructure.cloudflare_tunnel_id,
         },
-        "fleet": infrastructure.fleet.model_dump(mode="json"),
     }
     for key, facts in generated.items():
         configured = values.get(key, {})

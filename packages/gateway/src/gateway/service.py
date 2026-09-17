@@ -1786,7 +1786,7 @@ class GatewayControlService:
                     fingerprint_hash,
                     for_update=True,
                 )
-                if token_state is not None and token_state.owner_user_id
+                if token_state is not None
                 else None
             )
             if (

@@ -36,9 +36,8 @@ from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.http.aws_connections import (
     AwsConnectionCurrentResponse,
     AwsConnectionResponse,
-    AwsFleetEnsureRequest,
 )
-from tests.workspaces import administrator_credential, workspace_owner_user_id
+from tests.workspaces import workspace_owner_user_id
 
 from billing import DatabaseBillingAdmission
 
@@ -514,31 +513,3 @@ def test_initial_validation_failure_stays_retryable_without_an_active_generation
         assert recovered.json()["phase"] == "ready"
         assert recovered.json()["active_authorization"]["generation"] == 1
         assert recovered.json()["pending_authorization"] is None
-
-
-def test_only_administrators_can_ensure_shared_fleet(
-    isolated_services: ApiServices,
-) -> None:
-    with ExitStack() as client_stack:
-        client, _service = _client(isolated_services, client_stack)
-        payload = AwsFleetEnsureRequest(
-            account_id=ACCOUNT_ID,
-            role_arn=f"arn:aws:iam::{ACCOUNT_ID}:role/fleet",
-            external_id="fleet-api-test-external-identifier",
-            networks={
-                "us-east-1": AwsAccountNetwork(
-                    vpc_id="vpc-01234567",
-                    subnet_ids=("subnet-01234567", "subnet-89abcdef"),
-                    security_group_id="sg-01234567",
-                )
-            },
-        ).model_dump(mode="json")
-        refused = client.put("/api/v1/aws-connection/fleet", json=payload)
-        assert refused.status_code == 403
-        administrator, _record = administrator_credential(isolated_services.context, "fleet-ensure")
-        headers = {"Authorization": f"Bearer {administrator}"}
-        created = client.put("/api/v1/aws-connection/fleet", json=payload, headers=headers)
-        assert created.status_code == 200, created.text
-        repeated = client.put("/api/v1/aws-connection/fleet", json=payload, headers=headers)
-        assert repeated.status_code == 200
-        assert repeated.json() == created.json()

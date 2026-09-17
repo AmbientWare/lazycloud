@@ -221,7 +221,6 @@ class AwsAccountConnection(ContractModel):
         pattern=r"^[A-Za-z0-9+=,.@:_/-]+$",
         repr=False,
     )
-    platform_fleet: bool = False
     """Whether this is the platform's own account rather than a customer's.
 
     The fleet is capacity the platform bought and resells, so its machines serve

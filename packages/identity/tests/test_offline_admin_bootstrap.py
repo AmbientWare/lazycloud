@@ -8,11 +8,11 @@ from secrets import token_urlsafe
 import pytest
 from database.context import ServiceContext
 from database.repositories.identity import TokenRepository, WorkspaceAuditRepository
-from database.tables.identity import UserTable
 from identity.auth import AuthError, AuthService
 from identity.credential_files import CredentialFileError, CredentialFilePublication
+from identity.users import UserService
 from shared.http.workspaces import WorkspaceAuditAction
-from shared.identity import TokenKind, TokenStatus, UserStatus
+from shared.identity import PlatformRole, TokenKind, UserStatus
 
 
 def _configured_token() -> str:
@@ -32,16 +32,23 @@ def test_credential_publication_refuses_a_symlink_output(tmp_path: Path) -> None
     assert protected.read_text(encoding="utf-8") == "do-not-touch\n"
 
 
-def test_service_credentials_cannot_consume_or_bypass_admin_claim(
+def test_service_credentials_survive_human_token_revocation(
     service_context: ServiceContext,
 ) -> None:
     auth = AuthService(service_context)
 
-    auth.create_token("legacy-internal", kind=TokenKind.Worker)
-
     assert auth.bootstrap_required()
-    with pytest.raises(AuthError, match="bootstrap must complete"):
-        auth.create_service_token("container-worker", kind=TokenKind.Worker)
+    worker_token, worker = auth.create_service_token("container-worker", kind=TokenKind.Worker)
+    administrator = auth.bootstrap_administrator(request_id="bootstrap:human-independent")
+    auth.revoke_token(administrator.record.id)
+    users = UserService(service_context)
+    users.create(display_name="recovery administrator", role=PlatformRole.Administrator)
+    users.set_status(administrator.record.user_id, status=UserStatus.Disabled)
+    assert auth.authenticate(worker_token).id == worker.id
+    _, replacement = auth.create_service_token("replacement-worker", kind=TokenKind.Worker)
+    assert replacement.workspace_id == worker.workspace_id
+    with pytest.raises(AuthError):
+        auth.authenticate(administrator.token)
 
 
 def test_bootstrap_retry_publishes_the_exact_committed_token_once(
@@ -116,35 +123,6 @@ def test_configured_bootstrap_token_is_stable_and_only_its_hash_is_stored(
     assert stored is not None
     assert configured not in stored.token_hash
     assert stored.token_hash.startswith("pbkdf2_sha256$")
-
-
-def test_deployment_keeps_revoked_bootstrap_token_revoked_with_active_administrator(
-    service_context: ServiceContext,
-) -> None:
-    auth = AuthService(service_context)
-    token = _configured_token()
-    auth.ensure_administrator(configured_token=token)
-    record = auth.authenticate(token)
-    auth.revoke_token(record.id)
-    auth.ensure_administrator(configured_token=token)
-    with pytest.raises(AuthError):
-        auth.authenticate(token)
-    with service_context.database.session() as session:
-        admins = [
-            r
-            for r in TokenRepository(session).list_across_workspaces()
-            if r.kind is TokenKind.Admin
-        ]
-        assert len(admins) == 1 and admins[0].status is TokenStatus.Revoked
-    worker_token, _ = auth.create_service_token("deployment-worker", kind=TokenKind.Worker)
-    assert auth.authenticate(worker_token).kind is TokenKind.Worker
-    with service_context.database.session() as session:
-        user = session.get(UserTable, record.user_id)
-        assert user is not None
-        user.status = UserStatus.Disabled.value
-    assert not auth.administrator_ready()
-    with pytest.raises(AuthError, match="credential is no longer active"):
-        auth.ensure_administrator(configured_token=token)
 
 
 def test_configured_bootstrap_token_mismatch_fails_closed(

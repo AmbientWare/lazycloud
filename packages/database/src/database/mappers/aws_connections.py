@@ -94,7 +94,6 @@ def connection_from_row(row: AwsAccountConnectionTable) -> AwsAccountConnection:
             "user_id": row.user_id,
             "account_id": row.account_id,
             "external_id": row.external_id,
-            "platform_fleet": row.platform_fleet,
             "pool": row.pool,
             "phase": row.phase,
             "active_authorization": generations.get("active"),
@@ -133,7 +132,6 @@ def write_connection(row: AwsAccountConnectionTable, record: AwsAccountConnectio
     row.user_id = record.user_id
     row.account_id = record.account_id
     row.external_id = record.external_id
-    row.platform_fleet = record.platform_fleet
     row.pool = record.pool
     row.phase = record.phase.value
     row.node_role_arn = record.node_role_arn

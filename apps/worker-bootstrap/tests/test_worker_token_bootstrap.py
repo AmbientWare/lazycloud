@@ -5,14 +5,16 @@ from pathlib import Path
 
 import pytest
 from database.repositories.identity import TokenRepository
-from identity.auth import AuthError, AuthService, IdentityDatabaseContext
+from identity.auth import AuthService, IdentityDatabaseContext
+from identity.platform import PlatformNamespaceService
+from shared.errors import NotFoundError
 from shared.identity import TokenKind
 from worker_bootstrap_app.main import write_worker_token
 
 from database import DatabaseClient
 
 
-def test_worker_token_waits_for_admin_and_retries_without_leaking_credentials(
+def test_worker_token_requires_platform_initialization_without_a_human_account(
     database: DatabaseClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -21,18 +23,13 @@ def test_worker_token_waits_for_admin_and_retries_without_leaking_credentials(
     monkeypatch.setenv("LAZYCLOUD_DATABASE_URL", database_url)
     output = tmp_path / "worker-token"
 
-    with pytest.raises(AuthError, match="bootstrap must complete"):
+    with pytest.raises(NotFoundError, match="platform namespace is not initialized"):
         write_worker_token(name="compose-container-worker", output=output)
     assert not output.exists()
     auth = AuthService(IdentityDatabaseContext(database))
     assert auth.bootstrap_required()
-    auth.bootstrap_administrator(request_id="bootstrap:worker-token-test")
-    with pytest.raises(AuthError, match="bootstrap must complete"):
-        write_worker_token(name="compose-container-worker", output=output)
-    auth.mark_admin_token_published(
-        request_id="bootstrap:worker-token-test",
-        recovery=False,
-    )
+    namespace = PlatformNamespaceService(database).initialize()
+    assert PlatformNamespaceService(database).initialize() == namespace
 
     write_worker_token(name="compose-container-worker", output=output)
     first = output.read_text(encoding="utf-8").strip()
@@ -44,7 +41,7 @@ def test_worker_token_waits_for_admin_and_retries_without_leaking_credentials(
         second,
         name="compose-container-worker",
         kind=TokenKind.Worker,
-        workspace_id="default",
+        workspace_id=namespace.id,
     )
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert list(tmp_path.glob("*.pending")) == []
@@ -55,3 +52,4 @@ def test_worker_token_waits_for_admin_and_retries_without_leaking_credentials(
             kind=TokenKind.Worker,
         )
     assert [item.id for item in owned] == [record.id]
+    assert auth.bootstrap_required()

@@ -14,6 +14,7 @@ from shared.identity import (
     AuthScope,
     AuthTokenRecord,
     PlatformRole,
+    WorkspaceKind,
     WorkspaceMemberRecord,
     WorkspaceRole,
 )
@@ -69,7 +70,10 @@ def current_services(services: Annotated[ApiServices, Depends(api_services)]) ->
 
 def canonical_workspace_id(services: ApiServices, workspace: str = "default") -> str:
     try:
-        return ControlPlaneService(services.context).get_workspace(workspace).id
+        record = ControlPlaneService(services.context).get_workspace(workspace)
+        if record.kind is WorkspaceKind.Platform:
+            raise NotFoundError(f"workspace not found: {workspace}")
+        return record.id
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
@@ -82,6 +86,8 @@ async def current_workspace_id(
         record = await services.require_async_io().database.run_transaction(
             lambda session: services.context.workspace(session, workspace)
         )
+        if record.kind is WorkspaceKind.Platform:
+            raise NotFoundError(f"workspace not found: {workspace}")
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return record.id

@@ -13,8 +13,9 @@ deployment, from the branch named for it, and the values file Deploy writes
 there.
 
 [Object storage](OBJECT_STORAGE.md) describes workload identity, scoped workspace
-access and storage verification. Infrastructure descriptor version 7 names
-the S3 endpoint, bucket identities, workspace grant role and regional fleet networks.
+access and storage verification. Infrastructure descriptor version 8 names
+storage resources and the platform fleet's provider reference, IAM identities,
+and regional networks. The fleet has no customer connection or human owner.
 
 Use the shared [S3 Terraform backend](../terraform-state/README.md):
 
@@ -32,10 +33,10 @@ declares verified image inputs. Provider definitions own node catalogs;
 Only credentials are operator-owned; capacity policy is deployment-owned.
 
 AWS fleet workers can launch in `us-east-1` and `us-west-2`. The deployment
-owns a VPC in each region and registers both through `fleet.networks`. The
-connection role and node identity are shared across regions. Adding a region
-or subnets preserves every existing network; removing or replacing one is
-rejected while registering the fleet.
+owns a VPC in each region and exports both through `fleet.networks`. The
+connection role and node identity are shared across regions. Preserve networks
+while units still own resources there. The initializer validates provider access
+and network identity before application startup.
 
 When adding a region, publish its infrastructure descriptor and matching CPU
 and GPU image catalogs before selecting the release. Preserve existing

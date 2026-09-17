@@ -61,6 +61,7 @@ def private_pool_from_compute_state(state: ComputeUnitState) -> PrivateUnitState
         else projection.PoolConfig(name=state.name)
     )
     return PrivateUnitState(
+        platform_fleet=state.platform_fleet,
         workspace_id=state.workspace_id,
         name=state.name,
         pool=state.pool,
