@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
@@ -13,6 +14,7 @@ from database.repositories.compute import (
 )
 from database.repositories.identity import UserRepository, WorkspaceRepository
 from database.repositories.orchestration import MachineRepository
+from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import ComputeCapacityOperationTable, ComputeUnitTable
 from identity.platform import PlatformNamespaceService
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
@@ -77,6 +79,42 @@ def test_terminal_capacity_handoff_rejects_a_stale_writer(database: DatabaseClie
         assert persisted.fulfilled_at == operation.fulfilled_at
         assert persisted.demand_container_id == operation.demand_container_id
         assert not persisted.owns_capacity
+
+
+def test_recovery_cleanup_preserves_pending_and_other_units(database: DatabaseClient) -> None:
+    workspace = PlatformNamespaceService(database).initialize()
+    now = utc_now()
+    with database.session() as session:
+        units = ComputeUnitRepository(session)
+        retired = units.upsert(_platform_unit(workspace.id, "aws"))
+        sibling = units.upsert(_platform_unit(workspace.id, "aws"))
+        completed_id, pending_id, sibling_id, shared_id = (str(uuid4()) for _ in range(4))
+        for identity, source, target, completed_at in (
+            (completed_id, retired.id, retired.id, now),
+            (pending_id, retired.id, retired.id, None),
+            (sibling_id, sibling.id, sibling.id, now),
+            (shared_id, retired.id, sibling.id, now),
+        ):
+            session.add(
+                CapacityRecoveryTable(
+                    id=identity,
+                    workspace_id=workspace.id,
+                    source_unit_id=source,
+                    source_machine_id=str(uuid4()),
+                    target_unit_id=target,
+                    operation_id=str(uuid4()),
+                    observed_at=now,
+                    next_action_at=now,
+                    completed_at=completed_at,
+                )
+            )
+    with database.session() as session:
+        recovery = CapacityRecoveryRepository(session)
+        recovery.delete_completed_for_units([retired.id])
+        assert recovery.get(completed_id) is None
+        assert recovery.get(pending_id) is not None
+        assert recovery.get(sibling_id) is not None
+        assert recovery.get(shared_id) is not None
 
 
 def _platform_unit(workspace_id: str, provider: str) -> ComputeUnitRecord:
