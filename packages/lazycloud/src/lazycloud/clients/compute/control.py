@@ -12,7 +12,6 @@ from shared.http.aws_connections import (
     AwsConnectionCurrentResponse,
     AwsConnectionReconnectRequest,
     AwsConnectionResponse,
-    AwsFleetEnsureRequest,
 )
 from shared.http.compute import (
     MachineJoinCommandRequest,
@@ -93,13 +92,6 @@ class ComputeClient:
         )
         return AwsConnectionAuthorizationResponse.model_validate(
             self.channel.post(self._aws_path(""), request.model_dump(mode="json"))
-        )
-
-    def ensure_fleet_account(self, request: AwsFleetEnsureRequest) -> AwsConnectionResponse:
-        return AwsConnectionResponse.model_validate(
-            self.channel.request(
-                "PUT", self._aws_path("/fleet"), payload=request.model_dump(mode="json")
-            )
         )
 
     def validate_connection(self) -> AwsConnectionResponse:

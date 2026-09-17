@@ -13,6 +13,7 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -21,7 +22,7 @@ from database.repositories.orchestration import (
 )
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_fleet import Machine, ResourceStatus, Worker
-from shared.compute_policy import MachinePool
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError
 from shared.http.agent_identity import AgentTunnelIdentity
@@ -221,6 +222,15 @@ def _enroll(context: ServiceContext) -> ComputeMachineEnrollmentRecord:
     user_id = workspace_owner_user_id(context, workspace_id)
     machine_id, capacity_owner_id = str(uuid4()), str(uuid4())
     with context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=capacity_owner_id,
+                capacity_owner_id=capacity_owner_id,
+                workspace_id=workspace_id,
+                name=UnitName("tunnel-machine"),
+                pool=MachinePool("lazycloud"),
+            )
+        )
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id, capacity_owner_id=capacity_owner_id, status=ResourceStatus.Created

@@ -32,12 +32,11 @@ from shared.aws_connections import (
     AwsConnectionStackAction,
 )
 from shared.capacity import MachinePool
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeUnitPhase
+from shared.compute_policy import ComputeUnitPhase
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.aws_connections import (
     AwsConnectionCreateRequest,
     AwsConnectionReconnectRequest,
-    AwsFleetEnsureRequest,
 )
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import utc_now
@@ -181,26 +180,14 @@ class AwsAccountConnectionService:
 
     def connect(
         self,
-        request: AwsConnectionCreateRequest | AwsFleetEnsureRequest,
+        request: AwsConnectionCreateRequest,
         *,
         user_id: str,
-        platform_fleet: bool = False,
     ) -> AwsAccountConnectionAuthorization:
-        """Connect an AWS account, a customer's by default.
-
-        `platform_fleet` says this is the platform's own account, which makes its
-        machines serve every customer and bill to the fleet. It is not on the
-        request contract: a customer who could set it would be declaring their own
-        hardware to be ours. Only the administrator route passes it.
-        """
-        pool = (
-            request.pool
-            if isinstance(request, AwsConnectionCreateRequest) and not platform_fleet
-            else MachinePool(LAZYCLOUD_MACHINE_POOL)
-        )
+        """Connect a customer's AWS account."""
+        pool = request.pool
         with self.context.database.session() as session:
-            if not platform_fleet:
-                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
+            self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             existing = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if existing is not None:
                 if self._matches_existing_draft(existing, request, pool=pool):
@@ -237,7 +224,6 @@ class AwsAccountConnectionService:
         connection = AwsAccountConnection(
             id=connection_id,
             user_id=user_id,
-            platform_fleet=platform_fleet,
             pool=pool,
             account_id=request.account_id,
             external_id=external_id,
@@ -256,8 +242,7 @@ class AwsAccountConnectionService:
         )
         with self.context.database.session() as session:
             repository = AwsAccountConnectionRepository(session)
-            if not platform_fleet:
-                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
+            self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             if repository.get_for_user(user_id, for_update=True) is not None:
                 raise ConflictError("this account already has an AWS account connection")
             connection = repository.create(connection)
@@ -274,96 +259,6 @@ class AwsAccountConnectionService:
             raise NotFoundError("AWS account connection not found")
         return connection
 
-    def ensure_fleet(self, request: AwsFleetEnsureRequest, *, user_id: str) -> AwsAccountConnection:
-        """Register platform infrastructure and validate additive regional networks."""
-        if self.current(user_id=user_id) is None:
-            try:
-                self.connect(request, user_id=user_id, platform_fleet=True)
-            except ConflictError:
-                # Another ensure may have created the row. Validate it under lock below.
-                if self.current(user_id=user_id) is None:
-                    raise
-        with self.context.database.session() as session:
-            repository = AwsAccountConnectionRepository(session)
-            current = repository.get_for_user(user_id, for_update=True)
-            if current is None:
-                raise ConflictError("Fleet connection was removed during ensure")
-            authorizations = [
-                authorization
-                for authorization in (current.active_authorization, current.pending_authorization)
-                if authorization is not None
-            ]
-            if (
-                not current.platform_fleet
-                or current.account_id != request.account_id
-                or current.pool != MachinePool(LAZYCLOUD_MACHINE_POOL)
-                or not secrets.compare_digest(current.external_id, request.external_id)
-                or not authorizations
-                or any(
-                    authorization.role_arn != request.role_arn for authorization in authorizations
-                )
-                or any(
-                    region not in request.networks
-                    or network.vpc_id != request.networks[region].vpc_id
-                    or not set(network.subnet_ids).issubset(request.networks[region].subnet_ids)
-                    or network.security_group_id != request.networks[region].security_group_id
-                    for region, network in current.networks.items()
-                )
-            ):
-                raise ConflictError(
-                    "Fleet infrastructure does not match the existing connection. "
-                    "Reconcile account, role, external ID and network before deploying."
-                )
-            if current.phase not in {
-                AwsAccountConnectionPhase.Ready,
-                AwsAccountConnectionPhase.AwaitingAuthorization,
-                AwsAccountConnectionPhase.Validating,
-                AwsAccountConnectionPhase.Degraded,
-            }:
-                raise ConflictError("Fleet authorization transition must finish before deploying")
-            if current.networks == request.networks:
-                return current
-            active = current.active_authorization
-            if (
-                current.phase is not AwsAccountConnectionPhase.Ready
-                or active is None
-                or active.authorization_mode is not AwsAccountAuthorizationMode.ExistingRole
-                or current.pending_authorization is not None
-                or current.retiring_authorization is not None
-            ):
-                raise ConflictError("Fleet authorization must be ready before adding networks")
-
-        candidate = current.model_copy(update={"networks": request.networks})
-        try:
-            result = self.validator.validate(candidate, active)
-            self._validate_result(candidate, active, result)
-        except AwsAccountConnectionValidationError as exc:
-            raise UpstreamUnavailableError(exc.message) from exc
-        if (
-            result.networks != request.networks
-            or result.node_role_arn != current.node_role_arn
-            or result.node_instance_profile_arn != current.node_instance_profile_arn
-        ):
-            raise UpstreamUnavailableError(
-                "AWS validation changed the fleet network or node identity"
-            )
-
-        with self.context.database.session() as session:
-            repository = AwsAccountConnectionRepository(session)
-            durable = repository.get_for_user(user_id, for_update=True)
-            if durable is None or durable.id != current.id or durable.revision != current.revision:
-                raise ConflictError("Fleet connection changed while validating additional subnets")
-            updated = durable.model_copy(
-                update={
-                    "networks": result.networks,
-                    "revision": durable.revision + 1,
-                    "updated_at": utc_now(),
-                }
-            )
-            repository.save(updated)
-        self._publish(updated, WorkspaceChangeType.Updated)
-        return updated
-
     def validate(self, *, user_id: str) -> AwsAccountConnection:
         started_at = utc_now()
         with self.context.database.session() as session:
@@ -371,8 +266,7 @@ class AwsAccountConnectionService:
             current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
-            if not current.platform_fleet:
-                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
+            self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             target = self._validation_target(current)
             validating = self._begin_validation(current, target, started_at)
             repository.save(validating)
@@ -415,8 +309,7 @@ class AwsAccountConnectionService:
             current = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if current is None:
                 raise NotFoundError("AWS account connection not found")
-            if not current.platform_fleet:
-                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
+            self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             if current.phase is AwsAccountConnectionPhase.ReconnectPending:
                 pending = current.pending_authorization
                 if pending is None:
@@ -624,8 +517,7 @@ class AwsAccountConnectionService:
                 else:
                     raise ConflictError("AWS cleanup state has no authorization")
             elif current.phase is AwsAccountConnectionPhase.Degraded:
-                if not current.platform_fleet:
-                    self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
+                self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
                 phase = AwsAccountConnectionPhase.Degraded
             else:
                 return current
@@ -1541,7 +1433,7 @@ class AwsAccountConnectionService:
     @staticmethod
     def _matches_existing_draft(
         existing: AwsAccountConnection,
-        request: AwsConnectionCreateRequest | AwsFleetEnsureRequest,
+        request: AwsConnectionCreateRequest,
         *,
         pool: MachinePool,
     ) -> bool:
@@ -1576,14 +1468,6 @@ class AwsAccountConnectionDirectory:
                 workspace_id
             )
         return (connection,) if connection is not None else ()
-
-    def list_platform(self) -> tuple[AwsAccountConnection, ...]:
-        with self.context.database.session() as session:
-            return tuple(
-                connection
-                for connection in AwsAccountConnectionRepository(session).list_all()
-                if connection.platform_fleet
-            )
 
     def capacity_workspace(self, connection: AwsAccountConnection) -> str:
         with self.context.database.session() as session:

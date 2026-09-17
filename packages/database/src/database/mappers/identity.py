@@ -18,6 +18,7 @@ from shared.identity import (
     UserStatus,
     WorkspaceInvitationRecord,
     WorkspaceInvitationRole,
+    WorkspaceKind,
     WorkspaceMemberRecord,
     WorkspaceRecord,
     WorkspaceRole,
@@ -101,6 +102,7 @@ def workspace_record_from_table(row: WorkspaceTable) -> WorkspaceRecord:
         id=row.id,
         name=row.name,
         status=WorkspaceStatus(row.status),
+        kind=WorkspaceKind(row.kind),
         signing_key=row.signing_key or "",
         signing_key_prefix=row.signing_key_prefix,
         primary_token_id=row.primary_token_id,
@@ -129,6 +131,7 @@ def write_workspace_row(row: WorkspaceTable, workspace: WorkspaceRecord) -> None
     }:
         raise InvalidInputError("workspace storage contains unsupported connection settings")
     row.name = workspace.name
+    row.kind = workspace.kind.value
     row.status = workspace.status.value
     row.signing_key = workspace.signing_key
     row.signing_key_prefix = workspace.signing_key_prefix

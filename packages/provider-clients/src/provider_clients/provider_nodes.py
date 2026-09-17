@@ -9,6 +9,7 @@ from typing import Protocol
 
 from agent.provider_identity import ProviderHostCredentials
 from compute.provider_nodes import (
+    ProviderNodeAdmission,
     ProviderNodeIdentityProof,
     ProviderNodeIdentityVerifier,
     VerifiedProviderNodeIdentity,
@@ -30,7 +31,6 @@ from provider_aws import (
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.identity import verify_node as verify_hetzner_node
 from pydantic import SecretStr
-from shared.aws_connections import AwsAccountConnection
 from shared.compute_policy import ComputeUnitRecord
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.provider_config import ProviderKind
@@ -209,16 +209,12 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
         proof: ProviderNodeIdentityProof,
         *,
         pool: ComputeUnitRecord,
-        connection: AwsAccountConnection | None,
+        admission: ProviderNodeAdmission | None,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity:
         if proof.provider is not ProviderKind.Aws:
             raise InvalidInputError(f"unsupported provider node identity: {proof.provider.value}")
-        if (
-            connection is None
-            or connection.node_role_arn is None
-            or connection.node_instance_profile_arn is None
-        ):
+        if admission is None or not admission.machine_role_id or not admission.machine_profile_id:
             raise UpstreamUnavailableError("AWS node identity is not ready")
         if not pool.provider_state.resource_id:
             raise UpstreamUnavailableError("AWS provider pool identity is not ready")
@@ -233,10 +229,10 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
                     instance_id=proof.provider_instance_id,
                 ),
                 target=AwsProviderNodeIdentityTarget(
-                    account_id=connection.account_id,
+                    account_id=admission.account_id,
                     region=pool.region,
-                    node_role_arn=connection.node_role_arn,
-                    node_instance_profile_arn=connection.node_instance_profile_arn,
+                    node_role_arn=admission.machine_role_id,
+                    node_instance_profile_arn=admission.machine_profile_id,
                     autoscaling_group_name=pool.provider_state.resource_id,
                 ),
                 provider_machine_ids=provider_instance_ids,
@@ -283,14 +279,14 @@ class ProviderNodeIdentityRegistry:
         proof: ProviderNodeIdentityProof,
         *,
         pool: ComputeUnitRecord,
-        connection: AwsAccountConnection | None,
+        admission: ProviderNodeAdmission | None,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity:
         if proof.provider is ProviderKind.Aws:
             return self.aws.verify(
                 proof,
                 pool=pool,
-                connection=connection,
+                admission=admission,
                 provider_instance_ids=provider_instance_ids,
             )
         verifier = self.bootstrap_nodes.get(pool.provider_ref)

@@ -11,9 +11,9 @@ from compute.offers import ComputeOffer
 from compute.provider_launches import ProviderNodeLaunchService
 from compute.providers import ProviderUnitBootstrap, ProviderUnitRequest
 from database.repositories.compute import ComputeUnitRepository
-from database.repositories.identity import WorkspaceRepository
 from database.repositories.provider_launches import ProviderNodeLaunchRepository
 from database.workspace_secrets import WorkspaceSecretCipher
+from identity.platform import PlatformNamespaceService
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -49,7 +49,7 @@ def launch_owner(migrated_database_url: URL) -> Iterator[LaunchOwner]:
         )
     )
     with database.session() as session:
-        workspace = WorkspaceRepository(session).create(name="launch-authority")
+        workspace = PlatformNamespaceService(database).initialize()
         unit_id = str(uuid4())
         unit = ComputeUnitRecord(
             id=unit_id,

@@ -324,3 +324,46 @@ __all__ = [
     "connection_role_policy",
     "connection_role_statements",
 ]
+
+
+def node_diagnostics_policy() -> dict[str, JsonValue]:
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "SystemsManagerAgent",
+                "Effect": "Allow",
+                "Action": [
+                    "ssm:DescribeAssociation",
+                    "ssm:DescribeDocument",
+                    "ssm:GetDocument",
+                    "ssm:GetManifest",
+                    "ssm:ListAssociations",
+                    "ssm:ListInstanceAssociations",
+                    "ssm:PutComplianceItems",
+                    "ssm:PutInventory",
+                    "ssm:UpdateAssociationStatus",
+                    "ssm:UpdateInstanceAssociationStatus",
+                    "ssm:UpdateInstanceInformation",
+                ],
+                "Resource": "*",
+            },
+            {
+                "Sid": "SystemsManagerChannels",
+                "Effect": "Allow",
+                "Action": [
+                    "ec2messages:AcknowledgeMessage",
+                    "ec2messages:DeleteMessage",
+                    "ec2messages:FailMessage",
+                    "ec2messages:GetEndpoint",
+                    "ec2messages:GetMessages",
+                    "ec2messages:SendReply",
+                    "ssmmessages:CreateControlChannel",
+                    "ssmmessages:CreateDataChannel",
+                    "ssmmessages:OpenControlChannel",
+                    "ssmmessages:OpenDataChannel",
+                ],
+                "Resource": "*",
+            },
+        ],
+    }

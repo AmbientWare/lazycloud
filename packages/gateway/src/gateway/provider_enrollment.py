@@ -10,7 +10,11 @@ from secrets import token_urlsafe
 from compute.agent_control import ComputePrincipal, plan_join_token_creation
 from compute.offers import ReservationStatus
 from compute.provider_launches import ProviderNodeLaunchService
-from compute.provider_nodes import ProviderNodeIdentityProof, ProviderNodeIdentityVerifier
+from compute.provider_nodes import (
+    ProviderNodeAdmission,
+    ProviderNodeIdentityProof,
+    ProviderNodeIdentityVerifier,
+)
 from compute.service import ComputeService
 from coordination.rate_limit import release_slot, try_acquire_slot, try_consume
 from coordination.redis_client import RedisClient
@@ -24,10 +28,7 @@ from database.repositories.identity import WorkspaceMemberRepository, WorkspaceR
 from database.types import DatabaseSession
 from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr
-from shared.aws_connections import (
-    AwsAccountAuthorizationPhase,
-    AwsAccountConnection,
-)
+from shared.aws_connections import AwsAccountAuthorizationPhase
 from shared.compute_enrollment import MachineBootstrapPhase
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -44,6 +45,7 @@ from shared.http.provider_nodes import (
     ProviderNodeBootstrapPhaseRequest,
     ProviderNodeEnrollmentRequest,
 )
+from shared.identity import WorkspaceKind
 from shared.provider_config import ProviderKind
 
 from gateway.agent_enrollment import AgentJoinResult
@@ -90,11 +92,11 @@ class ProviderNodeEnrollmentService:
         *,
         peer_address: str = "",
     ) -> JoinAgentResponse:
-        pool, connection = self._enrollment_target(request)
+        pool, admission = self._enrollment_target(request)
         self._authorize_launch(request, pool)
         self._verify_active_node(
             pool=pool,
-            connection=connection,
+            admission=admission,
             provider=request.provider,
             region=request.region,
             provider_instance_id=request.provider_instance_id,
@@ -103,9 +105,10 @@ class ProviderNodeEnrollmentService:
             launch_id=request.launch_id,
         )
         with self.gateway.services.context.database.session() as session:
-            current, _ = self._enrollment_target_in_transaction(session, request)
+            current, current_admission = self._enrollment_target_in_transaction(session, request)
             if (
-                current.provider_ref != pool.provider_ref
+                current_admission != admission
+                or current.provider_ref != pool.provider_ref
                 or current.workspace_id != pool.workspace_id
                 or current.generation != pool.generation
                 or current.provider_state.resource_id != pool.provider_state.resource_id
@@ -212,11 +215,11 @@ class ProviderNodeEnrollmentService:
         *,
         peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
-        pool, connection = self._enrollment_target(request)
+        pool, admission = self._enrollment_target(request)
         self._authorize_launch(request, pool)
         self._verify_active_node(
             pool=pool,
-            connection=connection,
+            admission=admission,
             provider=request.provider,
             region=request.region,
             provider_instance_id=request.provider_instance_id,
@@ -271,11 +274,11 @@ class ProviderNodeEnrollmentService:
         *,
         peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
-        pool, connection = self._enrollment_target(request)
+        pool, admission = self._enrollment_target(request)
         self._authorize_launch(request, pool)
         self._verify_active_node(
             pool=pool,
-            connection=connection,
+            admission=admission,
             provider=request.provider,
             region=request.region,
             provider_instance_id=request.provider_instance_id,
@@ -300,7 +303,7 @@ class ProviderNodeEnrollmentService:
         self,
         *,
         pool: ComputeUnitRecord,
-        connection: AwsAccountConnection | None,
+        admission: ProviderNodeAdmission | None,
         provider: ProviderKind,
         region: str,
         provider_instance_id: str,
@@ -333,7 +336,7 @@ class ProviderNodeEnrollmentService:
                     peer_address=peer_address,
                 ),
                 pool=pool,
-                connection=connection,
+                admission=admission,
                 provider_instance_ids=known,
             )
 
@@ -409,7 +412,7 @@ class ProviderNodeEnrollmentService:
             | ProviderNodeBootstrapFailureRequest
             | ProviderNodeBootstrapPhaseRequest
         ),
-    ) -> tuple[ComputeUnitRecord, AwsAccountConnection | None]:
+    ) -> tuple[ComputeUnitRecord, ProviderNodeAdmission | None]:
         with self.gateway.services.context.database.session() as session:
             return self._enrollment_target_in_transaction(session, request, for_update=False)
 
@@ -423,7 +426,7 @@ class ProviderNodeEnrollmentService:
         ),
         *,
         for_update: bool = True,
-    ) -> tuple[ComputeUnitRecord, AwsAccountConnection | None]:
+    ) -> tuple[ComputeUnitRecord, ProviderNodeAdmission | None]:
         units = ComputeUnitRepository(session)
         pool = units.get(request.enrollment_request_id)
         if pool is not None and for_update:
@@ -439,31 +442,54 @@ class ProviderNodeEnrollmentService:
             or pool.region != request.region
         ):
             raise InvalidInputError("provider node enrollment request is not active")
-        if request.provider is not ProviderKind.Aws:
-            if not pool.platform_fleet or pool.provider_connection_id is not None:
-                raise InvalidInputError("bootstrap provider binding is not platform capacity")
-            return pool, None
-        if pool.provider_connection_id is None:
-            raise InvalidInputError("AWS provider connection is unavailable")
-        connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
-        owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
+        if not pool.platform_fleet:
+            if request.provider is not ProviderKind.Aws or pool.provider_connection_id is None:
+                raise InvalidInputError("customer provider connection is unavailable")
+            connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
+            owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
+            if (
+                connection is None
+                or connection.id != pool.provider_ref.removeprefix("aws:")
+                or owner is None
+                or connection.user_id != owner.user_id
+                or not connection.hosts_workloads
+                or connection.active_authorization is None
+                or connection.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready
+                or connection.node_role_arn is None
+                or connection.node_instance_profile_arn is None
+            ):
+                raise InvalidInputError("provider node binding is not active")
+            return pool, ProviderNodeAdmission(
+                account_id=connection.account_id,
+                machine_role_id=connection.node_role_arn,
+                machine_profile_id=connection.node_instance_profile_arn,
+            )
+        resolver = self.compute.provider_resolver
+        if resolver is None:
+            raise UpstreamUnavailableError("provider bindings are unavailable")
+        provider = resolver.resolve(pool.workspace_id, pool.provider_ref)
         if (
-            connection is None
-            or connection.id != pool.provider_ref.removeprefix("aws:")
-            or owner is None
-            or connection.user_id != owner.user_id
-            or not connection.hosts_workloads
-            or connection.active_authorization is None
-            or connection.active_authorization.phase is not AwsAccountAuthorizationPhase.Ready
+            provider.policy is None
+            or provider.policy.workspace_id != pool.workspace_id
+            or provider.policy.platform_fleet != pool.platform_fleet
+            or provider.connection_id != pool.provider_connection_id
         ):
-            raise InvalidInputError("provider node connection is not active")
-        return pool, connection
+            raise InvalidInputError("provider node binding is not active")
+        if request.provider is ProviderKind.Aws and provider.node_admission is None:
+            raise InvalidInputError("AWS node admission is unavailable")
+        return pool, provider.node_admission
 
-    def _pool_owner(self, session: DatabaseSession, pool: ComputeUnitRecord) -> str:
-        owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
-        if owner is None:
-            raise InvalidInputError("provider capacity workspace has no owner")
-        return owner.user_id
+    def _pool_owner(self, session: DatabaseSession, pool: ComputeUnitRecord) -> str | None:
+        workspace = WorkspaceRepository(session).get(pool.workspace_id)
+        if workspace is None:
+            raise InvalidInputError("provider capacity namespace is unavailable")
+        if pool.platform_fleet:
+            if workspace.kind is not WorkspaceKind.Platform:
+                raise InvalidInputError("platform capacity requires the platform namespace")
+            return None
+        if workspace.kind is not WorkspaceKind.Tenant:
+            raise InvalidInputError("customer capacity requires a tenant workspace")
+        return WorkspaceMemberRepository(session).owner_user_id(pool.workspace_id)
 
     def _issue_join_token(
         self,
@@ -473,15 +499,13 @@ class ProviderNodeEnrollmentService:
         pool: MachinePool,
         capacity_owner_id: str,
         *,
-        owner_user_id: str,
+        owner_user_id: str | None,
     ) -> SecretStr:
-        # The account is the connection's, which `_enrollment_target` has already
-        # proved is the owner of this unit's workspace. An instance the customer's
-        # own account launched belongs to that customer, exactly as a joined host does.
         plan = plan_join_token_creation(
             ComputePrincipal(
                 workspace_id=workspace_id,
                 owner_token_id=unit_id,
+                platform_fleet=owner_user_id is None,
             ),
             pool,
             capacity_owner_id=capacity_owner_id,

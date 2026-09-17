@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from functools import partial
 from itertools import count
 from pathlib import Path
@@ -24,6 +25,7 @@ from botocore.credentials import Credentials
 from compute.agent_control import hash_compute_token
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
+from compute.provider_nodes import ProviderNodeAdmission
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -50,11 +52,14 @@ from database.tables.orchestration import MachineTable, WorkerTable
 from database.tables.provider_launches import ProviderNodeLaunchTable
 from gateway.http import JoinAgentResponse
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
-from provider_aws import AWS_STS_PROOF_NONCE_KEY
+from identity.platform import PlatformNamespaceService
+from provider_aws import AWS_STS_PROOF_NONCE_KEY, Boto3AwsManagedPoolClientProvider
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from provider_clients.provider_nodes import ProviderNodeIdentityRegistry
+from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.identity import provider_label, verify_node
+from provider_hetzner.pooled_provider import HetznerPooledProvider
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -241,6 +246,11 @@ class _Resolver(ComputeProviderResolver):
             ref=f"aws:{_CONNECTION_ID}",
             capacity_mode=ComputeCapacityMode.Pooled,
             connection_id=_CONNECTION_ID,
+            node_admission=ProviderNodeAdmission(
+                account_id=_ACCOUNT_ID,
+                machine_role_id=_NODE_ROLE_ARN,
+                machine_profile_id=_NODE_PROFILE_ARN,
+            ),
             pooled=self.provider,
             policy=self.policy,
         )
@@ -267,7 +277,7 @@ def test_provider_node_enrollment_rejects_cross_workspace_connection(
         ComputeUnitRepository(session).upsert(cross_workspace_pool)
     enrollment = _service(isolated_services, _PooledProvider())
 
-    with pytest.raises(InvalidInputError, match="connection is not active"):
+    with pytest.raises(InvalidInputError, match="binding is not active"):
         enrollment.enroll(_request(cross_workspace_pool.id))
 
     assert default_pool.workspace_id != cross_workspace_pool.workspace_id
@@ -445,12 +455,13 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
             binary_redis_client=real_redis_actors.client(decode_responses=False),
             async_io=async_io,
         ) as services:
+            platform_workspace_id = PlatformNamespaceService(database).get().id
             with database.session() as session:
                 unit_id = str(uuid4())
                 pool = ComputeUnitRepository(session).upsert(
                     ComputeUnitRecord(
                         id=unit_id,
-                        workspace_id=services.context.default_workspace_id(session),
+                        workspace_id=platform_workspace_id,
                         name=UnitName("atomic-enrollment"),
                         pool=MachinePool("lazycloud"),
                         provider="hetzner",
@@ -558,9 +569,36 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                 )
 
             monkeypatch.setattr(httpx.HTTPTransport, "handle_request", provider_response)
+            resolver = WorkspaceComputeProviderResolver(
+                connections=lambda _: (),
+                capacity_workspace=lambda _: pool.workspace_id,
+                binaries_by_region={},
+                client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+                platform_providers=lambda: (
+                    ResolvedComputeProvider(
+                        ref=pool.provider_ref,
+                        capacity_mode=ComputeCapacityMode.Pooled,
+                        pooled=HetznerPooledProvider(
+                            provider_ref=pool.provider_ref,
+                            client=HetznerClient(SecretStr("test-token")),
+                            images_by_location={},
+                            launch_credentials=services.provider_node_launches,
+                            usd_per_currency_unit=Decimal("1"),
+                            primary_ipv4_hourly_micros=0,
+                        ),
+                        policy=ResolvedProviderPolicy(
+                            workspace_id=pool.workspace_id,
+                            pool=pool.pool,
+                            platform_fleet=True,
+                            default_region=pool.region,
+                            allowed_regions=(pool.region,),
+                        ),
+                    ),
+                ),
+            )
             enrollment = ProviderNodeEnrollmentService(
                 gateway=services.gateway_service,
-                compute=ComputeService(services.context),
+                compute=ComputeService(services.context, provider_resolver=resolver),
                 identity_verifier=ProviderNodeIdentityRegistry(
                     aws=AwsProviderNodeIdentityAdapter(
                         http_client=_IdentityHttpClient(), replay_guard=_ReplayGuard()
@@ -662,7 +700,7 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
             try:
                 replica_enrollment = ProviderNodeEnrollmentService(
                     gateway=replica_services.gateway_service,
-                    compute=replica_services.compute,
+                    compute=ComputeService(replica_services.context, provider_resolver=resolver),
                     identity_verifier=enrollment.identity_verifier,
                     launches=replica_services.provider_node_launches,
                     rate_limiter=replica_services.redis(),
@@ -736,7 +774,7 @@ def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> Compu
             ResolvedProviderPolicy(
                 workspace_id=workspace_id,
                 pool=connection.pool,
-                platform_fleet=connection.platform_fleet,
+                platform_fleet=False,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
                 allowed_offers=(

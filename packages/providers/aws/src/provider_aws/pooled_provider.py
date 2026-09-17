@@ -27,7 +27,7 @@ from shared.compute_policy import (
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 
-from .account_connection import AwsAccountConnectionTarget
+from .account_connection import AwsAccountConnectionTarget, AwsCapacityIdentity
 from .instance_catalog import (
     AWS_INSTANCE_CATALOG,
     AwsInstanceCatalogEntry,
@@ -58,9 +58,9 @@ _PHASES = {
 
 
 @dataclass(frozen=True, slots=True)
-class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
+class AwsPooledCapacityProvider(PooledCapacityProvider):
     provider_ref: str
-    connection: AwsAccountConnectionTarget
+    connection: AwsCapacityIdentity
     networks: Mapping[str, AwsAccountNetwork]
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries]
     client_provider: AwsManagedPoolClientProvider
@@ -333,8 +333,14 @@ class AwsConnectedAccountPooledProvider(PooledCapacityProvider):
         return network
 
     def _target(self, region: str) -> AwsAccountConnectionTarget:
-        return self.connection.model_copy(
-            update={"region": region, "network": self._network(region)}
+        return AwsAccountConnectionTarget(
+            account_id=self.connection.account_id,
+            region=region,
+            role_arn=self.connection.role_arn,
+            external_id=self.connection.external_id,
+            node_role_arn=self.connection.node_role_arn,
+            node_instance_profile_arn=self.connection.node_instance_profile_arn,
+            network=self._network(region),
         )
 
     def _spec(self, request: ProviderUnitRequest) -> AwsManagedPoolSpec:
@@ -422,4 +428,4 @@ def _snapshot(
     )
 
 
-__all__ = ["AwsConnectedAccountPooledProvider"]
+__all__ = ["AwsPooledCapacityProvider"]

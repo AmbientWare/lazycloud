@@ -6,6 +6,7 @@ import typer
 from lazycloud.cli.components.formatting import duration
 from lazycloud.cli.components.output import console
 from lazycloud.cli.components.results import emit_result
+from provider_clients.settings import PlatformCapacitySettings
 
 from database import (
     DatabaseApplicationName,
@@ -58,7 +59,12 @@ def database_migrate(ctx: typer.Context) -> None:
     what a rollback to an older image looks like, rather than migrating forward
     from a point it cannot reason about.
     """
-    inspection = bootstrap_database()
+    binding = PlatformCapacitySettings().aws
+    inspection = bootstrap_database(
+        platform_bindings=(
+            {binding.provider_ref: binding.migration_fingerprint()} if binding is not None else {}
+        )
+    )
     _show_schema(ctx, inspection, title="Database migrated")
 
 

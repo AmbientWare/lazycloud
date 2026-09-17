@@ -9,6 +9,7 @@ import pytest
 from billing.rate_publication import publish_metered_rate_history
 from control.service import ControlPlaneService
 from database.context import ServiceContext
+from identity.platform import PlatformNamespaceService
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
@@ -125,6 +126,7 @@ def workspace_template_url(
         )
         try:
             context = ServiceContext.create(database, root=tmp_path_factory.mktemp("domain"))
+            PlatformNamespaceService(database).initialize()
             control = ControlPlaneService(context, workspace_storage_client=FakeWorkspaceBuckets())
             owned_workspace(control, "default")
             control.ensure_workspace_storage("default")

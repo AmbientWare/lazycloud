@@ -37,6 +37,7 @@ from execution.task_progress import TaskProgressService
 from execution.tasks import TaskService
 from gateway.pool_bootstrap import PoolBootstrapProvisioner
 from gateway.settings import GatewaySettings
+from identity.platform import PlatformNamespaceService
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.settings import (
@@ -273,9 +274,10 @@ class SchedulerAppServices:
         platform_capacity = PlatformCapacitySettings()
         connection_directory = AwsAccountConnectionDirectory(context)
 
-        def platform_capacity_workspace(workspace: str) -> str:
-            with context.database.session() as session:
-                return context.workspace(session, workspace).id
+        platform_namespace_id = PlatformNamespaceService(context.database).namespace_id
+
+        def platform_capacity_workspace() -> str:
+            return platform_namespace_id
 
         def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
             with context.database.session() as session:
@@ -291,13 +293,17 @@ class SchedulerAppServices:
                 capacity.aws_capacity,
                 capacity.agent_binaries,
                 connections=connection_directory.list_for_workspace,
-                platform_connections=connection_directory.list_platform,
                 capacity_workspace=connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity,
                     launch_credentials=provider_node_launches,
                     capacity_workspace=platform_capacity_workspace,
                     redis=redis,
+                    binaries_by_region=(
+                        capacity.aws_capacity.binaries_by_region(capacity.agent_binaries)
+                        if capacity.aws_capacity.configured
+                        else {}
+                    ),
                 ),
                 gateway_origin=gateway_origin,
                 presigned_origin=storage.object_store.endpoint_url,

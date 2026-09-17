@@ -17,7 +17,6 @@ from compute.providers import (
 )
 from provider_aws import (
     AwsAccountConnectionTarget,
-    AwsConnectedAccountPooledProvider,
     AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClients,
@@ -26,6 +25,7 @@ from provider_aws import (
     AwsManagedPoolProvisioningError,
     AwsManagedPoolResourceIds,
     AwsManagedPoolSpec,
+    AwsPooledCapacityProvider,
     AwsProviderControlError,
     AwsProviderControlErrorCode,
     AwsRegionalPrices,
@@ -612,7 +612,7 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
 
 
 def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
-    provider = AwsConnectedAccountPooledProvider(
+    provider = AwsPooledCapacityProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
         networks={"us-east-1": _NETWORK},
@@ -649,7 +649,7 @@ def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
 def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> None:
     ec2 = _Ec2()
     autoscaling = _AutoScaling()
-    provider = AwsConnectedAccountPooledProvider(
+    provider = AwsPooledCapacityProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
         networks={"us-east-1": _NETWORK},
@@ -780,7 +780,7 @@ def test_pooled_provider_scales_and_reports_machine_infrastructure_health() -> N
 
 
 def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
-    provider = AwsConnectedAccountPooledProvider(
+    provider = AwsPooledCapacityProvider(
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         networks={},
         connection=AwsAccountConnectionTarget(

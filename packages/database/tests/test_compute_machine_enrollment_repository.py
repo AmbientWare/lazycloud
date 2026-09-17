@@ -6,12 +6,13 @@ from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import MachineRepository
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_fleet import Machine
-from shared.compute_policy import MachinePool
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.timestamps import utc_now
 
 
@@ -24,6 +25,14 @@ def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
         workspace_id = service_context.default_workspace_id(session)
         owner = WorkspaceMemberRepository(session).owner(workspace_id)
         assert owner is not None
+        unit = ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                name=UnitName("interruptions"),
+                pool=pool,
+            )
+        )
         machines = MachineRepository(session)
         enrollments = ComputeMachineEnrollmentRepository(session)
         for state in (
@@ -33,14 +42,14 @@ def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
         ):
             machine_id = str(uuid4())
             machines.upsert(
-                Machine(id=machine_id, pool=pool, provider="aws"),
+                Machine(id=machine_id, pool=pool, capacity_owner_id=unit.id, provider="aws"),
                 workspace_id=workspace_id,
             )
             enrollments.create(
                 ComputeMachineEnrollmentCreate(
                     user_id=owner.user_id,
                     workspace_id=workspace_id,
-                    capacity_owner_id=str(uuid4()),
+                    capacity_owner_id=unit.id,
                     pool=pool,
                     machine_id=machine_id,
                     machine_fingerprint_hash=uuid4().hex,

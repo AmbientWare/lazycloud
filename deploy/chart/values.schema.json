@@ -7,7 +7,6 @@
     "release",
     "aws",
     "runtime",
-    "fleet",
     "database",
     "serviceAccounts",
     "secrets"
@@ -152,9 +151,15 @@
     "tcpIngress": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["port"],
+      "required": [
+        "port"
+      ],
       "properties": {
-        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
       }
     },
     "cloudflared": {
@@ -216,7 +221,8 @@
       "required": [
         "LAZYCLOUD_RELEASE_MANIFEST_URL",
         "LAZYCLOUD_STRIPE_ACCOUNT_ID",
-        "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES"
+        "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES",
+        "LAZYCLOUD_PLATFORM_CAPACITY_AWS"
       ],
       "properties": {
         "LAZYCLOUD_RELEASE_MANIFEST_URL": {
@@ -226,60 +232,6 @@
         "LAZYCLOUD_STRIPE_ACCOUNT_ID": {
           "type": "string",
           "pattern": "^acct_[A-Za-z0-9]+$"
-        }
-      }
-    },
-    "fleet": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "account_id",
-        "role_arn",
-        "networks"
-      ],
-      "properties": {
-        "account_id": {
-          "type": "string",
-          "pattern": "^[0-9]{12}$"
-        },
-        "role_arn": {
-          "type": "string",
-          "minLength": 1
-        },
-        "networks": {
-          "type": "object",
-          "minProperties": 1,
-          "propertyNames": {
-            "pattern": "^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "vpc_id",
-              "subnet_ids",
-              "security_group_id"
-            ],
-            "properties": {
-              "vpc_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "subnet_ids": {
-                "type": "array",
-                "uniqueItems": true,
-                "items": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "minItems": 2
-              },
-              "security_group_id": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
-          }
         }
       }
     },

@@ -1243,6 +1243,33 @@ class ComputeService:
         records.sort(key=lambda item: item.name)
         return records
 
+    def platform_units(self) -> list[ComputeUnitRecord]:
+        with self.context.database.session() as session:
+            namespace = WorkspaceRepository(session).platform()
+            if namespace is None:
+                raise NotFoundError("platform namespace is not initialized")
+            return ComputeUnitRepository(session).list_for_workspace(namespace.id)
+
+    def delete_platform_unit(self, capacity_owner_id: str) -> None:
+        leases = self._required_capacity_owner_mutations()
+        with leases.mutation_lock(capacity_owner_id), leases.dispatch_lock(capacity_owner_id):
+            with self.context.database.session() as session:
+                namespace = WorkspaceRepository(session).platform()
+                unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
+                if unit is None:
+                    return
+                if (
+                    namespace is None
+                    or unit.workspace_id != namespace.id
+                    or not unit.platform_fleet
+                ):
+                    raise InvalidInputError("capacity does not belong to this deployment")
+                if self._machines_holding_active_work(session, pool_id=unit.id):
+                    raise ConflictError("platform capacity still holds active work")
+            if leases.has_open_reservations(capacity_owner_id):
+                raise ConflictError("platform capacity still holds scheduling reservations")
+            self.delete_unit(capacity_owner_id, workspace=namespace.id)
+
     def delete_unit(self, capacity_owner_id: str, *, workspace: str = "default") -> None:
         termination_errors: list[str] = []
         deleted_machine_ids: list[str] = []
@@ -1472,9 +1499,7 @@ class ComputeService:
             connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
                 workspace_id
             )
-        return (
-            connection is not None and not connection.platform_fleet and connection.hosts_workloads
-        )
+        return connection is not None and connection.hosts_workloads
 
     def pooled_offer_owner_id(self, provider: ResolvedComputeProvider, offer: ComputeOffer) -> str:
         policy = provider.policy
@@ -1544,8 +1569,6 @@ class ComputeService:
             )
         if connection is None:
             raise UpstreamUnavailableError("AWS baseline connection is unavailable")
-        if connection.platform_fleet:
-            raise InvalidInputError("platform warm capacity belongs to the fleet policy")
         pool = self.prepare_pooled_capacity(
             workspace=workspace,
             requirements=ComputeResourceRequirements(),
@@ -1595,8 +1618,6 @@ class ComputeService:
             )
             if connection is None:
                 return
-            if connection.platform_fleet:
-                raise InvalidInputError("platform warm capacity belongs to the fleet policy")
             provider_ref = f"aws:{connection.id}"
             self._clear_other_internal_pool_floors(
                 session,
@@ -1783,6 +1804,8 @@ class ComputeService:
                 root_volume_gib=root_volume_gib,
                 for_update=True,
             )
+            if current is not None:
+                unit_id, unit_name = current.id, current.name
             if current is not None and current.phase is ComputeUnitPhase.Deleting:
                 raise CapacityReservationConflictError(
                     f"compute pool {current.name!r} is finishing provider resource retirement"

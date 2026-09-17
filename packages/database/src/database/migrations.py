@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -163,7 +163,11 @@ def inspect_database_schema_connection(connection: Connection) -> DatabaseSchema
     )
 
 
-def bootstrap_database(database_url: str | None = None) -> DatabaseSchemaInspection:
+def bootstrap_database(
+    database_url: str | None = None,
+    *,
+    platform_bindings: Mapping[str, str] | None = None,
+) -> DatabaseSchemaInspection:
     settings = (
         DatabaseSettings(
             url=database_url,
@@ -175,12 +179,16 @@ def bootstrap_database(database_url: str | None = None) -> DatabaseSchemaInspect
     client = DatabaseClient.from_settings(settings)
     try:
         with client.engine.connect() as connection:
-            return bootstrap_database_connection(connection)
+            return bootstrap_database_connection(connection, platform_bindings=platform_bindings)
     finally:
         client.dispose()
 
 
-def bootstrap_database_connection(connection: Connection) -> DatabaseSchemaInspection:
+def bootstrap_database_connection(
+    connection: Connection,
+    *,
+    platform_bindings: Mapping[str, str] | None = None,
+) -> DatabaseSchemaInspection:
     """Bring the database to the revision this build expects.
 
     Runs migrations forward from wherever it is, whether that is nothing or an
@@ -201,6 +209,7 @@ def bootstrap_database_connection(connection: Connection) -> DatabaseSchemaInspe
 
         config = alembic_config(str(connection.engine.url))
         config.attributes["connection"] = connection
+        config.attributes["platform_bindings"] = dict(platform_bindings or {})
         command.upgrade(config, "head")
         completed = inspect_database_schema_connection(connection)
         if completed.state is not DatabaseSchemaState.Current:

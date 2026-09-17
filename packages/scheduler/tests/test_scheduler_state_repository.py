@@ -3245,6 +3245,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
         ComputeAgentTokenState(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-hash",
+            owner_user_id="22222222-2222-4222-8222-222222222222",
             workspace_id="ws-1",
             pool=MachinePool("gpu"),
             machine_id=machine_id,

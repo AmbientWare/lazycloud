@@ -24,6 +24,44 @@ from sqlalchemy.sql.schema import SchemaItem
 
 from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
 
+_PLATFORM_UNIT_OWNERSHIP = """
+CREATE OR REPLACE FUNCTION require_capacity_namespace()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.platform_fleet IS DISTINCT FROM (
+        SELECT kind = 'platform' FROM workspaces WHERE id = NEW.workspace_id
+    ) THEN
+        RAISE EXCEPTION 'capacity ownership must match its namespace' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.platform_fleet AND NEW.provider_connection_id IS NOT NULL THEN
+        RAISE EXCEPTION 'platform capacity cannot use a customer connection'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER compute_units_namespace_ownership
+BEFORE INSERT OR UPDATE OF workspace_id, platform_fleet, provider_connection_id ON compute_units
+FOR EACH ROW EXECUTE FUNCTION require_capacity_namespace();
+"""
+
+_MACHINE_NAMESPACE_OWNERSHIP = """
+CREATE OR REPLACE FUNCTION require_machine_namespace()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM compute_units u JOIN workspaces w ON w.id = u.workspace_id
+        WHERE u.id = NEW.capacity_owner_id AND u.workspace_id = NEW.workspace_id
+            AND (NEW.user_id IS NULL) = (w.kind = 'platform')
+    ) THEN
+        RAISE EXCEPTION 'machine ownership must match its capacity namespace'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+"""
+
 
 class ComputeUnitTable(IdTable, DatabaseBase):
     __tablename__ = "compute_units"
@@ -397,10 +435,10 @@ class ComputeJoinCredentialTable(IdTable, DatabaseBase):
         Index("ix_compute_join_credentials_user_status", "user_id", "status"),
     )
 
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
@@ -424,7 +462,7 @@ class ComputeJoinCredentialTable(IdTable, DatabaseBase):
 
 
 class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
-    """A joined machine, owned by the account whose credential enrolled it.
+    """A joined machine owned by a customer account or the platform namespace.
 
     The fingerprint is unique per account, not per workspace: one physical host is
     one machine however many workspaces its owner holds, and admitting it twice
@@ -434,6 +472,12 @@ class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
 
     __tablename__ = "compute_machine_enrollments"
     __table_args__: tuple[SchemaItem, ...] = (
+        Index(
+            "uq_compute_machine_enrollments_platform_fingerprint",
+            "machine_fingerprint_hash",
+            unique=True,
+            postgresql_where=text("user_id IS NULL"),
+        ),
         UniqueConstraint(
             "workspace_id",
             "machine_id",
@@ -503,10 +547,10 @@ class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
     )
     agent_version: Mapped[str] = mapped_column(String(160), nullable=False, default="")
 
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[str | None] = mapped_column(
         uuid_type,
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
@@ -545,3 +589,20 @@ class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
         DateTime(timezone=True), nullable=True
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+event.listen(
+    ComputeUnitTable.__table__,
+    "after_create",
+    DDL(_PLATFORM_UNIT_OWNERSHIP + _MACHINE_NAMESPACE_OWNERSHIP).execute_if(dialect="postgresql"),
+)
+for _table in (ComputeJoinCredentialTable, ComputeMachineEnrollmentTable):
+    event.listen(
+        _table.__table__,
+        "after_create",
+        DDL(f"""
+CREATE TRIGGER {_table.__tablename__}_namespace_ownership
+BEFORE INSERT OR UPDATE OF workspace_id, user_id, capacity_owner_id ON {_table.__tablename__}
+FOR EACH ROW EXECUTE FUNCTION require_machine_namespace();
+""").execute_if(dialect="postgresql"),
+    )

@@ -74,6 +74,11 @@ class AuthScope(StringEnum):
     Machine = "machine"
 
 
+class WorkspaceKind(StringEnum):
+    Tenant = "tenant"
+    Platform = "platform"
+
+
 class WorkspaceStatus(StringEnum):
     Active = "active"
     Disabled = "disabled"
@@ -167,6 +172,7 @@ def _storage_config_text(value: JsonValue) -> str:
 class WorkspaceRecord(ContractModel):
     id: str
     name: str
+    kind: WorkspaceKind = WorkspaceKind.Tenant
     status: WorkspaceStatus = WorkspaceStatus.Active
     signing_key_prefix: str | None = None
     signing_key: str = ""
@@ -371,6 +377,7 @@ __all__ = [
     "UserStatus",
     "WorkspaceInvitationRecord",
     "WorkspaceInvitationRole",
+    "WorkspaceKind",
     "WorkspaceMemberRecord",
     "WorkspaceRecord",
     "WorkspaceRole",

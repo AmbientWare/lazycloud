@@ -323,6 +323,7 @@ def _agent_machine(
     capacity_state: AgentCapacityState = AgentCapacityState.Available,
 ) -> ComputeAgentTokenState:
     return ComputeAgentTokenState(
+        owner_user_id="22222222-2222-4222-8222-222222222222",
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=f"token-{machine_id}",
         workspace_id="ws-1",

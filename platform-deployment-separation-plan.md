@@ -1,6 +1,9 @@
 # Platform deployment and account separation
 
-Status: proposed. This document does not implement the separation.
+Status: implemented on `feat/platform-deployment-separation`, pending release and
+production acceptance. The ownership decisions below remain the implementation
+contract. Follow [the cutover procedure](deploy/platform-deployment/PLATFORM_OWNERSHIP.md)
+for deployment.
 
 ## Outcome
 
