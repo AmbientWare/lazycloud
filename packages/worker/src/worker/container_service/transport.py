@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from shared.contracts import ContractModel
+from shared.http.workspace_sync import WorkspaceSyncBatch
 
 from worker.container_client.models import (
     ContainerCheckpointRequest,
@@ -32,7 +33,6 @@ from worker.container_client.models import (
     ContainerServicePayload,
     ContainerStatusRequest,
     ContainerStreamLogsRequest,
-    SyncContainerWorkspaceRequest,
 )
 from worker.container_service.service import WorkerContainerService
 
@@ -127,7 +127,7 @@ class WorkerContainerServiceTransport:
                     _request(request, ContainerCheckpointRequest)
                 )
             case ContainerServiceMethod.ContainerSyncWorkspace:
-                return self.service.sync_workspace(_request(request, SyncContainerWorkspaceRequest))
+                return self.service.sync_workspace(_request(request, WorkspaceSyncBatch))
             case _:
                 msg = f"{method.value} is a streaming container service method"
                 raise ValueError(msg)

@@ -12,9 +12,8 @@ from shared.http.compute import ContainerResponse
 from shared.http.deployments import DeploymentListResponse, DeploymentResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
 )
+from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from tests.fakes import FakeDeploymentClient
 
 T = TypeVar("T")
@@ -24,7 +23,7 @@ T = TypeVar("T")
 class FakeGatewayClient:
     requests: list[str] = field(default_factory=list)
     attached: list[str] = field(default_factory=list)
-    sync_requests: list[SyncContainerWorkspaceBody] = field(default_factory=list)
+    sync_requests: list[WorkspaceSyncBatch] = field(default_factory=list)
     fail: bool = False
 
     def stop_container(self, container_id: str) -> ContainerResponse:
@@ -52,10 +51,10 @@ class FakeGatewayClient:
 
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse:
-        self.sync_requests.append(body)
-        return SyncContainerWorkspaceResponse(path=body.path)
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse:
+        self.sync_requests.append(body.model_copy(update={"data": tuple(body.data)}))
+        return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 
 @dataclass

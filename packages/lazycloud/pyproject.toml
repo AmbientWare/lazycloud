@@ -7,6 +7,7 @@ description = "LazyCloud Python SDK and client CLI."
 requires-python = ">=3.10"
 dependencies = [
     "cloudpickle>=3,<4",
+    "httpx>=0.28,<1",
     "lazycloud-shared==0.1.0",
     "pillow>=11.3,<13",
     "pydantic>=2.12,<3",
@@ -15,6 +16,7 @@ dependencies = [
     "rich>=15,<16",
     "typer>=0.26.7",
     "typing-extensions>=4.12,<5",
+    "watchdog>=6,<7",
     # Floor held below 17 on purpose: this package supports Python 3.10 and
     # websockets 17 does not. A dependency that cannot install on a Python the
     # package claims to support is a broken install, not a version to chase.

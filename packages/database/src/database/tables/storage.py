@@ -35,6 +35,9 @@ class ObjectTable(IdTable, DatabaseBase):
         Index("ix_objects_cleanup_claimed_at", "cleanup_claimed_at"),
         CheckConstraint("size >= 0", name="ck_objects_size_nonnegative"),
         CheckConstraint(
+            "write_upload_id = '' OR write_claimed_at IS NOT NULL", name="ck_objects_upload_claim"
+        ),
+        CheckConstraint(
             "(write_claimed_at IS NULL AND write_claim_id = '' AND NOT write_created "
             "AND write_target_size IS NULL) OR "
             "(write_claimed_at IS NOT NULL AND write_claim_id <> '' "
@@ -82,6 +85,9 @@ class ObjectTable(IdTable, DatabaseBase):
     sha256: Mapped[str] = mapped_column(String(128), nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     write_claim_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    write_upload_id: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     write_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

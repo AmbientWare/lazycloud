@@ -130,7 +130,11 @@ def _owned_app(resources: ResourceControlClient, app_slug: str) -> AppResponse |
 
 
 def _recover_task(tasks: TaskClient, app_id: str, marker: str) -> TaskResponse | None:
-    matches = [task for task in tasks.list(app_id=app_id, limit=100) if task.args[:1] == [marker]]
+    matches = [
+        detail
+        for summary in tasks.list(app_id=app_id, limit=100)
+        if (detail := tasks.get(summary.id)).args[:1] == [marker]
+    ]
     if len(matches) > 1:
         raise RuntimeError("the run ID resolved more than one durable task; refusing ambiguity")
     return matches[0] if matches else None
@@ -199,7 +203,7 @@ def _cleanup(
     app = _owned_app(resources, app_slug)
     if app is not None:
         for task in tasks.list(app_id=app.id, limit=100):
-            if task.args[:1] == [marker] and not is_terminal_task_status(task.status):
+            if not is_terminal_task_status(task.status) and tasks.get(task.id).args[:1] == [marker]:
                 tasks.cancel(task.id)
         resources.delete_app(app.id)
         _support.poll_until(

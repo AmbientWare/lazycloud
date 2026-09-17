@@ -50,9 +50,8 @@ from shared.http.gateway import (
     AttachToContainerResponse,
     GetUrlRequest,
     GetUrlResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
 )
+from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.paths import HOME_ENV
 from shared.task_context import task_context
 from shared.tasks import TaskPolicy
@@ -115,7 +114,7 @@ class FakeEndpointGatewayClient:
     urls: list[GetUrlRequest] = field(default_factory=list)
     attached: list[str] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
-    sync_requests: list[SyncContainerWorkspaceBody] = field(default_factory=list)
+    sync_requests: list[WorkspaceSyncBatch] = field(default_factory=list)
 
     def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
         self.urls.append(request)
@@ -173,10 +172,10 @@ class FakeEndpointGatewayClient:
 
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse:
-        self.sync_requests.append(body)
-        return SyncContainerWorkspaceResponse(path=body.path)
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse:
+        self.sync_requests.append(body.model_copy(update={"data": tuple(body.data)}))
+        return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 
 @dataclass

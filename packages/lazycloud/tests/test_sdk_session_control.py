@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -205,6 +205,17 @@ def test_task_subscription_rejects_invalid_response(
 def test_gateway_control_client_streams_attach_events() -> None:
     class FakeChannel:
         paths: list[str]
+
+        def request_bytes(
+            self,
+            method: str,
+            path: str,
+            *,
+            data: bytes | Iterable[bytes],
+            headers: Mapping[str, str],
+            timeout_seconds: float | None = None,
+        ) -> bytes:
+            raise AssertionError("attach does not send binary requests")
 
         def __init__(self) -> None:
             self.paths = []

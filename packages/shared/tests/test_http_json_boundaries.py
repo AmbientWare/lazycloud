@@ -15,7 +15,6 @@ from shared.function_payloads import (
 from shared.http.compute import UnitResponse, WorkerListResponse
 from shared.http.gateway import (
     GetOrCreateStubRequest,
-    SyncContainerWorkspaceBody,
 )
 from shared.http.operations import CronJobResponse
 from shared.http.pods import PodSandboxExposePortRequest
@@ -33,14 +32,6 @@ class _ResultBytes(EncodedBytesBody):
     ("model", "payload"),
     [
         (GetOrCreateStubRequest, {"name": "function", "metadata": {"bad": object()}}),
-        (
-            SyncContainerWorkspaceBody,
-            {
-                "container_id": "container-1",
-                "operation": "write",
-                "metadata": {"bad": object()},
-            },
-        ),
         (
             CronJobResponse,
             {
@@ -69,7 +60,6 @@ class _ResultBytes(EncodedBytesBody):
 )
 def test_http_json_contracts_reject_arbitrary_python(
     model: type[GetOrCreateStubRequest]
-    | type[SyncContainerWorkspaceBody]
     | type[CronJobResponse]
     | type[TaskResponse]
     | type[StubConfigUpdateRequest],

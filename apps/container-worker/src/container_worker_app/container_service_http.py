@@ -11,6 +11,8 @@ import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import JsonValue, TypeAdapter
+from shared.http.workspace_sync import WORKSPACE_SYNC_CONTENT_TYPE, read_workspace_sync_batch
+from starlette.concurrency import run_in_threadpool
 from worker.container_client.models import ContainerServiceMethod, ContainerServicePayload
 from worker.container_client.wire import (
     CONTAINER_SERVICE_HTTP_PREFIX,
@@ -64,10 +66,20 @@ def create_container_service_app(
     ) -> JSONResponse:
         _authorize(token, authorization)
         method = _method(method_name)
-        payload = decode_container_service_wire_value(
-            _JSON_VALUE.validate_json(await request.body())
-        )
-        result = transport.unary(method, payload)
+        if method is ContainerServiceMethod.ContainerSyncWorkspace:
+            if request.headers.get("content-type") != WORKSPACE_SYNC_CONTENT_TYPE:
+                raise HTTPException(
+                    status_code=415, detail="workspace sync requires a binary batch"
+                )
+            try:
+                payload = await read_workspace_sync_batch(request.stream())
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            payload = decode_container_service_wire_value(
+                _JSON_VALUE.validate_json(await request.body())
+            )
+        result = await run_in_threadpool(transport.unary, method, payload)
         return JSONResponse(content=encode_container_service_wire_value(result))
 
     @app.post(f"{CONTAINER_SERVICE_HTTP_PREFIX}/{{method_name}}/stream")

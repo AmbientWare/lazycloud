@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
 from typing import Protocol
-from urllib.parse import urlsplit
 from uuid import uuid4
 
-import httpx
 from compute.agent_control import (
     DEFAULT_PRIVATE_JOIN_TTL_SECONDS,
     AgentImageConfig,
@@ -174,8 +171,6 @@ from shared.http.gateway import (
     GetUrlResponse,
     ResolveDeploymentTargetRequest,
     ResolveDeploymentTargetResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
 )
 from shared.http.gateway_tasks import (
     AppendTaskLogRequest,
@@ -186,13 +181,19 @@ from shared.http.gateway_tasks import (
     StartTaskResponse,
 )
 from shared.http.objects import (
+    AbortObjectUploadRequest,
+    BeginObjectUploadResponse,
+    CompleteObjectUploadRequest,
     HeadObjectRequest,
     HeadObjectResponse,
     ObjectMetadata,
+    ObjectUploadPartRequest,
+    ObjectUploadPartResponse,
     PutObjectRequest,
     PutObjectResponse,
 )
 from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
+from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
 from shared.logs import LogEntry
 from shared.objects import ObjectRecord
@@ -215,7 +216,6 @@ from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit, usage_record_id
 from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
-from worker.container_client import models
 from worker.container_client.scheduler import SchedulerContainerClientFactory
 
 from database import AsyncDatabaseClient
@@ -467,82 +467,44 @@ class GatewayControlService:
             object_metadata=ObjectMetadata(name=record.key, size=record.size),
         )
 
-    async def put_object_chunks(
-        self,
-        request: PutObjectRequest,
-        chunks: AsyncIterator[bytes],
-        *,
-        workspace_id: str,
-        database: AsyncDatabaseClient,
-        http: httpx.AsyncClient,
+    def begin_object_upload(
+        self, request: PutObjectRequest, *, workspace_id: str
+    ) -> BeginObjectUploadResponse:
+        return self.objects.begin_direct_upload(
+            workspace_id=workspace_id,
+            bucket=request.bucket,
+            key=object_key(request.object_metadata, request.hash),
+            size=request.object_metadata.size,
+            sha256=request.hash,
+            content_type=request.content_type,
+            metadata=request.metadata,
+            overwrite=request.overwrite,
+        )
+
+    def sign_object_upload_part(
+        self, object_id: str, request: ObjectUploadPartRequest, *, workspace_id: str
+    ) -> ObjectUploadPartResponse:
+        return self.objects.sign_upload_part(object_id, request, workspace_id=workspace_id)
+
+    def complete_object_upload(
+        self, object_id: str, request: CompleteObjectUploadRequest, *, workspace_id: str
     ) -> PutObjectResponse:
-        key = object_key(request.object_metadata, request.hash)
-        upload = None
-        try:
-            upload = await self.objects.prepare_stream_upload(
-                database,
-                workspace_id=workspace_id,
-                bucket=request.bucket,
-                key=key,
-                size=request.object_metadata.size,
-                sha256=request.hash,
-                content_type=request.content_type,
-                metadata=request.metadata,
-                overwrite=request.overwrite,
-            )
-            target = urlsplit(upload.upload.url)
-            if target.scheme not in {"http", "https"} or not target.netloc:
-                raise UpstreamUnavailableError("object store returned an invalid upload target")
-            headers = httpx.Headers(upload.upload.headers)
-            headers["Content-Length"] = str(request.object_metadata.size)
-            response = await http.put(
-                upload.upload.url,
-                headers=headers,
-                content=self._validated_upload_chunks(request, chunks),
-                timeout=OBJECT_UPLOAD_TIMEOUT_SECONDS,
-            )
-            if 400 <= response.status_code < 500:
-                raise InvalidInputError("object store rejected the upload")
-            if response.status_code < 200 or response.status_code >= 300:
-                raise UpstreamUnavailableError(
-                    f"object store upload failed with status {response.status_code}"
-                )
-            record = await self.objects.complete_stream_upload(database, upload)
-        except BaseException as exc:
-            if upload is not None:
-                try:
-                    await self.objects.abort_stream_upload(database, upload)
-                except BaseException as abort_error:
-                    raise BaseExceptionGroup(
-                        "object upload and claim cleanup failed",
-                        [exc, abort_error],
-                    ) from None
-            if isinstance(exc, KeyError | ValueError):
-                raise _domain_error(exc) from exc
-            if isinstance(exc, httpx.HTTPError | RuntimeError | OSError):
-                raise UpstreamUnavailableError("Object upload transport failed") from exc
-            raise
+        record = self.objects.finish_direct_upload(
+            workspace_id=workspace_id,
+            object_id=object_id,
+            claim_id=request.claim_id,
+            parts=request.parts,
+        )
+        if record is None:
+            raise NotFoundError("object upload not found")
         return PutObjectResponse(object_id=record.id)
 
-    @staticmethod
-    async def _validated_upload_chunks(
-        request: PutObjectRequest,
-        chunks: AsyncIterator[bytes],
-    ) -> AsyncIterator[bytes]:
-        digest = hashlib.sha256()
-        size = 0
-        async for chunk in chunks:
-            if not chunk:
-                continue
-            size += len(chunk)
-            if size > request.object_metadata.size:
-                raise InvalidInputError("object size does not match content")
-            digest.update(chunk)
-            yield chunk
-        if size != request.object_metadata.size:
-            raise InvalidInputError("object size does not match content")
-        if digest.hexdigest() != request.hash:
-            raise InvalidInputError("object hash does not match content")
+    def abort_object_upload(
+        self, object_id: str, request: AbortObjectUploadRequest, *, workspace_id: str
+    ) -> None:
+        self.objects.finish_direct_upload(
+            workspace_id=workspace_id, object_id=object_id, claim_id=request.claim_id, parts=None
+        )
 
     def object_download_url(
         self,
@@ -668,22 +630,14 @@ class GatewayControlService:
 
     def sync_container_workspace(
         self,
-        request: SyncContainerWorkspaceBody,
+        request: WorkspaceSyncBatch,
         *,
         workspace_id: str,
-    ) -> SyncContainerWorkspaceResponse:
+    ) -> WorkspaceSyncResponse:
         try:
-            container = self._container_for_workspace(request.container_id, workspace_id)
+            container = self._container_for_workspace(request.manifest.container_id, workspace_id)
             response = self.container_client_factory.client_for(container).client.sync_workspace(
-                models.SyncContainerWorkspaceRequest(
-                    container_id=request.container_id,
-                    operation=models.ContainerWorkspaceSyncOperation(request.operation.value),
-                    path=request.path,
-                    new_path=request.new_path,
-                    data=request.data,
-                    mode=request.mode,
-                    metadata=request.metadata,
-                )
+                request
             )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
@@ -691,7 +645,7 @@ class GatewayControlService:
             raise UpstreamUnavailableError(str(exc)) from exc
         if not response.ok:
             raise InvalidInputError(response.error_msg or "container workspace sync failed")
-        return SyncContainerWorkspaceResponse(path=response.path)
+        return WorkspaceSyncResponse(applied=response.applied)
 
     def start_task(self, request: StartTaskRequest, *, workspace_id: str) -> StartTaskResponse:
         try:

@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from foundation.process import ManagedCommandResult, ManagedCommandState
+from lazycloud.source_sync import (
+    SOURCE_PACKAGE_BUCKET,
+    SOURCE_PACKAGE_CONTENT_TYPE,
+    SourcePackageArchive,
+)
 from shared.http.errors import ErrorResponse, HttpApiError
 from shared.http.gateway import (
     DeployStubRequest,
@@ -16,6 +21,7 @@ from shared.http.gateway import (
     ResolveDeploymentTargetRequest,
     ResolveDeploymentTargetResponse,
 )
+from shared.http.objects import PutObjectResponse
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
 
 
@@ -104,6 +110,22 @@ class FakeUploadedObject:
 
 @dataclass
 class FakeUploadClient:
+    def upload_source(
+        self,
+        archive: SourcePackageArchive,
+        *,
+        name: str,
+        progress: Callable[[int], None] | None = None,
+    ) -> PutObjectResponse:
+        result = self.upload_bytes(
+            archive.path.read_bytes(),
+            name=name,
+            bucket=SOURCE_PACKAGE_BUCKET,
+            content_type=SOURCE_PACKAGE_CONTENT_TYPE,
+            progress=progress,
+        )
+        return PutObjectResponse(object_id=result.object_id)
+
     object_id: str
     uploads: list[dict[str, object]] = field(default_factory=list)
 
@@ -311,7 +333,14 @@ class FakeObjectClient:
     ) -> str:
         return f"memory://{bucket or 'default'}/{key}?head&expires={expires_seconds}"
 
-    def create_multipart_upload(self, key: str, *, bucket: str | None = None) -> str:
+    def create_multipart_upload(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+    ) -> str:
         self._upload_number += 1
         upload_id = f"upload-{self._upload_number}"
         self.uploads[(bucket or "default", key, upload_id)] = None
@@ -325,6 +354,8 @@ class FakeObjectClient:
         part_number: int,
         bucket: str | None = None,
         expires_seconds: int = 3600,
+        checksum_sha256: str = "",
+        content_length: int | None = None,
     ) -> str:
         return (
             f"memory://{bucket or 'default'}/{key}"
@@ -336,7 +367,7 @@ class FakeObjectClient:
         key: str,
         *,
         upload_id: str,
-        completed_parts: tuple[tuple[int, str], ...],
+        completed_parts: list[tuple[int, str]] | tuple[tuple[int, str], ...],
         bucket: str | None = None,
     ) -> None:
         del completed_parts
@@ -347,9 +378,13 @@ class FakeObjectClient:
     ) -> None:
         self.uploads.pop((bucket or "default", key, upload_id), None)
 
-    def abort_multipart_uploads(self, prefix: str, *, bucket: str | None = None) -> None:
+    def abort_multipart_uploads(
+        self, prefix: str, *, bucket: str | None = None, exact: bool = False
+    ) -> None:
         for target_bucket, key, upload_id in tuple(self.uploads):
-            if target_bucket == (bucket or "default") and key.startswith(prefix):
+            if target_bucket == (bucket or "default") and (
+                key == prefix if exact else key.startswith(prefix)
+            ):
                 self.abort_multipart_upload(key, bucket=target_bucket, upload_id=upload_id)
 
 

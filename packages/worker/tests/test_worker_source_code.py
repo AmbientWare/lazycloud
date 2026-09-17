@@ -144,7 +144,7 @@ def test_source_download_error_never_discloses_capability_query(
     ) -> Never:
         raise RuntimeError(f"failed request with {sentinel}")
 
-    monkeypatch.setattr(InternalHttpClient, "request", fail_request)
+    monkeypatch.setattr(InternalHttpClient, "stream", fail_request)
     materializer = SourceCodePackageMaterializer(
         cache_root=tmp_path / "cache",
         workspace_root=tmp_path / "workspaces",

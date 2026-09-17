@@ -63,6 +63,12 @@ from lazycloud.session.task import Task, TaskClient, TaskSubscription
 from lazycloud.session.uploads import (
     object_upload_timeout_seconds,
     stream_object_bytes,
+    stream_object_file,
+)
+from lazycloud.source_sync import (
+    SOURCE_PACKAGE_BUCKET,
+    SOURCE_PACKAGE_CONTENT_TYPE,
+    SourcePackageArchive,
 )
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 from lazycloud.values import cloudpickle_bytes
@@ -121,6 +127,10 @@ class ObjectUploadClient(Protocol):
         metadata: dict[str, str] | None = None,
         progress: ProgressCallback | None = None,
     ) -> ImageContextUploadResult | Mapping[str, JsonValue]: ...
+
+    def upload_source(
+        self, archive: SourcePackageArchive, *, name: str, progress: ProgressCallback | None = None
+    ) -> PutObjectResponse: ...
 
 
 class DeploymentOperationError(RuntimeError):
@@ -714,6 +724,40 @@ class DeploymentClient(ControlClientConfigMixin):
 class _DefaultObjectUploadClient:
     config: ControlClientConfig
     channel: HttpChannel
+
+    def upload_source(
+        self, archive: SourcePackageArchive, *, name: str, progress: ProgressCallback | None = None
+    ) -> PutObjectResponse:
+        response = HeadObjectResponse.model_validate(
+            self.channel.post(
+                workspace_path("/gateway/objects/head", self.config.workspace),
+                HeadObjectRequest(hash=archive.sha256, bucket=SOURCE_PACKAGE_BUCKET).model_dump(
+                    mode="json"
+                ),
+            )
+        )
+        if response.exists:
+            if progress is not None:
+                progress(archive.size)
+            return PutObjectResponse(object_id=response.object_id)
+        return stream_object_file(
+            channel=self.channel,
+            workspace=self.config.workspace,
+            source=archive.path,
+            size=archive.size,
+            object_hash=archive.sha256,
+            name=name,
+            bucket=SOURCE_PACKAGE_BUCKET,
+            overwrite=False,
+            content_type=SOURCE_PACKAGE_CONTENT_TYPE,
+            metadata={
+                "kind": "source-package",
+                "sha256": archive.sha256,
+                "file_count": str(len(archive.files)),
+            },
+            timeout_seconds=object_upload_timeout_seconds(self.config.timeout_seconds),
+            progress=progress,
+        )
 
     def upload_bytes(
         self,

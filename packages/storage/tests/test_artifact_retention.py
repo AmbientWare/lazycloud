@@ -51,6 +51,7 @@ from storage.service import (
     ObjectStorage,
 )
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
+from tests.fakes import FakeObjectClient
 from tests.workspaces import owned_workspace
 from worker.checkpoints import (
     WorkerCheckpointStatus,
@@ -68,9 +69,9 @@ def _archive_settings() -> ImageArchiveSettings:
     )
 
 
-class _MemoryObjectClient:
+class _MemoryObjectClient(FakeObjectClient):
     def __init__(self) -> None:
-        self.objects: dict[tuple[str, str], bytes] = {}
+        super().__init__()
         self.object_metadata: dict[tuple[str, str], dict[str, str]] = {}
 
     def put_bytes(

@@ -12,6 +12,7 @@ from uuid import uuid4
 from shared.app_identity import CONTAINER_HELPER_PATH
 from shared.contracts import ContractModel
 from shared.deployments import StubKind
+from shared.http.workspace_sync import WorkspaceSyncBatch
 
 from worker.container_client.models import (
     ContainerCheckpointRequest,
@@ -63,7 +64,6 @@ from worker.container_client.models import (
     ContainerStatusRequest,
     ContainerStatusResponse,
     ContainerStreamLogsRequest,
-    SyncContainerWorkspaceRequest,
     SyncContainerWorkspaceResponse,
 )
 from worker.container_service.models import (
@@ -87,11 +87,9 @@ from worker.container_service.protocols import (
     WorkerSandboxProcessManagerFactory,
 )
 from worker.execution import (
-    WorkspaceSyncOperation,
     plan_container_exec,
     plan_container_kill,
     plan_sandbox_exec,
-    plan_workspace_sync,
 )
 from worker.sandbox_server import (
     WORKER_CONTAINER_UPLOADS_HOST_PATH,
@@ -105,6 +103,7 @@ from worker.sandbox_server import (
     plan_sandbox_status,
     resolve_sandbox_container_path,
 )
+from worker.workspace_sync import apply_workspace_batch
 
 
 @dataclass(slots=True)
@@ -660,40 +659,13 @@ class WorkerContainerService:
 
     def sync_workspace(
         self,
-        request: SyncContainerWorkspaceRequest,
+        request: WorkspaceSyncBatch,
     ) -> SyncContainerWorkspaceResponse:
         try:
-            instance = self._required_instance(request.container_id)
-            plan = plan_workspace_sync(
-                request.container_id,
-                workspace_root=instance.workspace_root,
-                operation=WorkspaceSyncOperation(request.operation.value),
-                path=request.path,
-                new_path=request.new_path or None,
-                is_dir=request.operation.value == WorkspaceSyncOperation.Write.value
-                and request.metadata.get("is_dir") is True,
-                data_size_bytes=len(request.data),
-            )
-            target = Path(plan.target_path)
-            if plan.operation is WorkspaceSyncOperation.Delete:
-                _remove_path(target)
-            elif plan.operation is WorkspaceSyncOperation.Write:
-                if plan.is_dir:
-                    target.mkdir(parents=True, exist_ok=True)
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(request.data)
-            elif plan.operation is WorkspaceSyncOperation.Move:
-                if plan.new_path is None:
-                    return SyncContainerWorkspaceResponse(
-                        ok=False,
-                        error_msg="new_path is required for move operations",
-                    )
-                new_path = Path(plan.new_path)
-                new_path.parent.mkdir(parents=True, exist_ok=True)
-                target.rename(new_path)
-            return SyncContainerWorkspaceResponse(ok=True, path=plan.target_path)
-        except Exception as exc:
+            instance = self._required_instance(request.manifest.container_id)
+            applied = apply_workspace_batch(instance.workspace_root, request)
+            return SyncContainerWorkspaceResponse(applied=applied)
+        except (ValueError, OSError) as exc:
             return SyncContainerWorkspaceResponse(ok=False, error_msg=str(exc))
 
     def _filesystem_response[Response: ContractModel](

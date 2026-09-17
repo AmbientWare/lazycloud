@@ -22,10 +22,9 @@ from shared.http.deployments import DeploymentResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
     DeployStubResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
 )
 from shared.http.pods import CreatePodRequest, CreatePodResponse
+from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.placement import ProductRegion
 from typing_extensions import Self
 
@@ -67,8 +66,8 @@ class ContainerAttachClient(Protocol):
 
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse: ...
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse: ...
 
 
 class PodOperationError(RuntimeError):

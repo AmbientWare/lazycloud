@@ -51,6 +51,7 @@ def object_from_table(row: ObjectTable) -> ObjectRecord:
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
         write_claim_id=row.write_claim_id,
+        write_upload_id=row.write_upload_id,
         write_claimed_at=to_utc_or_none(row.write_claimed_at),
         write_created=row.write_created,
         write_target=write_target,
@@ -79,6 +80,7 @@ def write_object_row(row: ObjectTable, record: ObjectRecord) -> None:
     row.created_at = record.created_at
     row.updated_at = utc_now()
     row.write_claim_id = record.write_claim_id
+    row.write_upload_id = record.write_upload_id
     row.write_claimed_at = record.write_claimed_at
     row.write_created = record.write_created
     row.cleanup_kind = record.cleanup_kind
