@@ -254,6 +254,7 @@ class ContainerService:
     def reserve_image_build_container(
         self,
         *,
+        build_id: str,
         container_id: str,
         workspace_id: str,
         image_id: str,
@@ -272,9 +273,9 @@ class ContainerService:
         """
 
         with self.context.database.session() as session:
-            build = ImageBuildRepository(session).lock_build(
-                container_id, workspace_id=workspace_id
-            )
+            build = ImageBuildRepository(session).lock_build(build_id, workspace_id=workspace_id)
+            if build.execution_container_id != container_id:
+                raise ConflictError("image build execution attempt is no longer active")
             if build.status not in {BuildStatus.Pending, BuildStatus.Running}:
                 raise ConflictError("image build is no longer active")
             if build.image_id != image_id:

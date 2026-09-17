@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -15,6 +15,7 @@ from compute.capacity_errors import (
     CapacityReservationConflictError,
     CapacityReservationLeaseLostError,
 )
+from compute.capacity_recovery import record_capacity_risk
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
 from compute.offers import ComputeOffer
 from compute.policy import WorkspaceComputePolicyService
@@ -39,6 +40,7 @@ from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
 from database.context import ServiceContext
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
@@ -57,6 +59,8 @@ from database.repositories.orchestration import (
 )
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.worker_releases import WorkerReleaseRepository
+from database.tables.capacity_recovery import CapacityRecoveryTable
+from database.tables.compute import ComputeCapacityOperationTable
 from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
@@ -113,6 +117,7 @@ from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerRequest, SchedulerWorkerStatus
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
+from sqlalchemy import func, select
 from tests.real_redis import RealRedisActors
 from tests.workspaces import workspace_owner_user_id
 
@@ -867,6 +872,284 @@ def test_warm_reconciliation_propagates_lost_capacity_lease(
     owner_id = compute.pooled_offer_owner_id(resolver._resolved(), resolver.provider.offer)
     with pytest.raises(CapacityReservationLeaseLostError, match="lease was replaced"):
         compute.reconcile_platform_warm_capacity(now=datetime.now(UTC))
+
+
+def test_two_warm_workers_use_distinct_availability_zones(service_context: ServiceContext) -> None:
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    providers: list[ResolvedComputeProvider] = []
+    for zone in ("use1-az1", "use1-az2"):
+        offer = _offer().model_copy(
+            update={
+                "provider": f"aws:{zone}",
+                "id": zone,
+                "capability_key": zone,
+                "availability_zone": zone,
+                "preemptible": True,
+                "cost_terms": SupplierCostTerms(
+                    compute_hourly_micros=100_000,
+                    root_disk_hourly_micros=0,
+                    public_ipv4_hourly_micros=0,
+                ),
+            }
+        )
+        providers.append(
+            ResolvedComputeProvider(
+                ref=offer.provider,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                pooled=_PooledProvider(offer=offer),
+                policy=ResolvedProviderPolicy(
+                    workspace_id=workspace_id,
+                    pool=MachinePool("lazycloud"),
+                    platform_fleet=True,
+                    default_region=offer.region,
+                    allowed_regions=(offer.region,),
+                    allowed_offers=(
+                        ProviderOfferEligibility(
+                            region=offer.region,
+                            instance_type=offer.instance_type,
+                            preemptible=True,
+                        ),
+                    ),
+                ),
+            )
+        )
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        platform_connections=tuple,
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: tuple(providers),
+    )
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        scheduler_hooks=_SchedulerHooks(),
+        capacity_owner_mutations=_MutationLeases(),
+        pool_bootstrap_factory=_bootstrap,
+    )
+    now = datetime.now(UTC)
+    compute.reconcile_platform_warm_capacity(now=now)
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session).list_platform_internal(gpu=False)
+    assert len(units) == 2
+    assert {unit.offer_availability_zone for unit in units} == {"use1-az1", "use1-az2"}
+    assert all(unit.min_machines == unit.desired_machines == 1 for unit in units)
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=60))
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session).list_platform_internal(gpu=False)
+    assert len(units) == 2 and sum(unit.desired_machines for unit in units) == 2
+
+
+@pytest.mark.parametrize(
+    "replacement_markets,failure_code",
+    [
+        (1, None),
+        (2, None),
+        (2, CapacityFailureCode.CapacityUnavailable),
+        (2, CapacityFailureCode.ProviderQuotaExceeded),
+    ],
+)
+def test_two_interrupted_workers_admit_distinct_replacements_once(
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+    replacement_markets: int,
+    failure_code: CapacityFailureCode | None,
+) -> None:
+    reject_first = failure_code is not None
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+    providers: list[ResolvedComputeProvider] = []
+    capacity_providers: list[_PooledProvider] = []
+    for index in range(replacement_markets + 1):
+        offer = _offer().model_copy(
+            update={
+                "provider": f"aws:recovery-{index}",
+                "id": f"recovery-{index}",
+                "capability_key": f"recovery-{index}",
+                "availability_zone": f"use1-az{index + 1}",
+                "preemptible": True,
+                "cost_terms": SupplierCostTerms(
+                    compute_hourly_micros=100_000,
+                    root_disk_hourly_micros=0,
+                    public_ipv4_hourly_micros=0,
+                ),
+            }
+        )
+        capacity_provider = _PooledProvider(offer=offer)
+        capacity_providers.append(capacity_provider)
+        providers.append(
+            ResolvedComputeProvider(
+                ref=offer.provider,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                pooled=capacity_provider,
+                policy=ResolvedProviderPolicy(
+                    workspace_id=workspace_id,
+                    pool=MachinePool("lazycloud"),
+                    platform_fleet=True,
+                    default_region=offer.region,
+                    allowed_regions=(offer.region,),
+                    allowed_offers=(
+                        ProviderOfferEligibility(
+                            region=offer.region,
+                            instance_type=offer.instance_type,
+                            preemptible=True,
+                        ),
+                    ),
+                ),
+            )
+        )
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        platform_connections=tuple,
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: tuple(providers),
+    )
+    hooks = _SchedulerHooks()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        scheduler_hooks=hooks,
+        capacity_owner_mutations=RedisCapacityReservationRepository(real_redis_actors.client()),
+        pool_bootstrap_factory=_bootstrap,
+    )
+    source = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(preemptible=True),
+        region="us-east-1",
+        desired_machines=2,
+        root_volume_gib=200,
+        provider_ref=providers[0].ref,
+    )
+    compute.reconcile_unit_capacity(source.id)
+    now = datetime.now(UTC)
+    for index in range(2):
+        machine_id = str(uuid4())
+        _seed_serving_machine(
+            service_context,
+            source,
+            hooks,
+            machine_id=machine_id,
+            instance_id=f"i-{index:017x}",
+            now=now,
+        )
+        with service_context.database.session() as session:
+            enrollments = ComputeMachineEnrollmentRepository(session)
+            enrollment = enrollments.by_machine(workspace_id, machine_id)
+            assert enrollment is not None
+            interrupted = enrollments.save(
+                enrollment.model_copy(
+                    update={
+                        "capacity_state": AgentCapacityState.Draining,
+                        "capacity_observed_at": now,
+                        "capacity_notice_at": now + timedelta(minutes=2),
+                        "schedulable": False,
+                    }
+                )
+            )
+            record_capacity_risk(session, interrupted)
+            record_capacity_risk(session, interrupted)
+    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=1))
+    with service_context.database.session() as session:
+        rows = session.scalars(select(CapacityRecoveryTable)).all()
+        assert len(rows) == 2
+        assert len({row.target_unit_id for row in rows}) == replacement_markets, [
+            row.reason for row in rows
+        ]
+        assert all(row.source_adjusted and row.operation_id is not None for row in rows)
+        operations = [
+            ComputeCapacityOperationRepository(session).get(row.target_unit_id, row.operation_id)
+            for row in rows
+            if row.target_unit_id and row.operation_id
+        ]
+        assert len(operations) == 2
+        assert all(operation is not None and operation.owns_capacity for operation in operations)
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) <= 4
+        assert len(CapacityRecoveryRepository(session).protected_sources(source.id)) == 2
+    compute = replace(
+        compute,
+        capacity_owner_mutations=RedisCapacityReservationRepository(real_redis_actors.client()),
+    )
+    if reject_first:
+        capacity_providers[1].max_observed_machines = 0
+        capacity_providers[1].last_capacity_failure_at = now + timedelta(seconds=6)
+        capacity_providers[1].last_capacity_failure_code = failure_code
+    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=7))
+    if reject_first:
+        with service_context.database.session() as session:
+            rows = session.scalars(select(CapacityRecoveryTable)).all()
+            assert sum(row.target_unit_id is None for row in rows) == 1
+            rejected_operation = next(
+                operation
+                for operation in operations
+                if operation is not None
+                and operation.capacity_owner_id
+                == compute.pooled_offer_owner_id(providers[1], capacity_providers[1].offer)
+            )
+            released = ComputeCapacityOperationRepository(session).get(
+                rejected_operation.capacity_owner_id, rejected_operation.operation_id
+            )
+            assert released is not None and released.status is CapacityOperationStatus.Released
+            assert not released.owns_capacity
+        compute.reconcile_capacity_recovery(now=now + timedelta(seconds=13))
+        if failure_code is CapacityFailureCode.ProviderQuotaExceeded:
+            with service_context.database.session() as session:
+                rows = session.scalars(select(CapacityRecoveryTable)).all()
+                failed = [row for row in rows if row.completed_at is not None]
+                assert len(failed) == 1
+                assert failed[0].reason == "provider compute quota exceeded"
+                assert failed[0].attempt == 1 and failed[0].target_unit_id is None
+                assert (
+                    session.scalar(select(func.count()).select_from(ComputeCapacityOperationTable))
+                    == 2
+                )
+            return
+    with service_context.database.session() as session:
+        rows = session.scalars(select(CapacityRecoveryTable)).all()
+        assert sorted(row.attempt for row in rows) == ([1, 2] if reject_first else [1, 1])
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) <= 4
+        assert (
+            sum(
+                unit.desired_machines
+                for unit in ComputeUnitRepository(session).list_platform_internal()
+            )
+            == 2
+        )
+        targets = [
+            ComputeUnitRepository(session).get(row.target_unit_id)
+            for row in rows
+            if row.target_unit_id is not None
+        ]
+    replacement_ids: set[str] = set()
+    target_instances: dict[str, int] = {}
+    for target in targets:
+        assert target is not None
+        machine_id = str(uuid4())
+        replacement_ids.add(machine_id)
+        instance_index = target_instances.get(target.id, 0)
+        target_instances[target.id] = instance_index + 1
+        _seed_serving_machine(
+            service_context,
+            target,
+            hooks,
+            machine_id=machine_id,
+            instance_id=f"i-{instance_index:017x}",
+            now=now + timedelta(seconds=14),
+        )
+    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=19))
+    with service_context.database.session() as session:
+        rows = session.scalars(select(CapacityRecoveryTable)).all()
+        assert {row.replacement_machine_id for row in rows} == replacement_ids
+        assert all(row.completed_at is None for row in rows)
+        assert len(CapacityRecoveryRepository(session).protected_sources(source.id)) == 2
+    compute.reconcile_capacity_recovery(now=now + timedelta(seconds=25))
+    with service_context.database.session() as session:
+        rows = session.scalars(select(CapacityRecoveryTable)).all()
+        assert all(row.completed_at is not None for row in rows)
+        assert CapacityRecoveryRepository(session).protected_sources(source.id) == set()
 
 
 def test_fleet_warm_targets_keep_old_floor_until_cheaper_replacement_serves(
@@ -2423,7 +2706,7 @@ def test_named_retirement_ignores_absent_machines_and_preserves_retry_intent(
         assert absent.status == "active"
 
 
-def test_retiring_interrupted_machine_cannot_acquire_another_replacement(
+def test_retiring_machine_cannot_acquire_another_planned_replacement(
     service_context: ServiceContext,
 ) -> None:
     class LingeringRetirement(_PooledProvider):
@@ -2475,7 +2758,7 @@ def test_retiring_interrupted_machine_cannot_acquire_another_replacement(
             )
     old_machine, other_machine = machine_ids
     compute.begin_internal_unit_replacement(
-        pool.workspace_id, pool.id, old_machine, template_version=""
+        pool.workspace_id, pool.id, old_machine, template_version="next"
     )
     compute.scale_internal_unit(pool.workspace_id, pool.id, 2, before_mutation=_allow_scale)
     retired = compute.release_internal_unit_machine(pool.workspace_id, pool.id, old_machine)
@@ -2490,11 +2773,11 @@ def test_retiring_interrupted_machine_cannot_acquire_another_replacement(
 
     with pytest.raises(ConflictError):
         compute.begin_internal_unit_replacement(
-            pool.workspace_id, pool.id, old_machine, template_version=""
+            pool.workspace_id, pool.id, old_machine, template_version="next"
         )
     assert compute.get_internal_unit(pool.workspace_id, pool.id) == retired
     replacement = compute.begin_internal_unit_replacement(
-        pool.workspace_id, pool.id, other_machine, template_version=""
+        pool.workspace_id, pool.id, other_machine, template_version="next"
     )
     assert replacement.replacement_machine_id == other_machine
     assert replacement.desired_machines == 2
@@ -3729,6 +4012,7 @@ def test_recovered_warm_market_releases_handoff_after_surplus_retires() -> None:
     retiring = plan_warm_capacity(
         (source, target),
         target_unit_id="target",
+        targets={"source": 1, "target": 1},
         minimum=2,
         fleet_baseline=2,
         fleet_limit=4,
@@ -3740,6 +4024,7 @@ def test_recovered_warm_market_releases_handoff_after_surplus_retires() -> None:
     settled = plan_warm_capacity(
         (source, target),
         target_unit_id="target",
+        targets={"source": 1, "target": 1},
         minimum=2,
         fleet_baseline=2,
         fleet_limit=4,

@@ -67,6 +67,13 @@ state. The same release admission code runs in Compose and Kubernetes.
 
 ### Shipping from Actions
 
+The deployment's `auth ensure` job initializes administrator access and the
+default workspace's storage. Once bootstrap is published and an administrator
+account is active, a revoked bootstrap token stays revoked and does not block
+later releases or worker credentials. If administrator access is lost, use
+offline recovery. `auth bootstrap` still requires its original live credential
+when replaying a credential publication.
+
 The Ship workflow is the release. Run it from `main` and choose `patch`,
 `minor`, or `major`; it reads the latest `v*` tag, pushes the next one, publishes
 the release under that version, and deploys onto it. The tag is the only record

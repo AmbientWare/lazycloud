@@ -12,6 +12,7 @@ from agent.binary import AgentBinarySettings
 from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
+from compute.capacity_recovery import CAPACITY_RECOVERY_WAKE_SCOPE
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.provider_launches import ProviderNodeLaunchService
 from compute.request_placement import ComputeCapacityPlacementService
@@ -917,6 +918,7 @@ class ApiServices(ApiServiceCore):
                 DurableImageBuildDispatch(
                     context.database, container_scheduler, containers, image_build_container_config
                 ),
+                resolved_image_archive_store,
             ),
             events,
             publication_publisher,
@@ -1378,6 +1380,7 @@ def _gateway_control_service(
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
         agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
+        capacity_recovery_wake=RedisWakeSignal(core.redis(), CAPACITY_RECOVERY_WAKE_SCOPE),
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(
                 SchedulerWorkerPreemptionService(

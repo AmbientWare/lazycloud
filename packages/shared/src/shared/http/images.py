@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from pydantic import Field
 
 from shared.http.base import HttpModel
+from shared.http.task_progress import TaskPendingReason
 from shared.image_building.authoring import LinuxArchitecture
 from shared.image_building.records import BuildStatus, ImageBuildPhase
 
@@ -71,6 +72,8 @@ class BuildImageResponse(HttpModel):
     status: BuildStatus = BuildStatus.Running
     phase: ImageBuildPhase = ImageBuildPhase.Submitted
     error: str = ""
+    attempt_number: int = Field(default=0, ge=0, le=2)
+    pending_reason: TaskPendingReason | None = None
 
 
 class BuildImageEvent(HttpModel):

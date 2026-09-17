@@ -23,8 +23,10 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from time import monotonic
 from types import FrameType
 
+from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS
 from scheduler.service import (
     DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
     Scheduler,
@@ -159,6 +161,22 @@ def start_scheduler_loops(
     resolved_beats = beats or {}
     loops: list[SchedulerLoop] = []
 
+    def wait_for_capacity(timeout: float) -> None:
+        wake = scheduler.workloads.capacity_wake
+        if wake is None:
+            resolved_stop.wait(timeout)
+            return
+        try:
+            deadline = monotonic() + timeout
+            while not resolved_stop.is_set():
+                remaining = deadline - monotonic()
+                # Stay below Redis's socket timeout and observe process shutdown between reads.
+                if remaining <= 0 or wake.wait(timeout_seconds=min(remaining, 1.0)):
+                    return
+        except REDIS_UNAVAILABLE_ERRORS:
+            LOGGER.warning("capacity wake unavailable; using the durable due-work sweep")
+            resolved_stop.wait(timeout)
+
     def spawn(
         name: SchedulerLoopName,
         interval_seconds: float,
@@ -199,6 +217,7 @@ def start_scheduler_loops(
             include_containers=include_containers,
             container_limit=container_limit,
         ),
+        wait=wait_for_capacity,
     )
     spawn(
         SchedulerLoopName.Housekeeping,

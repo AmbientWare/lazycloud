@@ -244,6 +244,7 @@ class ManagedComputeWorkerPoolDrainController:
                 reason="worker-pool capacity changed during provider observation",
             )
         operational_desired, _maximum = provider_unit_operational_capacity(current_unit)
+        recovery_sources = self.compute.recovery_protected_machines(current_unit.id)
         if observation.snapshot.observed_machines > operational_desired:
             machines_by_instance = self.compute.internal_unit_machine_by_instance(
                 self.state.workspace_id, self.capacity_owner_id
@@ -261,6 +262,7 @@ class ManagedComputeWorkerPoolDrainController:
             }
             if current_unit.replacement_machine_id:
                 protected_machines.add(current_unit.replacement_machine_id)
+            protected_machines.update(recovery_sources)
             workers_by_machine = _workers_by_machine(
                 self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
             )
@@ -299,6 +301,7 @@ class ManagedComputeWorkerPoolDrainController:
             observation=observation,
             config=config,
             now=current_time,
+            recovery_sources=recovery_sources,
         )
         if idle.action is not WorkerPoolDrainAction.None_:
             return idle
@@ -306,6 +309,7 @@ class ManagedComputeWorkerPoolDrainController:
             current_unit,
             snapshot=observation.snapshot,
             now=current_time,
+            recovery_sources=recovery_sources,
         )
         return replacement if replacement is not None else idle
 
@@ -316,6 +320,7 @@ class ManagedComputeWorkerPoolDrainController:
         observation: WorkerPoolDrainObservation,
         config: WorkerPoolDrainConfig,
         now: datetime,
+        recovery_sources: set[str],
     ) -> WorkerPoolDrainResult:
         current_time = now
         sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
@@ -402,6 +407,7 @@ class ManagedComputeWorkerPoolDrainController:
             and machines_by_instance[instance.provider_instance_id]
             != current_unit.replacement_machine_id
         }
+        protected_machines.update(recovery_sources)
         candidate = _idle_machine_candidate(
             workers_by_machine,
             self.workers,
@@ -475,6 +481,7 @@ class ManagedComputeWorkerPoolDrainController:
         *,
         snapshot: ProviderUnitSnapshot,
         now: datetime,
+        recovery_sources: set[str],
     ) -> WorkerPoolDrainResult | None:
         """Replace retiring machines one at a time while preserving the warm floor."""
         current_version = snapshot.current_template_version
@@ -497,7 +504,7 @@ class ManagedComputeWorkerPoolDrainController:
             ).items()
             if machine_id in snapshot_machine_ids and machine_id in replaceable_machine_ids
         }
-        superseded = sorted(interrupted, key=interrupted.__getitem__) + [
+        superseded = [
             machine_id
             for instance in snapshot.instances
             if current_version
@@ -506,6 +513,7 @@ class ManagedComputeWorkerPoolDrainController:
             and (machine_id := machines_by_instance.get(instance.provider_instance_id))
             and machine_id in replaceable_machine_ids
             and machine_id not in interrupted
+            and machine_id not in recovery_sources
         ]
         replacement_machine_id = unit.replacement_machine_id
         if replacement_machine_id and replacement_machine_id not in snapshot_machine_ids:
@@ -611,10 +619,7 @@ class ManagedComputeWorkerPoolDrainController:
             unit.replacement_template_version,
         }
         registered_replacement = any(
-            (
-                replacement_machine_id in interrupted
-                or instance.booted_template_version in accepted_replacement_versions
-            )
+            instance.booted_template_version in accepted_replacement_versions
             and bool(
                 (machine_id := machines_by_instance.get(instance.provider_instance_id))
                 and machine_id != replacement_machine_id
@@ -635,8 +640,6 @@ class ManagedComputeWorkerPoolDrainController:
                 machine_id=replacement_machine_id,
                 reason="replacement provider machine has not enrolled",
             )
-        if replacement_machine_id in interrupted:
-            return self._release_draining(replacement_machine_id, workers_by_machine)
         return self._drain_superseded(
             replacement_machine_id,
             snapshot,

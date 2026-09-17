@@ -97,6 +97,7 @@ from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import AGENT_NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
+    CapacitySignalKind,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
@@ -1307,6 +1308,15 @@ class AgentDaemonService:
         if state.capacity_state in {AgentCapacityState.Preempting, AgentCapacityState.Cordoned}:
             return state
         if (
+            notice.kind is CapacitySignalKind.Rebalance
+            and state.capacity_state is not AgentCapacityState.Available
+            and not (
+                state.capacity_state is AgentCapacityState.Draining
+                and state.capacity_notice_at is None
+            )
+        ):
+            return state
+        if (
             state.capacity_state is AgentCapacityState.Draining
             and state.capacity_notice_at is not None
             and notice.notice_at is not None
@@ -1317,13 +1327,15 @@ class AgentDaemonService:
         updated = state.model_copy(
             update={
                 "capacity_state": (
-                    AgentCapacityState.Draining
+                    AgentCapacityState.AtRisk
+                    if notice.kind is CapacitySignalKind.Rebalance
+                    else AgentCapacityState.Draining
                     if notice.notice_at is not None
                     else AgentCapacityState.Preempting
                 ),
                 "capacity_reason": notice.reason,
                 "capacity_observed_at": _next_capacity_observation(state.capacity_observed_at),
-                "capacity_notice_at": notice.notice_at,
+                "capacity_notice_at": notice.notice_at or state.capacity_notice_at,
                 "updated_at": utc_now(),
             }
         )
@@ -1339,13 +1351,16 @@ class AgentDaemonService:
         runtime_http_url: str,
     ) -> AgentDaemonRunResult:
         if (
-            state.capacity_state is AgentCapacityState.Draining
+            state.capacity_state in {AgentCapacityState.AtRisk, AgentCapacityState.Draining}
             and not self._capacity_shutdown.due()
         ):
-            if state.capacity_notice_at is not None and not self._interruption_reported:
+            if (
+                state.capacity_notice_at is not None
+                or state.capacity_state is AgentCapacityState.AtRisk
+            ) and not self._interruption_reported:
                 self._record_capacity_interruption(
                     state,
-                    capacity_state=AgentCapacityState.Draining,
+                    capacity_state=state.capacity_state,
                     reason=state.capacity_reason,
                     observed_at=state.capacity_observed_at or utc_now(),
                     notice_at=state.capacity_notice_at,
@@ -1725,7 +1740,13 @@ def _provider_capacity_interruption_detector(
         if notice is None:
             return None
         return AgentCapacityInterruptionNotice(
-            reason=f"aws-ec2-spot-{notice.action.value}",
+            kind=notice.kind,
+            reason=(
+                f"aws-ec2-spot-{notice.action.value}"
+                if notice.action is not None
+                else "aws-ec2-spot-rebalance"
+            ),
+            observed_at=notice.observed_at,
             notice_at=notice.notice_at,
         )
 
@@ -1955,7 +1976,7 @@ def _agent_state_from_stream_response(
             "release_generation": response.generation,
             "capacity_state": (
                 state.capacity_state
-                if state.capacity_notice_at is not None
+                if state.capacity_state is not AgentCapacityState.Available
                 and response.capacity_state is AgentCapacityState.Available
                 else response.capacity_state
             ),
@@ -1994,7 +2015,8 @@ def _capacity_interruption_result(
         tunnel_connected=tunnel_connected,
         runtime_http_url=runtime_http_url,
         capacity_state=state.capacity_state,
-        capacity_interrupted=state.capacity_state is not AgentCapacityState.Draining,
+        capacity_interrupted=state.capacity_state
+        not in {AgentCapacityState.AtRisk, AgentCapacityState.Draining},
     )
 
 

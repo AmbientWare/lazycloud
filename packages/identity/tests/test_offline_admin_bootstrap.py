@@ -8,10 +8,11 @@ from secrets import token_urlsafe
 import pytest
 from database.context import ServiceContext
 from database.repositories.identity import TokenRepository, WorkspaceAuditRepository
+from database.tables.identity import UserTable
 from identity.auth import AuthError, AuthService
 from identity.credential_files import CredentialFileError, CredentialFilePublication
 from shared.http.workspaces import WorkspaceAuditAction
-from shared.identity import TokenKind
+from shared.identity import TokenKind, TokenStatus, UserStatus
 
 
 def _configured_token() -> str:
@@ -115,6 +116,35 @@ def test_configured_bootstrap_token_is_stable_and_only_its_hash_is_stored(
     assert stored is not None
     assert configured not in stored.token_hash
     assert stored.token_hash.startswith("pbkdf2_sha256$")
+
+
+def test_deployment_keeps_revoked_bootstrap_token_revoked_with_active_administrator(
+    service_context: ServiceContext,
+) -> None:
+    auth = AuthService(service_context)
+    token = _configured_token()
+    auth.ensure_administrator(configured_token=token)
+    record = auth.authenticate(token)
+    auth.revoke_token(record.id)
+    auth.ensure_administrator(configured_token=token)
+    with pytest.raises(AuthError):
+        auth.authenticate(token)
+    with service_context.database.session() as session:
+        admins = [
+            r
+            for r in TokenRepository(session).list_across_workspaces()
+            if r.kind is TokenKind.Admin
+        ]
+        assert len(admins) == 1 and admins[0].status is TokenStatus.Revoked
+    worker_token, _ = auth.create_service_token("deployment-worker", kind=TokenKind.Worker)
+    assert auth.authenticate(worker_token).kind is TokenKind.Worker
+    with service_context.database.session() as session:
+        user = session.get(UserTable, record.user_id)
+        assert user is not None
+        user.status = UserStatus.Disabled.value
+    assert not auth.administrator_ready()
+    with pytest.raises(AuthError, match="credential is no longer active"):
+        auth.ensure_administrator(configured_token=token)
 
 
 def test_configured_bootstrap_token_mismatch_fails_closed(

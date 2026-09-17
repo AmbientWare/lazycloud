@@ -86,7 +86,7 @@ spec:
       containers:
         - name: administrator-bootstrap
           image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
-          command: ["lazycloud-admin", "--json", "auth", "bootstrap"]
+          command: ["lazycloud-admin", "--json", "auth", "ensure"]
           env:
             {{- include "lazycloud.env" (list . "administratorBootstrap") | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.bootstrap.database | nindent 12 }}

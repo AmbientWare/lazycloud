@@ -36,6 +36,7 @@ from gateway.http import (
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
+    CapacitySignalKind,
 )
 from shared.compute_policy import MachinePool
 from shared.http.agent_identity import (
@@ -242,6 +243,49 @@ def test_stale_release_cannot_apply_worker_instructions(tmp_path: Path) -> None:
     assert saved is not None and saved.release_generation == 2
     assert not service.worker_controller.active_slots_path.exists()
     assert not service.state_store.ready_path.exists()
+
+
+@pytest.mark.parametrize("planned_drain", [False, True])
+def test_advisory_keeps_workers_alive_until_an_actual_interruption(
+    tmp_path: Path, planned_drain: bool
+) -> None:
+    events: list[str] = []
+    service = _service(
+        tmp_path,
+        _InterruptionGateway(events),
+        worker_controller=_InterruptionWorkerController(tmp_path, events),
+    )
+    state = service.state_store.load(service.options.gateway_url)
+    assert state is not None
+    if planned_drain:
+        state = state.model_copy(update={"capacity_state": AgentCapacityState.Draining})
+    advisory = AgentCapacityInterruptionNotice(
+        kind=CapacitySignalKind.Rebalance, reason="provider-capacity-at-risk"
+    )
+    try:
+        risk = service._begin_capacity_interruption(state, advisory)
+        result = service._resume_capacity_interruption(
+            risk, current_iterations=1, tunnel_connected=True, runtime_http_url=""
+        )
+        assert result.capacity_state is AgentCapacityState.AtRisk
+        assert not result.capacity_interrupted
+        assert service._capacity_shutdown.deadline is None
+        assert not any(event.startswith("workers:") for event in events)
+        deadline = datetime.now(UTC) + timedelta(minutes=2)
+        draining = service._begin_capacity_interruption(
+            risk, AgentCapacityInterruptionNotice(reason="provider-reclaim", notice_at=deadline)
+        )
+        assert draining.capacity_state is AgentCapacityState.Draining
+        assert service._begin_capacity_interruption(draining, advisory) == draining
+        assert service._capacity_shutdown.deadline == deadline
+        immediate = service._begin_capacity_interruption(
+            draining, AgentCapacityInterruptionNotice(reason="provider-hibernate")
+        )
+        assert immediate.capacity_state is AgentCapacityState.Preempting
+        assert immediate.capacity_notice_at == deadline
+    finally:
+        service._capacity_shutdown.close()
+        service.worker_controller.close()
 
 
 def test_expired_interruption_stops_workers_when_gateway_is_unavailable(tmp_path: Path) -> None:

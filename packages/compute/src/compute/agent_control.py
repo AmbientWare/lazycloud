@@ -354,6 +354,8 @@ def machine_serves_workloads(
         return False
     if enrollment.readiness_phase is not MachineReadinessPhase.Ready:
         return False
+    if enrollment.capacity_state is not AgentCapacityState.Available:
+        return False
     return (
         worker_state.machine_worker_availability(machine_id) is MachineWorkerAvailability.Available
     )

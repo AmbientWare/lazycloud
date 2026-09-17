@@ -142,7 +142,7 @@ def test_publication_commits_current_image_metadata_with_terminal_build(
             builds = ImageBuildRepository(session)
             builds.upsert(build, workspace_id=workspace.id)
             assert builds.claim_publication(
-                build.id, workspace_id=workspace.id, claim_id="publisher"
+                build.id, workspace_id=workspace.id, claim_id="publisher", container_id=None
             )
         completed = build.model_copy(
             update={

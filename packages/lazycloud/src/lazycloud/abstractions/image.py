@@ -779,6 +779,28 @@ def _response_error(response: BuildImageResponse) -> str:
 
 
 def _write_build_response(step: TerminalStep, response: BuildImageResponse) -> None:
+    if not response.done and not response.msg:
+        summaries = {
+            "queued": "queued",
+            "retry": "retrying after interruption",
+            "capacity_busy": "waiting for compute",
+            "capacity_unavailable": "waiting for compute availability",
+            "capacity_limit": "waiting for room within the compute limit",
+            "provisioning_compute": "starting compute",
+            "starting_container": "starting build container",
+            "dependencies": "waiting for build inputs",
+        }
+        summary = (
+            summaries[response.pending_reason.value]
+            if response.pending_reason is not None
+            else "building"
+            if response.status.value == "running"
+            else "queued"
+        )
+        if response.attempt_number > 1:
+            summary = f"retry {response.attempt_number}/2 · {summary}"
+        step.update(summary)
+        return
     if response.warning and response.msg:
         step.log(f"warning: {response.msg.rstrip()}")
         return

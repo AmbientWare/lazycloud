@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import Field
@@ -16,6 +17,15 @@ class ReservationStatus(StrEnum):
     Terminating = "terminating"
     Failed = "failed"
     Deleted = "deleted"
+
+
+@dataclass(frozen=True, slots=True)
+class CapacityMarket:
+    cloud: str
+    region: str
+    availability_zone: str
+    instance_type: str
+    preemptible: bool
 
 
 class ComputeOffer(ContractModel):
@@ -48,6 +58,16 @@ class ComputeOffer(ContractModel):
     latitude: float = 0.0
     longitude: float = 0.0
     labels: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def market(self) -> CapacityMarket:
+        return CapacityMarket(
+            cloud=self.cloud or self.provider,
+            region=self.region,
+            availability_zone=self.availability_zone,
+            instance_type=self.instance_type,
+            preemptible=self.preemptible,
+        )
 
     @property
     def hourly_cost_micros(self) -> int | None:

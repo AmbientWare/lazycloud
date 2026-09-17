@@ -76,6 +76,7 @@ def _request(
     manifest_path.write_text("{}", encoding="utf-8")
     session = plan_image_build_session(
         image,
+        container_id="build-1",
         image_id=plan.image_id,
         build_id="build-1",
     )

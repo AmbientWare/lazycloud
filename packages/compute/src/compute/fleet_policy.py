@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pydantic import Field, model_validator
@@ -56,14 +57,11 @@ def plan_warm_capacity(
     fleet_limit: int,
     fleet_committed: int,
     maintenance_busy: bool,
+    targets: Mapping[str, int] | None = None,
 ) -> WarmCapacityPlan:
+    goals = dict(targets) if targets is not None else {target_unit_id: minimum}
     target = next((unit for unit in units if unit.unit_id == target_unit_id), None)
-    other_eligible = sum(
-        min(unit.ready, unit.desired)
-        for unit in units
-        if unit.unit_id != target_unit_id and unit.eligible
-    )
-    required = max(minimum - other_eligible, 0)
+    required = goals.get(target_unit_id, 0)
     current_desired = target.desired if target is not None else 0
     current_committed = target.committed if target is not None else 0
     ceiling = min(fleet_limit, fleet_baseline + int(not maintenance_busy))
@@ -71,21 +69,21 @@ def plan_warm_capacity(
         current_desired,
         min(required, max(ceiling - fleet_committed + current_committed, 0)),
     )
-    floors = {unit.unit_id: 0 for unit in units}
-    floors[target_unit_id] = min(desired, minimum)
-    remaining = max(minimum - min(target.ready if target else 0, desired), 0)
+    floors = {unit.unit_id: min(unit.desired, goals.get(unit.unit_id, 0)) for unit in units}
+    floors[target_unit_id] = min(desired, required)
+    remaining = max(minimum - sum(min(unit.ready, floors[unit.unit_id]) for unit in units), 0)
     for unit in sorted(
-        (unit for unit in units if unit.unit_id != target_unit_id),
+        units,
         key=lambda unit: (not unit.eligible, -unit.floor, unit.unit_id),
     ):
-        retained = min(unit.ready, unit.desired, remaining)
-        floors[unit.unit_id] = retained
+        retained = min(max(min(unit.ready, unit.desired) - floors[unit.unit_id], 0), remaining)
+        floors[unit.unit_id] += retained
         remaining -= retained
     sources = set(target.handoff_from if target else ())
     sources.update(
         unit.unit_id
         for unit in units
-        if unit.unit_id != target_unit_id and not unit.eligible and unit.floor
+        if unit.unit_id != target_unit_id and unit.desired > goals.get(unit.unit_id, 0)
     )
     handoff_from = tuple(
         sorted(

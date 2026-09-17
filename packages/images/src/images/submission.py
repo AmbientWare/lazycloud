@@ -6,12 +6,14 @@ from datetime import timedelta
 from typing import Protocol
 from uuid import uuid4
 
+from database.repositories.image_build_attempts import ImageBuildAttemptRepository
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.images import ImageBuildRepository
-from shared.errors import PaymentRequiredError
+from shared.errors import InvalidInputError, PaymentRequiredError
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildPhase, ImageBuildRecord
 from shared.timestamps import utc_now
+from storage.service import ObjectByteClient
 
 from database import DatabaseClient
 from images.building import ImageBuildCredentialPlan, build_image_plan, plan_image_build_session
@@ -25,13 +27,18 @@ class ImageBuildDispatchExecutor(Protocol):
 
     def dispatch(self, build_id: str, workspace_id: str, payload: str) -> None: ...
 
-    def abort(self, build_id: str, workspace_id: str) -> None: ...
+    def abort(self, build_id: str, workspace_id: str, *, container_id: str) -> None: ...
+
+    def prepare_retry(
+        self, build_id: str, workspace_id: str, payload: str, *, container_id: str
+    ) -> str: ...
 
 
 @dataclass(slots=True)
 class ImageBuildSubmissionService:
     database: DatabaseClient
     executor: ImageBuildDispatchExecutor
+    archive_store: ObjectByteClient
 
     def submit(
         self,
@@ -46,8 +53,13 @@ class ImageBuildSubmissionService:
     ) -> ImageBuildRecord:
         plan = build_image_plan(image)
         build_id = str(uuid4())
+        container_id = str(uuid4())
         lifecycle = plan_image_build_session(
-            image, require_archive_publication=True, image_id=plan.image_id, build_id=build_id
+            image,
+            container_id=container_id,
+            require_archive_publication=True,
+            image_id=plan.image_id,
+            build_id=build_id,
         )
         record = ImageBuildRecord(
             id=build_id,
@@ -116,6 +128,13 @@ class ImageBuildSubmissionService:
                     dispatch.bind_request(request_id, workspace_id=workspace_id, build_id=active.id)
                 return active
             record = repository.upsert(record, workspace_id=workspace_id)
+            record = ImageBuildAttemptRepository(session).begin(
+                build_id,
+                workspace_id=workspace_id,
+                container_id=container_id,
+                expected_container_id=None,
+                now=utc_now(),
+            )
             dispatch.enqueue(build_id, payload, now=utc_now())
             if request_id is not None:
                 dispatch.bind_request(request_id, workspace_id=workspace_id, build_id=build_id)
@@ -176,9 +195,11 @@ class ImageBuildSubmissionService:
                 record = ImageBuildRepository(session).get(build_id, workspace_id=workspace_id)
             if record is None:
                 continue
-            if record.started_at is None and record.created_at > now - timedelta(minutes=5):
-                continue
             try:
+                if self.retry_interrupted(build_id, workspace_id=workspace_id):
+                    continue
+                if record.started_at is None and record.created_at > now - timedelta(minutes=5):
+                    continue
                 if self._fail(build_id, workspace_id, "image build worker progress lease expired"):
                     failed += 1
             except Exception as exc:
@@ -187,6 +208,77 @@ class ImageBuildSubmissionService:
                 )
         self.cleanup(limit=limit)
         return failed
+
+    def retry_interrupted(self, build_id: str, *, workspace_id: str) -> bool:
+        now = utc_now()
+        with self.database.session() as session:
+            attempts = ImageBuildAttemptRepository(session)
+            record = attempts.interrupted(build_id, workspace_id=workspace_id, now=now)
+            payload = ImageBuildDispatchRepository(session).payload(
+                build_id, workspace_id=workspace_id
+            )
+        if record is None:
+            return False
+        if record.attempt_number != 1:
+            return self._fail_interrupted(
+                record,
+                workspace_id=workspace_id,
+                reason="image build interrupted after its automatic retry",
+            )
+        if payload is None:
+            return self._fail_interrupted(
+                record,
+                workspace_id=workspace_id,
+                reason="interrupted image build inputs are unavailable",
+            )
+        if record.created_at < now - timedelta(minutes=5):
+            return self._fail_interrupted(
+                record,
+                workspace_id=workspace_id,
+                reason="interrupted image build exceeded its original submission deadline",
+            )
+        container_id = str(uuid4())
+        try:
+            payload = self.executor.prepare_retry(
+                build_id, workspace_id, payload, container_id=container_id
+            )
+        except InvalidInputError as exc:
+            return self._fail_interrupted(record, workspace_id=workspace_id, reason=exc.message)
+        with self.database.session() as session:
+            attempts = ImageBuildAttemptRepository(session)
+            current = attempts.interrupted(
+                build_id, workspace_id=workspace_id, now=now, for_update=True
+            )
+            if current is None or current.execution_container_id != record.execution_container_id:
+                return False
+            attempts.begin(
+                build_id,
+                workspace_id=workspace_id,
+                container_id=container_id,
+                expected_container_id=record.execution_container_id,
+                now=now,
+            )
+            ImageBuildDispatchRepository(session).replace_payload(build_id, payload)
+        return True
+
+    def _fail_interrupted(
+        self, expected: ImageBuildRecord, *, workspace_id: str, reason: str
+    ) -> bool:
+        with self.database.session() as session:
+            repository = ImageBuildRepository(session)
+            current = repository.lock_build(expected.id, workspace_id=workspace_id)
+            if (
+                current.execution_container_id != expected.execution_container_id
+                or current.status not in {BuildStatus.Pending, BuildStatus.Running}
+            ):
+                return False
+            current.status = BuildStatus.Failed
+            current.phase = ImageBuildPhase.Failed
+            current.error = reason
+            current.finished_at = utc_now()
+            repository.upsert(current, workspace_id=workspace_id)
+            ImageBuildDispatchRepository(session).schedule_cleanup(current.id, after=utc_now())
+        return True
 
     def _fail(
         self, build_id: str, workspace_id: str, reason: str, *, claim_id: str | None = None
@@ -219,7 +311,12 @@ class ImageBuildSubmissionService:
         for build_id, workspace_id in candidates:
             retry_at = None
             try:
-                self.executor.abort(build_id, workspace_id)
+                with self.database.session() as session:
+                    record = ImageBuildRepository(session).get(build_id, workspace_id=workspace_id)
+                if record is not None and record.execution_container_id is not None:
+                    self.executor.abort(
+                        build_id, workspace_id, container_id=record.execution_container_id
+                    )
             except Exception as exc:
                 retry_at = utc_now() + timedelta(seconds=5)
                 LOGGER.warning(
@@ -227,6 +324,37 @@ class ImageBuildSubmissionService:
                 )
             with self.database.session() as session:
                 ImageBuildDispatchRepository(session).schedule_cleanup(build_id, after=retry_at)
+        with self.database.session() as session:
+            retired = ImageBuildAttemptRepository(session).cleanup_due(now=utc_now(), limit=limit)
+        for container_id, attempt_build_id, workspace_id in retired:
+            retry_at = None
+            try:
+                self.executor.abort(attempt_build_id, workspace_id, container_id=container_id)
+            except Exception as exc:
+                retry_at = utc_now() + timedelta(seconds=5)
+                LOGGER.warning(
+                    "retired image build attempt cleanup failed for %s (%s)",
+                    container_id,
+                    type(exc).__name__,
+                )
+            with self.database.session() as session:
+                ImageBuildAttemptRepository(session).schedule_cleanup(container_id, after=retry_at)
+        with self.database.session() as session:
+            uploads = ImageBuildAttemptRepository(session).expired_uploads(
+                now=utc_now(), limit=limit
+            )
+        for container_id, bucket, key, retained in uploads:
+            try:
+                if not retained:
+                    self.archive_store.delete(key, bucket=bucket)
+                with self.database.session() as session:
+                    ImageBuildAttemptRepository(session).release_upload(container_id)
+            except Exception as exc:
+                LOGGER.warning(
+                    "image build upload cleanup failed for %s (%s)",
+                    container_id,
+                    type(exc).__name__,
+                )
 
     def cancel(self, build_id: str, *, workspace_id: str, reason: str) -> ImageBuildRecord:
         with self.database.session() as session:
