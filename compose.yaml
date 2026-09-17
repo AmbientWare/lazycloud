@@ -332,7 +332,7 @@ services:
   administrator-bootstrap:
     image: "database-bootstrap:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     extra_hosts: *local-hosts
-    entrypoint: ["lazycloud-admin", "--json", "auth", "bootstrap"]
+    entrypoint: ["lazycloud-admin", "--json", "auth", "ensure"]
     command:
       - --token-file
       - /run/secrets/lazycloud-administrator-token

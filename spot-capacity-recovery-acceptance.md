@@ -21,6 +21,13 @@ Preserve the database and all existing tenant data. Pause Argo reconciliation
 before scaling old workloads down, then resume its normal deployment of the
 merged release. Record the deployed revision and public execution result below.
 
+The preceding deployment was blocked by a revoked bootstrap credential despite
+an active administrator account. Deployment initialization now checks published
+bootstrap and current administrator standing. It preserves token revocation and
+still provisions workspace storage. Fifteen identity and offline CLI checks
+passed, including worker credential creation after bootstrap-token revocation
+and refusal when no active administrator remains.
+
 - Compute, pool drain and migration checks passed, including simultaneous loss
   with one or two replacement markets, a fresh service/Redis client between
   passes, and a rejected purchase releasing ownership before another market

@@ -633,6 +633,20 @@ class AuthService:
             claim = IdentityBootstrapClaimRepository(session).get()
             return claim.request_id if claim is not None else None
 
+    def ensure_administrator(
+        self, *, configured_token: str, github_user_id: int | None = None
+    ) -> None:
+        """Initialize a deployment without reissuing a revoked bootstrap credential."""
+        if self.administrator_ready():
+            return
+        request_id = "bootstrap:configured-administrator"
+        self.bootstrap_administrator(
+            request_id=request_id,
+            configured_token=configured_token,
+            github_user_id=github_user_id,
+        )
+        self.mark_admin_token_published(request_id=request_id, recovery=False)
+
     def recovery_request_exists(self, request_id: str) -> bool:
         _validate_offline_request_id(request_id)
         with self.context.database.session() as session:
