@@ -6,10 +6,6 @@ name: Ship
 on:
   workflow_dispatch:
     inputs:
-      commit:
-        description: Source commit already merged into main. Empty uses this workflow's commit.
-        type: string
-        default: ""
       bump:
         description: Which part of the version this release changes
         type: choice
@@ -47,19 +43,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Resolve the merged source commit
+      - name: Record the main commit
         id: source
-        env:
-          REQUESTED_COMMIT: ${{ inputs.commit || github.sha }}
         run: |
           set -euo pipefail
-          commit="$(git rev-parse --verify "${REQUESTED_COMMIT}^{commit}")"
-          git merge-base --is-ancestor "$commit" origin/main || {
-            echo "::error::Release source must already be merged into main."
-            exit 1
-          }
+          commit="$(git rev-parse --verify HEAD)"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
       - name: Compute the next version
