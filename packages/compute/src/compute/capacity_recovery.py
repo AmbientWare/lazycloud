@@ -24,9 +24,11 @@ from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionShape,
     CapacityAcquisitionStatus,
+    CapacityFailureCode,
     CapacityFulfillmentRequest,
     CapacityOperationStatus,
     CapacityReleaseRequest,
+    capacity_failure_message,
 )
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import (
@@ -126,14 +128,6 @@ class CapacityRecoveryService:
             return
         if not record.source_adjusted:
             source, record = self._adjust_source(source, record, now=now)
-        if record.replacement_machine_id is None and (
-            now >= record.observed_at + timedelta(seconds=source.registration_timeout_seconds)
-            or (record.target_unit_id is None and record.attempt >= MAX_RECOVERY_ATTEMPTS)
-        ):
-            self._finish_without_replacement(
-                record, reason="replacement acquisition exhausted", now=now
-            )
-            return
         # Persisted reduction must reach the provider before it can replenish the old market.
         if not record.source_applied:
             with self.compute._required_capacity_owner_mutations().mutation_lock(source.id):
@@ -161,6 +155,14 @@ class CapacityRecoveryService:
                     )
                 record = record.model_copy(update={"source_applied": True})
                 self._save(record, now=now)
+        if record.replacement_machine_id is None and (
+            now >= record.observed_at + timedelta(seconds=source.registration_timeout_seconds)
+            or (record.target_unit_id is None and record.attempt >= MAX_RECOVERY_ATTEMPTS)
+        ):
+            self._finish_without_replacement(
+                record, reason="replacement acquisition exhausted", now=now
+            )
+            return
         if record.replacement_machine_id:
             self._settle(source, record, now=now)
             return
@@ -457,6 +459,7 @@ class CapacityRecoveryService:
                 or now
                 >= operation.created_at + timedelta(seconds=target.registration_timeout_seconds)
             ):
+                failure_code = operation.failure_code
                 self.compute.release_acquired_capacity(
                     CapacityReleaseRequest(
                         capacity_owner_id=target.id,
@@ -475,6 +478,21 @@ class CapacityRecoveryService:
                     record = record.model_copy(
                         update={"target_unit_id": None, "operation_id": None}
                     )
+                    if failure_code in {
+                        CapacityFailureCode.ProviderQuotaExceeded,
+                        CapacityFailureCode.JoinAuthorityUnusable,
+                        CapacityFailureCode.ProviderUnavailable,
+                    }:
+                        self._save(
+                            record.model_copy(
+                                update={
+                                    "completed_at": now,
+                                    "reason": capacity_failure_message(failure_code),
+                                }
+                            ),
+                            now=now,
+                        )
+                        return
                 self._save(
                     record.model_copy(update={"reason": "replacement acquisition failed"}), now=now
                 )

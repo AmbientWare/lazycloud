@@ -7,6 +7,20 @@ cleanup proof and deployed database-rate verification remain open.
 Local owner checks use real PostgreSQL and Redis. Provider-owner tests use their
 existing deterministic provider; they do not prove AWS behavior.
 
+## Release cutover
+
+The owner approved a shutdown and replacement of old workers for this release.
+Mixed versions are not supported for the image-attempt transition. Old workers
+report their container ID as the build ID; retries require separate identities.
+Stop old API and scheduler replicas before migration so they cannot create builds
+without attempt ownership. Resume on the new release and verify every serving
+worker's image and agent identity before running acceptance work.
+
+Production inspection before cutover found no active image builds or containers.
+Preserve the database and all existing tenant data. Pause Argo reconciliation
+before scaling old workloads down, then resume its normal deployment of the
+merged release. Record the deployed revision and public execution result below.
+
 - Compute, pool drain and migration checks passed, including simultaneous loss
   with one or two replacement markets, a fresh service/Redis client between
   passes, and a rejected purchase releasing ownership before another market
@@ -20,6 +34,11 @@ existing deterministic provider; they do not prove AWS behavior.
 - Changed-file Python types and Ruff passed. Web TypeScript passed.
 - All checks on implementation commit `2ecd22ae5` passed in CI, including the
   changed Python owners, types, lint/format, client wheel installation and web.
+- Final review moved source capacity reduction ahead of recovery expiry so an
+  expired recovery still prevents replenishment in the threatened market.
+  Quota, provider availability and join-authority failures stop recovery after
+  releasing the failed purchase. The simultaneous-recovery owner check passed
+  all four cases, including quota failure without another purchase.
 
 ## Public execution
 

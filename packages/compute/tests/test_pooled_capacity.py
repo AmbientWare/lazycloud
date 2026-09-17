@@ -60,6 +60,7 @@ from database.repositories.orchestration import (
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.tables.capacity_recovery import CapacityRecoveryTable
+from database.tables.compute import ComputeCapacityOperationTable
 from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
 from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
@@ -116,7 +117,7 @@ from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerRequest, SchedulerWorkerStatus
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
-from sqlalchemy import select
+from sqlalchemy import func, select
 from tests.real_redis import RealRedisActors
 from tests.workspaces import workspace_owner_user_id
 
@@ -941,13 +942,22 @@ def test_two_warm_workers_use_distinct_availability_zones(service_context: Servi
     assert len(units) == 2 and sum(unit.desired_machines for unit in units) == 2
 
 
-@pytest.mark.parametrize("replacement_markets,reject_first", [(1, False), (2, False), (2, True)])
+@pytest.mark.parametrize(
+    "replacement_markets,failure_code",
+    [
+        (1, None),
+        (2, None),
+        (2, CapacityFailureCode.CapacityUnavailable),
+        (2, CapacityFailureCode.ProviderQuotaExceeded),
+    ],
+)
 def test_two_interrupted_workers_admit_distinct_replacements_once(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
     replacement_markets: int,
-    reject_first: bool,
+    failure_code: CapacityFailureCode | None,
 ) -> None:
+    reject_first = failure_code is not None
     with service_context.database.session() as session:
         workspace_id = service_context.default_workspace_id(session)
     providers: list[ResolvedComputeProvider] = []
@@ -1066,7 +1076,7 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
     if reject_first:
         capacity_providers[1].max_observed_machines = 0
         capacity_providers[1].last_capacity_failure_at = now + timedelta(seconds=6)
-        capacity_providers[1].last_capacity_failure_code = CapacityFailureCode.CapacityUnavailable
+        capacity_providers[1].last_capacity_failure_code = failure_code
     compute.reconcile_capacity_recovery(now=now + timedelta(seconds=7))
     if reject_first:
         with service_context.database.session() as session:
@@ -1085,6 +1095,18 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
             assert released is not None and released.status is CapacityOperationStatus.Released
             assert not released.owns_capacity
         compute.reconcile_capacity_recovery(now=now + timedelta(seconds=13))
+        if failure_code is CapacityFailureCode.ProviderQuotaExceeded:
+            with service_context.database.session() as session:
+                rows = session.scalars(select(CapacityRecoveryTable)).all()
+                failed = [row for row in rows if row.completed_at is not None]
+                assert len(failed) == 1
+                assert failed[0].reason == "provider compute quota exceeded"
+                assert failed[0].attempt == 1 and failed[0].target_unit_id is None
+                assert (
+                    session.scalar(select(func.count()).select_from(ComputeCapacityOperationTable))
+                    == 2
+                )
+            return
     with service_context.database.session() as session:
         rows = session.scalars(select(CapacityRecoveryTable)).all()
         assert sorted(row.attempt for row in rows) == ([1, 2] if reject_first else [1, 1])

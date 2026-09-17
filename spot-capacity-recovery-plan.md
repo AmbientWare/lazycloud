@@ -1,6 +1,8 @@
 # Spot capacity recovery implementation plan
 
-Status: proposed implementation, with no runtime or infrastructure changes in this PR.
+Status: implemented on `feat/spot-capacity-recovery`. See
+[acceptance evidence](spot-capacity-recovery-acceptance.md) for completed checks
+and remaining live verification.
 Code baseline: `main` at `02380bddc4c2918ff75e0f99456c9e030d42896e`.
 
 ## Outcome and scope
@@ -22,7 +24,7 @@ Warm diversification applies to the platform fleet. Recovery of customer-owned
 cloud machines remains within that customer's authorized providers, placement
 constraints, and account. Self-hosted machines cannot authorize provider purchases.
 
-## What the current code does
+## Baseline behavior
 
 | Owner | Current behavior and change required |
 | --- | --- |
