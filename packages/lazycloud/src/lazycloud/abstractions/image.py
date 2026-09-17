@@ -493,7 +493,7 @@ class Image:
         *,
         bucket: str = IMAGE_BUILD_CONTEXT_BUCKET,
         name: str | None = None,
-        overwrite: bool = True,
+        overwrite: bool = False,
     ) -> Self:
         context = self._context_archive()
         if not context.files and self.dockerfile_content is None:

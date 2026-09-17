@@ -14,6 +14,7 @@ from lazycloud.cli.main import build_public_cli
 from lazycloud.http_transport import request_raw
 from lazycloud.session import Client
 from lazycloud.session.deployment import DeploymentClient
+from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.session.uploads import stream_object_bytes
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.client_version import RECOMMENDED_CLIENT_VERSION_HEADER, observe_client_versions
@@ -320,7 +321,7 @@ def test_preparation_checks_source_existence_in_each_workspace(tmp_path: Path) -
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
-    with running_http_server(server):
+    with running_http_server(server), DeploymentPreparation() as preparation:
         for index, workspace in enumerate(("tenant-a", "tenant-a", "tenant-b", "tenant-a")):
             if index == 3:
                 stored.clear()
@@ -330,6 +331,7 @@ def test_preparation_checks_source_existence_in_each_workspace(tmp_path: Path) -
                 workspace=workspace,
                 sync_source=True,
                 source_root=tmp_path,
+                preparation=preparation if index < 3 else None,
             )
             response = deployment.prepare(DeploymentSpec(name="hello"))
             assert response.stub_id == "stub-prepared"
