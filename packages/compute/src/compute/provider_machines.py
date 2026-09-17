@@ -588,7 +588,10 @@ class ProviderMachineReconciler:
             if _reservation_open(item.status) and item.id not in destruction_observations
         }
         if unproved:
-            if snapshot.phase is ProviderCapacityPhase.Deleted:
+            if (
+                snapshot.phase is ProviderCapacityPhase.Deleted
+                or pool.phase is ComputeUnitPhase.Deleting
+            ):
                 phase = ComputeUnitPhase.Deleting
             elif snapshot.desired_machines != snapshot.observed_machines or authoritative_zero:
                 phase = ComputeUnitPhase.Updating

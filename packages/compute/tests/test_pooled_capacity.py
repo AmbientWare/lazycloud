@@ -257,6 +257,11 @@ class _EmptyAccountProvider(_PooledProvider):
 
 @dataclass(slots=True)
 class _AsyncScaleDownProvider(_PooledProvider):
+    def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        return self.set_unit_capacity(
+            request, desired_machines=0, max_machines=request.max_machines
+        ).model_copy(update={"phase": ProviderCapacityPhase.Deleting})
+
     def set_unit_capacity(
         self,
         request: ProviderUnitRequest,
@@ -3099,6 +3104,11 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
     with service_context.database.session() as session:
         [retiring] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert retiring.storage_volume_ids == ("vol-00000000000000000",)
+    with pytest.raises(UpstreamUnavailableError, match="capacity release is in progress"):
+        compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
+    with service_context.database.session() as session:
+        deleting = ComputeUnitRepository(session).get(pool.id)
+    assert deleting is not None and deleting.phase is ComputeUnitPhase.Deleting
 
 
 def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
