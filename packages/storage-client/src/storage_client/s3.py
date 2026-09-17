@@ -191,6 +191,11 @@ class _CompletedPart(TypedDict):
     ETag: str
 
 
+class _CreateMultipartOptions(TypedDict, total=False):
+    ContentType: str
+    Metadata: dict[str, str]
+
+
 class _MultipartUpload(TypedDict):
     Parts: list[_CompletedPart]
 
@@ -309,6 +314,8 @@ class _MultipartClient(Protocol):
         *,
         Bucket: str,
         Key: str,
+        ContentType: str = "application/octet-stream",
+        Metadata: dict[str, str] | None = None,
     ) -> _CreateMultipartUploadResponse: ...
 
     def complete_multipart_upload(
@@ -736,13 +743,22 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         }
         return S3PresignedUpload(url=url, headers=headers)
 
-    def create_multipart_upload(self, key: str, *, bucket: str | None = None) -> str:
+    def create_multipart_upload(
+        self,
+        key: str,
+        *,
+        bucket: str | None = None,
+        content_type: str = "application/octet-stream",
+        metadata: dict[str, str] | None = None,
+    ) -> str:
         client = self.client
         if not isinstance(client, _MultipartClient):
             raise TypeError("configured S3 client does not support multipart uploads")
+        options: _CreateMultipartOptions = {"ContentType": content_type}
+        if metadata is not None:
+            options["Metadata"] = metadata
         response = client.create_multipart_upload(
-            Bucket=bucket or self.settings.bucket,
-            Key=key,
+            Bucket=bucket or self.settings.bucket, Key=key, **options
         )
         return str(response["UploadId"])
 
@@ -754,16 +770,23 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
         part_number: int,
         bucket: str | None = None,
         expires_seconds: int = 3600,
+        checksum_sha256: str = "",
+        content_length: int | None = None,
     ) -> str:
+        params: _PresignParams = {
+            "Bucket": bucket or self.settings.bucket,
+            "Key": key,
+            "UploadId": upload_id,
+            "PartNumber": part_number,
+        }
+        if checksum_sha256:
+            params["ChecksumSHA256"] = checksum_sha256
+        if content_length is not None:
+            params["ContentLength"] = content_length
         return str(
             self._presigner.generate_presigned_url(
                 "upload_part",
-                Params={
-                    "Bucket": bucket or self.settings.bucket,
-                    "Key": key,
-                    "UploadId": upload_id,
-                    "PartNumber": part_number,
-                },
+                Params=params,
                 ExpiresIn=_effective_presign_expiration(self.settings, expires_seconds),
             )
         )
@@ -886,7 +909,9 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             if code != "NoSuchBucket":
                 raise
 
-    def abort_multipart_uploads(self, prefix: str, *, bucket: str | None = None) -> None:
+    def abort_multipart_uploads(
+        self, prefix: str, *, bucket: str | None = None, exact: bool = False
+    ) -> None:
         client = self.client
         if not isinstance(client, _ListMultipartUploadsClient):
             raise TypeError("configured S3 client does not support multipart listing")
@@ -903,6 +928,8 @@ class S3ObjectStoreClient(Generic[S3ClientT]):
             for upload in response.get("Uploads", ()):
                 if not upload["Key"].startswith(prefix):
                     raise RuntimeError("multipart listing returned an upload outside the prefix")
+                if exact and upload["Key"] != prefix:
+                    continue
                 try:
                     self.abort_multipart_upload(
                         upload["Key"], upload_id=upload["UploadId"], bucket=target_bucket

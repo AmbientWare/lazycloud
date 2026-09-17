@@ -34,6 +34,7 @@ class ObjectRecord(ArtifactObjectFields):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     write_claim_id: str = ""
+    write_upload_id: str = ""
     write_claimed_at: datetime | None = None
     write_created: bool = False
     write_target: ObjectWriteCommand | None = None

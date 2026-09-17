@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import threading
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -18,6 +19,7 @@ from shared.contracts import ContractModel
 
 from worker.events import ContainerRequestContext
 from worker.execution import stub_code_cache_key
+from worker.source_capacity import SourceCapacityError, require_source_space
 
 SOURCE_CACHE_READY_FILE = ".source-cache-ready"
 SOURCE_WORKSPACE_OWNER_FILE = ".source-workspace-owner"
@@ -110,15 +112,17 @@ class SourceCodePackageMaterializer:
                 request.container_id,
                 encoding="utf-8",
             )
-            bytes_read = self._ensure_cache(request, mount, cache_path, cache_ready_path)
-            _copy_directory_contents_atomic(
-                cache_path,
-                workspace_path,
-                workspace_ready_path,
-                request.container_id,
-            )
-            _touch_cache_entry(cache_path)
-            self._enforce_cache_limits()
+            try:
+                bytes_read = self._ensure_cache(request, mount, cache_path, cache_ready_path)
+                _copy_directory_contents_atomic(
+                    cache_path,
+                    workspace_path,
+                    workspace_ready_path,
+                    request.container_id,
+                )
+                _touch_cache_entry(cache_path)
+            finally:
+                self._enforce_cache_limits()
             return SourceCodeMaterializationResult(
                 workspace_path=str(workspace_path),
                 cache_path=str(cache_path),
@@ -214,15 +218,20 @@ class SourceCodePackageMaterializer:
     ) -> int:
         if ready_path.exists():
             return 0
-        data = self._read_source_bytes(mount)
-        _verify_source_hash(data, mount.source_sha256)
         tmp_path = cache_path.with_name(f"{cache_path.name}.tmp.{request.container_id}")
         shutil.rmtree(tmp_path, ignore_errors=True)
-        _extract_zip_bytes(data, tmp_path)
-        (tmp_path / SOURCE_CACHE_READY_FILE).write_text("ok", encoding="utf-8")
-        shutil.rmtree(cache_path, ignore_errors=True)
-        tmp_path.replace(cache_path)
-        return len(data)
+        tmp_path.mkdir(parents=True)
+        try:
+            archive_path = tmp_path / "source.zip"
+            size = self._download_source(mount, archive_path)
+            extracted = tmp_path / "extracted"
+            _extract_zip(archive_path, extracted)
+            (extracted / SOURCE_CACHE_READY_FILE).write_text("ok", encoding="utf-8")
+            shutil.rmtree(cache_path, ignore_errors=True)
+            extracted.replace(cache_path)
+            return size
+        finally:
+            shutil.rmtree(tmp_path, ignore_errors=True)
 
     def _enforce_cache_limits(self) -> None:
         candidates = _source_cache_candidates(self.cache_root)
@@ -234,34 +243,50 @@ class SourceCodePackageMaterializer:
             _remove_path(path)
             total_bytes -= size_bytes
 
-    def _read_source_bytes(self, mount: RequestMount) -> bytes:
+    def _download_source(self, mount: RequestMount, destination: Path) -> int:
+        digest = hashlib.sha256()
+        size = 0
+
+        def write_chunks(chunks: Iterable[bytes]) -> None:
+            nonlocal size
+            with destination.open("wb") as output:
+                for chunk in chunks:
+                    require_source_space(destination.parent, len(chunk))
+                    output.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+
         if mount.source_download_url:
             parsed = urlparse(mount.source_download_url)
             if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
                 msg = "source download URL must be an HTTP(S) URL with a hostname"
                 raise SourceCodeMaterializationError(msg)
             try:
-                response = self.http.request(
+                with self.http.stream(
                     "GET",
                     mount.source_download_url,
                     timeout_seconds=60,
-                )
-                if response.status_code < 200 or response.status_code >= 300:
-                    msg = f"source download returned HTTP {response.status_code}"
-                    raise SourceCodeMaterializationError(msg)
-                return response.content
-            except SourceCodeMaterializationError:
+                ) as response:
+                    if response.status_code < 200 or response.status_code >= 300:
+                        msg = f"source download returned HTTP {response.status_code}"
+                        raise SourceCodeMaterializationError(msg)
+                    write_chunks(response.iter_bytes(chunk_size=1024 * 1024))
+            except (SourceCodeMaterializationError, SourceCapacityError):
                 raise
             except Exception as exc:
                 raise SourceCodeMaterializationError(
                     f"source download failed: {type(exc).__name__}"
                 ) from None
-        if mount.local_path:
+        elif mount.local_path:
             path = Path(mount.local_path)
-            if path.is_file():
-                return path.read_bytes()
-        msg = f"source object is unavailable for mount {mount.mount_path}"
-        raise SourceCodeMaterializationError(msg)
+            with path.open("rb") as source:
+                write_chunks(iter(lambda: source.read(1024 * 1024), b""))
+        else:
+            msg = f"source object is unavailable for mount {mount.mount_path}"
+            raise SourceCodeMaterializationError(msg)
+        if mount.source_sha256 and digest.hexdigest() != mount.source_sha256:
+            raise SourceCodeMaterializationError("source package hash mismatch")
+        return size
 
 
 def _validate_container_id(container_id: str) -> str:
@@ -342,21 +367,13 @@ def _path_size(path: Path) -> int:
     return sum(item.lstat().st_size for item in path.rglob("*") if not item.is_dir())
 
 
-def _verify_source_hash(data: bytes, expected_sha256: str) -> None:
-    if not expected_sha256:
-        return
-    actual = hashlib.sha256(data).hexdigest()
-    if actual != expected_sha256:
-        msg = f"source package hash mismatch: expected {expected_sha256}, got {actual}"
-        raise SourceCodeMaterializationError(msg)
-
-
-def _extract_zip_bytes(data: bytes, destination: Path) -> None:
+def _extract_zip(archive_path: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    archive_path = destination.with_suffix(".zip")
-    archive_path.write_bytes(data)
     try:
         with zipfile.ZipFile(archive_path) as archive:
+            require_source_space(
+                destination, sum(member.file_size for member in archive.infolist())
+            )
             for member in archive.infolist():
                 target = _safe_extract_target(destination, member.filename)
                 if member.is_dir():
@@ -364,12 +381,15 @@ def _extract_zip_bytes(data: bytes, destination: Path) -> None:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, target.open("wb") as output:
-                    shutil.copyfileobj(source, output)
+                    while chunk := source.read(1024 * 1024):
+                        require_source_space(destination, len(chunk))
+                        output.write(chunk)
+                mode = (member.external_attr >> 16) & 0o777
+                if mode:
+                    target.chmod(mode)
     except zipfile.BadZipFile as exc:
         msg = "source package is not a valid zip archive"
         raise SourceCodeMaterializationError(msg) from exc
-    finally:
-        archive_path.unlink(missing_ok=True)
 
 
 def _safe_extract_target(root: Path, member_name: str) -> Path:
@@ -379,6 +399,16 @@ def _safe_extract_target(root: Path, member_name: str) -> Path:
         msg = f"source package path escapes workspace: {member_name}"
         raise SourceCodeMaterializationError(msg)
     return target
+
+
+def _copy_source_file(source: str | Path, destination: str | Path) -> str:
+    target = Path(destination)
+    with Path(source).open("rb") as input_file, target.open("wb") as output:
+        while chunk := input_file.read(1024 * 1024):
+            require_source_space(target.parent, len(chunk))
+            output.write(chunk)
+    shutil.copystat(source, destination)
+    return str(destination)
 
 
 def _copy_directory_contents_atomic(
@@ -392,16 +422,20 @@ def _copy_directory_contents_atomic(
     shutil.rmtree(destination, ignore_errors=True)
     ready_path.unlink(missing_ok=True)
     tmp_path.mkdir(parents=True, exist_ok=True)
-    for child in source.iterdir():
-        if child.name == SOURCE_CACHE_READY_FILE:
-            continue
-        target = tmp_path / child.name
-        if child.is_dir():
-            shutil.copytree(child, target)
-        else:
-            shutil.copy2(child, target)
-    os.replace(tmp_path, destination)
-    ready_path.write_text("ok", encoding="utf-8")
+    try:
+        require_source_space(tmp_path, _path_size(source))
+        for child in source.iterdir():
+            if child.name == SOURCE_CACHE_READY_FILE:
+                continue
+            target = tmp_path / child.name
+            if child.is_dir():
+                shutil.copytree(child, target, copy_function=_copy_source_file)
+            else:
+                _copy_source_file(child, target)
+        os.replace(tmp_path, destination)
+        ready_path.write_text("ok", encoding="utf-8")
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 __all__ = [

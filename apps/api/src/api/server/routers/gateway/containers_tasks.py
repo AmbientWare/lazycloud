@@ -3,18 +3,16 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from gateway.service import GatewayControlService
-from shared.errors import NotFoundError
+from shared.errors import InvalidInputError, NotFoundError
 from shared.http.functions import FunctionRetireRequest, FunctionRetireResponse
 from shared.http.gateway import (
     AttachToContainerRequest,
     AttachToContainerResponse,
     CheckpointContainerRequest,
     CheckpointContainerResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
 )
 from shared.http.gateway_tasks import (
     AppendTaskLogRequest,
@@ -24,6 +22,12 @@ from shared.http.gateway_tasks import (
     StartTaskRequest,
     StartTaskResponse,
 )
+from shared.http.workspace_sync import (
+    WORKSPACE_SYNC_CONTENT_TYPE,
+    WorkspaceSyncResponse,
+    read_workspace_sync_batch,
+)
+from starlette.concurrency import run_in_threadpool
 
 from api.server.async_io import ApiAsyncIo
 from api.server.auth import read_workspace, write_workspace
@@ -73,13 +77,21 @@ async def attach_to_container(
     )
 
 
-@router.post("/containers/sync-workspace", response_model=SyncContainerWorkspaceResponse)
-def sync_container_workspace(
-    request: SyncContainerWorkspaceBody,
+@router.post("/containers/sync-workspace", response_model=WorkspaceSyncResponse)
+async def sync_container_workspace(
+    request: Request,
     workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
-) -> SyncContainerWorkspaceResponse:
-    return service.sync_container_workspace(request, workspace_id=workspace_id)
+) -> WorkspaceSyncResponse:
+    if request.headers.get("content-type") != WORKSPACE_SYNC_CONTENT_TYPE:
+        raise InvalidInputError("workspace sync requires a binary batch")
+    try:
+        batch = await read_workspace_sync_batch(request.stream())
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
+    return await run_in_threadpool(
+        service.sync_container_workspace, batch, workspace_id=workspace_id
+    )
 
 
 @router.get("/containers/attach/stream", response_class=StreamingResponse)

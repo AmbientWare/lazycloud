@@ -85,6 +85,12 @@ overrides apply to the selected preview. Endpoint and ASGI previews manage their
 HTTP listener; custom container ports, TCP mode, entrypoints and attaching an
 existing container are unsupported.
 
+Use `.lazycloudignore` in the sync directory to exclude files. Live edits transfer
+only changed files, and each replacement becomes visible after its full contents
+pass checksum verification. Large files transfer in chunks and need temporary disk
+space locally and on the worker. Keep datasets and model weights in
+[volumes](/concepts/volumes) when they should persist across previews.
+
 The SDK accepts the same preview configuration through `ServeOptions`:
 
 ```python

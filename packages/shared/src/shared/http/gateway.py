@@ -6,7 +6,6 @@ from typing import Literal
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.app_slug import validate_app_slug
-from shared.bytes_transport import EncodedBytesBody
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import MachinePool
 from shared.deployment_records import DEFAULT_WORKLOAD_PREEMPTIBLE, CpuRequest, MemoryRequest
@@ -68,29 +67,6 @@ class AgentCapacityInterruptionResponse(HttpModel):
     observed_at: datetime
     notice_at: datetime | None = None
     changed: bool = False
-
-
-class ContainerWorkspaceSyncOperation(StringEnum):
-    Delete = "delete"
-    Write = "write"
-    Move = "move"
-
-
-class SyncContainerWorkspaceBody(EncodedBytesBody):
-    container_id: str
-    operation: ContainerWorkspaceSyncOperation
-    path: str = ""
-    new_path: str = ""
-    mode: int = 0o644
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-    @property
-    def data(self) -> bytes:
-        return self.bytes_value()
-
-
-class SyncContainerWorkspaceResponse(HttpModel):
-    path: str = ""
 
 
 class CheckpointContainerRequest(HttpModel):
@@ -318,7 +294,6 @@ __all__ = [
     "Autoscaler",
     "CheckpointContainerRequest",
     "CheckpointContainerResponse",
-    "ContainerWorkspaceSyncOperation",
     "DeployStubRequest",
     "DeployStubResponse",
     "GatewayTaskPolicy",
@@ -333,6 +308,4 @@ __all__ = [
     "SchemaField",
     "SecretVar",
     "StubVolume",
-    "SyncContainerWorkspaceBody",
-    "SyncContainerWorkspaceResponse",
 ]

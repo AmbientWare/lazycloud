@@ -112,14 +112,7 @@ PLATFORM_GATEWAY_ENV_KEYS = {
 class ContainerRuntimeOperation(StrEnum):
     Kill = "kill"
     Exec = "exec"
-    WorkspaceSync = "workspace-sync"
     SandboxExec = "sandbox-exec"
-
-
-class WorkspaceSyncOperation(StrEnum):
-    Delete = "delete"
-    Write = "write"
-    Move = "move"
 
 
 class OciMountType(StrEnum):
@@ -382,16 +375,6 @@ class RuntimeServerOperationPlan(ContractModel):
     force_delete: bool = False
     requires_running: bool = False
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class WorkspaceSyncPlan(ContractModel):
-    container_id: str
-    operation: WorkspaceSyncOperation
-    workspace_root: str
-    target_path: str
-    new_path: str | None = None
-    is_dir: bool = False
-    data_size_bytes: int = 0
 
 
 class CheckpointCacheMetadata(ContractModel):
@@ -872,35 +855,6 @@ def plan_sandbox_exec(
     )
 
 
-def plan_workspace_sync(
-    container_id: str,
-    *,
-    workspace_root: str,
-    operation: WorkspaceSyncOperation,
-    path: str,
-    new_path: str | None = None,
-    is_dir: bool = False,
-    data_size_bytes: int = 0,
-) -> WorkspaceSyncPlan:
-    target = _safe_workspace_path(workspace_root, path)
-    planned_new_path = _safe_workspace_path(workspace_root, new_path) if new_path else None
-    if operation is WorkspaceSyncOperation.Move and planned_new_path is None:
-        msg = "new_path is required for move operations"
-        raise ValueError(msg)
-    if data_size_bytes < 0:
-        msg = "data_size_bytes cannot be negative"
-        raise ValueError(msg)
-    return WorkspaceSyncPlan(
-        container_id=container_id,
-        operation=operation,
-        workspace_root=workspace_root,
-        target_path=target,
-        new_path=planned_new_path,
-        is_dir=is_dir,
-        data_size_bytes=data_size_bytes,
-    )
-
-
 def stub_code_cache_key(workspace_id: str, object_id: str) -> str:
     payload = f"{len(workspace_id)}:{workspace_id}:{len(object_id)}:{object_id}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -976,15 +930,3 @@ def _cuda_major_minor(value: str | None) -> str | None:
     if len(parts) < 2:
         return None
     return f"{parts[0]}.{parts[1]}"
-
-
-def _safe_workspace_path(root: str, relative_path: str | None) -> str:
-    if relative_path is None:
-        msg = "workspace path is required"
-        raise ValueError(msg)
-    root_clean = "/" + root.strip("/")
-    target = posixpath.normpath(posixpath.join(root_clean, relative_path.lstrip("/")))
-    if target != root_clean and not target.startswith(root_clean + "/"):
-        msg = "workspace sync path escapes workspace root"
-        raise ValueError(msg)
-    return target

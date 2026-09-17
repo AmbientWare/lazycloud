@@ -7,10 +7,23 @@ from pydantic import Field, field_validator
 from shared.app_identity import WORKSPACE_OBJECT_BUCKET, WORKSPACE_UPLOAD_BUCKETS
 from shared.http.base import HttpModel
 
+MAX_OBJECT_BYTES = 5115 * 1024**3
+MAX_UPLOAD_PARTS = 10_000
+DEFAULT_UPLOAD_PART_BYTES = 64 * 1024**2
+
+
+def object_upload_part_size(size: int) -> int:
+    return max(DEFAULT_UPLOAD_PART_BYTES, (size + MAX_UPLOAD_PARTS - 1) // MAX_UPLOAD_PARTS)
+
+
+def object_upload_part_count(size: int) -> int:
+    part_size = object_upload_part_size(size)
+    return max(1, (size + part_size - 1) // part_size)
+
 
 class ObjectMetadata(HttpModel):
     name: str = Field(default="", max_length=1024)
-    size: int = Field(default=0, ge=0)
+    size: int = Field(default=0, ge=0, le=MAX_OBJECT_BYTES)
 
     @field_validator("name")
     @classmethod
@@ -77,6 +90,40 @@ class PutObjectResponse(HttpModel):
     object_id: str = Field(min_length=1)
 
 
+class ObjectUploadTarget(HttpModel):
+    claim_id: str = Field(min_length=1)
+
+
+class ObjectUploadPartRequest(HttpModel):
+    claim_id: str = Field(min_length=1, max_length=64)
+    part_number: int = Field(ge=1, le=MAX_UPLOAD_PARTS)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ObjectUploadPartResponse(HttpModel):
+    url: str = Field(min_length=1, repr=False)
+    headers: dict[str, str] = Field(repr=False)
+
+
+class BeginObjectUploadResponse(HttpModel):
+    object_id: str = Field(min_length=1)
+    upload: ObjectUploadTarget | None = None
+
+
+class CompletedObjectUploadPart(HttpModel):
+    part_number: int = Field(ge=1, le=MAX_UPLOAD_PARTS)
+    etag: str = Field(min_length=1, max_length=256)
+
+
+class CompleteObjectUploadRequest(HttpModel):
+    claim_id: str = Field(min_length=1, max_length=64)
+    parts: list[CompletedObjectUploadPart] = Field(min_length=1, max_length=MAX_UPLOAD_PARTS)
+
+
+class AbortObjectUploadRequest(HttpModel):
+    claim_id: str = Field(min_length=1, max_length=64)
+
+
 _METADATA_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}")
 _MAX_METADATA_BYTES = 2048
 
@@ -88,9 +135,18 @@ def _workspace_upload_bucket(value: str) -> str:
 
 
 __all__ = [
+    "AbortObjectUploadRequest",
+    "BeginObjectUploadResponse",
+    "CompleteObjectUploadRequest",
+    "CompletedObjectUploadPart",
     "HeadObjectRequest",
     "HeadObjectResponse",
     "ObjectMetadata",
+    "ObjectUploadPartRequest",
+    "ObjectUploadPartResponse",
+    "ObjectUploadTarget",
     "PutObjectRequest",
     "PutObjectResponse",
+    "object_upload_part_count",
+    "object_upload_part_size",
 ]

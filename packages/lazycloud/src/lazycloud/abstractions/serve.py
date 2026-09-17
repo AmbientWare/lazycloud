@@ -3,14 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Protocol
+from uuid import uuid4
 
-from shared.bytes_transport import encode_bytes
 from shared.containers import ContainerStatus
 from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
@@ -18,29 +21,41 @@ from shared.gpu import GpuInput
 from shared.http.compute import ContainerResponse, ContainerWithAppPageResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
-    ContainerWorkspaceSyncOperation,
     GatewayUrlKind,
     GetUrlRequest,
     GetUrlResponse,
-    SyncContainerWorkspaceBody,
-    SyncContainerWorkspaceResponse,
+)
+from shared.http.workspace_sync import (
+    MAX_SYNC_BATCH_BYTES,
+    MAX_SYNC_CHANGES,
+    MAX_SYNC_MANIFEST_BYTES,
+    SYNC_CHUNK_BYTES,
+    WorkspaceSyncBatch,
+    WorkspaceSyncEntry,
+    WorkspaceSyncManifest,
+    WorkspaceSyncOperation,
+    WorkspaceSyncResponse,
 )
 from shared.paths import state_home
 from shared.transport_retry import (
     TRANSIENT_TRANSPORT_ERRORS,
     TransientRetry,
+    call_with_transient_retry,
     is_transient_transport_error,
 )
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import PoolInput
 from lazycloud.json_contracts import parse_json_object
+from lazycloud.source_sync import SOURCE_IGNORE_FILE, SourceFileFilter
 from lazycloud.terminal import Terminal
 
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_ATTACH_POLL_SECONDS = 0.5
-DEFAULT_SYNC_POLL_SECONDS = 0.5
+DEFAULT_SYNC_DEBOUNCE_SECONDS = 0.1
 DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS = 30.0
 DEFAULT_PREVIEW_RECORD_TTL_SECONDS = 24 * 60 * 60
 ACTIVE_PREVIEW_CONTAINER_STATUSES = {ContainerStatus.Pending, ContainerStatus.Running}
@@ -98,8 +113,8 @@ class ServeUrlClient(Protocol):
 class WorkspaceSyncClient(Protocol):
     def sync_container_workspace(
         self,
-        body: SyncContainerWorkspaceBody,
-    ) -> SyncContainerWorkspaceResponse: ...
+        body: WorkspaceSyncBatch,
+    ) -> WorkspaceSyncResponse: ...
 
 
 class PreviewContainerClient(Protocol):
@@ -201,7 +216,7 @@ class ServePreviewSession:
     token: str | None = None
     authorized: bool = True
     attach_poll_seconds: float = DEFAULT_ATTACH_POLL_SECONDS
-    sync_poll_seconds: float = DEFAULT_SYNC_POLL_SECONDS
+    sync_debounce_seconds: float = DEFAULT_SYNC_DEBOUNCE_SECONDS
     initial_sync_timeout_seconds: float = DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS
     preview_record: ServePreviewRecord | None = None
     _syncer: ContainerWorkspaceSyncer | None = field(default=None, init=False, repr=False)
@@ -220,7 +235,7 @@ class ServePreviewSession:
                 local_dir=self.sync_dir,
                 gateway_client=self.gateway_client,
                 terminal=terminal,
-                poll_seconds=self.sync_poll_seconds,
+                debounce_seconds=self.sync_debounce_seconds,
                 initial_sync_timeout_seconds=self.initial_sync_timeout_seconds,
                 full_initial_sync=False,
             )
@@ -310,7 +325,7 @@ class ContainerWorkspaceSyncer:
     local_dir: str
     gateway_client: WorkspaceSyncClient
     terminal: Terminal | None = None
-    poll_seconds: float = DEFAULT_SYNC_POLL_SECONDS
+    debounce_seconds: float = DEFAULT_SYNC_DEBOUNCE_SECONDS
     initial_sync_timeout_seconds: float = DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS
     full_initial_sync: bool = True
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -318,6 +333,10 @@ class ContainerWorkspaceSyncer:
     _snapshot: dict[str, FileState] = field(default_factory=dict, init=False, repr=False)
     _initialized: bool = field(default=False, init=False, repr=False)
     _failure: Exception | None = field(default=None, init=False, repr=False)
+
+    _changes: _WorkspaceEvents = field(
+        default_factory=lambda: _WorkspaceEvents(), init=False, repr=False
+    )
 
     def start(self) -> None:
         if self._thread is not None:
@@ -327,6 +346,7 @@ class ContainerWorkspaceSyncer:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._changes.ready.set()
         if self._thread is not None:
             self._thread.join()
 
@@ -335,19 +355,55 @@ class ContainerWorkspaceSyncer:
             raise RuntimeError(f"directory sync failed: {self._failure}") from self._failure
 
     def _run(self) -> None:
+        observer = Observer()
+        root = Path(self.local_dir).expanduser().resolve()
         try:
+            self._changes.root = root
+            self._changes.selection = SourceFileFilter.for_root(root)
+            observer.schedule(self._changes, str(root), recursive=True)
+            observer.start()
             self._sync_initial_with_retries()
+            while not self._stop_event.is_set():
+                if not self._changes.ready.wait(1):
+                    if not observer.is_alive() or any(
+                        not emitter.is_alive() for emitter in observer.emitters
+                    ):
+                        raise RuntimeError("source filesystem watcher stopped")
+                    continue
+                if self._stop_event.wait(self.debounce_seconds):
+                    break
+                paths, rescan = self._changes.take()
+                if rescan:
+                    self._changes.selection = SourceFileFilter.for_root(root)
+                    next_snapshot = _snapshot(self.local_dir)
+                    self._sync_delta(next_snapshot)
+                    self._snapshot = next_snapshot
+                else:
+                    changed: list[str] = []
+                    removed: list[str] = []
+                    for relative in sorted(paths):
+                        path = root / relative
+                        if path.is_file() and self._changes.selection.includes(relative):
+                            changed.append(relative)
+                        elif relative in self._snapshot:
+                            removed.append(relative)
+                    self._send_changes(removed, changed)
+                    for relative in removed:
+                        self._snapshot.pop(relative, None)
+                    for relative in changed:
+                        try:
+                            stat = (root / relative).stat()
+                            self._snapshot[relative] = FileState(
+                                stat.st_size, stat.st_mtime_ns, stat.st_mode & 0o777
+                            )
+                        except FileNotFoundError:
+                            pass
         except Exception as exc:
             self._failure = exc
-            return
-        while not self._stop_event.wait(self.poll_seconds):
-            try:
-                next_snapshot = _snapshot(self.local_dir)
-                self._sync_delta(next_snapshot)
-                self._snapshot = next_snapshot
-            except Exception as exc:
-                self._failure = exc
-                return
+        finally:
+            observer.stop()
+            if observer.ident is not None:
+                observer.join()
 
     def _sync_initial_with_retries(self) -> None:
         if self._initialized:
@@ -371,7 +427,7 @@ class ContainerWorkspaceSyncer:
                 if not announced_wait:
                     self._detail(f"Waiting for serve sync endpoint: {exc}")
                     announced_wait = True
-                if self._stop_event.wait(self.poll_seconds):
+                if self._stop_event.wait(self.debounce_seconds):
                     return
 
     def sync_once(self) -> None:
@@ -386,10 +442,7 @@ class ContainerWorkspaceSyncer:
         self._detail(f"Watching {len(self._snapshot)} files")
 
     def _sync_initial(self, snapshot: dict[str, FileState]) -> None:
-        for relative in sorted(snapshot):
-            if self._stop_event.is_set():
-                return
-            self._write_file(relative)
+        self._send_changes([], sorted(snapshot))
 
     def _sync_delta(self, next_snapshot: dict[str, FileState]) -> None:
         removed = sorted(set(self._snapshot) - set(next_snapshot))
@@ -398,57 +451,198 @@ class ContainerWorkspaceSyncer:
             for relative, state in sorted(next_snapshot.items())
             if self._snapshot.get(relative) != state
         ]
-        for relative in removed:
+        self._send_changes(removed, changed)
+
+    def _send_changes(self, removed: list[str], changed: list[str]) -> None:
+        with TemporaryDirectory(prefix="lazycloud-sync-") as temporary:
+            self._send_snapshots(removed, changed, Path(temporary))
+
+    def _send_snapshots(self, removed: list[str], changed: list[str], temporary: Path) -> None:
+        entries: list[WorkspaceSyncEntry] = []
+        sources: list[Path] = []
+        total_size = 0
+        manifest_size = 1024
+        root = Path(self.local_dir).expanduser().resolve()
+        changed_paths = set(changed)
+        for index, relative in enumerate(removed + changed):
             if self._stop_event.is_set():
                 return
-            self._sync(
-                operation=ContainerWorkspaceSyncOperation.Delete,
+            size = 0
+            checksum = ""
+            mode = 0o644
+            operation = WorkspaceSyncOperation.Delete
+            snapshot: Path | None = None
+            if relative in changed_paths:
+                path = root / relative
+                if not path.resolve().is_relative_to(root):
+                    raise ValueError(f"source file escapes source root: {relative}")
+                try:
+                    with path.open("rb") as source:
+                        mode = os.fstat(source.fileno()).st_mode & 0o777
+                        snapshot = temporary / str(index)
+                        digest = hashlib.sha256()
+                        with snapshot.open("wb") as target:
+                            while chunk := source.read(SYNC_CHUNK_BYTES):
+                                if self._stop_event.is_set():
+                                    return
+                                target.write(chunk)
+                                digest.update(chunk)
+                                size += len(chunk)
+                        checksum = digest.hexdigest()
+                    operation = WorkspaceSyncOperation.Write
+                except FileNotFoundError:
+                    pass
+            entry = WorkspaceSyncEntry(
+                operation=operation,
                 path=relative,
+                mode=mode,
+                size=min(size, MAX_SYNC_BATCH_BYTES),
+                file_size=size,
+                sha256=checksum,
+                transfer_id=uuid4().hex if snapshot is not None else "",
             )
-        for relative in changed:
-            if self._stop_event.is_set():
-                return
-            self._write_file(relative)
+            entry_bytes = len(entry.model_dump_json().encode()) + 1
+            if entries and (
+                total_size + size > MAX_SYNC_BATCH_BYTES
+                or len(entries) >= MAX_SYNC_CHANGES
+                or manifest_size + entry_bytes > MAX_SYNC_MANIFEST_BYTES
+            ):
+                self._send_batch(entries, sources)
+                for source_path in sources:
+                    source_path.unlink()
+                entries, sources = [], []
+                total_size, manifest_size = 0, 1024
+            if size > MAX_SYNC_BATCH_BYTES and snapshot is not None:
+                try:
+                    for offset in range(0, size, MAX_SYNC_BATCH_BYTES):
+                        if self._stop_event.is_set():
+                            raise InterruptedError("workspace sync stopped")
+                        fragment = entry.model_copy(
+                            update={
+                                "offset": offset,
+                                "size": min(MAX_SYNC_BATCH_BYTES, size - offset),
+                            }
+                        )
+                        self._send_batch([fragment], [snapshot])
+                except BaseException:
+                    abort = WorkspaceSyncEntry(
+                        operation=WorkspaceSyncOperation.Abort,
+                        path=relative,
+                        transfer_id=entry.transfer_id,
+                    )
+                    with suppress(Exception):
+                        self._send_batch([abort], [])
+                    raise
+                snapshot.unlink()
+                continue
+            entries.append(entry)
+            total_size += size
+            manifest_size += entry_bytes
+            if snapshot is not None:
+                sources.append(snapshot)
+        if entries:
+            self._send_batch(entries, sources)
         if removed or changed:
             self._detail(f"Synced {len(changed)} changed, {len(removed)} removed")
 
-    def _write_file(self, relative: str) -> None:
-        self._sync(
-            operation=ContainerWorkspaceSyncOperation.Write,
-            path=relative,
-            data=(Path(self.local_dir) / relative).read_bytes(),
-            mode=(Path(self.local_dir) / relative).stat().st_mode & 0o777,
-        )
+    def _send_batch(self, entries: list[WorkspaceSyncEntry], sources: list[Path]) -> None:
+        def content() -> Iterator[bytes]:
+            writes = [entry for entry in entries if entry.operation is WorkspaceSyncOperation.Write]
+            for path, entry in zip(sources, writes, strict=True):
+                with path.open("rb") as source:
+                    source.seek(entry.offset)
+                    remaining = entry.size
+                    while remaining:
+                        chunk = source.read(min(remaining, SYNC_CHUNK_BYTES))
+                        if not chunk:
+                            raise ValueError("workspace snapshot is incomplete")
+                        yield chunk
+                        remaining -= len(chunk)
 
-    def _sync(
-        self,
-        *,
-        operation: ContainerWorkspaceSyncOperation,
-        path: str,
-        data: bytes = b"",
-        mode: int = 0o644,
-        new_path: str = "",
-    ) -> None:
-        self.gateway_client.sync_container_workspace(
-            SyncContainerWorkspaceBody(
-                container_id=self.container_id,
-                operation=operation,
-                path=path,
-                new_path=new_path,
-                mode=mode,
-                value_base64=encode_bytes(data),
+        def send() -> WorkspaceSyncResponse:
+            return self.gateway_client.sync_container_workspace(
+                WorkspaceSyncBatch(
+                    manifest=WorkspaceSyncManifest(container_id=self.container_id, entries=entries),
+                    data=content(),
+                )
             )
-        )
+
+        try:
+            response = call_with_transient_retry(send)
+        except BaseException:
+            aborts = [
+                WorkspaceSyncEntry(
+                    operation=WorkspaceSyncOperation.Abort,
+                    path=entry.path,
+                    transfer_id=entry.transfer_id,
+                )
+                for entry in entries
+                if entry.operation is WorkspaceSyncOperation.Write and entry.size == entry.file_size
+            ]
+            if aborts:
+                with suppress(Exception):
+                    self.gateway_client.sync_container_workspace(
+                        WorkspaceSyncBatch(
+                            manifest=WorkspaceSyncManifest(
+                                container_id=self.container_id, entries=aborts
+                            ),
+                            data=(),
+                        )
+                    )
+            raise
+        if response.applied != len(entries):
+            raise RuntimeError("worker did not acknowledge every source change")
 
     def _detail(self, message: str) -> None:
         if self.terminal is not None:
             self.terminal.detail(message)
 
 
+class _WorkspaceEvents(FileSystemEventHandler):
+    def __init__(self) -> None:
+        self.root = Path(".")
+        self.selection = SourceFileFilter(self.root, ())
+        self.ready = threading.Event()
+        self.lock = threading.Lock()
+        self.paths: set[str] = set()
+        self.rescan = False
+
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        if event.event_type not in {"created", "modified", "deleted", "moved"}:
+            return
+        if event.is_directory and event.event_type == "modified":
+            return
+        with self.lock:
+            for raw in (event.src_path, event.dest_path):
+                if not raw:
+                    continue
+                try:
+                    relative = Path(os.fsdecode(raw)).relative_to(self.root).as_posix()
+                except ValueError:
+                    continue
+                if relative == SOURCE_IGNORE_FILE or relative == ".":
+                    self.rescan = True
+                elif self.selection.includes(relative, directory=event.is_directory):
+                    if event.is_directory or len(self.paths) >= 10000:
+                        self.rescan = True
+                    else:
+                        self.paths.add(relative)
+            if self.paths or self.rescan:
+                self.ready.set()
+
+    def take(self) -> tuple[set[str], bool]:
+        with self.lock:
+            paths, rescan = self.paths, self.rescan
+            self.paths, self.rescan = set(), False
+            self.ready.clear()
+            return paths, rescan
+
+
 @dataclass(frozen=True, slots=True)
 class FileState:
     size: int
     mtime_ns: int
+    mode: int
 
 
 def resolve_serve_url(
@@ -612,6 +806,7 @@ def _snapshot(local_dir: str) -> dict[str, FileState]:
         files[path.relative_to(root).as_posix()] = FileState(
             size=stat.st_size,
             mtime_ns=stat.st_mtime_ns,
+            mode=stat.st_mode & 0o777,
         )
     return files
 

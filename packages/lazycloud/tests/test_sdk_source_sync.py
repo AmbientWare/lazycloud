@@ -84,12 +84,13 @@ def test_source_package_sync_preserves_canonical_module_prefix(tmp_path: Path) -
 def test_source_archive_prefix_changes_digest(tmp_path: Path) -> None:
     (tmp_path / "workloads.py").write_text("def invoke(): return 1\n", encoding="utf-8")
 
-    unprefixed = build_source_package_archive(tmp_path)
-    prefixed = build_source_package_archive(tmp_path, archive_prefix=("package",))
-
-    assert unprefixed.sha256 != prefixed.sha256
-    assert unprefixed.files == ("workloads.py",)
-    assert prefixed.files == ("package/workloads.py",)
+    with (
+        build_source_package_archive(tmp_path) as unprefixed,
+        build_source_package_archive(tmp_path, archive_prefix=("package",)) as prefixed,
+    ):
+        assert unprefixed.sha256 != prefixed.sha256
+        assert unprefixed.files == ("workloads.py",)
+        assert prefixed.files == ("package/workloads.py",)
 
 
 def test_prefixed_source_package_round_trips_custom_type_with_one_module_identity(
@@ -121,15 +122,14 @@ def opaque_square(value: OpaqueNumber) -> OpaqueNumber:
         source_root,
     )
     invocation = cloudpickle_bytes({"args": (client_module.OpaqueNumber(9),), "kwargs": {}})
-    archive = build_source_package_archive(
-        source_root,
-        archive_prefix=reference.archive_prefix,
-    )
     runner_root = tmp_path / "runner"
     runner_root.mkdir()
-    archive_path = tmp_path / "source.zip"
-    archive_path.write_bytes(archive.data)
-    with zipfile.ZipFile(archive_path) as source_archive:
+    with (
+        build_source_package_archive(
+            source_root, archive_prefix=reference.archive_prefix
+        ) as archive,
+        zipfile.ZipFile(archive.path) as source_archive,
+    ):
         source_archive.extractall(runner_root)
 
     _clear_test_module(module_name)
@@ -166,8 +166,11 @@ def test_source_archive_prefix_rejects_unsafe_paths(
 ) -> None:
     (tmp_path / "workloads.py").write_text("def invoke(): return 1\n", encoding="utf-8")
 
-    with pytest.raises(SourcePackageSyncError, match="importable module names"):
-        build_source_package_archive(tmp_path, archive_prefix=archive_prefix)
+    with (
+        pytest.raises(SourcePackageSyncError, match="importable module names"),
+        build_source_package_archive(tmp_path, archive_prefix=archive_prefix),
+    ):
+        pass
 
 
 def _clear_test_module(module_name: str) -> None:
