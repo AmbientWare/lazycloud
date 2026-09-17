@@ -363,6 +363,23 @@ def _one_row_changed(result: object) -> bool:
 class ImageBuildRepository:
     session: Session
 
+    def record_progress(self, build_id: str, *, workspace_id: str, now: datetime) -> None:
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        self.session.execute(
+            update(ImageBuildTable)
+            .where(
+                ImageBuildTable.id == build_id,
+                ImageBuildTable.workspace_id == workspace_id,
+                ImageBuildTable.status.in_(("pending", "running")),
+                ImageBuildTable.cleanup_claimed_at.is_(None),
+            )
+            .values(
+                status=BuildStatus.Running.value,
+                started_at=func.coalesce(ImageBuildTable.started_at, now),
+                updated_at=now,
+            )
+        )
+
     def upsert(
         self,
         build: ImageBuildRecord,
@@ -543,24 +560,26 @@ class ImageBuildRepository:
         ).first()
         return image_build_from_table(row) if row is not None else None
 
-    def list_completed_by_fingerprint(
+    def reusable_by_fingerprint(
         self,
         fingerprint: str,
         *,
         workspace_id: str,
-        limit: int,
-    ) -> list[ImageBuildRecord]:
+    ) -> ImageBuildRecord | None:
         statement = (
             select(ImageBuildTable)
             .where(
                 ImageBuildTable.workspace_id == workspace_id,
                 ImageBuildTable.fingerprint == fingerprint,
                 ImageBuildTable.status == BuildStatus.Complete.value,
+                ImageBuildTable.build_container_required.is_(True),
+                ImageBuildTable.image_archive_format_version == 2,
             )
             .order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id.asc())
-            .limit(max(limit, 0))
+            .limit(1)
         )
-        return [image_build_from_table(row) for row in self.session.scalars(statement)]
+        row = self.session.scalar(statement)
+        return image_build_from_table(row) if row is not None else None
 
     def get_latest_by_image_id(
         self,
@@ -579,24 +598,26 @@ class ImageBuildRepository:
         ).first()
         return image_build_from_table(row) if row is not None else None
 
-    def list_completed_by_image_id(
+    def reusable_by_image_id(
         self,
         image_id: str,
         *,
         workspace_id: str,
-        limit: int,
-    ) -> list[ImageBuildRecord]:
+    ) -> ImageBuildRecord | None:
         statement = (
             select(ImageBuildTable)
             .where(
                 ImageBuildTable.workspace_id == workspace_id,
                 ImageBuildTable.image_id == image_id,
                 ImageBuildTable.status == BuildStatus.Complete.value,
+                ImageBuildTable.build_container_required.is_(True),
+                ImageBuildTable.image_archive_format_version == 2,
             )
             .order_by(ImageBuildTable.created_at.desc(), ImageBuildTable.id.asc())
-            .limit(max(limit, 0))
+            .limit(1)
         )
-        return [image_build_from_table(row) for row in self.session.scalars(statement)]
+        row = self.session.scalar(statement)
+        return image_build_from_table(row) if row is not None else None
 
     def claim_publication(
         self,

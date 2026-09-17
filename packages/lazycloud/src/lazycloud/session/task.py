@@ -18,6 +18,7 @@ from shared.http.tasks import (
     TaskPageResponse,
     TaskResponse,
     TaskStopResponse,
+    TaskSummaryResponse,
 )
 from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus, is_terminal_task_status
@@ -455,7 +456,7 @@ class TaskClient(ControlClientConfigMixin):
         deployment_id: str | None = None,
         app_id: str | None = None,
         limit: int = 100,
-    ) -> list[TaskResponse]:
+    ) -> list[TaskSummaryResponse]:
         response = self.control_client.list_tasks(
             stub_ids=stub_ids,
             status=status,

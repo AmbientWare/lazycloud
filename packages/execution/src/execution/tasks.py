@@ -35,6 +35,7 @@ from shared.tasks import (
     RetryPolicy,
     Task,
     TaskAttempt,
+    TaskProgressSnapshot,
     TaskStatus,
     is_terminal_task_status,
     normalize_retry_policy,
@@ -900,7 +901,7 @@ class TaskService:
     @staticmethod
     def log_page_in_session(
         session: DatabaseSession,
-        task: Task,
+        task: Task | TaskProgressSnapshot,
         *,
         limit: int,
         cursor: LogPageCursor | None,

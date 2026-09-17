@@ -6,7 +6,7 @@ import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import type { Task } from "@/lib/api/schemas";
+import type { TaskSummary } from "@/lib/api/schemas";
 import { startupBetween } from "@/lib/format";
 
 export function AppRecentTasksSection({
@@ -18,7 +18,7 @@ export function AppRecentTasksSection({
 }: {
   workspaceName: string;
   appId: string;
-  tasks: Task[] | undefined;
+  tasks: TaskSummary[] | undefined;
   pending: boolean;
   error: string | undefined;
 }) {
@@ -56,7 +56,7 @@ function RecentRunsList({
   workspaceName,
   appId,
 }: {
-  tasks: Task[];
+  tasks: TaskSummary[];
   workspaceName: string;
   appId: string;
 }) {

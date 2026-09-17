@@ -1,7 +1,13 @@
 import { useLiveNow } from "@/hooks/use-live-now";
-import type { Task } from "@/lib/api/schemas/tasks";
+import type { TaskSummary } from "@/lib/api/schemas/tasks";
 
-export function TaskPendingNotice({ task, compact = false }: { task: Task; compact?: boolean }) {
+export function TaskPendingNotice({
+  task,
+  compact = false,
+}: {
+  task: TaskSummary;
+  compact?: boolean;
+}) {
   const pending = task.status === "pending" || task.status === "retry";
   const progress = pending ? task.pending_progress : null;
   const now = useLiveNow(Boolean(progress));

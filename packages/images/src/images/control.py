@@ -4,6 +4,7 @@ import hashlib
 import tempfile
 import time
 from collections.abc import Generator, Iterator
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -40,14 +41,19 @@ from images.building import (
     registry_credentials_for_image,
     resolve_base_image_digest,
 )
+from images.changes import ImageBuildChangeSubscription
 from images.context import ImageSecretReader
 from images.metadata import CURRENT_IMAGE_CLIP_VERSION
 
-IMAGE_BUILD_STREAM_POLL_SECONDS = 0.25
+IMAGE_BUILD_STREAM_REFRESH_SECONDS = 5.0
 MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES = 256 * 1024 * 1024
 
 
 class ImageBuildWorkflow(Protocol):
+    def follow_changes(
+        self, build_id: str, *, workspace_id: str
+    ) -> AbstractContextManager[ImageBuildChangeSubscription]: ...
+
     def get(self, build_id: str, *, workspace_id: str | None = None) -> ImageBuildRecord: ...
     def find_by_request_id(
         self, request_id: str, *, workspace_id: str
@@ -578,6 +584,20 @@ def stream_build_events(
     *,
     workspace_id: str,
     after: int = 0,
+) -> Generator[BuildImageEvent, None, None]:
+    with images.follow_changes(build_id, workspace_id=workspace_id) as changes:
+        yield from _follow_build_events(
+            images, build_id, workspace_id=workspace_id, after=after, changes=changes
+        )
+
+
+def _follow_build_events(
+    images: ImageBuildWorkflow,
+    build_id: str,
+    *,
+    workspace_id: str,
+    after: int,
+    changes: ImageBuildChangeSubscription,
 ) -> Iterator[BuildImageEvent]:
     cursor = after
     record = images.get(build_id, workspace_id=workspace_id)
@@ -608,7 +628,8 @@ def stream_build_events(
                     python_version=record.image.python_version,
                 ),
             )
-        time.sleep(IMAGE_BUILD_STREAM_POLL_SECONDS)
+        if not any(event.sequence > 0 for event in events):
+            changes.wait(IMAGE_BUILD_STREAM_REFRESH_SECONDS)
 
 
 def _validate_secret_references(secrets: list[str]) -> None:

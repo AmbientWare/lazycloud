@@ -9,6 +9,7 @@ import {
   taskSchema,
   taskTimeWindowBucketListSchema,
   type Task,
+  type TaskSummary,
 } from "@/lib/api/schemas";
 
 import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
@@ -67,7 +68,7 @@ export function tasksInfiniteQueryOptions(workspaceId: string, options: TaskList
 }
 
 export function selectTaskList(
-  data: InfiniteListQueryData<Task> | undefined,
+  data: InfiniteListQueryData<TaskSummary> | undefined,
   hasNextPage: boolean | undefined,
 ) {
   return selectInfiniteList(data, hasNextPage, (task) => task.id);

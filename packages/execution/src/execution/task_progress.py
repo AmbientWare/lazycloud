@@ -7,7 +7,7 @@ from typing import Protocol
 
 from database.repositories.compute import ComputeCapacityOperationRepository
 from database.repositories.execution import TaskAttemptRepository
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.orchestration import ContainerProgressSnapshot, ContainerRepository
 from shared.capacity import CapacityFailureCode, capacity_failure_message
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.http.task_progress import (
@@ -20,7 +20,7 @@ from shared.scheduling import (
     SchedulerContainerStatus,
     SchedulerWorkerRequest,
 )
-from shared.tasks import Task, TaskStatus
+from shared.tasks import Task, TaskProgressSnapshot, TaskStatus
 from shared.timestamps import utc_now
 
 from execution.context import ExecutionContext
@@ -42,42 +42,39 @@ class TaskProgressService:
     capacity: TaskCapacityReader
     deliveries: TaskWorkerDeliveryReader
 
-    def read(self, tasks: Sequence[Task]) -> dict[str, TaskPendingProgress | None]:
+    def read(
+        self, tasks: Sequence[Task | TaskProgressSnapshot]
+    ) -> dict[str, TaskPendingProgress | None]:
         now = utc_now()
         retried = [
             task.id
             for task in tasks
-            if task.invocation is not None
+            if task.is_function
             and task.attempt_number > 0
             and task.status in {TaskStatus.Pending, TaskStatus.Retry}
         ]
         pending_since: dict[str, datetime] = {}
         if retried:
             with self.context.database.session() as session:
-                attempts = TaskAttemptRepository(session).latest_for_tasks(retried)
-            pending_since = {
-                task_id: attempt.finished_at
-                for task_id, attempt in attempts.items()
-                if attempt.finished_at is not None
-            }
+                pending_since = TaskAttemptRepository(session).latest_finished_for_tasks(retried)
         groups = {
             (task.workspace_id, task.stub_id)
             for task in tasks
-            if task.invocation is not None
+            if task.is_function
             and task.status is TaskStatus.Pending
             and task.claimable_at is not None
             and task.workspace_id
             and task.stub_id
         }
-        containers: dict[tuple[str, str], list[ContainerRecord]] = {}
+        containers: dict[tuple[str, str], list[ContainerProgressSnapshot]] = {}
+        if groups:
+            with self.context.database.session() as session:
+                for container in ContainerRepository(session).progress_for_workloads(groups):
+                    containers.setdefault(
+                        (container.workspace_id, container.stub_id or ""), []
+                    ).append(container)
         states: dict[str, SchedulerContainerState] = {}
         for workspace_id, stub_id in groups:
-            with self.context.database.session() as session:
-                containers[workspace_id, stub_id] = ContainerRepository(session).list(
-                    workspace_id=workspace_id,
-                    stub_ids=(stub_id,),
-                    statuses=(ContainerStatus.Pending.value, ContainerStatus.Running.value),
-                )
             states.update(
                 (state.container_id, state)
                 for state in self.capacity.list_by_stub(stub_id)
@@ -121,16 +118,16 @@ class TaskProgressService:
 
 
 def task_pending_progress(
-    task: Task,
+    task: Task | TaskProgressSnapshot,
     *,
-    containers: Sequence[ContainerRecord],
+    containers: Sequence[ContainerRecord | ContainerProgressSnapshot],
     states: dict[str, SchedulerContainerState],
     deliveries: dict[str, datetime],
     capacity_failures: dict[str, CapacityFailureCode],
     now: datetime,
     since: datetime,
 ) -> TaskPendingProgress | None:
-    if task.invocation is None or task.status not in {TaskStatus.Pending, TaskStatus.Retry}:
+    if not task.is_function or task.status not in {TaskStatus.Pending, TaskStatus.Retry}:
         return None
     if task.status is TaskStatus.Retry:
         return TaskPendingProgress.for_reason(TaskPendingReason.Retry, since=since, observed_at=now)

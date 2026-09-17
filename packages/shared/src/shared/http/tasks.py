@@ -31,14 +31,8 @@ class TaskDeploymentReferenceResponse(HttpModel):
     version: int
 
 
-class TaskResponse(HttpModel):
-    """One task row, with its owning resources named rather than embedded.
-
-    A page repeats whatever a row carries, so a hundred rows of one app would
-    carry that app's record a hundred times. What a reader wants from the
-    resources around a task is a name, a kind, and a version, and their ids stay
-    on the row, so addressing the resource itself needs nothing more.
-    """
+class TaskSummaryResponse(HttpModel):
+    """Task status and resource references, without execution inputs or results."""
 
     id: str
     name: str
@@ -52,14 +46,9 @@ class TaskResponse(HttpModel):
     parent_task_id: str | None = None
     root_task_id: str | None = None
     handler: str | None = None
-    command: list[str] = Field(default_factory=list)
-    args: list[JsonValue] = Field(default_factory=list)
-    kwargs: dict[str, JsonValue] = Field(default_factory=dict)
     attempt_number: int = 0
     max_attempts: int = 1
     next_retry_at: datetime | None = None
-    result: JsonValue = None
-    error: str | None = None
     exit_code: int | None = None
     created_at: datetime
     started_at: datetime | None = None
@@ -70,19 +59,22 @@ class TaskResponse(HttpModel):
     actions: TaskActionCapabilitiesResponse = Field(default_factory=TaskActionCapabilitiesResponse)
 
 
-class TaskDetailResponse(TaskResponse):
-    """A single task read, which additionally carries the container it ran in.
+class TaskResponse(TaskSummaryResponse):
+    command: list[str] = Field(default_factory=list)
+    args: list[JsonValue] = Field(default_factory=list)
+    kwargs: dict[str, JsonValue] = Field(default_factory=dict)
+    result: JsonValue = None
+    error: str | None = None
 
-    Absent from the row payload rather than sent empty there: a null container on
-    a row would read as "this task had none", which is a different fact from
-    "a listing does not resolve containers".
-    """
+
+class TaskDetailResponse(TaskResponse):
+    """Task inputs, result and the container it ran in."""
 
     container: ContainerResponse | None = None
 
 
 class TaskPageResponse(HttpModel):
-    data: list[TaskResponse] = Field(default_factory=list)
+    data: list[TaskSummaryResponse] = Field(default_factory=list)
     next: str = ""
 
 
@@ -137,6 +129,7 @@ __all__ = [
     "TaskPageResponse",
     "TaskResponse",
     "TaskStopResponse",
+    "TaskSummaryResponse",
     "TaskTimeWindowBucketListResponse",
     "TaskTimeWindowBucketResponse",
     "TaskWorkloadReferenceResponse",

@@ -28,7 +28,12 @@ from shared.http.gateway import (
 from shared.http.observability import (
     LogRecord,
 )
-from shared.http.tasks import TaskDetailResponse, TaskPageResponse, TaskResponse, TaskStopResponse
+from shared.http.tasks import (
+    TaskDetailResponse,
+    TaskPageResponse,
+    TaskStopResponse,
+    TaskSummaryResponse,
+)
 from shared.tasks import TaskStatus
 from shared.transport_retry import TransientRetry
 from tests.fakes import http_api_error
@@ -115,7 +120,7 @@ class FakeSessionResources:
         self.task_requests.append((stub_ids, status, deployment_id, app_id, limit, cursor))
         if self.fail_tasks:
             raise http_api_error("tasks failed")
-        task = TaskResponse(
+        task = TaskSummaryResponse(
             id="task-1",
             name="worker",
             status=TaskStatus.Complete,

@@ -8,7 +8,7 @@ from pathlib import Path
 from shared.events import Event
 from shared.http.deployments import DeploymentResponse
 from shared.http.observability import EventHistoryRequest, EventQueryResponse
-from shared.http.tasks import TaskDetailResponse, TaskResponse
+from shared.http.tasks import TaskDetailResponse, TaskSummaryResponse
 from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus
 from typing_extensions import Self
@@ -140,7 +140,7 @@ class Client:
         *,
         status: TaskStatus | None = None,
         limit: int = 100,
-    ) -> list[TaskResponse]:
+    ) -> list[TaskSummaryResponse]:
         return self.task_client.list(status=status, limit=limit)
 
     @property

@@ -191,21 +191,23 @@ class ImageBuildAttemptRepository:
         return image_build_from_table(row)
 
     def require_active(self, build_id: str, *, workspace_id: str, container_id: str) -> int:
-        row = self.session.scalar(
-            select(ImageBuildTable)
-            .where(ImageBuildTable.id == build_id, ImageBuildTable.workspace_id == workspace_id)
-            .with_for_update()
+        base = self.session.scalar(
+            select(ImageBuildAttemptTable.log_sequence_base)
+            .join(ImageBuildTable, ImageBuildTable.id == ImageBuildAttemptTable.build_id)
+            .where(
+                ImageBuildTable.id == build_id,
+                ImageBuildTable.workspace_id == workspace_id,
+                ImageBuildTable.status.in_(("pending", "running")),
+                ImageBuildTable.execution_container_id == container_id,
+                ImageBuildTable.cleanup_claimed_at.is_(None),
+                ImageBuildAttemptTable.container_id == container_id,
+                ImageBuildAttemptTable.retired_at.is_(None),
+            )
+            .with_for_update(of=ImageBuildTable)
         )
-        if (
-            row is None
-            or row.status not in {"pending", "running"}
-            or row.execution_container_id != container_id
-        ):
+        if base is None:
             raise ConflictError("image build execution attempt is no longer active")
-        attempt = self.session.get(ImageBuildAttemptTable, container_id)
-        if attempt is None or attempt.retired_at is not None:
-            raise ConflictError("image build execution attempt is no longer active")
-        return attempt.log_sequence_base
+        return base
 
     def build_for_container(
         self, container_id: str, *, workspace_id: str

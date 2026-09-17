@@ -68,7 +68,14 @@ from shared.http.functions import (
 from shared.http.task_progress import TaskPendingProgress
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.placement import ProductRegion
-from shared.tasks import Task, TaskDependency, TaskStatus, is_terminal_task_status
+from shared.tasks import (
+    Task,
+    TaskDependency,
+    TaskProgressSnapshot,
+    TaskResultSnapshot,
+    TaskStatus,
+    is_terminal_task_status,
+)
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
@@ -1062,13 +1069,15 @@ class FunctionControlService:
 
         if self.task_changes is None:
             raise RuntimeError("function invocation notifications are not configured")
-        try:
-            task = await self._async_database().run_transaction(
-                lambda session: self.services.tasks.get_in_session(session, initial.task_id)
-            )
-        except NotFoundError as exc:
+        task = await self._async_database().run_transaction(
+            lambda session: TaskRepository(session).progress_snapshot(initial.task_id)
+        )
+        if task is None:
             yield FunctionInvokeResponse.from_result(
-                task_id=initial.task_id, output=str(exc), done=True, exit_code=1
+                task_id=initial.task_id,
+                output=f"task not found: {initial.task_id}",
+                done=True,
+                exit_code=1,
             )
             return
         if not task.workspace_id:
@@ -1142,14 +1151,19 @@ class FunctionControlService:
                     pending_progress=progress,
                 )
             if is_terminal_task_status(task.status):
+                completed = await self._async_database().run_transaction(
+                    lambda session: TaskRepository(session).result_snapshot(initial.task_id)
+                )
+                if completed is None:
+                    raise NotFoundError(f"task not found: {task.id}")
                 yield FunctionInvokeResponse.from_result(
                     task_id=task.id,
                     result=(
-                        _function_result_payload(task)
+                        _function_result_payload(completed)
                         if task.status is TaskStatus.Complete
                         else None
                     ),
-                    output=task.error or "",
+                    output=completed.error or "",
                     done=True,
                     exit_code=task.exit_code
                     if task.exit_code is not None
@@ -1178,9 +1192,11 @@ class FunctionControlService:
         task_id: str,
         *,
         cursor: LogPageCursor | None,
-    ) -> tuple[LogPage, Task]:
+    ) -> tuple[LogPage, TaskProgressSnapshot]:
         tasks = self.services.tasks
-        task = tasks.get_in_session(session, task_id)
+        task = TaskRepository(session).progress_snapshot(task_id)
+        if task is None:
+            raise NotFoundError(f"task not found: {task_id}")
         return tasks.log_page_in_session(
             session, task, limit=1_000, cursor=cursor, follow=True
         ), task
@@ -1318,7 +1334,7 @@ class FunctionControlService:
         return task.workspace_id
 
 
-def _function_result_payload(task: Task) -> FunctionResultPayload:
+def _function_result_payload(task: TaskResultSnapshot) -> FunctionResultPayload:
     if task.function_result is None:
         raise InvalidInputError(f"function task {task.id} has no function result")
     return task.function_result

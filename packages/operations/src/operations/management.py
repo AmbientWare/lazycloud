@@ -84,7 +84,13 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.identity import WorkspaceStatus
 from shared.objects import ObjectRecord
 from shared.realtime.streams import LogStreamQuery
-from shared.tasks import Task, TaskStatus, is_terminal_task_status
+from shared.tasks import (
+    Task,
+    TaskProgressSnapshot,
+    TaskStatus,
+    TaskSummary,
+    is_terminal_task_status,
+)
 from shared.timestamps import utc_now
 from shared.worker_events import TASK_EVENT_RESOURCE_TYPE
 from storage.service import ObjectStorage
@@ -293,7 +299,7 @@ class AppOperationalSummary(ContractModel):
     last_deployed_at: datetime | None = None
 
 
-class TaskView(ContractModel):
+class TaskView[T: TaskSummary](ContractModel):
     """A task, the resources around it named, and what this reader may do to it.
 
     The task is a field rather than a base class, so passing one on re-reads
@@ -301,7 +307,7 @@ class TaskView(ContractModel):
     the response.
     """
 
-    task: Task
+    task: T
     pending_progress: TaskPendingProgress | None = None
     app: TaskAppReferenceResponse | None = None
     workload: TaskWorkloadReferenceResponse | None = None
@@ -309,7 +315,7 @@ class TaskView(ContractModel):
     actions: TaskActionCapabilitiesResponse = Field(default_factory=TaskActionCapabilitiesResponse)
 
 
-class TaskDetailView(TaskView):
+class TaskDetailView(TaskView[Task]):
     """One task read on its own, which carries the container it ran in."""
 
     container: ContainerRecord | None = None
@@ -439,7 +445,7 @@ def _is_uuid(value: str) -> bool:
 
 
 def _task_actions(
-    record: RelatedTaskRecord,
+    record: RelatedTaskRecord[Task] | RelatedTaskRecord[TaskProgressSnapshot],
     *,
     can_write: bool,
 ) -> TaskActionCapabilitiesResponse:
@@ -455,19 +461,25 @@ def _task_actions(
     )
 
 
-def _task_app(record: RelatedTaskRecord) -> TaskAppReferenceResponse | None:
+def _task_app(
+    record: RelatedTaskRecord[Task] | RelatedTaskRecord[TaskProgressSnapshot],
+) -> TaskAppReferenceResponse | None:
     if record.app_name is None:
         return None
     return TaskAppReferenceResponse(name=record.app_name)
 
 
-def _task_workload(record: RelatedTaskRecord) -> TaskWorkloadReferenceResponse | None:
+def _task_workload(
+    record: RelatedTaskRecord[Task] | RelatedTaskRecord[TaskProgressSnapshot],
+) -> TaskWorkloadReferenceResponse | None:
     if record.workload_name is None or record.workload_kind is None:
         return None
     return TaskWorkloadReferenceResponse(name=record.workload_name, kind=record.workload_kind)
 
 
-def _task_deployment(record: RelatedTaskRecord) -> TaskDeploymentReferenceResponse | None:
+def _task_deployment(
+    record: RelatedTaskRecord[Task] | RelatedTaskRecord[TaskProgressSnapshot],
+) -> TaskDeploymentReferenceResponse | None:
     if record.deployment_name is None or record.deployment_version is None:
         return None
     return TaskDeploymentReferenceResponse(
@@ -476,7 +488,9 @@ def _task_deployment(record: RelatedTaskRecord) -> TaskDeploymentReferenceRespon
     )
 
 
-def _task_view(record: RelatedTaskRecord, *, can_write: bool) -> TaskView:
+def _task_view(
+    record: RelatedTaskRecord[TaskProgressSnapshot], *, can_write: bool
+) -> TaskView[TaskProgressSnapshot]:
     return TaskView(
         task=record.task,
         app=_task_app(record),
@@ -1175,7 +1189,7 @@ class ManagementService:
         can_write: bool = False,
         limit: int = 50,
         cursor: str | None = None,
-    ) -> CursorPage[TaskView]:
+    ) -> CursorPage[TaskView[TaskProgressSnapshot]]:
         workspace_record = self.control_plane.get_workspace(workspace)
         offset = _parse_cursor(cursor)
         with self.services.context.database.session() as session:

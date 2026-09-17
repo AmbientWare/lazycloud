@@ -14,17 +14,17 @@ class ImageBuildLogRepository:
     session: Session
 
     def append(self, build_id: str, *, workspace_id: str, after: int, messages: list[str]) -> int:
-        row = self.session.scalar(
-            select(ImageBuildTable)
+        status = self.session.scalar(
+            select(ImageBuildTable.status)
             .where(ImageBuildTable.id == build_id, ImageBuildTable.workspace_id == workspace_id)
             .with_for_update()
         )
-        if row is None:
+        if status is None:
             raise NotFoundError("image build does not exist")
         last = self.last_sequence(build_id)
         if after > last:
             raise ConflictError("image build progress contains a gap")
-        if row.status not in {"pending", "running"}:
+        if status not in {"pending", "running"}:
             return last
         if messages:
             self.session.execute(

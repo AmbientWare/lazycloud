@@ -22,11 +22,12 @@ from shared.http.tasks import (
     TaskPageResponse,
     TaskResponse,
     TaskStopResponse,
+    TaskSummaryResponse,
     TaskTimeWindowBucketListResponse,
     TaskTimeWindowBucketResponse,
 )
 from shared.identity import AuthScope
-from shared.tasks import Task, TaskStatus
+from shared.tasks import Task, TaskProgressSnapshot, TaskStatus
 
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
@@ -55,8 +56,8 @@ def _task_response(task: Task) -> TaskResponse:
     return _task_payload(TaskResponse, task)
 
 
-def _task_view_response(view: TaskView) -> TaskResponse:
-    return _task_payload(TaskResponse, view.task).model_copy(
+def _task_view_response(view: TaskView[TaskProgressSnapshot]) -> TaskSummaryResponse:
+    return TaskSummaryResponse.model_validate(view.task).model_copy(
         update={
             "app": view.app,
             "pending_progress": view.pending_progress,

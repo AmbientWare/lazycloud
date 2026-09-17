@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import timedelta
 from uuid import uuid4
@@ -41,6 +42,7 @@ from images.building import (
     plan_image_build_log_event,
 )
 from images.building.models import ImageBuildStreamEventKind
+from images.changes import ImageBuildChangeSubscription
 from images.context import ImageContext
 from images.execution import (
     ImageBuildExecutionResult,
@@ -60,7 +62,6 @@ from images.submission import ImageBuildSubmissionService
 
 LOGGER = logging.getLogger(__name__)
 
-IMAGE_BUILD_REUSE_CANDIDATE_LIMIT = 16
 MAX_IMAGE_BUILD_DIAGNOSTIC_LINES = 256
 MAX_IMAGE_BUILD_DIAGNOSTIC_LINE_BYTES = 8 * 1024
 MAX_IMAGE_BUILD_DIAGNOSTIC_BYTES = 64 * 1024
@@ -73,14 +74,6 @@ class ImageArchiveReservation:
 
     archive: ImageArchiveRecord
     upload_required: bool
-
-
-def _reusable_build(record: ImageBuildRecord) -> bool:
-    return (
-        record.status is BuildStatus.Complete
-        and record.cache_metadata.get("build_container_required") == "true"
-        and record.cache_metadata.get("image_archive_format_version") == "2"
-    )
 
 
 def _active_build_status(status: BuildStatus) -> bool:
@@ -672,13 +665,16 @@ class ImageBuildService:
             sequence = logs.append(
                 build_id, workspace_id=workspace_id, after=base + after, messages=messages
             )
-            repository = ImageBuildRepository(session)
-            record = repository.get(build_id, workspace_id=workspace_id)
-            if record is not None and _active_build_status(record.status):
-                record.status = BuildStatus.Running
-                record.started_at = record.started_at or utc_now()
-                repository.upsert(record, workspace_id=workspace_id)
-            return sequence - base
+            ImageBuildRepository(session).record_progress(
+                build_id, workspace_id=workspace_id, now=utc_now()
+            )
+        self.submission.changes.publish(build_id, workspace_id=workspace_id)
+        return sequence - base
+
+    def follow_changes(
+        self, build_id: str, *, workspace_id: str
+    ) -> AbstractContextManager[ImageBuildChangeSubscription]:
+        return self.submission.changes.follow(build_id, workspace_id=workspace_id)
 
     def stream_events(
         self,
@@ -778,17 +774,10 @@ class ImageBuildService:
         workspace_id: str | None = None,
     ) -> ImageBuildRecord | None:
         resolved_workspace_id = self._resolve_workspace_id(workspace_id)
-        return next(
-            (
-                record
-                for record in self._list_completed_by_fingerprint(
-                    fingerprint,
-                    workspace_id=resolved_workspace_id,
-                )
-                if _reusable_build(record)
-            ),
-            None,
-        )
+        with self.context.database.session() as session:
+            return ImageBuildRepository(session).reusable_by_fingerprint(
+                fingerprint, workspace_id=resolved_workspace_id
+            )
 
     def find_by_image_id(
         self,
@@ -810,42 +799,9 @@ class ImageBuildService:
         workspace_id: str | None = None,
     ) -> ImageBuildRecord | None:
         resolved_workspace_id = self._resolve_workspace_id(workspace_id)
-        return next(
-            (
-                record
-                for record in self._list_completed_by_image_id(
-                    image_id,
-                    workspace_id=resolved_workspace_id,
-                )
-                if _reusable_build(record)
-            ),
-            None,
-        )
-
-    def _list_completed_by_fingerprint(
-        self,
-        fingerprint: str,
-        *,
-        workspace_id: str,
-    ) -> list[ImageBuildRecord]:
         with self.context.database.session() as session:
-            return ImageBuildRepository(session).list_completed_by_fingerprint(
-                fingerprint,
-                workspace_id=workspace_id,
-                limit=IMAGE_BUILD_REUSE_CANDIDATE_LIMIT,
-            )
-
-    def _list_completed_by_image_id(
-        self,
-        image_id: str,
-        *,
-        workspace_id: str,
-    ) -> list[ImageBuildRecord]:
-        with self.context.database.session() as session:
-            return ImageBuildRepository(session).list_completed_by_image_id(
-                image_id,
-                workspace_id=workspace_id,
-                limit=IMAGE_BUILD_REUSE_CANDIDATE_LIMIT,
+            return ImageBuildRepository(session).reusable_by_image_id(
+                image_id, workspace_id=resolved_workspace_id
             )
 
     def list(self, *, workspace_id: str | None = None) -> list[ImageBuildRecord]:
@@ -938,6 +894,9 @@ class ImageBuildService:
         level: EventLevel = EventLevel.Info,
         data: dict[str, JsonValue] | None = None,
     ) -> None:
+        self.submission.changes.publish(
+            record.id, workspace_id=self._resolve_workspace_id(workspace_id)
+        )
         if self.events is None:
             return
         event_data: dict[str, JsonValue] = {

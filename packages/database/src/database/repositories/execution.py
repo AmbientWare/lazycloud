@@ -50,7 +50,10 @@ from shared.tasks import (
     Task,
     TaskAttempt,
     TaskDependency,
+    TaskProgressSnapshot,
+    TaskResultSnapshot,
     TaskStatus,
+    TaskSummary,
     is_terminal_task_status,
 )
 from shared.worker_events import CONTAINER_EVENT_RESOURCE_TYPE, TASK_EVENT_RESOURCE_TYPE
@@ -114,7 +117,7 @@ class TaskCreationSample(BaseModel):
         return _utc_datetime(value)
 
 
-class RelatedTaskRecord(BaseModel):
+class RelatedTaskRecord[T: TaskSummary](BaseModel):
     """A task with the facts a reader needs about the resources that own it.
 
     Names, kinds, and versions read straight off the joined tables' own columns
@@ -122,7 +125,7 @@ class RelatedTaskRecord(BaseModel):
     gone, which is why each is nullable on its own.
     """
 
-    task: Task
+    task: T
     app_name: str | None = None
     workload_name: str | None = None
     workload_kind: StubKind | None = None
@@ -131,14 +134,14 @@ class RelatedTaskRecord(BaseModel):
     container_status: ContainerStatus | None = None
 
 
-class DetailedTaskRecord(RelatedTaskRecord):
+class DetailedTaskRecord(RelatedTaskRecord[Task]):
     """One task read whole, including the container record itself."""
 
     container: ContainerRecord | None = None
 
 
 class RelatedTaskPage(BaseModel):
-    data: list[RelatedTaskRecord]
+    data: list[RelatedTaskRecord[TaskProgressSnapshot]]
     next: str = ""
 
 
@@ -209,6 +212,30 @@ class TaskRepository:
             return None
         row = self.session.get(TaskTable, task_id)
         return task_from_table(row) if row is not None else None
+
+    def progress_snapshot(self, task_id: str) -> TaskProgressSnapshot | None:
+        if not _is_uuid_text(task_id):
+            return None
+        row = (
+            self.session.execute(select(*_task_summary_columns()).where(TaskTable.id == task_id))
+            .mappings()
+            .one_or_none()
+        )
+        return TaskProgressSnapshot.model_validate(dict(row)) if row is not None else None
+
+    def result_snapshot(self, task_id: str) -> TaskResultSnapshot | None:
+        if not _is_uuid_text(task_id):
+            return None
+        row = (
+            self.session.execute(
+                select(TaskTable.id, TaskTable.function_result, TaskTable.error).where(
+                    TaskTable.id == task_id
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return TaskResultSnapshot.model_validate(dict(row)) if row is not None else None
 
     def delete(self, task_id: str, *, workspace_id: str) -> bool:
         if not _is_uuid_text(task_id):
@@ -568,7 +595,20 @@ class TaskRepository:
         offset: int = 0,
     ) -> RelatedTaskPage:
         """Read a filtered task page with its owning resources named in SQL."""
-        statement = _related_task_statement().where(TaskTable.workspace_id == workspace_id)
+        statement = (
+            _related_task_statement()
+            .with_only_columns(
+                *_task_summary_columns(),
+                AppTable.name.label("app_name"),
+                StubTable.name.label("workload_name"),
+                StubTable.type.label("workload_kind"),
+                DeploymentTable.name.label("deployment_name"),
+                DeploymentTable.version.label("deployment_version"),
+                ContainerTable.status.label("container_status"),
+                maintain_column_froms=True,
+            )
+            .where(TaskTable.workspace_id == workspace_id)
+        )
         if status is not None:
             statement = statement.where(TaskTable.status == status.value)
         if app_id is not None:
@@ -600,30 +640,28 @@ class TaskRepository:
             .offset(max(offset, 0))
             .limit(max(limit, 1) + 1)
         )
-        rows = list(self.session.execute(statement).tuples())
+        rows = list(self.session.execute(statement).mappings())
         page_rows = rows[: max(limit, 1)]
         return RelatedTaskPage(
             data=[
                 RelatedTaskRecord(
-                    task=task_from_table(task_row),
-                    app_name=app_name,
-                    workload_name=stub_name,
-                    workload_kind=StubKind(stub_type) if stub_type is not None else None,
-                    deployment_name=deployment_name,
-                    deployment_version=deployment_version,
+                    task=TaskProgressSnapshot.model_validate(
+                        {key: row[key] for key in TaskProgressSnapshot.model_fields}
+                    ),
+                    app_name=row.app_name,
+                    workload_name=row.workload_name,
+                    workload_kind=StubKind(row.workload_kind)
+                    if row.workload_kind is not None
+                    else None,
+                    deployment_name=row.deployment_name,
+                    deployment_version=row.deployment_version,
                     container_status=(
-                        ContainerStatus(container_status) if container_status is not None else None
+                        ContainerStatus(row.container_status)
+                        if row.container_status is not None
+                        else None
                     ),
                 )
-                for (
-                    task_row,
-                    app_name,
-                    stub_name,
-                    stub_type,
-                    deployment_name,
-                    deployment_version,
-                    container_status,
-                ) in page_rows
+                for row in page_rows
             ],
             next=str(max(offset, 0) + len(page_rows)) if len(rows) > len(page_rows) else "",
         )
@@ -842,6 +880,33 @@ def _narrowed_tasks[StatementT: Select[Any]](
     return statement
 
 
+def _task_summary_columns():
+    return (
+        TaskTable.id,
+        TaskTable.name,
+        TaskTable.status,
+        TaskTable.workspace_id,
+        TaskTable.app_id,
+        TaskTable.stub_id,
+        TaskTable.deployment_id,
+        TaskTable.container_id,
+        TaskTable.parent_task_id,
+        TaskTable.root_task_id,
+        TaskTable.handler,
+        TaskTable.attempt_number,
+        TaskTable.max_attempts,
+        TaskTable.next_retry_at,
+        TaskTable.exit_code,
+        TaskTable.created_at,
+        TaskTable.started_at,
+        TaskTable.finished_at,
+        func.coalesce(func.jsonb_typeof(TaskTable.invocation) == "object", False).label(
+            "is_function"
+        ),
+        TaskTable.claimable_at,
+    )
+
+
 def _related_task_statement() -> Select[tuple[TaskTable, str, str, str, str, int, str]]:
     """Tasks joined to the columns that name their app, workload, and container.
 
@@ -995,11 +1060,11 @@ class TaskAttemptRepository:
         row = self.session.scalars(statement).first()
         return task_attempt_from_table(row) if row is not None else None
 
-    def latest_for_tasks(self, task_ids: Sequence[str]) -> dict[str, TaskAttempt]:
+    def latest_finished_for_tasks(self, task_ids: Sequence[str]) -> dict[str, datetime]:
         if not task_ids:
             return {}
         statement = (
-            select(TaskAttemptTable)
+            select(TaskAttemptTable.task_id, TaskAttemptTable.finished_at)
             .where(TaskAttemptTable.task_id.in_(task_ids))
             .distinct(TaskAttemptTable.task_id)
             .order_by(
@@ -1009,8 +1074,9 @@ class TaskAttemptRepository:
             )
         )
         return {
-            str(row.task_id): task_attempt_from_table(row)
-            for row in self.session.scalars(statement)
+            str(row.task_id): _utc_datetime(row.finished_at)
+            for row in self.session.execute(statement)
+            if row.finished_at is not None
         }
 
 

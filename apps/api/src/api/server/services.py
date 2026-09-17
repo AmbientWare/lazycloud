@@ -81,6 +81,7 @@ from identity.invitations import WorkspaceInvitationService
 from identity.platform import PlatformNamespaceService
 from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
+from images.changes import ImageBuildChanges
 from images.control import ImageControlService
 from images.filesystem import FilesystemImageService
 from images.publication import (
@@ -925,6 +926,7 @@ class ApiServices(ApiServiceCore):
                     context.database, container_scheduler, containers, image_build_container_config
                 ),
                 resolved_image_archive_store,
+                ImageBuildChanges(redis),
             ),
             events,
             publication_publisher,
