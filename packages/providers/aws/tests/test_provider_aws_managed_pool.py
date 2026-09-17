@@ -786,6 +786,9 @@ def test_pooled_provider_preserves_capacity_across_namespace_adoption() -> None:
     provider.delete_unit(observed_request)
     deleted = provider.delete_unit(observed_request)
     assert deleted.phase is ProviderCapacityPhase.Deleted
+    released = provider.release_machine(observed_request, first_instance)
+    assert released.phase is ProviderCapacityPhase.Deleted
+    assert released.instances == []
 
 
 def test_pooled_provider_refuses_a_connection_with_no_network() -> None:

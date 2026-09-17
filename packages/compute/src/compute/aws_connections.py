@@ -11,6 +11,7 @@ from database.repositories.aws_connections import (
     AwsAccountConnectionRepository,
     AwsAuthorizationCleanupTombstoneRepository,
 )
+from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeUnitRepository,
 )
@@ -925,6 +926,9 @@ class AwsAccountConnectionService:
             dependent = pools.list_for_provider_connection(claimed.id)
             if any(pool.phase is not ComputeUnitPhase.Deleted for pool in dependent):
                 raise ConflictError("AWS account connection still has active compute pools")
+            CapacityRecoveryRepository(session).delete_completed_for_units(
+                [pool.id for pool in dependent]
+            )
             for pool in dependent:
                 pools.delete(pool.id, workspace_id=pool.workspace_id)
             deleted = connections.delete_claimed(claimed)
