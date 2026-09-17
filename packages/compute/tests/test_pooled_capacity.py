@@ -275,7 +275,7 @@ class _AsyncScaleDownProvider(_PooledProvider):
         instance = ProviderUnitInstance(
             provider_instance_id="i-00000000000000000",
             status="terminating",
-            storage_volume_ids=("vol-00000000000000000",),
+            storage_volume_ids=(),
         )
         return ProviderUnitSnapshot(
             phase=ProviderCapacityPhase.Ready,
@@ -3096,6 +3096,9 @@ def test_pooled_scale_down_projects_updating_during_provider_termination(
     assert scaling.desired_machines == 0
     assert scaling.observed_machines == 1
     assert scaling.phase is ComputeUnitPhase.Updating
+    with service_context.database.session() as session:
+        [retiring] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
+    assert retiring.storage_volume_ids == ("vol-00000000000000000",)
 
 
 def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
