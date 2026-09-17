@@ -17,9 +17,13 @@ export function pythonCall(result: string, method: string, manifest: DeploymentM
         .filter(
           (parameter) => !["var_positional", "var_keyword"].includes(parameter.parameter_kind),
         )
+        .filter((parameter) => parameter.required || parameter.parameter_kind !== "positional_only")
+        .filter(
+          (parameter) => parameter.required || !(parameter.python_type || parameter.python_default),
+        )
         .map(
           (parameter) =>
-            `${parameter.parameter_kind === "positional_only" ? "" : `${parameter.name}=`}${pythonLiteral(body[parameter.name], 4)}`,
+            `${parameter.parameter_kind === "positional_only" ? "" : `${parameter.name}=`}${parameter.python_type ? parameter.name : pythonLiteral(body[parameter.name], 4)}`,
         )
     : Object.keys(body).length
       ? [`**${pythonLiteral(body, 4)}`]
@@ -30,6 +34,10 @@ export function pythonCall(result: string, method: string, manifest: DeploymentM
 
 export function sourceSnippet(manifest: DeploymentManifest, source: SourceImport): string {
   const { importLine, reference } = source;
+  const pythonInputs =
+    manifest.client_contract?.operation.parameters
+      .filter((parameter) => parameter.required && parameter.python_type)
+      .map((parameter) => `${parameter.name}: ${parameter.python_type}`) ?? [];
   if (manifest.kind === "asgi")
     return [
       importLine,
@@ -51,6 +59,7 @@ export function sourceSnippet(manifest: DeploymentManifest, source: SourceImport
   return [
     importLine,
     "",
+    ...(pythonInputs.length ? [`# Supply Python objects for ${pythonInputs.join(", ")}.`, ""] : []),
     pythonCall("result", `${reference}.remote`, manifest),
     "print(result)",
     "",

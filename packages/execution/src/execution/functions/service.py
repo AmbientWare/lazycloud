@@ -44,6 +44,7 @@ from shared.function_payloads import (
     FunctionDependencyBinding,
     FunctionInvocationPayload,
     FunctionJsonInvocation,
+    FunctionPayloadEncoding,
     FunctionResultPayload,
     function_result_payload_size,
     validate_function_dependency_bindings,
@@ -120,6 +121,16 @@ class FunctionControlService:
             if stub.kind is not StubKind.Function:
                 raise InvalidInputError(f"stub is not a function: {stub.id}")
             config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
+            if (
+                isinstance(request.invocation, FunctionJsonInvocation)
+                and request.invocation.result_encoding is FunctionPayloadEncoding.Json
+                and stub.config.client_contract is not None
+            ):
+                python_type = stub.config.client_contract.operation.return_python_type
+                if python_type:
+                    raise InvalidInputError(
+                        f"function returns {python_type}; call it through the Python SDK"
+                    )
             # Before the task row, because everything after this commits: a
             # refusal taken later leaves a task queued forever for an account
             # nothing will schedule. Asked with the GPU the container will want,

@@ -6,6 +6,18 @@ export const PLAYGROUND_KINDS = new Set(["function", "endpoint"]);
 const PRIMITIVE_TYPES = ["string", "integer", "number", "boolean"] as const;
 type PrimitiveType = (typeof PRIMITIVE_TYPES)[number];
 
+export function pythonOnlyReason(manifest: DeploymentManifest): string | null {
+  const operation = manifest.client_contract?.operation;
+  if (!operation) return null;
+  const reasons: string[] = [];
+  for (const parameter of operation.parameters) {
+    if (parameter.python_type) reasons.push(`${parameter.name}: ${parameter.python_type}`);
+    if (parameter.python_default) reasons.push(`${parameter.name} has a Python default`);
+  }
+  if (operation.return_python_type) reasons.push(`return: ${operation.return_python_type}`);
+  return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
+}
+
 export type PlaygroundField = {
   name: string;
   type: PrimitiveType;
@@ -36,7 +48,7 @@ export function playgroundFields(manifest: DeploymentManifest): PlaygroundField[
     if (parameters.length === 0) return [];
     const fields: PlaygroundField[] = [];
     for (const parameter of parameters) {
-      const rawType = parameter.json_schema.type;
+      const rawType = parameter.json_schema?.type;
       const type = primitiveType(typeof rawType === "string" ? rawType : undefined);
       if (!type) return null;
       fields.push({
@@ -73,11 +85,13 @@ export function exampleBody(manifest: DeploymentManifest): Record<string, JsonVa
   if (contract) {
     for (const parameter of contract.operation.parameters) {
       if (["var_positional", "var_keyword"].includes(parameter.parameter_kind)) continue;
+      if (parameter.python_type || parameter.python_default) continue;
       if (parameter.default !== null && parameter.default !== undefined) {
         body[parameter.name] = parameter.default;
         continue;
       }
-      const type = typeof parameter.json_schema.type === "string" ? parameter.json_schema.type : "";
+      const type =
+        typeof parameter.json_schema?.type === "string" ? parameter.json_schema.type : "";
       body[parameter.name] = placeholderValue(type);
     }
     return body;

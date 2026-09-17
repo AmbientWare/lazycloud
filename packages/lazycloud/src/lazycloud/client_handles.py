@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import ValidationError
 from shared.deployments import DeploymentKind
+from shared.function_payloads import FunctionPayloadEncoding
 from shared.http.errors import http_api_error_from_body
 from shared.http.functions import FunctionInvokeResponse
 from shared.serialization import to_json_value
@@ -130,6 +131,9 @@ class ResourceHandle:
 
 class FunctionHandle(ResourceHandle):
     def remote(self, *args: Any, **kwargs: Any) -> Any:
+        return self.remote_json(*args, **kwargs)
+
+    def remote_json(self, *args: Any, **kwargs: Any) -> Any:
         try:
             response = FunctionInvokeResponse.model_validate(
                 _json_request(
@@ -146,31 +150,11 @@ class FunctionHandle(ResourceHandle):
             raise ClientHandleError(response.output or "function invocation failed")
         if response.result is not None:
             try:
-                return decode_function_result(response.result)
-            except FunctionResultDecodeError as exc:
-                raise ClientHandleError("function returned an invalid result") from exc
-        return response.task_id or None
-
-    def remote_json(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            response = FunctionInvokeResponse.model_validate(
-                _json_request(
-                    self.invoke_url,
-                    method="POST",
-                    json_body=_call_payload(args, kwargs, result_format="json"),
-                    token=self._token(),
-                    timeout_seconds=self.timeout_seconds,
+                return decode_function_result(
+                    response.result, expected_encoding=FunctionPayloadEncoding.Json
                 )
-            )
-        except ValidationError as exc:
-            raise ClientHandleError("function returned an invalid response") from exc
-        if response.exit_code != 0:
-            raise ClientHandleError(response.output or "function invocation failed")
-        if response.result is not None:
-            try:
-                return decode_function_result(response.result)
             except FunctionResultDecodeError as exc:
-                raise ClientHandleError("function returned an invalid result") from exc
+                raise ClientHandleError(str(exc)) from exc
         if not response.task_id:
             return None
         completed = Task(
@@ -185,9 +169,11 @@ class FunctionHandle(ResourceHandle):
         if not completed.ok:
             raise ClientHandleError(completed.error or f"function task {completed.status.value}")
         try:
-            return decode_function_result(completed.value)
+            return decode_function_result(
+                completed.value, expected_encoding=FunctionPayloadEncoding.Json
+            )
         except FunctionResultDecodeError as exc:
-            raise ClientHandleError("function returned an invalid result") from exc
+            raise ClientHandleError(str(exc)) from exc
 
     async def async_remote(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.remote, *args, **kwargs)
@@ -272,15 +258,11 @@ def handle_from_manifest(
 def _call_payload(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-    *,
-    result_format: str = "",
 ) -> dict[str, JsonValue]:
     payload: dict[str, JsonValue] = {
         "args": [_json_value(item) for item in args],
         "kwargs": {key: _json_value(value) for key, value in kwargs.items()},
     }
-    if result_format:
-        payload["result_format"] = result_format
     return payload
 
 

@@ -6,7 +6,8 @@ from typing import Any
 
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
-from shared.callables import bind_arguments, coerce_arguments
+from shared.callables import bind_arguments, prepare_callable_arguments
+from shared.function_payloads import FunctionPayloadEncoding
 
 from lazycloud.abstractions.metadata import SchemaInput, schema_metadata
 from lazycloud.schema import OutputValidationError, Schema, ValidationError
@@ -63,9 +64,11 @@ def prepare_arguments(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     inputs: SchemaInput,
+    *,
+    encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Json,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     if inputs is None:
-        return coerce_arguments(target, args, kwargs)
+        return prepare_callable_arguments(target, args, kwargs, encoding=encoding)
     schema = inputs if isinstance(inputs, Schema) else Schema.from_dict(schema_metadata(inputs))
     bound = bind_arguments(target, args, kwargs)
     bound.apply_defaults()

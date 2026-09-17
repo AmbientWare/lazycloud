@@ -3,23 +3,39 @@ import { z } from "zod";
 import { jsonValueSchema } from "./json";
 
 // Synced to packages/shared/src/shared/http/client_manifests.py
-// (ClientManifestResource) and shared/models/client_contracts.py; scoped to
-// the fields the function-page playground consumes.
+// Includes the callable contract used by the playground and call examples.
 
-const clientParameterSchema = z.object({
-  name: z.string(),
-  json_schema: z.record(jsonValueSchema).default({}),
-  required: z.boolean().default(true),
-  default: jsonValueSchema.nullish(),
-  parameter_kind: z.string().default("keyword"),
-});
+const clientParameterSchema = z
+  .object({
+    name: z.string(),
+    json_schema: z.record(jsonValueSchema).nullable().default({}),
+    python_type: z.string().default(""),
+    required: z.boolean().default(true),
+    default: jsonValueSchema.nullish(),
+    python_default: z.boolean().default(false),
+    parameter_kind: z.string().default("keyword"),
+  })
+  .refine(
+    (parameter) => (parameter.json_schema === null) === Boolean(parameter.python_type),
+    "A Python-only parameter must name its type and omit its JSON schema",
+  )
+  .refine(
+    (parameter) => !parameter.python_default || (!parameter.required && parameter.default == null),
+    "Python defaults remain in the handler",
+  );
 export type ClientParameter = z.infer<typeof clientParameterSchema>;
 
-const clientOperationSchema = z.object({
-  name: z.string(),
-  parameters: z.array(clientParameterSchema).default([]),
-  return_schema: z.record(jsonValueSchema).default({}),
-});
+const clientOperationSchema = z
+  .object({
+    name: z.string(),
+    parameters: z.array(clientParameterSchema).default([]),
+    return_schema: z.record(jsonValueSchema).nullable().default({}),
+    return_python_type: z.string().default(""),
+  })
+  .refine(
+    (operation) => (operation.return_schema === null) === Boolean(operation.return_python_type),
+    "A Python-only return must name its type and omit its JSON schema",
+  );
 export type ClientOperation = z.infer<typeof clientOperationSchema>;
 
 const clientContractSchema = z.object({

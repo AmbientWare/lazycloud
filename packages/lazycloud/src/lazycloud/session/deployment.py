@@ -175,12 +175,12 @@ class DeploymentSubmission:
             try:
                 return decode_function_result(result.value)
             except FunctionResultDecodeError as exc:
-                raise DeploymentOperationError("deployment returned an invalid result") from exc
+                raise DeploymentOperationError(str(exc)) from exc
         if self.response.result is not None:
             try:
                 return decode_function_result(self.response.result)
             except FunctionResultDecodeError as exc:
-                raise DeploymentOperationError("deployment returned an invalid result") from exc
+                raise DeploymentOperationError(str(exc)) from exc
         return None
 
     def subscribe(self) -> TaskSubscription:

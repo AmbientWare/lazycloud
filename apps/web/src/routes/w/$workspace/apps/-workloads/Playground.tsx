@@ -14,7 +14,13 @@ import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
 import { taskQueryOptions } from "@/lib/queries/tasks";
 
-import { buildBody, exampleBody, playgroundFields, type PlaygroundField } from "./playground-form";
+import {
+  buildBody,
+  exampleBody,
+  playgroundFields,
+  pythonOnlyReason,
+  type PlaygroundField,
+} from "./playground-form";
 
 /**
  * In-UI invoke for a deployed function or endpoint. The form is built
@@ -49,6 +55,10 @@ export function Playground({
   }
   if (manifest.isError) {
     return <PanelError message={manifest.error.message} />;
+  }
+  const pythonRequired = pythonOnlyReason(manifest.data);
+  if (pythonRequired) {
+    return <p className="p-4 text-sm text-muted-foreground">{pythonRequired}</p>;
   }
   return (
     <PlaygroundForm

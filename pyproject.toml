@@ -56,6 +56,7 @@ dev = [
     "boto3-stubs[autoscaling,cloudformation,ec2,s3,sts]>=1.40,<2",
     "httpx2>=2.4.0",
     "lupa>=2.8",
+    "numpy>=2,<3",
     "pytest>=9,<10",
 ]
 lint = [

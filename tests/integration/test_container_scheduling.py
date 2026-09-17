@@ -10,6 +10,8 @@ from execution.containers.scheduling import ContainerSchedulingPersistenceServic
 from execution.functions.service import FunctionControlService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
+from lazycloud.abstractions.function import _serialize_invocation
+from lazycloud.session.task import FunctionCall, TaskClient
 from runner.invocation import cloudpickle_bytes
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.state import (
@@ -21,8 +23,6 @@ from shared.function_payloads import (
     FunctionCloudpickleResult,
 )
 from shared.http.functions import (
-    FUNCTION_CALL_REF_MARKER,
-    FunctionCallDependency,
     FunctionClaimRequest,
     FunctionInvokeBody,
     FunctionSetResultBody,
@@ -90,18 +90,14 @@ def test_function_dependency_waits_then_schedules_materialized_args(
             ),
         )
     )
+    downstream_invocation = _serialize_invocation(
+        (FunctionCall[int](task_id=upstream.task_id, client=TaskClient()),), {"right": 3}
+    )
     downstream = service.function_invoke(
         FunctionInvokeBody(
             stub_id=stub.id,
-            invocation=FunctionCloudpickleInvocation.from_bytes(
-                cloudpickle_bytes(
-                    {
-                        "args": ({FUNCTION_CALL_REF_MARKER: True, "task_id": upstream.task_id},),
-                        "kwargs": {"right": 3},
-                    }
-                )
-            ),
-            dependencies=[FunctionCallDependency(task_id=upstream.task_id)],
+            invocation=downstream_invocation.payload,
+            dependencies=downstream_invocation.dependencies,
         )
     )
 
@@ -320,18 +316,14 @@ def test_function_dependency_failure_fails_downstream_without_scheduling(
             ),
         )
     )
+    downstream_invocation = _serialize_invocation(
+        (FunctionCall[int](task_id=upstream.task_id, client=TaskClient()),), {}
+    )
     downstream = service.function_invoke(
         FunctionInvokeBody(
             stub_id=stub.id,
-            invocation=FunctionCloudpickleInvocation.from_bytes(
-                cloudpickle_bytes(
-                    {
-                        "args": ({FUNCTION_CALL_REF_MARKER: True, "task_id": upstream.task_id},),
-                        "kwargs": {},
-                    }
-                )
-            ),
-            dependencies=[FunctionCallDependency(task_id=upstream.task_id)],
+            invocation=downstream_invocation.payload,
+            dependencies=downstream_invocation.dependencies,
         )
     )
     upstream_task = isolated_services.tasks.get(upstream.task_id)

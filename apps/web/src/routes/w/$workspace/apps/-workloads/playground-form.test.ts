@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import type { DeploymentManifest } from "@/lib/api/schemas";
+import { deploymentManifestSchema } from "@/lib/api/schemas/client_manifests";
 
-import { buildBody, curlSnippet, playgroundFields } from "./playground-form";
+import { buildBody, curlSnippet, playgroundFields, pythonOnlyReason } from "./playground-form";
+
+it("requires Python invocation for a Python result contract", () => {
+  const resource = deploymentManifestSchema.parse({
+    ...manifest(),
+    client_contract: {
+      operation: { name: "remote", return_schema: null, return_python_type: "numpy.ndarray" },
+    },
+  });
+  expect(pythonOnlyReason(resource)).not.toBeNull();
+  expect(pythonOnlyReason(manifest())).toBeNull();
+});
 
 function manifest(overrides: Partial<DeploymentManifest> = {}): DeploymentManifest {
   return {
@@ -27,7 +39,7 @@ function contractManifest(
 ): DeploymentManifest {
   return manifest({
     client_contract: {
-      operation: { name: "remote", parameters, return_schema: {} },
+      operation: { name: "remote", parameters, return_schema: {}, return_python_type: "" },
     },
   });
 }
@@ -38,6 +50,8 @@ describe("playgroundFields", () => {
       contractManifest([
         {
           name: "value",
+          python_type: "",
+          python_default: false,
           json_schema: { type: "integer" },
           required: true,
           default: null,
@@ -45,6 +59,8 @@ describe("playgroundFields", () => {
         },
         {
           name: "label",
+          python_type: "",
+          python_default: false,
           json_schema: { type: "string" },
           required: false,
           default: "hi",
@@ -63,6 +79,8 @@ describe("playgroundFields", () => {
       contractManifest([
         {
           name: "values",
+          python_type: "",
+          python_default: false,
           json_schema: { type: "array", items: { type: "integer" } },
           required: true,
           default: null,

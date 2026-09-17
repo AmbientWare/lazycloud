@@ -254,6 +254,9 @@ def _manifest_version(resources: list[dict[str, JsonValue]]) -> str:
 
 
 def _validate_typed_resources(app: str, resources: list[ClientManifestResource]) -> None:
+    for resource in resources:
+        if resource.client_contract is not None:
+            _require_json_contract(resource.client_contract, resource.name)
     stale = [resource for resource in resources if resource.client_contract is None]
     if not stale:
         return
@@ -266,6 +269,15 @@ def _validate_typed_resources(app: str, resources: list[ClientManifestResource])
         f"contracts: {details}. Redeploy these resources with the current SDK "
         "and then run `lazycloud app export` again."
     )
+
+
+def _require_json_contract(contract: ClientContract, name: str) -> None:
+    errors = contract.json_export_errors()
+    if errors:
+        raise ClientGenerationError(
+            f"cannot export a JSON client for {name!r}: {'; '.join(errors)}. "
+            "Call this function through its source Python SDK object."
+        )
 
 
 def _resource_symbols(resources: list[ClientManifestResource]) -> list[str]:
@@ -626,6 +638,7 @@ def _contract_schema_context(
     *,
     symbol: str,
 ) -> _SchemaContext:
+    _require_json_contract(contract, symbol)
     used: set[str] = set()
     prefix = _python_class_name(symbol)
     models: list[_GeneratedSchemaModel] = []
@@ -681,8 +694,8 @@ def _contract_schema_context(
     for definition in definitions.values():
         register(definition, "Model")
     for parameter in contract.operation.parameters:
-        register(parameter.json_schema, _python_class_name(parameter.name))
-    register(contract.operation.return_schema, "Output")
+        register(validate_json_object(parameter.json_schema), _python_class_name(parameter.name))
+    register(validate_json_object(contract.operation.return_schema), "Output")
     return _SchemaContext(
         models=models,
         ref_names=ref_names,

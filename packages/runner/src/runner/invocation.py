@@ -8,7 +8,8 @@ from collections.abc import Callable
 from typing import Any
 
 import cloudpickle
-from shared.callables import InvocationHandler, coerce_arguments
+from shared.callables import InvocationHandler, prepare_callable_arguments
+from shared.function_payloads import FunctionPayloadEncoding
 
 
 def cloudpickle_bytes(value: Any) -> bytes:
@@ -20,14 +21,15 @@ def cloudpickle_bytes(value: Any) -> bytes:
 
 def invoke_handler(
     handler: Callable[..., Any],
-    /,
-    *args: Any,
-    **kwargs: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Json,
 ) -> Any:
     if isinstance(handler, InvocationHandler):
-        result = handler.invoke_arguments(args, kwargs)
+        result = handler.invoke_arguments(args, kwargs, encoding=encoding)
     else:
-        args, kwargs = coerce_arguments(handler, args, kwargs)
+        args, kwargs = prepare_callable_arguments(handler, args, kwargs, encoding=encoding)
         result = handler(*args, **kwargs)
     if inspect.isawaitable(result):
         return asyncio.run(_await_any(result))

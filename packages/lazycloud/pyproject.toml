@@ -18,6 +18,7 @@ dependencies = [
     "typer>=0.26.7",
     "tomli>=2,<3",
     "typing-extensions>=4.12,<5",
+    "typing-inspection>=0.4.2,<1",
     "watchdog>=6,<7",
     # Floor held below 17 on purpose: this package supports Python 3.10 and
     # websockets 17 does not. A dependency that cannot install on a Python the

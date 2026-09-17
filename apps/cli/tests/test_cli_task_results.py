@@ -31,9 +31,9 @@ class _TaskHandle:
         *,
         wait: bool,
         timeout_seconds: float | None,
-    ) -> TaskResult:
+    ) -> TaskResult[JsonValue]:
         _ = wait, timeout_seconds
-        return TaskResult(self.task)
+        return TaskResult(self.task, self.task.result)
 
 
 @dataclass(slots=True)

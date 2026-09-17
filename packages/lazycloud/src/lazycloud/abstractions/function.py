@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import pickle
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
@@ -18,6 +20,7 @@ from typing import (
     overload,
 )
 
+import cloudpickle
 from pydantic import ValidationError
 from shared.autoscaling import QueueDepthAutoscaler
 from shared.deployment_records import (
@@ -37,13 +40,14 @@ from shared.deployment_records import (
 from shared.deployments import DeploymentKind
 from shared.env import HOT_RELOAD_ENV
 from shared.function_payloads import (
+    FunctionCallPersistentId,
     FunctionCloudpickleInvocation,
     FunctionInvocationArguments,
     FunctionInvocationPayload,
+    FunctionPayloadEncoding,
 )
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.functions import (
-    FUNCTION_CALL_REF_MARKER,
     FunctionCallDependency,
     FunctionInvokeResponse,
     FunctionServeResponse,
@@ -89,11 +93,9 @@ from lazycloud.session.deployment import DeploymentClient, DeploymentControlClie
 from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
 from lazycloud.terminal import Terminal, TerminalStep
-from lazycloud.values import cloudpickle_bytes
 
 P = ParamSpec("P")
 R = TypeVar("R")
-KeyT = TypeVar("KeyT")
 
 
 class _FunctionClient(Protocol):
@@ -244,8 +246,16 @@ class Function(Generic[P, R]):
             return serialize_result(self.func, self.func(*args, **kwargs), self.outputs)
         return self.invoke_arguments(args, kwargs)
 
-    def invoke_arguments(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> R:
-        prepared_args, prepared_kwargs = prepare_arguments(self.func, args, kwargs, self.inputs)
+    def invoke_arguments(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Cloudpickle,
+    ) -> R:
+        prepared_args, prepared_kwargs = prepare_arguments(
+            self.func, args, kwargs, self.inputs, encoding=encoding
+        )
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )
@@ -752,19 +762,20 @@ def _map_args(input_value: Any) -> tuple[Any, ...]:
 def _serialize_invocation(
     args: tuple[Any, ...], kwargs: Mapping[str, Any]
 ) -> SerializedFunctionInvocation:
-    dependencies: list[FunctionCallDependency] = []
-    seen: set[str] = set()
-    serialized_args = _function_call_ref_tuple(args, dependencies, seen)
-    serialized_kwargs = _function_call_ref_mapping(dict(kwargs), dependencies, seen)
     payload: dict[str, object] = {
-        "args": serialized_args,
-        "kwargs": serialized_kwargs,
+        "args": args,
+        "kwargs": dict(kwargs),
     }
+    stream = io.BytesIO()
+    references = _FunctionCallReferences()
+    pickler: pickle.Pickler = cloudpickle.CloudPickler(stream)
+    pickler.persistent_id = references.persistent_id
+    pickle.Pickler.dump(pickler, payload)
     try:
         public_arguments = FunctionInvocationArguments.model_validate(
             {
-                "args": list(serialized_args),
-                "kwargs": serialized_kwargs,
+                "args": list(args),
+                "kwargs": dict(kwargs),
             },
             strict=True,
         )
@@ -772,39 +783,30 @@ def _serialize_invocation(
         public_arguments = None
     return SerializedFunctionInvocation(
         payload=FunctionCloudpickleInvocation.from_bytes(
-            cloudpickle_bytes(payload),
+            stream.getvalue(),
             arguments=public_arguments,
         ),
-        dependencies=dependencies,
+        dependencies=list(references.dependencies.values()),
     )
 
 
-def _function_call_ref_payload(
-    value: Any,
-    dependencies: list[FunctionCallDependency],
-    seen: set[str],
-) -> Any:
-    if isinstance(value, FunctionCall):
-        if value.task_id not in seen:
-            seen.add(value.task_id)
-            dependencies.append(
-                FunctionCallDependency(
-                    task_id=value.task_id,
-                    workspace_id=value.workspace_id,
-                )
+@dataclass
+class _FunctionCallReferences:
+    dependencies: dict[str, FunctionCallDependency] = field(default_factory=dict)
+
+    def persistent_id(self, value: object) -> FunctionCallPersistentId | None:
+        if not isinstance(value, FunctionCall):
+            return None
+        previous = self.dependencies.get(value.task_id)
+        if previous is not None and previous.workspace_id != value.workspace_id:
+            raise FunctionOperationError(
+                f"function dependency {value.task_id} names conflicting workspaces"
             )
-        return {FUNCTION_CALL_REF_MARKER: True, "task_id": value.task_id}
-    if _is_invocation_mapping(value):
-        return _function_call_ref_mapping(value, dependencies, seen)
-    if _is_invocation_list(value):
-        return [_function_call_ref_payload(item, dependencies, seen) for item in value]
-    if _is_invocation_tuple(value):
-        return _function_call_ref_tuple(value, dependencies, seen)
-    return value
-
-
-def _is_invocation_mapping(value: object) -> TypeGuard[dict[object, object]]:
-    return isinstance(value, dict)
+        self.dependencies[value.task_id] = FunctionCallDependency(
+            task_id=value.task_id,
+            workspace_id=value.workspace_id,
+        )
+        return ("function_call", value.task_id)
 
 
 def _is_invocation_list(value: object) -> TypeGuard[list[object]]:
@@ -813,24 +815,6 @@ def _is_invocation_list(value: object) -> TypeGuard[list[object]]:
 
 def _is_invocation_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
     return isinstance(value, tuple)
-
-
-def _function_call_ref_mapping(
-    value: Mapping[KeyT, object],
-    dependencies: list[FunctionCallDependency],
-    seen: set[str],
-) -> dict[KeyT, Any]:
-    return {
-        key: _function_call_ref_payload(item, dependencies, seen) for key, item in value.items()
-    }
-
-
-def _function_call_ref_tuple(
-    value: Iterable[object],
-    dependencies: list[FunctionCallDependency],
-    seen: set[str],
-) -> tuple[Any, ...]:
-    return tuple(_function_call_ref_payload(item, dependencies, seen) for item in value)
 
 
 def _current_task_context() -> tuple[str, str]:

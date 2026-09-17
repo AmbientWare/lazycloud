@@ -451,6 +451,31 @@ A rollback to an image older than the schema is refused rather than migrated
 from, because there is no path to compute from a revision that build does not
 carry. Roll forward, or restore the database.
 
+### Python invocation format upgrade
+
+Python invocation format 2 preserves Python object graphs and resolves function
+dependencies through pickle references. Format 1 is rejected. JSON invocation
+and result formats remain at version 1.
+
+This alpha upgrade requires a coordinated cutover:
+
+1. Stop function admission and scheduled invocations with the current release.
+   Drain running calls, cancel queued calls, and stop their containers.
+2. Inventory legacy Python task records by workspace and task ID. Their
+   `invocation.encoding` is `cloudpickle` and `invocation.version` is `1`.
+   Remove the reviewed records before starting the new application. This deletes
+   their task history and results. Completed records also need removal because
+   the new task reader validates the stored invocation format.
+3. Deploy the API, scheduler, shared contracts, and runner from the same release.
+   Upgrade the calling SDK before reopening admission and schedules. Restart
+   existing function containers with the new runner.
+4. Run `tests.e2e.local.function.scenario_serialization` against a local stack
+   built from that release, then verify Python calls and dependency chains against
+   the deployment before reopening it to callers.
+
+Do not roll an old runner or SDK back into this deployment. Function result
+storage is unchanged by this upgrade.
+
 ### Secrets
 
 The External Secrets Operator reads them from Secrets Manager as the

@@ -32,7 +32,7 @@ from shared.contracts import ContractModel
 from shared.cron import CronJobRecord, CronJobRun, next_cron_run
 from shared.errors import InvalidInputError
 from shared.events import EventLevel
-from shared.function_payloads import FunctionJsonInvocation
+from shared.function_payloads import FunctionJsonInvocation, FunctionPayloadEncoding
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.scheduling import SchedulerWorkerRequest, SchedulerWorkerStatus, WorkerRemovalResult
@@ -1738,7 +1738,9 @@ class Scheduler:
             response = functions.function_invoke(
                 FunctionInvokeBody(
                     stub_id=stub_id,
-                    invocation=FunctionJsonInvocation(),
+                    invocation=FunctionJsonInvocation(
+                        result_encoding=FunctionPayloadEncoding.Cloudpickle
+                    ),
                     headless=True,
                 )
             )
