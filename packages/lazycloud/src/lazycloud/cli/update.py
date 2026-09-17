@@ -47,14 +47,13 @@ def update(
             if current == latest
             else f"lazycloud {current} is ahead of the latest release, {latest}."
         )
-        emit(ctx, payload=payload, view=notice_card("Up to date", f"{message}\n{location}"))
+        emit(ctx, payload=payload, view=notice_card(f"{message}\n{location}"))
         return
     if check:
         emit(
             ctx,
             payload=payload,
             view=notice_card(
-                "Update available",
                 f"lazycloud {current} is installed; {latest} is the latest release.\n{location}",
                 hint="Run `lazycloud update` to upgrade.",
             ),
@@ -93,5 +92,5 @@ def update(
     emit(
         ctx,
         payload=payload,
-        view=notice_card("Updated", f"lazycloud {actual} is installed.\n{location}"),
+        view=notice_card(f"lazycloud {actual} is installed.\n{location}"),
     )

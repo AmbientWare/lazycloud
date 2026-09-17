@@ -163,7 +163,6 @@ def agent_status(ctx: typer.Context) -> None:
     emit_result(
         ctx,
         payload=summary.model_dump(mode="json"),
-        title="Agent status",
         fields={
             "agents": summary.agents,
             "active leases": summary.active_leases,
@@ -297,6 +296,5 @@ def agent_delete(ctx: typer.Context, agent_id: str) -> None:
     emit_notice(
         ctx,
         payload={"agent_id": agent_id, "deleted": True},
-        title="Agent deleted",
         message=f"Deleted {agent_id}.",
     )

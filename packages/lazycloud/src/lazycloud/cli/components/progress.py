@@ -264,8 +264,8 @@ def _pending_card(task_id: str, pending: TaskPendingProgress) -> RenderableType:
         TaskPendingReason.StartingContainer: "Check container logs if startup stops progressing.",
     }[pending.reason]
     return notice_card(
-        f"Task {task_id[:8]} · pending {elapsed}",
         pending.message,
+        title=f"Task {task_id[:8]} · pending {elapsed}",
         hint=hint,
         tone="warning"
         if pending.reason

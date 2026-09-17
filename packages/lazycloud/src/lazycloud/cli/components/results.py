@@ -13,7 +13,7 @@ def emit_result(
     ctx: typer.Context,
     *,
     payload: object,
-    title: str,
+    title: str | None = None,
     fields: dict[str, JsonValue],
     tone: CardTone = "neutral",
     message: str = "",
@@ -22,7 +22,7 @@ def emit_result(
     emit(
         ctx,
         payload=payload,
-        view=result_card(title, fields, tone=tone, message=message),
+        view=result_card(fields, title=title, tone=tone, message=message),
     )
 
 
@@ -30,7 +30,7 @@ def emit_notice(
     ctx: typer.Context,
     *,
     payload: object,
-    title: str,
+    title: str | None = None,
     message: str,
     hint: str = "",
     tone: CardTone = "success",
@@ -39,7 +39,7 @@ def emit_notice(
     emit(
         ctx,
         payload=payload,
-        view=notice_card(title, message, hint=hint, tone=tone),
+        view=notice_card(message, title=title, hint=hint, tone=tone),
     )
 
 

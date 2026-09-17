@@ -37,4 +37,4 @@ def prune_logs(ctx: typer.Context) -> None:
         "batches": result.batches,
         "budget_exhausted": result.budget_exhausted,
     }
-    emit_result(ctx, payload=payload, title="Log retention", fields=payload)
+    emit_result(ctx, payload=payload, fields=payload)

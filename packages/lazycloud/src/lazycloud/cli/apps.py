@@ -67,7 +67,6 @@ def app_export(
         ctx,
         payload=payload,
         view=result_card(
-            "Typed package generated",
             {
                 "package": payload["package"],
                 "path": payload["path"],
@@ -76,6 +75,7 @@ def app_export(
                 ),
                 "ASGI without schema": ", ".join(payload["asgi_without_schema"]) or "none",
             },
+            title="Typed package generated",
             tone="success",
         ),
     )
@@ -135,7 +135,6 @@ def app_show(
         ctx,
         payload=response.model_dump(mode="json"),
         view=result_card(
-            "App",
             {
                 "name": response.name,
                 "state": response.lifecycle_state.value,
@@ -158,7 +157,6 @@ def app_pause(
         ctx,
         payload=response.model_dump(mode="json"),
         view=notice_card(
-            "App paused",
             f"Paused {response.name}.",
             tone="success",
         ),
@@ -177,7 +175,6 @@ def app_resume(
         ctx,
         payload=response.model_dump(mode="json"),
         view=notice_card(
-            "App resumed",
             f"Resumed {response.name}.",
             tone="success",
         ),
@@ -196,7 +193,7 @@ def app_delete(
     emit(
         ctx,
         payload={"app_id": app_id, "deleted": True},
-        view=notice_card("App deleted", f"Deleted {app}.", tone="success"),
+        view=notice_card(f"Deleted {app}.", tone="success"),
     )
 
 

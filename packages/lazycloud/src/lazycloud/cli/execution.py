@@ -183,13 +183,15 @@ def deploy(
             ctx,
             payload=payload,
             view=result_card(
-                "App deployed" if isinstance(response, AppDeployResult) else "Deployment created",
                 json_default(_deployment_summary(response, handler=handler, name=name)),
+                title="App deployed"
+                if isinstance(response, AppDeployResult)
+                else "Deployment created",
                 tone="success",
             ),
         )
         return
-    print_payload(ctx, payload, title="Deployment result", tone="success")
+    print_payload(ctx, payload)
 
 
 def run(
@@ -290,7 +292,7 @@ def run(
         console.print()
         console.print(result, markup=False, highlight=False)
         return
-    print_payload(ctx, result, title="Run result")
+    print_payload(ctx, result)
 
 
 def shell(
@@ -368,7 +370,7 @@ def shell(
     if isinstance(response, ShellSession):
         open_shell_session(ctx, response, workspace=workspace)
         return
-    print_payload(ctx, response, title="Shell session")
+    print_payload(ctx, response)
 
 
 def open_existing_shell(
@@ -447,7 +449,6 @@ def deployment_stop(
         ctx,
         payload=responses,
         view=notice_card(
-            "Deployments stopped",
             f"Stopped {len(responses)} deployment{'s' if len(responses) != 1 else ''}.",
             tone="success",
         ),
@@ -465,7 +466,6 @@ def deployment_start(
         ctx,
         payload=response.model_dump(mode="json"),
         view=notice_card(
-            "Deployment started",
             f"Started {response.name}.",
             tone="success",
         ),
@@ -487,7 +487,6 @@ def deployment_scale(
         ctx,
         payload=response.model_dump(mode="json"),
         view=notice_card(
-            "Deployment scaled",
             f"Set {response.name} to {containers} containers.",
             tone="success",
         ),
@@ -505,7 +504,6 @@ def deployment_delete(
         ctx,
         payload={"deployment_id": deployment_id_or_name, "deleted": True},
         view=notice_card(
-            "Deployment deleted",
             f"Deleted {deployment_id_or_name}.",
             tone="success",
         ),
