@@ -23,6 +23,7 @@ from lazycloud.cli.components.output import (
     table,
 )
 from lazycloud.cli.components.progress import attach_terminal
+from lazycloud.cli.components.results import emit_python_result
 from lazycloud.cli.control import resource_client
 from lazycloud.cli.handler_workflows import (
     HandlerLoadError,
@@ -287,12 +288,7 @@ def run(
         else:
             _reject_unapplied_overrides(target, overrides)
             response = call_handler(target, args=payload_args)
-    result = resource_payload(response)
-    if isinstance(result, str) and not json_output_enabled(ctx):
-        console.print()
-        console.print(result, markup=False, highlight=False)
-        return
-    print_payload(ctx, result)
+    emit_python_result(ctx, response)
 
 
 def shell(
