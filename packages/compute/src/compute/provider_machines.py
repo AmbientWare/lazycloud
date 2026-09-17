@@ -331,6 +331,14 @@ class ProviderMachineReconciler:
                         if value is not None
                     }
                 )
+            # Providers can omit detached disks during termination. Keep every
+            # observed disk until its absence is proven for this launch.
+            storage_volume_ids = tuple(
+                sorted(
+                    set(instance.storage_volume_ids)
+                    | (set(settled_existing.storage_volume_ids) if settled_existing else set())
+                )
+            )
             payload: dict[str, JsonValue | datetime] = {
                 "provider": pool.provider_ref,
                 "offer_id": offer.id,
@@ -400,7 +408,7 @@ class ProviderMachineReconciler:
                 "runtime": offer.runtime,
                 "region": offer.region,
                 "availability_zone": instance.availability_zone,
-                "storage_volume_ids": list(instance.storage_volume_ids),
+                "storage_volume_ids": list(storage_volume_ids),
                 "booted_template_version": instance.booted_template_version,
                 "missing_since": None,
                 "provider_storage_destroyed_at": settled_existing.provider_storage_destroyed_at
@@ -580,7 +588,10 @@ class ProviderMachineReconciler:
             if _reservation_open(item.status) and item.id not in destruction_observations
         }
         if unproved:
-            if snapshot.phase is ProviderCapacityPhase.Deleted:
+            if (
+                snapshot.phase is ProviderCapacityPhase.Deleted
+                or pool.phase is ComputeUnitPhase.Deleting
+            ):
                 phase = ComputeUnitPhase.Deleting
             elif snapshot.desired_machines != snapshot.observed_machines or authoritative_zero:
                 phase = ComputeUnitPhase.Updating
