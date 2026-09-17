@@ -38,6 +38,9 @@ Answer condensed. This is a must-follow rule, not a preference.
 
 - Lead with the answer or outcome. State blockers and decisions needed in one
   line each.
+- During builds, CI runs, and deployments, report only success or failure.
+  Do not narrate individual steps or send updates that only say work is still
+  running.
 - Omit reasoning already accepted, alternatives not taken, restated context,
   and evidence the reader did not ask for. Link or name a file or command
   instead of reproducing its content.
