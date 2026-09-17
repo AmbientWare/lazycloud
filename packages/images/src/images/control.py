@@ -581,14 +581,19 @@ def stream_build_events(
 ) -> Iterator[BuildImageEvent]:
     cursor = after
     record = images.get(build_id, workspace_id=workspace_id)
+    last_progress: BuildImageResponse | None = None
     heartbeat_at = time.monotonic() + 5
     while True:
         events = images.stream_events(build_id, workspace_id=workspace_id, after=cursor)
         for event in events:
-            if event.sequence <= cursor:
+            if event.sequence != 0 and event.sequence <= cursor and not event.done:
                 continue
             response = _response_from_stream_plan(event)
-            cursor = event.sequence
+            if event.sequence == 0:
+                if response == last_progress:
+                    continue
+                last_progress = response
+            cursor = max(cursor, event.sequence)
             yield BuildImageEvent(sequence=event.sequence, response=response)
             if response.done:
                 return
@@ -596,7 +601,8 @@ def stream_build_events(
             heartbeat_at = time.monotonic() + 5
             yield BuildImageEvent(
                 sequence=0,
-                response=BuildImageResponse(
+                response=last_progress
+                or BuildImageResponse(
                     build_id=build_id,
                     image_id=record.image_id or "",
                     python_version=record.image.python_version,
@@ -653,6 +659,8 @@ def _response_from_stream_plan(plan: ImageBuildStreamEventPlan) -> BuildImageRes
         status=plan.status,
         phase=plan.phase,
         error=plan.error,
+        attempt_number=plan.attempt_number,
+        pending_reason=plan.pending_reason,
     )
 
 

@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from uuid import uuid4
 
+from database.repositories.image_build_attempts import (
+    ImageBuildAttemptRepository,
+    ImageBuildProgress,
+)
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.image_build_logs import ImageBuildLogRepository
 from database.repositories.images import (
@@ -15,7 +20,9 @@ from observability.events import EventService
 from pydantic import JsonValue, TypeAdapter
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
+from shared.http.task_progress import TaskPendingReason
 from shared.image_building.authoring import ImageSpec
+from shared.image_building.constants import IMAGE_ARCHIVE_UPLOAD_TIMEOUT_SECONDS
 from shared.image_building.records import (
     BuildStatus,
     ImageArchiveRecord,
@@ -33,6 +40,7 @@ from images.building import (
     plan_image_build_failure_event,
     plan_image_build_log_event,
 )
+from images.building.models import ImageBuildStreamEventKind
 from images.context import ImageContext
 from images.execution import (
     ImageBuildExecutionResult,
@@ -116,7 +124,11 @@ class ImageBuildService:
         *,
         workspace_id: str,
         sensitive_values: tuple[str, ...],
+        container_id: str,
     ) -> list[ImageBuildStreamEventPlan]:
+        record = self.get(build_id, workspace_id=workspace_id)
+        if record.execution_container_id != container_id:
+            raise ConflictError("image build execution attempt is no longer active")
         emitted: list[ImageBuildStreamEventPlan] = []
         existing_events = self.stream_events(build_id, workspace_id=workspace_id)
         seen = {image_build_stream_event_key(event) for event in existing_events}
@@ -126,13 +138,9 @@ class ImageBuildService:
                 continue
             if image_build_stream_event_key(event) in seen or event.message in seen_messages:
                 continue
-            emitted.append(
-                self.append_stream_event(
-                    build_id,
-                    event,
-                    workspace_id=workspace_id,
-                    sensitive_values=sensitive_values,
-                )
+            emitted.append(event)
+            self._persist_stream_event(
+                record, event, workspace_id=workspace_id, sensitive_values=sensitive_values
             )
             seen.add(image_build_stream_event_key(event))
             if event.message:
@@ -144,10 +152,10 @@ class ImageBuildService:
                 result,
                 workspace_id=workspace_id,
                 sensitive_values=sensitive_values,
+                container_id=container_id,
             )
             emitted.append(self._stream_event_from_record(completed))
             return emitted
-        record = self.get(build_id, workspace_id=workspace_id)
         if _is_terminal_build_status(record.status):
             return emitted
         status = result.status if result.status in _TERMINAL_BUILD_STATUSES else BuildStatus.Failed
@@ -179,6 +187,7 @@ class ImageBuildService:
         *,
         workspace_id: str,
         sensitive_values: tuple[str, ...],
+        container_id: str,
     ) -> ImageBuildRecord:
         claim_id = uuid4().hex
         initial = self.get(build_id, workspace_id=workspace_id)
@@ -189,6 +198,7 @@ class ImageBuildService:
                 build_id,
                 workspace_id=workspace_id,
                 claim_id=claim_id,
+                container_id=container_id,
             ):
                 raise RuntimeError("image build publication ownership is no longer active")
 
@@ -279,9 +289,20 @@ class ImageBuildService:
 
     def fail_container_build(self, container_id: str, error: str, *, workspace_id: str) -> None:
         with self.context.database.session() as session:
-            record = ImageBuildRepository(session).get(container_id, workspace_id=workspace_id)
+            record = ImageBuildAttemptRepository(session).build_for_container(
+                container_id, workspace_id=workspace_id
+            )
         if record is not None:
-            self.fail(record.id, error, workspace_id=workspace_id)
+            self._persist_stream_event(
+                record,
+                plan_image_build_failure_event(
+                    error,
+                    image_id=record.image_id or "",
+                    build_id=record.id,
+                    python_version=record.image.python_version,
+                ),
+                workspace_id=workspace_id,
+            )
 
     def fail(
         self,
@@ -323,12 +344,18 @@ class ImageBuildService:
         error_message: str = "",
     ) -> ImageBuildRecord:
         record = self.get(build_id, workspace_id=workspace_id)
+        if record.execution_container_id != container_id:
+            raise ConflictError("image build execution attempt is no longer active")
         if record.image_id != image_id:
             raise ConflictError("reported image build result does not match the build image")
         if _is_terminal_build_status(record.status):
             return record
         if status not in _TERMINAL_BUILD_STATUSES:
             raise ConflictError("reported image build result is not terminal")
+        if status is BuildStatus.Failed and self.submission.retry_interrupted(
+            build_id, workspace_id=workspace_id
+        ):
+            return self.get(build_id, workspace_id=workspace_id)
 
         events = [
             plan_image_build_log_event(
@@ -365,6 +392,7 @@ class ImageBuildService:
             result,
             workspace_id=workspace_id,
             sensitive_values=(),
+            container_id=container_id,
         )
         completed = self.get(build_id, workspace_id=workspace_id)
         if completed.status is BuildStatus.Complete:
@@ -445,6 +473,68 @@ class ImageBuildService:
             )
 
     def reserve_image_archive(
+        self,
+        image_id: str,
+        *,
+        build_id: str,
+        workspace_id: str,
+        container_id: str,
+        object_key: str,
+        size_bytes: int,
+        sha256: str,
+        registry_ref: str,
+        manifest_digest: str,
+        architecture: str,
+        format_version: int,
+    ) -> ImageArchiveReservation:
+        settings = self.archive_settings
+        if settings is None:
+            raise UpstreamUnavailableError("image archive storage is not configured")
+        with self.context.database.session() as session:
+            attempts = ImageBuildAttemptRepository(session)
+            attempts.require_active(build_id, workspace_id=workspace_id, container_id=container_id)
+            reservation = self._reserve_image_archive(
+                image_id,
+                object_key=object_key,
+                size_bytes=size_bytes,
+                sha256=sha256,
+                registry_ref=registry_ref,
+                manifest_digest=manifest_digest,
+                architecture=architecture,
+                format_version=format_version,
+            )
+            if reservation.upload_required:
+                attempts.record_upload(
+                    container_id,
+                    bucket=reservation.archive.bucket,
+                    object_key=settings.physical_key(reservation.archive.object_key),
+                    expires_at=utc_now()
+                    + timedelta(
+                        seconds=settings.presign_seconds + IMAGE_ARCHIVE_UPLOAD_TIMEOUT_SECONDS + 60
+                    ),
+                )
+            return reservation
+
+    def confirm_archive_upload_lease(
+        self, *, build_id: str, workspace_id: str, container_id: str, bucket: str, object_key: str
+    ) -> None:
+        settings = self.archive_settings
+        if settings is None:
+            raise UpstreamUnavailableError("image archive storage is not configured")
+        with self.context.database.session() as session:
+            attempts = ImageBuildAttemptRepository(session)
+            attempts.require_active(build_id, workspace_id=workspace_id, container_id=container_id)
+            attempts.record_upload(
+                container_id,
+                bucket=bucket,
+                object_key=settings.physical_key(object_key),
+                expires_at=utc_now()
+                + timedelta(
+                    seconds=settings.presign_seconds + IMAGE_ARCHIVE_UPLOAD_TIMEOUT_SECONDS + 60
+                ),
+            )
+
+    def _reserve_image_archive(
         self,
         image_id: str,
         *,
@@ -566,12 +656,21 @@ class ImageBuildService:
         return sanitized
 
     def record_worker_progress(
-        self, build_id: str, *, workspace_id: str, after: int, messages: list[str]
+        self,
+        build_id: str,
+        *,
+        workspace_id: str,
+        container_id: str,
+        after: int,
+        messages: list[str],
     ) -> int:
         with self.context.database.session() as session:
+            base = ImageBuildAttemptRepository(session).require_active(
+                build_id, workspace_id=workspace_id, container_id=container_id
+            )
             logs = ImageBuildLogRepository(session)
             sequence = logs.append(
-                build_id, workspace_id=workspace_id, after=after, messages=messages
+                build_id, workspace_id=workspace_id, after=base + after, messages=messages
             )
             repository = ImageBuildRepository(session)
             record = repository.get(build_id, workspace_id=workspace_id)
@@ -579,7 +678,7 @@ class ImageBuildService:
                 record.status = BuildStatus.Running
                 record.started_at = record.started_at or utc_now()
                 repository.upsert(record, workspace_id=workspace_id)
-            return sequence
+            return sequence - base
 
     def stream_events(
         self,
@@ -589,23 +688,40 @@ class ImageBuildService:
         after: int = 0,
     ) -> list[ImageBuildStreamEventPlan]:
         resolved_workspace_id = self._resolve_workspace_id(workspace_id)
-        record = self.get(build_id, workspace_id=resolved_workspace_id)
         with self.context.database.session() as session:
+            record = ImageBuildAttemptRepository(session).progress(
+                build_id, workspace_id=resolved_workspace_id
+            )
             repository = ImageBuildLogRepository(session)
             messages = repository.page(build_id, after=after)
-            last = repository.last_sequence(build_id)
+            last = record.last_sequence
         events = [
             plan_image_build_log_event(
                 message,
                 image_id=record.image_id or "",
                 build_id=record.id,
-                python_version=record.image.python_version,
+                python_version=record.python_version,
             ).model_copy(update={"sequence": sequence})
             for sequence, message in messages
         ]
         if _is_terminal_build_status(record.status) and (not messages or messages[-1][0] == last):
             events.append(
-                self._stream_event_from_record(record).model_copy(update={"sequence": last + 1})
+                self._stream_event_from_record(
+                    self.get(build_id, workspace_id=resolved_workspace_id)
+                ).model_copy(update={"sequence": last + 1, "attempt_number": record.attempt_number})
+            )
+        elif _active_build_status(record.status):
+            events.append(
+                ImageBuildStreamEventPlan(
+                    kind=ImageBuildStreamEventKind.Progress,
+                    build_id=record.id,
+                    image_id=record.image_id or "",
+                    python_version=record.python_version,
+                    status=record.status,
+                    phase=record.phase,
+                    attempt_number=record.attempt_number,
+                    pending_reason=_build_pending_reason(record),
+                )
             )
         return events
 
@@ -759,6 +875,8 @@ class ImageBuildService:
         with self.context.database.session() as session:
             repository = ImageBuildRepository(session)
             current = repository.lock_build(record.id, workspace_id=workspace_id)
+            if current.execution_container_id != record.execution_container_id:
+                raise ConflictError("image build execution attempt is no longer active")
             if _is_terminal_build_status(current.status):
                 return current
             if event.message:
@@ -920,6 +1038,26 @@ def _image_build_failure_diagnostic(
         if any(marker in lowered for marker in ("error", "exception", "failed", "exit code")):
             return message.rstrip("\n")
     return sanitized_reason.rstrip("\n")
+
+
+def _build_pending_reason(record: ImageBuildProgress) -> TaskPendingReason | None:
+    if record.started_at is not None:
+        return None
+    if record.container_id is None:
+        return TaskPendingReason.Retry if record.attempt_number > 1 else TaskPendingReason.Queued
+    if record.worker_id:
+        return TaskPendingReason.StartingContainer
+    if record.acquisition_status == "at_limit":
+        return TaskPendingReason.CapacityLimit
+    if record.owns_capacity and record.acquisition_status in {
+        "intent",
+        "requested",
+        "existing_pending",
+    }:
+        return TaskPendingReason.ProvisioningCompute
+    return (
+        TaskPendingReason.CapacityUnavailable if record.requested_at else TaskPendingReason.Queued
+    )
 
 
 def _is_terminal_build_status(status: BuildStatus) -> bool:

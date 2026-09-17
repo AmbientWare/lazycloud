@@ -6,8 +6,9 @@ from uuid import uuid4
 
 from database.mappers.images import image_build_from_table
 from database.tables.images import ImageBuildRequestTable, ImageBuildTable
+from database.tables.orchestration import ContainerTable
 from shared.image_building.records import ImageBuildRecord
-from sqlalchemy import select, text, update
+from sqlalchemy import exists, or_, select, text, update
 from sqlalchemy.orm import Session, load_only
 
 
@@ -116,6 +117,13 @@ class ImageBuildDispatchRepository:
             .values(dispatch_payload=payload, dispatch_after=now)
         )
 
+    def replace_payload(self, build_id: str, payload: str) -> None:
+        self.session.execute(
+            update(ImageBuildTable)
+            .where(ImageBuildTable.id == build_id)
+            .values(dispatch_payload=payload)
+        )
+
     def claim_due(
         self,
         *,
@@ -176,7 +184,13 @@ class ImageBuildDispatchRepository:
                     ImageBuildTable.dispatched_at.is_not(None)
                     | ImageBuildTable.dispatch_payload.is_(None)
                 ),
-                ImageBuildTable.updated_at < before,
+                or_(
+                    ImageBuildTable.updated_at < before,
+                    exists().where(
+                        ContainerTable.id == ImageBuildTable.execution_container_id,
+                        ContainerTable.termination_reason == "PREEMPTED",
+                    ),
+                ),
             )
             .order_by(ImageBuildTable.updated_at)
             .limit(limit)

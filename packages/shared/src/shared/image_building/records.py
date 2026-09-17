@@ -31,6 +31,8 @@ class ImageBuildPhase(StringEnum):
 
 class ImageBuildRecord(ContractModel):
     id: str
+    execution_container_id: str | None = None
+    attempt_number: int = Field(default=0, ge=0, le=2)
     image: ImageSpec
     fingerprint: str
     image_id: str | None = None

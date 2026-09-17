@@ -136,6 +136,8 @@ class ImageBuildTable(IdTable, DatabaseBase):
             name="ck_image_builds_archive_format_version",
         ),
         Index("ix_image_builds_context_object", "context_object_id"),
+        Index("uq_image_builds_execution_container", "execution_container_id", unique=True),
+        CheckConstraint("attempt_number BETWEEN 0 AND 2", name="ck_image_builds_attempt_number"),
         Index(
             "ix_image_builds_cleanup_due",
             "execution_cleanup_after",
@@ -189,6 +191,10 @@ class ImageBuildTable(IdTable, DatabaseBase):
         nullable=True,
     )
     image_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    execution_container_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    attempt_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     cache_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     archive_path_value: Mapped[str] = mapped_column(Text, nullable=False, default="")
     archive_path_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -230,6 +236,37 @@ class ImageBuildTable(IdTable, DatabaseBase):
     dispatch_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dispatch_claim_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ImageBuildAttemptTable(DatabaseBase):
+    __tablename__ = "image_build_attempts"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("build_id", "number", name="uq_image_build_attempts_number"),
+        CheckConstraint("number BETWEEN 1 AND 2", name="ck_image_build_attempts_number"),
+        CheckConstraint("log_sequence_base >= 0", name="ck_image_build_attempts_log_base"),
+        Index(
+            "ix_image_build_attempts_upload_cleanup",
+            "upload_expires_at",
+            postgresql_where=text("upload_object_key IS NOT NULL"),
+        ),
+        Index(
+            "ix_image_build_attempts_cleanup_due",
+            "cleanup_after",
+            postgresql_where=text("cleanup_after IS NOT NULL"),
+        ),
+    )
+    container_id: Mapped[str] = mapped_column(uuid_type, primary_key=True)
+    build_id: Mapped[str] = mapped_column(
+        uuid_type, ForeignKey("image_builds.id", ondelete="CASCADE"), nullable=False
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleanup_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    log_sequence_base: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    upload_object_key: Mapped[str | None] = mapped_column(Text)
+    upload_bucket: Mapped[str | None] = mapped_column(String(255))
+    upload_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CheckpointTable(IdTable, DatabaseBase):

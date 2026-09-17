@@ -1775,10 +1775,15 @@ class WorkerRepositoryService:
             )
         except NotFoundError as exc:
             raise AuthorizationDeniedError("image archive upload build is unavailable") from exc
-        if build.image_id != request.image_id or build.status not in {
-            BuildStatus.Pending,
-            BuildStatus.Running,
-        }:
+        if (
+            build.execution_container_id != request.container_id
+            or build.image_id != request.image_id
+            or build.status
+            not in {
+                BuildStatus.Pending,
+                BuildStatus.Running,
+            }
+        ):
             raise AuthorizationDeniedError(
                 "image archive upload build ownership is no longer active"
             )
@@ -1798,6 +1803,9 @@ class WorkerRepositoryService:
             raise UpstreamUnavailableError("image archive storage is not configured")
         reservation = dependencies.images.reserve_image_archive(
             request.image_id,
+            build_id=request.build_id,
+            workspace_id=request.workspace_id,
+            container_id=request.container_id,
             object_key=object_key,
             size_bytes=request.archive_size_bytes,
             sha256=request.archive_sha256,
@@ -1819,6 +1827,14 @@ class WorkerRepositoryService:
             or credentials.object_key != reservation.archive.object_key
         ):
             raise RuntimeError("image archive upload descriptor does not match reservation")
+        if credentials.ok and reservation.upload_required:
+            dependencies.images.confirm_archive_upload_lease(
+                build_id=request.build_id,
+                workspace_id=request.workspace_id,
+                container_id=request.container_id,
+                bucket=credentials.bucket,
+                object_key=credentials.object_key,
+            )
         return GetImageArchiveUploadCredentialsResponse(credentials=credentials)
 
     def get_image_build_credentials(
@@ -1895,6 +1911,7 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError("image build context build is unavailable") from exc
         if (
             build.image.context_object_id != request.object_id
+            or build.execution_container_id != request.container_id
             or build.status not in {BuildStatus.Pending, BuildStatus.Running}
             or (state.image_id and state.image_id != build.image_id)
         ):
@@ -1944,6 +1961,7 @@ class WorkerRepositoryService:
         sequence = self.dependencies.images.record_worker_progress(
             request.build_id,
             workspace_id=request.workspace_id,
+            container_id=request.container_id,
             after=request.after,
             messages=request.logs,
         )

@@ -40,6 +40,7 @@ class ExecutionContainerService(Protocol):
     def reserve_image_build_container(
         self,
         *,
+        build_id: str,
         container_id: str,
         workspace_id: str,
         image_id: str,

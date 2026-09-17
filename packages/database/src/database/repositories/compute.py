@@ -59,6 +59,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -99,6 +100,16 @@ class ComputeCapacityOperationSizingRecord:
     owns_capacity: bool
     failure_count: int
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeOfferState:
+    id: str
+    desired_machines: int
+    observed_machines: int
+    phase: ComputeUnitPhase
+    provider_state: ComputeUnitProviderState
+    registration_timeout_seconds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +423,65 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
 @dataclass(slots=True)
 class ComputeUnitRepository:
     session: Session
+
+    def offer_states(
+        self,
+        identities: Collection[tuple[str, str, str, str, int]],
+    ) -> dict[tuple[str, str, str, str, int], ComputeOfferState]:
+        if not identities:
+            return {}
+        table = ComputeUnitTable
+        rows = self.session.execute(
+            select(
+                table.workspace_id,
+                table.provider_ref,
+                table.region,
+                table.capability_key,
+                table.root_volume_gib,
+                table.id,
+                table.desired_machines,
+                table.observed_machines,
+                table.phase,
+                table.degraded_reason,
+                table.degraded_at,
+                table.registration_timeout_seconds,
+            ).where(
+                tuple_(
+                    table.workspace_id,
+                    table.provider_ref,
+                    table.region,
+                    table.capability_key,
+                    table.root_volume_gib,
+                ).in_(identities)
+            )
+        ).tuples()
+        return {
+            (workspace, provider, region, capability, volume): ComputeOfferState(
+                id=identity,
+                desired_machines=desired,
+                observed_machines=observed,
+                phase=ComputeUnitPhase(phase),
+                registration_timeout_seconds=timeout,
+                provider_state=ComputeUnitProviderState(
+                    degraded_reason=reason,
+                    degraded_at=to_utc_or_none(degraded_at),
+                ),
+            )
+            for (
+                workspace,
+                provider,
+                region,
+                capability,
+                volume,
+                identity,
+                desired,
+                observed,
+                phase,
+                reason,
+                degraded_at,
+                timeout,
+            ) in rows
+        }
 
     def upsert(self, record: ComputeUnitRecord) -> ComputeUnitRecord:
         # The immutability comparison below is by identity, and it runs before the
@@ -1962,6 +2032,7 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
                 ComputeMachineEnrollmentTable.capacity_state.in_(
                     (
+                        AgentCapacityState.AtRisk.value,
                         AgentCapacityState.Draining.value,
                         AgentCapacityState.Preempting.value,
                         AgentCapacityState.Cordoned.value,

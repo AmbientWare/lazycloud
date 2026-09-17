@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from networking.internal_http import InternalHttpClient
 from pydantic import AwareDatetime, Field
 from shared.contracts import ContractModel
+from shared.image_building.constants import IMAGE_ARCHIVE_UPLOAD_TIMEOUT_SECONDS
 from shared.image_building.credentials import registry_host_for_image
 from shared.scheduling import WorkerExecutionRequest
 from shared.timestamps import utc_now
@@ -79,7 +80,6 @@ from worker.repository_payloads import (
 )
 
 ImageBuildLog = Callable[[str], None]
-IMAGE_ARCHIVE_UPLOAD_TIMEOUT_SECONDS = 120
 MAX_IMAGE_BUILD_CONTEXT_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_BUILD_CONTEXT_MEMBERS = 10_000
 MAX_IMAGE_BUILD_CONTEXT_MEMBER_BYTES = 128 * 1024 * 1024

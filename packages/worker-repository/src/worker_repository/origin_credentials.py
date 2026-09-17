@@ -232,6 +232,7 @@ class WorkerCacheOriginCredentialService:
             settings.bucket,
             image_archive_object_key(
                 request.image_id,
+                container_id=request.container_id,
                 extension=self.config.image_archive_extension,
             ),
         )

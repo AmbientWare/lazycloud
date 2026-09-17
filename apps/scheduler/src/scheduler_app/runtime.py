@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import TracebackType
 
+from compute.capacity_recovery import CAPACITY_RECOVERY_WAKE_SCOPE
 from compute.state import RedisComputeStateRepository
 from control.custom_domains import CustomDomainService
 from coordination.redis_client import RedisClient
@@ -222,9 +223,11 @@ class SchedulerRuntime:
                         execution_services.containers,
                         image_build_container_settings,
                     ),
+                    execution_services.object_storage.object_client,
                 ),
                 containers=dispatch_requests,
                 dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
+                capacity_wake=RedisWakeSignal(redis_client, CAPACITY_RECOVERY_WAKE_SCOPE),
                 autoscaling_targets=AutoscalingTargetService(scheduler_services.context),
                 function_autoscaler=AutoscalingDriver(
                     scheduler_services,

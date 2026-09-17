@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 IMAGE_ARCHIVE_KEY_PREFIX = "image-archives"
+IMAGE_ARCHIVE_UPLOAD_TIMEOUT_SECONDS = 120
 
 
-def image_archive_object_key(image_id: str, *, extension: str) -> str:
-    """The one object key for an image's archive.
+def image_archive_object_key(image_id: str, *, container_id: str, extension: str) -> str:
+    """Isolate outstanding upload capabilities belonging to different attempts."""
 
-    Content-addressed by image id alone: no workspace, because the archive is
-    global, and no build id, because two builds of the same image produce the same
-    bytes and keying by build wrote a full duplicate copy for each.
-    """
-
-    if not image_id:
-        raise ValueError("image archive key requires an image id")
-    return f"{IMAGE_ARCHIVE_KEY_PREFIX}/{image_id}.{extension.lstrip('.')}"
+    if not image_id or not container_id:
+        raise ValueError("image archive key requires an image and execution container")
+    return f"{IMAGE_ARCHIVE_KEY_PREFIX}/{image_id}/{container_id}.{extension.lstrip('.')}"
 
 
 DEFAULT_IMAGE_BASE = "python:3.12-slim"

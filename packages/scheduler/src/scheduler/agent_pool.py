@@ -162,7 +162,7 @@ class AgentWorkerPoolController:
         if (
             machine.workspace_id == self.config.workspace_id
             and _machine_owned_by(machine, self.config)
-            and machine.capacity_state is AgentCapacityState.Draining
+            and machine.capacity_state in {AgentCapacityState.AtRisk, AgentCapacityState.Draining}
             and worker is not None
         ):
             if worker.status not in {

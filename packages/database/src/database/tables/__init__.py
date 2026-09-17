@@ -36,6 +36,7 @@ from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
 from database.tables.billing_preferences import BillingPreferencesTable
 from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
 from database.tables.billing_webhook_events import BillingWebhookEventTable
+from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import (
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
@@ -73,6 +74,7 @@ from database.tables.identity import (
 from database.tables.images import (
     CheckpointTable,
     ImageArchiveTable,
+    ImageBuildAttemptTable,
     ImageBuildTable,
     ImageTable,
 )
@@ -122,6 +124,7 @@ __all__ = [
     "BillingPreferencesTable",
     "BillingWebhookEventTable",
     "CacheEntryTable",
+    "CapacityRecoveryTable",
     "CheckpointTable",
     "ComputeCapacityOperationTable",
     "ComputeJoinCredentialTable",
@@ -145,6 +148,7 @@ __all__ = [
     "IdentityAdminRecoveryRequestTable",
     "IdentityBootstrapClaimTable",
     "ImageArchiveTable",
+    "ImageBuildAttemptTable",
     "ImageBuildTable",
     "ImageTable",
     "LogTable",

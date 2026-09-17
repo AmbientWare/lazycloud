@@ -423,6 +423,7 @@ class SchedulerWorkloadControls:
     image_builds: SchedulerBuildSubmissions | None = None
     containers: SchedulerContainerRequestService | None = None
     dispatch_wake: WakeSignalWaiter | None = None
+    capacity_wake: WakeSignalWaiter | None = None
     function_autoscaler: AutoscalingDriver | None = None
     endpoints: AutoscalingDriver | None = None
     pods: AutoscalingDriver | None = None
@@ -841,6 +842,13 @@ class Scheduler:
                 billing_enforcement_stopped_count=billing_enforcement.stopped_count,
                 billing_enforcement_failure_count=billing_enforcement.failed_count,
             )
+        try:
+            self.runtime_services.compute.reconcile_capacity_recovery(
+                now=now or utc_now(),
+                limit=container_limit,
+            )
+        except Exception:
+            LOGGER.exception("scheduler capacity recovery failed")
         self.container_scheduler.acquire_capacity(now=now, limit=container_limit)
         return SchedulerRunResult(
             cron_job_runs=cron_job_runs,

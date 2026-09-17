@@ -17,9 +17,15 @@ class ComputeMachineEnrollmentStatus(StringEnum):
 
 class AgentCapacityState(StringEnum):
     Available = "available"
+    AtRisk = "at_risk"
     Draining = "draining"
     Preempting = "preempting"
     Cordoned = "cordoned"
+
+
+class CapacitySignalKind(StringEnum):
+    Rebalance = "rebalance"
+    Interruption = "interruption"
 
 
 class AgentWorkerSlotStatus(StringEnum):
@@ -113,6 +119,7 @@ class ComputePreflightCheck(ContractModel):
 __all__ = [
     "AgentCapacityState",
     "AgentWorkerSlotStatus",
+    "CapacitySignalKind",
     "ComputeCredentialStatus",
     "ComputeMachineEnrollmentStatus",
     "ComputePreflightCheck",

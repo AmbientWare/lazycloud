@@ -14,15 +14,15 @@ concurrency, terminal failure, publication, and cleanup explicit: a build that
 dies must not leave a half-published image that later loads as though it were
 whole.
 
-New build requests are preemptible. Dispatch retries preserve the submitted
-request's recorded choice. A running build whose worker stops reporting becomes
-failed, queues cleanup and requires a fresh submission to retry; it does not
-restart automatically. Archive publication remains fenced by build ownership.
+New build requests are preemptible. Confirmed provider interruption permits one
+automatic restart when durable inputs remain available and the original
+submission deadline has not passed. Build-command failure and an unexplained
+progress timeout fail the build. Cancellation prevents another attempt.
 
-A build is a container the platform placed, and is admitted, recorded, metered
-and billed as one. It carries the build's own id as its container id, so the
-durable `containers` row, the `container_billing_shapes` placement written
-against it, and the usage the worker reports all name one thing; a separate id
-is one the ledger cannot resolve, and no row at all is compute nothing can
-price. A build that fails held the capacity it was given for as long as it ran
-and is billed for it.
+A public build owns up to two durable execution attempts. Each attempt has its
+own container row, billing placement, log offset and upload key. Credentials,
+progress, results and publication require the current execution container.
+Retired containers cannot write into the successor's attempt. Cleanup names the
+retired container and waits for upload capabilities to expire before deleting
+unpublished bytes; globally retained image archives survive attempt cleanup.
+Each attempt is billed for the compute it used, including a failed attempt.

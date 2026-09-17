@@ -124,7 +124,7 @@ class ImageControlClient:
                         response = event.response
                         if response.build_id != build_id:
                             raise ValueError("image build stream changed build identity")
-                        if event.sequence > cursor or event.sequence == 0:
+                        if response.done or event.sequence > cursor or event.sequence == 0:
                             cursor = max(cursor, event.sequence)
                             retry.reset()
                             yield response

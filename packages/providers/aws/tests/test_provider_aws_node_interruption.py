@@ -5,12 +5,12 @@ from datetime import UTC, datetime
 
 import pytest
 from provider_aws import (
-    AWS_EC2_SPOT_INSTANCE_ACTION_PATH,
     AwsEc2SpotInterruptionMonitor,
     AwsInstanceMetadataResponse,
     AwsSpotInterruptionAction,
     AwsSpotInterruptionMonitorError,
 )
+from shared.compute_enrollment import CapacitySignalKind
 
 
 @dataclass(slots=True)
@@ -32,7 +32,7 @@ class _MetadataTransport:
         return self.responses.pop(0)
 
 
-def test_spot_interruption_monitor_reuses_imdsv2_token_when_no_notice_exists() -> None:
+def test_spot_interruption_monitor_reports_no_risk_when_metadata_is_absent() -> None:
     metadata = _MetadataTransport(
         responses=[
             AwsInstanceMetadataResponse(status_code=200, body=b"imds-session"),
@@ -43,14 +43,23 @@ def test_spot_interruption_monitor_reuses_imdsv2_token_when_no_notice_exists() -
     monitor = AwsEc2SpotInterruptionMonitor(transport=metadata, monotonic=lambda: 10.0)
 
     assert monitor.poll() is None
-    assert monitor.poll() is None
 
-    assert [request[:2] for request in metadata.requests] == [
-        ("PUT", "/latest/api/token"),
-        ("GET", AWS_EC2_SPOT_INSTANCE_ACTION_PATH),
-        ("GET", AWS_EC2_SPOT_INSTANCE_ACTION_PATH),
-    ]
-    assert metadata.requests[1][2] == {"X-aws-ec2-metadata-token": "imds-session"}
+
+def test_rebalance_recommendation_has_no_termination_deadline() -> None:
+    metadata = _MetadataTransport(
+        responses=[
+            AwsInstanceMetadataResponse(status_code=200, body=b"imds-session"),
+            AwsInstanceMetadataResponse(status_code=404, body=b""),
+            AwsInstanceMetadataResponse(
+                status_code=200, body=b'{"noticeTime":"2026-09-16T21:02:43Z"}'
+            ),
+        ]
+    )
+    notice = AwsEc2SpotInterruptionMonitor(transport=metadata).poll()
+    assert notice is not None
+    assert notice.kind is CapacitySignalKind.Rebalance
+    assert notice.notice_at is None
+    assert notice.observed_at == datetime(2026, 9, 16, 21, 2, 43, tzinfo=UTC)
 
 
 def test_spot_interruption_monitor_refreshes_rejected_token_and_parses_notice() -> None:

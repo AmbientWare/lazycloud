@@ -68,6 +68,8 @@ def image_build_from_table(row: ImageBuildTable) -> ImageBuildRecord:
         cache_metadata["image_archive_format_version"] = str(row.image_archive_format_version)
     return ImageBuildRecord(
         id=str(row.id),
+        execution_container_id=row.execution_container_id,
+        attempt_number=row.attempt_number,
         image=ImageSpec.model_validate(image_definition),
         fingerprint=row.fingerprint,
         image_id=row.image_id,

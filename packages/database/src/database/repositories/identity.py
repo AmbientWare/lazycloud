@@ -181,10 +181,16 @@ class IdentityBootstrapClaimRepository:
         return bool(
             self.session.scalar(
                 select(
-                    exists().where(
-                        TokenTable.kind == TokenKind.Admin.value,
-                        TokenTable.status == TokenStatus.Active.value,
-                        TokenTable.disabled_by_admin.is_(False),
+                    or_(
+                        exists().where(
+                            UserTable.role == PlatformRole.Administrator.value,
+                            UserTable.status == UserStatus.Active.value,
+                        ),
+                        exists().where(
+                            TokenTable.kind == TokenKind.Admin.value,
+                            TokenTable.status == TokenStatus.Active.value,
+                            TokenTable.disabled_by_admin.is_(False),
+                        ),
                     )
                 )
             )

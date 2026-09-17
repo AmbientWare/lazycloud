@@ -72,7 +72,13 @@ export const poolJoinCommandResponseSchema = z
 const machineReadinessPhaseSchema = z.enum(["joining", "ready", "blocked", "offline", "revoked"]);
 
 const machinePreflightSeveritySchema = z.enum(["info", "warning", "error"]);
-const agentCapacityStateSchema = z.enum(["available", "draining", "preempting", "cordoned"]);
+const agentCapacityStateSchema = z.enum([
+  "available",
+  "at_risk",
+  "draining",
+  "preempting",
+  "cordoned",
+]);
 
 const machinePreflightCheckSchema = z
   .object({
