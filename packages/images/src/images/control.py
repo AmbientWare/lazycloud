@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import shlex
 import tempfile
 import time
 from collections.abc import Generator, Iterator
@@ -506,16 +507,13 @@ def _image_spec_from_build(
 
 
 def _build_step(step: BuildStep) -> ImageBuildStep:
-    kind = step.type.strip().lower()
-    if kind == ImageBuildStepKind.Pip.value:
-        return ImageBuildStep(kind=ImageBuildStepKind.Pip, args=step.command.split())
-    if kind == ImageBuildStepKind.UvProject.value:
-        return ImageBuildStep(kind=ImageBuildStepKind.UvProject, args=step.command.split())
-    if kind == ImageBuildStepKind.Apt.value:
-        return ImageBuildStep(kind=ImageBuildStepKind.Apt, args=step.command.split())
-    if kind == ImageBuildStepKind.Micromamba.value:
-        return ImageBuildStep(kind=ImageBuildStepKind.Micromamba, args=step.command.split())
-    return ImageBuildStep(kind=ImageBuildStepKind.Shell, command=step.command)
+    try:
+        kind = ImageBuildStepKind(step.type)
+    except ValueError as exc:
+        raise InvalidInputError(f"unsupported image build step: {step.type}") from exc
+    if kind is ImageBuildStepKind.Shell:
+        return ImageBuildStep(kind=kind, command=step.command)
+    return ImageBuildStep(kind=kind, args=shlex.split(step.command), groups=step.groups)
 
 
 def _source_image_for_spec(spec: ImageSpec) -> str:

@@ -13,6 +13,7 @@ from shared.image_building.records import BuildStatus, ImageBuildPhase
 class BuildStep(HttpModel):
     type: str = ""
     command: str = ""
+    groups: list[str] = Field(default_factory=list)
 
 
 class VerifyImageBuildRequest(HttpModel):

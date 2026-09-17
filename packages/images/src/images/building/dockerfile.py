@@ -3,18 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable
+import shlex
 
 from pydantic import JsonValue
-from shared.image_building.authoring import ImageBuildStepKind, ImageSpec
+from shared.image_building.authoring import PROJECT_BUILD_STEP_KINDS, ImageBuildStepKind, ImageSpec
 from shared.image_building.context import fingerprint_build_context
 from shared.image_building.credentials import dedupe_names, image_secret_names
 from shared.image_building.planning import ImageBuildPlan
+from shared.image_building.python import normalize_python_version
 from shared.image_building.requirements import sanitize_python_packages
 
 from images.building.commands import _normalize_step, plan_image_build_commands
 from images.building.constants import DEFAULT_IMAGE_BASE
 from images.building.models import ImageInstallCommandMode, PythonRuntimeSetupAction
+from images.building.projects import PROJECT_ENVIRONMENT
 from images.building.python_runtime import plan_python_runtime_setup
 
 IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 2
@@ -68,13 +70,22 @@ def render_image_dockerfile(image: ImageSpec) -> str:
         mode=install_mode,
         python_executable=python_setup.python_executable,
     ):
-        if build_command.kind is ImageBuildStepKind.UvProject:
-            lines.extend(_uv_project_copy_lines(build_command.args))
-            lines.append("ENV UV_PROJECT_ENVIRONMENT=/opt/lazycloud/.venv")
+        project = build_command.kind in PROJECT_BUILD_STEP_KINDS
+        virtualenv = project and build_command.kind is not ImageBuildStepKind.MicromambaEnvironment
+        if project:
+            lines.append('COPY ["./", "./"]')
+        if virtualenv:
+            lines.append(f"ENV UV_PROJECT_ENVIRONMENT={PROJECT_ENVIRONMENT}")
         lines.append(f"RUN {build_command.command}")
-        if build_command.kind is ImageBuildStepKind.UvProject:
+        if virtualenv:
             lines.append("ENV VIRTUAL_ENV=${UV_PROJECT_ENVIRONMENT}")
             lines.append("ENV PATH=${VIRTUAL_ENV}/bin:${PATH}")
+
+    if any(step.kind in PROJECT_BUILD_STEP_KINDS for step in image.build_steps):
+        release = normalize_python_version(image.python_version).removeprefix("micromamba")
+        parts = tuple(int(part) for part in release.split("."))
+        check = f"import sys; assert sys.version_info[:{len(parts)}] == {parts!r}, sys.version"
+        lines.append(f"RUN python -c {shlex.quote(check)}")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -126,11 +137,6 @@ def _append_env_and_build_args(lines: list[str], image: ImageSpec) -> None:
 
     for secret in image_secret_names(image.secrets):
         lines.append(f"ARG {secret}")
-
-
-def _uv_project_copy_lines(args: Iterable[str]) -> list[str]:
-    project_dir = next((value for value in args if value.strip()), ".")
-    return [f"COPY {json.dumps([project_dir.rstrip('/') + '/', './'])}"]
 
 
 def _docker_value(value: str) -> str:

@@ -3,11 +3,12 @@ from __future__ import annotations
 import shlex
 
 from shared.image_building.authoring import (
+    PROJECT_BUILD_STEP_KINDS,
     ImageBuildStep,
     ImageBuildStepKind,
     ImageSpec,
-    PythonVersion,
 )
+from shared.image_building.python import normalize_python_version, python_minor_version
 
 from images.building.commands import _normalize_step
 from images.building.constants import (
@@ -44,8 +45,11 @@ def plan_python_runtime_setup(image: ImageSpec) -> PythonRuntimeSetupPlan:
             reason="Python setup is ignored and no package install steps require it",
         )
 
-    if _is_micromamba_python_version(python_version):
-        minor = PythonVersion(python_version.removeprefix("micromamba")).value
+    if python_version.startswith("micromamba"):
+        release = normalize_python_version(python_version).removeprefix("micromamba")
+        environment_file = any(
+            step.kind is ImageBuildStepKind.MicromambaEnvironment for step in image.build_steps
+        )
         return PythonRuntimeSetupPlan(
             action=PythonRuntimeSetupAction.ConfigureMicromamba,
             requires_python=True,
@@ -56,8 +60,10 @@ def plan_python_runtime_setup(image: ImageSpec) -> PythonRuntimeSetupPlan:
                 "ENV PATH=${MAMBA_ROOT_PREFIX}/bin:${PATH}",
                 *([UV_COPY_INSTRUCTION] if requires_uv else []),
             ],
-            commands=[
-                f"micromamba create -y -n base -c conda-forge python={minor} pip"
+            commands=[]
+            if environment_file
+            else [
+                f"micromamba create -y -n base -c conda-forge python={release} pip"
                 " && micromamba clean --all --yes",
                 _bytecode_compile_command("python"),
             ],
@@ -83,14 +89,10 @@ def plan_python_runtime_setup(image: ImageSpec) -> PythonRuntimeSetupPlan:
             commands=[_bytecode_compile_command("python")],
             reason="no Python version configured for managed installation",
         )
-    supported_versions = {version.value for version in PythonVersion}
-    if python_version not in supported_versions:
-        supported = ", ".join(sorted(supported_versions))
-        msg = f"managed Python version must be one of {supported}; received {python_version!r}"
-        raise ValueError(msg)
+    python_version = normalize_python_version(python_version)
 
     quoted_version = shlex.quote(python_version)
-    runtime_python = f"/usr/local/bin/python{python_version}"
+    runtime_python = f"/usr/local/bin/python{python_minor_version(python_version)}"
     return PythonRuntimeSetupPlan(
         action=PythonRuntimeSetupAction.InstallManagedPython,
         requires_python=True,
@@ -112,11 +114,12 @@ def _bytecode_compile_command(python_executable: str) -> str:
 
 def _managed_python_setup_command(python_version: str, *, quoted_version: str) -> str:
     prefix_python = f"{MANAGED_PYTHON_PREFIX}/bin/python"
-    base_python = f"/usr/local/bin/python{python_version}"
+    base_python = f"/usr/local/bin/python{python_minor_version(python_version)}"
     base_pip = "/usr/local/bin/pip"
-    major, minor = python_version.split(".", maxsplit=1)
+    release = tuple(int(part) for part in python_version.split("."))
     version_check = shlex.quote(
-        f"import sys; raise SystemExit(0 if sys.version_info[:2] == ({major}, {minor}) else 1)"
+        f"import sys; raise SystemExit(0 if sys.version_info[:{len(release)}] "
+        f"== {release!r} else 1)"
     )
     mismatch = shlex.quote(
         f"existing {MANAGED_PYTHON_PREFIX} interpreter does not match {base_python}"
@@ -151,20 +154,17 @@ def _managed_python_setup_command(python_version: str, *, quoted_version: str) -
 
 def _managed_python_link_command(python_version: str) -> str:
     prefix_python = f"{MANAGED_PYTHON_PREFIX}/bin/python"
+    minor = python_minor_version(python_version)
     return (
         'runtime_link() { source_path="$1"; target_path="$2"; '
         'if [ -e "$target_path" ] || [ -L "$target_path" ]; then '
         'if [ "$source_path" -ef "$target_path" ]; then return 0; fi; '
         'rm -f "$target_path"; fi; ln -s "$source_path" "$target_path"; }; '
         f"runtime_link {prefix_python} /usr/local/bin/python && "
-        f"runtime_link {prefix_python} /usr/local/bin/python{python_version} && "
+        f"runtime_link {prefix_python} /usr/local/bin/python{minor} && "
         f'runtime_bin=$(dirname "$(readlink -f {prefix_python})") && '
         '[ -x "$runtime_bin/pip" ] && runtime_link "$runtime_bin/pip" /usr/local/bin/pip'
     )
-
-
-def _is_micromamba_python_version(python_version: str) -> bool:
-    return "micromamba" in python_version.lower()
 
 
 def _image_requires_python_runtime(image: ImageSpec) -> bool:
@@ -176,15 +176,12 @@ def _image_requires_python_runtime(image: ImageSpec) -> bool:
 
 
 def _image_requires_uv(image: ImageSpec) -> bool:
-    return any(
-        _normalize_step(step).kind is ImageBuildStepKind.UvProject for step in image.build_steps
-    )
+    return any(_normalize_step(step).kind in PROJECT_BUILD_STEP_KINDS for step in image.build_steps)
 
 
 def _step_requires_python(step: ImageBuildStep) -> bool:
-    return step.kind in {
+    return step.kind in PROJECT_BUILD_STEP_KINDS | {
         ImageBuildStepKind.Pip,
-        ImageBuildStepKind.UvProject,
         ImageBuildStepKind.Micromamba,
     } and bool(step.args)
 
