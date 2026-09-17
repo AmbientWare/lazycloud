@@ -271,8 +271,8 @@ Never copy local AWS credentials into workloads, images, or GitHub secrets.
 `0001_relational_baseline` is deployed and frozen. Schema changes add an Alembic
 revision chained onto the previous one. A deployed database records the revision
 it reached, so changing that file invalidates its history and refuses the next
-deploy. The completed owner-authorized reset is recorded in
-`deploy/database-reset.md`; it does not authorize another production reset.
+deploy. The completed owner-authorized reset in PR #295 does not authorize
+another production reset.
 Local development state is the Compose databases, volumes, and stacks;
 resetting and re-bootstrapping those is ordinary development work.
 

@@ -69,7 +69,7 @@ Migrate an existing built-in pool in stages. Install and validate custom
 capacity first, deploy the replica placement rules through Argo, then drain
 selected old nodes one at a time. Disable the built-in pool only after custom
 capacity is serving and replacement provisioning is proven. Preserve node
-access, the cluster and all data. [Migration acceptance](../SPOT_PLAN.md)
+access, the cluster and all data. [Migration acceptance](../spot-capacity.md)
 
 When adopting an existing built-in node role, import its access entry and
 `AmazonEKSAutoNodePolicy` association into `aws_eks_access_entry.node` and
