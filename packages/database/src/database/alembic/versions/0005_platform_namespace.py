@@ -158,6 +158,11 @@ def upgrade() -> None:
         )
     """)
     op.execute("""
+        UPDATE compute_units SET provider_attributes = provider_attributes ||
+            jsonb_build_object('namespace_id', workspace_id::text)
+        WHERE provider_ref LIKE 'aws:%' AND capacity_mode = 'pooled'
+    """)
+    op.execute("""
         UPDATE compute_units SET workspace_id = (SELECT id FROM workspaces WHERE kind = 'platform'),
             provider_connection_id = NULL
         WHERE platform_fleet

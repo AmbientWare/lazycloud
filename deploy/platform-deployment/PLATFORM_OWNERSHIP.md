@@ -4,6 +4,9 @@ Revision `0005_platform_namespace` moves platform capacity into an application
 namespace. Tenant workspaces, users, billing, workloads, and customer cloud
 connections retain their ownership. Platform unit IDs, names, generations,
 provider resources, recovery records, and cleanup history remain intact.
+AWS checkpoints retain their original resource namespace for names and tags,
+including customer-owned pools. Database ownership can change without creating
+a second fleet or losing the first fleet's cleanup identity.
 
 This upgrade requires downtime. Stop old writers before migration. After the
 ownership change, recover by moving forward with a corrected build; an older

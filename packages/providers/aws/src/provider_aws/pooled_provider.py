@@ -18,7 +18,7 @@ from compute.providers import (
     ProviderUnitRequest,
     ProviderUnitSnapshot,
 )
-from pydantic import ValidationError
+from pydantic import Field
 from shared.aws_connections import AwsAccountNetwork
 from shared.compute_policy import (
     ComputeUnitProviderState,
@@ -55,6 +55,11 @@ _PHASES = {
     AwsManagedPoolPhase.Deleting: ProviderCapacityPhase.Deleting,
     AwsManagedPoolPhase.Deleted: ProviderCapacityPhase.Deleted,
 }
+
+
+class AwsPooledUnitState(AwsManagedPoolResourceIds):
+    namespace_id: str = Field(min_length=1)
+    """Immutable namespace used in AWS resource names and ownership tags."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +241,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
             self._spec(request),
             self._resource_ids(request),
         )
-        return self._snapshot(provisioner, snapshot)
+        return self._snapshot(provisioner, snapshot, namespace_id=self._namespace_id(request))
 
     def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
@@ -244,7 +249,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
             self._spec(request),
             self._resource_ids(request),
         )
-        return self._snapshot(provisioner, snapshot)
+        return self._snapshot(provisioner, snapshot, namespace_id=self._namespace_id(request))
 
     def set_unit_capacity(
         self,
@@ -273,7 +278,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
                     max_nodes=max_machines,
                 )
                 snapshot = provisioner.describe(spec, snapshot.resource_ids)
-        return self._snapshot(provisioner, snapshot)
+        return self._snapshot(provisioner, snapshot, namespace_id=self._namespace_id(request))
 
     def release_machine(
         self,
@@ -288,7 +293,11 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
             desired_nodes = min(desired_nodes, observed.desired_nodes)
         provisioner.scale(spec, desired_nodes=desired_nodes, max_nodes=spec.max_nodes)
         provisioner.release_instance(spec, provider_instance_id)
-        return self._snapshot(provisioner, provisioner.describe(spec, self._resource_ids(request)))
+        return self._snapshot(
+            provisioner,
+            provisioner.describe(spec, self._resource_ids(request)),
+            namespace_id=self._namespace_id(request),
+        )
 
     def delete_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         provisioner = self._provisioner(request.offer.region)
@@ -298,6 +307,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
                 self._spec(request),
                 self._resource_ids(request),
             ),
+            namespace_id=self._namespace_id(request),
         )
 
     def machine_storage_destroyed(
@@ -316,11 +326,13 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
     def _snapshot(
         provisioner: AwsManagedPoolProvisioner,
         snapshot: AwsManagedPoolSnapshot,
+        *,
+        namespace_id: str,
     ) -> ProviderUnitSnapshot:
         details = provisioner.instance_details(
             tuple(instance.instance_id for instance in snapshot.instances)
         )
-        return _snapshot(snapshot, details=details)
+        return _snapshot(snapshot, details=details, namespace_id=namespace_id)
 
     def _provisioner(self, region: str) -> AwsManagedPoolProvisioner:
         target = self._target(region)
@@ -354,7 +366,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
             raise ValueError(f"AWS managed pool AMI is not configured for {request.offer.region!r}")
         network = self._network(request.offer.region)
         return AwsManagedPoolSpec(
-            workspace_id=request.workspace_id,
+            workspace_id=self._namespace_id(request),
             unit_name=request.unit_name,
             region=request.offer.region,
             instance_type=request.offer.instance_type,
@@ -380,22 +392,23 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
         )
 
     @staticmethod
+    def _namespace_id(request: ProviderUnitRequest) -> str:
+        if not request.provider_state.attributes:
+            return request.workspace_id
+        return AwsPooledUnitState.model_validate(request.provider_state.attributes).namespace_id
+
+    @staticmethod
     def _resource_ids(request: ProviderUnitRequest) -> AwsManagedPoolResourceIds:
         if not request.provider_state.attributes:
             return AwsManagedPoolResourceIds()
-        try:
-            return AwsManagedPoolResourceIds.model_validate(request.provider_state.attributes)
-        except ValidationError:
-            # Provider state is an opaque provider-owned checkpoint. A shape this
-            # provider no longer recognizes must fall back to discovery by tag
-            # rather than degrade the pool forever on an unreadable checkpoint.
-            return AwsManagedPoolResourceIds()
+        return AwsPooledUnitState.model_validate(request.provider_state.attributes)
 
 
 def _snapshot(
     snapshot: AwsManagedPoolSnapshot,
     *,
     details: Mapping[str, AwsManagedPoolInstanceDetails],
+    namespace_id: str,
 ) -> ProviderUnitSnapshot:
     instances = [
         ProviderUnitInstance(
@@ -423,7 +436,10 @@ def _snapshot(
         current_template_version=snapshot.current_host_revision,
         provider_state=ComputeUnitProviderState(
             resource_id=snapshot.resource_ids.autoscaling_group_name or "",
-            attributes=snapshot.resource_ids.model_dump(mode="json"),
+            attributes=AwsPooledUnitState(
+                namespace_id=namespace_id,
+                **snapshot.resource_ids.model_dump(exclude={"namespace_id"}),
+            ).model_dump(mode="json"),
         ),
     )
 

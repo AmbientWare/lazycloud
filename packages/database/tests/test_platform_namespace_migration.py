@@ -199,7 +199,18 @@ def test_platform_adoption_fences_identity_and_preserves_tenant_and_capacity_his
             assert tenant.signing_key == "retained-signing-key"
             adopted = ComputeUnitRepository(session).get(unit_id)
             assert adopted == unit.model_copy(
-                update={"workspace_id": namespace.id, "provider_connection_id": None}
+                update={
+                    "workspace_id": namespace.id,
+                    "provider_connection_id": None,
+                    "provider_state": unit.provider_state.model_copy(
+                        update={
+                            "attributes": {
+                                **unit.provider_state.attributes,
+                                "namespace_id": workspace_id,
+                            }
+                        }
+                    ),
+                }
             )
             old_worker = TokenRepository(session).get_across_workspaces(token.id)
             retained_human = TokenRepository(session).get_across_workspaces(human.id)
