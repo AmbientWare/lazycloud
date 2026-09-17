@@ -31,43 +31,6 @@ from database import (
 auth_app = typer.Typer(help="Bootstrap or recover control-plane administrator access offline.")
 
 
-@auth_app.command("ensure")
-def ensure_admin(
-    ctx: typer.Context,
-    github_user_id: Annotated[
-        int | None,
-        typer.Option("--github-user-id", envvar="LAZYCLOUD_ADMINISTRATOR_GITHUB_USER_ID"),
-    ] = None,
-) -> None:
-    """Initialize administrator access and storage for a deployment."""
-    token = _validate_configured_token(ClientSettings().token.strip(), source="LAZYCLOUD_TOKEN")
-    if token is None:
-        raise CredentialFileError("LAZYCLOUD_TOKEN is required for deployment initialization")
-    database = DatabaseClient.from_settings(
-        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
-    )
-    storage_client = S3ObjectStoreClient.from_settings(S3ObjectStoreSettings())
-    try:
-        AuthService(IdentityDatabaseContext(database)).ensure_administrator(
-            configured_token=token, github_user_id=github_user_id
-        )
-        storage = _provision_workspace_storage(database, storage_client, "default")
-    finally:
-        storage_client.close()
-        database.dispose()
-    emit_result(
-        ctx,
-        payload={
-            "status": "ready",
-            "workspace": "default",
-            "workspace_storage_bucket": storage.bucket,
-            "workspace_storage_backend": storage.backend,
-        },
-        title="Administrator ready",
-        fields={"Workspace": "default"},
-    )
-
-
 @auth_app.command("bootstrap")
 def bootstrap_admin(
     ctx: typer.Context,

@@ -18,6 +18,7 @@ from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
+    ComputeUnitRepository,
 )
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -39,7 +40,7 @@ from scheduler.routes import SchedulerBackendRouteResolver
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_fleet import Machine, ResourceStatus, Worker
-from shared.compute_policy import MachinePool
+from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.http.agent_identity import TunnelServiceRole
 from shared.http.agent_tunnel import TunnelRouteRequest
@@ -65,6 +66,15 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
     owner = workspace_owner_user_id(context, workspace)
     machine_id, worker_id, capacity_owner, container_id = (str(uuid4()) for _ in range(4))
     with context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=capacity_owner,
+                capacity_owner_id=capacity_owner,
+                workspace_id=workspace,
+                name=UnitName("tunnel-machine"),
+                pool=MachinePool("lazycloud"),
+            )
+        )
         MachineRepository(session).upsert(
             Machine(id=machine_id, capacity_owner_id=capacity_owner, status=ResourceStatus.Created),
             workspace_id=workspace,

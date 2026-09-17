@@ -22,7 +22,11 @@ import json
 import sys
 from pathlib import Path
 
-from provider_aws.connection_policy import ConcreteArns, connection_role_policy
+from provider_aws.connection_policy import (
+    ConcreteArns,
+    connection_role_policy,
+    node_diagnostics_policy,
+)
 
 _RENDERED = Path(__file__).resolve().parent / "platform-deployment" / "connection-role-policy.json"
 
@@ -52,25 +56,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="Fail if the file is stale.")
     args = parser.parse_args(argv)
 
-    rendered = _rendered()
-    if not args.check:
-        _RENDERED.parent.mkdir(parents=True, exist_ok=True)
-        _RENDERED.write_text(rendered)
-        print(f"wrote {_RENDERED}")
+    outcomes = [
+        _write_or_check(_RENDERED, _rendered(), check=args.check),
+        _write_or_check(
+            _RENDERED.with_name("node-diagnostics-policy.json"),
+            json.dumps(node_diagnostics_policy(), indent=2, sort_keys=True) + "\n",
+            check=args.check,
+        ),
+    ]
+    return max(outcomes)
+
+
+def _write_or_check(path: Path, rendered: str, *, check: bool) -> int:
+    if not check:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered)
+        print(f"wrote {path}")
         return 0
 
-    current = _RENDERED.read_text() if _RENDERED.exists() else ""
+    current = path.read_text() if path.exists() else ""
     if current == rendered:
         return 0
     diff = difflib.unified_diff(
         current.splitlines(keepends=True),
         rendered.splitlines(keepends=True),
-        fromfile=f"{_RENDERED.name} (committed)",
-        tofile=f"{_RENDERED.name} (generated)",
+        fromfile=f"{path.name} (committed)",
+        tofile=f"{path.name} (generated)",
     )
     sys.stdout.writelines(diff)
     print(
-        f"\n{_RENDERED} is stale. Run: uv run --group workspace python "
+        f"\n{path} is stale. Run: uv run --group workspace python "
         "deploy/render_connection_policy.py",
         file=sys.stderr,
     )

@@ -72,6 +72,7 @@ from shared.identity import (
     UserStatus,
     WorkspaceInvitationRecord,
     WorkspaceInvitationRole,
+    WorkspaceKind,
     WorkspaceMemberRecord,
     WorkspaceRecord,
     WorkspaceRole,
@@ -942,6 +943,17 @@ class WorkspaceInvitationRepository:
 class WorkspaceRepository:
     session: Session
 
+    def platform(self) -> WorkspaceRecord | None:
+        row = self.session.scalar(
+            select(WorkspaceTable).where(WorkspaceTable.kind == WorkspaceKind.Platform.value)
+        )
+        return workspace_record_from_table(row) if row is not None else None
+
+    def lock_platform_initialization(self) -> None:
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext('platform-initialization'))")
+        )
+
     def create(self, *, name: str, signing_key: str | None = None) -> WorkspaceRecord:
         return self.upsert(
             WorkspaceRecord(
@@ -984,13 +996,18 @@ class WorkspaceRepository:
 
     def resolve_for_deletion(self, workspace_id_or_name: str) -> WorkspaceRecord | None:
         """System lookup by id that retains tombstones, or by whoever holds the name."""
-        return self.get(workspace_id_or_name) or self.by_name(workspace_id_or_name)
+        workspace = self.get(workspace_id_or_name) or self.by_name(workspace_id_or_name)
+        return (
+            workspace if workspace is not None and workspace.kind is WorkspaceKind.Tenant else None
+        )
 
     def lock_for_deletion(self, workspace_id: str) -> WorkspaceRecord:
         """Exclusively fence admission before changing workspace lifecycle state."""
         row = self.session.scalars(
             select(WorkspaceTable)
-            .where(WorkspaceTable.id == workspace_id)
+            .where(
+                WorkspaceTable.id == workspace_id, WorkspaceTable.kind == WorkspaceKind.Tenant.value
+            )
             .with_for_update()
             .execution_options(populate_existing=True)
         ).first()
@@ -998,7 +1015,9 @@ class WorkspaceRepository:
 
     def list(self) -> list[WorkspaceRecord]:
         rows = self.session.scalars(
-            select(WorkspaceTable).order_by(WorkspaceTable.created_at.desc(), WorkspaceTable.id)
+            select(WorkspaceTable)
+            .where(WorkspaceTable.kind == WorkspaceKind.Tenant.value)
+            .order_by(WorkspaceTable.created_at.desc(), WorkspaceTable.id)
         )
         return [workspace_record_from_table(row) for row in rows]
 

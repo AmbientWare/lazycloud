@@ -257,8 +257,9 @@ class AgentWorkerPoolController:
         somebody rejoined the hardware, and preferring capacity you cannot change
         your mind about is not a preference.
         """
+        owner_user_id = _worker_owner(machine, self.config)
         if (
-            worker.owner_user_id == machine.owner_user_id
+            worker.owner_user_id == owner_user_id
             and worker.workspace_id == machine.workspace_id
             and worker.priority == self.config.priority
             and worker.region == self.config.region
@@ -272,7 +273,7 @@ class AgentWorkerPoolController:
         updated = self.workers.update_worker_tenancy(
             worker.worker_id,
             workspace_id=machine.workspace_id,
-            owner_user_id=machine.owner_user_id,
+            owner_user_id=owner_user_id,
             priority=self.config.priority,
             region=self.config.region,
             now=now,
@@ -354,6 +355,16 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
     )
 
 
+def _worker_owner(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> str:
+    if config.platform_fleet:
+        if machine.owner_user_id is not None:
+            raise ValueError("platform machine cannot belong to an account")
+        return ""
+    if not machine.owner_user_id:
+        raise ValueError("customer machine requires an account owner")
+    return machine.owner_user_id
+
+
 def agent_machine_worker_record(
     machine: ComputeAgentTokenState,
     config: AgentPoolConfig,
@@ -377,7 +388,7 @@ def agent_machine_worker_record(
         workspace_id=machine.workspace_id,
         # Empty on the fleet: an owner serves the comparison that decides who may
         # be placed here, and platform capacity answers to everyone.
-        owner_user_id="" if config.platform_fleet else machine.owner_user_id,
+        owner_user_id=_worker_owner(machine, config),
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",

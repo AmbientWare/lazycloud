@@ -27,6 +27,7 @@ from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService, TokenIssuer
+from identity.platform import PlatformNamespaceService
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.aws_connections import (
@@ -345,7 +346,7 @@ def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
                 capacity_owner_id=platform_id,
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider,
                 capacity_owner_source=CapacityOwnerSource.Provider,
-                workspace_id=other.id,
+                workspace_id=PlatformNamespaceService(services.context.database).get().id,
                 name=UnitName("platform-pool"),
                 pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
                 provider="aws",

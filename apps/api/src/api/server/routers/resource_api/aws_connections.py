@@ -20,11 +20,10 @@ from shared.http.aws_connections import (
     AwsConnectionCustomerAction,
     AwsConnectionReconnectRequest,
     AwsConnectionResponse,
-    AwsFleetEnsureRequest,
     AwsManagedAuthorizationResponse,
 )
 
-from api.server.auth import admin_access, read_user, write_user
+from api.server.auth import read_user, write_user
 from api.server.service_dependencies import (
     aws_account_connection_directory,
     aws_account_connection_service,
@@ -167,20 +166,6 @@ def connect_aws_account(
     service: AwsAccountConnectionService = Depends(aws_account_connection_service),
 ) -> AwsConnectionAuthorizationResponse:
     return _authorization_response(service.connect(request, user_id=user_id))
-
-
-@router.put(
-    "/fleet",
-    response_model=AwsConnectionResponse,
-    operation_id="ensure_aws_fleet_account",
-)
-def ensure_aws_fleet_account(
-    request: AwsFleetEnsureRequest,
-    _auth: admin_access,
-    user_id: write_user,
-    service: AwsAccountConnectionService = Depends(aws_account_connection_service),
-) -> AwsConnectionResponse:
-    return _response(service.ensure_fleet(request, user_id=user_id))
 
 
 @router.post(

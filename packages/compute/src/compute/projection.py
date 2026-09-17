@@ -119,6 +119,7 @@ class ProviderReservation(ContractModel):
 
 
 class PrivateUnitState(CapacityOwnerIdentity):
+    platform_fleet: bool = False
     workspace_id: str = ""
     name: UnitName
     pool: MachinePool = MachinePool("")

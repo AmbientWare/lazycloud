@@ -188,7 +188,7 @@ class ComputeUnitSizingRecord:
 class ComputeJoinCredentialRecord(ContractModel):
     id: str
     token_hash: str
-    user_id: str
+    user_id: str | None
     """Account the machine joining with this credential will belong to.
 
     Resolved from the owner of the minting workspace, and the only thing placement
@@ -228,7 +228,7 @@ class ComputeJoinCredentialRecord(ContractModel):
 
 class ComputeMachineCredentialRecord(ContractModel):
     id: str
-    user_id: str
+    user_id: str | None
     credential_generation: int
     status: ComputeMachineEnrollmentStatus
     schedulable: bool
@@ -240,7 +240,7 @@ class ComputeMachineCredentialRecord(ContractModel):
 
 class ComputeMachineEnrollmentRecord(ContractModel):
     id: str
-    user_id: str
+    user_id: str | None
     """Account this machine belongs to, stamped from the credential that enrolled it."""
     workspace_id: str
     capacity_owner_id: str
@@ -294,7 +294,7 @@ class ComputeMachineCapacityInterruptionRecord:
 
 
 class ComputeMachineEnrollmentCreate(ContractModel):
-    user_id: str
+    user_id: str | None
     workspace_id: str
     capacity_owner_id: str
     pool: MachinePool
@@ -1677,7 +1677,7 @@ class ComputeJoinCredentialRepository:
         self,
         *,
         token_hash: str,
-        user_id: str,
+        user_id: str | None,
         workspace_id: str,
         capacity_owner_id: str,
         pool: MachinePool,
@@ -2104,7 +2104,7 @@ class ComputeMachineEnrollmentRepository:
 
     def by_fingerprint(
         self,
-        user_id: str,
+        user_id: str | None,
         machine_fingerprint_hash: str,
         *,
         for_update: bool = False,

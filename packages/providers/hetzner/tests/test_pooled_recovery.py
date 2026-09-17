@@ -11,6 +11,7 @@ from compute.providers import ProviderCapacityPhase, ProviderUnitBootstrap, Prov
 from coordination.request_cooldown import RedisRequestCooldown
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.provider_launches import ProviderNodeLaunchRepository
+from identity.platform import PlatformNamespaceService
 from provider_hetzner.client import HetznerClient, PrimaryIP, Server
 from provider_hetzner.identity import provider_label
 from provider_hetzner.pooled_provider import HetznerNodeImage, HetznerPooledProvider
@@ -35,11 +36,12 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
 ) -> None:
     services = isolated_services
     unit_id = str(uuid4())
+    namespace_id = PlatformNamespaceService(services.context.database).get().id
     with services.context.database.session() as session:
         pool = ComputeUnitRepository(session).upsert(
             ComputeUnitRecord(
                 id=unit_id,
-                workspace_id=services.context.default_workspace_id(session),
+                workspace_id=namespace_id,
                 name=UnitName("hetzner-recovery"),
                 pool=MachinePool("lazycloud"),
                 capacity_owner_id=unit_id,

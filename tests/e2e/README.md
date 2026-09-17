@@ -11,7 +11,8 @@ authorization or prerequisites return exit code `77`.
 
 ## Boundaries
 
-- `local/` targets an already-healthy root Compose stack.
+- `local/` targets an already-healthy root Compose stack with the
+  `customer-compute` profile when it needs the local Docker machine.
 - `external/` targets an explicitly authorized provider, cluster, private network, or
   GPU environment.
 - Release publication, deployment, migration, connection administration,

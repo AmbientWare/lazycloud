@@ -43,19 +43,7 @@ _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
 def billing_owner_for_unit(unit: ComputeUnitRecord) -> UsageBillingOwner:
-    """How containers on this unit's machines price.
-
-    A provider connection is a customer's own cloud account, so a unit holding
-    one is capacity we provision and manage but never buy — what the management
-    fee is charged for. Everything else a machine can be brought to is hardware
-    we neither bought nor manage. `ComputeUnitRecord` makes holding a connection
-    exactly equivalent to being internal, and refuses one on any other unit.
-
-    The platform's own fleet reaches here too, because a hosted deployment
-    provisions it through a connection like any other and its machines join like
-    any other. What separates it is the connection saying so, not how the machine
-    arrived.
-    """
+    """Choose container pricing from the unit's durable ownership."""
 
     if unit.platform_fleet:
         return UsageBillingOwner.PlatformFleet
@@ -173,6 +161,8 @@ class GatewayUnitStateCoordinator:
         state = ComputeUnitState(
             workspace_id=workspace_id,
             name=unit.name,
+            platform_fleet=unit.platform_fleet,
+            default_eligible=unit.default_eligible,
             pool=unit.pool,
             capacity_owner_id=unit.capacity_owner_id,
             provider=unit.provider,
@@ -368,6 +358,8 @@ class GatewayUnitStateCoordinator:
         state = ComputeUnitState(
             workspace_id=workspace_id,
             name=pool_state.name,
+            platform_fleet=pool_state.platform_fleet,
+            default_eligible=current.default_eligible if current is not None else False,
             pool=(current.pool if current is not None else pool_state.pool),
             capacity_owner_id=(
                 current.capacity_owner_id if current is not None else pool_state.capacity_owner_id

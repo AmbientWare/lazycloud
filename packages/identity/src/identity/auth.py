@@ -39,6 +39,7 @@ from shared.identity import (
     TokenStatus,
     UserRecord,
     UserStatus,
+    WorkspaceKind,
     WorkspaceMemberRecord,
     WorkspaceRecord,
     WorkspaceStatus,
@@ -315,6 +316,11 @@ class TokenIssuer:
         owner_workspace_id = ""
         if workspace_id:
             workspace = self.context.workspace(session, workspace_id)
+            if workspace.kind is WorkspaceKind.Platform and TokenKind(kind) not in {
+                TokenKind.Worker,
+                TokenKind.Machine,
+            }:
+                raise AuthError("platform namespace requires a machine or worker credential")
             owner_workspace_id = WorkspaceRepository(session).lock_active_owner(workspace.id).id
         else:
             UserRepository(session).lock_active(user_id)
@@ -571,6 +577,8 @@ class AuthService:
     ) -> tuple[str, WorkspaceMemberRecord | None]:
         def resolve(session: DatabaseSession) -> tuple[str, WorkspaceMemberRecord | None]:
             record = self.context.workspace(session, workspace)
+            if record.kind is WorkspaceKind.Platform:
+                raise NotFoundError(f"workspace not found: {workspace}")
             membership = (
                 WorkspaceMemberRepository(session).membership(
                     workspace_id=record.id,
@@ -632,20 +640,6 @@ class AuthService:
         with self.context.database.session() as session:
             claim = IdentityBootstrapClaimRepository(session).get()
             return claim.request_id if claim is not None else None
-
-    def ensure_administrator(
-        self, *, configured_token: str, github_user_id: int | None = None
-    ) -> None:
-        """Initialize a deployment without reissuing a revoked bootstrap credential."""
-        if self.administrator_ready():
-            return
-        request_id = "bootstrap:configured-administrator"
-        self.bootstrap_administrator(
-            request_id=request_id,
-            configured_token=configured_token,
-            github_user_id=github_user_id,
-        )
-        self.mark_admin_token_published(request_id=request_id, recovery=False)
 
     def recovery_request_exists(self, request_id: str) -> bool:
         _validate_offline_request_id(request_id)
@@ -867,7 +861,7 @@ class AuthService:
         name: str,
         *,
         kind: TokenKind,
-        workspace_id: str = "default",
+        workspace_id: str | None = None,
         scopes: list[str] | None = None,
         stage_token: Callable[[str], None] | None = None,
     ) -> tuple[str, AuthTokenRecord]:
@@ -875,16 +869,16 @@ class AuthService:
             raise ValueError(f"not a platform service token kind: {kind.value}")
         issuer = TokenIssuer(self.context, self.token_cache)
         with self.context.database.session() as session:
-            claim_repository = IdentityBootstrapClaimRepository(session)
-            claim_repository.get(lock=True)
-            if not claim_repository.administrator_ready():
-                raise AuthError("offline administrator bootstrap must complete first")
             workspace_repository = WorkspaceRepository(session)
-            normalized_workspace_id = try_uuid(workspace_id)
+            platform = workspace_repository.platform()
+            if platform is None:
+                raise AuthError("platform namespace must be initialized first")
+            selected_workspace = workspace_id or platform.id
+            normalized_workspace_id = try_uuid(selected_workspace)
             workspace = (
                 workspace_repository.get(normalized_workspace_id)
                 if normalized_workspace_id is not None
-                else workspace_repository.by_name(workspace_id)
+                else workspace_repository.by_name(selected_workspace)
             )
             if workspace is None or workspace.status is not WorkspaceStatus.Active:
                 raise NotFoundError(f"workspace not found: {workspace_id}")
@@ -922,8 +916,9 @@ class AuthService:
         caller asks for stays valid forever otherwise, so narrowing what a service
         may do would never reach a host that already has a file.
         """
-        if not self.administrator_ready():
-            raise AuthError("offline administrator bootstrap must complete first")
+        with self.context.database.session() as session:
+            if WorkspaceRepository(session).platform() is None:
+                raise AuthError("platform namespace must be initialized first")
         record = self.authenticate(token)
         normalized_workspace_id = self._workspace_id(workspace_id)
         if (
@@ -1363,6 +1358,8 @@ class AuthService:
         if requirement.workspace_id is not None:
             with self.context.database.session() as session:
                 workspace = self.context.workspace(session, requirement.workspace_id)
+                if workspace.kind is not WorkspaceKind.Tenant:
+                    raise AuthError("platform namespace cannot be selected as a workspace")
                 membership = (
                     WorkspaceMemberRepository(session).membership(
                         workspace_id=workspace.id,

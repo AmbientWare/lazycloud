@@ -88,14 +88,13 @@ application settings and secret bindings.
 Terraform owns `<deployment>/platform`. Operators own the values in
 `<deployment>/operator`. The chart's `secrets.map` lists required properties.
 
-Populate the operator document before the first sync, including the administrator
-token and service credentials. For an existing document, read its current version,
+Populate the operator document before the first sync with the service credentials
+named by the chart. Deployment needs no administrator token. Read the current version,
 merge only the intended properties, and preserve every unrelated value.
 Do not replace it with an example JSON object.
 
-Configure the administrator token before the bootstrap Job runs. Recover a lost
-administrator credential through the account recovery procedure; do not reset a
-persistent database.
+Create administrator access separately through offline `auth bootstrap`. Recover
+lost access through offline recovery; do not reset a persistent database.
 
 Initialize the tunnel issuer and gateway bootstrap credential with the
 [connection gateway procedure](../connection-gateway.md#bootstrap-credentials-once).
@@ -133,8 +132,8 @@ Ship publishes client packages and a complete immutable release manifest, then
 records the selected release for Argo. For an existing release, Deploy renders
 configuration from its manifest without rebuilding artifacts.
 
-Argo runs secret projection, schema migrations, administrator and billing
-bootstrap, workloads, and fleet registration in their declared sync waves.
+Argo runs secret projection, schema migrations, platform initialization, billing
+bootstrap, and workloads in their declared sync waves.
 Check several signals together:
 
 ```sh
@@ -167,9 +166,11 @@ This deletes persistent infrastructure and data. Before proceeding, obtain
 authorization for the exact deployment, inventory its resources, and verify
 backups of data and credentials the owner needs to retain.
 
-1. Stop new work and drain existing workloads.
-2. Use `lazycloud-admin fleet destroy` against that deployment while its
-   control plane and provider credentials remain available.
+1. Stop new work, drain existing workloads, and stop schedulers.
+2. Run `lazycloud-admin fleet destroy --confirm-stopped` with that deployment's
+   database, Redis, provider configuration and workload identity. It removes
+   platform capacity only. Resolve customer capacity separately before retiring
+   the installation.
 3. Confirm the command succeeded and the provider reports the owned capacity
    removed. Investigate lease contention or incomplete deletion before continuing.
 4. Remove the deployment's Argo Application through Git and verify its workloads

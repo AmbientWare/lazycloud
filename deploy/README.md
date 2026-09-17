@@ -43,8 +43,15 @@ and the service logs to confirm startup. The API serves the built dashboard at
 `http://lazycloud.localhost:8000`. For frontend edits, run `bun run dev` from
 `apps/web`; its default API target is `http://127.0.0.1:8000`.
 
-Compose initializes Garage 2.3, publishes the reviewed billing rates, and
-creates the local administrator. Garage's S3 endpoint is
+Compose initializes the platform namespace, Garage 2.3, and the reviewed billing
+rates without a human token. To create the local administrator and enroll a
+customer-owned Docker machine for workload acceptance, run:
+
+```sh
+COMPOSE_PROFILES=customer-compute uv run --frozen --group workspace python -m deploy.release
+```
+
+That profile requires the local `LAZYCLOUD_TOKEN`. Garage's S3 endpoint is
 `http://object-store.localhost:3900`; the Admin API binds only to loopback on
 port 3903. Application and workspace buckets use the configured platform key.
 The worker receives a separate bucket key with a fifteen-minute expiration.

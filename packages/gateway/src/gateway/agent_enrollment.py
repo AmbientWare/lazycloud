@@ -27,6 +27,7 @@ def private_unit_for_enrollment(
 ) -> PrivateUnitState:
     config = pool_config_from_unit(unit)
     return PrivateUnitState(
+        platform_fleet=unit.platform_fleet,
         workspace_id=unit.workspace_id,
         name=unit.name,
         pool=unit.pool,

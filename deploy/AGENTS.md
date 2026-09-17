@@ -19,10 +19,10 @@ substitutes, and gives every service an explicit owner and health check.
   the baseline or reset production data during an upgrade. The completed
   owner-authorized relational reset is recorded in `deploy/database-reset.md`;
   it does not authorize another reset.
-- Run migrations before starting new application pods. Previous replicas keep
-  serving during migration, so new ownership columns must preserve their reads
-  and valid writes. Test that older writers cannot erase ownership recorded by
-  the new repository.
+- Run migrations before starting new application pods. Compatible schema changes
+  must preserve older writers during rollout. Ownership cutovers stop old writers
+  before migration and resume only with the new build. Never roll an older build
+  back onto a schema it cannot read.
 - A deployment value is usually read on several independent paths, so correcting
   one place proves nothing about the rest. When a name, origin, or credential
   changes, find every consumer of it in the same change.

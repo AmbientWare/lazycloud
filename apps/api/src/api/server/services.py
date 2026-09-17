@@ -78,6 +78,7 @@ from gateway.shell_proxy import connect_shell_backend
 from gateway.tunnel_certificates import TunnelCertificateService
 from identity.auth import AuthService, AuthTokenCache
 from identity.invitations import WorkspaceInvitationService
+from identity.platform import PlatformNamespaceService
 from identity.sign_in import BillingProvisioner, SignInService
 from identity.users import UserService
 from images.control import ImageControlService
@@ -744,9 +745,10 @@ class ApiServices(ApiServiceCore):
         )
         aws_connection_directory = AwsAccountConnectionDirectory(context)
 
-        def platform_capacity_workspace(workspace: str) -> str:
-            with context.database.session() as session:
-                return context.workspace(session, workspace).id
+        platform_namespace_id = PlatformNamespaceService(context.database).namespace_id
+
+        def platform_capacity_workspace() -> str:
+            return platform_namespace_id
 
         def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
             with context.database.session() as session:
@@ -766,13 +768,17 @@ class ApiServices(ApiServiceCore):
                 aws_capacity_config,
                 agent_artifact_config,
                 connections=aws_connection_directory.list_for_workspace,
-                platform_connections=aws_connection_directory.list_platform,
                 capacity_workspace=aws_connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity_config,
                     launch_credentials=provider_node_launches,
                     capacity_workspace=platform_capacity_workspace,
                     redis=redis,
+                    binaries_by_region=(
+                        aws_capacity_config.binaries_by_region(agent_artifact_config)
+                        if aws_capacity_config.configured
+                        else {}
+                    ),
                 ),
                 gateway_origin=gateway_config.public_http_url,
                 presigned_origin=object_store_config.endpoint_url,

@@ -14,6 +14,7 @@ from database.repositories.compute import (
 from database.repositories.identity import UserRepository, WorkspaceRepository
 from database.repositories.orchestration import MachineRepository
 from database.tables.compute import ComputeCapacityOperationTable, ComputeUnitTable
+from identity.platform import PlatformNamespaceService
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
 from shared.capacity import (
     CapacityAcquisitionShape,
@@ -39,7 +40,7 @@ from database import DatabaseClient
 
 def test_terminal_capacity_handoff_rejects_a_stale_writer(database: DatabaseClient) -> None:
     with database.session() as session:
-        workspace = WorkspaceRepository(session).create(name="handoff-fencing")
+        workspace = PlatformNamespaceService(database).initialize()
         unit = ComputeUnitRepository(session).upsert(_platform_unit(workspace.id, "aws"))
         operation_id = str(uuid4())
         operation = ComputeCapacityOperationRepository(session).upsert(
@@ -104,7 +105,7 @@ def test_capacity_batches_share_work_and_keep_empty_pool_audits_progressing(
     database: DatabaseClient,
 ) -> None:
     with database.session() as session:
-        workspace = WorkspaceRepository(session).create(name="reconciliation")
+        workspace = PlatformNamespaceService(database).initialize()
         repository = ComputeUnitRepository(session)
         active = {
             repository.upsert(
@@ -146,7 +147,7 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
     database: DatabaseClient,
 ) -> None:
     with database.session() as session:
-        workspace = WorkspaceRepository(session).create(name="platform")
+        workspace = PlatformNamespaceService(database).initialize()
         customer = WorkspaceRepository(session).create(name="customer")
         repository = ComputeUnitRepository(session)
         old_machine_id = str(uuid4())
@@ -200,7 +201,7 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
         repository.upsert(
             ComputeUnitRecord(
                 id=str(uuid4()),
-                workspace_id=workspace.id,
+                workspace_id=customer.id,
                 name=UnitName("public"),
                 pool=MachinePool("lazycloud"),
                 desired_machines=90,
@@ -243,12 +244,12 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
         ] == [reserved.id]
 
 
-def test_fleet_capacity_lock_serializes_purchases_across_workspaces(
+def test_fleet_capacity_lock_serializes_purchases_across_providers(
     database: DatabaseClient,
 ) -> None:
     with database.session() as session:
         units = [
-            _platform_unit(WorkspaceRepository(session).create(name=provider).id, provider)
+            _platform_unit(PlatformNamespaceService(database).initialize().id, provider)
             for provider in ("aws", "hetzner")
         ]
     ready = Barrier(2)

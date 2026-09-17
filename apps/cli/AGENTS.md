@@ -8,9 +8,9 @@ reused from the public CLI package rather than reimplemented here. Commands stay
 thin, machine-readable output stays stable and free of secrets, and a capability
 that belongs on both CLIs lands on both in the same change.
 
-`fleet ensure` and `fleet destroy` are a pair, and a deployment's life runs
-between them. `ensure` registers the platform's own account so pools can be
-provisioned in it; `destroy` deletes every unit so nothing is left to launch
-machines once Terraform takes the cluster away. Neither reaches past the control
-plane to the provider: a unit is the record that owns an autoscaling group, so
-deleting the group without the unit leaves the scheduler free to build it again.
+`platform initialize` creates the application namespace and validates configured
+provider bindings through offline deployment authority. It needs no account token.
+`fleet destroy --confirm-stopped` uses the same deployment authority to remove
+only platform units through the compute service. Stop admission and schedulers
+first. Customer capacity stays outside this command's scope. Provider resources
+retain their owning unit until the provider confirms cleanup.

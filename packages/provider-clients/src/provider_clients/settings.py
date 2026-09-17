@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from agent.binary import AgentBinarySettings
 from provider_aws import AwsManagedPoolBinaries
+from provider_aws.platform import AwsPlatformBinding
 from provider_hetzner import HetznerNodeImage
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -214,11 +215,13 @@ class AwsCapacityReconciliationSettings(BaseSettings):
 
 
 class PlatformCapacitySettings(BaseSettings):
+    aws: AwsPlatformBinding | None = None
     hetzner_images: dict[str, HetznerNodeImage] = Field(default_factory=dict)
     hetzner_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_PLATFORM_CAPACITY_",
+        env_nested_delimiter="__",
         extra="ignore",
         hide_input_in_errors=True,
     )
@@ -234,7 +237,7 @@ class PlatformCapacitySettings(BaseSettings):
 
     @property
     def configured(self) -> bool:
-        return bool(self.hetzner_images or self.hetzner_tokens)
+        return bool(self.aws is not None or self.hetzner_images or self.hetzner_tokens)
 
 
 __all__ = [

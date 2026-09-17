@@ -83,7 +83,12 @@ def main() -> None:
     compose = Compose.model_validate_json(
         output("docker", "compose", "--profile", "*", "config", "--format", "json")
     )
-    services = {name: service for name, service in compose.services.items() if not service.profiles}
+    profiles = set(os.environ.get("COMPOSE_PROFILES", "").split(",")) - {""}
+    services = {
+        name: service
+        for name, service in compose.services.items()
+        if not service.profiles or profiles.intersection(service.profiles) or "*" in profiles
+    }
     workers = {
         name
         for name, service in services.items()

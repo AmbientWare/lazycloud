@@ -33,7 +33,7 @@ from shared.aws_connections import (
 
 from .account_connection_policy import validate_aws_account_connection_template_policy
 from .boto3_clients import has_operations, is_boto3_client_factory
-from .connection_policy import CloudFormationArns, connection_role_policy
+from .connection_policy import CloudFormationArns, connection_role_policy, node_diagnostics_policy
 from .instance_catalog import aws_console_host, aws_partition_for_region
 from .provider_control import (
     AwsProviderControlError,
@@ -356,14 +356,13 @@ class AwsAccountConnectionAuthorizationPlan(AwsAccountConnectionModel):
         return self
 
 
-class AwsAccountConnectionTarget(AwsAccountConnectionModel):
+class AwsCapacityIdentity(AwsAccountConnectionModel):
     account_id: str = Field(pattern=_ACCOUNT_ID_PATTERN.pattern)
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     role_arn: str
     external_id: SecretStr = Field(min_length=32, max_length=256, repr=False)
     node_role_arn: str
     node_instance_profile_arn: str
-    network: AwsAccountNetwork | None = None
 
     @field_validator("role_arn", "node_role_arn", "node_instance_profile_arn")
     @classmethod
@@ -397,6 +396,10 @@ class AwsAccountConnectionTarget(AwsAccountConnectionModel):
             if kind != expected_kind:
                 raise ValueError(f"AWS connection ARN must identify an IAM {expected_kind}")
         return self
+
+
+class AwsAccountConnectionTarget(AwsCapacityIdentity):
+    network: AwsAccountNetwork | None = None
 
 
 class AwsNodeBucketAccessGrant(AwsAccountConnectionModel):
@@ -765,6 +768,8 @@ class Boto3AwsAccountConnectionValidator:
                 operation="validate shared node instance profile",
             ).instance_profile
             regions = _validate_ec2_inventory_access(session.client("ec2"), target.region)
+            if target.network is not None:
+                _validate_account_network(session.client("ec2"), target.network)
         except ClientError as exc:
             raise _client_error(exc, operation="validate account connection") from exc
         except BotoCoreError as exc:
@@ -1746,50 +1751,6 @@ def _assert_external_id_enforced(
 
 
 _NODE_DIAGNOSTICS_POLICY_NAME = "managed-node-diagnostics"
-_NODE_DIAGNOSTICS_POLICY = json.dumps(
-    {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Sid": "SystemsManagerAgent",
-                "Effect": "Allow",
-                "Action": [
-                    "ssm:DescribeAssociation",
-                    "ssm:DescribeDocument",
-                    "ssm:GetDocument",
-                    "ssm:GetManifest",
-                    "ssm:ListAssociations",
-                    "ssm:ListInstanceAssociations",
-                    "ssm:PutComplianceItems",
-                    "ssm:PutInventory",
-                    "ssm:UpdateAssociationStatus",
-                    "ssm:UpdateInstanceAssociationStatus",
-                    "ssm:UpdateInstanceInformation",
-                ],
-                "Resource": "*",
-            },
-            {
-                "Sid": "SystemsManagerChannels",
-                "Effect": "Allow",
-                "Action": [
-                    "ec2messages:AcknowledgeMessage",
-                    "ec2messages:DeleteMessage",
-                    "ec2messages:FailMessage",
-                    "ec2messages:GetEndpoint",
-                    "ec2messages:GetMessages",
-                    "ec2messages:SendReply",
-                    "ssmmessages:CreateControlChannel",
-                    "ssmmessages:CreateDataChannel",
-                    "ssmmessages:OpenControlChannel",
-                    "ssmmessages:OpenDataChannel",
-                ],
-                "Resource": "*",
-            },
-        ],
-    },
-    sort_keys=True,
-    separators=(",", ":"),
-)
 
 
 def _ensure_node_diagnostics_policy(
@@ -1808,7 +1769,9 @@ def _ensure_node_diagnostics_policy(
         client.put_role_policy(
             RoleName=role_name,
             PolicyName=_NODE_DIAGNOSTICS_POLICY_NAME,
-            PolicyDocument=_NODE_DIAGNOSTICS_POLICY,
+            PolicyDocument=json.dumps(
+                node_diagnostics_policy(), sort_keys=True, separators=(",", ":")
+            ),
         )
     except ClientError as exc:
         raise _client_error(exc, operation="ensure managed node diagnostics policy") from exc
