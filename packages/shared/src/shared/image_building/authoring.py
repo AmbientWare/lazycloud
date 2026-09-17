@@ -10,6 +10,9 @@ class ImageBuildStepKind(StringEnum):
     Shell = "shell"
     Pip = "pip"
     UvProject = "uv-project"
+    PoetryProject = "poetry-project"
+    Pyproject = "pyproject"
+    MicromambaEnvironment = "micromamba-environment"
     Micromamba = "micromamba"
     Apt = "apt"
 
@@ -22,6 +25,16 @@ class PythonVersion(StringEnum):
     Py314 = "3.14"
 
 
+PROJECT_BUILD_STEP_KINDS = frozenset(
+    {
+        ImageBuildStepKind.UvProject,
+        ImageBuildStepKind.PoetryProject,
+        ImageBuildStepKind.Pyproject,
+        ImageBuildStepKind.MicromambaEnvironment,
+    }
+)
+
+
 class LinuxArchitecture(StringEnum):
     Amd64 = "amd64"
     Arm64 = "arm64"
@@ -31,6 +44,7 @@ class ImageBuildStep(ContractModel):
     kind: ImageBuildStepKind
     args: list[str] = Field(default_factory=list)
     command: str | None = None
+    groups: list[str] = Field(default_factory=list)
 
 
 class ImageFilesystemSource(ContractModel):
@@ -62,6 +76,7 @@ class ImageSpec(ContractModel):
 
 
 __all__ = [
+    "PROJECT_BUILD_STEP_KINDS",
     "ImageBuildStep",
     "ImageBuildStepKind",
     "ImageFilesystemSource",

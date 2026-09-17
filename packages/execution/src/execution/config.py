@@ -19,6 +19,7 @@ from shared.deployment_records import (
 )
 from shared.enums import StringEnum
 from shared.image_building.authoring import PythonVersion
+from shared.image_building.python import normalize_python_version, python_minor_version
 from shared.mounts import MountAuthMode, validate_mount_auth
 from shared.placement import ProductRegion
 from shared.resources import parse_memory_mib
@@ -58,9 +59,9 @@ def parse_execution_python_version(value: object) -> ExecutionPythonVersion:
         msg = "Python version must be a supported major.minor string"
         raise ValueError(msg)
 
-    normalized = value.strip()
-    if not normalized.startswith("micromamba"):
-        normalized = normalized.removeprefix("python")
+    normalized = normalize_python_version(value)
+    prefix = "micromamba" if normalized.startswith("micromamba") else ""
+    normalized = prefix + python_minor_version(normalized)
     try:
         return ExecutionPythonVersion(normalized)
     except ValueError as exc:

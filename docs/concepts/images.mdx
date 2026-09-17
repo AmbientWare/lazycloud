@@ -32,17 +32,126 @@ The result reports the remote ffmpeg version. Your machine does not need ffmpeg.
 Use `.add_python_packages(["httpx"])` to install a Python dependency.
 
 Images are cached by content. Keep dependency versions pinned when you need
-reproducible builds. If an image-build worker is interrupted, rerun the command;
-interrupted builds do not restart automatically.
+reproducible builds. A confirmed provider interruption permits one automatic
+retry within the build's original deadline.
 
 `Image()` with no arguments is the managed Python 3.12 image. Python 3.10
-through 3.14 are available.
+through 3.14 are available. You can also pin a patch release, such as `3.12.11`.
+
+## Create an image from a project
+
+Use a factory to select Python and install the project's dependencies:
+
+```python
+from lazycloud import Image
+
+image = Image.from_uv(".")
+```
+
+The path is the project directory. The build includes its source and local
+dependencies within that directory, respecting `.lazycloudignore`. Put workspace
+members and relative path dependencies inside this directory; files outside it
+are not uploaded. Build backends run in the image, not on your laptop.
+
+### uv
+
+```python
+image = Image.from_uv(".", extras=["gpu"], groups=["inference"])
+```
+
+Requires `pyproject.toml` and `uv.lock`. The build checks that the lockfile matches
+the project and installs its locked dependencies. Default dependency groups,
+including `dev`, are excluded; use `groups` to include them. Packaged projects
+are installed without editable mode.
+
+### Poetry
+
+```python
+image = Image.from_poetry(".", extras=["gpu"], groups=["inference"])
+```
+
+Requires `pyproject.toml` and `poetry.lock`. The build validates the lockfile and
+uses Poetry to install the main dependencies and selected groups and extras.
+Poetry's package mode determines whether the root project is installed.
+
+### Standard pyproject.toml
+
+```python
+image = Image.from_pyproject(".", extras=["gpu"], groups=["inference"])
+```
+
+Uses standard `[project]` metadata and `[dependency-groups]`. No lockfile is
+required. Dependencies are resolved during the build; this factory does not use
+uv or Poetry lockfiles as installation guarantees. Use the corresponding
+factory when you need locked dependencies.
+
+The declared build backend builds packaged projects and resolves dynamic
+dependency metadata. Projects without a build backend install dependencies
+without installing the root project. Package-manager-specific dependency source
+overrides are not used.
+
+### Micromamba
+
+```yaml environment.yml
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - pip:
+      - httpx==0.28.1
+```
+
+```python
+image = Image.from_micromamba("environment.yml")
+```
+
+The environment file supplies Python requirements, channels, Conda packages,
+and pip dependencies. An environment YAML is not a lockfile; unpinned packages
+are resolved during the build. Relative files are included from its directory.
+
+### Python selection
+
+An explicit `python_version` overrides the project's interpreter pin:
+
+```python
+image = Image.from_uv(".", python_version="3.12.11")
+```
+
+Otherwise, Python projects use `.python-version`, and Micromamba uses the Python
+pin in the environment file. Without a pin, LazyCloud selects Python 3.12 when
+compatible, otherwise the lowest supported compatible minor version.
+`requires-python` is a compatibility constraint, not an interpreter pin.
+Unsupported pins and incompatible requirements fail instead of silently
+changing versions. Exact patch pins are preserved.
+
+Factories return an ordinary image that you can extend:
+
+```python
+image = Image.from_uv(".").add_commands([
+    "apt-get update && apt-get install -y ffmpeg"
+])
+```
+
+All four factories also accept `base_image`, `base_image_creds`, and
+`architecture`, using the same values as the constructor. For example:
+
+```python
+image = Image.from_uv(
+    ".", base_image="nvidia/cuda:12.3.1-runtime-ubuntu22.04"
+)
+```
+
+These factories configure the remote environment. The CLI still imports your
+handler module locally, so top-level imports must be available locally. Run
+`uv run lazycloud run main:handler` from your project environment, or place
+remote-only imports inside the handler.
 
 ## Constructor
 
 ```python
 Image(
-    python_version="3.12",         # "3.10" through "3.14"
+    python_version="3.12",         # supported minor or exact patch release
     python_packages=["httpx"],     # package specs, or a path to requirements.txt
     commands=["python --version"], # shell commands run during the build
     base_image=None,               # start from a registry image instead
@@ -58,13 +167,10 @@ Each returns the image, so they chain.
 - `add_python_packages(packages)` installs packages. Pass a list of specs or a
   path to a `requirements.txt`.
 - `add_commands(commands)` runs shell commands during the build.
-- `add_uv_project(path=".", extras=[...])` installs a local uv project from its
-  `pyproject.toml` and `uv.lock`.
 - `add_local_path(pattern="*")` includes matching local files in the build
   context.
-- `add_python_version(version)` switches the managed Python version.
-- `micromamba()` switches to a micromamba environment, and
-  `add_micromamba_packages(packages, channels=[...])` installs into it.
+- `add_micromamba_packages(packages, channels=[...])` adds packages to an image
+  created with `from_micromamba()`.
 - `with_envs(env_vars, clear=False)` sets environment variables from a
   mapping, `"KEY=value"` strings, or a sequence of them.
 - `with_secrets(secrets)` makes workspace secrets available during the build.
@@ -75,7 +181,9 @@ Each returns the image, so they chain.
 ## Start from an existing image
 
 ```python
-gpu_image = Image.from_registry("nvcr.io/nvidia/pytorch:24.05-py3")
+gpu_image = Image.from_registry(
+    "nvidia/cuda:12.3.1-runtime-ubuntu22.04", python_version="3.11"
+)
 custom_image = Image.from_dockerfile("./Dockerfile", context_dir=".")
 ```
 
