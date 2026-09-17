@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
-from contextvars import copy_context
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import RLock
 from typing import Protocol
 
 from pydantic import JsonValue
@@ -57,6 +58,7 @@ from lazycloud.control_clients import (
 from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.references import HandlerReferenceError, source_root_handler_reference
+from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.session.task import Task, TaskClient, TaskSubscription
 from lazycloud.session.uploads import (
     object_upload_timeout_seconds,
@@ -233,7 +235,9 @@ class DeploymentClient(ControlClientConfigMixin):
     source_ignore_patterns: tuple[str, ...] = ()
     source_include_patterns: tuple[str, ...] = ()
     terminal: Terminal | None = None
+    preparation: DeploymentPreparation | None = field(default=None, repr=False)
     _channel: HttpChannel | None = field(default=None, init=False, repr=False)
+    _client_lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     @property
     def control_client(self) -> DeploymentControlClient:
@@ -317,25 +321,42 @@ class DeploymentClient(ControlClientConfigMixin):
             if not selected_root.is_dir():
                 msg = f"deployment source root is not a directory: {selected_root}"
                 raise RuntimeError(msg)
-        image_operation = self._image_operation(spec, image=image)
-        with image_operation if image_operation is not None else nullcontext():
-            with ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="deployment-image-verification"
-            ) as executor:
-                verification = (
-                    executor.submit(copy_context().run, image_operation.verify)
-                    if image_operation is not None
-                    else None
+        source_image = deepcopy(image) if image is not None else _image_from_spec(spec.image)
+        if source_image.context_path is not None:
+            source_image.context_path = str(Path(source_image.context_path).expanduser().resolve())
+        scope = self._preparation_scope(selected_workspace)
+        with (
+            nullcontext(self.preparation)
+            if self.preparation is not None
+            else DeploymentPreparation()
+        ) as preparation:
+            image_future = (
+                preparation.image(
+                    _preparation_key(
+                        {
+                            "scope": scope,
+                            "image": source_image.spec().model_dump(mode="json"),
+                            "credentials": {**source_image.get_credentials_from_env()},
+                        }
+                    ),
+                    lambda: self._prepare_image(source_image),
                 )
-                source_object_id = self._source_object_id(
-                    spec,
-                    sync_source=sync_source,
-                    source_root=selected_root,
-                    archive_prefix=archive_prefix,
-                )
-                if verification is not None:
-                    verification.result()
-            prepared_spec = self._finish_image(spec, image_operation)
+                if self.client is None or self.image_client is not None
+                else None
+            )
+            source_object_id = self._source_object_id(
+                spec,
+                sync_source=sync_source,
+                source_root=selected_root,
+                archive_prefix=archive_prefix,
+                preparation=preparation,
+                scope=scope,
+            )
+            prepared_spec = (
+                spec.model_copy(update={"image": image_future.result()})
+                if image_future is not None
+                else spec
+            )
         with self._step("Runtime", prepared_spec.name) as step:
             response = self.control_client.get_or_create_stub(
                 _stub_request_from_spec(
@@ -581,41 +602,41 @@ class DeploymentClient(ControlClientConfigMixin):
         )
 
     def _http_channel(self) -> HttpChannel:
-        if self._channel is None:
-            self._channel = control_http_channel(self._config())
-        return self._channel
+        with self._client_lock:
+            if self._channel is None:
+                self._channel = control_http_channel(self._config())
+            return self._channel
 
-    def _image_operation(
-        self, spec: DeploymentSpec, *, image: Image | None
-    ) -> ImageBuildOperation | None:
-        if self.client is not None and self.image_client is None:
-            return None
-        source_image = image or _image_from_spec(spec.image)
-        prepared_image = source_image
-        if _needs_context_upload(prepared_image):
-            prepared_image = prepared_image._sync_context(self._object_client())
+    def _prepare_image(self, image: Image) -> ImageSpec:
+        if _needs_context_upload(image):
+            image._sync_context(self._object_client())
 
-        return ImageBuildOperation(prepared_image, self._image_client(), terminal=self.terminal)
-
-    def _finish_image(
-        self, spec: DeploymentSpec, operation: ImageBuildOperation | None
-    ) -> DeploymentSpec:
-        if operation is None:
-            return spec
-        result = operation.finish()
+        with ImageBuildOperation(image, self._image_client(), terminal=self.terminal) as operation:
+            operation.verify()
+            result = operation.finish()
         if not result.success:
             msg = result.error or "image build failed"
             if result.build_id:
                 msg = f"{msg} (build {result.build_id})"
             raise ImageBuildError(msg)
 
-        built_spec = operation.image.spec().model_copy(
+        return operation.image.spec().model_copy(
             update={
                 "image_id": result.image_id or operation.image.spec().image_id,
                 "python_version": result.python_version or operation.image.spec().python_version,
             }
         )
-        return spec.model_copy(update={"image": built_spec})
+
+    def _preparation_scope(self, workspace: str) -> str:
+        config = self._config()
+        return _preparation_key(
+            {
+                "endpoint": config.endpoint,
+                "workspace": workspace,
+                "token": config.token,
+                "timeout": config.timeout_seconds,
+            }
+        )
 
     def _step(self, name: str, summary: str) -> AbstractContextManager[TerminalStep]:
         if self.terminal is None:
@@ -641,6 +662,8 @@ class DeploymentClient(ControlClientConfigMixin):
         sync_source: bool | None,
         source_root: str | Path | None,
         archive_prefix: tuple[str, ...],
+        preparation: DeploymentPreparation,
+        scope: str,
     ) -> str:
         selected_sync = self.sync_source if sync_source is None else sync_source
         metadata_object_id = _metadata_str(spec.metadata, "object_id")
@@ -653,23 +676,38 @@ class DeploymentClient(ControlClientConfigMixin):
 
         from lazycloud.source_sync import SourcePackageSyncer
 
-        result = SourcePackageSyncer(
+        root = Path(selected_root or ".").expanduser().resolve()
+        syncer = SourcePackageSyncer(
             self._object_client(),
-            root_dir=selected_root or ".",
+            root_dir=root,
             archive_prefix=archive_prefix,
             terminal=self.terminal,
-        ).sync(
-            ignore_patterns=self.source_ignore_patterns or None,
-            include_patterns=self.source_include_patterns or None,
         )
-        return result.object_id
+        return preparation.source(
+            _preparation_key(
+                {
+                    "scope": scope,
+                    "root": str(root),
+                    "prefix": list(archive_prefix),
+                    "ignore": list(self.source_ignore_patterns),
+                    "include": list(self.source_include_patterns),
+                }
+            ),
+            lambda: (
+                syncer.sync(
+                    ignore_patterns=self.source_ignore_patterns or None,
+                    include_patterns=self.source_include_patterns or None,
+                ).object_id
+            ),
+        )
 
     def _object_client(self) -> ObjectUploadClient:
-        if self.object_client is None:
-            self.object_client = _DefaultObjectUploadClient(
-                self._config(), channel=self._http_channel()
-            )
-        return self.object_client
+        with self._client_lock:
+            if self.object_client is None:
+                self.object_client = _DefaultObjectUploadClient(
+                    self._config(), channel=self._http_channel()
+                )
+            return self.object_client
 
 
 @dataclass(frozen=True, slots=True)
@@ -841,6 +879,10 @@ def _image_from_spec(spec: ImageSpec) -> Image:
 def _needs_context_upload(image: Image) -> bool:
     spec = image.spec()
     return bool((spec.context_path or spec.dockerfile) and not spec.context_object_id)
+
+
+def _preparation_key(payload: dict[str, JsonValue]) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def _metadata_int(metadata: Mapping[str, JsonValue], key: str) -> int:

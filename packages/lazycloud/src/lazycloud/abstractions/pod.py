@@ -45,6 +45,7 @@ from lazycloud.session.deployment import (
     DeploymentControlClient,
     DeploymentResourceClient,
 )
+from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.terminal import Terminal
 
 
@@ -466,6 +467,7 @@ class Pod(ControlClientConfigMixin):
         workspace: str | None = None,
         external_url: str | None = None,
         source_root: str | Path | None = None,
+        _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
         if name is not None:
             self.name = name
@@ -478,6 +480,7 @@ class Pod(ControlClientConfigMixin):
                 timeout_seconds=self.timeout_seconds,
                 sync_source=True,
                 terminal=self.terminal,
+                preparation=_preparation,
             ).create(
                 self.spec(),
                 workspace=workspace or self.workspace,

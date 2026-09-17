@@ -86,6 +86,7 @@ from lazycloud.env import called_on_import, is_local
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
+from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
 from lazycloud.terminal import Terminal, TerminalStep
 from lazycloud.values import cloudpickle_bytes
@@ -394,6 +395,7 @@ class Function(Generic[P, R]):
         name: str | None = None,
         workspace: str | None = None,
         source_root: str | Path | None = None,
+        _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
         try:
             response = DeploymentClient(
@@ -404,6 +406,7 @@ class Function(Generic[P, R]):
                 timeout_seconds=self.timeout,
                 sync_source=True,
                 terminal=self.terminal,
+                preparation=_preparation,
             ).create(
                 self.spec(),
                 name=name,

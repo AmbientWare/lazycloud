@@ -84,6 +84,7 @@ from lazycloud.env import is_local
 from lazycloud.json_contracts import parse_json_value
 from lazycloud.references import dotted_reference
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
+from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.terminal import Terminal
 
 P = ParamSpec("P")
@@ -344,12 +345,14 @@ class Endpoint(Generic[P, R]):
         name: str | None = None,
         workspace: str | None = None,
         source_root: str | Path | None = None,
+        _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
         return _deploy_endpoint(
             self,
             name=name,
             workspace=workspace,
             source_root=source_root,
+            preparation=_preparation,
         )
 
     def serve(
@@ -717,12 +720,14 @@ class ASGI:
         name: str | None = None,
         workspace: str | None = None,
         source_root: str | Path | None = None,
+        _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
         return _deploy_endpoint(
             self,
             name=name,
             workspace=workspace,
             source_root=source_root,
+            preparation=_preparation,
         )
 
     def serve(
@@ -1144,6 +1149,7 @@ def _deploy_endpoint(
     name: str | None = None,
     workspace: str | None,
     source_root: str | Path | None = None,
+    preparation: DeploymentPreparation | None = None,
 ) -> DeployStubResponse:
     try:
         response = DeploymentClient(
@@ -1154,6 +1160,7 @@ def _deploy_endpoint(
             timeout_seconds=owner.timeout,
             sync_source=True,
             terminal=owner.terminal,
+            preparation=preparation,
         ).create(
             owner.spec(),
             name=name,
