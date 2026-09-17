@@ -369,7 +369,7 @@ both replicas; disruption budgets cannot prevent provider reclamation.
 Argo and External Secrets share Spot capacity. Auto Mode provisioning runs
 outside these nodes, so their outage does not stop replacement provisioning.
 The cache retains its single EBS claim and recovers in the disk's zone. See
-[the migration and recovery checks](SPOT_PLAN.md) before draining a node.
+[the migration and recovery checks](spot-capacity.md) before draining a node.
 
 There is no metrics-server in this cluster, so `kubectl top` returns
 `Metrics API not available`. Read usage from the kubelet through the API server

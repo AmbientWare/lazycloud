@@ -54,17 +54,6 @@ Calculate savings from the actual selected nodes, prices, Auto Mode charges,
 disks, IPs, transfer, and replacement overlap. A quoted Spot price or a projected
 monthly layout is not an observed bill.
 
-The September 10, 2026 rollout recorded successful cache write/read recovery
-with the original volume. Its public function check stopped at billing
-admission, so it did not establish task recovery under interruption. The
-seven-day savings comparison was also outstanding. Those historical results
-do not establish the state of a later release.
-
-The original qualification targets were at least $80/month net savings over
-a comparable seven-day window, API p95 and placement delay within 10% of the
-baseline, and an error-rate increase no greater than 0.1 percentage points.
-Keep current evidence with the release being accepted.
-
 ## Recover from failed qualification
 
 If availability or savings fail the reviewed bounds, restore the approved

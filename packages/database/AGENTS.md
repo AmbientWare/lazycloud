@@ -9,9 +9,8 @@ Redis hot state stays out unless the history itself has to be durable.
 
 `0001_relational_baseline` is deployed and frozen. Schema changes require forward
 migrations; editing a deployed revision invalidates the database's history.
-The completed owner-authorized reset is recorded in `deploy/database-reset.md`.
-Local databases remain disposable. This release does not authorize another
-production reset.
+The completed owner-authorized reset in PR #295 does not authorize another
+production reset. Local databases remain disposable.
 
 The revisions are explicit DDL, never `create_all`. A migration generated from
 the live metadata always agrees with it, which sounds like safety and is the

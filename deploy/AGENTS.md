@@ -17,8 +17,7 @@ substitutes, and gives every service an explicit owner and health check.
   repairs. GitHub deployment jobs retain their configured OIDC identity.
 - Deployed databases are persistent. Append Alembic revisions; never rewrite
   the baseline or reset production data during an upgrade. The completed
-  owner-authorized relational reset is recorded in `deploy/database-reset.md`;
-  it does not authorize another reset.
+  owner-authorized relational reset in PR #295 does not authorize another reset.
 - Run migrations before starting new application pods. Compatible schema changes
   must preserve older writers during rollout. Ownership cutovers stop old writers
   before migration and resume only with the new build. Never roll an older build
