@@ -53,7 +53,7 @@ class FakeGatewayClient:
         self,
         body: WorkspaceSyncBatch,
     ) -> WorkspaceSyncResponse:
-        self.sync_requests.append(body)
+        self.sync_requests.append(body.model_copy(update={"data": tuple(body.data)}))
         return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 

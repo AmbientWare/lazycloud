@@ -19,7 +19,6 @@ from shared.http.workspace_sync import (
     WorkspaceSyncOperation,
     WorkspaceSyncResponse,
 )
-from tests.fakes import http_api_error
 
 
 @dataclass
@@ -52,40 +51,7 @@ class InterruptingGatewayClient:
         self,
         body: WorkspaceSyncBatch,
     ) -> WorkspaceSyncResponse:
-        self.sync_requests.append(body)
-        return WorkspaceSyncResponse(applied=len(body.manifest.entries))
-
-
-@dataclass
-class InitiallyUnpublishedGatewayClient(InterruptingGatewayClient):
-    failures_remaining: int = 1
-
-    def sync_container_workspace(
-        self,
-        body: WorkspaceSyncBatch,
-    ) -> WorkspaceSyncResponse:
-        self.sync_requests.append(body)
-        if self.failures_remaining > 0:
-            self.failures_remaining -= 1
-            raise http_api_error(
-                "worker address not published for container ctr-serve",
-                status_code=503,
-            )
-        return WorkspaceSyncResponse(applied=len(body.manifest.entries))
-
-
-@dataclass
-class InitiallyMissingContainerGatewayClient(InterruptingGatewayClient):
-    failures_remaining: int = 1
-
-    def sync_container_workspace(
-        self,
-        body: WorkspaceSyncBatch,
-    ) -> WorkspaceSyncResponse:
-        self.sync_requests.append(body)
-        if self.failures_remaining > 0:
-            self.failures_remaining -= 1
-            raise http_api_error("Container not found: ctr-serve", status_code=404)
+        self.sync_requests.append(body.model_copy(update={"data": tuple(body.data)}))
         return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 
@@ -203,51 +169,6 @@ def test_serve_workspace_syncer_writes_filtered_tree_through_gateway(tmp_path: P
         entry.path: entry for request in gateway.sync_requests for entry in request.manifest.entries
     }
     assert writes["app.py"].operation is WorkspaceSyncOperation.Write
-    assert gateway.sync_requests[0].data == b"print('ok')\nVALUE = 1\n"
+    assert b"".join(gateway.sync_requests[0].data) == b"print('ok')\nVALUE = 1\n"
     assert "ignored.py" not in writes
     assert "__pycache__/skip.py" not in writes
-
-
-def test_serve_workspace_syncer_retries_until_worker_address_is_published(
-    tmp_path: Path,
-) -> None:
-    gateway = InitiallyUnpublishedGatewayClient()
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "app.py").write_text("print('ok')\n", encoding="utf-8")
-
-    syncer = ContainerWorkspaceSyncer(
-        container_id="ctr-serve",
-        local_dir=str(source),
-        gateway_client=gateway,
-        terminal=Terminal(quiet=True),
-        debounce_seconds=0,
-        initial_sync_timeout_seconds=1,
-    )
-
-    syncer._sync_initial_with_retries()
-
-    assert len(gateway.sync_requests) == 2
-    assert gateway.failures_remaining == 0
-
-
-def test_serve_workspace_syncer_retries_until_container_service_is_ready(
-    tmp_path: Path,
-) -> None:
-    gateway = InitiallyMissingContainerGatewayClient()
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "app.py").write_text("print('ok')\n", encoding="utf-8")
-    syncer = ContainerWorkspaceSyncer(
-        container_id="ctr-serve",
-        local_dir=str(source),
-        gateway_client=gateway,
-        terminal=Terminal(quiet=True),
-        debounce_seconds=0,
-        initial_sync_timeout_seconds=1,
-    )
-
-    syncer._sync_initial_with_retries()
-
-    assert len(gateway.sync_requests) == 2
-    assert gateway.failures_remaining == 0

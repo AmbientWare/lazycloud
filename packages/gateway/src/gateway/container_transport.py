@@ -84,20 +84,21 @@ class HttpContainerServiceTransport:
         path = f"{_CONTAINER_SERVICE_HTTP_PREFIX}/{method.value}"
         if stream:
             path = f"{path}/stream"
-        payload = (
-            request.encode()
-            if isinstance(request, WorkspaceSyncBatch)
-            else json.dumps(
+        if isinstance(request, WorkspaceSyncBatch):
+            payload = request.encode()
+            content_length = request.encoded_size
+        else:
+            payload = json.dumps(
                 _encode_container_service_wire_value(request.model_dump(mode="python")),
                 separators=(",", ":"),
             ).encode("utf-8")
-        )
+            content_length = len(payload)
         headers = {
             "accept": "application/json",
             "content-type": WORKSPACE_SYNC_CONTENT_TYPE
             if isinstance(request, WorkspaceSyncBatch)
             else "application/json",
-            "content-length": str(len(payload)),
+            "content-length": str(content_length),
             **self.options.auth_metadata,
         }
         with self._connection(timeout_seconds) as connection:

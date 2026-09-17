@@ -9,7 +9,7 @@ from foundation.io_utils import OutputMessage
 from shared.checkpoints import CHECKPOINT_OPERATION_TIMEOUT_SECONDS
 from shared.contracts import ContractModel
 from shared.errors import UpstreamUnavailableError
-from shared.http.workspace_sync import WorkspaceSyncBatch
+from shared.http.workspace_sync import SYNC_TIMEOUT_SECONDS, WorkspaceSyncBatch
 
 from .models import (
     CONTAINER_CLIENT_LOG_KEEPALIVE_SECONDS,
@@ -431,6 +431,7 @@ class ContainerServiceClient:
             ContainerServiceMethod.ContainerSyncWorkspace,
             request,
             SyncContainerWorkspaceResponse,
+            timeout_seconds=SYNC_TIMEOUT_SECONDS,
         )
 
     def _unary(

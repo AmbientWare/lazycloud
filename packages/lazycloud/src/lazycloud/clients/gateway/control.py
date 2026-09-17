@@ -26,6 +26,7 @@ from shared.http.gateway import (
     ResolveDeploymentTargetResponse,
 )
 from shared.http.workspace_sync import (
+    SYNC_TIMEOUT_SECONDS,
     WORKSPACE_SYNC_CONTENT_TYPE,
     WorkspaceSyncBatch,
     WorkspaceSyncResponse,
@@ -137,7 +138,11 @@ class GatewayControlClient:
                     "POST",
                     self._scoped("/gateway/containers/sync-workspace"),
                     data=body.encode(),
-                    headers={"Content-Type": WORKSPACE_SYNC_CONTENT_TYPE},
+                    timeout_seconds=SYNC_TIMEOUT_SECONDS,
+                    headers={
+                        "Content-Type": WORKSPACE_SYNC_CONTENT_TYPE,
+                        "Content-Length": str(body.encoded_size),
+                    },
                 )
             )
         except ValidationError as exc:

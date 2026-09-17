@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -383,14 +384,25 @@ def test_worker_container_service_workspace_sync(tmp_path: Path) -> None:
             container_id="ctr-1",
             entries=[
                 WorkspaceSyncEntry(
-                    operation=WorkspaceSyncOperation.Write, path="sync/a.txt", size=4, mode=0o755
+                    operation=WorkspaceSyncOperation.Write,
+                    path="sync/a.txt",
+                    size=4,
+                    mode=0o755,
+                    sha256=hashlib.sha256(b"sync").hexdigest(),
+                    file_size=4,
+                    transfer_id="a" * 32,
                 ),
                 WorkspaceSyncEntry(
-                    operation=WorkspaceSyncOperation.Write, path="sync/b.txt", size=3
+                    operation=WorkspaceSyncOperation.Write,
+                    path="sync/b.txt",
+                    size=3,
+                    sha256=hashlib.sha256(b"new").hexdigest(),
+                    file_size=3,
+                    transfer_id="b" * 32,
                 ),
             ],
         ),
-        data=b"syncnew",
+        data=(b"syncnew",),
     )
     result = service.sync_workspace(WorkspaceSyncBatch.decode(batch.encode()))
     assert result.ok and result.applied == 2
@@ -405,11 +417,16 @@ def test_worker_container_service_workspace_sync(tmp_path: Path) -> None:
             container_id="ctr-1",
             entries=[
                 WorkspaceSyncEntry(
-                    operation=WorkspaceSyncOperation.Write, path="escape/secret", size=3
+                    operation=WorkspaceSyncOperation.Write,
+                    path="escape/secret",
+                    size=3,
+                    sha256=hashlib.sha256(b"bad").hexdigest(),
+                    file_size=3,
+                    transfer_id="c" * 32,
                 ),
             ],
         ),
-        data=b"bad",
+        data=(b"bad",),
     )
     assert not service.sync_workspace(malicious).ok
     assert not (outside / "secret").exists()

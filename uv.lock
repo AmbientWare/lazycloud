@@ -1266,6 +1266,7 @@ name = "lazycloud-shared"
 version = "0.1.0"
 source = { editable = "packages/shared" }
 dependencies = [
+    { name = "anyio" },
     { name = "certifi" },
     { name = "croniter" },
     { name = "httpx" },
@@ -1275,6 +1276,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4,<5" },
     { name = "certifi", specifier = ">=2025.1.31" },
     { name = "croniter", specifier = ">=6.2.4" },
     { name = "httpx", specifier = ">=0.28,<1" },

@@ -83,6 +83,14 @@ class ObjectWriteClaim:
     write_required: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class ObjectUploadLease:
+    bucket: str
+    key: str
+    size: int
+    upload_id: str
+
+
 @dataclass(slots=True)
 class ObjectRepository:
     session: Session
@@ -276,6 +284,37 @@ class ObjectRepository:
             raise ConflictError("object write claim was replaced")
         row.write_upload_id = upload_id
         self.session.flush()
+
+    def renew_upload(
+        self, object_id: str, claim_id: str, *, workspace_id: str
+    ) -> ObjectUploadLease:
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        CleanupRepository(self.session).lock_keys({f"object:{object_id}"})
+        row = self.session.execute(
+            update(ObjectTable)
+            .where(
+                ObjectTable.id == object_id,
+                ObjectTable.workspace_id == workspace_id,
+                ObjectTable.write_claim_id == claim_id,
+                ObjectTable.write_upload_id != "",
+                ObjectTable.write_target_size.is_not(None),
+            )
+            .values(write_claimed_at=utc_now())
+            .returning(
+                ObjectTable.bucket,
+                ObjectTable.key,
+                ObjectTable.write_target_size,
+                ObjectTable.write_upload_id,
+            )
+        ).one_or_none()
+        if row is None or row.write_target_size is None:
+            raise NotFoundError("active object upload not found")
+        return ObjectUploadLease(
+            bucket=row.bucket,
+            key=row.key,
+            size=row.write_target_size,
+            upload_id=row.write_upload_id,
+        )
 
     def list_stale_write_claims(
         self,

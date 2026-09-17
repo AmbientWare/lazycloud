@@ -7,9 +7,12 @@ import os
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Protocol
+from uuid import uuid4
 
 from shared.containers import ContainerStatus
 from shared.deployment_records import CpuRequest, MemoryRequest
@@ -23,8 +26,10 @@ from shared.http.gateway import (
     GetUrlResponse,
 )
 from shared.http.workspace_sync import (
-    MAX_SYNC_BYTES,
+    MAX_SYNC_BATCH_BYTES,
     MAX_SYNC_CHANGES,
+    MAX_SYNC_MANIFEST_BYTES,
+    SYNC_CHUNK_BYTES,
     WorkspaceSyncBatch,
     WorkspaceSyncEntry,
     WorkspaceSyncManifest,
@@ -35,6 +40,7 @@ from shared.paths import state_home
 from shared.transport_retry import (
     TRANSIENT_TRANSPORT_ERRORS,
     TransientRetry,
+    call_with_transient_retry,
     is_transient_transport_error,
 )
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -448,50 +454,142 @@ class ContainerWorkspaceSyncer:
         self._send_changes(removed, changed)
 
     def _send_changes(self, removed: list[str], changed: list[str]) -> None:
+        with TemporaryDirectory(prefix="lazycloud-sync-") as temporary:
+            self._send_snapshots(removed, changed, Path(temporary))
+
+    def _send_snapshots(self, removed: list[str], changed: list[str], temporary: Path) -> None:
         entries: list[WorkspaceSyncEntry] = []
-        content = bytearray()
+        sources: list[Path] = []
+        total_size = 0
+        manifest_size = 1024
         root = Path(self.local_dir).expanduser().resolve()
         changed_paths = set(changed)
-        for relative in removed + changed:
+        for index, relative in enumerate(removed + changed):
             if self._stop_event.is_set():
                 return
-            data = b""
+            size = 0
+            checksum = ""
             mode = 0o644
             operation = WorkspaceSyncOperation.Delete
+            snapshot: Path | None = None
             if relative in changed_paths:
                 path = root / relative
                 if not path.resolve().is_relative_to(root):
                     raise ValueError(f"source file escapes source root: {relative}")
                 try:
                     with path.open("rb") as source:
-                        data = source.read(MAX_SYNC_BYTES + 1)
                         mode = os.fstat(source.fileno()).st_mode & 0o777
+                        snapshot = temporary / str(index)
+                        digest = hashlib.sha256()
+                        with snapshot.open("wb") as target:
+                            while chunk := source.read(SYNC_CHUNK_BYTES):
+                                if self._stop_event.is_set():
+                                    return
+                                target.write(chunk)
+                                digest.update(chunk)
+                                size += len(chunk)
+                        checksum = digest.hexdigest()
                     operation = WorkspaceSyncOperation.Write
                 except FileNotFoundError:
                     pass
-                if len(data) > MAX_SYNC_BYTES:
-                    raise ValueError(f"live sync file exceeds 64 MiB: {relative}")
-            if entries and (
-                len(content) + len(data) > 8 * 1024 * 1024 or len(entries) >= MAX_SYNC_CHANGES
-            ):
-                self._send_batch(entries, content)
-                entries, content = [], bytearray()
-            entries.append(
-                WorkspaceSyncEntry(operation=operation, path=relative, mode=mode, size=len(data))
+            entry = WorkspaceSyncEntry(
+                operation=operation,
+                path=relative,
+                mode=mode,
+                size=min(size, MAX_SYNC_BATCH_BYTES),
+                file_size=size,
+                sha256=checksum,
+                transfer_id=uuid4().hex if snapshot is not None else "",
             )
-            content.extend(data)
+            entry_bytes = len(entry.model_dump_json().encode()) + 1
+            if entries and (
+                total_size + size > MAX_SYNC_BATCH_BYTES
+                or len(entries) >= MAX_SYNC_CHANGES
+                or manifest_size + entry_bytes > MAX_SYNC_MANIFEST_BYTES
+            ):
+                self._send_batch(entries, sources)
+                for source_path in sources:
+                    source_path.unlink()
+                entries, sources = [], []
+                total_size, manifest_size = 0, 1024
+            if size > MAX_SYNC_BATCH_BYTES and snapshot is not None:
+                try:
+                    for offset in range(0, size, MAX_SYNC_BATCH_BYTES):
+                        if self._stop_event.is_set():
+                            raise InterruptedError("workspace sync stopped")
+                        fragment = entry.model_copy(
+                            update={
+                                "offset": offset,
+                                "size": min(MAX_SYNC_BATCH_BYTES, size - offset),
+                            }
+                        )
+                        self._send_batch([fragment], [snapshot])
+                except BaseException:
+                    abort = WorkspaceSyncEntry(
+                        operation=WorkspaceSyncOperation.Abort,
+                        path=relative,
+                        transfer_id=entry.transfer_id,
+                    )
+                    with suppress(Exception):
+                        self._send_batch([abort], [])
+                    raise
+                snapshot.unlink()
+                continue
+            entries.append(entry)
+            total_size += size
+            manifest_size += entry_bytes
+            if snapshot is not None:
+                sources.append(snapshot)
         if entries:
-            self._send_batch(entries, content)
+            self._send_batch(entries, sources)
         if removed or changed:
             self._detail(f"Synced {len(changed)} changed, {len(removed)} removed")
 
-    def _send_batch(self, entries: list[WorkspaceSyncEntry], content: bytearray) -> None:
-        response = self.gateway_client.sync_container_workspace(
-            WorkspaceSyncBatch(
-                manifest=WorkspaceSyncManifest(container_id=self.container_id, entries=entries),
-                data=bytes(content),
+    def _send_batch(self, entries: list[WorkspaceSyncEntry], sources: list[Path]) -> None:
+        def content() -> Iterator[bytes]:
+            writes = [entry for entry in entries if entry.operation is WorkspaceSyncOperation.Write]
+            for path, entry in zip(sources, writes, strict=True):
+                with path.open("rb") as source:
+                    source.seek(entry.offset)
+                    remaining = entry.size
+                    while remaining:
+                        chunk = source.read(min(remaining, SYNC_CHUNK_BYTES))
+                        if not chunk:
+                            raise ValueError("workspace snapshot is incomplete")
+                        yield chunk
+                        remaining -= len(chunk)
+
+        def send() -> WorkspaceSyncResponse:
+            return self.gateway_client.sync_container_workspace(
+                WorkspaceSyncBatch(
+                    manifest=WorkspaceSyncManifest(container_id=self.container_id, entries=entries),
+                    data=content(),
+                )
             )
-        )
+
+        try:
+            response = call_with_transient_retry(send)
+        except BaseException:
+            aborts = [
+                WorkspaceSyncEntry(
+                    operation=WorkspaceSyncOperation.Abort,
+                    path=entry.path,
+                    transfer_id=entry.transfer_id,
+                )
+                for entry in entries
+                if entry.operation is WorkspaceSyncOperation.Write and entry.size == entry.file_size
+            ]
+            if aborts:
+                with suppress(Exception):
+                    self.gateway_client.sync_container_workspace(
+                        WorkspaceSyncBatch(
+                            manifest=WorkspaceSyncManifest(
+                                container_id=self.container_id, entries=aborts
+                            ),
+                            data=(),
+                        )
+                    )
+            raise
         if response.applied != len(entries):
             raise RuntimeError("worker did not acknowledge every source change")
 

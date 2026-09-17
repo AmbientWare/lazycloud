@@ -16,6 +16,8 @@ from shared.http.objects import (
     CompleteObjectUploadRequest,
     HeadObjectRequest,
     HeadObjectResponse,
+    ObjectUploadPartRequest,
+    ObjectUploadPartResponse,
     PutObjectRequest,
     PutObjectResponse,
 )
@@ -66,6 +68,16 @@ def begin_object_upload(
     return service.begin_object_upload(request, workspace_id=workspace_id)
 
 
+@router.post("/objects/uploads/{object_id}/parts", response_model=ObjectUploadPartResponse)
+def sign_object_upload_part(
+    object_id: str,
+    request: ObjectUploadPartRequest,
+    workspace_id: write_transfer,
+    service: GatewayControlService = Depends(gateway_service),
+) -> ObjectUploadPartResponse:
+    return service.sign_object_upload_part(object_id, request, workspace_id=workspace_id)
+
+
 @router.post("/objects/uploads/{object_id}/complete", response_model=PutObjectResponse)
 def complete_object_upload(
     object_id: str,
@@ -80,7 +92,7 @@ def complete_object_upload(
 def abort_object_upload(
     object_id: str,
     request: AbortObjectUploadRequest,
-    workspace_id: write_transfer,
+    workspace_id: write_workspace,
     service: GatewayControlService = Depends(gateway_service),
 ) -> None:
     service.abort_object_upload(object_id, request, workspace_id=workspace_id)

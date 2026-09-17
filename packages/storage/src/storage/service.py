@@ -41,7 +41,16 @@ from shared.errors import (
     NotFoundError,
     UpstreamUnavailableError,
 )
-from shared.http.objects import BeginObjectUploadResponse, ObjectUploadTarget
+from shared.http.objects import (
+    MAX_OBJECT_BYTES,
+    BeginObjectUploadResponse,
+    CompletedObjectUploadPart,
+    ObjectUploadPartRequest,
+    ObjectUploadPartResponse,
+    ObjectUploadTarget,
+    object_upload_part_count,
+    object_upload_part_size,
+)
 from shared.objects import ObjectRecord, ObjectWriteCommand
 from shared.paths import state_home
 from shared.timestamps import utc_now
@@ -527,8 +536,8 @@ class ObjectStorage:
         overwrite: bool,
     ) -> BeginObjectUploadResponse:
         self._validate_bucket(bucket)
-        if size > 5 * 1024**3:
-            raise InvalidInputError("object uploads cannot exceed 5 GiB")
+        if not 0 <= size <= MAX_OBJECT_BYTES:
+            raise InvalidInputError("object uploads must be between 0 bytes and 5115 GiB")
         physical_bucket = self.physical_bucket(bucket)
         physical_key = self.physical_key_for_workspace(workspace_id, bucket=bucket, key=key)
         command = ObjectWriteCommand(
@@ -563,23 +572,9 @@ class ObjectStorage:
             )
             with self.context.database.session() as session:
                 ObjectRepository(session).bind_upload(claim, upload_id, workspace_id=workspace_id)
-            checksum = base64.b64encode(bytes.fromhex(sha256)).decode("ascii")
-            url = self.object_client.generate_presigned_upload_part_url(
-                physical_key,
-                bucket=physical_bucket,
-                upload_id=upload_id,
-                part_number=1,
-                expires_seconds=900,
-                checksum_sha256=checksum,
-                content_length=size,
-            )
             return BeginObjectUploadResponse(
                 object_id=claim.record.id,
-                upload=ObjectUploadTarget(
-                    claim_id=claim.claim_id,
-                    url=url,
-                    headers={"Content-Length": str(size), "x-amz-checksum-sha256": checksum},
-                ),
+                upload=ObjectUploadTarget(claim_id=claim.claim_id),
             )
         except BaseException:
             if upload_id:
@@ -594,20 +589,46 @@ class ObjectStorage:
                 ObjectRepository(session).abort_write(claim, workspace_id=workspace_id)
             raise
 
+    def sign_upload_part(
+        self, object_id: str, request: ObjectUploadPartRequest, *, workspace_id: str
+    ) -> ObjectUploadPartResponse:
+        with self.context.database.session() as session:
+            lease = ObjectRepository(session).renew_upload(
+                object_id, request.claim_id, workspace_id=workspace_id
+            )
+            if request.part_number > object_upload_part_count(lease.size):
+                raise InvalidInputError("upload part exceeds the declared object size")
+            part_size = object_upload_part_size(lease.size)
+            size = min(part_size, lease.size - (request.part_number - 1) * part_size)
+            checksum = base64.b64encode(bytes.fromhex(request.sha256)).decode("ascii")
+            url = self.object_client.generate_presigned_upload_part_url(
+                self.physical_key_for_workspace(workspace_id, bucket=lease.bucket, key=lease.key),
+                bucket=self.physical_bucket(lease.bucket),
+                upload_id=lease.upload_id,
+                part_number=request.part_number,
+                expires_seconds=900,
+                checksum_sha256=checksum,
+                content_length=size,
+            )
+        return ObjectUploadPartResponse(
+            url=url, headers={"Content-Length": str(size), "x-amz-checksum-sha256": checksum}
+        )
+
     def finish_direct_upload(
         self,
         *,
         workspace_id: str,
         object_id: str,
         claim_id: str,
-        etag: str | None,
+        parts: list[CompletedObjectUploadPart] | None,
+        claimed_before: datetime | None = None,
     ) -> ObjectRecord | None:
         with self.context.database.session() as session:
             WorkspaceRepository(session).lock_object_write_completion_owner(workspace_id)
             repository = ObjectRepository(session)
             location = repository.get_location(object_id, workspace_id=workspace_id)
             if location is None:
-                if etag is None:
+                if parts is None:
                     return None
                 raise NotFoundError("object upload not found")
             CleanupRepository(session).lock_keys(
@@ -623,9 +644,13 @@ class ObjectStorage:
             if not record.write_claim_id:
                 return record
             if record.write_claim_id != claim_id or (
-                etag is not None and not record.write_upload_id
+                parts is not None and not record.write_upload_id
             ):
                 raise ConflictError("object upload claim is no longer active")
+            if claimed_before is not None and (
+                record.write_claimed_at is None or record.write_claimed_at > claimed_before
+            ):
+                raise ConflictError("object upload lease was renewed")
             target = record.write_target
             if target is None:
                 raise ConflictError("object upload target is missing")
@@ -638,7 +663,7 @@ class ObjectStorage:
                 workspace_id, bucket=record.bucket, key=record.key
             )
             bucket = self.physical_bucket(record.bucket)
-            if etag is None:
+            if parts is None:
                 if record.write_upload_id:
                     self.object_client.abort_multipart_upload(
                         key, bucket=bucket, upload_id=record.write_upload_id
@@ -653,12 +678,16 @@ class ObjectStorage:
                     )
                 repository.abort_write(claim, workspace_id=workspace_id)
                 return None
+            if [part.part_number for part in parts] != list(
+                range(1, object_upload_part_count(target.size) + 1)
+            ):
+                raise InvalidInputError("upload completion requires every part in order")
             try:
                 self.object_client.complete_multipart_upload(
                     key,
                     bucket=bucket,
                     upload_id=record.write_upload_id,
-                    completed_parts=[(1, etag)],
+                    completed_parts=[(part.part_number, part.etag) for part in parts],
                 )
             except NotFoundError:
                 if self._stored_object(claim.record, key) is None:
@@ -1149,7 +1178,8 @@ class ObjectStorage:
                     workspace_id=owned.workspace_id,
                     object_id=owned.record.id,
                     claim_id=owned.record.write_claim_id,
-                    etag=None,
+                    parts=None,
+                    claimed_before=claimed_before,
                 )
             except ConflictError:
                 continue

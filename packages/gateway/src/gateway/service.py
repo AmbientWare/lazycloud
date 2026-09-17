@@ -187,6 +187,8 @@ from shared.http.objects import (
     HeadObjectRequest,
     HeadObjectResponse,
     ObjectMetadata,
+    ObjectUploadPartRequest,
+    ObjectUploadPartResponse,
     PutObjectRequest,
     PutObjectResponse,
 )
@@ -479,6 +481,11 @@ class GatewayControlService:
             overwrite=request.overwrite,
         )
 
+    def sign_object_upload_part(
+        self, object_id: str, request: ObjectUploadPartRequest, *, workspace_id: str
+    ) -> ObjectUploadPartResponse:
+        return self.objects.sign_upload_part(object_id, request, workspace_id=workspace_id)
+
     def complete_object_upload(
         self, object_id: str, request: CompleteObjectUploadRequest, *, workspace_id: str
     ) -> PutObjectResponse:
@@ -486,7 +493,7 @@ class GatewayControlService:
             workspace_id=workspace_id,
             object_id=object_id,
             claim_id=request.claim_id,
-            etag=request.etag,
+            parts=request.parts,
         )
         if record is None:
             raise NotFoundError("object upload not found")
@@ -496,7 +503,7 @@ class GatewayControlService:
         self, object_id: str, request: AbortObjectUploadRequest, *, workspace_id: str
     ) -> None:
         self.objects.finish_direct_upload(
-            workspace_id=workspace_id, object_id=object_id, claim_id=request.claim_id, etag=None
+            workspace_id=workspace_id, object_id=object_id, claim_id=request.claim_id, parts=None
         )
 
     def object_download_url(

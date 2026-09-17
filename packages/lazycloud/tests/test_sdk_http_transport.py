@@ -27,6 +27,10 @@ from tests.http_server import running_http_server
 from typer.testing import CliRunner
 
 
+class _TransportServer(ThreadingHTTPServer):
+    upload_size: int = 0
+
+
 class _TransportHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self._handle()
@@ -72,10 +76,23 @@ class _TransportHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path.startswith("/gateway/objects/uploads"):
+            assert isinstance(self.server, _TransportServer)
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             assert self.headers.get("Authorization") == "Bearer test-token"
             if parsed.path.endswith("/complete"):
                 self._respond(200, b'{"object_id":"obj-stream"}', content_type="application/json")
+                return
+            if parsed.path.endswith("/parts"):
+                part: dict[str, JsonValue] = {
+                    "url": f"http://{self.headers['Host']}/direct-upload",
+                    "headers": {
+                        "Content-Length": str(self.server.upload_size),
+                        "x-amz-checksum-sha256": base64.b64encode(
+                            bytes.fromhex(body["sha256"])
+                        ).decode(),
+                    },
+                }
+                self._respond(200, json.dumps(part).encode(), content_type="application/json")
                 return
             name = body["object_metadata"]["name"]
             if name == "denied":
@@ -88,17 +105,11 @@ class _TransportHandler(BaseHTTPRequestHandler):
                 return
             assert body["bucket"] == SOURCE_PACKAGE_BUCKET
             assert body["metadata"] == {"kind": "source"}
+            self.server.upload_size = body["object_metadata"]["size"]
             target: dict[str, JsonValue] = {
                 "object_id": "obj-stream",
                 "upload": {
                     "claim_id": "claim",
-                    "url": f"http://{self.headers['Host']}/direct-upload",
-                    "headers": {
-                        "Content-Length": str(body["object_metadata"]["size"]),
-                        "x-amz-checksum-sha256": base64.b64encode(
-                            bytes.fromhex(body["hash"])
-                        ).decode(),
-                    },
                 },
             }
             self._respond(200, json.dumps(target).encode(), content_type="application/json")
@@ -138,7 +149,7 @@ class _TransportHandler(BaseHTTPRequestHandler):
 
 @contextmanager
 def _http_server() -> Iterator[str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _TransportHandler)
+    server = _TransportServer(("127.0.0.1", 0), _TransportHandler)
     server.daemon_threads = True
     with running_http_server(server):
         yield f"http://127.0.0.1:{server.server_port}"
