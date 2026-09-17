@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import re
+import shlex
 import zipfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,11 +29,11 @@ from shared.image_building import (
     sanitize_python_packages,
 )
 from shared.image_building.authoring import (
+    PROJECT_BUILD_STEP_KINDS,
     ImageBuildStep,
     ImageBuildStepKind,
     ImageSpec,
     LinuxArchitecture,
-    PythonVersion,
 )
 from shared.image_building.credentials import (
     ImageCredentialEnvVar,
@@ -41,8 +42,14 @@ from shared.image_building.credentials import (
     dedupe_names,
     resolve_registry_credentials,
 )
+from shared.image_building.python import normalize_python_version
 from typing_extensions import Self
 
+from lazycloud.abstractions.image_project import (
+    ImageProject,
+    load_conda_environment,
+    load_python_project,
+)
 from lazycloud.source_sync import collect_source_files
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 
@@ -155,7 +162,6 @@ class Image:
     ignore_python: bool = False
     include_files_patterns: tuple[str, ...] = field(default_factory=tuple)
     context_object_id: str | None = None
-    _base_image_explicit: bool = field(default=False, init=False, repr=False)
 
     def __init__(
         self,
@@ -169,9 +175,8 @@ class Image:
         architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
     ) -> None:
         self.architecture = LinuxArchitecture(architecture)
-        self.python_version = _normalize_python_version(str(python_version))
+        self.python_version = normalize_python_version(str(python_version))
         self.base = base_image or _default_image_base(self.python_version)
-        self._base_image_explicit = base_image is not None
         self.packages = tuple(_constructor_python_packages(python_packages))
         self.commands = tuple(str(command) for command in commands)
         self.build_steps = ()
@@ -192,8 +197,16 @@ class Image:
             self.with_envs(env_vars)
 
     @classmethod
-    def from_registry(cls, image_uri: str, credentials: ImageCredentialInput = None) -> Self:
-        return cls(base_image=image_uri, base_image_creds=credentials)
+    def from_registry(
+        cls,
+        image_uri: str,
+        credentials: ImageCredentialInput = None,
+        *,
+        python_version: str = "3.12",
+    ) -> Self:
+        return cls(
+            base_image=image_uri, base_image_creds=credentials, python_version=python_version
+        )
 
     @classmethod
     def from_id(cls, image_id: str) -> Self:
@@ -203,10 +216,118 @@ class Image:
     def from_dockerfile(cls, path: str | Path, context_dir: str | Path | None = None) -> Self:
         return cls()._with_dockerfile(path, context_dir=context_dir)
 
-    def micromamba(self) -> Self:
-        if not self.python_version.startswith("micromamba"):
-            self.python_version = _micromamba_python_version(self.python_version)
-        return self
+    @classmethod
+    def from_uv(
+        cls,
+        path: str | Path = ".",
+        *,
+        python_version: str | None = None,
+        extras: Sequence[str] = (),
+        groups: Sequence[str] = (),
+        base_image: str | None = None,
+        base_image_creds: ImageCredentialInput = None,
+        architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
+    ) -> Self:
+        return cls._from_project(
+            load_python_project(
+                path,
+                kind=ImageBuildStepKind.UvProject,
+                python_version=python_version,
+                extras=extras,
+                groups=groups,
+            ),
+            base_image=base_image,
+            base_image_creds=base_image_creds,
+            architecture=architecture,
+        )
+
+    @classmethod
+    def from_poetry(
+        cls,
+        path: str | Path = ".",
+        *,
+        python_version: str | None = None,
+        extras: Sequence[str] = (),
+        groups: Sequence[str] = (),
+        base_image: str | None = None,
+        base_image_creds: ImageCredentialInput = None,
+        architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
+    ) -> Self:
+        return cls._from_project(
+            load_python_project(
+                path,
+                kind=ImageBuildStepKind.PoetryProject,
+                python_version=python_version,
+                extras=extras,
+                groups=groups,
+            ),
+            base_image=base_image,
+            base_image_creds=base_image_creds,
+            architecture=architecture,
+        )
+
+    @classmethod
+    def from_pyproject(
+        cls,
+        path: str | Path = ".",
+        *,
+        python_version: str | None = None,
+        extras: Sequence[str] = (),
+        groups: Sequence[str] = (),
+        base_image: str | None = None,
+        base_image_creds: ImageCredentialInput = None,
+        architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
+    ) -> Self:
+        return cls._from_project(
+            load_python_project(
+                path,
+                kind=ImageBuildStepKind.Pyproject,
+                python_version=python_version,
+                extras=extras,
+                groups=groups,
+            ),
+            base_image=base_image,
+            base_image_creds=base_image_creds,
+            architecture=architecture,
+        )
+
+    @classmethod
+    def from_micromamba(
+        cls,
+        path: str | Path = "environment.yml",
+        *,
+        python_version: str | None = None,
+        base_image: str | None = None,
+        base_image_creds: ImageCredentialInput = None,
+        architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
+    ) -> Self:
+        return cls._from_project(
+            load_conda_environment(path, python_version=python_version),
+            base_image=base_image,
+            base_image_creds=base_image_creds,
+            architecture=architecture,
+        )
+
+    @classmethod
+    def _from_project(
+        cls,
+        project: ImageProject,
+        *,
+        base_image: str | None,
+        base_image_creds: ImageCredentialInput,
+        architecture: LinuxArchitecture | str,
+    ) -> Self:
+        image = cls(
+            python_version=project.python_version,
+            base_image=base_image,
+            base_image_creds=base_image_creds,
+            architecture=architecture,
+        )
+        image.context_path = str(project.root)
+        image.context_digest = fingerprint_build_context(project.root)
+        image.include_files_patterns = project.files
+        image.build_steps = (project.step,)
+        return image
 
     def add_commands(self, commands: Sequence[str]) -> Self:
         self.build_steps = (
@@ -225,44 +346,6 @@ class Image:
             *(
                 ImageBuildStep(kind=ImageBuildStepKind.Pip, args=[package])
                 for package in sanitize_python_packages(values)
-            ),
-        )
-        return self
-
-    def add_uv_project(
-        self,
-        path: str | Path = ".",
-        *,
-        extras: Sequence[str] = (),
-    ) -> Self:
-        project_path = Path(path).expanduser().resolve()
-        pyproject_path = project_path / "pyproject.toml"
-        lock_path = project_path / "uv.lock"
-        if not pyproject_path.is_file():
-            msg = f"uv project must contain pyproject.toml: {project_path}"
-            raise ValueError(msg)
-        if not lock_path.is_file():
-            msg = f"uv project must contain uv.lock: {project_path}"
-            raise ValueError(msg)
-        if self.context_path is not None:
-            existing_context = Path(self.context_path).expanduser().resolve()
-            if existing_context != project_path:
-                msg = "uv project path must match the existing image build context"
-                raise ValueError(msg)
-
-        self.context_path = str(project_path)
-        self.context_digest = fingerprint_build_context(project_path)
-        patterns = ["pyproject.toml", "uv.lock"]
-        if (project_path / ".python-version").is_file():
-            patterns.append(".python-version")
-        self.include_files_patterns = tuple(
-            dict.fromkeys((*self.include_files_patterns, *patterns))
-        )
-        self.build_steps = (
-            *self.build_steps,
-            ImageBuildStep(
-                kind=ImageBuildStepKind.UvProject,
-                args=[".", *sanitize_python_packages(extras)],
             ),
         )
         return self
@@ -325,14 +408,6 @@ class Image:
 
     def build_with_gpu(self, hint: str) -> Self:
         self.gpu_hint = hint
-        return self
-
-    def add_python_version(self, python_version: str) -> Self:
-        normalized = _normalize_python_version(python_version)
-        if not self._base_image_explicit:
-            self.base = _default_image_base(normalized)
-        self.python_version = normalized
-        self.ignore_python = False
         return self
 
     def with_docker(self) -> Self:
@@ -443,7 +518,7 @@ class Image:
         return ImageSpec(
             architecture=self.architecture,
             base=self.base,
-            python_version=_normalize_python_version(self.python_version),
+            python_version=normalize_python_version(self.python_version),
             packages=list(self.packages),
             commands=list(self.commands),
             build_steps=list(self.build_steps),
@@ -464,7 +539,7 @@ class Image:
     def _context_archive(self) -> ImageBuildContext:
         context = Path(self.context_path or ".").expanduser().resolve()
         files = _context_files(context, self.include_files_patterns)
-        if any(step.kind is ImageBuildStepKind.UvProject for step in self.build_steps):
+        if any(step.kind in PROJECT_BUILD_STEP_KINDS for step in self.build_steps):
             files = sorted(
                 {*files, *(path.relative_to(context) for path in collect_source_files(context))}
             )
@@ -686,39 +761,15 @@ def _env_items(
     return result
 
 
-def _normalize_python_version(python_version: str) -> str:
-    value = python_version.strip()
-    prefix = ""
-    if value.startswith("micromamba"):
-        prefix = "micromamba"
-        value = value.removeprefix(prefix)
-    else:
-        value = value.removeprefix("python")
-    try:
-        normalized = PythonVersion(value).value
-    except ValueError as exc:
-        supported = ", ".join(version.value for version in PythonVersion)
-        msg = f"Python version must be one of {supported}; received {python_version!r}"
-        raise ValueError(msg) from exc
-    return f"{prefix}{normalized}"
-
-
 def _default_image_base(python_version: str) -> str:
-    if python_version in {version.value for version in PythonVersion}:
+    if not python_version.startswith("micromamba"):
         return f"python:{python_version}-slim"
     return DEFAULT_IMAGE_BASE
 
 
-def _micromamba_python_version(python_version: str) -> str:
-    value = _normalize_python_version(python_version)
-    if value.startswith("micromamba"):
-        return value
-    return f"micromamba{value}"
-
-
 def _http_build_step(step: ImageBuildStep) -> BuildStep:
-    command = step.command or " ".join(step.args)
-    return BuildStep(type=step.kind.value, command=command)
+    command = step.command or shlex.join(step.args)
+    return BuildStep(type=step.kind.value, command=command, groups=step.groups)
 
 
 def _context_files(context: Path, patterns: tuple[str, ...]) -> list[Path]:

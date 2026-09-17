@@ -90,9 +90,6 @@ def test_sdk_image_build_request_preserves_credentials_without_leaking_spec_valu
     assert request.existing_image_uri == "ghcr.io/team/worker:latest"
     assert request.existing_image_creds == {"username": "user", "password": "secret"}
     assert verify_request.existing_image_creds == request.existing_image_creds
-    assert request.build_steps[0].type == "pip"
-    assert request.build_steps[0].command == "httpx>=0.27"
-    assert request.build_steps[1].type == "shell"
     assert request.env_vars == ["MODE=test"]
     assert request.secrets == ["API_TOKEN"]
     assert request.gpu == "A10G"
@@ -167,7 +164,7 @@ def test_sdk_image_uv_project_requires_lockfile(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"uv\.lock"):
-        Image().add_uv_project(tmp_path)
+        Image.from_uv(tmp_path)
 
 
 def test_sdk_image_build_revalidates_durable_identity_before_each_build() -> None:

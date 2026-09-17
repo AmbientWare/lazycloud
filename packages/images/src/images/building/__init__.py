@@ -6,7 +6,6 @@ from images.building.commands import (
     plan_image_build_commands,
     render_micromamba_install_command,
     render_pip_install_command,
-    render_uv_project_sync_command,
 )
 from images.building.constants import (
     BASE_IMAGE_DIGEST_CACHE_TTL_SECONDS,
@@ -144,7 +143,6 @@ __all__ = [
     "render_image_dockerfile",
     "render_micromamba_install_command",
     "render_pip_install_command",
-    "render_uv_project_sync_command",
     "resolve_base_image_digest",
     "unmarshal_registry_credentials",
 ]

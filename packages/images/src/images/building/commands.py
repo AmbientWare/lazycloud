@@ -3,11 +3,17 @@ from __future__ import annotations
 import shlex
 from collections.abc import Iterable
 
-from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
+from shared.image_building.authoring import (
+    PROJECT_BUILD_STEP_KINDS,
+    ImageBuildStep,
+    ImageBuildStepKind,
+    ImageSpec,
+)
 from shared.image_building.requirements import sanitize_python_packages
 
 from images.building.constants import PIP_GROUP_BOUNDARY_FLAGS
 from images.building.models import ImageBuildCommand, ImageInstallCommandMode
+from images.building.projects import render_project_install
 
 
 def render_pip_install_command(
@@ -36,29 +42,6 @@ def render_pip_install_command(
     else:
         command = [python_executable, "-m", "pip", "install"]
     return " ".join([*command, *tokens])
-
-
-def render_uv_project_sync_command(
-    args: Iterable[str],
-    *,
-    mode: ImageInstallCommandMode = ImageInstallCommandMode.Dockerfile,
-    python_executable: str = "python",
-) -> str:
-    project_dir, extras = _uv_project_args(args)
-    command = [
-        "uv",
-        "sync",
-        "--frozen",
-        "--no-dev",
-        "--no-editable",
-        "--python",
-        shlex.quote(python_executable),
-    ]
-    for extra in extras:
-        command.extend(["--extra", shlex.quote(extra)])
-    if mode is ImageInstallCommandMode.Runtime and project_dir not in {"", "."}:
-        command.extend(["--project", shlex.quote(project_dir)])
-    return " ".join(command)
 
 
 def render_micromamba_install_command(
@@ -131,9 +114,7 @@ def plan_image_build_commands(
             continue
 
         flush()
-        if command := _render_non_install_step(
-            normalized, mode=mode, python_executable=python_executable
-        ):
+        if command := _render_non_install_step(normalized, python_executable=python_executable):
             commands.append(
                 ImageBuildCommand(
                     kind=normalized.kind,
@@ -141,6 +122,10 @@ def plan_image_build_commands(
                     args=tuple(normalized.args),
                 )
             )
+        if normalized.kind in PROJECT_BUILD_STEP_KINDS:
+            python_executable = "python"
+            if mode is not ImageInstallCommandMode.Runtime:
+                mode = ImageInstallCommandMode.DockerfileManagedPython
 
     flush()
     return commands
@@ -149,12 +134,10 @@ def plan_image_build_commands(
 def _normalize_step(step: ImageBuildStep) -> ImageBuildStep:
     if step.kind is ImageBuildStepKind.Pip:
         return ImageBuildStep(kind=step.kind, args=sanitize_python_packages(step.args))
-    if step.kind is ImageBuildStepKind.UvProject:
-        project_dir, extras = _uv_project_args(step.args)
-        return ImageBuildStep(
-            kind=ImageBuildStepKind.UvProject,
-            args=[project_dir, *sanitize_python_packages(extras)],
-        )
+    if step.kind in PROJECT_BUILD_STEP_KINDS:
+        if not step.args:
+            raise ValueError(f"{step.kind} requires a project path")
+        return step
     if step.kind in {ImageBuildStepKind.Micromamba, ImageBuildStepKind.Apt}:
         args = [value.strip() for value in step.args if value.strip()]
         return ImageBuildStep(kind=step.kind, args=args)
@@ -202,7 +185,6 @@ def _render_install_command(
 def _render_non_install_step(
     step: ImageBuildStep,
     *,
-    mode: ImageInstallCommandMode,
     python_executable: str,
 ) -> str:
     if step.kind is ImageBuildStepKind.Shell:
@@ -212,10 +194,8 @@ def _render_non_install_step(
         if not args:
             return ""
         return f"apt-get update && apt-get install -y {args} && rm -rf /var/lib/apt/lists/*"
-    if step.kind is ImageBuildStepKind.UvProject:
-        return render_uv_project_sync_command(
-            step.args, mode=mode, python_executable=python_executable
-        )
+    if step.kind in PROJECT_BUILD_STEP_KINDS:
+        return render_project_install(step, python_executable=python_executable)
     msg = f"unsupported image build step kind: {step.kind}"
     raise ValueError(msg)
 
@@ -243,10 +223,3 @@ def _split_flag_tokens(value: str) -> list[str]:
 
 def _install_step_requires_isolation(args: Iterable[str]) -> bool:
     return any(flag in value for value in args for flag in PIP_GROUP_BOUNDARY_FLAGS)
-
-
-def _uv_project_args(args: Iterable[str]) -> tuple[str, list[str]]:
-    values = [value.strip() for value in args if value.strip()]
-    if not values:
-        return ".", []
-    return values[0], values[1:]

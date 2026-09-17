@@ -21,8 +21,8 @@ app = App(APP_NAME)
 
 @app.function(
     name="cuda-runtime",
-    image=Image.from_registry("nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04").add_python_version(
-        "3.10"
+    image=Image.from_registry(
+        "nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04", python_version="3.10"
     ),
     gpu="L4",
     gpu_count=1,
@@ -40,8 +40,7 @@ def cuda_runtime() -> str:
 @app.function(
     name="cuda-torch",
     image=(
-        Image.from_registry("nvidia/cuda:12.3.1-runtime-ubuntu22.04")
-        .add_python_version("3.11")
+        Image.from_registry("nvidia/cuda:12.3.1-runtime-ubuntu22.04", python_version="3.11")
         .add_python_packages(["torch==2.3.1"])
         .build_with_gpu("L4")
     ),
@@ -60,8 +59,7 @@ def cuda_torch() -> str:
 @app.function(
     name="pytorch-cuda",
     image=(
-        Image.from_registry("pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime")
-        .add_python_version("3.11")
+        Image.from_registry("pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime", python_version="3.11")
         .add_commands(["apt-get update && apt-get install -y ffmpeg"])
         .build_with_gpu("L4")
     ),

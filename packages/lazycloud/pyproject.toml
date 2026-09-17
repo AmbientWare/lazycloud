@@ -10,11 +10,13 @@ dependencies = [
     "httpx>=0.28,<1",
     "lazycloud-shared==0.1.0",
     "pillow>=11.3,<13",
+    "poetry-core>=2.2,<3",
     "pydantic>=2.12,<3",
     "pydantic-settings>=2.4,<3",
     "pyyaml>=6,<7",
     "rich>=15,<16",
     "typer>=0.26.7",
+    "tomli>=2,<3",
     "typing-extensions>=4.12,<5",
     "watchdog>=6,<7",
     # Floor held below 17 on purpose: this package supports Python 3.10 and
