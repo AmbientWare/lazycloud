@@ -17,6 +17,7 @@ from lazycloud.session.task import (
     TaskOperationError,
     TaskSubscription,
 )
+from lazycloud.values import cloudpickle_bytes
 from pydantic import JsonValue
 from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionCloudpickleResult
@@ -297,6 +298,23 @@ def test_completed_function_call_rejects_malformed_result() -> None:
 
     with pytest.raises(TaskOperationError, match="invalid function result payload"):
         call.get()
+
+
+def test_python_call_result_keeps_the_task_record_json_serializable() -> None:
+    payload = FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(2 + 3j))
+    response = TaskDetailResponse(
+        id="task-python-result",
+        name="python-result",
+        status=TaskStatus.Complete,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        result=payload.model_dump(mode="json"),
+    )
+    client = TaskClient(client=FakeSessionResources(task_responses={response.id: response}))
+    result = FunctionCall[complex](task_id=response.id, client=client).result(wait=True)
+
+    assert result.value == 2 + 3j
+    assert result.task.result == payload.model_dump(mode="json")
+    assert shared.tasks.Task.model_validate_json(result.task.model_dump_json()) == result.task
 
 
 def test_task_async_wait_returns_task_result() -> None:
