@@ -603,6 +603,12 @@ services:
         token_path="$$state_dir/join-token"
         mkdir -p "$$state_dir"
         chmod 0700 "$$state_dir"
+        # A machine keeps its name for as long as it is joined, and this agent
+        # keeps its identity across restarts, so a second mint would be refused.
+        if [ -f "$$state_dir/agent-state.json" ]; then
+          echo "compose agent already holds its identity; no join credential needed"
+          exit 0
+        fi
         export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
         # The credential belongs to the customer even though the administrator mints
         # it: the enrollment names whoever asked, and placement compares that account

@@ -1501,14 +1501,9 @@ class GatewayControlService:
                     machine_id,
                 )
             if enrollment is not None:
-                unit = self.unit_state_coordinator.unit_by_capacity_owner(
-                    enrollment.capacity_owner_id,
-                    workspace_id=workspace_id,
-                )
-                if unit.provider == "agent":
-                    raise ConflictError(
-                        "joined machines must be removed with 'lazycloud-agent leave' on the host"
-                    )
+                # Removal from the account side revokes the host's authority. An agent
+                # still running there sees the revocation and stops; a host that lost
+                # its identity has no other way to give its name back.
                 self._delete_enrolled_machine(enrollment)
             else:
                 self.services.compute.delete_machine(machine_id, workspace=workspace_id)
