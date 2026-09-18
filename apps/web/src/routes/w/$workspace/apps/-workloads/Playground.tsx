@@ -9,7 +9,7 @@ import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { invokeDeployment, type InvokeResult } from "@/lib/api/invoke";
+import { invokeDeployment, invokeFunctionTask, type InvokeResult } from "@/lib/api/invoke";
 import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
 import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
 import { taskQueryOptions } from "@/lib/queries/tasks";
@@ -18,7 +18,8 @@ import {
   buildBody,
   exampleBody,
   playgroundFields,
-  pythonOnlyReason,
+  playgroundPythonOnlyReason,
+  returnsPythonValue,
   type PlaygroundField,
 } from "./playground-form";
 
@@ -26,7 +27,8 @@ import {
  * In-UI invoke for a deployed function or endpoint. The form is built
  * from the deployment's recorded callable contract; flat primitive schemas get typed inputs, anything
  * richer gets a raw JSON editor. Invoke fires the real invoke URL with the
- * session bearer token.
+ * session bearer token, except for a function returning a Python object,
+ * which is invoked through the function API so the task stores the result.
  */
 export function Playground({
   workspaceId,
@@ -56,7 +58,7 @@ export function Playground({
   if (manifest.isError) {
     return <PanelError message={manifest.error.message} />;
   }
-  const pythonRequired = pythonOnlyReason(manifest.data);
+  const pythonRequired = playgroundPythonOnlyReason(manifest.data);
   if (pythonRequired) {
     return <p className="p-4 text-sm text-muted-foreground">{pythonRequired}</p>;
   }
@@ -93,10 +95,14 @@ function PlaygroundForm({
   const [rawText, setRawText] = useState(seeded);
   const [inputError, setInputError] = useState<string | null>(null);
 
+  const pythonResult = manifest.kind === "function" && returnsPythonValue(manifest);
   const invoke = useMutation({
     // Same-origin: the published hostname is a different origin to the dashboard,
     // and a deployed resource owes the dashboard no CORS permission.
-    mutationFn: (body: JsonValue) => invokeDeployment(manifest.invoke_path, body),
+    mutationFn: (body: JsonValue) =>
+      pythonResult
+        ? invokeFunctionTask(workspaceId, manifest.stub_id, body)
+        : invokeDeployment(manifest.invoke_path, body),
   });
 
   type BodyResult = { ok: true; body: JsonValue } | { ok: false; message: string };
