@@ -15,12 +15,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  cpu:
-    name: Bake CPU host image
+  bake:
+    name: Bake ${{ matrix.variant }} host image
     runs-on: ubuntu-latest
     environment: release
-    outputs:
-      ami_ids: ${{ steps.bake.outputs.ami_ids }}
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cpu, gpu]
     env:
       AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
     steps:
@@ -44,60 +46,26 @@ jobs:
           role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
           aws-region: ${{ env.AWS_RELEASE_REGION }}
 
-      - name: Bake CPU image
-        id: bake
+      - name: Bake and copy
         shell: bash
         run: |
           set -euo pipefail
-          ami_ids="$(uv run --group workspace python -m deploy.ami.bake --regions us-east-1 us-west-2)"
-          test -n "${ami_ids}"
-          echo "ami_ids=${ami_ids}" >> "${GITHUB_OUTPUT}"
+          uv run --group workspace python -m deploy.ami.bake \
+            --variant ${{ matrix.variant }} > ${{ matrix.variant }}-ami-ids.json
+          test -s ${{ matrix.variant }}-ami-ids.json
 
-  gpu:
-    name: Bake GPU host image
-    runs-on: ubuntu-latest
-    environment: release
-    outputs:
-      ami_ids: ${{ steps.bake.outputs.ami_ids }}
-    env:
-      AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
-    steps:
-      - name: Refuse anything but main
-        if: github.ref != 'refs/heads/main'
-        run: |
-          echo "::error::Node Images runs from main; this run is on ${GITHUB_REF}."
-          exit 1
-
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      # Matrix jobs share one output slot, so each variant hands its map on as
+      # an artifact instead.
+      - name: Upload AMI map
+        uses: actions/upload-artifact@v7
         with:
-          version: "0.11.21"
-
-      - name: Configure release AWS identity
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
-          aws-region: ${{ env.AWS_RELEASE_REGION }}
-
-      - name: Bake GPU image
-        id: bake
-        shell: bash
-        run: |
-          set -euo pipefail
-          ami_ids="$(uv run --group workspace python -m deploy.ami.bake \
-            --variant gpu \
-            --regions us-east-1 us-west-2)"
-          test -n "${ami_ids}"
-          echo "ami_ids=${ami_ids}" >> "${GITHUB_OUTPUT}"
+          name: ${{ matrix.variant }}-ami-ids
+          path: ${{ matrix.variant }}-ami-ids.json
+          if-no-files-found: error
 
   publish:
     name: Publish host image catalog
-    needs:
-      - cpu
-      - gpu
+    needs: bake
     runs-on: ubuntu-latest
     environment: release
     env:
@@ -120,11 +88,17 @@ jobs:
           role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
           aws-region: ${{ env.AWS_RELEASE_REGION }}
 
+      - name: Download AMI maps
+        uses: actions/download-artifact@v7
+        with:
+          pattern: "*-ami-ids"
+          merge-multiple: true
+
       - name: Publish catalog
         run: >-
           uv run --group workspace python -m deploy.ami.catalog publish
-          --cpu-ami-ids '${{ needs.cpu.outputs.ami_ids }}'
-          --gpu-ami-ids '${{ needs.gpu.outputs.ami_ids }}'
+          --cpu-ami-ids "$(cat cpu-ami-ids.json)"
+          --gpu-ami-ids "$(cat gpu-ami-ids.json)"
           --source-revision "${GITHUB_SHA}"
           --bucket "${{ vars.OBJECT_STORE_RELEASE_BUCKET }}"
           --public-base-url "${{ vars.RELEASE_PUBLIC_BASE_URL }}"
