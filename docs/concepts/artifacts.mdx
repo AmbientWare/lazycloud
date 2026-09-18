@@ -39,8 +39,6 @@ the file until it expires. The task ID is attached automatically.
 
 `save()` uploads the file, zipping it first if the path is a directory, and
 returns a `SavedArtifact` with `artifact_id`, `task_id`, and `filename`.
-Outside a task, with no task id, `save()` packages the file on local disk
-instead and returns a `SavedArtifact` without an `artifact_id`.
 
 Other ways to construct one:
 
@@ -68,18 +66,12 @@ producing container, pass `task_id=...` explicitly.
 
 ## Storage charges
 
-Artifacts count toward volume storage, at the same published storage rate as
-volumes. Usage appears as Artifacts. Charges depend on the stored file's size
-and how long it is retained, including files deleted between metering scans.
-Directories are billed at their uploaded archive size.
+Artifacts are billed as storage at the volume rate, by size and how long they
+are kept. The Storage page shows total bytes, the estimated monthly cost, and
+this month's charges.
 
-The Storage page shows total bytes, the estimated monthly cost at the current
-size, and accrued charges for the current UTC calendar month. Estimates exclude
-future uploads, deletions, and account allowances. Billing continues until storage
-confirms deletion, including when a deletion needs a retry.
-
-Use `Artifact.save()` to persist an artifact. The implicit `/artifacts` mount is
-read-only. For a writable shared filesystem, declare a `Volume` explicitly.
+The `/artifacts` mount is read-only. For a writable shared filesystem, declare
+a `Volume`.
 
 ## Retention
 
@@ -87,16 +79,9 @@ Artifacts expire automatically using the same plan retention window as logs:
 Free keeps them for one day, Team for 30 days, and Business for 90 days.
 Complimentary accounts use the Business window.
 
-The plan at upload determines the retention window. Expiration is measured from
-when the upload succeeds, and later plan changes do not reset that deletion date.
-There are no workspace or per-artifact retention settings. Read `saved.expires_at`
-after `artifact.save()`, or see the deletion date in the dashboard.
-Retention applies to remote storage, not locally packaged files.
-
-Expired files become unavailable through the artifact API; background cleanup
-removes their stored bytes. Newly issued public URLs cannot outlive the artifact's
-expiration. Previously issued URLs may remain usable until their own expiry or
-physical deletion. Files can be deleted earlier with `artifact.delete()`.
+The window is fixed by the plan at upload and counted from the upload. Read
+`saved.expires_at` or see the date in the dashboard. Public URLs do not outlive
+the artifact. Delete earlier with `artifact.delete()`.
 
 For durable files, use a Volume or download a copy before expiration.
 

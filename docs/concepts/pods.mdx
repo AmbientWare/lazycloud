@@ -108,13 +108,11 @@ opens a shell in a pod container.
 
 ## TCP connections
 
-Set `tcp=True`, declare the server's port, and use `pod.deploy()`. TCP ingress
-requires a public Pod with `authorized=False` and a configured TLS ingress on
-the installation. Standalone `pod.create()` rejects TCP before starting a container.
-Your TCP server must authenticate its own clients if it handles private data.
+Set `tcp=True`, declare the server's port, and use `pod.deploy()`. TCP pods are
+public (`authorized=False`), so your server must authenticate its own clients.
 
 The deployment returns a `tls://hostname:port` address. Connect with TLS and send
-that hostname as SNI; the ingress forwards decrypted bytes to your server.
+that hostname as SNI.
 
 ```python
 import socket

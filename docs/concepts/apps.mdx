@@ -31,9 +31,6 @@ def count(text: str) -> dict[str, int]:
     return {"words": count_words.local(text)}
 ```
 
-The endpoint calls the counting function locally in its container. It needs
-no second remote task for this small calculation.
-
 App names start with a lowercase letter and contain lowercase letters,
 digits, or underscores, up to 63 characters. Workload names must be unique
 within each kind in the app.
@@ -95,11 +92,9 @@ uv run lazycloud app export web_app --openapi-path service=/schema/openapi.json
 uv run lazycloud app export web_app --openapi service=./openapi.json
 ```
 
-ASGI methods use the schema's operation IDs and include async equivalents.
-They support JSON bodies and path, query, and header parameters. Unsupported
-parameter locations or body formats fail generation with an explanation.
-An ASGI app without a schema keeps `request()` and `async_request()` for raw
-HTTP calls; the command reports that its route types are unavailable.
+ASGI methods are named after the schema's operation IDs. Routes the generator
+cannot type fail with an explanation; an ASGI app without a schema keeps
+`request()` and `async_request()` for raw HTTP calls.
 
 Export again after deploying contract changes. Packages include functions,
 endpoints, and ASGI apps. Pods and sandboxes are excluded.

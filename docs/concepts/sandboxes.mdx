@@ -104,12 +104,10 @@ instance.update_network_permissions(block_network=True)
 instance.update_network_permissions(allow_list=["203.0.113.10/32"])
 ```
 
-An exposed URL points at this exact container. It never redirects to another
-instance of the same sandbox, and it stops working when the container stops.
+An exposed URL points at this container and stops working when it stops.
 Declare `ports=[8000]` on the sandbox to expose ports as soon as an instance
 is ready. `block_network` and `allow_list` set the outbound policy and cannot
-be combined. Allow-list entries are IP networks in CIDR notation. Replace the
-example address with your destination's address; hostnames are not supported.
+be combined. Allow-list entries are CIDR networks; hostnames are not supported.
 
 ## Docker inside a sandbox
 
@@ -119,10 +117,9 @@ the sandbox's Docker daemon. Then
 `stop`, `rm`, `exec`, `login`, `compose_up`, `compose_down`, and volume
 commands.
 
-Nested containers share the sandbox's network. Bind each service to a distinct
-port, then call `instance.expose_port(port)` to obtain its platform URL. Docker
-`run(ports=...)` and Compose `ports` mappings are rejected because shared
-networking cannot apply them.
+Nested containers share the sandbox's network, so bind each service to its own
+port and call `instance.expose_port(port)` for its URL. Docker and Compose port
+mappings are rejected.
 
 ## Snapshots
 
