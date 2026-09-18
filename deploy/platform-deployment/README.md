@@ -33,13 +33,17 @@ declares verified image inputs. Provider definitions own node catalogs;
 Only credentials are operator-owned; capacity policy is deployment-owned.
 
 AWS fleet workers can launch in `us-east-1` and `us-west-2`. The deployment
-owns a VPC in each region and exports both through `fleet.networks`. The
+owns a VPC in each region, one `fleet-network` module call per region in
+`fleet.tf`, and exports them all through `fleet.networks`. The
 connection role and node identity are shared across regions. Preserve networks
 while units still own resources there. The initializer validates provider access
 and network identity before application startup.
 
-When adding a region, publish its infrastructure descriptor and matching CPU
-and GPU image catalogs before selecting the release. Preserve existing
+To add a region: declare its provider alias in `versions.tf`, call the
+`fleet-network` module and list it in `fleet_networks`, allow it in
+`compute.aws_configuration`, add its supplier prices, and request its GPU
+quotas. Then publish its infrastructure descriptor and matching CPU and GPU
+image catalogs before selecting the release. Preserve existing
 connection networks and customer-managed authorization stacks.
 
 Image baking selects tagged public fleet subnets with an active internet route

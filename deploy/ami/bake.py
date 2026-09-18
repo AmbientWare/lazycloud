@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from agent.operations import build_agent_install_script
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from deploy.ami.recipe import host_recipe_sha256
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from shared.app_identity import AGENT_NAME
@@ -259,7 +260,12 @@ def main() -> None:
         default=_BakeVariant.Cpu.value,
         help="cpu bakes the default node image; gpu adds the NVIDIA driver and toolkit",
     )
-    parser.add_argument("--regions", nargs="+", default=["us-east-1"])
+    parser.add_argument(
+        "--regions",
+        nargs="+",
+        default=list(AWS_COMPUTE_CONFIGURATION.allowed_regions),
+        help="first region bakes, the rest receive copies; defaults to every allowed region",
+    )
     parser.add_argument(
         "--instance-type",
         default=None,

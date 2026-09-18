@@ -33,18 +33,7 @@ output "infrastructure_configuration" {
       node_instance_profile_arn = aws_iam_instance_profile.fleet_node.arn
       account_id                = data.aws_caller_identity.current.account_id
       role_arn                  = aws_iam_role.fleet_connection.arn
-      networks = {
-        (var.region) = {
-          vpc_id            = aws_vpc.fleet.id
-          subnet_ids        = aws_subnet.fleet[*].id
-          security_group_id = aws_security_group.fleet_node.id
-        }
-        "us-west-2" = {
-          vpc_id            = aws_vpc.fleet_west.id
-          subnet_ids        = aws_subnet.fleet_west[*].id
-          security_group_id = aws_security_group.fleet_west_node.id
-        }
-      }
+      networks                  = local.fleet_networks
     }
     secret_documents = {
       platform = aws_secretsmanager_secret.platform.name

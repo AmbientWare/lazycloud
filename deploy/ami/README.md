@@ -6,7 +6,8 @@ image.
 
 The `Connected AWS Node Images` workflow runs only by explicit dispatch from
 `main`. Its CPU and GPU jobs run in parallel. Each job bakes once, in the first
-region it is given, and copies that AMI into every other region. The bake
+allowed region, and copies that AMI into every other allowed region. The
+region list is `AWS_COMPUTE_CONFIGURATION.allowed_regions`. The bake
 resolves the latest Amazon Linux 2023 x86_64 image, launches a temporary bake
 instance, installs Docker, host networking tools, zram, and SSM, then registers
 an immutable AMI. The GPU variant also installs and verifies the pinned NVIDIA
@@ -59,8 +60,9 @@ uv run --group workspace python -m deploy.ami.bake \
   --regions us-east-1
 ```
 
-`bake.py` prints a JSON region-to-AMI map on stdout and progress on stderr. The
-first `--regions` entry is where the bake runs; the rest receive copies. CPU
+`bake.py` prints a JSON region-to-AMI map on stdout and progress on stderr.
+`--regions` defaults to every allowed region; the first entry is where the bake
+runs and the rest receive copies. CPU
 bakes use `c7i.large` with a 16 GiB volume. GPU bakes use `g4dn.xlarge` with a 40
 GiB volume so the bake can prove `nvidia-smi` and the Docker NVIDIA runtime before
 publishing an image.
