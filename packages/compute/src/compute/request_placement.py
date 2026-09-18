@@ -6,15 +6,13 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Protocol
 
-from database.repositories.apps import DeploymentRepository
-from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord, MachinePool
+from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord
 from shared.contracts import ContractModel
-from shared.errors import InvalidInputError, UpstreamUnavailableError
-from shared.placement import ProductRegion, product_region
+from shared.errors import UpstreamUnavailableError
+from shared.placement import Placement, ProductRegion, product_region
 
 from compute.context import ComputeContext
 from compute.offers import ComputeOffer, OfferRequest, filter_offers, offer_selection_key
-from compute.policy import WorkspaceComputePolicyService
 from compute.providers import ResolvedComputeProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -47,14 +45,10 @@ class PooledCapacityOwner(Protocol):
 class ComputeCapacityPlacementRequest(ContractModel):
     workspace_id: str
     deployment_id: str = ""
-    requested_pool: str = ""
+    placement: Placement
+    """Where the workload's stub was pinned when it was created."""
     region: ProductRegion | None = None
     requirements: ComputeResourceRequirements
-
-
-@dataclass(frozen=True, slots=True)
-class ComputeCapacityPlacementResult:
-    pool: MachinePool
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,21 +60,16 @@ class ComputeCapacityPurchase:
 @dataclass(slots=True)
 class ComputeCapacityPlacementService:
     context: ComputeContext
-    policies: WorkspaceComputePolicyService
     compute: PooledCapacityOwner
-
-    def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
-        return ComputeCapacityPlacementResult(pool=MachinePool(self._machine_pool_for(request)))
 
     def purchase_candidates(
         self, request: ComputeCapacityPlacementRequest
     ) -> tuple[ComputeCapacityPurchase, ...]:
         """Return approved purchase candidates in GPU-preference and cost order."""
-        pool = self._machine_pool_for(request)
         providers = tuple(
             provider
             for provider in self.compute.pooled_providers(request.workspace_id)
-            if provider.policy is not None and provider.policy.pool == pool
+            if provider.policy is not None and provider.policy.placement == request.placement
         )
         requirements = request.requirements
         purchase = OfferRequest(
@@ -155,35 +144,9 @@ class ComputeCapacityPlacementService:
     ) -> None:
         self.compute.prepare_pooled_offer(provider=provider, offer=offer, requirements=requirements)
 
-    def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> str:
-        return self.policies.resolve_machine_pool(
-            request.requested_pool or self._deployment_machine_pool(request),
-            workspace=request.workspace_id,
-        )
-
-    def _deployment_machine_pool(self, request: ComputeCapacityPlacementRequest) -> str:
-        """The group a deployment was pinned to when it was created.
-
-        A deployment keeps the fleet it was deployed onto: a workspace that
-        later changes its default must not move workloads already running.
-        """
-        if not request.deployment_id:
-            return ""
-        with self.context.database.session() as session:
-            deployment = DeploymentRepository(session).get(
-                request.deployment_id,
-                workspace_id=request.workspace_id,
-            )
-        if deployment is None:
-            raise InvalidInputError(
-                f"deployment {request.deployment_id!r} was not found in the workspace"
-            )
-        return deployment.pool
-
 
 __all__ = [
     "ComputeCapacityPlacementRequest",
-    "ComputeCapacityPlacementResult",
     "ComputeCapacityPlacementService",
     "ComputeCapacityPurchase",
 ]

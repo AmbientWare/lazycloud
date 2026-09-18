@@ -27,8 +27,8 @@ from tests.http_server import running_http_server
 from lazycloud import App, Image
 
 
-def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:
-    app = App("pool_deploy")
+def test_app_deploy_applies_the_machine_to_every_deployable_resource() -> None:
+    app = App("machine_deploy")
     deployments = FakeDeploymentClient(stub_id_from_type=True)
 
     function = app.function(lambda: "function", name="function")
@@ -51,7 +51,7 @@ def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:
 
     result = app.deploy(
         workspace="production",
-        pool="aws",
+        machine="box-a",
     )
 
     assert len(result.resources) == 4
@@ -62,30 +62,30 @@ def test_app_deploy_applies_the_pool_to_every_deployable_resource() -> None:
         "asgi",
     }
     assert all(
-        request.workspace == "production" and request.pool == "aws"
+        request.workspace == "production" and request.machine == "box-a"
         for request in deployments.stub_requests
     )
 
 
-def test_app_deploy_pool_only_changes_the_selected_resource() -> None:
-    app = App("selected_pool")
+def test_app_deploy_machine_only_changes_the_selected_resource() -> None:
+    app = App("selected_machine")
     deployments = FakeDeploymentClient(stub_id_from_type=True)
     function = app.function(
         lambda: "function",
         name="function",
     )
-    pod = app.pod(name="pod", pool="lazycloud")
+    pod = app.pod(name="pod", machine="box-b")
     function.deployment_client = deployments
 
     app.deploy(
         resource="function:function",
-        pool="aws",
+        machine="box-a",
     )
 
-    assert function.pool == "aws"
-    assert pod.pool == "lazycloud"
+    assert function.machine == "box-a"
+    assert pod.machine == "box-b"
     assert len(deployments.stub_requests) == 1
-    assert deployments.stub_requests[0].pool == "aws"
+    assert deployments.stub_requests[0].machine == "box-a"
 
 
 def test_app_deploy_overlaps_builds_and_uploads_and_shares_only_one_source_snapshot(

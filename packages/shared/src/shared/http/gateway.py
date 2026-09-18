@@ -7,14 +7,13 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.app_slug import validate_app_slug
 from shared.compute_enrollment import AgentCapacityState
-from shared.compute_policy import MachinePool
 from shared.deployment_records import DEFAULT_WORKLOAD_PREEMPTIBLE, CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
 from shared.http.client_manifests import ClientContract
 from shared.lifecycle import LifecycleHooks
-from shared.placement import AvailabilityZone, ProductRegion, validate_placement_pool
+from shared.placement import AvailabilityZone, ProductRegion, validate_placement_machine
 from shared.tasks import RetryPolicy
 
 
@@ -190,8 +189,8 @@ class GetOrCreateStubRequest(HttpModel):
     allow_list: list[str] = Field(default_factory=list)
     docker_enabled: bool = False
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
-    pool: MachinePool = MachinePool(Field(default="", max_length=240))
-    """Pool this workload lands in, empty to take the default."""
+    machine: str = Field(default="", max_length=63)
+    """A joined machine this workload must run on, empty to run in the workspace."""
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
@@ -200,7 +199,7 @@ class GetOrCreateStubRequest(HttpModel):
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> GetOrCreateStubRequest:
-        validate_placement_pool(self.region, self.availability_zone, self.pool)
+        validate_placement_machine(self.region, self.availability_zone, self.machine)
         # Both rules the deployment record states, checked here too because this
         # is the other owner that builds a runtime-ready stub config.
         if self.cron and self.stub_type != DeploymentKind.Function.value:

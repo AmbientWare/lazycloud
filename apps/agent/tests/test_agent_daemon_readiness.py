@@ -38,7 +38,6 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     CapacitySignalKind,
 )
-from shared.compute_policy import MachinePool
 from shared.http.agent_identity import (
     AgentCertificateRequest,
     AgentCertificateResponse,
@@ -56,6 +55,7 @@ from shared.http.provider_nodes import (
     ProviderNodeEnrollmentRequest,
 )
 from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
+from shared.placement import Placement
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
 
 
@@ -188,7 +188,7 @@ def _service(
         AgentState(
             gateway_url="https://control.example.com",
             workspace_id="11111111-1111-4111-8111-111111111111",
-            pool=MachinePool("pool-one"),
+            placement=Placement.machine("pool-one"),
             machine_id="machine-one",
             agent_token="agent-secret",
             credential_id="22222222-2222-4222-8222-222222222222",

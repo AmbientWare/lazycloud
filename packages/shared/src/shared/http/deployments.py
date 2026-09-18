@@ -4,7 +4,6 @@ from datetime import datetime
 
 from pydantic import Field
 
-from shared.compute_policy import MachinePool
 from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
@@ -35,7 +34,7 @@ class DeploymentSpecResponse(HttpModel):
     cron: str | None = None
     command: list[str] = Field(default_factory=list)
     ports: dict[str, int] = Field(default_factory=dict)
-    pool: MachinePool = MachinePool("")
+    machine: str = ""
 
 
 class DeploymentActionCapabilitiesResponse(HttpModel):

@@ -11,6 +11,7 @@ from foundation.process import ProcessTimeoutError, run_process
 from networking.internal_http import InternalHttpClient
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT, AGENT_TUNNEL_CONTROL_URL
 from shared.identity import TokenKind
+from shared.placement import PlacementKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from worker.adapters import WorkerRouteIdentity
 from worker.automatic_checkpoints import WorkerAutomaticCheckpointService
@@ -44,7 +45,6 @@ from worker.container_startup import (
 )
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.credential_payloads import WorkerCredentialPrincipal
-from worker.events import WorkerPoolMode
 from worker.execution import (
     GatewayEndpointSettings,
     GatewayServiceSettings,
@@ -558,7 +558,7 @@ def _worker_identity(config: WorkerSettings) -> WorkerRouteIdentity:
     execution = config.configuration.execution
     return WorkerRouteIdentity(
         worker_id=config.worker_id,
-        pool=config.pool,
+        placement=config.placement,
         machine_id=config.machine_id,
         pod_address=config.pod_address,
         container_service_port=config.container_service_port,
@@ -577,14 +577,14 @@ def _scheduler_worker_record(
         worker_id=identity.worker_id,
         runtime_image=config.runtime_image,
         agent_binary_sha256=config.agent_binary_sha256,
-        pool=identity.pool,
+        placement=identity.placement,
         capacity_owner_id=_required_capacity_owner_id(config),
         machine_id=identity.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=capacity.gpu_type,
         runtime_class=execution.runtime.value,
         runtime_classes=[runtime.value for runtime in runtime_classes],
-        private_worker=execution.pool_mode is WorkerPoolMode.Private,
+        private_worker=identity.placement.kind is not PlacementKind.Platform,
         preemptible=execution.preemptible,
         free_cpu_millicores=capacity.cpu_millicores,
         free_memory_mib=capacity.memory_mib,
@@ -670,7 +670,7 @@ def _client_network_backend(
             RemoteWorkerNetworkIpRepository(client),
             # The control plane scopes every network mutation by the worker's own
             # record; this prefix only names the network in local state and logs.
-            network_prefix=config.network_prefix or config.pool or config.worker_id,
+            network_prefix=config.network_prefix or config.placement.key or config.worker_id,
             # The allocator issues addresses onto this bridge, so it has to be told
             # which one: left on the default it would hand out addresses the bridge
             # does not front.

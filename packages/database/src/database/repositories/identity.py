@@ -643,6 +643,19 @@ class WorkspaceMemberRepository:
             return existing
         return self.add(workspace_id=workspace_id, user_id=user_id, role=WorkspaceRole.Owner)
 
+    def is_owner(self, *, workspace_id: str, user_id: str) -> bool:
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        WorkspaceMemberTable.workspace_id == workspace_id,
+                        WorkspaceMemberTable.user_id == user_id,
+                        WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                    )
+                )
+            )
+        )
+
     def owner_user_id(self, workspace_id: str) -> str:
         owner = self.owner(workspace_id)
         if owner is None:
@@ -949,6 +962,19 @@ class WorkspaceRepository:
         )
         return workspace_record_from_table(row) if row is not None else None
 
+    def active_names_for_connection(self, connection_id: str) -> list[str]:
+        """Workspaces that still live in a connected account, by name for the refusal."""
+        return list(
+            self.session.scalars(
+                select(WorkspaceTable.name)
+                .where(
+                    WorkspaceTable.connection_id == connection_id,
+                    WorkspaceTable.status != WorkspaceStatus.Deleted.value,
+                )
+                .order_by(WorkspaceTable.name)
+            )
+        )
+
     def lock_platform_initialization(self) -> None:
         self.session.execute(
             text("SELECT pg_advisory_xact_lock(hashtext('platform-initialization'))")
@@ -977,6 +1003,14 @@ class WorkspaceRepository:
             return None
         row = self.session.get(WorkspaceTable, workspace_id)
         return workspace_record_from_table(row) if row is not None else None
+
+    def names_for_ids(self, workspace_ids: Collection[str]) -> dict[str, str]:
+        rows = self.session.execute(
+            select(WorkspaceTable.id, WorkspaceTable.name).where(
+                WorkspaceTable.id.in_(list(workspace_ids))
+            )
+        )
+        return {str(workspace_id): name for workspace_id, name in rows}
 
     def by_name(self, name: str) -> WorkspaceRecord | None:
         """The workspace that currently holds this name, in whatever state.
@@ -1150,6 +1184,9 @@ class WorkspaceRepository:
             select(exists().where(VolumeCleanupTable.workspace_id == workspace.id))
         ):
             workspace.storage = WorkspaceStorageConfig()
+        # The bucket is gone by now, so nothing ties the tombstone to the account it
+        # lived in, and holding the reference would block that account's disconnect.
+        workspace.connection_id = None
         workspace.labels.clear()
         workspace.metadata.clear()
         workspace.updated_at = utc_now()

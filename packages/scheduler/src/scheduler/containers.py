@@ -208,8 +208,6 @@ class SchedulerContainerWorkerRepository(Protocol):
 
 
 class SchedulerContainerPlacement(Protocol):
-    def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest: ...
-
     def purchase_candidates(
         self, request: SchedulerWorkerRequest
     ) -> tuple[ComputeCapacityPurchase, ...]: ...
@@ -218,9 +216,10 @@ class SchedulerContainerPlacement(Protocol):
 class SchedulerContainerFailureHandler(Protocol):
     def mark_scheduling_failed(
         self,
-        request: SchedulerWorkerRequest,
-        reason: str,
+        container_id: str,
         *,
+        workspace_id: str,
+        reason: str,
         now: datetime | None = None,
     ) -> bool: ...
 
@@ -393,14 +392,6 @@ class SchedulerContainerRequestService:
             }
         )
         quota_reserved = False
-        try:
-            request = self.placement.place(request)
-        except Exception as exc:
-            return SchedulerContainerSubmitResult(
-                status=SchedulerContainerSubmitStatus.Error,
-                container_id=request.container_id,
-                reason=str(exc),
-            )
         self._record_usage(request, UsageMetric.SchedulerContainerRequested)
         if self.containers.is_container_cancelled(request.container_id):
             return SchedulerContainerSubmitResult(
@@ -537,7 +528,7 @@ class SchedulerContainerRequestService:
                     "gpu_request": ",".join(request.gpu),
                 },
                 metadata={
-                    "pool_selector": request.pool_selector,
+                    "placement": request.placement.key,
                 },
             )
         except Exception:
@@ -559,22 +550,6 @@ class SchedulerContainerRequestService:
         if not claims:
             return []
 
-        placed_claims: list[SchedulerContainerRequestClaim] = []
-        placement_failures: list[SchedulerContainerDispatchResult] = []
-        for claim in claims:
-            request = claim.request
-            try:
-                placed_claims.append(
-                    SchedulerContainerRequestClaim(
-                        request=self.placement.place(request),
-                        token=claim.token,
-                    )
-                )
-            except Exception as exc:
-                failure = self._fail_request(request, str(exc), current_time)
-                self._acknowledge(claim)
-                placement_failures.append(failure)
-        claims = placed_claims
         cancelled = [
             claim
             for claim in claims
@@ -584,7 +559,7 @@ class SchedulerContainerRequestService:
         for claim in cancelled:
             self._acknowledge(claim)
             self._release_capacity_reservation(claim.request.container_id, now=current_time)
-        results = placement_failures + [
+        results = [
             SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Cancelled,
                 container_id=claim.request.container_id,
@@ -839,12 +814,11 @@ class SchedulerContainerRequestService:
             ):
                 remaining.append(claim)
                 continue
-            # This path never consults can_fit, so the tenancy rule is restated rather
-            # than inherited. Reservations are acquired per workspace already, which is
-            # what should make this unreachable—stating it is what keeps that true by
-            # construction instead of by coincidence. Falling through to the planner
-            # refuses it there, with a reason.
-            if not worker.serves_owner(owners_by_workspace_id[claim.request.workspace_id]):
+            # This path never consults can_fit, so the placement rule is restated
+            # rather than inherited. Reservations are acquired per placement already,
+            # which is what should make this unreachable; stating it is what keeps that
+            # true by construction instead of by coincidence.
+            if worker.placement != claim.request.placement:
                 remaining.append(claim)
                 continue
             if claim.request.region is not None and worker.region != claim.request.region:
@@ -976,7 +950,7 @@ class SchedulerContainerRequestService:
             LOGGER.exception(
                 "capacity acquisition failed for container %s in pool %s",
                 request.container_id,
-                request.pool_selector,
+                request.placement,
             )
             result = CapacityAcquisitionResult(
                 status=CapacityAcquisitionStatus.TemporarilyUnavailable,
@@ -1405,7 +1379,12 @@ class SchedulerContainerRequestService:
         now: datetime,
     ) -> SchedulerContainerDispatchResult:
         try:
-            failed = self.failure_handler.mark_scheduling_failed(request, reason, now=now)
+            failed = self.failure_handler.mark_scheduling_failed(
+                request.container_id,
+                workspace_id=request.workspace_id,
+                reason=reason,
+                now=now,
+            )
         except Exception as exc:
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Error,
@@ -1568,7 +1547,7 @@ def _scheduling_request(
         memory_mib=memory_mib,
         gpu_count=gpu_count,
         gpu=list(request.gpu),
-        pool_selector=request.pool_selector,
+        placement=request.placement,
         runtime_class=request.runtime_class,
         docker_enabled=request.docker_enabled,
         preemptible=request.preemptible,
@@ -1592,22 +1571,22 @@ def _placement_failure_detail(
     A request that never finds a worker previously failed with only "retry-limit",
     which says nothing about whether capacity was missing or merely mismatched.
     """
-    selector = request.pool_selector or "<none>"
+    placement = request.placement.key
     if not workers:
-        return f"{reason}: no schedulable workers (pool selector {selector})"
+        return f"{reason}: no schedulable workers (placement {placement})"
     scheduling = _scheduling_request(
         request,
         owner_user_id=owner_user_id,
         provisionable=False,
     )
     rejections = [
-        f"{worker.worker_id[:8]} in {worker.pool!r}: {detail}"
+        f"{worker.worker_id[:8]} in {worker.placement.key}: {detail}"
         for worker in workers[:3]
         if (detail := _worker_capacity(worker, now=now).fit_rejection(scheduling))
     ]
     if not rejections:
-        return f"{reason} (pool selector {selector})"
-    return f"{reason}: pool selector {selector}; " + "; ".join(rejections)
+        return f"{reason} (placement {placement})"
+    return f"{reason}: placement {placement}; " + "; ".join(rejections)
 
 
 def _worker_capacity(
@@ -1621,14 +1600,13 @@ def _worker_capacity(
         region=worker.region,
         availability_zone=worker.availability_zone,
         worker_id=worker.worker_id,
-        pool=worker.pool,
+        placement=worker.placement,
         owner_user_id=worker.owner_user_id,
         private_worker=worker.private_worker,
         priority=worker.priority,
         gpu_type=worker.gpu_type,
         runtime_class=worker.runtime_class,
         runtime_classes=list(worker.runtime_classes),
-        requires_pool_selector=worker.requires_pool_selector,
         preemptible=worker.preemptible,
         free_cpu=max(worker.free_cpu_millicores - reserved.cpu_millicores, 0) / 1000,
         free_memory_mib=max(worker.free_memory_mib - reserved.memory_mib, 0),

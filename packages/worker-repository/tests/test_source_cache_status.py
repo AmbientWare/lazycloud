@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
@@ -21,7 +22,12 @@ def test_source_cache_cleanup_status_is_bounded_and_outlives_its_workspace(
     By id and not by name: a deleted workspace releases its name, and the next
     workspace to take it is a different tenant whose cleanup this is not.
     """
-    workspace = owned_workspace(ControlPlaneService(service_context), "cleanup-status")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "cleanup-status",
+    )
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     with service_context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)
@@ -58,7 +64,12 @@ def test_source_cache_cleanup_status_is_bounded_and_outlives_its_workspace(
 def test_source_cache_cleanup_status_clamps_future_clock_and_reports_missing(
     service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(service_context), "clock-status")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "clock-status",
+    )
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
     with service_context.database.session() as session:
         repository = SourceCacheCleanupRepository(session)

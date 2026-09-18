@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from compute.policy import WorkspaceComputePolicyService
+from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import (
     UserRepository,
@@ -7,7 +9,6 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from database.tables.storage_access import StorageAccessTable
-from shared.identity import WorkspaceStorageConfig
 from shared.storage_access import (
     StorageAccessObservation,
     StorageRequestClass,
@@ -16,6 +17,7 @@ from shared.storage_access import (
 from sqlalchemy import select
 from storage.access_metering import record_storage_access
 from storage_client.s3 import S3ObjectStoreSettings
+from tests.workspaces import connected_workspace
 
 
 def test_storage_observations_dedupe_survive_deletion_and_exclude_customer_storage(
@@ -32,16 +34,18 @@ def test_storage_observations_dedupe_survive_deletion_and_exclude_customer_stora
         user = UserRepository(session).create(display_name="storage accounting")
         workspace = WorkspaceRepository(session).create(name="storage accounting")
         WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace.id, user_id=user.id)
-        external = WorkspaceRepository(session).create(name="customer storage")
-        external.storage = WorkspaceStorageConfig(
-            backend="s3",
-            bucket=f"platform-workspace-{external.id}",
-            config={
-                "endpoint_url": settings.endpoint_url,
-                "region": "us-east-1",
-                "access_key": "customer-key",
-                "secret_key": "customer-secret",
-            },
+    external = connected_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "customer storage",
+    )
+    with database.session() as session:
+        # A workspace in a connected account keeps its bucket there; a log line
+        # naming that bucket is never platform storage, whatever the bucket is called.
+        external = WorkspaceRepository(session).get(external.id) or external
+        external.storage = external.storage.model_copy(
+            update={"bucket": f"platform-workspace-{external.id}"}
         )
         WorkspaceRepository(session).upsert(external)
     observation = StorageAccessObservation(

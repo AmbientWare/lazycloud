@@ -18,8 +18,9 @@ from shared.compute_enrollment import (
     AgentWorkerSlotStatus,
     ComputePreflightCheck,
 )
-from shared.compute_policy import MachinePool, UnitName
+from shared.compute_policy import UnitName
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -38,19 +39,13 @@ class ComputeUnitStatus(StrEnum):
 class ComputeUnitState(ContractModel):
     workspace_id: str
     name: UnitName
-    """Unit this hot state belongs to. Pool state is per unit, never per pool."""
-    pool: MachinePool = MachinePool("")
-    """Pool the unit's machines serve. Carried so a consumer holding only this
-    state never has to substitute the unit's name for the label."""
+    """Unit this hot state belongs to."""
+    placement: Placement
+    """Where the unit's machines are, so the scheduler registers their workers there."""
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     platform_fleet: bool = False
     """Whether this unit is the platform's own capacity, so the scheduler can
     register a machine's worker with the tenancy the unit decided."""
-    default_eligible: bool = False
-    """Whether this unit answers a workload that named no pool.
-
-    Carried so the scheduler can register a machine's worker with the unit's
-    policy instead of guessing one the unit alone knows."""
     provider: str = "agent"
     status: ComputeUnitStatus = ComputeUnitStatus.Active
     min_machines: int = 0
@@ -76,7 +71,7 @@ class ComputeJoinTokenState(ContractModel):
     workspace_id: str
     capacity_owner_id: str = Field(min_length=1)
     """Unit that issued the credential, carried onto the machine that joins."""
-    pool: MachinePool
+    placement: Placement
     credential_id: str = ""
     machine_id: str = ""
     created_by_token_id: str = ""
@@ -105,11 +100,10 @@ class ComputeAgentTokenState(ContractModel):
     capacity_owner_id: str = Field(min_length=1)
     """Unit that bought this machine.
 
-    Taken from the join credential rather than from the pool config: a joined
-    machine in a pool an auto-scaling unit also feeds must never be selected by
-    that unit's drain.
+    Taken from the join credential rather than from the unit config, so a drain
+    only ever selects machines its own unit bought.
     """
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     credential_id: str = ""
     credential_generation: int = 1
@@ -151,7 +145,7 @@ class ComputeAgentTokenState(ContractModel):
 
 class ComputeAgentWorkerSlotState(ContractModel):
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     worker_id: str
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
@@ -197,18 +191,18 @@ class ComputeStateKeys:
             "*",
         )
 
-    def pool_state(self, workspace_id: str, capacity_owner_id: str) -> str:
+    def unit_state_key(self, workspace_id: str, capacity_owner_id: str) -> str:
         return self.redis.key(
             self.namespace, "workspaces", workspace_id, "units", capacity_owner_id
         )
 
-    def pool_index(self, workspace_id: str) -> str:
+    def unit_index(self, workspace_id: str) -> str:
         return self.redis.key(self.namespace, "workspaces", workspace_id, "unit-index")
 
-    def pool_workspace_index(self) -> str:
+    def unit_workspace_index(self) -> str:
         return self.redis.key(self.namespace, "workspace-index")
 
-    def pool_state_lock(self, workspace_id: str, capacity_owner_id: str) -> str:
+    def unit_state_lock(self, workspace_id: str, capacity_owner_id: str) -> str:
         return self.redis.key(
             self.namespace, "workspaces", workspace_id, "units", capacity_owner_id, "lock"
         )
@@ -343,15 +337,15 @@ class RedisComputeStateRepository:
 
     def save_unit_state(self, state: ComputeUnitState) -> ComputeUnitState:
         self.redis.set(
-            self.keys.pool_state(state.workspace_id, state.capacity_owner_id),
+            self.keys.unit_state_key(state.workspace_id, state.capacity_owner_id),
             dump_model_json(state),
         )
-        self.redis.set_add(self.keys.pool_index(state.workspace_id), state.capacity_owner_id)
-        self.redis.set_add(self.keys.pool_workspace_index(), state.workspace_id)
+        self.redis.set_add(self.keys.unit_index(state.workspace_id), state.capacity_owner_id)
+        self.redis.set_add(self.keys.unit_workspace_index(), state.workspace_id)
         return state
 
     def get_unit_state(self, workspace_id: str, capacity_owner_id: str) -> ComputeUnitState | None:
-        raw = self.redis.get(self.keys.pool_state(workspace_id, capacity_owner_id))
+        raw = self.redis.get(self.keys.unit_state_key(workspace_id, capacity_owner_id))
         if raw is None:
             return None
         state = load_model_json(ComputeUnitState, raw)
@@ -359,8 +353,8 @@ class RedisComputeStateRepository:
             return state.model_copy(update={"workspace_id": workspace_id})
         return state
 
-    def list_pool_states(self, workspace_id: str, *, limit: int = 0) -> list[ComputeUnitState]:
-        names = sorted(redis_strings(self.redis.set_members(self.keys.pool_index(workspace_id))))
+    def list_unit_states(self, workspace_id: str, *, limit: int = 0) -> list[ComputeUnitState]:
+        names = sorted(redis_strings(self.redis.set_members(self.keys.unit_index(workspace_id))))
         if limit > 0:
             names = names[:limit]
         return [
@@ -369,40 +363,40 @@ class RedisComputeStateRepository:
             if (state := self.get_unit_state(workspace_id, name)) is not None
         ]
 
-    def list_all_pool_states(self, *, limit: int = 0) -> list[ComputeUnitState]:
+    def list_all_unit_states(self, *, limit: int = 0) -> list[ComputeUnitState]:
         states: list[ComputeUnitState] = []
         workspace_ids = sorted(
-            redis_strings(self.redis.set_members(self.keys.pool_workspace_index()))
+            redis_strings(self.redis.set_members(self.keys.unit_workspace_index()))
         )
         for workspace_id in workspace_ids:
             remaining = 0 if limit <= 0 else limit - len(states)
             if limit > 0 and remaining <= 0:
                 break
-            states.extend(self.list_pool_states(workspace_id, limit=remaining))
+            states.extend(self.list_unit_states(workspace_id, limit=remaining))
         return states
 
     def delete_unit_state(self, workspace_id: str, capacity_owner_id: str) -> bool:
         machine_index = self.keys.agent_machine_index(workspace_id, capacity_owner_id)
         for machine_id in redis_strings(self.redis.set_members(machine_index)):
             self.delete_agent_machine_state(workspace_id, capacity_owner_id, machine_id)
-        pool_root = self.keys.pool_state(workspace_id, capacity_owner_id)
+        pool_root = self.keys.unit_state_key(workspace_id, capacity_owner_id)
         owned_descendants = self.redis.scan(f"{pool_root}:*")
         join_token_index = self.keys.join_token_index(workspace_id, capacity_owner_id)
         join_token_hashes = redis_strings(self.redis.set_members(join_token_index))
         join_token_keys = [self.keys.join_token(token_hash) for token_hash in join_token_hashes]
         deleted = bool(
             self.redis.delete(
-                self.keys.pool_state(workspace_id, capacity_owner_id),
-                self.keys.pool_state_lock(workspace_id, capacity_owner_id),
+                self.keys.unit_state_key(workspace_id, capacity_owner_id),
+                self.keys.unit_state_lock(workspace_id, capacity_owner_id),
                 machine_index,
                 join_token_index,
                 *join_token_keys,
                 *owned_descendants,
             )
         )
-        self.redis.set_remove(self.keys.pool_index(workspace_id), capacity_owner_id)
-        if self.redis.set_cardinality(self.keys.pool_index(workspace_id)) == 0:
-            self.redis.set_remove(self.keys.pool_workspace_index(), workspace_id)
+        self.redis.set_remove(self.keys.unit_index(workspace_id), capacity_owner_id)
+        if self.redis.set_cardinality(self.keys.unit_index(workspace_id)) == 0:
+            self.redis.set_remove(self.keys.unit_workspace_index(), workspace_id)
         return deleted
 
     def delete_workspace_state(self, workspace_id: str) -> int:
@@ -411,7 +405,7 @@ class RedisComputeStateRepository:
         owned_keys.extend(self._workspace_join_token_keys(workspace_id))
         owned_keys.extend(self._workspace_agent_token_keys(workspace_id))
         deleted = int(self.redis.delete(*owned_keys)) if owned_keys else 0
-        self.redis.set_remove(self.keys.pool_workspace_index(), workspace_id)
+        self.redis.set_remove(self.keys.unit_workspace_index(), workspace_id)
         return deleted
 
     def _workspace_join_token_keys(self, workspace_id: str) -> list[str]:
@@ -539,8 +533,8 @@ class RedisComputeStateRepository:
     def unit_owner_for_machine(self, workspace_id: str, machine_id: str) -> str | None:
         """Resolve which unit a joined machine enrolled under.
 
-        The reverse index is the only authority: the machine's pool label names
-        the pool it serves, which several units share.
+        The reverse index is the only authority; nothing on the machine names
+        its unit.
         """
         raw = self.redis.get(self.keys.agent_machine_owner(workspace_id, machine_id))
         if raw is None or not redis_text(raw):
@@ -770,7 +764,7 @@ class RedisComputeStateRepository:
 
 
 def _agent_route_order(route: AgentBackendRoute) -> tuple[str, str, str, str]:
-    return (route.workspace_id, route.pool, route.machine_id, route.route_id)
+    return (route.workspace_id, route.placement.key, route.machine_id, route.route_id)
 
 
 @dataclass(init=False, slots=True)

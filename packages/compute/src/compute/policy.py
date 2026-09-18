@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
-from uuid import uuid4
 
 from database.repositories.apps import DeploymentRepository
 from database.repositories.aws_connections import AwsAccountConnectionRepository
@@ -15,11 +14,15 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
-    WorkspaceComputePolicyRepository,
 )
-from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
+from database.repositories.identity import (
+    WorkspaceMemberRepository,
+    WorkspaceRecord,
+    WorkspaceRepository,
+)
+from database.repositories.orchestration import MachineRepository
 from database.types import DatabaseSession
-from shared.aws_connections import AWS_CONNECTED_MACHINE_POOL, AwsAccountConnection
+from shared.aws_connections import AwsAccountConnection
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
@@ -27,18 +30,14 @@ from shared.compute_enrollment import (
     MachineServiceState,
 )
 from shared.compute_policy import (
-    LAZYCLOUD_MACHINE_POOL,
     ComputeResourceRequirements,
-    ComputeUnitPhase,
     ComputeUnitRecord,
-    MachinePool,
-    WorkspaceComputePolicy,
 )
 from shared.deployment_records import Deployment, DeploymentSpec, request_and_limit
-from shared.errors import ConflictError, NotFoundError
+from shared.errors import InvalidInputError
 from shared.identity import WorkspaceStatus
+from shared.placement import Placement
 from shared.resources import parse_memory_mib
-from shared.timestamps import utc_now
 
 from compute.agent_control import (
     MachineWorkerState,
@@ -68,24 +67,12 @@ class ComputeInstanceView:
 @dataclass(frozen=True, slots=True)
 class ComputeWorkloadView:
     deployment: Deployment
-    pool: MachinePool
+    machine: str
     resources: ComputeResourceRequirements
 
 
 @dataclass(frozen=True, slots=True)
-class MachinePoolView:
-    """One pool a workload may name, described by the units feeding it."""
-
-    name: str
-    is_default: bool
-    providers: tuple[str, ...]
-    unit_count: int
-    gpu_types: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class ComputeSummary:
-    policy: WorkspaceComputePolicy
     connection: AwsAccountConnection | None
     instances: tuple[ComputeInstanceView, ...]
     ready_instance_count: int
@@ -163,59 +150,6 @@ class WorkspaceComputePolicyService:
     aws_default_capacity: AwsDefaultCapacityBaseline | None = None
     worker_state: MachineWorkerState | None = None
 
-    def get_policy(self, *, workspace: str) -> WorkspaceComputePolicy:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            repository = WorkspaceComputePolicyRepository(session)
-            current = repository.get_for_workspace(workspace_id)
-            if current is not None:
-                return current
-            now = utc_now()
-            return repository.ensure_default(
-                WorkspaceComputePolicy(
-                    id=str(uuid4()),
-                    workspace_id=workspace_id,
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-
-    def update_policy(
-        self,
-        *,
-        workspace: str,
-        expected_revision: int,
-        default_pool: str,
-    ) -> WorkspaceComputePolicy:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            repository = WorkspaceComputePolicyRepository(session)
-            current = repository.get_for_workspace(workspace_id, for_update=True)
-            if current is None:
-                now = utc_now()
-                current = repository.ensure_default(
-                    WorkspaceComputePolicy(
-                        id=str(uuid4()),
-                        workspace_id=workspace_id,
-                        created_at=now,
-                        updated_at=now,
-                    )
-                )
-                current = repository.get_for_workspace(workspace_id, for_update=True)
-                if current is None:
-                    raise RuntimeError("workspace compute policy is unavailable")
-            if current.revision != expected_revision:
-                raise ConflictError("workspace compute policy revision was superseded")
-            return repository.save(
-                current.model_copy(
-                    update={
-                        "revision": current.revision + 1,
-                        "default_pool": default_pool or current.default_pool,
-                        "updated_at": utc_now(),
-                    }
-                )
-            )
-
     def reconcile_workspace_baseline(self, workspace_id: str) -> None:
         """Apply the connected account's warm baseline in one workspace it backs.
 
@@ -287,74 +221,39 @@ class WorkspaceComputePolicyService:
             if workspace_id in active_workspace_ids
         ]
 
-    def default_machine_pool(self, *, workspace: str) -> MachinePool:
-        """Pool a workload lands in when it names none."""
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            return self._policy_in_session(session, workspace_id).default_pool
+    def resolve_placement(
+        self, session: DatabaseSession, workspace: WorkspaceRecord, machine: str
+    ) -> Placement:
+        """Where a workload of this workspace runs.
 
-    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> MachinePool:
-        """Pin the pool a deployment runs in for as long as it exists."""
-        return self.resolve_machine_pool(_deployment_pool_name(spec), workspace=workspace)
-
-    def resolve_machine_pool(self, pool: str, *, workspace: str) -> MachinePool:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            selected = (
-                MachinePool(pool)
-                if pool
-                else self._policy_in_session(session, workspace_id).default_pool
-            )
-            if selected == LAZYCLOUD_MACHINE_POOL:
-                return selected
-            if (
-                selected == AWS_CONNECTED_MACHINE_POOL
-                and AwsAccountConnectionRepository(session).get_for_workspace_owner(workspace_id)
-                is not None
+        Without a machine it is the workspace's location: the platform fleet, or
+        the connected account the workspace was created in. With one it is that
+        machine, and only if the machine exists in the owner's account and lists
+        this workspace. There is no fallback in either direction; a workload that
+        names a machine runs there or not at all.
+        """
+        members = WorkspaceMemberRepository(session)
+        if not machine:
+            if workspace.connection_id is None:
+                return Placement.platform()
+            connection = AwsAccountConnectionRepository(session).get(workspace.connection_id)
+            # A workspace may hold several owners; the account that connected the
+            # cloud must be one of them, whichever row the database lists first.
+            if connection is None or not members.is_owner(
+                workspace_id=workspace.id, user_id=connection.user_id
             ):
-                return selected
-            owner_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
-            if any(
-                unit.pool == selected and unit.phase is not ComputeUnitPhase.Deleted
-                for unit in ComputeUnitRepository(session).list_for_account(owner_id)
-            ):
-                return selected
-        raise NotFoundError(
-            f"compute pool {selected!r} not found; "
-            "join a machine to this pool before running workloads"
-        )
-
-    def pools(self, *, workspace: str) -> tuple[MachinePoolView, ...]:
-        """Pools backed by the workspace owner's machines or platform capacity."""
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            owner_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
-            repository = ComputeUnitRepository(session)
-            units = {
-                unit.id: unit
-                for unit in (
-                    *repository.list_for_account(owner_id),
-                    *repository.list_platform_internal(),
+                raise InvalidInputError(
+                    f"workspace {workspace.name!r} is pinned to a connected account "
+                    "that no longer belongs to its owner"
                 )
-            }
-            default_pool = self._policy_in_session(session, workspace_id).default_pool
-        grouped: dict[str, list[ComputeUnitRecord]] = {}
-        for unit in units.values():
-            if unit.phase is ComputeUnitPhase.Deleted:
-                continue
-            grouped.setdefault(unit.pool, []).append(unit)
-        return tuple(
-            MachinePoolView(
-                name=name,
-                is_default=name == default_pool,
-                providers=tuple(sorted({unit.provider for unit in members})),
-                unit_count=len(members),
-                gpu_types=tuple(
-                    sorted({unit.worker_gpu_type for unit in members if unit.worker_gpu_type})
-                ),
+            return connection.placement
+        record = MachineRepository(session).get_serving_by_name(workspace.id, machine)
+        if record is None:
+            raise InvalidInputError(
+                f"machine {machine!r} is not joined to this account or does not serve "
+                f"workspace {workspace.name!r}"
             )
-            for name, members in sorted(grouped.items())
-        )
+        return Placement.machine(record.id)
 
     def catalog(self) -> tuple[tuple[str, tuple[ComputeCatalogInstance, ...]], ...]:
         """Provider inventory: what may be launched, independent of who is asking."""
@@ -402,7 +301,7 @@ class WorkspaceComputePolicyService:
                 record,
                 region=pool.region,
                 workspace_id=workspace_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 enrollments=enrollments,
                 worker_state=self.worker_state,
             )
@@ -428,7 +327,7 @@ class WorkspaceComputePolicyService:
                 views.append(
                     ComputeWorkloadView(
                         deployment=deployment,
-                        pool=deployment.pool,
+                        machine=deployment.machine,
                         resources=requirements,
                     )
                 )
@@ -436,7 +335,6 @@ class WorkspaceComputePolicyService:
         return tuple(views)
 
     def summary(self, *, workspace: str) -> ComputeSummary:
-        policy = self.get_policy(workspace=workspace)
         instances = self.instances(workspace=workspace)
         workloads = self.workloads(workspace=workspace)
         with self.context.database.session() as session:
@@ -456,7 +354,6 @@ class WorkspaceComputePolicyService:
             for item in instances
         )
         return ComputeSummary(
-            policy=policy,
             connection=connection,
             instances=instances,
             ready_instance_count=ready_instance_count,
@@ -495,25 +392,6 @@ class WorkspaceComputePolicyService:
             memory_mb=_memory_mb(memory_request),
             gpu=list(resources.gpu),
             gpu_count=resources.gpu_count,
-        )
-
-    @staticmethod
-    def _policy_in_session(
-        session: DatabaseSession,
-        workspace_id: str,
-    ) -> WorkspaceComputePolicy:
-        repository = WorkspaceComputePolicyRepository(session)
-        policy = repository.get_for_workspace(workspace_id)
-        if policy is not None:
-            return policy
-        now = utc_now()
-        return repository.ensure_default(
-            WorkspaceComputePolicy(
-                id=str(uuid4()),
-                workspace_id=workspace_id,
-                created_at=now,
-                updated_at=now,
-            )
         )
 
 
@@ -559,7 +437,7 @@ def _compute_instance_view(
     *,
     region: str,
     workspace_id: str,
-    pool: MachinePool,
+    placement: Placement,
     enrollments: ComputeMachineEnrollmentRepository,
     worker_state: MachineWorkerState,
 ) -> ComputeInstanceView:
@@ -580,7 +458,7 @@ def _compute_instance_view(
         enrollment = enrollments.by_machine(
             workspace_id,
             record.machine_id,
-            pool=pool,
+            placement=placement,
         )
         if machine_serves_workloads(
             enrollment,
@@ -621,21 +499,10 @@ def _compute_instance_view(
     )
 
 
-def _deployment_pool_name(spec: DeploymentSpec) -> str:
-    pool = spec.metadata.get("pool")
-    if isinstance(pool, str):
-        return pool.strip()
-    if not isinstance(pool, dict):
-        return ""
-    name = pool.get("name")
-    return str(name).strip() if name is not None else ""
-
-
 __all__ = [
     "AwsDefaultCapacityBaseline",
     "ComputeInstanceView",
     "ComputeSummary",
     "ComputeWorkloadView",
-    "MachinePoolView",
     "WorkspaceComputePolicyService",
 ]

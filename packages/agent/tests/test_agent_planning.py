@@ -16,7 +16,7 @@ from agent.operations import (
     select_agent_gpu_devices,
 )
 from shared.compute_enrollment import AgentWorkerSlotStatus, PreflightSeverity
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.usage import UsageBillingOwner
 
 
@@ -77,7 +77,7 @@ def test_worker_slot_equality_and_reconciliation() -> None:
     active = AgentWorkerSlot(
         worker_id="worker-1",
         worker_token="token-1",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         billing_owner=UsageBillingOwner.SelfHosted,
         machine_id="machine-1",
@@ -88,7 +88,7 @@ def test_worker_slot_equality_and_reconciliation() -> None:
     changed = active.model_copy(update={"memory_mb": 2048})
     new_slot = AgentWorkerSlot(
         worker_id="worker-2",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         billing_owner=UsageBillingOwner.SelfHosted,
     )

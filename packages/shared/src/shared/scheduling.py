@@ -7,12 +7,11 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field, JsonValue, field_validator
 
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.http.task_progress import TaskPendingProgress
-from shared.placement import AvailabilityZone, ProductRegion
+from shared.placement import AvailabilityZone, Placement, ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -79,12 +78,12 @@ class WorkerExecutionRequest(ContractModel):
     """
 
     gpu_count: int = 0
-    pool_selector: str = ""
-    """Pool this request must land in, empty to take the default.
+    placement: Placement
+    """Where this request must land, resolved from its stub when the stub was created.
 
-    A group may be fed by several units, so the request names the pool and the
-    capacity controllers arbitrate which unit serves it. Naming the unit here
-    would pin the request to one candidate and suppress failover.
+    Several units may serve one placement, so the request names the placement
+    and the capacity controllers arbitrate which unit serves it. Naming the unit
+    here would pin the request to one candidate and suppress failover.
     """
     architecture: str = "amd64"
     provider_runtime: str = OciRuntimeName.Runsc.value
@@ -139,38 +138,19 @@ class WorkerUnavailableReason(StringEnum):
     ShuttingDown = "shutting_down"
 
 
-def worker_serves_owner(
-    *,
-    private_worker: bool,
-    worker_owner_user_id: str,
-    request_owner_user_id: str,
-) -> bool:
-    """Whether a worker may run a request belonging to `request_owner_user_id`.
-
-    The platform fleet is shared, which is what lets any workspace place work on it.
-    A private worker is the account's own machine, so it serves every workspace that
-    account owns—the customer's data is on both sides of that boundary, and asking
-    them to connect the same hardware once per workspace answered nothing.
-
-    Accept the consequence deliberately: between an owner's own workspaces, private
-    capacity is no longer a hard isolation boundary, so a container escape on their
-    machine reaches their other environments. It stops there. Platform-managed
-    capacity is a different rule above, and no comparison here can widen it.
-
-    A private record naming no owner was written without the authority to name one,
-    so it serves none rather than all.
-    """
-
-    if not private_worker:
-        return True
-    return bool(worker_owner_user_id) and worker_owner_user_id == request_owner_user_id
-
-
 class WorkerExecutionRecord(ContractModel):
     worker_id: str
     runtime_image: str = ""
     agent_binary_sha256: str = ""
-    pool: MachinePool
+    placement: Placement
+    """Where this worker is, copied from the unit that admitted it.
+
+    The whole of the placement rule: a request lands here only when its own
+    placement compares equal. A platform request never reaches a connection or a
+    machine worker because the kinds differ, and one account's connection never
+    serves another's because the connection id differs.
+    """
+
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     workspace_id: str = ""
     """Workspace that enrolled a private worker; empty on the shared platform fleet.
@@ -182,10 +162,10 @@ class WorkerExecutionRecord(ContractModel):
     """
 
     owner_user_id: str = ""
-    """Account whose machine this is, and the whole of the private-placement rule.
+    """Account whose machine this is, kept for attribution and billing.
 
-    Stamped from the same authority as `workspace_id`. Compared rather than the
-    workspace because one account's capacity serves every workspace it owns.
+    Stamped from the same authority as `workspace_id`. Not compared at placement;
+    the placement above already names the account's connection or machine.
     """
 
     billing_owner: UsageBillingOwner = UsageBillingOwner.PlatformFleet
@@ -199,7 +179,7 @@ class WorkerExecutionRecord(ContractModel):
     """
 
     priority: int = 0
-    """Preference for landing work here, taken from the unit that feeds this pool.
+    """Preference for landing work here, taken from the unit that admitted this worker.
 
     Higher is preferred, the same direction capacity acquisition already reads.
     Stamped from the same authority as the three fields above, and for the same
@@ -216,7 +196,6 @@ class WorkerExecutionRecord(ContractModel):
     runtime_class: str = ""
     runtime_classes: list[str] = Field(default_factory=list)
     private_worker: bool = False
-    requires_pool_selector: bool = False
     preemptible: bool = False
     free_cpu_millicores: int = 0
     free_memory_mib: int = 0
@@ -243,13 +222,6 @@ class WorkerExecutionRecord(ContractModel):
             msg = "worker values cannot be negative"
             raise ValueError(msg)
         return value
-
-    def serves_owner(self, owner_user_id: str) -> bool:
-        return worker_serves_owner(
-            private_worker=self.private_worker,
-            worker_owner_user_id=self.owner_user_id,
-            request_owner_user_id=owner_user_id,
-        )
 
 
 WORKER_REQUEST_POLL_LEASE_SECONDS = 60

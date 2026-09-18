@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from control.service import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import MachinePool
 from shared.deployment_records import (
     DEFAULT_DISK,
     DeploymentSpec,
@@ -70,7 +69,6 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
     env: dict[str, str | None] = {}
     for name, value in _env_dict(request.env).items():
         env[name] = value
-    pool_selector = request.pool.strip()
     retry_policy = request.retry_policy or (
         RetryPolicy.from_retries(request.retries) if request.retries > 0 else None
     )
@@ -153,7 +151,6 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             docker_enabled=request.docker_enabled,
             block_network=request.block_network,
             allow_list=request.allow_list,
-            pool_selector=pool_selector or None,
         ),
         env=env,
         route=request.route,
@@ -184,7 +181,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             outputs=request.outputs.model_dump(mode="json"),
         ),
         tcp=request.tcp,
-        pool=MachinePool(pool_selector),
+        machine=request.machine,
     )
 
 
@@ -287,6 +284,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             "stub_id": stub.id,
             "stub_kind": stub.kind.value,
             "app_id": stub.app_id or "",
+            "machine": config.machine,
         },
         retry_policy=config.retry_policy,
         lifecycle_hooks=config.lifecycle_hooks,

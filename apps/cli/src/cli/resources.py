@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.cards import empty_state, notice_card
+from lazycloud.cli.components.cards import empty_state
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.formatting import duration, timestamp
+from lazycloud.cli.components.formatting import duration
 from lazycloud.cli.components.output import (
     command_from_args,
     console,
@@ -20,23 +19,17 @@ from lazycloud.cli.components.output import (
 from lazycloud.cli.components.progress import print_stream_message
 from lazycloud.cli.components.results import emit_notice, emit_result
 from lazycloud.cli.control import compute_client, control_config
-from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
 from lazycloud.cli.resources import container_attach, container_checkpoint
 from lazycloud.clients.map.control import MapControlClient
 from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
 from lazycloud.terminal import humanize_bytes
 from pydantic import JsonValue
-from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.http.collections import MAX_MAP_TTL_SECONDS
 from shared.http.compute import (
     ContainerResponse,
     ContainerRunRequest,
-    MachineCreateRequest,
-    MachineJoinCommandRequest,
     UnitCreateRequest,
-    UnitJoinCommandRequest,
-    UnitJoinTokenRequest,
 )
 from shared.http.observability import EventHistoryRequest, LogQueryRequest
 
@@ -406,13 +399,11 @@ def container_stop(
 def unit_create(
     ctx: typer.Context,
     name: str,
-    pool: Annotated[str, typer.Option("--pool")] = "",
     provider: Annotated[str, typer.Option("--provider")] = "agent",
     initial_machines: Annotated[int, typer.Option("--initial-machines", min=0)] = 0,
     min_machines: Annotated[int, typer.Option("--min-machines", min=0)] = 0,
     max_machines: Annotated[int, typer.Option("--max-machines", min=0)] = 1,
     scaling_enabled: Annotated[bool, typer.Option("--scaling-enabled")] = False,
-    default_eligible: Annotated[bool, typer.Option("--default-eligible")] = False,
     priority: Annotated[
         int,
         typer.Option(
@@ -447,13 +438,11 @@ def unit_create(
     response = admin_api_client().create_unit(
         UnitCreateRequest(
             name=name,
-            pool=MachinePool(pool),
             provider=provider,
             initial_machines=initial_machines,
             min_machines=min_machines,
             max_machines=max_machines,
             scaling_enabled=scaling_enabled,
-            default_eligible=default_eligible,
             priority=priority,
             worker_cpu_millicores=worker_cpu_millicores,
             worker_memory_mib=worker_memory_mib,
@@ -471,7 +460,7 @@ def unit_create(
         title="Unit created",
         fields={
             "name": response.name,
-            "pool": str(response.pool),
+            "placement": str(response.placement),
             "provider": response.provider,
             "scaling": response.scaling_enabled,
             "id": response.id,
@@ -483,7 +472,6 @@ def unit_create(
 def unit_ensure(
     ctx: typer.Context,
     name: str,
-    pool: Annotated[str, typer.Option("--pool")] = "",
     provider: Annotated[str, typer.Option("--provider")] = "agent",
     capacity_owner_output: Annotated[
         Path | None,
@@ -493,18 +481,16 @@ def unit_ensure(
             resolve_path=True,
             help=(
                 "Write the unit's capacity owner id here. A worker is admitted only "
-                "into a pool some unit already feeds, and this id is assigned at "
-                "creation rather than derived from the pool name."
+                "into a unit that already exists, and this id is assigned at "
+                "creation rather than derived from the unit name."
             ),
         ),
     ] = None,
 ) -> None:
     """Return the unit with this name, creating it only if none exists.
 
-    Looked up by name rather than by pool: several units may feed one pool, so a
-    pool lookup can return somebody else's unit. The shared fleet and a joined
-    machine both file a unit against the platform pool, and registering the fleet
-    against the machine's unit fails no visible check.
+    Looked up by name rather than by placement: several units may serve one
+    placement, so a placement lookup can return somebody else's unit.
     """
     client = admin_api_client()
     record = next(
@@ -512,9 +498,7 @@ def unit_ensure(
         None,
     )
     if record is None:
-        record = client.create_unit(
-            UnitCreateRequest(name=name, pool=MachinePool(pool), provider=provider)
-        )
+        record = client.create_unit(UnitCreateRequest(name=name, provider=provider))
     if capacity_owner_output is not None:
         # An identifier, not a credential: it grants nothing without the worker
         # token that accompanies it, so it is written in the clear.
@@ -525,7 +509,7 @@ def unit_ensure(
         title="Unit ready",
         fields={
             "name": record.name,
-            "pool": str(record.pool),
+            "placement": str(record.placement),
             "provider": record.provider,
             "id": record.id,
         },
@@ -541,11 +525,11 @@ def unit_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Units",
-            ["name", "pool", "provider", "machines", "scaling", "id"],
+            ["name", "placement", "provider", "machines", "scaling", "id"],
             [
                 [
                     item.name,
-                    item.pool,
+                    item.placement.key,
                     item.provider,
                     (
                         f"{item.min_machines} min, {item.initial_machines} initial, "
@@ -584,122 +568,6 @@ def unit_clear_degraded(
             "phase": response.phase.value,
             "status": response.status,
             "machines": response.observed_machines,
-        },
-        tone="success",
-    )
-
-
-def pool_join_token(
-    ctx: typer.Context,
-    pool: Annotated[str, typer.Option("--pool")] = "",
-    ttl: Annotated[str, typer.Option("--ttl")] = "",
-) -> None:
-    """Mint a single-use join credential for a pool, creating its unit if new.
-
-    Names a pool, not a unit: the capacity owner is found or created server-side,
-    so nothing has to exist before the first host joins.
-    """
-    response = admin_api_client().create_pool_join_token(
-        MachineJoinCommandRequest(pool=MachinePool(pool), ttl=ttl)
-    )
-    emit_result(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        title="Pool join token",
-        fields={"token": response.token, "expires": timestamp(response.expires_at)},
-        tone="success",
-        message="Copy this token now. It grants one machine access to the pool.",
-    )
-
-
-def unit_join_token(
-    ctx: typer.Context,
-    unit_id: str,
-    ttl: Annotated[str, typer.Option("--ttl")] = "",
-) -> None:
-    """Mint a single-use join credential for the unit's pool."""
-    response = admin_api_client().create_unit_join_token(unit_id, UnitJoinTokenRequest(ttl=ttl))
-    emit_result(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        title="Unit join token",
-        fields={"token": response.token, "expires": timestamp(response.expires_at)},
-        tone="success",
-        message="Copy this token now. It grants one machine access to the pool.",
-    )
-
-
-def pool_join(
-    ctx: typer.Context,
-    unit_id: str,
-    ttl: Annotated[str, typer.Option("--ttl")] = "",
-    agent_bin: Annotated[str, typer.Option("--agent-bin")] = "",
-    executor: Annotated[str, typer.Option("--executor")] = "",
-    worker_image: Annotated[str, typer.Option("--worker-image")] = "",
-    print_only: Annotated[bool, typer.Option("--print-only")] = False,
-) -> None:
-    response = admin_api_client().unit_join_command(unit_id, UnitJoinCommandRequest(ttl=ttl))
-    command = build_pool_join_command(
-        response.command,
-        agent_bin=agent_bin,
-        executor=executor,
-        worker_image=worker_image,
-    )
-    if json_output_enabled(ctx):
-        payload = response.model_dump(mode="json")
-        payload["command"] = command
-        print_payload(ctx, payload)
-        return
-    if print_only:
-        console.print(
-            notice_card(
-                command,
-                title="Unit join command",
-                hint="This command contains a short-lived credential. Do not share it.",
-                tone="warning",
-            )
-        )
-        return
-    try:
-        exit_code = subprocess.call(command, shell=True)
-    except KeyboardInterrupt:
-        return
-    if agent_join_interrupted(exit_code):
-        return
-    if exit_code:
-        raise typer.Exit(exit_code)
-    emit_notice(
-        ctx,
-        payload={"status": "running"},
-        title="Agent is running",
-        message="The unit joined successfully.",
-    )
-
-
-def machine_create(
-    ctx: typer.Context,
-    provider: Annotated[str, typer.Option("--provider")] = "local",
-    cpu: Annotated[float | None, typer.Option("--cpu")] = None,
-    memory: Annotated[str | None, typer.Option("--memory")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
-) -> None:
-    response = admin_api_client().create_machine(
-        MachineCreateRequest(
-            provider=provider,
-            cpu=cpu,
-            memory=memory,
-            gpu=gpu,
-        )
-    )
-    emit_result(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        title="Machine created",
-        fields={
-            "provider": response.provider,
-            "pool": str(response.pool),
-            "status": response.status.value,
-            "id": response.id,
         },
         tone="success",
     )
@@ -769,10 +637,10 @@ def worker_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Workers",
-            ["pool", "status", "free cpu", "free memory", "free gpu", "machine", "id"],
+            ["placement", "status", "free cpu", "free memory", "free gpu", "machine", "id"],
             [
                 [
-                    item.pool,
+                    item.placement.key,
                     item.status,
                     str(item.free_cpu),
                     f"{item.free_memory} MiB",
@@ -864,8 +732,6 @@ unit_app.command("create")(unit_create)
 unit_app.command("ensure")(unit_ensure)
 unit_app.command("list")(unit_list)
 unit_app.command("delete")(unit_delete)
-unit_app.command("join")(pool_join)
-unit_app.command("join-token")(unit_join_token)
 unit_app.command(
     "clear-degraded",
     help="Allow a pool that exhausted its retries to launch machines again.",
@@ -873,8 +739,6 @@ unit_app.command(
 
 
 def register_machine_extensions(group: typer.Typer) -> None:
-    group.command("join-token")(pool_join_token)
-    group.command("create")(machine_create)
     group.command("delete")(machine_delete)
     group.command("cordon")(machine_cordon)
     group.command("uncordon")(machine_uncordon)

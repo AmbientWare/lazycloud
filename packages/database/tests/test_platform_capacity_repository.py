@@ -29,10 +29,10 @@ from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.compute_reconciliation import ComputeReconciliationKind
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -123,7 +123,7 @@ def _platform_unit(workspace_id: str, provider: str) -> ComputeUnitRecord:
         id=unit_id,
         workspace_id=workspace_id,
         name=UnitName(unit_id),
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         provider=provider,
         provider_ref=f"{provider}:fleet",
         platform_fleet=True,
@@ -241,7 +241,7 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
                 id=str(uuid4()),
                 workspace_id=customer.id,
                 name=UnitName("public"),
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
                 desired_machines=90,
                 max_machines=90,
             )

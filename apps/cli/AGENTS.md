@@ -14,3 +14,7 @@ provider bindings through offline deployment authority. It needs no account toke
 only platform units through the compute service. Stop admission and schedulers
 first. Customer capacity stays outside this command's scope. Provider resources
 retain their owning unit until the provider confirms cleanup.
+
+Joining a machine is a public workflow and lives in the public CLI. The operator
+CLI keeps unit create, list, and scale for platform capacity; a unit it creates
+is platform placement, which no workload chooses.

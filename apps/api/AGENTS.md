@@ -10,3 +10,9 @@ instead of wherever someone remembered.
 
 Router registration order matters where a fallback route exists: a catch-all
 registered too early silently claims paths that belong to something else.
+
+Machines are account resources. `POST /api/v1/machines/join-command` and
+`PATCH /api/v1/machines/{id}` act for the signed-in account, which is the only
+thing that owns a machine name; `GET /api/v1/machines` reads the workspace the
+request names. There is no route that creates a machine directly or hands out a
+bare join token: the command is the credential's only rendering.

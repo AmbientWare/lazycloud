@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient, RedisWireScalar, redis_text
 from database.tables.identity import TokenTable
@@ -231,7 +232,13 @@ def test_ticket_mint_rejects_wrong_workspace_and_insufficient_scope(
         service.mint_shell_ticket(token, audience=_audience(token.workspace_id))
     assert not fake.values
 
-    other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "other")
+    other_workspace = owned_workspace(
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ),
+        "other",
+    )
     _other_raw, other = auth.create_token(
         "other-shell",
         workspace_id=other_workspace.id,

@@ -4,9 +4,9 @@ from datetime import datetime
 
 from pydantic import Field
 
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.placement import Placement
 from shared.timestamps import utc_now
 
 
@@ -26,13 +26,13 @@ class LeaseStatus(StringEnum):
 
 class Machine(ContractModel):
     id: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    name: str = ""
+    """Account-unique name a workload pins to; empty for provider-bought machines."""
+    workspace_ids: tuple[str, ...] = ()
+    """Workspaces whose workloads may land here. Empty for platform and provider capacity."""
+    placement: Placement = Placement.platform()
     capacity_owner_id: str = ""
-    """Unit that bought this machine, from the join credential it enrolled with.
-
-    Stored rather than derived: the pool names the group the machine serves, and
-    several units share one, so it can never answer which unit owns it.
-    """
+    """Unit that bought this machine, from the join credential it enrolled with."""
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
     cpu: float | None = None
@@ -48,7 +48,7 @@ class Machine(ContractModel):
 class Worker(ContractModel):
     id: str
     machine_id: str | None = None
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    placement: Placement = Placement.platform()
     status: ResourceStatus = ResourceStatus.Created
     labels: dict[str, str] = Field(default_factory=dict)
     last_seen_at: datetime = Field(default_factory=utc_now)
@@ -58,7 +58,7 @@ class Worker(ContractModel):
 class AgentRecord(ContractModel):
     id: str
     name: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    placement: Placement = Placement.platform()
     status: ResourceStatus = ResourceStatus.Created
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)

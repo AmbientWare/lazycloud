@@ -18,7 +18,6 @@ from compute.capacity_errors import (
 from compute.capacity_recovery import record_capacity_risk
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
 from compute.offers import ComputeOffer, ReservationStatus
-from compute.policy import WorkspaceComputePolicyService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -108,12 +107,12 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitProviderState,
     ComputeUnitRecord,
-    MachinePool,
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
 from shared.network_egress import NetworkEgressRouteEvidence
+from shared.placement import Placement
 from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerRequest, SchedulerWorkerStatus
 from shared.source_cache_cleanup import WorkerCacheGenerationState
@@ -366,7 +365,7 @@ class _Resolver(ComputeProviderResolver):
             policy=ResolvedProviderPolicy(
                 purchases_enabled=self.purchases_enabled,
                 workspace_id=workspace_id,
-                pool=connection.pool if connection is not None else MachinePool("lazycloud"),
+                placement=connection.placement if connection is not None else Placement.platform(),
                 platform_fleet=connection is None,
                 root_volume_gib=self.root_volume_gib,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
@@ -552,7 +551,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
                 policy=ResolvedProviderPolicy(
                     purchases_enabled=name != "disabled",
                     workspace_id=workspace_id,
-                    pool=MachinePool("lazycloud"),
+                    placement=Placement.platform(),
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
@@ -588,15 +587,11 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
     unit = compute.prepare_pooled_offer(
         provider=existing, offer=existing_offer, requirements=requirements
     )
-    placement = ComputeCapacityPlacementService(
-        service_context,
-        WorkspaceComputePolicyService(service_context),
-        compute,
-    )
+    placement = ComputeCapacityPlacementService(service_context, compute)
     candidates = placement.purchase_candidates(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
-            requested_pool="lazycloud",
+            placement=Placement.platform(),
             requirements=requirements,
         )
     )
@@ -641,7 +636,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
         container_id=str(uuid4()),
         cpu_millicores=1_000,
         memory_mib=1_024,
-        pool_selector="lazycloud",
+        placement=Placement.platform(),
         timestamp=now,
     )
     acquired = service.acquire(request, purchases=lambda: candidates, now=now)
@@ -693,13 +688,11 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
         root_volume_gib=200,
     )
     compute.reconcile_unit_capacity(pool.id)
-    placement = ComputeCapacityPlacementService(
-        service_context, WorkspaceComputePolicyService(service_context), compute
-    )
+    placement = ComputeCapacityPlacementService(service_context, compute)
     candidates = placement.purchase_candidates(
         ComputeCapacityPlacementRequest(
             workspace_id=pool.workspace_id,
-            requested_pool=pool.pool,
+            placement=pool.placement,
             requirements=requirements,
         )
     )
@@ -718,7 +711,7 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
         container_id=str(uuid4()),
         cpu_millicores=1_000,
         memory_mib=1_024,
-        pool_selector=pool.pool,
+        placement=pool.placement,
         timestamp=now,
     )
     waiting = service.acquire(request, purchases=lambda: candidates, now=now)
@@ -786,7 +779,7 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
         pooled=provider,
         policy=ResolvedProviderPolicy(
             workspace_id=workspace_id,
-            pool=MachinePool("lazycloud"),
+            placement=Placement.platform(),
             platform_fleet=True,
             default_region=offer.region,
             allowed_regions=(offer.region,),
@@ -911,7 +904,7 @@ def test_two_warm_workers_use_distinct_availability_zones(service_context: Servi
                 pooled=_PooledProvider(offer=offer),
                 policy=ResolvedProviderPolicy(
                     workspace_id=workspace_id,
-                    pool=MachinePool("lazycloud"),
+                    placement=Placement.platform(),
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
@@ -996,7 +989,7 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
                 pooled=capacity_provider,
                 policy=ResolvedProviderPolicy(
                     workspace_id=workspace_id,
-                    pool=MachinePool("lazycloud"),
+                    placement=Placement.platform(),
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
@@ -1192,7 +1185,7 @@ def test_fleet_warm_targets_reuse_retired_identity_and_keep_serving_floor(
                 pooled=suppliers[name],
                 policy=ResolvedProviderPolicy(
                     workspace_id=workspace_id,
-                    pool=MachinePool("lazycloud"),
+                    placement=Placement.platform(),
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
@@ -1455,7 +1448,7 @@ def test_failed_warm_purchase_preserves_serving_baseline_and_releases_unused_cap
                 pooled=suppliers[-1],
                 policy=ResolvedProviderPolicy(
                     workspace_id=workspace_id,
-                    pool=MachinePool("lazycloud"),
+                    placement=Placement.platform(),
                     platform_fleet=True,
                     default_region=offer.region,
                     allowed_regions=(offer.region,),
@@ -1719,7 +1712,7 @@ def test_aws_default_capacity_is_one_durable_floor_preserved_by_placement(
                     "id": sibling_id,
                     "capacity_owner_id": sibling_id,
                     "name": "larger-demand-owned-cpu",
-                    "pool": "larger-demand-owned-cpu",
+                    "placement": Placement.machine("larger-demand-owned-cpu"),
                     "selector": "larger-demand-owned-cpu",
                     "capability_key": f"{baseline.capability_key}:larger",
                     "desired_machines": 1,
@@ -2403,6 +2396,7 @@ def test_registered_reservation_settles_against_durable_purchase_outcome(
     )
     now = datetime.now(UTC)
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         container_id=str(uuid4()),
         workspace_id=pool.workspace_id,
         stub_id=str(uuid4()),
@@ -2413,7 +2407,7 @@ def test_registered_reservation_settles_against_durable_purchase_outcome(
     with reservations.mutation_lock(pool.capacity_owner_id):
         decision = reservations.reserve(
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             owner_kind=pool.capacity_owner_kind,
             request=request,
             shape=CapacityRequestShape(cpu_millicores=4_000, memory_mib=32 * 1_024),
@@ -3051,7 +3045,7 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 provider="agent",
                 status=ResourceStatus.Running,
             ),
@@ -3216,7 +3210,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 provider="agent",
                 status=ResourceStatus.Running,
             ),
@@ -3226,7 +3220,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             Worker(
                 id=worker_id,
                 machine_id=machine_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 status=ResourceStatus.Running,
             ),
             workspace_id=pool.workspace_id,
@@ -3236,7 +3230,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
             user_id=owner_user_id,
             workspace_id=pool.workspace_id,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             created_by_token_id=None,
             max_uses=1,
             expires_at=now + timedelta(minutes=2),
@@ -3246,7 +3240,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
                 user_id=owner_user_id,
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 machine_id=machine_id,
                 machine_fingerprint_hash="b" * 64,
                 join_credential_id=credential.id,
@@ -3280,7 +3274,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             pool.workspace_id,
             machine_id,
-            pool=pool.pool,
+            placement=pool.placement,
         )
         machine = MachineRepository(session).get(machine_id, workspace_id=pool.workspace_id)
         worker = WorkerRepository(session).get(worker_id, workspace_id=pool.workspace_id)
@@ -3588,7 +3582,7 @@ def test_clearing_warm_capacity_preserves_work_from_another_workspace(
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 provider=pool.provider_ref,
                 status=ResourceStatus.Running,
             ),
@@ -4252,7 +4246,7 @@ def _seed_serving_machine(
         MachineRepository(session).upsert(
             Machine(
                 id=machine_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 provider="agent",
                 status=ResourceStatus.Running,
             ),
@@ -4262,7 +4256,7 @@ def _seed_serving_machine(
             Worker(
                 id=worker_id,
                 machine_id=machine_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 status=ResourceStatus.Running,
             ),
             workspace_id=pool.workspace_id,
@@ -4272,7 +4266,7 @@ def _seed_serving_machine(
             user_id=owner_id,
             workspace_id=pool.workspace_id,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             created_by_token_id=None,
             max_uses=1,
             expires_at=now + timedelta(minutes=2),
@@ -4282,7 +4276,7 @@ def _seed_serving_machine(
                 user_id=owner_id,
                 workspace_id=pool.workspace_id,
                 capacity_owner_id=pool.capacity_owner_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 machine_id=machine_id,
                 machine_fingerprint_hash=hashlib.sha256(machine_id.encode()).hexdigest(),
                 join_credential_id=credential.id,
@@ -4388,7 +4382,7 @@ def test_worker_update_holds_fleet_maintenance_until_verified_intake_returns(
             worker_id=agent_machine_worker_id(machine_id),
             machine_id=machine_id,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             runtime_image="worker:v1",
             agent_binary_sha256="a" * 64,
             status=SchedulerWorkerStatus.Available,

@@ -190,15 +190,17 @@ def _deployments_on_connection(
     deployments: Sequence[Deployment],
     connection: AwsAccountConnection | None,
 ) -> tuple[Deployment, ...]:
-    """Deployments whose pool this connection provisions into.
+    """Deployments placed on this connection.
 
-    The pool is what ties a workload to an account now: a deployment running
-    in the pool a connection stamps on its units needs that account's bucket
-    grants, and one in any other pool does not.
+    The placement is what ties a workload to an account: a deployment running
+    on the connection's capacity needs that account's bucket
+    grants, and one placed anywhere else does not.
     """
     if connection is None:
         return ()
-    return tuple(deployment for deployment in deployments if deployment.pool == connection.pool)
+    return tuple(
+        deployment for deployment in deployments if deployment.placement == connection.placement
+    )
 
 
 def _deployment_bucket_access_grants(

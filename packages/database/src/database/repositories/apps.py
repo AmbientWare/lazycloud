@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -57,6 +57,7 @@ from shared.deployments import DeploymentKind, StubKind
 from shared.enums import StringEnum
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
+from shared.placement import Placement
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
@@ -935,6 +936,23 @@ class StubRepository:
                 .returning(StubTable.id)
             )
             is not None
+        )
+
+    def workspaces_pinned_to(
+        self, placement: Placement, workspace_ids: Collection[str]
+    ) -> list[str]:
+        """Workspaces among `workspace_ids` with a stub still pinned to `placement`."""
+        if not workspace_ids:
+            return []
+        return list(
+            self.session.scalars(
+                select(StubTable.workspace_id)
+                .where(
+                    StubTable.placement == placement.key,
+                    StubTable.workspace_id.in_(list(workspace_ids)),
+                )
+                .distinct()
+            )
         )
 
 

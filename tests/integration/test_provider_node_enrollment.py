@@ -25,6 +25,7 @@ from botocore.credentials import Credentials
 from compute.agent_control import hash_compute_token
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
+from compute.policy import WorkspaceComputePolicyService
 from compute.provider_nodes import ProviderNodeAdmission
 from compute.providers import (
     ComputeProviderResolver,
@@ -79,7 +80,6 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.errors import InvalidInputError, UpstreamUnavailableError
@@ -91,6 +91,7 @@ from shared.http.provider_nodes import (
     ProviderNodeEnrollmentRequest,
 )
 from shared.network_egress import NetworkEgressRouteEvidence
+from shared.placement import Placement
 from shared.provider_config import ProviderKind
 from shared.supplier_costs import SupplierCostTerms
 from sqlalchemy import func, select, text
@@ -267,7 +268,13 @@ def test_provider_node_enrollment_rejects_cross_workspace_connection(
     isolated_services: ApiServices,
 ) -> None:
     default_pool = _seed_connection_and_pool(isolated_services)
-    other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "other")
+    other_workspace = owned_workspace(
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ),
+        "other",
+    )
     cross_workspace_pool = _pool(
         workspace_id=other_workspace.id,
         pool_id=str(uuid4()),
@@ -463,7 +470,7 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                         id=unit_id,
                         workspace_id=platform_workspace_id,
                         name=UnitName("atomic-enrollment"),
-                        pool=MachinePool("lazycloud"),
+                        placement=Placement.platform(),
                         provider="hetzner",
                         provider_ref="hetzner:test",
                         platform_fleet=True,
@@ -588,7 +595,7 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                         ),
                         policy=ResolvedProviderPolicy(
                             workspace_id=pool.workspace_id,
-                            pool=pool.pool,
+                            placement=pool.placement,
                             platform_fleet=True,
                             default_region=pool.region,
                             allowed_regions=(pool.region,),
@@ -773,7 +780,7 @@ def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> Compu
             provider,
             ResolvedProviderPolicy(
                 workspace_id=workspace_id,
-                pool=connection.pool,
+                placement=connection.placement,
                 platform_fleet=False,
                 default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                 allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
@@ -872,7 +879,7 @@ def _pool(*, workspace_id: str, pool_id: str, name: str) -> ComputeUnitRecord:
         capacity_owner_source=CapacityOwnerSource.Provider,
         workspace_id=workspace_id,
         name=UnitName(name),
-        pool=MachinePool(name),
+        placement=Placement.connection(_CONNECTION_ID),
         selector=name,
         status=ComputeUnitPhase.Ready.value,
         source="workspace_policy",

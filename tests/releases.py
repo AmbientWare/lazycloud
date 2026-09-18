@@ -4,7 +4,7 @@ from control.release_settings import ReleaseSettings
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
 from scheduler.state import RedisSchedulerWorkerRepository
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.releases import ActiveRelease
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
@@ -31,7 +31,7 @@ def assign_runtime(
             worker_id=str(uuid4()),
             machine_id=str(uuid4()),
             runtime_image="container-worker:local",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             capacity_owner_id=str(uuid4()),
             status=SchedulerWorkerStatus.Available,
         )

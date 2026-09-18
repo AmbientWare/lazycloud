@@ -64,7 +64,7 @@ def private_pool_from_compute_state(state: ComputeUnitState) -> PrivateUnitState
         platform_fleet=state.platform_fleet,
         workspace_id=state.workspace_id,
         name=state.name,
-        pool=state.pool,
+        placement=state.placement,
         capacity_owner_id=state.capacity_owner_id,
         selector=config.selector or state.name,
         config=config,
@@ -79,6 +79,7 @@ def machine_view(
     agent_state: ComputeAgentTokenState | None = None,
     *,
     tunnel_connected: bool,
+    workspace_names: list[str] | None = None,
 ) -> UnitMachineResponse:
     memory = _memory_mb(machine.memory)
     gpu = machine.gpu or ""
@@ -120,7 +121,8 @@ def machine_view(
         gpu=gpu,
         gpu_count=gpu_count,
         status=machine.status.value,
-        pool=machine.pool,
+        name=machine.name,
+        workspaces=list(workspace_names or []),
         provider_name=machine.provider,
         readiness_phase=readiness_phase,
         readiness_message=readiness_message,
@@ -220,7 +222,7 @@ def agent_route_view(
     return AgentRoute(
         route_id=route.route_id,
         workspace_id=route.workspace_id,
-        pool=route.pool,
+        placement=route.placement,
         machine_id=route.machine_id,
         worker_id=route.worker_id,
         container_id=route.container_id,
@@ -239,7 +241,7 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
     return AgentWorkerSlot(
         worker_id=slot.worker_id,
         worker_token=str(worker_token) if worker_token is not None else "",
-        pool=slot.pool,
+        placement=slot.placement,
         capacity_owner_id=slot.capacity_owner_id,
         billing_owner=slot.billing_owner,
         machine_id=slot.machine_id,

@@ -14,9 +14,9 @@ from database.tables.compute import ComputeProviderInstanceTable
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
     UnitName,
 )
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from sqlalchemy import update
 
@@ -30,7 +30,7 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
             id=str(uuid4()),
             workspace_id=workspace_id,
             name=UnitName("provider-binding"),
-            pool=MachinePool("provider-binding"),
+            placement=Placement.machine("provider-binding"),
         )
         ComputeUnitRepository(session).upsert(pool)
         instance = ComputeProviderInstanceRecord(
@@ -48,7 +48,7 @@ def test_provider_instance_machine_binding_is_idempotent_and_fenced(
 
         machine_id = str(uuid4())
         MachineRepository(session).upsert(
-            Machine(id=machine_id, pool=pool.pool, provider="aws"),
+            Machine(id=machine_id, placement=pool.placement, provider="aws"),
             workspace_id=workspace_id,
         )
 
@@ -69,7 +69,7 @@ def test_reconciliation_preserves_unproved_cleanup_and_reappearing_instances(
             id=str(uuid4()),
             workspace_id=workspace_id,
             name=UnitName("reconcile-history"),
-            pool=MachinePool("reconcile-history"),
+            placement=Placement.machine("reconcile-history"),
         )
         ComputeUnitRepository(session).upsert(pool)
         repository = ComputeProviderInstanceRepository(session)
@@ -136,7 +136,7 @@ def test_pool_sizing_counts_retiring_capacity_until_release_is_terminal(
             id=str(uuid4()),
             workspace_id=workspace_id,
             name=UnitName("sizing"),
-            pool=MachinePool("sizing"),
+            placement=Placement.machine("sizing"),
         )
         ComputeUnitRepository(session).upsert(pool)
         repository = ComputeProviderInstanceRepository(session)

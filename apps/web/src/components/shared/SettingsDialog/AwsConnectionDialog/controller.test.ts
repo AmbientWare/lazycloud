@@ -163,7 +163,6 @@ function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): AwsCon
   return {
     id: "00000000-0000-4000-8000-000000000001",
     account_id: "123456789012",
-    pool: "aws",
     phase,
     active_authorization: {
       generation: 1,

@@ -32,7 +32,7 @@ def deployment_response(
             cron=spec.cron,
             command=spec.command,
             ports=spec.ports,
-            pool=deployment.pool,
+            machine=deployment.machine,
         ),
         active=deployment.active,
         deleted_at=deployment.deleted_at,

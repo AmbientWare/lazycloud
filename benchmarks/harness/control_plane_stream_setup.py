@@ -15,16 +15,14 @@ from cli.api_client import AdminApiClient
 from coordination.redis_client import RedisClient
 from identity.auth import AuthService, IdentityDatabaseContext
 from identity.token_invalidation import AuthTokenInvalidation
-from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.workspace.control import WorkspaceControlClient
 from pydantic import SecretStr
-from shared.compute_policy import MachinePool
 from shared.containers import ContainerStatus
 from shared.http.compute import ContainerDetailResponse, ContainerRunRequest, UnitCreateRequest
-from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
 from shared.http.system import TokenCreateRequest
 from shared.http_transport import HttpChannel
 from shared.identity import AuthScope, TokenKind
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from worker.events import ContainerEventPayload
 from worker.repository_client import WorkerRepositoryHttpClient, WorkerRepositoryHttpTransport
@@ -107,8 +105,9 @@ class ControlPlaneStreamProvisioner:
 
     def prepare(self) -> Path:
         workspace_name = f"stream-bench-{self.run_id}"
-        delivery_pool = MachinePool(f"stream-bench-{self.run_id}-delivery")
-        load_pool = MachinePool(f"stream-bench-{self.run_id}-load")
+        # Customer workloads land where their workspace resolves to, which is the
+        # platform; both benchmark units are platform capacity.
+        placement = Placement.platform()
         workspace = self._workspace_client().create(workspace_name)
         self.record.workspace_id = workspace.id
         self.record.workspace_name = workspace.name
@@ -126,12 +125,10 @@ class ControlPlaneStreamProvisioner:
         delivery_unit = customer_api.create_unit(
             UnitCreateRequest(
                 name=f"stream-bench-{self.run_id}-delivery",
-                pool=delivery_pool,
                 provider="local",
                 initial_machines=0,
                 min_machines=0,
                 max_machines=0,
-                default_eligible=True,
                 worker_cpu_millicores=4_000,
                 worker_memory_mib=8_192,
                 worker_runtimes=("runsc",),
@@ -140,7 +137,6 @@ class ControlPlaneStreamProvisioner:
         load_unit = customer_api.create_unit(
             UnitCreateRequest(
                 name=f"stream-bench-{self.run_id}-load",
-                pool=load_pool,
                 provider="local",
                 initial_machines=0,
                 min_machines=0,
@@ -149,35 +145,18 @@ class ControlPlaneStreamProvisioner:
             )
         )
         self.record.unit_ids.extend((delivery_unit.id, load_unit.id))
-        compute = ComputeClient.from_endpoint(
-            self.endpoint,
-            token=customer.token,
-            timeout_seconds=self.request_timeout_seconds,
-            workspace=workspace.id,
-        )
-        policy = compute.policy()
-        compute.update_policy(
-            WorkspaceComputePolicyUpdateRequest(
-                expected_revision=policy.revision,
-                default_pool=str(delivery_pool),
-            )
-        )
-        emit_progress(
-            "provision-pools-created",
-            delivery_pool=str(delivery_pool),
-            load_pool=str(load_pool),
-        )
+        emit_progress("provision-units-created", placement=placement.key)
 
         load = self._register_worker(
             role="load",
-            pool=load_pool,
+            placement=placement,
             capacity_owner_id=load_unit.capacity_owner_id,
             cpu_millicores=0,
             memory_mib=0,
         )
         delivery = self._register_worker(
             role="delivery",
-            pool=delivery_pool,
+            placement=placement,
             capacity_owner_id=delivery_unit.capacity_owner_id,
             cpu_millicores=4_000,
             memory_mib=8_192,
@@ -278,7 +257,7 @@ class ControlPlaneStreamProvisioner:
         self,
         *,
         role: str,
-        pool: MachinePool,
+        placement: Placement,
         capacity_owner_id: str,
         cpu_millicores: int,
         memory_mib: int,
@@ -297,7 +276,7 @@ class ControlPlaneStreamProvisioner:
             AddWorkerRequest(
                 worker=SchedulerWorkerRecord(
                     worker_id=worker_id,
-                    pool=pool,
+                    placement=placement,
                     capacity_owner_id=capacity_owner_id,
                     status=SchedulerWorkerStatus.Pending,
                     runtime_class="runsc",

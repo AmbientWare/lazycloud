@@ -6,12 +6,11 @@ from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from shared.capacity import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.placement import Placement
 
 AUTHORIZATION_ERROR_MESSAGE_MAX_LENGTH = 2048
-AWS_CONNECTED_MACHINE_POOL = "aws"
 AWS_MANAGED_NETWORK_ZONE_PARAMETERS = tuple(f"AvailabilityZone{slot}" for slot in "ABCDEF")
 
 
@@ -229,14 +228,6 @@ class AwsAccountConnection(ContractModel):
     arrive through the same enrolment, so nothing downstream can tell them apart
     unless the connection says which it is.
     """
-    pool: MachinePool = Field(
-        default=MachinePool(AWS_CONNECTED_MACHINE_POOL), min_length=1, max_length=240
-    )
-    """Pool every unit provisioned on this connection stamps.
-
-    Chosen at connection creation and immutable while its units exist. Workloads
-    select this pool explicitly or through their workspace's default pool.
-    """
     phase: AwsAccountConnectionPhase
     active_authorization: AwsAccountAuthorizationGeneration | None = None
     pending_authorization: AwsAccountAuthorizationGeneration | None = None
@@ -251,8 +242,8 @@ class AwsAccountConnection(ContractModel):
     )
     networks: dict[AwsRegion, AwsAccountNetwork] = Field(default_factory=dict)
     """Configured regional networks. Managed stacks populate their own region."""
-    drain_total_pools: int = Field(default=0, ge=0)
-    drain_remaining_pools: int = Field(default=0, ge=0)
+    drain_total_units: int = Field(default=0, ge=0)
+    drain_remaining_units: int = Field(default=0, ge=0)
     customer_action_url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
     customer_action_label: str = Field(default="", max_length=128)
     revision: int = Field(default=1, ge=1)
@@ -294,8 +285,8 @@ class AwsAccountConnection(ContractModel):
         generations = [item.generation for item in authorizations]
         if len(generations) != len(set(generations)):
             raise ValueError("AWS authorization generations must be unique")
-        if self.drain_remaining_pools > self.drain_total_pools:
-            raise ValueError("remaining AWS pool drain count cannot exceed total")
+        if self.drain_remaining_units > self.drain_total_units:
+            raise ValueError("remaining AWS unit drain count cannot exceed total")
         if (self.node_role_arn is None) != (self.node_instance_profile_arn is None):
             raise ValueError("AWS node role and instance profile must be set together")
         if (self.claim_token is None) != (self.claim_expires_at is None):
@@ -360,11 +351,16 @@ class AwsAccountConnection(ContractModel):
         return authorization.managed_authorization if authorization is not None else None
 
     @property
+    def placement(self) -> Placement:
+        """Placement every unit provisioned on this connection stamps."""
+        return Placement.connection(self.id)
+
+    @property
     def hosts_workloads(self) -> bool:
         """Whether this connection is ready to run workloads.
 
         A readiness fact about the account, not a statement about where any
-        workload is scheduled: what a workload runs on is the pool it names.
+        workload is scheduled: what a workload runs on is the placement it names.
         """
         accepts = self.phase in {
             AwsAccountConnectionPhase.Ready,
@@ -524,7 +520,6 @@ class AwsAccountValidationResult(ContractModel):
 
 
 __all__ = [
-    "AWS_CONNECTED_MACHINE_POOL",
     "AWS_MANAGED_NETWORK_ZONE_PARAMETERS",
     "AWS_REGION_PATTERN",
     "AwsAccountAuthorizationGeneration",

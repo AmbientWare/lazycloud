@@ -8,8 +8,8 @@ from datetime import datetime
 import pytest
 from pydantic import JsonValue
 from scheduler.state import RedisSchedulerContainerRepository
-from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason, WorkerStartupKind
+from shared.placement import Placement
 from shared.scheduling import (
     ContainerStatusUpdatePlan,
     SchedulerContainerStatus,
@@ -408,6 +408,7 @@ def _request(
     gpu_count: int = 0,
 ) -> WorkerExecutionRequest:
     return WorkerExecutionRequest(
+        placement=Placement.platform(),
         workspace_id="workspace-1",
         stub_id="stub-1",
         container_id="ctr-1",
@@ -489,7 +490,7 @@ class _WorkerRepository:
         return WorkerCapacityResult(
             worker=WorkerExecutionRecord(
                 worker_id=worker_id,
-                pool=MachinePool("test"),
+                placement=Placement.machine("test"),
                 capacity_owner_id=_CAPACITY_OWNER_ID,
             ),
             change=change,

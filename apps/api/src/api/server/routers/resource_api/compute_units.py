@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.service import GatewayControlService
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.http.compute import (
     UnitCreateRequest,
     UnitJoinCommandRequest,
@@ -69,13 +69,11 @@ def create_unit(
         services.compute.create_unit(
             UnitName(request.name),
             workspace=workspace_id,
-            pool=MachinePool(request.pool) if request.pool else None,
             provider=request.provider,
             initial_machines=request.initial_machines,
             min_machines=request.min_machines,
             max_machines=request.max_machines,
             scaling_enabled=request.scaling_enabled,
-            default_eligible=request.default_eligible,
             priority=request.priority,
             min_free_cpu_millicores=request.min_free_cpu_millicores,
             min_free_memory_mib=request.min_free_memory_mib,

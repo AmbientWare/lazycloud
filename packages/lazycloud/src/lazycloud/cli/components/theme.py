@@ -1,7 +1,7 @@
 """Semantic Rich styles for the ``lazycloud`` and ``lazycloud-admin`` commands.
 
 One small set of semantic styles replaces per-command color literals, and one
-mapping ties domain states (task/build/container status, machine/worker/pool
+mapping ties domain states (task/build/container status, machine/worker/unit
 state, AWS connection phases) to those styles.
 """
 

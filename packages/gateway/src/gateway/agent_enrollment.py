@@ -30,7 +30,7 @@ def private_unit_for_enrollment(
         platform_fleet=unit.platform_fleet,
         workspace_id=unit.workspace_id,
         name=unit.name,
-        pool=unit.pool,
+        placement=unit.placement,
         capacity_owner_id=unit.capacity_owner_id,
         selector=config.selector,
         config=config,

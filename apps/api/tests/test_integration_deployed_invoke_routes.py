@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubRecord
 from execution.endpoints.dispatch import AsyncEndpointResponseStream, EndpointDispatchTarget
 from execution.endpoints.service import EndpointIngressDispatchSession
@@ -428,7 +429,10 @@ def test_endpoint_host_routing_preserves_numeric_deployment_suffixes(
         headers = _auth_headers(isolated_services)
 
         url = (
-            ControlPlaneService(isolated_services.context)
+            ControlPlaneService(
+                isolated_services.context,
+                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+            )
             .stub_url(stub.id, external_url=BASE_URL)
             .url
         )
@@ -490,7 +494,13 @@ def test_public_app_keeps_private_endpoint_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "mixed-owner")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ),
+        "mixed-owner",
+    )
     app = isolated_services.apps.create("mixed", workspace=workspace.id, public=True)
     private_deployment = isolated_services.deployments.deploy(
         DeploymentSpec(
@@ -633,7 +643,12 @@ def _deploy(
     workspace: str = "default",
     public: bool = False,
 ) -> tuple[Deployment, StubRecord]:
-    owned_workspace(ControlPlaneService(services.context), workspace)
+    owned_workspace(
+        ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ),
+        workspace,
+    )
     deployment = services.deployments.deploy(
         DeploymentSpec(
             name=name,
@@ -650,7 +665,9 @@ def _deploy(
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
     matches = [
         stub
-        for stub in ControlPlaneService(services.context).list_stubs()
+        for stub in ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ).list_stubs()
         if stub.deployment_id == deployment_id
     ]
     assert len(matches) == 1
@@ -662,7 +679,12 @@ def _base_host(url: str) -> str:
 
 
 def _auth_headers(services: ApiServices, *, workspace: str = "default") -> dict[str, str]:
-    owned_workspace(ControlPlaneService(services.context), workspace)
+    owned_workspace(
+        ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ),
+        workspace,
+    )
     raw_token, _record = AuthService(services.context).create_token(
         f"route-test-{workspace}",
         scopes=["read", "write"],

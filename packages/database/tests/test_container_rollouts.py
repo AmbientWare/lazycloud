@@ -9,6 +9,7 @@ from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from shared.containers import ContainerRecord, ContainerStatus
+from shared.placement import Placement
 from shared.tasks import Task
 from shared.timestamps import utc_now
 from sqlalchemy.engine import URL
@@ -31,6 +32,7 @@ def test_rollout_admission_preserves_claimed_work_and_bounds_replacement_capacit
             workspace = WorkspaceRepository(session).create(name="rollout-admission")
             stub = StubRepository(session).upsert(
                 StubRecord(
+                    placement=Placement.platform(),
                     id=str(uuid4()),
                     workspace_id=workspace.id,
                     name="work",

@@ -94,7 +94,6 @@ def connection_from_row(row: AwsAccountConnectionTable) -> AwsAccountConnection:
             "user_id": row.user_id,
             "account_id": row.account_id,
             "external_id": row.external_id,
-            "pool": row.pool,
             "phase": row.phase,
             "active_authorization": generations.get("active"),
             "pending_authorization": generations.get("pending"),
@@ -109,8 +108,8 @@ def connection_from_row(row: AwsAccountConnectionTable) -> AwsAccountConnection:
                 )
                 for item in row.network_rows
             },
-            "drain_total_pools": row.drain_total_pools,
-            "drain_remaining_pools": row.drain_remaining_pools,
+            "drain_total_units": row.drain_total_units,
+            "drain_remaining_units": row.drain_remaining_units,
             "customer_action_url": row.customer_action_url,
             "customer_action_label": row.customer_action_label,
             "revision": row.revision,
@@ -132,12 +131,11 @@ def write_connection(row: AwsAccountConnectionTable, record: AwsAccountConnectio
     row.user_id = record.user_id
     row.account_id = record.account_id
     row.external_id = record.external_id
-    row.pool = record.pool
     row.phase = record.phase.value
     row.node_role_arn = record.node_role_arn
     row.node_instance_profile_arn = record.node_instance_profile_arn
-    row.drain_total_pools = record.drain_total_pools
-    row.drain_remaining_pools = record.drain_remaining_pools
+    row.drain_total_units = record.drain_total_units
+    row.drain_remaining_units = record.drain_remaining_units
     row.customer_action_url = record.customer_action_url
     row.customer_action_label = record.customer_action_label
     row.revision = record.revision

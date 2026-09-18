@@ -12,10 +12,10 @@ from database.repositories.storage_retention import StorageRetentionRepository
 from database.tables.email_outbox import EmailOutboxTable
 from database.tables.identity import UserTable
 from shared.billing_credits import CreditGrant, CreditKind
-from shared.identity import WorkspaceStorageConfig
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, select
 from storage.unfunded_retention import UnfundedStorageRetentionService
+from tests.workspaces import connected_workspace
 
 from storage import unfunded_retention
 
@@ -105,14 +105,8 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
         user = session.get(UserTable, user_id)
         assert user is not None
         user.email = "storage-retention@example.com"
-    external = services.control_plane_service.set_workspace(
-        "customer-bucket",
-        owner_user_id=user_id,
-        storage=WorkspaceStorageConfig(
-            backend="s3",
-            bucket="customer-owned-bucket",
-            config={"access_key": "test-only", "secret_key": "test-only"},
-        ),
+    external = connected_workspace(
+        services.control_plane_service, "customer-bucket", owner_user_id=user_id
     )
     with services.database.session() as session:
         VolumeRepository(session).create("customer-data", workspace_id=external.id)

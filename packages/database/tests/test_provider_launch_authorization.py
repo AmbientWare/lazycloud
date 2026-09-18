@@ -20,11 +20,11 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.http.provider_nodes import ProviderNodeIdentityRequest
+from shared.placement import Placement
 from shared.provider_config import ProviderKind
 from shared.timestamps import utc_now
 from sqlalchemy.engine import URL
@@ -55,7 +55,7 @@ def launch_owner(migrated_database_url: URL) -> Iterator[LaunchOwner]:
             id=unit_id,
             workspace_id=workspace.id,
             name=UnitName("launch-authority"),
-            pool=MachinePool("lazycloud"),
+            placement=Placement.platform(),
             provider="hetzner",
             provider_ref="hetzner:test",
             platform_fleet=True,

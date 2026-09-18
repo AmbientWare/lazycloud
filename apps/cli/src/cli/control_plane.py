@@ -13,7 +13,6 @@ from shared.http.stubs import StubCreateRequest
 from shared.http.workspaces import (
     WorkspaceResponse,
     WorkspaceSetRequest,
-    WorkspaceStorageResponse,
 )
 
 from cli.api_client import admin_api_client
@@ -48,9 +47,6 @@ def _show_workspace(ctx: typer.Context, record: WorkspaceResponse, *, title: str
 def workspace_configure(
     ctx: typer.Context,
     name: Annotated[str, typer.Argument()],
-    storage_backend: Annotated[str, typer.Option("--storage-backend")] = "local",
-    storage_bucket: Annotated[str | None, typer.Option("--storage-bucket")] = None,
-    storage_prefix: Annotated[str, typer.Option("--storage-prefix")] = "",
     signing_key_prefix: Annotated[str | None, typer.Option("--signing-key-prefix")] = None,
     primary_token_id: Annotated[str | None, typer.Option("--primary-token-id")] = None,
     labels: Annotated[
@@ -62,16 +58,11 @@ def workspace_configure(
         typer.Option("--metadata", help="Workspace metadata as KEY=VALUE."),
     ] = None,
 ) -> None:
-    """Configure operator-owned workspace storage and identity settings."""
+    """Configure operator-owned workspace identity settings."""
     record = admin_api_client().upsert_workspace(
         name,
         WorkspaceSetRequest(
             name=name,
-            storage=WorkspaceStorageResponse(
-                backend=storage_backend,
-                bucket=storage_bucket,
-                prefix=storage_prefix,
-            ),
             signing_key_prefix=signing_key_prefix,
             primary_token_id=primary_token_id,
             labels=parse_key_values(labels or []),

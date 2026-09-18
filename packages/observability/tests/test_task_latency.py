@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.orchestration import ContainerRepository
 from operations.management import ManagementService
@@ -22,7 +23,9 @@ def _seed_stub(services: ApiServices):
     )
     stub = next(
         item
-        for item in ControlPlaneService(services.context).list_stubs()
+        for item in ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ).list_stubs()
         if item.deployment_id == deployment.id
     )
     return deployment, stub

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
@@ -15,7 +16,9 @@ def test_object_storage_deletes_each_workspace_physical_object_independently(
 ) -> None:
     object_client = FakeObjectClient()
     object_storage = ObjectStorage(service_context, object_client=object_client)
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     first = owned_workspace(control, "object-first")
     last = owned_workspace(control, "object-last")
     key = "sources/shared.zip"
@@ -58,7 +61,12 @@ def test_object_storage_preserves_metadata_when_physical_delete_is_not_confirmed
 ) -> None:
     object_client = _StickyDeleteObjectClient()
     object_storage = ObjectStorage(service_context, object_client=object_client)
-    workspace = owned_workspace(ControlPlaneService(service_context), "object-sticky")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "object-sticky",
+    )
     record = object_storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket=SOURCE_PACKAGE_BUCKET,

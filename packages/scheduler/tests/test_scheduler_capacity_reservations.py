@@ -57,12 +57,12 @@ from shared.capacity import (
 )
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
     UnitName,
 )
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord
 from shared.errors import NotFoundError, UpstreamUnavailableError
+from shared.placement import Placement
 from shared.realtime.contracts import CloudEventRecord, EventDataInput, EventRecordType
 from shared.scheduling import (
     SchedulerContainerState,
@@ -78,7 +78,7 @@ OWNER_ID = "11111111-1111-4111-8111-111111111111"
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 OTHER_OWNER_ID = "22222222-2222-4222-8222-222222222222"
 DEFAULT_UNIT_NAME = UnitName("default")
-DEFAULT_POOL = MachinePool("default")
+DEFAULT_POOL = Placement.platform()
 
 
 def _request(container_id: str, *, cpu: int = 1_000) -> SchedulerWorkerRequest:
@@ -88,7 +88,7 @@ def _request(container_id: str, *, cpu: int = 1_000) -> SchedulerWorkerRequest:
         container_id=container_id,
         cpu_millicores=cpu,
         memory_mib=512,
-        pool_selector="default",
+        placement=Placement.platform(),
         timestamp=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
@@ -118,7 +118,7 @@ class _Controller:
     capacity_owner_id: str = OWNER_ID
     owner_kind: CapacityOwnerKind = CapacityOwnerKind.PooledProvider
     unit_name: UnitName = DEFAULT_UNIT_NAME
-    pool: MachinePool = DEFAULT_POOL
+    placement: Placement = DEFAULT_POOL
     registration_timeout: timedelta = timedelta(minutes=10)
     ensure_calls: list[str] = field(default_factory=list)
     release_calls: list[str] = field(default_factory=list)
@@ -131,7 +131,6 @@ class _Controller:
     health: CapacityPoolOperationalHealth = CapacityPoolOperationalHealth.Healthy
     target_machine_id: str = ""
     owns_capacity: bool = False
-    default_eligible: bool = True
 
     def operational_health(self, *, now: datetime) -> CapacityPoolOperationalHealth:
         _ = now
@@ -148,7 +147,7 @@ class _Controller:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=self.capacity_owner_id,
-            pool=self.pool,
+            placement=self.placement,
             current_units=0,
             target_units=0,
             headroom=WorkerPoolEffectiveHeadroom(),
@@ -157,9 +156,7 @@ class _Controller:
         )
 
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
-        if request.pool_selector:
-            return request.pool_selector == self.pool
-        return self.default_eligible
+        return request.placement == self.placement
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return _shape()
@@ -273,14 +270,13 @@ def _managed_pool() -> ComputeUnitRecord:
         id=OWNER_ID,
         workspace_id=WORKSPACE_ID,
         name=UnitName("default"),
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         provider="generic",
         capacity_owner_id=OWNER_ID,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
         max_machines=2,
         scaling_enabled=True,
-        default_eligible=True,
         worker_cpu_millicores=4_000,
         worker_memory_mib=8_192,
     )
@@ -306,12 +302,13 @@ class _IdentityPlacement:
 class _FailureHandler:
     def mark_scheduling_failed(
         self,
-        request: SchedulerWorkerRequest,
-        reason: str,
+        container_id: str,
         *,
+        workspace_id: str,
+        reason: str,
         now: datetime | None = None,
     ) -> bool:
-        _ = request, reason, now
+        _ = container_id, workspace_id, reason, now
         return True
 
 
@@ -436,7 +433,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
     with repository.mutation_lock(OWNER_ID):
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=_request("container-1"),
             shape=_shape(),
@@ -445,7 +442,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
         )
         repeated = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=_request("container-1"),
             shape=_shape(),
@@ -454,7 +451,7 @@ def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
         )
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=_request("container-2"),
             shape=_shape(),
@@ -480,7 +477,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
     with repository.mutation_lock(OWNER_ID):
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("shared-name"),
+            placement=Placement.machine("shared-name"),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=_request("container-1", cpu=3_000),
             shape=_shape(),
@@ -489,7 +486,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
         )
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("shared-name"),
+            placement=Placement.machine("shared-name"),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=_request("container-2", cpu=3_000),
             shape=_shape(),
@@ -500,7 +497,7 @@ def test_reservation_capacity_and_owner_identity_prevent_false_reuse(
     with repository.mutation_lock(OTHER_OWNER_ID):
         other = repository.reserve(
             capacity_owner_id=OTHER_OWNER_ID,
-            pool=MachinePool("shared-name"),
+            placement=Placement.machine("shared-name"),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=other_request,
             shape=_shape(),
@@ -525,7 +522,7 @@ def test_one_container_cannot_reserve_two_capacity_owners(
             try:
                 return repository.reserve(
                     capacity_owner_id=owner_id,
-                    pool=DEFAULT_POOL,
+                    placement=DEFAULT_POOL,
                     owner_kind=CapacityOwnerKind.PooledProvider,
                     request=request,
                     shape=_shape(),
@@ -717,7 +714,7 @@ def test_capacity_reservation_reuses_machine_during_prepared_worker_update(
     reservation = CapacityProvisioningReservation(
         id="worker-update-demand",
         capacity_owner_id=OWNER_ID,
-        pool=DEFAULT_POOL,
+        placement=DEFAULT_POOL,
         owner_kind=CapacityOwnerKind.PooledProvider,
         acquisition_shape=_shape(),
         operation_id="worker-update-demand",
@@ -745,7 +742,7 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
     # of another pool would run tenant work on a fleet nobody asked for, and this
     # filter is the only thing standing between a request and that fleet.
     assert not compute.accepts(
-        _request("other-pool").model_copy(update={"pool_selector": "another-pool"})
+        _request("other-pool").model_copy(update={"placement": Placement.machine("another-pool")})
     )
 
 
@@ -758,7 +755,9 @@ def test_platform_capacity_accepts_customer_cold_requests_in_the_requested_marke
 
     assert request.workspace_id != unit.workspace_id
     assert controller.accepts(request)
-    assert not controller.accepts(request.model_copy(update={"pool_selector": "other-fleet"}))
+    assert not controller.accepts(
+        request.model_copy(update={"placement": Placement.machine("other-fleet")})
+    )
 
     controller.unit = unit.model_copy(update={"worker_preemptible": True})
     assert not controller.accepts(request)
@@ -1007,7 +1006,7 @@ def test_registered_gpu_reservation_recovers_cpu_backfill_before_dispatch(
     with repository.mutation_lock(OWNER_ID):
         repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=worker.pool,
+            placement=worker.placement,
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=request,
             shape=_shape().model_copy(update={"gpu_type": "L4", "gpu_count": 1}),
@@ -1467,7 +1466,7 @@ async def test_real_redis_dispatch_atomically_consumes_capacity_allocation(
     with reservations.mutation_lock(OWNER_ID):
         decision = reservations.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=request,
             shape=_shape(),
@@ -1533,7 +1532,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
     with repository.mutation_lock(OWNER_ID):
         first = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=first_request,
             shape=shape,
@@ -1542,7 +1541,7 @@ def test_cpu_memory_and_gpu_exhaustion_prevent_false_compatible_reuse(
         )
         second = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=second_request,
             shape=shape,
@@ -1607,7 +1606,7 @@ def test_reservation_repository_rejects_registered_state_regression(
     with repository.mutation_lock(OWNER_ID):
         decision = repository.reserve(
             capacity_owner_id=OWNER_ID,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             owner_kind=CapacityOwnerKind.PooledProvider,
             request=_request("state-regression"),
             shape=_shape(),
@@ -1719,7 +1718,7 @@ def _worker(capacity_owner_id: str, *, created_at: datetime) -> SchedulerWorkerR
     return SchedulerWorkerRecord(
         runtime_image="container-worker:local",
         worker_id=f"worker-{capacity_owner_id[:4]}",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         capacity_owner_id=capacity_owner_id,
         machine_id="machine-1",
         status=SchedulerWorkerStatus.Available,

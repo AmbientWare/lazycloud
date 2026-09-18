@@ -8,12 +8,6 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
-from compute.policy import WorkspaceComputePolicyService
-from compute.request_placement import (
-    ComputeCapacityPlacementRequest,
-    ComputeCapacityPlacementService,
-)
-from control.service import ControlPlaneService
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.compute import (
@@ -26,8 +20,7 @@ from database.repositories.compute import (
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from fastapi.testclient import TestClient
-from identity.auth import AuthService, TokenIssuer
-from identity.platform import PlatformNamespaceService
+from identity.auth import TokenIssuer
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.aws_connections import (
@@ -48,24 +41,22 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
-    LAZYCLOUD_MACHINE_POOL,
     ComputeCapacityMode,
-    ComputeResourceRequirements,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.deployment_records import DeploymentSpec
+from shared.errors import InvalidInputError
 from shared.http.compute_policy import (
-    MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeSummaryResponse,
 )
-from shared.identity import TokenKind, WorkspaceRecord, WorkspaceStatus
+from shared.identity import WorkspaceStatus
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
-from tests.workspaces import owned_workspace, workspace_owner_user_id
+from tests.workspaces import workspace_owner_user_id
 
 
 def _workspace_owner_id(services: ApiServices) -> str:
@@ -120,7 +111,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
                 name=UnitName("current-aws-inventory"),
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 provider_ref=f"aws:{connection.id}",
                 provider_connection_id=connection.id,
                 capacity_mode=ComputeCapacityMode.Pooled,
@@ -134,7 +125,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         MachineRepository(session).upsert(
             Machine(
                 id=ready_machine_id,
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 provider="aws",
                 status=ResourceStatus.Running,
                 created_at=now,
@@ -147,7 +138,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 user_id=owner_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=pool_id,
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,
                 credential_hash="c" * 64,
@@ -163,7 +154,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             Worker(
                 id=agent_machine_worker_id(ready_machine_id),
                 machine_id=ready_machine_id,
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 status=ResourceStatus.Running,
                 last_seen_at=now,
                 created_at=now,
@@ -204,7 +195,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=agent_machine_worker_id(ready_machine_id),
-            pool=MachinePool("aws"),
+            placement=Placement.machine("aws"),
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=ready_machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -293,125 +284,55 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     )
 
 
-def test_machine_pool_listing_uses_capacity_ownership_across_workspaces(
-    api_runtime: tuple[ApiServices, TestClient],
-    api_workspace: WorkspaceRecord,
-) -> None:
-    services, client = api_runtime
-    control = ControlPlaneService(services.context)
-    caller = api_workspace
-    other = owned_workspace(control, f"pool-listing-other-{caller.id}")
-    caller_owner = workspace_owner_user_id(services.context, caller.id)
-    other_owner = workspace_owner_user_id(services.context, other.id)
-    services.compute.create_unit(UnitName("caller-local"), workspace=caller.id, provider="local")
-    services.compute.create_unit(UnitName("other-local"), workspace=other.id, provider="local")
-    for name, provenance, owner in (
-        ("caller-pool", other.id, caller_owner),
-        ("other-pool", caller.id, other_owner),
-    ):
-        unit = services.compute.create_unit(
-            UnitName(name), workspace=provenance, pool=MachinePool(name), provider="agent"
-        )
-        now = datetime.now(UTC)
-        machine_id = str(uuid4())
-        with services.context.database.session() as session:
-            MachineRepository(session).upsert(
-                Machine(
-                    id=machine_id,
-                    pool=MachinePool(name),
-                    provider="agent",
-                    status=ResourceStatus.Running,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                workspace_id=provenance,
-            )
-            ComputeMachineEnrollmentRepository(session).create(
-                ComputeMachineEnrollmentCreate(
-                    user_id=owner,
-                    workspace_id=provenance,
-                    capacity_owner_id=unit.id,
-                    pool=MachinePool(name),
-                    machine_id=machine_id,
-                    machine_fingerprint_hash="f" * 64,
-                    credential_hash=uuid4().hex + uuid4().hex,
-                    last_join_at=now,
-                )
-            )
-    platform_id = str(uuid4())
-    with services.context.database.session() as session:
-        ComputeUnitRepository(session).upsert(
-            ComputeUnitRecord(
-                id=platform_id,
-                capacity_owner_id=platform_id,
-                capacity_owner_kind=CapacityOwnerKind.PooledProvider,
-                capacity_owner_source=CapacityOwnerSource.Provider,
-                workspace_id=PlatformNamespaceService(services.context.database).get().id,
-                name=UnitName("platform-pool"),
-                pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
-                provider="aws",
-                provider_ref="aws:platform",
-                platform_fleet=True,
-                visibility=ComputeUnitVisibility.Internal,
-                capacity_mode=ComputeCapacityMode.Pooled,
-                region="us-east-1",
-                offer_id="us-east-1:m7i.xlarge",
-                capability_key="aws:platform:amd64:runsc",
-            )
-        )
-    token, _record = AuthService(services.context).create_token(
-        "pool-listing-token",
-        kind=TokenKind.Workspace,
-        workspace_id=caller.id,
-    )
-
-    response = client.get(
-        "/api/v1/compute/pools",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 200, response.text
-    pools = MachinePoolListResponse.model_validate_json(response.content)
-    assert [item.name for item in pools.data] == ["caller-local", "caller-pool", "lazycloud"]
-
-
-def test_deployment_placement_is_pinned_when_workspace_default_changes(
+def test_deployment_refuses_a_machine_that_is_unknown_or_serves_another_workspace(
     isolated_services: ApiServices,
 ) -> None:
-    _seed_ready_aws_connection(isolated_services)
-    policies = WorkspaceComputePolicyService(isolated_services.context)
+    """Naming a machine pins the deployment to it or fails; nothing falls back.
+
+    The refusal carries the name so the caller can see which machine they
+    typed, and a machine that exists but serves another workspace refuses the
+    same way: for this workspace it does not exist.
+    """
     workspace_id = _workspace_id(isolated_services)
-    original = isolated_services.deployments.deploy(
-        DeploymentSpec(name="before-policy-change"),
-        workspace="default",
+    owner_id = _workspace_owner_id(isolated_services)
+    elsewhere = isolated_services.control_plane_service.set_workspace(
+        "machine-elsewhere", owner_user_id=owner_id
     )
-    policy = policies.get_policy(workspace="default")
-
-    policies.update_policy(
-        workspace="default",
-        expected_revision=policy.revision,
-        default_pool="aws",
-    )
-    created_after = isolated_services.deployments.deploy(
-        DeploymentSpec(name="after-policy-change"),
-        workspace="default",
-    )
-    persisted_original = isolated_services.deployments.get(original.id)
-    scheduled_original = ComputeCapacityPlacementService(
-        isolated_services.context,
-        policies,
-        isolated_services.compute,
-    ).place(
-        ComputeCapacityPlacementRequest(
-            workspace_id=workspace_id,
-            deployment_id=original.id,
-            requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+    machine_id = str(uuid4())
+    with isolated_services.context.database.session() as session:
+        MachineRepository(session).upsert(
+            Machine(
+                id=machine_id,
+                name="rack-7",
+                workspace_ids=(elsewhere.id,),
+                placement=Placement.machine(machine_id),
+                provider="agent",
+                status=ResourceStatus.Running,
+            ),
+            workspace_id=elsewhere.id,
         )
+
+    with pytest.raises(InvalidInputError, match="'no-such-machine'"):
+        isolated_services.deployments.deploy(
+            DeploymentSpec(name="on-missing", metadata={"machine": "no-such-machine"}),
+            workspace="default",
+        )
+    with pytest.raises(InvalidInputError, match="'rack-7'"):
+        isolated_services.deployments.deploy(
+            DeploymentSpec(name="on-foreign", metadata={"machine": "rack-7"}),
+            workspace="default",
+        )
+    pinned = isolated_services.deployments.deploy(
+        DeploymentSpec(name="on-rack", metadata={"machine": "rack-7"}),
+        workspace=elsewhere.id,
+    )
+    located = isolated_services.deployments.deploy(
+        DeploymentSpec(name="located"), workspace="default"
     )
 
-    assert persisted_original.pool == LAZYCLOUD_MACHINE_POOL
-    assert scheduled_original.pool == LAZYCLOUD_MACHINE_POOL
-    assert created_after.pool == "aws"
+    assert (pinned.placement, pinned.machine) == (Placement.machine(machine_id), "rack-7")
+    assert (located.placement, located.machine) == (Placement.platform(), "")
+    assert workspace_id != elsewhere.id
 
 
 def _workspace_id(isolated_services: ApiServices) -> str:
@@ -465,7 +386,6 @@ def _seed_ready_aws_connection(
                 user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
-                pool=MachinePool("aws"),
                 phase=(
                     AwsAccountConnectionPhase.ReconnectPending
                     if reconnecting

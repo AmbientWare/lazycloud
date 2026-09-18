@@ -38,7 +38,8 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeCapacityMode, MachinePool
+from shared.compute_policy import ComputeCapacityMode
+from shared.placement import Placement
 
 from provider_clients.provider_definitions import PROVIDER_DEFINITIONS
 from provider_clients.settings import AwsCapacitySettings, PlatformCapacitySettings
@@ -106,7 +107,7 @@ def configured_platform_compute_providers(
                     policy=ResolvedProviderPolicy(
                         **definition.policy.model_dump(),
                         workspace_id=namespace_id,
-                        pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
+                        placement=Placement.platform(),
                         platform_fleet=True,
                     ),
                     pooled=adapter,
@@ -130,7 +131,7 @@ def configured_platform_compute_providers(
                             }
                         ).model_dump(),
                         workspace_id=namespace_id,
-                        pool=MachinePool(LAZYCLOUD_MACHINE_POOL),
+                        placement=Placement.platform(),
                         platform_fleet=True,
                     ),
                     pooled=aws_adapter,
@@ -290,7 +291,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 )
                 .model_dump(),
                 workspace_id=self.capacity_workspace(connection),
-                pool=connection.pool,
+                placement=connection.placement,
                 platform_fleet=False,
             ),
             pooled=AwsPooledCapacityProvider(

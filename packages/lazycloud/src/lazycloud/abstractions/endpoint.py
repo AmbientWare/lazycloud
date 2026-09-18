@@ -54,7 +54,7 @@ from lazycloud.abstractions.invocation import (
 )
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PoolInput,
+    MachineInput,
     RetryPolicyInput,
     SchemaInput,
     build_resource_metadata,
@@ -150,7 +150,7 @@ class EndpointOptions(TypedDict, total=False):
     preemptible: bool
     region: str | None
     availability_zone: str
-    pool: PoolInput
+    machine: MachineInput
     metadata: dict[str, Any] | None
 
 
@@ -181,7 +181,7 @@ class ASGIOptions(TypedDict, total=False):
     preemptible: bool
     region: str | None
     availability_zone: str
-    pool: PoolInput
+    machine: MachineInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +236,7 @@ class Endpoint(Generic[P, R]):
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
     availability_zone: str = ""
-    pool: PoolInput = None
+    machine: MachineInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
     deployment_client: DeploymentControlClient | None = field(
@@ -341,7 +341,7 @@ class Endpoint(Generic[P, R]):
                     else schema_from_contract_return(client_contract)
                 ),
                 docker_enabled=self.docker_enabled,
-                pool=self.pool,
+                machine=self.machine,
                 extra=self.metadata,
             ),
             client_contract=client_contract,
@@ -485,7 +485,7 @@ def _endpoint(
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
     availability_zone: str = "",
-    pool: PoolInput = None,
+    machine: MachineInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Endpoint[P, R]: ...
 
@@ -528,7 +528,7 @@ def _endpoint(
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
     availability_zone: str = "",
-    pool: PoolInput = None,
+    machine: MachineInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
 
@@ -570,7 +570,7 @@ def _endpoint(
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
     availability_zone: str = "",
-    pool: PoolInput = None,
+    machine: MachineInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Endpoint[P, R]] | Endpoint[P, R]:
     def decorate(target: Callable[P, R]) -> Endpoint[P, R]:
@@ -607,7 +607,7 @@ def _endpoint(
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             metadata=metadata or {},
             route=route,
             domain=domain,
@@ -649,7 +649,7 @@ class ASGI:
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
     availability_zone: str = ""
-    pool: PoolInput = None
+    machine: MachineInput = None
     deployment_client: DeploymentControlClient | None = field(
         default=None,
         init=False,
@@ -718,7 +718,7 @@ class ASGI:
                 autoscaler=self.autoscaler,
                 task_policy=self.task_policy,
                 checkpoint_enabled=self.checkpoint_enabled,
-                pool=self.pool,
+                machine=self.machine,
             ),
             client_contract=asgi_client_contract(),
         )
@@ -858,7 +858,7 @@ def _asgi(
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
     availability_zone: str = "",
-    pool: PoolInput = None,
+    machine: MachineInput = None,
 ) -> Callable[[Callable[..., Any]], ASGIResourceT]:
     def decorate(target: Callable[..., Any]) -> ASGIResourceT:
         return resource_type(
@@ -890,7 +890,7 @@ def _asgi(
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
         )
 
     return decorate

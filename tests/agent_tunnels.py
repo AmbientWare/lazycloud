@@ -60,13 +60,13 @@ async def enrolled_tunnel_route(
                 capacity_owner_id=worker.capacity_owner_id,
                 workspace_id=stub.workspace_id,
                 name=UnitName(f"tunnel-{worker.machine_id}"),
-                pool=worker.pool,
+                placement=worker.placement,
             )
         )
         MachineRepository(session).upsert(
             Machine(
                 id=worker.machine_id,
-                pool=worker.pool,
+                placement=worker.placement,
                 capacity_owner_id=worker.capacity_owner_id,
                 status=ResourceStatus.Running,
             ),
@@ -76,7 +76,7 @@ async def enrolled_tunnel_route(
             Worker(
                 id=worker.worker_id,
                 machine_id=worker.machine_id,
-                pool=worker.pool,
+                placement=worker.placement,
                 status=ResourceStatus.Running,
             ),
             workspace_id=stub.workspace_id,
@@ -86,7 +86,7 @@ async def enrolled_tunnel_route(
                 user_id=owner,
                 workspace_id=stub.workspace_id,
                 capacity_owner_id=worker.capacity_owner_id,
-                pool=worker.pool,
+                placement=worker.placement,
                 machine_id=worker.machine_id,
                 machine_fingerprint_hash=hash_compute_token(worker.machine_id),
                 credential_hash=hash_compute_token(token),
@@ -132,7 +132,7 @@ async def enrolled_tunnel_route(
         machine_id=worker.machine_id,
         worker_id=worker.worker_id,
         container_id=container_id,
-        pool=worker.pool,
+        placement=worker.placement,
         kind=BackendRouteKind.Container,
         port=port,
         local_target=backend_address,

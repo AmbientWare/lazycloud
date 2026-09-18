@@ -4,8 +4,8 @@ Before running, follow the guide to select an existing bucket, unique input/outp
 paths, and credential secret names through `LAZYCLOUD_PARQUET_*` variables.
 The configuration module reads `PARQUET_S3_ACCESS_KEY_ID` and
 `PARQUET_S3_SECRET_ACCESS_KEY` from your environment and stores their values.
-With an authorized AWS instance role, omit credential setup and select `pool="aws"`
-on the functions instead.
+If the workspace lives in a connected AWS account, omit credential setup and use
+the instance role instead.
 
 Run these commands from this downloaded project directory:
 

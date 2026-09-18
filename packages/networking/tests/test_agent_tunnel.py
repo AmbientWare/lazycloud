@@ -40,10 +40,11 @@ from scheduler.routes import SchedulerBackendRouteResolver
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_fleet import Machine, ResourceStatus, Worker
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.http.agent_identity import TunnelServiceRole
 from shared.http.agent_tunnel import TunnelRouteRequest
+from shared.placement import Placement
 from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
@@ -72,7 +73,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 capacity_owner_id=capacity_owner,
                 workspace_id=workspace,
                 name=UnitName("tunnel-machine"),
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
             )
         )
         MachineRepository(session).upsert(
@@ -83,7 +84,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             Worker(
                 id=worker_id,
                 machine_id=machine_id,
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
                 status=ResourceStatus.Created,
             ),
             workspace_id=workspace,
@@ -105,7 +106,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 user_id=owner,
                 workspace_id=workspace,
                 capacity_owner_id=capacity_owner,
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
                 machine_id=machine_id,
                 machine_fingerprint_hash=hashlib.sha256(machine_id.encode()).hexdigest(),
                 credential_hash=hashlib.sha256(uuid4().bytes).hexdigest(),
@@ -183,7 +184,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             machine_id=machine_id,
             worker_id=worker_id,
             container_id=container_id,
-            pool=MachinePool("lazycloud"),
+            placement=Placement.platform(),
             kind=BackendRouteKind.Worker,
             state=BackendRouteState.Ready,
             local_target=f"127.0.0.1:{backend_port}",

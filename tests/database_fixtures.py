@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from billing.rate_publication import publish_metered_rate_history
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from identity.platform import PlatformNamespaceService
@@ -127,7 +128,11 @@ def workspace_template_url(
         try:
             context = ServiceContext.create(database, root=tmp_path_factory.mktemp("domain"))
             PlatformNamespaceService(database).initialize()
-            control = ControlPlaneService(context, workspace_storage_client=FakeWorkspaceBuckets())
+            control = ControlPlaneService(
+                context,
+                placement_resolver=WorkspaceComputePolicyService(context),
+                workspace_storage_client=FakeWorkspaceBuckets(),
+            )
             owned_workspace(control, "default")
             control.ensure_workspace_storage("default")
         finally:

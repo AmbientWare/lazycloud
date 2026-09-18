@@ -9,9 +9,9 @@ from pydantic import Field
 from shared.capacity import CapacityOwnerKind, CapacityPoolSizingSnapshot
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
 )
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 
@@ -42,7 +42,7 @@ class WorkerPoolEffectiveHeadroom(ContractModel):
 class WorkerPoolSizingPlan(ContractModel):
     action: WorkerPoolSizingAction
     capacity_owner_id: str
-    pool: MachinePool
+    placement: Placement
     current_units: int = Field(ge=0)
     target_units: int = Field(ge=0)
     headroom: WorkerPoolEffectiveHeadroom
@@ -193,7 +193,7 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -204,7 +204,7 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.Wait,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -217,7 +217,7 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -229,7 +229,7 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -241,7 +241,7 @@ def plan_worker_pool_sizing(
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.Wait,
             capacity_owner_id=pool.capacity_owner_id,
-            pool=pool.pool,
+            placement=pool.placement,
             current_units=current_units,
             target_units=current_units,
             headroom=headroom,
@@ -252,7 +252,7 @@ def plan_worker_pool_sizing(
     return WorkerPoolSizingPlan(
         action=WorkerPoolSizingAction.ScaleUp,
         capacity_owner_id=pool.capacity_owner_id,
-        pool=pool.pool,
+        placement=pool.placement,
         current_units=current_units,
         target_units=(
             current_units + 1

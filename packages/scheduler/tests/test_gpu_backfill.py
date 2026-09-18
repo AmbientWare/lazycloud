@@ -8,7 +8,7 @@ from scheduler.state import (
     SchedulerContainerRequestClaim,
     SchedulerRepositoryError,
 )
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
@@ -30,7 +30,7 @@ def test_gpu_arrival_fences_backfill_before_atomic_dispatch(
         SchedulerWorkerRecord(
             worker_id="gpu-worker",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            pool=MachinePool("lazycloud"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             gpu_type="L4",
@@ -43,6 +43,7 @@ def test_gpu_arrival_fences_backfill_before_atomic_dispatch(
         )
     )
     cpu = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="workspace",
         stub_id="stub",
         container_id="cpu",
@@ -99,7 +100,7 @@ def test_concurrent_gpu_recovery_claims_only_marked_cpu_backfill(
         SchedulerWorkerRecord(
             worker_id="gpu-worker",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            pool=MachinePool("lazycloud"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             gpu_type="l4",
@@ -130,6 +131,7 @@ def test_concurrent_gpu_recovery_claims_only_marked_cpu_backfill(
         )
     workers.enqueue_container_request(
         SchedulerWorkerRequest(
+            placement=Placement.platform(),
             workspace_id="workspace",
             stub_id="stub",
             container_id="waiting-gpu",

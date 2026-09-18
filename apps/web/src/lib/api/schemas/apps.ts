@@ -60,14 +60,14 @@ export const deploymentSchema = z.object({
       cron: z.string().nullish(),
       command: z.array(z.string()).default([]),
       ports: z.record(z.number()).default({}),
-      pool: z.string().default(""),
+      machine: z.string().default(""),
     })
     .default({
       resources: { gpu: [], gpu_count: 0, concurrency: 1 },
       methods: [],
       command: [],
       ports: {},
-      pool: "",
+      machine: "",
     }),
   active: z.boolean(),
   deleted_at: z.string().nullish(),

@@ -15,7 +15,6 @@ from database.repositories.custom_domains import CustomDomainRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
-from shared.compute_policy import MachinePool
 from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
 from shared.deployment_records import (
     Deployment,
@@ -43,6 +42,7 @@ from control.deployment_cleanup import (
     delete_deployment_cron_jobs,
 )
 from control.events import ControlEventEmitter
+from control.placement import PlacementResolver
 from control.tcp_ingress import require_tcp_ingress
 
 
@@ -79,10 +79,6 @@ class DeploymentRegistrar(Protocol):
     ) -> DeploymentRegistration: ...
 
 
-class DeploymentPoolResolver(Protocol):
-    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> MachinePool: ...
-
-
 class DeploymentScheduleWriter(Protocol):
     """The one thing deploying needs from schedules: make this one's match."""
 
@@ -104,11 +100,17 @@ class CustomDomainUseAdmission(Protocol):
     ) -> None: ...
 
 
+def deployment_machine(spec: DeploymentSpec) -> str:
+    """The joined machine a spec pins to, from its metadata, or empty."""
+    machine = spec.metadata.get("machine")
+    return machine.strip() if isinstance(machine, str) else ""
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentService:
     context: ControlContext
     events: ControlEventEmitter
-    pool_resolver: DeploymentPoolResolver
+    placement: PlacementResolver
     registrar: DeploymentRegistrar
     schedules: DeploymentScheduleWriter
     custom_domain_admission: CustomDomainUseAdmission
@@ -117,12 +119,12 @@ class DeploymentService:
 
     def deploy(self, spec: DeploymentSpec, *, workspace: str = "default") -> Deployment:
         normalized_spec = _normalize_runtime_spec(spec)
+        machine = deployment_machine(normalized_spec)
         with self.context.database.session() as session:
             workspace_record = self.context.workspace(session, workspace)
-        resolved_pool = self.pool_resolver.resolve_deployment_pool(
-            normalized_spec,
-            workspace=workspace_record.id,
-        )
+            resolved_placement = self.placement.resolve_placement(
+                session, workspace_record, machine
+            )
         app_resolution = self.registrar.resolve_deployment_app(
             normalized_spec,
             workspace=workspace_record.id,
@@ -182,7 +184,8 @@ class DeploymentService:
                     spec=normalized_spec,
                     subdomain=subdomain,
                     custom_hostname=custom_hostname,
-                    pool=resolved_pool,
+                    placement=resolved_placement,
+                    machine=machine,
                     active=deployment_active,
                 ),
                 workspace_id=workspace_record.id,

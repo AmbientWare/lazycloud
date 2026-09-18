@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import shlex
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -15,6 +16,7 @@ from api.server.worker_repository_service import (
     WorkerRepositoryService,
 )
 from compute.agent_control import agent_machine_worker_id, hash_compute_token
+from compute.policy import WorkspaceComputePolicyService
 from compute.state import (
     RedisComputeStateRepository,
 )
@@ -84,12 +86,12 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
     UnitName,
 )
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.http.compute import MachineJoinCommandRequest
 from shared.http.errors import ErrorResponse
 from shared.http.releases import AgentReleaseRequest
 from shared.http.worker_usage import WorkerUsageWindowResponse
@@ -97,6 +99,7 @@ from shared.identity import AuthScope, TokenKind, WorkspaceStorageConfig
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
+from shared.placement import Placement
 from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from shared.scheduling import WorkerExecutionRecord
 from shared.source_cache_cleanup import (
@@ -209,22 +212,25 @@ def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
         )
     now = utc_now()
     unit_id, machine_id = str(uuid4()), str(uuid4())
-    pool = MachinePool("interrupted-build")
+    pool = Placement.platform()
     with services.context.database.session() as session:
         ComputeUnitRepository(session).upsert(
             ComputeUnitRecord(
-                id=unit_id, workspace_id=workspace_id, name=UnitName("interrupted-build"), pool=pool
+                id=unit_id,
+                workspace_id=workspace_id,
+                name=UnitName("interrupted-build"),
+                placement=pool,
             )
         )
         MachineRepository(session).upsert(
-            Machine(id=machine_id, pool=pool), workspace_id=workspace_id
+            Machine(id=machine_id, placement=pool), workspace_id=workspace_id
         )
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 user_id=owner_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=unit_id,
-                pool=pool,
+                placement=pool,
                 machine_id=machine_id,
                 machine_fingerprint_hash=uuid4().hex,
                 credential_hash=uuid4().hex,
@@ -298,7 +304,7 @@ def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
         now = utc_now()
         with services.context.database.session() as session:
             MachineRepository(session).upsert(
-                Machine(id=second_machine, pool=pool), workspace_id=workspace_id
+                Machine(id=second_machine, placement=pool), workspace_id=workspace_id
             )
             CapacityRecoveryRepository(session).record_signal(
                 workspace_id=workspace_id,
@@ -373,7 +379,14 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
     service = isolated_services.worker_repository_service
     assert service.dependencies is not None
     service.dependencies = replace(service.dependencies, images=images)
-    workspace_id = ControlPlaneService(isolated_services.context).get_workspace().id
+    workspace_id = (
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
+        .get_workspace()
+        .id
+    )
     build = _pending_image_build(isolated_services, ImageSpec(commands=["python -V"]))
     container_id = build.id
     reserved = isolated_services.containers.reserve_image_build_container(
@@ -436,7 +449,10 @@ def test_automatic_checkpoint_lease_is_bound_to_assigned_container_and_worker(
     isolated_services: ApiServices,
 ) -> None:
     service = isolated_services.worker_repository_service
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     workspace = owned_workspace(control, "default")
     workspace_owner_user_id(isolated_services.context, workspace.id)
     stub = control.create_stub("automatic-checkpoint-lease", workspace=workspace.id)
@@ -520,11 +536,10 @@ def test_managed_image_build_credentials_use_assigned_workspace(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("pool"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             private_worker=True,
             owner_user_id="22222222-2222-4222-8222-222222222222",
-            requires_pool_selector=True,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
             free_cpu_millicores=1000,
@@ -582,11 +597,10 @@ def test_managed_container_credentials_use_assigned_workspace(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("pool"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             private_worker=True,
             owner_user_id="22222222-2222-4222-8222-222222222222",
-            requires_pool_selector=True,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
             free_cpu_millicores=1000,
@@ -675,11 +689,10 @@ def test_image_archive_upload_credentials_are_bound_and_one_time(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("pool"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             private_worker=True,
             owner_user_id="22222222-2222-4222-8222-222222222222",
-            requires_pool_selector=True,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
             free_cpu_millicores=1000,
@@ -807,11 +820,10 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("pool"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             private_worker=True,
             owner_user_id="22222222-2222-4222-8222-222222222222",
-            requires_pool_selector=True,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
             free_cpu_millicores=1000,
@@ -865,17 +877,13 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
 def test_cache_origin_broker_returns_urls_without_storage_credentials(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context),
-        "brokered-worker",
-        storage=WorkspaceStorageConfig(
-            backend="s3",
-            bucket="workspace-bucket",
-            config={
-                "access_key": "workspace-access",
-                "secret_key": "workspace-secret",
-            },
-        ),
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
+    workspace = control.set_workspace_storage(
+        owned_workspace(control, "brokered-worker").id,
+        WorkspaceStorageConfig(backend="s3", bucket="workspace-bucket"),
     )
     image_id = "image-brokered"
     with isolated_services.context.database.session() as session:
@@ -935,7 +943,11 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
     with ExitStack() as client_stack:
         redis = real_redis_actors.client()
         workspace = owned_workspace(
-            ControlPlaneService(isolated_services.context), "origin-authorization-owner"
+            ControlPlaneService(
+                isolated_services.context,
+                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+            ),
+            "origin-authorization-owner",
         )
         workspace_id = workspace.id
         victim_image_id = "image-victim"
@@ -1009,7 +1021,7 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
                 runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-attacker",
-                pool=MachinePool("managed"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
             ),
         )
@@ -1115,7 +1127,10 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
     with ExitStack() as client_stack:
         redis = real_redis_actors.client()
         token = _worker_token(isolated_services, "workspace-a")
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         workspace = owned_workspace(control, "workspace-a")
         workspace_owner_user_id(isolated_services.context, workspace.id)
         isolated_services.compute.create_unit(
@@ -1143,7 +1158,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
                 runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-1",
-                pool=MachinePool("pool"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
                 total_cpu_millicores=1000,
                 total_memory_mib=1024,
@@ -1163,7 +1178,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-1",
                 machine_id="compose-machine",
-                pool=MachinePool("pool"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
                 total_cpu_millicores=1000,
                 total_memory_mib=1024,
@@ -1181,7 +1196,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
                 container_id=container_id,
                 cpu_millicores=100,
                 memory_mib=128,
-                pool_selector="pool",
+                placement=Placement.platform(),
             ),
         )
         worker_lock_key = workers.keys.worker_lock("worker-1")
@@ -1238,7 +1253,7 @@ def test_worker_network_mutations_are_bound_to_authenticated_worker_assignment(
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-network-owner",
                 machine_id="machine-network-owner",
-                pool=MachinePool("network-pool"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
             ),
         )
@@ -1311,7 +1326,7 @@ async def test_worker_repository_stream_blocks_until_scheduler_assignment(
             capacity_owner_id=capacity_owner_id,
             worker_id=worker_id,
             machine_id="compose-machine",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -1379,7 +1394,7 @@ async def test_worker_repository_stream_blocks_until_scheduler_assignment(
             container_id=container_id,
             cpu_millicores=100,
             memory_mib=128,
-            pool_selector="default",
+            placement=Placement.platform(),
         ),
     )
     response = await asyncio.wait_for(waiting, timeout=1.0)
@@ -1412,7 +1427,7 @@ def test_stale_source_cache_session_cannot_change_current_worker_availability(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
         )
     )
@@ -1484,11 +1499,12 @@ async def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
         )
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="workspace-a",
         stub_id="stub-1",
         container_id="container-1",
@@ -1535,7 +1551,10 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
 ) -> None:
     with ExitStack() as client_stack:
         redis = real_redis_actors.client()
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         workspace = owned_workspace(control, "workspace-a")
         workspace_owner_user_id(isolated_services.context, workspace.id)
         stub = control.create_stub("worker", workspace=workspace.id)
@@ -1564,7 +1583,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
                 runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-1",
-                pool=MachinePool("pool"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
             ),
         )
@@ -1577,7 +1596,7 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
                 runtime_image="container-worker:local",
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
                 worker_id="worker-2",
-                pool=MachinePool("pool"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
             ),
         )
@@ -1634,7 +1653,7 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
             worker=SchedulerWorkerRecord(
                 runtime_image="container-worker:local",
                 worker_id="worker-1",
-                pool=MachinePool("pool"),
+                placement=Placement.platform(),
                 capacity_owner_id=capacity_owner_id,
                 status=SchedulerWorkerStatus.Available,
                 created_at=utc_now() + timedelta(days=365),
@@ -1708,7 +1727,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
                 **base_payload,
                 "worker": {
                     "worker_id": "capacity-worker",
-                    "pool": "capacity-pool",
+                    "placement": Placement.platform().key,
                 },
             },
             headers=headers,
@@ -1720,7 +1739,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
                 "worker": WorkerExecutionRecord(
                     runtime_image="container-worker:local",
                     worker_id="capacity-worker",
-                    pool=MachinePool("capacity-pool"),
+                    placement=Placement.platform(),
                     capacity_owner_id=owner_id,
                 ).model_dump(mode="json"),
             },
@@ -1739,7 +1758,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
                 "worker": WorkerExecutionRecord(
                     runtime_image="container-worker:local",
                     worker_id="capacity-worker",
-                    pool=MachinePool("capacity-pool"),
+                    placement=Placement.platform(),
                     capacity_owner_id=other_owner_id,
                 ).model_dump(mode="json"),
             },
@@ -1752,7 +1771,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
                 "worker": WorkerExecutionRecord(
                     runtime_image="container-worker:local",
                     worker_id="capacity-worker",
-                    pool=MachinePool("capacity-pool"),
+                    placement=Placement.platform(),
                     capacity_owner_id=owner_id,
                 ).model_dump(mode="json"),
             },
@@ -1778,7 +1797,11 @@ def test_container_shutdown_requires_assigned_worker_storage_release(
     redis = real_redis_actors.client()
     containers = RedisSchedulerContainerRepository(redis)
     workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context), "shutdown-storage-release"
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ),
+        "shutdown-storage-release",
     )
     container_id = str(uuid4())
     with isolated_services.context.database.session() as session:
@@ -2230,9 +2253,9 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
     containers = RedisSchedulerContainerRepository(redis)
     compute_states = RedisComputeStateRepository(redis)
     gateway = isolated_services.gateway_service
-    pool = MachinePool("port-route-cleanup")
+    pool = "port-route-cleanup"
     workspace_id, machine_id, _ = _join_gateway_agent(
-        isolated_services, gateway, pool=pool, machine_fingerprint="port-route-cleanup"
+        isolated_services, gateway, unit_name=pool, machine_fingerprint="port-route-cleanup"
     )
     worker_id = agent_machine_worker_id(machine_id)
     unit = gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id)
@@ -2244,7 +2267,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
             worker_id=worker_id,
             workspace_id=workspace_id,
             machine_id=machine_id,
-            pool=pool,
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -2279,7 +2302,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
         AgentBackendRoute(
             route_id=f"{machine_id}:{worker_id}:{container_id}:container:{port}",
             workspace_id=workspace_id,
-            pool=pool,
+            placement=Placement.platform(),
             machine_id=machine_id,
             worker_id=worker_id,
             container_id=container_id,
@@ -2308,7 +2331,7 @@ def test_worker_repository_container_cleanup_unpublishes_every_port_route(
     worker_route = AgentBackendRoute(
         route_id=f"{machine_id}:{worker_id}:{container_id}:worker:0",
         workspace_id=workspace_id,
-        pool=pool,
+        placement=Placement.platform(),
         machine_id=machine_id,
         worker_id=worker_id,
         container_id=container_id,
@@ -2366,9 +2389,9 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
     containers = RedisSchedulerContainerRepository(redis)
     compute_states = RedisComputeStateRepository(redis)
     gateway = async_services.gateway_service
-    pool = MachinePool("orphan-routes")
+    pool = "orphan-routes"
     workspace_id, machine_id, _ = _join_gateway_agent(
-        async_services, gateway, pool=pool, machine_fingerprint="orphan-routes"
+        async_services, gateway, unit_name=pool, machine_fingerprint="orphan-routes"
     )
     worker_id = agent_machine_worker_id(machine_id)
     unit = gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id)
@@ -2379,7 +2402,7 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
             worker_id=worker_id,
             workspace_id=workspace_id,
             machine_id=machine_id,
-            pool=pool,
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -2404,7 +2427,7 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
     active_route = AgentBackendRoute(
         route_id=f"{machine_id}:{worker_id}:{container_id}:container:9090",
         workspace_id=workspace_id,
-        pool=pool,
+        placement=Placement.platform(),
         machine_id=machine_id,
         worker_id=worker_id,
         container_id=container_id,
@@ -2433,7 +2456,7 @@ async def test_worker_repository_reconciles_orphan_routes_without_removing_activ
         route_id="missing-worker:missing-container:container:9090",
         workspace_id=workspace_id,
         capacity_owner_id=unit.capacity_owner_id,
-        pool=pool,
+        placement=Placement.platform(),
         machine_id=machine_id,
         worker_id="missing-worker",
         container_id="missing-container",
@@ -2483,12 +2506,12 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
     workspace_id, machine_id, agent_token = _join_gateway_agent(
         isolated_services,
         gateway,
-        pool=MachinePool("pool-a"),
+        unit_name="pool-a",
         machine_fingerprint="route-machine",
     )
     worker_id = agent_machine_worker_id(machine_id)
     joined_unit = gateway.unit_state_coordinator.unit_by_name(
-        UnitName(MachinePool("pool-a")),
+        UnitName("pool-a"),
         workspace_id=workspace_id,
     )
     RedisSchedulerWorkerRepository(redis).add_worker(
@@ -2498,7 +2521,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
             worker_id=worker_id,
             workspace_id=workspace_id,
             machine_id=machine_id,
-            pool=MachinePool("pool-a"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
@@ -2532,7 +2555,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
     route = AgentBackendRoute(
         route_id=f"{machine_id}:{worker_id}:{container_id}:container:8001",
         workspace_id=workspace_id,
-        pool=MachinePool("pool-a"),
+        placement=Placement.platform(),
         machine_id=machine_id,
         worker_id=worker_id,
         container_id=container_id,
@@ -2572,10 +2595,10 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     """The record answers to the token, not to the host that sent it.
 
     A customer holds root on the machine they joined, so every tenancy field in a
-    registration is something they can edit. `private_worker` is the switch the
-    owner comparison hangs on: a worker registered public is compared against no
-    account at all, and every workspace's default pool carries the same name, so
-    claiming one is enough to be offered another account's work.
+    registration is something they can edit. Placement is what the scheduler
+    compares, so a worker that registered itself as platform capacity would be
+    offered every account's work; the unit's placement wins, and everything that
+    follows from it does too.
     """
 
     redis = isolated_services.redis_client
@@ -2586,16 +2609,17 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
     )
-    workspace_id, machine_id, _agent_token = _join_gateway_agent(
+    workspace_id, machine_id, _agent_token = _join_named_machine(
         isolated_services,
         gateway,
-        pool=MachinePool("shared-fleet-claim"),
+        name="shared-fleet-claim",
         machine_fingerprint="shared-fleet-claim-machine",
     )
     worker_id = agent_machine_worker_id(machine_id)
-    joined_unit = gateway.unit_state_coordinator.unit_by_name(
-        UnitName(MachinePool("shared-fleet-claim")),
-        workspace_id=workspace_id,
+    joined_unit = next(
+        unit
+        for unit in isolated_services.compute.list_units(workspace=workspace_id)
+        if unit.placement == Placement.machine(machine_id)
     )
     workers = RedisSchedulerWorkerRepository(redis)
 
@@ -2606,10 +2630,9 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
                 capacity_owner_id=joined_unit.capacity_owner_id,
                 worker_id=worker_id,
                 machine_id=machine_id,
-                pool=MachinePool("shared-fleet-claim"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
                 private_worker=False,
-                requires_pool_selector=True,
                 # Which capacity this account's work prefers is the unit's to
                 # decide, so a host that names its own is answered the same way.
                 priority=2**31 - 1,
@@ -2630,6 +2653,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
 
     stored = workers.get_worker(worker_id)
     assert stored is not None
+    assert stored.placement == Placement.machine(machine_id)
     assert stored.private_worker is True
     assert stored.owner_user_id == workspace_owner_user_id(isolated_services.context, workspace_id)
     assert stored.priority == joined_unit.priority
@@ -2647,7 +2671,7 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
     workspace_id, machine_id, agent_token = _join_gateway_agent(
         isolated_services,
         gateway,
-        pool=MachinePool("release-reconnect"),
+        unit_name="release-reconnect",
         machine_fingerprint="release-reconnect",
     )
     release = DeploymentReleaseService().state()
@@ -2659,7 +2683,7 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
             worker_id=slot.worker_id,
             machine_id=machine_id,
             capacity_owner_id=slot.capacity_owner_id,
-            pool=slot.pool,
+            placement=slot.placement,
             runtime_image=release.target.worker_image,
         ),
         cache_generation_id=str(uuid4()),
@@ -2881,7 +2905,7 @@ def _join_gateway_agent(
     services: ApiServices,
     gateway: GatewayControlService,
     *,
-    pool: MachinePool,
+    unit_name: str,
     machine_fingerprint: str,
 ) -> tuple[str, str, str]:
     with services.context.database.session() as session:
@@ -2890,18 +2914,48 @@ def _join_gateway_agent(
     # needs the owner row production writes with it.
     workspace_owner_user_id(services.context, workspace_id)
     services.compute.create_unit(
-        UnitName(pool),
+        UnitName(unit_name),
         provider="agent",
         workspace=workspace_id,
     )
     bootstrap = gateway.unit_state_coordinator.create_unit_join_token(
-        gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
+        gateway.unit_state_coordinator.unit_by_name(UnitName(unit_name), workspace_id=workspace_id),
         workspace_id=workspace_id,
         owner_token_id="worker-repository-test",
     )
+    return _join_with_token(gateway, workspace_id, bootstrap.token, machine_fingerprint)
+
+
+def _join_named_machine(
+    services: ApiServices,
+    gateway: GatewayControlService,
+    *,
+    name: str,
+    machine_fingerprint: str,
+) -> tuple[str, str, str]:
+    """Join a machine the way an account does: by name, through a join command."""
+    with services.context.database.session() as session:
+        workspace = services.context.workspace(session)
+    user_id = workspace_owner_user_id(services.context, workspace.id)
+    command = gateway.machine_join_command(
+        MachineJoinCommandRequest(name=name, workspaces=[workspace.name]),
+        user_id=user_id,
+        owner_token_id="worker-repository-test",
+    )
+    words = shlex.split(command.command)
+    token = words[words.index("--join-token") + 1]
+    return _join_with_token(gateway, workspace.id, token, machine_fingerprint)
+
+
+def _join_with_token(
+    gateway: GatewayControlService,
+    workspace_id: str,
+    token: str,
+    machine_fingerprint: str,
+) -> tuple[str, str, str]:
     joined = gateway.join_agent(
         JoinAgentRequest(
-            join_token=bootstrap.token,
+            join_token=token,
             machine_fingerprint=machine_fingerprint,
             hostname=machine_fingerprint,
             os="linux",
@@ -2954,7 +3008,13 @@ def _worker_token(
     *,
     kind: TokenKind = TokenKind.Worker,
 ) -> str:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), workspace_id)
+    workspace = owned_workspace(
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ),
+        workspace_id,
+    )
     workspace_owner_user_id(isolated_services.context, workspace.id)
     return AuthService(isolated_services.context).create_token(
         f"{workspace_id}-{kind.value}",
@@ -2970,22 +3030,17 @@ def _register_worker_session(
     client: TestClient,
     bootstrap_token: str,
     worker: SchedulerWorkerRecord,
+    unit_name: str = "test-unit",
 ) -> dict[str, str]:
     with services.context.database.session() as session:
         durable_workspace_id = services.context.workspace(session, workspace_id).id
-        unit = ComputeUnitRepository(session).get_by_name(
-            durable_workspace_id,
-            worker.pool,
-        )
+        unit = ComputeUnitRepository(session).get_by_name(durable_workspace_id, unit_name)
     if unit is None:
         capacity_owner_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                f"lazycloud-test-capacity:{durable_workspace_id}:{worker.pool}",
-            )
+            uuid5(NAMESPACE_URL, f"lazycloud-test-capacity:{durable_workspace_id}:{unit_name}")
         )
         unit = services.compute.create_unit(
-            UnitName(worker.pool),
+            UnitName(unit_name),
             workspace=durable_workspace_id,
             provider="local",
             capacity_owner_id=capacity_owner_id,
@@ -3301,7 +3356,10 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
     """
 
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         workspace = owned_workspace(control, "usage-owner")
         workspace_owner_user_id(isolated_services.context, workspace.id)
         for pool in ("pool-assigned", "pool-stranger"):
@@ -3350,7 +3408,7 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
                     capacity_owner_id="11111111-1111-4111-8111-111111111111",
                     worker_id=name,
                     machine_id=f"machine-{name}",
-                    pool=MachinePool(pool),
+                    placement=Placement.platform(),
                     status=SchedulerWorkerStatus.Available,
                     total_cpu_millicores=1000,
                     total_memory_mib=1024,
@@ -3426,7 +3484,10 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
     """
 
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         workspace = owned_workspace(control, "window-owner")
         workspace_owner_user_id(isolated_services.context, workspace.id)
         isolated_services.compute.create_unit(
@@ -3467,7 +3528,7 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
                 capacity_owner_id="22222222-2222-4222-8222-222222222222",
                 worker_id="worker-window",
                 machine_id="machine-worker-window",
-                pool=MachinePool("pool-window"),
+                placement=Placement.platform(),
                 status=SchedulerWorkerStatus.Available,
                 total_cpu_millicores=1000,
                 total_memory_mib=1024,
@@ -3550,7 +3611,10 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
     """
 
     service = isolated_services.worker_repository_service
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "pooled-exit",
         kind=StubKind.Function,
         handler="pkg.jobs:handler",

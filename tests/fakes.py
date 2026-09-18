@@ -22,6 +22,8 @@ from shared.http.gateway import (
     ResolveDeploymentTargetResponse,
 )
 from shared.http.objects import PutObjectResponse
+from shared.identity import WorkspaceRecord
+from shared.workspace_storage import WorkspaceStorageGrant
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings, S3PresignedUpload
 
 
@@ -386,6 +388,16 @@ class FakeObjectClient:
                 key == prefix if exact else key.startswith(prefix)
             ):
                 self.abort_multipart_upload(key, bucket=target_bucket, upload_id=upload_id)
+
+
+class FakeWorkspaceStorageIssuer:
+    """For tests whose workspaces all live in platform storage; a grant is never asked for."""
+
+    def issue(self, workspace: WorkspaceRecord) -> WorkspaceStorageGrant:
+        raise AssertionError(f"no storage grant expected for workspace {workspace.id}")
+
+    def retire(self, workspace: WorkspaceRecord) -> None:
+        del workspace
 
 
 @dataclass(slots=True)

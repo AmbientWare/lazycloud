@@ -11,9 +11,9 @@ from uuid import uuid4
 
 from pydantic import Field, field_validator
 from shared.app_identity import WORKER_BUNDLE_ROOT
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.routing import (
     AgentBackendRoute,
     BackendRouteKind,
@@ -138,7 +138,7 @@ class SchedulerContainerRouteRepository(Protocol):
 
 class WorkerRouteIdentity(ContractModel):
     worker_id: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    placement: Placement = Placement.platform()
     machine_id: str = ""
     pod_address: str = ""
     container_service_port: int = 0
@@ -161,11 +161,11 @@ class WorkerRouteIdentity(ContractModel):
     def route_context(self, request: ContainerRequestContext) -> WorkerRouteContext | None:
         if not (request.workspace_id and request.container_id):
             return None
-        if not (self.pool and self.machine_id and self.worker_id):
+        if not (self.placement and self.machine_id and self.worker_id):
             return None
         return WorkerRouteContext(
             workspace_id=request.workspace_id,
-            pool=self.pool,
+            placement=self.placement,
             machine_id=self.machine_id,
             worker_id=self.worker_id,
             container_id=request.container_id,
@@ -315,7 +315,7 @@ class WorkerRouteRecovery:
             if not instance.build_request and (
                 instance.worker_id != self.identity.worker_id
                 or instance.machine_id != self.identity.machine_id
-                or instance.pool != self.identity.pool
+                or instance.placement != self.identity.placement
             ):
                 raise RuntimeError("Local container belongs to a different worker")
             request = ContainerRequestContext(

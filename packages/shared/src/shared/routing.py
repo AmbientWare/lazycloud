@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pydantic import field_validator
 
-from shared.capacity import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.placement import Placement
 
 BACKEND_ROUTE_ADDRESS_SCHEME = "route"
 
@@ -38,7 +38,7 @@ class AgentBackendRoute(ContractModel):
     route_id: str
     enrollment_id: str = ""
     workspace_id: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: Placement = Placement.platform()
     capacity_owner_id: str = ""
     machine_id: str = ""
     worker_id: str = ""

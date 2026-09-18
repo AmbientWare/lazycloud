@@ -30,13 +30,8 @@ class CallableWrapper(Protocol):
 LifecycleHookReference = str | Callable[..., Any] | CallableWrapper
 LifecycleHookInput = LifecycleHookReference | Iterable[LifecycleHookReference] | None
 SchemaInput = Mapping[str, JsonValue] | DictExportable | ModelDumpable | None
-PoolInput = str | None
-"""A scheduling group is a label, so naming one is naming a string.
-
-There is no pool object to pass: the durable row a workload lands on is a
-provisioning unit the control plane owns and chooses, and several units may
-feed one group.
-"""
+MachineInput = str | None
+"""A joined machine this workload must run on, by name; unset runs in the workspace."""
 RetryPolicyInput = RetryPolicy | Mapping[str, JsonValue] | None
 
 
@@ -151,7 +146,7 @@ def build_resource_metadata(
     block_network: bool | None = None,
     allow_list: list[str] | None = None,
     docker_enabled: bool | None = None,
-    pool: PoolInput = None,
+    machine: MachineInput = None,
     extra: Mapping[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     metadata: dict[str, JsonValue] = dict(extra or {})
@@ -175,8 +170,8 @@ def build_resource_metadata(
         metadata["inputs"] = schema_metadata(inputs)
     if outputs is not None:
         metadata["outputs"] = schema_metadata(outputs)
-    if pool is not None:
-        metadata["pool"] = {"name": pool}
+    if machine is not None:
+        metadata["machine"] = machine
     return metadata
 
 
@@ -212,7 +207,7 @@ __all__ = [
     "CallableWrapper",
     "LifecycleHookInput",
     "LifecycleHookReference",
-    "PoolInput",
+    "MachineInput",
     "RetryPolicyInput",
     "SchemaInput",
     "autoscaler_metadata",

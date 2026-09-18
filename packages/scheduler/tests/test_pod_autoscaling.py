@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
@@ -179,7 +180,10 @@ def test_pod_keep_warm_minus_one_is_durable_never_scale_to_zero(
             resources=Resources(keep_warm=-1),
         )
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     stub = next(item for item in control.list_stubs() if item.deployment_id == deployment.id)
 
     assert stub.config.runtime.keep_warm == -1
@@ -473,7 +477,10 @@ def test_pod_deployment_explicit_zero_scale_remains_zero_with_connections(
         containers=0,
     )
 
-    updated = ControlPlaneService(isolated_services.context).get_stub(stub.id)
+    updated = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).get_stub(stub.id)
     assert updated.config.autoscaler.model_fields_set >= {"min_containers", "max_containers"}
     assert updated.config.autoscaler.min_containers == 0
     assert updated.config.autoscaler.max_containers == 0
@@ -500,7 +507,9 @@ def _create_pod_stub(
             ports={"8080": 8080},
         )
     )
-    control = ControlPlaneService(services.context)
+    control = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    )
     stub = next(
         item
         for item in control.list_stubs()

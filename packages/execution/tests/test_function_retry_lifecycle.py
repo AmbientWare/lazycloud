@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.orchestration import ContainerRepository
 from execution.functions.service import FunctionControlService
@@ -51,7 +52,10 @@ def test_function_retry_reuses_a_warm_container_and_leaves_replacement_to_the_au
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=scheduler),
     )
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "retry-container-lifecycle",
         kind=StubKind.Function,
         handler="module:handler",

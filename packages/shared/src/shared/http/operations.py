@@ -6,12 +6,12 @@ from pydantic import Field, JsonValue
 
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.compute_fleet import LeaseStatus, ResourceStatus
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.events import Event
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.records import BuildStatus, ImageBuildPhase
+from shared.placement import Placement
 
 
 class CronJobResponse(HttpModel):
@@ -138,7 +138,6 @@ class ImageBuildListResponse(HttpModel):
 
 class AgentRegisterRequest(HttpModel):
     name: str = "agent"
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -147,7 +146,7 @@ class AgentRegisterRequest(HttpModel):
 class AgentResponse(HttpModel):
     id: str
     name: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    placement: Placement = Placement.platform()
     status: ResourceStatus = ResourceStatus.Created
     version: str = "local"
     capacity: dict[str, int | float | str] = Field(default_factory=dict)

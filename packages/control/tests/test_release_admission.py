@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
@@ -15,7 +15,7 @@ def test_activation_preserves_serving_and_fences_upgrade_authority(tmp_path: Pat
     image = "registry.example.com/worker@sha256:" + "a" * 64
     worker = SchedulerWorkerRecord(
         worker_id="worker",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         capacity_owner_id=str(uuid4()),
         runtime_image=image,
         agent_binary_sha256="b" * 64,

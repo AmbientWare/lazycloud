@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from shared.aws_connections import AwsAccountConnectionPhase
 from shared.http.errors import HttpApiError, HttpTransportError
 from shared.identity import WorkspaceStatus
 
@@ -16,7 +17,7 @@ from lazycloud.cli.components.output import (
     table,
 )
 from lazycloud.cli.components.prompts import confirm_destructive
-from lazycloud.cli.control import workspace_client
+from lazycloud.cli.control import compute_client, workspace_client
 from lazycloud.config import ClientProfile, ConfigError, get_profile, set_profile, settings
 
 workspace_app = typer.Typer(help="Manage workspaces.")
@@ -29,6 +30,22 @@ def _save_workspace(profile: ClientProfile, name: str) -> None:
         activate=False,
         replace_legacy=True,
     )
+
+
+def _connection_for_cloud(cloud: str | None) -> str | None:
+    if cloud is None:
+        return None
+    if cloud != "aws":
+        raise ClientError(f"unsupported cloud {cloud!r}; connected clouds: aws")
+    connection = compute_client().current_connection()
+    if connection is None:
+        raise ClientError("no AWS account is connected; run `lazycloud cloud connect aws` first")
+    if connection.phase is not AwsAccountConnectionPhase.Ready:
+        raise ClientError(
+            f"the connected AWS account is {connection.phase.value}; "
+            "a workspace can be created there once `lazycloud cloud status` reports ready"
+        )
+    return connection.id
 
 
 def _require_profile_workspace() -> None:
@@ -76,10 +93,23 @@ def workspace_list(ctx: typer.Context) -> None:
     "create",
     help="Create and select a workspace. Administrator access required.",
 )
-def workspace_create(ctx: typer.Context, name: str) -> None:
+def workspace_create(
+    ctx: typer.Context,
+    name: str,
+    cloud: Annotated[
+        str | None,
+        typer.Option(
+            "--cloud",
+            help=(
+                "Create the workspace in your connected cloud account instead of LazyCloud. "
+                "Its compute and volumes live there for good. Accepts: aws."
+            ),
+        ),
+    ] = None,
+) -> None:
     _require_profile_workspace()
     profile = get_profile()
-    workspace = workspace_client().create(name)
+    workspace = workspace_client().create(name, connection_id=_connection_for_cloud(cloud))
     try:
         _save_workspace(profile, workspace.name)
     except (ConfigError, OSError) as exc:

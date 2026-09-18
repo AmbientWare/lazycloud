@@ -35,7 +35,7 @@ from shared.events import EventLevel
 from shared.function_payloads import FunctionJsonInvocation, FunctionPayloadEncoding
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
 from shared.http.workspace_changes import WorkspaceChangeType
-from shared.scheduling import SchedulerWorkerRequest, SchedulerWorkerStatus, WorkerRemovalResult
+from shared.scheduling import SchedulerWorkerStatus, WorkerRemovalResult
 from shared.tasks import Task
 from shared.timestamps import utc_now
 from shared.worker_events import (
@@ -1411,19 +1411,15 @@ class Scheduler:
             # is failed once rather than once per scheduler.
             if not confirmations.claim_confirmed(container.id):
                 continue
-            request = SchedulerWorkerRequest(
-                workspace_id=container.workspace_id,
-                stub_id=container.stub_id or "container",
-                container_id=container.id,
-            )
             if container.runtime_worker_id or container.status is ContainerStatus.Running:
                 self.runtime_services.containers.stop(
                     container.id, reason=StopContainerReason.Scheduler
                 )
             else:
                 if not request_service.failure_handler.mark_scheduling_failed(
-                    request,
-                    ORPHANED_CONTAINER_FAILURE_REASON,
+                    container.id,
+                    workspace_id=container.workspace_id,
+                    reason=ORPHANED_CONTAINER_FAILURE_REASON,
                     now=current_time,
                 ):
                     continue
@@ -1863,7 +1859,7 @@ def _log_worker_pool_drain_decisions(
     """Say what each pool decided, including when it decides the same thing."""
 
     for result in results:
-        pool = str(result.pool)
+        pool = result.placement.key
         last = logged_at.get(result.capacity_owner_id)
         acted = result.action is not WorkerPoolDrainAction.None_
         due = last is None or (now - last).total_seconds() >= (
@@ -1907,7 +1903,7 @@ def _record_worker_pool_drain_observability(
             ):
                 data: dict[str, JsonValue] = {
                     "source": WORKER_POOL_DRAIN_SOURCE,
-                    "pool": result.pool,
+                    "placement": result.placement.key,
                     "capacity_owner_id": result.capacity_owner_id,
                     "action": result.action.value,
                     "machine_id": result.machine_id,
@@ -1921,13 +1917,13 @@ def _record_worker_pool_drain_observability(
                 services.events.emit(
                     WORKER_POOL_DRAIN_DECISION_ACTION,
                     resource_type="worker_pool",
-                    resource_id=result.pool,
+                    resource_id=result.capacity_owner_id,
                     message="worker-pool drain selected desired capacity",
                     level=EventLevel.Warning if result.error else EventLevel.Info,
                     data=data,
                 )
             event_signatures[signature_key] = signature
-        labels = {"source": WORKER_POOL_DRAIN_SOURCE, "pool": str(result.pool)}
+        labels = {"source": WORKER_POOL_DRAIN_SOURCE, "placement": str(result.placement)}
         services.metrics.increment(
             "worker_pool_drain_decisions_total",
             labels={

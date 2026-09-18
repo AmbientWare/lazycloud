@@ -6,6 +6,7 @@ from threading import Barrier
 from uuid import uuid4
 
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import TaskAttemptRepository, TaskRepository
@@ -22,9 +23,10 @@ from tests.releases import assign_runtime
 def test_claim_commits_one_running_attempt_before_returning_work(
     isolated_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(isolated_services.context).create_stub(
-        "claim-start", kind=StubKind.Function, handler="main:hello"
-    )
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub("claim-start", kind=StubKind.Function, handler="main:hello")
     containers = [
         ContainerRecord(
             id=str(uuid4()),
@@ -71,7 +73,10 @@ def test_claim_commits_one_running_attempt_before_returning_work(
 def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
     isolated_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "idle-retirement",
         kind=StubKind.Function,
         handler="main:hello",

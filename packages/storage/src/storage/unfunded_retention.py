@@ -70,7 +70,7 @@ class UnfundedStorageRetentionService:
                 workspace = repository.lock_workspace(workspace_id)
                 if (
                     workspace is not None
-                    and not (workspace.storage.access_key or workspace.storage.secret_key)
+                    and workspace.connection_id is None
                     and (
                         ObjectRepository(session).workspace_has_objects(workspace_id)
                         or VolumeRepository(session).list(workspace_id=workspace_id)
@@ -89,7 +89,8 @@ class UnfundedStorageRetentionService:
                     "Your credit balance is empty. Your stored files will be retained "
                     f"at no charge until {deadline}. Restore a positive credit balance "
                     "before that date to keep your data. Otherwise, platform-managed files "
-                    "and volumes will be permanently deleted. Customer-owned storage is unaffected."
+                    "and volumes will be permanently deleted. Workspaces in your connected "
+                    "AWS account are unaffected."
                 )
                 period.notification_message_id = EmailOutboxRepository(session).enqueue(
                     EmailMessage(

@@ -12,8 +12,8 @@ from scheduler.agent_pool import (
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import RedisSchedulerWorkerRepository, SchedulerWorkerRecord
 from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
-from shared.compute_policy import MachinePool
 from shared.container_requests import schedulable_capacity
+from shared.placement import Placement
 from shared.scheduling import WorkerUnavailableReason
 from tests.real_redis import RealRedisActors
 
@@ -35,7 +35,7 @@ def test_agent_worker_pool_reconciles_connected_machine_and_capacity(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool=MachinePool("gpu"),
+            placement=Placement.machine("gpu"),
             gpu_type="A4000",
         ),
         _MachineRepo([machine]),
@@ -49,7 +49,7 @@ def test_agent_worker_pool_reconciles_connected_machine_and_capacity(
     worker = workers.get_worker(worker_id)
     assert worker is not None
     assert worker.status is SchedulerWorkerStatus.Pending
-    assert worker.pool == "gpu"
+    assert worker.placement == Placement.machine("gpu")
     assert worker.machine_id == "machine-one"
     # Less than the machine physically holds. The agent and the container
     # runtime are already on it, and offer selection bought it on that basis.
@@ -84,7 +84,7 @@ def test_agent_worker_pool_excludes_machine_with_failed_typed_preflight(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool=MachinePool("gpu"),
+            placement=Placement.machine("gpu"),
         ),
         _MachineRepo([machine]),
         workers,
@@ -109,7 +109,7 @@ def test_agent_worker_pool_disables_stale_machine_worker(
     worker = SchedulerWorkerRecord(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         worker_id=agent_machine_worker_id("machine-one"),
-        pool=MachinePool("gpu"),
+        placement=Placement.machine("gpu"),
         machine_id="machine-one",
         status=SchedulerWorkerStatus.Available,
         runtime_image="worker:verified",
@@ -129,7 +129,7 @@ def test_agent_worker_pool_disables_stale_machine_worker(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool=MachinePool("gpu"),
+            placement=Placement.machine("gpu"),
         ),
         _MachineRepo([machine]),
         workers,
@@ -175,7 +175,7 @@ def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker(
     worker = SchedulerWorkerRecord(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         worker_id=agent_machine_worker_id("machine-one"),
-        pool=MachinePool("gpu"),
+        placement=Placement.machine("gpu"),
         machine_id="machine-one",
         status=SchedulerWorkerStatus.Unavailable,
         total_cpu_millicores=4000,
@@ -191,7 +191,7 @@ def test_agent_worker_pool_does_not_readd_a_cordoned_machine_worker(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool=MachinePool("gpu"),
+            placement=Placement.machine("gpu"),
         ),
         _MachineRepo([machine]),
         workers,
@@ -220,7 +220,7 @@ def test_agent_worker_pool_reports_a_cordon_as_a_cordon(
     worker = SchedulerWorkerRecord(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         worker_id=agent_machine_worker_id("machine-one"),
-        pool=MachinePool("gpu"),
+        placement=Placement.machine("gpu"),
         machine_id="machine-one",
         status=SchedulerWorkerStatus.Available,
         total_cpu_millicores=4000,
@@ -236,7 +236,7 @@ def test_agent_worker_pool_reports_a_cordon_as_a_cordon(
         AgentPoolConfig(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             workspace_id="ws-1",
-            pool=MachinePool("gpu"),
+            placement=Placement.machine("gpu"),
         ),
         _MachineRepo([machine]),
         workers,
@@ -268,7 +268,7 @@ def test_machine_drain_survives_agent_pool_reconciliation(
             worker_id=worker_id,
             capacity_owner_id=machine.capacity_owner_id,
             machine_id=machine.machine_id,
-            pool=machine.pool,
+            placement=machine.placement,
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=4000,
             total_memory_mib=8192,
@@ -281,7 +281,7 @@ def test_machine_drain_survives_agent_pool_reconciliation(
         AgentPoolConfig(
             capacity_owner_id=machine.capacity_owner_id,
             workspace_id=machine.workspace_id,
-            pool=machine.pool,
+            placement=machine.placement,
         ),
         _MachineRepo([machine]),
         workers,
@@ -327,7 +327,7 @@ def _agent_machine(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         token_hash=f"token-{machine_id}",
         workspace_id="ws-1",
-        pool=MachinePool("gpu"),
+        placement=Placement.machine("gpu"),
         machine_id=machine_id,
         executor=DEFAULT_PRIVATE_EXECUTOR,
         cpu_millicores=cpu_millicores,

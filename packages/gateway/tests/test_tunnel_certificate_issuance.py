@@ -27,13 +27,14 @@ from networking.tunnel_tls import agent_certificate_request
 from pydantic import SecretStr
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_fleet import Machine, ResourceStatus
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.errors import ConflictError
 from shared.http.agent_identity import (
     AgentCertificateRequest,
     GatewayCertificateRequest,
     TunnelServiceRole,
 )
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.workspaces import workspace_owner_user_id
@@ -78,7 +79,7 @@ def test_agent_issuance_requires_current_enrollment_and_its_bound_key(
                 capacity_owner_id=owner_id,
                 workspace_id=workspace_id,
                 name=UnitName("certificate-machine"),
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
             )
         )
         MachineRepository(session).upsert(
@@ -90,7 +91,7 @@ def test_agent_issuance_requires_current_enrollment_and_its_bound_key(
                 user_id=user_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=owner_id,
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
                 machine_id=machine_id,
                 machine_fingerprint_hash=hash_compute_token(machine_id),
                 credential_hash=token_hash,
@@ -130,7 +131,7 @@ def test_agent_issuance_requires_current_enrollment_and_its_bound_key(
             workspace_id=workspace_id,
             capacity_owner_id=owner_id,
             machine_id=machine_id,
-            pool=enrollment.pool,
+            placement=enrollment.placement,
             credential_id=enrollment.id,
             credential_generation=enrollment.credential_generation,
         )

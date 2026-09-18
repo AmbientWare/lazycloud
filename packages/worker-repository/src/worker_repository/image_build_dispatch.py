@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import uuid4
 
+from control.placement import PlacementResolver
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.image_build_attempts import ImageBuildAttemptRepository
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
@@ -37,6 +38,7 @@ class DurableImageBuildDispatch:
     scheduler: SchedulerContainerRequestService
     containers: ExecutionContainerService
     settings: ImageBuildContainerSettings
+    placement_resolver: PlacementResolver
 
     def abort(self, build_id: str, workspace_id: str, *, container_id: str) -> None:
         with self.database.session() as session:
@@ -105,11 +107,16 @@ class DurableImageBuildDispatch:
                 auth=entry.get("auth", ""),
                 identity_token=entry.get("identitytoken", ""),
             )
+        workspace = _workspace(self.database, request.workspace_id)
+        # A build runs where the workspace's workloads run, so the image is baked
+        # on the capacity that will pull it.
+        with self.database.session() as session:
+            placement = self.placement_resolver.resolve_placement(session, workspace, "")
         payload = ImageBuildDispatchPayload(
             plan=plan_image_build_container_request(
                 request,
                 workspace_id=request.workspace_id,
-                pool_selector=self.settings.pool_selector,
+                placement=placement,
                 cpu_millicores=self.settings.cpu_millicores,
                 memory_mib=self.settings.memory_mib,
             ),
@@ -117,7 +124,6 @@ class DurableImageBuildDispatch:
                 registry_auth=registry_auth, build_args=request.build_args
             ),
         )
-        workspace = _workspace(self.database, request.workspace_id)
         return WorkspaceSecretCipher.from_workspace(workspace).encrypt(
             f"image-build-dispatch:{request.build_id}", payload.model_dump_json()
         )

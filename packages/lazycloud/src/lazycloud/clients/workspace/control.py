@@ -60,8 +60,8 @@ class WorkspaceControlClient:
     def list(self) -> WorkspaceListResponse:
         return WorkspaceListResponse.model_validate(self.channel.get("/api/v1/workspaces"))
 
-    def create(self, name: str) -> WorkspaceResponse:
-        request = WorkspaceCreateRequest(name=name)
+    def create(self, name: str, *, connection_id: str | None = None) -> WorkspaceResponse:
+        request = WorkspaceCreateRequest(name=name, connection_id=connection_id)
         return WorkspaceResponse.model_validate(
             self.channel.post("/api/v1/workspaces", request.model_dump(mode="json"))
         )

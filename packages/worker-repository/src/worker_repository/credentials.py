@@ -270,7 +270,7 @@ class WorkerCredentialService:
             if not storage.bucket:
                 msg = f"workspace storage is unavailable for {workspace_id!r}"
                 raise UpstreamUnavailableError(msg)
-            grant = self.storage_issuer.issue(workspace_id=workspace_id, storage=storage)
+            grant = self.storage_issuer.issue(workspace)
         return workspace_storage_credentials(grant)
 
     def _mount_credentials(

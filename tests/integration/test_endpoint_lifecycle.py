@@ -17,6 +17,7 @@ import uvicorn
 from anyio.from_thread import start_blocking_portal
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubRecord
 from database.records.endpoint_dispatch import EndpointDispatchStateRecord
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
@@ -624,7 +625,9 @@ async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
     matches = [
         stub
-        for stub in ControlPlaneService(services.context).list_stubs()
+        for stub in ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ).list_stubs()
         if stub.deployment_id == deployment_id
     ]
     assert len(matches) == 1
@@ -705,7 +708,9 @@ def _set_endpoint_dispatch_limits(
     max_pending: int = 10,
     concurrency: int = 1,
 ) -> None:
-    ControlPlaneService(services.context).update_stub_config(
+    ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    ).update_stub_config(
         stub.id,
         fields={
             "runtime.timeout_seconds": timeout_seconds,

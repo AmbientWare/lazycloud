@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
+from compute.policy import WorkspaceComputePolicyService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.event_bus import EventBusEvent, EventBusEventType, event_id_for_event, event_key
@@ -84,7 +85,6 @@ from scheduler.state import (
 )
 from scheduler.workers import SchedulerWorkerAdminService
 from shared.billing_quotes import ContainerShape
-from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName, StopContainerReason, capacity_memory_mib
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
@@ -95,6 +95,7 @@ from shared.errors import ConflictError, NotFoundError
 from shared.http.functions import FunctionClaimRequest
 from shared.http.task_progress import TaskPendingReason
 from shared.image_building.authoring import ImageSpec
+from shared.placement import Placement
 from shared.realtime.contracts import (
     CloudEventRecord,
     EventDataInput,
@@ -287,12 +288,13 @@ class _IdentityPlacement:
 class _DiscardFailureHandler:
     def mark_scheduling_failed(
         self,
-        request: SchedulerWorkerRequest,
-        reason: str,
+        container_id: str,
         *,
+        workspace_id: str,
+        reason: str,
         now: datetime | None = None,
     ) -> bool:
-        del request, reason, now
+        del container_id, workspace_id, reason, now
         return True
 
 
@@ -410,7 +412,10 @@ def _create_cron_function(
     )
     stub = next(
         item
-        for item in ControlPlaneService(isolated_services.context).list_stubs()
+        for item in ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).list_stubs()
         if item.deployment_id == deployment.id
     )
     # Declaring the schedule is what creates it; there is no second call.
@@ -711,7 +716,10 @@ def test_new_cron_version_takes_over_the_prior_schedule(
     )
     second_stub = next(
         item
-        for item in ControlPlaneService(isolated_services.context).list_stubs()
+        for item in ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).list_stubs()
         if item.deployment_id == second.id
     )
 
@@ -729,7 +737,14 @@ def test_inactive_cron_deployment_never_enqueues(
 ) -> None:
     deployment, _stub, cron_job = _create_cron_function(isolated_services)
     deployment.active = False
-    workspace_id = ControlPlaneService(isolated_services.context).get_workspace("default").id
+    workspace_id = (
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
+        .get_workspace("default")
+        .id
+    )
     with isolated_services.context.database.session() as session:
         DeploymentRepository(session).upsert(
             deployment,
@@ -758,7 +773,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -787,7 +802,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
         memory_mib=100,
         gpu=["T4"],
         gpu_count=1,
-        pool_selector="aws",
+        placement=Placement.connection("aws"),
         payload=request_payload,
         timestamp=now,
     )
@@ -815,7 +830,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
     requeued = _backlog_request(redis, repo)
     assert requeued.retry_count == 1
     assert requeued.container_id == "container-1"
-    assert requeued.pool_selector == "aws"
+    assert requeued.placement == Placement.connection("aws")
     assert requeued.payload == request_payload
 
     add_plan = plan_worker_capacity_change(
@@ -843,7 +858,7 @@ async def test_scheduler_worker_repository_requeues_expired_worker_requests(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -856,6 +871,7 @@ async def test_scheduler_worker_repository_requeues_expired_worker_requests(
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -910,7 +926,7 @@ async def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -924,6 +940,7 @@ async def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_
     )
     delivered = [
         SchedulerWorkerRequest(
+            placement=Placement.platform(),
             workspace_id="ws-1",
             stub_id="stub-1",
             container_id=container_id,
@@ -1036,7 +1053,7 @@ async def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pu
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Pending,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -1057,6 +1074,7 @@ async def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pu
     _assert_redis_ttl(redis, repo.keys.worker_state("worker-1"), 60)
 
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -1138,6 +1156,7 @@ def test_scheduler_request_claim_recovers_after_process_loss(
     repository = RedisSchedulerWorkerRepository(redis)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -1192,7 +1211,7 @@ async def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -1205,6 +1224,7 @@ async def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -1295,7 +1315,7 @@ def test_scheduler_worker_admin_service_lists_cordons_drains_and_removes_workers
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             machine_id="machine-1",
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
@@ -1478,7 +1498,7 @@ def test_scheduler_container_repository_state_indexes_and_concurrency_release(
     route = AgentBackendRoute(
         route_id="route-1",
         workspace_id="ws-1",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         machine_id="machine-1",
         worker_id="worker-1",
         port=8080,
@@ -1541,7 +1561,7 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool=MachinePool("gpu-pool"),
+            placement=Placement.machine("gpu-pool"),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             gpu_type="T4",
@@ -1563,7 +1583,7 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-2",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Unavailable,
             free_cpu_millicores=4000,
             free_memory_mib=4096,
@@ -1582,7 +1602,7 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
         memory_mib=100,
         gpu=["T4"],
         gpu_count=1,
-        pool_selector="gpu-pool",
+        placement=Placement.machine("gpu-pool"),
         runtime_class="runsc",
         docker_enabled=True,
         timestamp=now,
@@ -1622,7 +1642,7 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
     assert queued.container_id == request.container_id
     assert queued.workspace_id == request.workspace_id
     assert queued.stub_id == request.stub_id
-    assert queued.pool_selector == "gpu-pool"
+    assert queued.placement == Placement.machine("gpu-pool")
     assert queued.runtime_class == "runsc"
     assert queued.docker_enabled
     assert await _worker_delivery_empty(async_redis, worker_repo, "worker-2")
@@ -1686,7 +1706,7 @@ def test_scheduler_dispatch_preserves_durable_assignment_when_commit_response_is
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -1696,6 +1716,7 @@ def test_scheduler_dispatch_preserves_durable_assignment_when_commit_response_is
         )
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id=workspace_id,
         stub_id="stub-1",
         container_id=container.id,
@@ -1783,7 +1804,7 @@ def test_durable_request_recovers_queue_publication_and_capacity_after_redis_los
         workspace_id=workspace_id,
         stub_id="container",
         container_id=container.id,
-        pool_selector="lazycloud",
+        placement=Placement.platform(),
         cpu_millicores=1000,
         memory_mib=256,
         timestamp=now,
@@ -1868,7 +1889,7 @@ async def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -1878,6 +1899,7 @@ async def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit
         )
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -1936,6 +1958,7 @@ async def test_worker_request_dequeue_holds_one_delivery_without_the_worker_muta
     workers = RedisSchedulerWorkerRepository(redis)
     requests = [
         SchedulerWorkerRequest(
+            placement=Placement.platform(),
             workspace_id="ws-1",
             stub_id="stub-1",
             container_id=f"container-{index}",
@@ -1991,6 +2014,7 @@ async def test_worker_request_blocking_pop_wakes_on_assignment_without_duplicate
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -2041,7 +2065,7 @@ async def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
             machine_id="machine-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             billing_owner=UsageBillingOwner.PlatformFleet,
@@ -2052,6 +2076,7 @@ async def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced
         )
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="image-build",
         container_id="22222222-2222-4222-8222-222222222222",
@@ -2109,7 +2134,7 @@ async def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -2122,6 +2147,7 @@ async def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -2171,6 +2197,7 @@ def test_scheduler_cancellation_removes_only_owned_backlog_and_preserves_fence(
     service = _request_service(workers, containers)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     cancelled_request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-cancelled",
@@ -2309,7 +2336,7 @@ async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -2322,6 +2349,7 @@ async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -2439,7 +2467,7 @@ async def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -2452,6 +2480,7 @@ async def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -2505,7 +2534,7 @@ async def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -2518,6 +2547,7 @@ async def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -2587,6 +2617,7 @@ def test_scheduler_reconciles_confirmed_unrecoverable_sql_container(
             )
         )
     recoverable_request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id=workspace_id,
         stub_id="container",
         container_id=recoverable.id,
@@ -2642,7 +2673,10 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
             ports={"8080": 8080},
         )
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     stub = next(item for item in control.list_stubs() if item.deployment_id == deployment.id)
     stub = control.update_stub_config(
         stub.id,
@@ -2727,7 +2761,7 @@ def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_sched
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -2740,6 +2774,7 @@ def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_sched
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -2779,7 +2814,7 @@ def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
             free_cpu_millicores=1000,
@@ -2793,6 +2828,7 @@ def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
     )
     requests = [
         SchedulerWorkerRequest(
+            placement=Placement.platform(),
             workspace_id="ws-1",
             stub_id="stub-1",
             container_id=f"container-{index}",
@@ -2845,6 +2881,7 @@ def test_scheduler_container_request_service_bounds_no_capacity_retries(
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -2904,6 +2941,7 @@ def test_scheduler_image_build_failure_persists_coordination_evidence_and_fails_
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="image-build",
         container_id="33333333-3333-4333-8333-333333333333",
@@ -2953,7 +2991,7 @@ def test_scheduler_container_request_service_waits_for_pending_worker_without_re
             runtime_image="container-worker:local",
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Pending,
             free_cpu_millicores=1000,
             free_memory_mib=1000,
@@ -2965,6 +3003,7 @@ def test_scheduler_container_request_service_waits_for_pending_worker_without_re
         now=now,
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -3007,6 +3046,7 @@ def test_scheduler_container_request_service_reserves_quota_on_submit(
         ),
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -3247,7 +3287,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
             token_hash="agent-hash",
             owner_user_id="22222222-2222-4222-8222-222222222222",
             workspace_id="ws-1",
-            pool=MachinePool("gpu"),
+            placement=Placement.machine("gpu"),
             machine_id=machine_id,
             executor=DEFAULT_PRIVATE_EXECUTOR,
             cpu_millicores=4000,
@@ -3264,7 +3304,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
         SchedulerWorkerRecord(
             runtime_image="container-worker:local",
             worker_id=worker_id,
-            pool=MachinePool("gpu"),
+            placement=Placement.machine("gpu"),
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -3311,7 +3351,7 @@ def test_scheduler_pool_state_service_refreshes_worker_container_and_agent_snaps
         agent_pool_configs=[
             AgentPoolConfig(
                 workspace_id="ws-1",
-                pool=MachinePool("gpu"),
+                placement=Placement.machine("gpu"),
                 capacity_owner_id="11111111-1111-4111-8111-111111111111",
             )
         ],
@@ -3346,7 +3386,7 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
         SchedulerWorkerRecord(
             runtime_image="container-worker:local",
             worker_id="worker-one",
-            pool=MachinePool("shared-name"),
+            placement=Placement.machine("shared-name"),
             capacity_owner_id=owner_one,
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
@@ -3361,7 +3401,7 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
         SchedulerWorkerRecord(
             runtime_image="container-worker:local",
             worker_id="worker-two",
-            pool=MachinePool("shared-name"),
+            placement=Placement.machine("shared-name"),
             capacity_owner_id=owner_two,
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
@@ -3388,12 +3428,12 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
         agent_pool_configs=[
             AgentPoolConfig(
                 workspace_id="ws-1",
-                pool=MachinePool("shared-name"),
+                placement=Placement.machine("shared-name"),
                 capacity_owner_id=owner_one,
             ),
             AgentPoolConfig(
                 workspace_id="ws-2",
-                pool=MachinePool("shared-name"),
+                placement=Placement.machine("shared-name"),
                 capacity_owner_id=owner_two,
             ),
         ],
@@ -3401,10 +3441,10 @@ def test_scheduler_pool_state_service_isolates_same_display_name_by_capacity_own
     )
 
     assert set(states) == {owner_one, owner_two}
-    assert states[owner_one].pool == "shared-name"
+    assert states[owner_one].placement == Placement.machine("shared-name")
     assert states[owner_one].running_containers == 1
     assert states[owner_one].free_cpu == 1
-    assert states[owner_two].pool == "shared-name"
+    assert states[owner_two].placement == Placement.machine("shared-name")
     assert states[owner_two].running_containers == 0
     assert states[owner_two].free_cpu == 3
     assert pool_states.get_state(owner_one) == states[owner_one]
@@ -3458,13 +3498,14 @@ class _FailureHandler:
 
     def mark_scheduling_failed(
         self,
-        request: SchedulerWorkerRequest,
-        reason: str,
+        container_id: str,
         *,
+        workspace_id: str,
+        reason: str,
         now: datetime | None = None,
     ) -> bool:
-        _ = now
-        self.calls.append((request.container_id, reason))
+        _ = workspace_id, now
+        self.calls.append((container_id, reason))
         return True
 
 
@@ -3486,7 +3527,10 @@ def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
             isolated_services.workspace_changes,
         ),
     )
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "orphan-claim",
         kind=StubKind.Function,
         handler="pkg.jobs:handler",
@@ -3574,7 +3618,7 @@ async def test_assignment_deadline_stops_the_durable_worker_despite_lost_hot_ass
             capacity_owner_id=str(uuid4()),
             worker_id=worker_id,
             machine_id="machine-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=now + timedelta(hours=1),
             total_cpu_millicores=1000,
@@ -3595,6 +3639,7 @@ async def test_assignment_deadline_stops_the_durable_worker_despite_lost_hot_ass
     )
     if worker_removed:
         request = SchedulerWorkerRequest(
+            placement=Placement.platform(),
             container_id=container.id,
             workspace_id=workspace_id,
             stub_id="container",
@@ -3683,7 +3728,7 @@ def test_undelivered_assignment_recovers_after_rollback_loses_redis(
             capacity_owner_id=str(uuid4()),
             worker_id="worker-1",
             machine_id="machine-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             status=SchedulerWorkerStatus.Available,
             request_poll_expires_at=now + timedelta(minutes=5),
             total_cpu_millicores=1000,
@@ -3693,6 +3738,7 @@ def test_undelivered_assignment_recovers_after_rollback_loses_redis(
         )
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         container_id=container.id,
         workspace_id=workspace_id,
         stub_id="container",

@@ -6,7 +6,7 @@ from typing import Protocol
 
 from compute.agent_control import agent_machine_worker_id
 from compute.state import ComputeAgentTokenState
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerWorkerRecord,
@@ -68,12 +68,12 @@ class SchedulerPoolStateService:
         now: datetime | None = None,
     ) -> dict[str, WorkerPoolStateSnapshot]:
         configs_by_owner: dict[str, AgentPoolConfig] = {}
-        pool_names_by_owner: dict[str, str] = {}
+        placements_by_owner: dict[str, Placement] = {}
         for config in agent_pool_configs or []:
             self._register_capacity_owner(
-                pool_names_by_owner,
+                placements_by_owner,
                 capacity_owner_id=config.capacity_owner_id,
-                pool=config.pool,
+                placement=config.placement,
             )
             existing = configs_by_owner.setdefault(config.capacity_owner_id, config)
             if existing != config:
@@ -82,15 +82,15 @@ class SchedulerPoolStateService:
                 )
         for worker in self.workers.list_workers():
             self._register_capacity_owner(
-                pool_names_by_owner,
+                placements_by_owner,
                 capacity_owner_id=worker.capacity_owner_id,
-                pool=worker.pool,
+                placement=worker.placement,
             )
         states: dict[str, WorkerPoolStateSnapshot] = {}
-        for capacity_owner_id in sorted(pool_names_by_owner):
+        for capacity_owner_id in sorted(placements_by_owner):
             state = self.refresh_pool(
                 capacity_owner_id,
-                pool=MachinePool(pool_names_by_owner[capacity_owner_id]),
+                placement=placements_by_owner[capacity_owner_id],
                 agent_pool_config=configs_by_owner.get(capacity_owner_id),
                 now=now,
             )
@@ -101,19 +101,17 @@ class SchedulerPoolStateService:
         self,
         capacity_owner_id: str,
         *,
-        pool: MachinePool,
+        placement: Placement,
         agent_pool_config: AgentPoolConfig | None = None,
         now: datetime | None = None,
     ) -> WorkerPoolStateSnapshot:
         self._require_capacity_owner(capacity_owner_id)
         workers = self.workers.list_workers_for_capacity_owner(capacity_owner_id)
-        if any(worker.pool != pool for worker in workers):
-            raise RuntimeError(
-                f"capacity owner {capacity_owner_id!r} contains multiple pool display names"
-            )
+        if any(worker.placement != placement for worker in workers):
+            raise RuntimeError(f"capacity owner {capacity_owner_id!r} spans several placements")
         if agent_pool_config is not None and (
             agent_pool_config.capacity_owner_id != capacity_owner_id
-            or agent_pool_config.pool != pool
+            or agent_pool_config.placement != placement
         ):
             raise RuntimeError(
                 f"agent pool config does not match capacity owner {capacity_owner_id!r}"
@@ -126,7 +124,7 @@ class SchedulerPoolStateService:
                 SchedulerWorkerSnapshot(
                     worker_id=worker.worker_id,
                     status=worker.status,
-                    pool=worker.pool,
+                    placement=worker.placement,
                     active_containers=[
                         container.container_id
                         for container in containers_by_worker[worker.worker_id]
@@ -152,7 +150,7 @@ class SchedulerPoolStateService:
         ).model_copy(
             update={
                 "capacity_owner_id": capacity_owner_id,
-                "pool": pool,
+                "placement": placement,
             }
         )
         return self.pool_states.set_state(capacity_owner_id, state)
@@ -160,17 +158,15 @@ class SchedulerPoolStateService:
     @classmethod
     def _register_capacity_owner(
         cls,
-        pool_names_by_owner: dict[str, str],
+        placements_by_owner: dict[str, Placement],
         *,
         capacity_owner_id: str,
-        pool: MachinePool,
+        placement: Placement,
     ) -> None:
         cls._require_capacity_owner(capacity_owner_id)
-        existing_pool_name = pool_names_by_owner.setdefault(capacity_owner_id, pool)
-        if existing_pool_name != pool:
-            raise RuntimeError(
-                f"capacity owner {capacity_owner_id!r} contains multiple pool display names"
-            )
+        existing = placements_by_owner.setdefault(capacity_owner_id, placement)
+        if existing != placement:
+            raise RuntimeError(f"capacity owner {capacity_owner_id!r} spans several placements")
 
     @staticmethod
     def _require_capacity_owner(capacity_owner_id: str) -> None:

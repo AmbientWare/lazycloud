@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
@@ -17,7 +18,9 @@ def test_control_workspace_reads_are_empty_or_not_found_without_creating_rows(
     tmp_path: Path,
 ) -> None:
     context = ServiceContext.create(database, root=tmp_path)
-    service = ControlPlaneService(context)
+    service = ControlPlaneService(
+        context, placement_resolver=WorkspaceComputePolicyService(context)
+    )
     assert service.list_workspaces() == []
     for missing in ("default", "missing-workspace"):
         with pytest.raises(NotFoundError, match=f"workspace not found: {missing}"):

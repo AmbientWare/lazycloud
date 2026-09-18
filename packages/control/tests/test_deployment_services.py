@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.apps import AppService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployments import DeploymentAppResolution, DeploymentRegistration
@@ -160,7 +161,10 @@ def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
 
     stubs_by_deployment = {
         stub.deployment_id: stub
-        for stub in ControlPlaneService(isolated_services.context).list_stubs()
+        for stub in ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).list_stubs()
         if stub.deployment_id
     }
     assert stubs_by_deployment[first_function.id].kind.value == DeploymentKind.Function.value
@@ -169,7 +173,10 @@ def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
     assert stubs_by_deployment[first_function.id].id == first_function.stub_id
     assert stubs_by_deployment[endpoint.id].id == endpoint.stub_id
     assert stubs_by_deployment[second_function.id].id == second_function.stub_id
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     for deployment in (first_function, endpoint, second_function):
         resolved = control.get_deployment_stub(deployment.id, workspace="default")
         assert resolved is not None and resolved.id == deployment.stub_id
@@ -195,6 +202,7 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
 ) -> None:
     control_plane = ControlPlaneService(
         isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         workspace_changes=isolated_services.workspace_changes,
     )
     workspace = owned_workspace(control_plane, "default")
@@ -276,7 +284,13 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
 def test_registration_and_placement_cleanup_failures_are_both_reported(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ),
+        "default",
+    )
     placements = _FailingPlacementCleanup()
     deployments = replace(
         isolated_services.deployments,
@@ -560,7 +574,9 @@ def test_management_stop_and_delete_are_workspace_scoped_and_stop_containers(
     )
     stub = next(
         stub
-        for stub in ControlPlaneService(services.context).list_stubs()
+        for stub in ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ).list_stubs()
         if stub.deployment_id == deployment.id
     )
     container = services.containers.run(
@@ -590,6 +606,7 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
 
     control_plane = ControlPlaneService(
         isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         workspace_changes=isolated_services.workspace_changes,
     )
     workspace = owned_workspace(control_plane, "default")

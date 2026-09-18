@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from coordination.event_bus import (
     EventBusEvent,
@@ -38,6 +39,7 @@ from shared.compute_fleet import Machine, Worker
 from shared.container_requests import StopContainerReason, WorkerStartupKind
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
+from shared.placement import Placement
 from shared.tasks import TaskStatus
 from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit
 from shared.workload_keys import (
@@ -281,6 +283,7 @@ def test_checkpoint_gpu_limit_rejects_before_scheduler_submission(
         isolated_services.containers.submit_scheduler_request(
             container,
             ContainerSchedulingOptions(
+                placement=Placement.platform(),
                 workspace_name="workspace",
                 startup_kind=WorkerStartupKind.Pod,
                 checkpoint_enabled=True,
@@ -493,7 +496,10 @@ def test_stopping_a_container_gives_up_the_redis_state_it_held(
         ),
     )
     app = isolated_services.apps.create("released_on_stop_app")
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "released_on_stop_pod",
         kind=StubKind.Pod,
         handler="pkg.workloads:handler",

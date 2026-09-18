@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import TokenRepository, WorkspaceMemberRepository
@@ -28,7 +29,12 @@ from tests.workspaces import administrator_credential, owned_workspace
 def test_auth_service_records_token_kind_and_checks_scopes(
     service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(service_context), "workspace-a")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "workspace-a",
+    )
     cache = AuthTokenCache()
     auth = AuthService(service_context, token_cache=cache)
     raw_token, record = auth.create_token(
@@ -102,7 +108,9 @@ def test_auth_service_cache_is_explicitly_shared_reset_and_closed(
 def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     workspace_a = owned_workspace(control, "workspace-a")
     workspace_b = owned_workspace(control, "workspace-b")
     auth = AuthService(service_context)
@@ -143,7 +151,12 @@ def test_policy_decisions_cover_workspace_admin_and_restricted_tokens(
 def test_policy_decisions_cover_worker_and_external_input(
     service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(service_context), "workspace-a")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "workspace-a",
+    )
     auth = AuthService(service_context)
     _, public_worker = auth.create_token(
         "worker",
@@ -194,7 +207,9 @@ def test_a_users_credential_reaches_only_the_workspaces_they_belong_to(
     credential must not act in another customer's workspace, and a member must not
     perform an action reserved for the owner.
     """
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     users = UserService(service_context)
     me = users.create(display_name="me-user")
     them = users.create(display_name="them-user")
@@ -257,7 +272,9 @@ def test_a_workspace_credential_cannot_be_widened_by_a_membership_row(
     service_context: ServiceContext,
 ) -> None:
     """Automation keeps its single-workspace blast radius whatever else is presented."""
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     mine = owned_workspace(control, "mine")
     theirs = owned_workspace(control, "theirs")
     me = UserService(service_context).create(display_name="me-user")

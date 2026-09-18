@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
+import { EditMachineWorkspacesDialog } from "./MachineWorkspaces";
 
 export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const connection = useQuery(awsConnectionQueryOptions());
@@ -40,6 +41,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
+  const [editingMachine, setEditingMachine] = useState<UnitMachine | null>(null);
   const loadError = connection.error ?? instances.error;
 
   if (connection.isPending || instances.isPending || billing.isPending) {
@@ -76,6 +78,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
         loading={machines.isPending}
         error={machines.error}
         onJoin={() => setJoinDialogOpen(true)}
+        onEditWorkspaces={setEditingMachine}
       />
       <AwsConnectionDialog
         connection={connection.data ?? null}
@@ -83,6 +86,12 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
         onOpenChange={setAwsDialogOpen}
       />
       <JoinMachineDialog open={joinDialogOpen} onOpenChange={setJoinDialogOpen} />
+      <EditMachineWorkspacesDialog
+        machine={editingMachine}
+        onOpenChange={(open) => {
+          if (!open) setEditingMachine(null);
+        }}
+      />
     </div>
   );
 }
@@ -346,11 +355,13 @@ function SelfHostedPanel({
   loading,
   error,
   onJoin,
+  onEditWorkspaces,
 }: {
   machines: UnitMachine[];
   loading: boolean;
   error: Error | null;
   onJoin: () => void;
+  onEditWorkspaces: (machine: UnitMachine) => void;
 }) {
   return (
     <Panel
@@ -376,12 +387,20 @@ function SelfHostedPanel({
           {machines.map((machine) => (
             <li
               key={machine.id}
-              className="interactive-row grid gap-2 px-4 py-3 sm:grid-cols-[minmax(10rem,1fr)_auto_auto] sm:items-center"
+              className="interactive-row grid gap-2 px-4 py-3 sm:grid-cols-[minmax(10rem,1fr)_auto_auto_auto] sm:items-center"
             >
               <div className="min-w-0">
-                <code className="mono block truncate text-xs">{machine.id}</code>
+                <code className="mono block truncate text-xs">{machine.name || machine.id}</code>
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
                   {machine.readiness_message}
+                </p>
+                <p
+                  className="mono mt-0.5 truncate text-[11px] text-muted-foreground"
+                  title={machine.workspaces.join(", ")}
+                >
+                  {machine.workspaces.length === 0
+                    ? "Serves no workspaces"
+                    : `Serves ${machine.workspaces.join(", ")}`}
                 </p>
               </div>
               <StatusChip
@@ -391,6 +410,14 @@ function SelfHostedPanel({
               <p className="mono text-[11px] text-muted-foreground sm:text-right">
                 {formatCpu(machine.cpu)} · {formatMemory(machine.memory)}
               </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onEditWorkspaces(machine)}
+              >
+                Workspaces
+              </Button>
             </li>
           ))}
         </ul>

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
@@ -14,6 +14,7 @@ from uuid import uuid4
 from billing.admission import DatabaseBillingAdmission
 from database.records.apps import AutoscalingStubRecord, StubKind, StubRecord
 from database.repositories.apps import DeploymentRepository, StubRepository
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.identity import (
     ConcurrencyLimitRepository,
@@ -30,6 +31,7 @@ from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import DEFAULT_RESOURCE_TYPE
 from shared.autoscaler_state import autoscaler_target_kind
+from shared.aws_connections import AwsAccountConnectionPhase
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
@@ -51,6 +53,7 @@ from shared.identity import (
     WorkspaceStorageConfig,
 )
 from shared.objects import ObjectRecord
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.urls import (
     StubUrlTarget,
@@ -60,6 +63,7 @@ from shared.urls import (
     build_stub_url,
 )
 from shared.workload_config import StubConfig
+from shared.workspace_storage import ConnectedWorkspaceStorageIssuer
 from sqlalchemy.orm import Session
 
 from control.apps import AppRegistry
@@ -76,6 +80,7 @@ from control.models import (
     WorkspaceConfigExport,
     WorkspaceCreateResult,
 )
+from control.placement import PlacementResolver
 from control.tcp_ingress import tcp_pod_url
 
 
@@ -84,10 +89,6 @@ class WorkspaceStorageError(RuntimeError):
 
 
 class WorkspaceStorageAlreadyExistsError(ValueError):
-    pass
-
-
-class WorkspaceStorageAuthorizationError(PermissionError):
     pass
 
 
@@ -127,10 +128,6 @@ class WorkspaceBucketClient(Protocol):
     def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None: ...
 
 
-class OwnedWorkspaceBucketClient(WorkspaceBucketClient, Protocol):
-    def close(self) -> None: ...
-
-
 def _workspace_bucket_settings(client: WorkspaceBucketClient) -> WorkspaceBucketSettings:
     if not isinstance(client, WorkspaceBucketSettingsProvider):
         raise WorkspaceStorageError("workspace storage client settings are unavailable")
@@ -146,7 +143,7 @@ def _upsert_workspace_row(
     session: Session,
     name: str,
     *,
-    storage: WorkspaceStorageConfig | None = None,
+    connection_id: str | None = None,
     signing_key_prefix: str | None = None,
     primary_token_id: str | None = None,
     labels: dict[str, str] | None = None,
@@ -164,7 +161,7 @@ def _upsert_workspace_row(
                 signing_key_prefix=signing_key_prefix,
                 signing_key=new_signing_key(signing_key_prefix),
                 primary_token_id=primary_token_id,
-                storage=storage or WorkspaceStorageConfig(),
+                connection_id=connection_id,
                 labels=labels or {},
                 metadata=metadata_payload,
                 created_at=now,
@@ -173,13 +170,8 @@ def _upsert_workspace_row(
         )
     if existing.status is not WorkspaceStatus.Active:
         raise ConflictError(f"workspace is not active: {name}")
-    if storage is not None:
-        # The response model never carries the connection settings, so a caller naming
-        # a bucket cannot resend the credentials that reach it. Keeping the existing
-        # bag is what stops a settings update from stranding the objects already there.
-        existing.storage = storage.model_copy(
-            update={"config": storage.config or existing.storage.config}
-        )
+    if connection_id is not None and existing.connection_id != connection_id:
+        raise ConflictError(f"workspace already lives in another location: {name}")
     existing.signing_key_prefix = signing_key_prefix or existing.signing_key_prefix
     if not existing.signing_key:
         existing.signing_key = new_signing_key(existing.signing_key_prefix)
@@ -197,7 +189,9 @@ def _stub_config_payload(config: StubConfig) -> dict[str, JsonValue]:
 
 
 def _stub_preparation_fingerprint(stub: StubRecord) -> str:
-    payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at"})
+    # Placement is derived from the workspace and `config.machine`, both in the
+    # payload, so leaving it out lets a caller resolve it only on creation.
+    payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at", "placement"})
     config = _stub_config_payload(stub.config)
     if not config.get("object_id"):
         config.pop("object_id", None)
@@ -329,10 +323,9 @@ class ControlPlaneService:
     context: ControlContext
     workspace_storage_client: WorkspaceBucketClient | None = None
     public_http_origin: str = ""
-    workspace_storage_client_factory: (
-        Callable[[WorkspaceStorageConfig], OwnedWorkspaceBucketClient] | None
-    ) = None
+    connected_workspace_storage: ConnectedWorkspaceStorageIssuer | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
+    placement_resolver: PlacementResolver | None = None
     workspace_admission: WorkspaceCreationAdmission = field(
         default_factory=DatabaseBillingAdmission
     )
@@ -348,7 +341,7 @@ class ControlPlaneService:
         name: str,
         *,
         owner_user_id: str,
-        storage: WorkspaceStorageConfig | None = None,
+        connection_id: str | None = None,
         signing_key_prefix: str | None = None,
         primary_token_id: str | None = None,
         labels: dict[str, str] | None = None,
@@ -367,7 +360,7 @@ class ControlPlaneService:
             record = _upsert_workspace_row(
                 session,
                 name,
-                storage=storage,
+                connection_id=connection_id,
                 signing_key_prefix=signing_key_prefix,
                 primary_token_id=primary_token_id,
                 labels=labels,
@@ -384,8 +377,13 @@ class ControlPlaneService:
         name: str | None = None,
         *,
         owner_user_id: str,
-        storage: WorkspaceStorageConfig | None = None,
+        connection_id: str | None = None,
     ) -> WorkspaceCreateResult:
+        """Create a workspace where it will live for good.
+
+        `connection_id` names a connected cloud account owned by the creator. Its
+        compute and its bucket both go there, and nothing later can move them.
+        """
         workspace_name = name or f"workspace-{uuid4()}"
         # Only a workspace that does not exist yet is a new one. `set_workspace`
         # adopts an existing name and adds the caller as an owner, and refusing
@@ -396,11 +394,17 @@ class ControlPlaneService:
                     session,
                     owner_user_id=owner_user_id,
                 )
+            if connection_id is not None:
+                _require_ready_connection(session, connection_id, owner_user_id=owner_user_id)
         workspace = self.set_workspace(
             workspace_name,
             owner_user_id=owner_user_id,
-            storage=storage,
+            connection_id=connection_id,
         )
+        # Storage first. Provisioning reaches another system and can fail; a
+        # workspace left without a bucket is retried by adopting the name, while a
+        # primary token minted before that failure would never be handed back.
+        workspace = self.ensure_workspace_storage(workspace.id)
         # Adopting an existing workspace keeps the credential it already has. Minting
         # unconditionally repointed `primary_token_id` at a new token on every call, so
         # asking for a workspace that was already there re-keyed it and left the
@@ -418,8 +422,6 @@ class ControlPlaneService:
                     workspace.name,
                     primary_token_id=token_record.id,
                 )
-        if storage is None:
-            workspace = self.ensure_workspace_storage(workspace.id)
         return WorkspaceCreateResult(
             workspace_id=workspace.id,
             token=raw_token,
@@ -492,17 +494,21 @@ class ControlPlaneService:
             return record
         return self.create_workspace_storage(record.id)
 
-    def create_workspace_storage(
-        self,
-        workspace: str,
-        *,
-        token_id_for_cache_invalidation: str | None = None,
-    ) -> WorkspaceRecord:
+    def create_workspace_storage(self, workspace: str) -> WorkspaceRecord:
+        """Create the workspace's bucket in the location the workspace lives in."""
         workspace_record = self.get_workspace(workspace)
-        self._validate_storage_attach_allowed(workspace_record)
+        if _workspace_storage_available(workspace_record.storage):
+            raise WorkspaceStorageAlreadyExistsError("workspace storage already exists")
+        if workspace_record.connection_id is not None:
+            storage = self._connected_workspace_storage(workspace_record)
+        else:
+            storage = self._platform_workspace_storage(workspace_record)
+        return self.set_workspace_storage(workspace_record.id, storage)
+
+    def _platform_workspace_storage(self, workspace: WorkspaceRecord) -> WorkspaceStorageConfig:
         client = self._default_workspace_storage_client()
-        prefix = _workspace_bucket_settings(client).workspace_bucket_prefix
-        bucket = f"{prefix}-{workspace_record.id}".replace("_", "-")
+        settings = _workspace_bucket_settings(client)
+        bucket = f"{settings.workspace_bucket_prefix}-{workspace.id}".replace("_", "-")
         try:
             client.create_bucket(bucket)
             client.validate_bucket_access(bucket)
@@ -510,105 +516,35 @@ class ControlPlaneService:
         except Exception as exc:
             msg = f"unable to create workspace storage bucket {bucket!r}: {exc}"
             raise WorkspaceStorageError(msg) from exc
-        storage = self._default_workspace_storage(
-            client=client,
-            bucket=bucket,
-        )
-        updated = self.set_workspace_storage(workspace_record.id, storage)
-        self._invalidate_token_cache_if_present(token_id_for_cache_invalidation)
-        return updated
-
-    def attach_external_workspace_storage(
-        self,
-        workspace: str,
-        storage: WorkspaceStorageConfig,
-        *,
-        token_id_for_cache_invalidation: str | None = None,
-    ) -> WorkspaceRecord:
-        workspace_record = self.get_workspace(workspace)
-        self._validate_storage_attach_allowed(workspace_record)
-        if not storage.bucket:
-            msg = "workspace storage bucket is required"
-            raise WorkspaceStorageError(msg)
-        if not (storage.access_key and storage.secret_key and storage.endpoint_url):
-            raise WorkspaceStorageError(
-                "external workspace storage requires its own endpoint, access key, and secret key"
-            )
-        client = self._workspace_storage_client_for(storage)
-        validation_error: Exception | None = None
-        try:
-            client.validate_bucket_access(storage.bucket)
-        except Exception as exc:
-            validation_error = exc
-        close_error: Exception | None = None
-        try:
-            client.close()
-        except Exception as exc:
-            close_error = exc
-        if validation_error is not None:
-            msg = f"unable to access workspace storage bucket {storage.bucket!r}"
-            if close_error is not None:
-                raise WorkspaceStorageError(
-                    f"{msg}; client cleanup also failed"
-                ) from ExceptionGroup(
-                    "workspace storage validation and client cleanup failed",
-                    [validation_error, close_error],
-                )
-            raise WorkspaceStorageError(f"{msg}: {validation_error}") from validation_error
-        if close_error is not None:
-            raise WorkspaceStorageError(
-                f"unable to close workspace storage client for bucket {storage.bucket!r}"
-            ) from close_error
-        updated = self.set_workspace_storage(workspace_record.id, storage)
-        self._invalidate_token_cache_if_present(token_id_for_cache_invalidation)
-        return updated
-
-    def _validate_storage_attach_allowed(self, workspace: WorkspaceRecord) -> None:
-        # Who may act on this workspace is settled before the call: the route's
-        # workspace dependency resolved and authorized it. A second comparison here
-        # could only ask a narrower question, and asked it of a credential that no
-        # longer names a workspace at all.
-        if _workspace_storage_available(workspace.storage):
-            msg = "workspace storage already exists"
-            raise WorkspaceStorageAlreadyExistsError(msg)
-
-    def _default_workspace_storage(
-        self,
-        *,
-        client: WorkspaceBucketClient,
-        bucket: str,
-    ) -> WorkspaceStorageConfig:
-        """Persist coordinates only; the issuer supplies temporary workspace credentials."""
-        settings = _workspace_bucket_settings(client)
-        default_config: dict[str, JsonValue] = {
-            "endpoint_url": settings.endpoint_url or "",
-            "region": settings.region_name,
-            "force_path_style": settings.force_path_style,
-        }
+        # Coordinates only; the issuer supplies temporary workspace credentials.
         return WorkspaceStorageConfig(
             backend="s3",
             bucket=bucket,
-            config=default_config,
+            endpoint_url=settings.endpoint_url or "",
+            region=settings.region_name,
         )
+
+    def _connected_workspace_storage(self, workspace: WorkspaceRecord) -> WorkspaceStorageConfig:
+        if self.connected_workspace_storage is None:
+            raise WorkspaceStorageError("connected cloud storage is not configured")
+        if workspace.connection_id is None:
+            raise WorkspaceStorageError("workspace does not live in a connected account")
+        with self.context.database.session() as session:
+            connection = AwsAccountConnectionRepository(session).get(workspace.connection_id)
+        if connection is None:
+            raise WorkspaceStorageError("the workspace's connected account no longer exists")
+        try:
+            return self.connected_workspace_storage.provision(workspace, connection)
+        except Exception as exc:
+            raise WorkspaceStorageError(
+                f"unable to create workspace storage in AWS account {connection.account_id}: {exc}"
+            ) from exc
 
     def _default_workspace_storage_client(self) -> WorkspaceBucketClient:
         if self.workspace_storage_client is None:
             msg = "workspace storage client is required to create workspace storage"
             raise WorkspaceStorageError(msg)
         return self.workspace_storage_client
-
-    def _workspace_storage_client_for(
-        self,
-        storage: WorkspaceStorageConfig,
-    ) -> OwnedWorkspaceBucketClient:
-        if self.workspace_storage_client_factory is not None:
-            return self.workspace_storage_client_factory(storage)
-        msg = "workspace storage client factory is required to validate external workspace storage"
-        raise WorkspaceStorageError(msg)
-
-    def _invalidate_token_cache_if_present(self, token_id: str | None) -> None:
-        _ = token_id
-        return
 
     def export_workspace_config(
         self,
@@ -667,6 +603,9 @@ class ControlPlaneService:
         reuse_existing: bool = True,
     ) -> StubRecord:
         workspace_record = self.get_workspace(workspace)
+        resolver = self.placement_resolver
+        if resolver is None:
+            raise RuntimeError("control plane placement resolver was not injected")
         metadata_payload = dict(metadata) if metadata is not None else {}
         now = utc_now()
         requested = StubRecord(
@@ -683,6 +622,9 @@ class ControlPlaneService:
                 if isinstance(config, StubConfig)
                 else StubConfig.model_validate(dict(config) if config is not None else {})
             ),
+            # Resolved only when the stub is created below; the fingerprint leaves
+            # placement out, so reusing an existing stub never pays for it.
+            placement=Placement.platform(),
             metadata=metadata_payload,
             created_at=now,
             updated_at=now,
@@ -710,7 +652,10 @@ class ControlPlaneService:
                 metadata=requested.metadata,
             )
             if existing is None:
-                record = repository.upsert(requested)
+                placement = resolver.resolve_placement(
+                    session, workspace_record, requested.config.machine
+                )
+                record = repository.upsert(requested.model_copy(update={"placement": placement}))
                 if reuse_existing:
                     repository.set_preparation_fingerprint(
                         record.id, workspace_id=workspace_record.id, fingerprint=fingerprint
@@ -1577,6 +1522,17 @@ def _workspace_storage_available(storage: WorkspaceStorageConfig) -> bool:
     return bool(storage.bucket and storage.backend != "local")
 
 
+def _require_ready_connection(session: Session, connection_id: str, *, owner_user_id: str) -> None:
+    connection = AwsAccountConnectionRepository(session).get(connection_id)
+    if connection is None or connection.user_id != owner_user_id:
+        raise NotFoundError(f"connected cloud account not found: {connection_id}")
+    if connection.phase is not AwsAccountConnectionPhase.Ready:
+        raise ConflictError(
+            f"connected AWS account {connection.account_id} is {connection.phase.value}; "
+            "a workspace can only be created there once it is ready"
+        )
+
+
 def _limit_by_id_or_name(
     repository: ConcurrencyLimitRepository,
     limit_id_or_name: str,
@@ -1643,6 +1599,5 @@ __all__ = [
     "ControlPlaneService",
     "WorkspaceCreationAdmission",
     "WorkspaceStorageAlreadyExistsError",
-    "WorkspaceStorageAuthorizationError",
     "WorkspaceStorageError",
 ]

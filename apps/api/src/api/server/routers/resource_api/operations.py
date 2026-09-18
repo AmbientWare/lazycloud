@@ -471,7 +471,6 @@ def register_agent(
     return AgentResponse.model_validate(
         services.agents.register(
             request.name,
-            pool=request.pool,
             version=request.version,
             capacity=dict(request.capacity),
             labels=request.labels,

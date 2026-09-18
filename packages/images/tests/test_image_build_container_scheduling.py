@@ -18,6 +18,7 @@ from images.scheduling import (
 )
 from shared.image_building.authoring import ImageSpec
 from shared.image_building.credentials import ImageCredentialEnvVar
+from shared.placement import Placement
 
 
 def test_unmodified_private_image_uses_ephemeral_credentials_during_build(
@@ -46,8 +47,12 @@ def test_unmodified_private_image_uses_ephemeral_credentials_during_build(
         }
     )
 
-    plan = plan_image_build_container_request(request, workspace_id="workspace-1")
-    concurrent = plan_image_build_container_request(request, workspace_id="workspace-1")
+    plan = plan_image_build_container_request(
+        request, workspace_id="workspace-1", placement=Placement.platform()
+    )
+    concurrent = plan_image_build_container_request(
+        request, workspace_id="workspace-1", placement=Placement.platform()
+    )
     metadata = plan.credential_metadata
     payload_json = json.dumps(plan.scheduler_request.payload, sort_keys=True)
 

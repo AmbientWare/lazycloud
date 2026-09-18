@@ -4,18 +4,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from foundation.ids import try_uuid
-from shared.compute_policy import MachinePool
 from shared.errors import NotFoundError
 
 
 class MachineDeletionGateway(Protocol):
-    def delete_machine(
-        self,
-        machine_id: str,
-        *,
-        workspace_id: str,
-        pool: MachinePool = MachinePool(""),
-    ) -> None: ...
+    def delete_machine(self, machine_id: str, *, workspace_id: str) -> None: ...
 
 
 class ProviderMachineRelease(Protocol):
@@ -32,13 +25,7 @@ class MachineLifecycleService:
     gateway: MachineDeletionGateway
     provider_compute: ProviderMachineRelease | None = None
 
-    def delete_machine(
-        self,
-        machine_id: str,
-        *,
-        workspace_id: str,
-        pool: MachinePool = MachinePool(""),
-    ) -> None:
+    def delete_machine(self, machine_id: str, *, workspace_id: str) -> None:
         if try_uuid(machine_id) is None:
             # Machine ids are UUIDs; malformed ids are indistinguishable from
             # missing machines instead of leaking a database type error.
@@ -49,11 +36,7 @@ class MachineLifecycleService:
                 machine_id,
                 workspace=workspace_id,
             )
-        self.gateway.delete_machine(
-            machine_id,
-            workspace_id=workspace_id,
-            pool=pool,
-        )
+        self.gateway.delete_machine(machine_id, workspace_id=workspace_id)
 
 
 __all__ = [

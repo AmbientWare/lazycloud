@@ -12,7 +12,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
+from shared.placement import Placement
 from worker.configuration import (
     WORKER_CONFIG_PATH_ENV,
     WorkerConfiguration,
@@ -78,9 +78,9 @@ class WorkerSettings(BaseSettings):
         default=30.0,
         validation_alias="WORKER_REPOSITORY_TIMEOUT_SECONDS",
     )
-    pool: MachinePool = Field(
-        default=MachinePool(LAZYCLOUD_MACHINE_POOL),
-        validation_alias="WORKER_POOL",
+    placement: Placement = Field(
+        default=Placement.platform(),
+        validation_alias="WORKER_PLACEMENT",
     )
     capacity_owner_id: str = Field(
         default="",

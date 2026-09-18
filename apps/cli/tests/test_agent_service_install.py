@@ -12,7 +12,6 @@ from cli.agent_install import (
     AgentInstallState,
     install_agent_service,
 )
-from shared.compute_policy import MachinePool
 from tests.url_constants import EXAMPLE_COM_URL
 
 
@@ -41,7 +40,6 @@ def test_agent_install_keeps_credentials_in_a_private_file(
     result = install_agent_service(
         AgentInstallRequest(
             name="worker-a",
-            pool=MachinePool("gpu"),
             endpoint=EXAMPLE_COM_URL,
             join_token="secret-token-value",
             version="v1",

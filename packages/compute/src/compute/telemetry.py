@@ -6,8 +6,8 @@ from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field, JsonValue
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.timestamps import utc_now
 
 from compute.state import ComputeAgentTokenState
@@ -104,7 +104,7 @@ class AgentMachineMetrics(ContractModel):
 
 class AgentTelemetryState(ContractModel):
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     executor: str = ""
     os: str = ""
@@ -127,7 +127,7 @@ class AgentTelemetryState(ContractModel):
 def agent_telemetry_state(state: ComputeAgentTokenState) -> AgentTelemetryState:
     return AgentTelemetryState(
         workspace_id=state.workspace_id,
-        pool=state.pool,
+        placement=state.placement,
         machine_id=state.machine_id,
         executor=state.executor,
         os=state.os,
@@ -304,7 +304,7 @@ def agent_node_usage_metadata(
     effective = metrics or state.metrics
     return {
         "workspace_id": state.workspace_id,
-        "pool": state.pool,
+        "placement": state.placement.key,
         "machine_id": state.machine_id,
         "node_type": node_type.value,
         "capacity_source": pool_state.source.value,

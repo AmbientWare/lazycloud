@@ -125,10 +125,9 @@ def _internal_compute_unit_state(
     return ComputeUnitState(
         workspace_id=pool.workspace_id,
         name=pool.name,
-        pool=pool.pool,
+        placement=pool.placement,
         capacity_owner_id=pool.capacity_owner_id,
         platform_fleet=pool.platform_fleet,
-        default_eligible=pool.default_eligible,
         provider=pool.provider_ref,
         status=_internal_pool_status(pool.phase),
         min_machines=pool.min_machines,

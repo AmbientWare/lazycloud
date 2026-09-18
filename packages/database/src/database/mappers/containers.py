@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from shared.containers import ContainerRecord
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRequest
 from shared.timestamps import to_utc, to_utc_or_none
 
@@ -78,7 +79,7 @@ def write_container(row: ContainerTable, record: ContainerRecord) -> None:
 def scheduling_request_from_row(
     row: ContainerTable, *, include_payload: bool = True
 ) -> SchedulerWorkerRequest:
-    if row.scheduling_requested_at is None:
+    if row.scheduling_requested_at is None or row.scheduling_placement is None:
         raise ValueError("container has no scheduling request")
     return SchedulerWorkerRequest.model_validate(
         {
@@ -91,7 +92,7 @@ def scheduling_request_from_row(
             "memory_mib": row.scheduling_memory_mib,
             "gpu": row.scheduling_gpu,
             "gpu_count": row.scheduling_gpu_count,
-            "pool_selector": row.scheduling_pool_selector,
+            "placement": Placement.parse(row.scheduling_placement),
             "architecture": row.scheduling_architecture,
             "provider_runtime": row.scheduling_provider_runtime,
             "runtime_class": row.scheduling_runtime_class,
@@ -118,7 +119,7 @@ def write_scheduling_request(row: ContainerTable, request: SchedulerWorkerReques
     row.scheduling_memory_mib = request.memory_mib
     row.scheduling_gpu = list(request.gpu)
     row.scheduling_gpu_count = request.gpu_count
-    row.scheduling_pool_selector = request.pool_selector
+    row.scheduling_placement = request.placement.key
     row.scheduling_architecture = request.architecture
     row.scheduling_provider_runtime = request.provider_runtime
     row.scheduling_runtime_class = request.runtime_class

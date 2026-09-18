@@ -54,6 +54,18 @@ Removing a mount or deleting a deployment also leaves stored files intact.
 
 Volume storage is billed per GiB-month. See [Plans and limits](/platform/plans).
 
+## Where volumes live
+
+A volume is stored in its workspace's bucket, and that bucket is wherever the
+workspace was created: LazyCloud storage, or your connected AWS account when
+the workspace was created with `--cloud aws`. That location never changes. To
+move data to a workspace in another location, create the new workspace and
+copy the files with `lazycloud cp`.
+
+Volumes in a workspace that lives in your AWS account are billed by AWS, not
+by LazyCloud. See [Compute](/platform/compute) for how workspaces choose a
+location.
+
 ## Upload inputs before the first run
 
 If a workload needs files before it starts, create or reuse its declared

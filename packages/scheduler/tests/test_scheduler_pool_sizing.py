@@ -10,8 +10,8 @@ from scheduler.pool_sizing import (
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource, CapacityPoolSizingSnapshot
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
 )
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
 OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -27,14 +27,13 @@ def _pool(**updates: object) -> ComputeUnitRecord:
         "capacity_owner_kind": CapacityOwnerKind.PooledProvider,
         "capacity_owner_source": CapacityOwnerSource.Provider,
         "name": "cpu",
-        "pool": "cpu",
+        "placement": Placement.machine("cpu"),
         "provider": "managed",
         "initial_machines": 2,
         "desired_machines": 1,
         "min_machines": 1,
         "max_machines": 4,
         "scaling_enabled": True,
-        "default_eligible": True,
         "min_free_cpu_millicores": 2_000,
         "min_free_memory_mib": 2_048,
         "worker_cpu_millicores": 4_000,
@@ -61,7 +60,7 @@ def _worker(
     return SchedulerWorkerRecord(
         worker_id=worker_id,
         capacity_owner_id=OWNER_ID,
-        pool=MachinePool("cpu"),
+        placement=Placement.machine("cpu"),
         status=status,
         request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
         runtime_classes=["runsc"],

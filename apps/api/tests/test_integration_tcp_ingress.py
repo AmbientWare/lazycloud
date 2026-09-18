@@ -11,6 +11,7 @@ from api.server.tcp_ingress import (
     TcpIngressRouteNotFound,
 )
 from api.tcp_certificate import ensure_local_tcp_certificate
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
@@ -71,7 +72,10 @@ async def test_tcp_route_resolver_rejects_private_non_tcp_and_unexposed_pods(
     async_services: ApiServices,
 ) -> None:
     async_io = async_services.require_async_io()
-    control = ControlPlaneService(async_services.context)
+    control = ControlPlaneService(
+        async_services.context,
+        placement_resolver=WorkspaceComputePolicyService(async_services.context),
+    )
     resolver = RedisTcpIngressRouteResolver(
         services=async_services,
         redis=async_io.redis,

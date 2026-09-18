@@ -160,7 +160,7 @@ for the flags that command accepts. An omitted option keeps the definition's val
 | `--port <spec>` | Port to expose, as `8080` or `name=8080`. Repeatable. `serve` uses `--container-port`. |
 | `--keep-warm <seconds>` | Idle seconds a container stays up. |
 | `--tcp`, `--no-tcp` | Raw TCP ingress instead of HTTP. |
-| `--pool <name>` | Compute pool to run in. |
+| `--machine <name>` | Joined machine this workload must run on, by name. Unset runs in the workspace. |
 | `--region <name>`, `--availability-zone <id>` | Placement overrides where supported. Availability-zone selection is available on `deploy`, `run`, and `shell`. |
 | `--preemptible`, `--no-preemptible` | Allow reclaimable capacity or require non-preemptible capacity (`deploy` and `run`). Workloads are preemptible by default. |
 | `--entrypoint <cmd>` | Container entrypoint override. |

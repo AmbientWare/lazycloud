@@ -103,7 +103,7 @@ class OciContainerServiceInstanceRecorder:
             stub_type=context.request.stub_type,
             worker_id=identity.worker_id,
             machine_id=identity.machine_id,
-            pool=identity.pool,
+            placement=identity.placement,
             image_id=context.request.image_id,
             container_ip=(
                 network_result.identity.container_ip

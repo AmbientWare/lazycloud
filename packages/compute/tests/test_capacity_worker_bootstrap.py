@@ -10,7 +10,7 @@ from compute.agent_control import (
 )
 from compute.state import ComputeAgentWorkerSlotState
 from pydantic import ValidationError
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord
 from shared.usage import UsageBillingOwner
 
@@ -24,7 +24,7 @@ def test_registered_worker_boundaries_reject_invalid_capacity_owner_id(
     with pytest.raises(ValidationError, match="capacity_owner_id"):
         SchedulerWorkerRecord(
             worker_id="worker-1",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             capacity_owner_id=capacity_owner_id,
         )
 
@@ -36,7 +36,7 @@ def test_agent_worker_token_reuse_requires_reusable_worker_binding() -> None:
     slot = ComputeAgentWorkerSlotState(
         billing_owner=UsageBillingOwner.SelfHosted,
         workspace_id=str(uuid4()),
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         machine_id=str(uuid4()),
         worker_id=worker_id,
         capacity_owner_id=str(uuid4()),

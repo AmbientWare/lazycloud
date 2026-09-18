@@ -10,7 +10,7 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
-from compute.policy import AwsDefaultCapacityBaseline
+from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -41,10 +41,10 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitProviderState,
     ComputeUnitRecord,
-    MachinePool,
 )
 from shared.http.compute import UnitScaleResponse
 from shared.network_egress import NetworkEgressRouteEvidence
+from shared.placement import Placement
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 
@@ -205,7 +205,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
                 provider,
                 ResolvedProviderPolicy(
                     workspace_id=workspace_id,
-                    pool=MachinePool("aws"),
+                    placement=Placement.machine("aws"),
                     platform_fleet=False,
                     default_region=AWS_COMPUTE_CONFIGURATION.default_region,
                     allowed_regions=AWS_COMPUTE_CONFIGURATION.allowed_regions,
@@ -246,7 +246,13 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         )
         headers = {"Authorization": f"Bearer {raw_token}"}
         path = f"/api/v1/units/{pool.id}/scale"
-        owned_workspace(ControlPlaneService(isolated_services.context), "other")
+        owned_workspace(
+            ControlPlaneService(
+                isolated_services.context,
+                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+            ),
+            "other",
+        )
 
         cross_workspace = client.put(
             f"{path}?workspace=other",

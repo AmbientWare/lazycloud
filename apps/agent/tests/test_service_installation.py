@@ -26,8 +26,8 @@ from agent.service_manager import (
 from agent_app import main as agent_main
 from gateway.http import LeaveAgentRequest, LeaveAgentResponse
 from shared.app_identity import AGENT_NAME
-from shared.compute_policy import MachinePool
 from shared.http.errors import ErrorResponse
+from shared.placement import Placement
 from shared.usage import UsageBillingOwner
 from tests.http_server import running_http_server
 from tests.url_constants import EXAMPLE_URL
@@ -77,7 +77,7 @@ def test_status_validates_state_and_never_outputs_agent_token(
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool=MachinePool("customer-cpu"),
+        placement=Placement.machine("customer-cpu"),
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,
@@ -162,7 +162,7 @@ def installation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_I
     state = AgentState(
         gateway_url=EXAMPLE_URL,
         workspace_id="workspace-one",
-        pool=MachinePool("customer-cpu"),
+        placement=Placement.machine("customer-cpu"),
         machine_id="machine-one",
         agent_token="persisted-agent-secret",
         credential_id=TEST_AGENT_CREDENTIAL_ID,

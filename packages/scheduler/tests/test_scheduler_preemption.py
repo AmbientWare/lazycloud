@@ -29,10 +29,10 @@ from scheduler.worker_rollout import (
     WorkerWorkloadRolloutService,
 )
 from shared.compute_enrollment import AgentCapacityState
-from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployments import StubKind
+from shared.placement import Placement
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
@@ -71,6 +71,7 @@ class _InterruptionSource:
 
 def _request(container_id: str) -> SchedulerWorkerRequest:
     return SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="workspace-1",
         stub_id="stub-1",
         container_id=container_id,
@@ -106,7 +107,7 @@ async def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id="worker-1",
-            pool=MachinePool("cpu"),
+            placement=Placement.machine("cpu"),
             capacity_owner_id=OWNER_ID,
             machine_id="machine-1",
             status=SchedulerWorkerStatus.Available,
@@ -135,7 +136,7 @@ async def test_preemption_atomically_cordons_and_requeues_unstarted_work_once(
         enrollment_id="notice-1",
         credential_generation=1,
         workspace_id="workspace-1",
-        pool=MachinePool("cpu"),
+        placement=Placement.machine("cpu"),
         machine_id="machine-1",
         state=AgentCapacityState.Preempting,
         reason="provider interruption notice",
@@ -174,7 +175,7 @@ def test_preemption_rejects_stale_worker_session_fence(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id="worker-1",
-            pool=MachinePool("cpu"),
+            placement=Placement.machine("cpu"),
             capacity_owner_id=OWNER_ID,
             machine_id="machine-1",
         ),
@@ -221,6 +222,7 @@ def test_worker_update_preempts_only_eligible_inflight_work_after_grace(
             for preemptible in (False, True):
                 stub = StubRepository(session).upsert(
                     StubRecord(
+                        placement=Placement.platform(),
                         id=str(uuid4()),
                         workspace_id=workspace.id,
                         name=f"function-{preemptible}",
@@ -292,7 +294,7 @@ def test_interruption_drains_workload_admission_until_provider_deadline(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id="worker-1",
-            pool=MachinePool("cpu"),
+            placement=Placement.machine("cpu"),
             capacity_owner_id=OWNER_ID,
             machine_id="machine-1",
             status=SchedulerWorkerStatus.Available,
@@ -306,7 +308,11 @@ def test_interruption_drains_workload_admission_until_provider_deadline(
             for kind in (StubKind.Function, StubKind.Endpoint):
                 stub = StubRepository(session).upsert(
                     StubRecord(
-                        id=str(uuid4()), workspace_id=workspace.id, name=kind.value, kind=kind
+                        placement=Placement.platform(),
+                        id=str(uuid4()),
+                        workspace_id=workspace.id,
+                        name=kind.value,
+                        kind=kind,
                     )
                 )
                 container = ContainerRecord(
@@ -347,7 +353,7 @@ def test_interruption_drains_workload_admission_until_provider_deadline(
             enrollment_id="provider-notice",
             credential_generation=1,
             workspace_id=workspace.id,
-            pool=MachinePool("cpu"),
+            placement=Placement.machine("cpu"),
             machine_id="machine-1",
             state=AgentCapacityState.Draining,
             reason="provider interruption",

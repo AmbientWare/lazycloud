@@ -13,7 +13,6 @@ from urllib.parse import urlparse
 from pydantic import Field, JsonValue, TypeAdapter, field_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import (
-    ADMIN_CLI_NAME,
     AGENT_CONTAINER_DATA_PATH,
     AGENT_CONTAINER_LOG_PATH,
     AGENT_CONTAINER_TMP_PATH,
@@ -29,7 +28,6 @@ from shared.compute_enrollment import (
     CapacitySignalKind,
     PreflightSeverity,
 )
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.env import (
     GATEWAY_GRPC_HOST_ENV,
@@ -41,6 +39,7 @@ from shared.env import (
     GATEWAY_HTTP_URL_ENV,
 )
 from shared.gpu import normalize_gpu_type
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from worker.configuration import (
@@ -105,51 +104,15 @@ class AgentWorkerNetwork(ContractModel):
     """
 
 
-class AgentJoinRequest(ContractModel):
-    name: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
-    endpoint: str = "http://127.0.0.1:9000"
-    token_secret: str | None = None
-    version: str = "local"
-    labels: dict[str, str] = Field(default_factory=dict)
-
-
-class AgentStatusSummary(ContractModel):
-    agents: int
-    active_leases: int
-    pools: dict[str, int] = Field(default_factory=dict)
-
-
 class AgentHostStatus(ContractModel):
     joined: bool = False
     state_path: str
     active_worker_count: int = 0
     workspace_id: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: str = ""
     machine_id: str = ""
     gateway_url: str = ""
     service: AgentServiceRuntimeStatus
-
-
-def build_join_command(request: AgentJoinRequest) -> list[str]:
-    command = [
-        ADMIN_CLI_NAME,
-        "agent",
-        "join",
-        "--name",
-        request.name,
-        "--pool",
-        str(request.pool),
-        "--endpoint",
-        request.endpoint,
-        "--version",
-        request.version,
-    ]
-    if request.token_secret:
-        command.extend(["--token-secret", request.token_secret])
-    for key, value in request.labels.items():
-        command.extend(["--label", f"{key}={value}"])
-    return command
 
 
 def agent_binary_filename(
@@ -753,13 +716,6 @@ main "$@"
     )
 
 
-def summarize_agent_status(agent_pools: list[str], active_leases: int) -> AgentStatusSummary:
-    pools: dict[str, int] = {}
-    for pool in agent_pools:
-        pools[pool] = pools.get(pool, 0) + 1
-    return AgentStatusSummary(agents=len(agent_pools), active_leases=active_leases, pools=pools)
-
-
 class AgentCapacityCheckName(StrEnum):
     MaxCpu = "capacity.max_cpu"
     MaxMemory = "capacity.max_memory"
@@ -869,7 +825,7 @@ class AgentState(ContractModel):
     release_generation: int = Field(default=0, ge=0)
     gateway_url: str
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     agent_token: str
     credential_id: str
@@ -955,7 +911,7 @@ class AgentWorkerDirs(ContractModel):
 class AgentWorkerSlot(ContractModel):
     worker_id: str
     worker_token: str = ""
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    placement: Placement = Placement.platform()
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     billing_owner: UsageBillingOwner
     machine_id: str = ""
@@ -1245,7 +1201,7 @@ def agent_state_payload(
         "gateway_url": state.gateway_url,
         "release_generation": state.release_generation,
         "workspace_id": state.workspace_id,
-        "pool": state.pool,
+        "placement": state.placement.key,
         "machine_id": state.machine_id,
         "agent_token": state.agent_token,
         "credential_id": state.credential_id,
@@ -1384,7 +1340,7 @@ def plan_worker_container(
         AGENT_MANAGED_LABEL: "true",
         AGENT_WORKER_ID_LABEL: slot.worker_id,
         f"{NAME}.agent.machine_id": slot.machine_id,
-        f"{NAME}.agent.pool_name": str(slot.pool),
+        f"{NAME}.agent.placement": slot.placement.key,
     }
     if image_id:
         labels[f"{NAME}.agent.worker_image_id"] = image_id
@@ -1395,12 +1351,12 @@ def plan_worker_container(
         "WORKER_RUNTIME_IMAGE": image,
         "WORKER_AGENT_BINARY_SHA256": agent_binary_sha256,
         "WORKER_TOKEN": slot.worker_token,
-        "WORKER_POOL": str(slot.pool),
+        "WORKER_PLACEMENT": slot.placement.key,
         "WORKER_CAPACITY_OWNER_ID": slot.capacity_owner_id,
         "WORKER_MACHINE": slot.machine_id,
         "WORKER_POD_ADDRESS": "127.0.0.1",
         "WORKER_CONTAINER_SERVICE_PORT": str(container_service_port),
-        "CACHE_LOCALITY": str(slot.pool),
+        "CACHE_LOCALITY": slot.placement.key,
         "CACHE_NODE": slot.machine_id,
         "WORKER_SOURCE_CACHE_STORAGE_ID": f"machine:{slot.machine_id}",
         "WORKER_NETWORK_PREFIX": slot.network_prefix,
@@ -1463,7 +1419,7 @@ def same_worker_slot(a: AgentWorkerSlot | None, b: AgentWorkerSlot | None) -> bo
         return a is b
     comparable = [
         "worker_id",
-        "pool",
+        "placement",
         "machine_id",
         "cpu_millicores",
         "memory_mb",

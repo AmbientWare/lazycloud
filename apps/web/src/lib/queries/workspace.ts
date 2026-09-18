@@ -3,9 +3,13 @@ import { z } from "zod";
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import { workspaceSchema, type Workspace } from "@/lib/api/schemas";
 
-/** Administrators only: create a workspace owned by the signed-in account. 403 otherwise. */
-export function createWorkspace(name: string): Promise<Workspace> {
-  return postJson("/api/v1/workspaces", workspaceSchema, { name });
+/**
+ * Administrators only: create a workspace owned by the signed-in account. 403 otherwise.
+ * A connection id places the workspace, its compute and its bucket, in that connected
+ * AWS account for good.
+ */
+export function createWorkspace(name: string, connectionId: string | null): Promise<Workspace> {
+  return postJson("/api/v1/workspaces", workspaceSchema, { name, connection_id: connectionId });
 }
 
 /** Administrators only: irreversibly delete an empty, non-system workspace. */

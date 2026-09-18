@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
@@ -23,7 +24,12 @@ from tests.workspaces import owned_workspace
 def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
     service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(service_context), "cache-storage-owner")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "cache-storage-owner",
+    )
     owner = WorkerCacheStorageOwnerRecord(
         kind=WorkerCacheStorageOwnerKind.Machine,
         owner_id="provider-machine-a",

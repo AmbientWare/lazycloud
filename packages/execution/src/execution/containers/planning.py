@@ -13,7 +13,7 @@ from shared.container_requests import (
 from shared.contracts import ContractModel
 from shared.deployment_records import DEFAULT_DISK
 from shared.errors import InvalidInputError
-from shared.placement import ProductRegion
+from shared.placement import Placement, ProductRegion
 from shared.resources import parse_memory_mib
 from shared.workload_config import StubRuntimeConfig
 
@@ -54,7 +54,7 @@ class ContainerSchedulingOptions(ContractModel):
     disk_mib: int = Field(gt=0)
     gpu: list[str] = Field(default_factory=list)
     gpu_count: int = 0
-    pool_selector: str = ""
+    placement: Placement
     runtime: OciRuntimeName | str = OciRuntimeName.Runsc
     runtime_class: str = ""
     docker_enabled: bool = False

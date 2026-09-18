@@ -7,10 +7,10 @@ from typing import Protocol
 
 from pydantic import Field
 from shared.compute_enrollment import AgentCapacityState
-from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
+from shared.placement import Placement
 from shared.scheduling import (
     SchedulerContainerState,
     SchedulerContainerStatus,
@@ -54,7 +54,7 @@ class CapacityInterruption(ContractModel):
     enrollment_id: str
     credential_generation: int = Field(ge=1)
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     state: AgentCapacityState
     reason: str
@@ -311,7 +311,7 @@ class SchedulerCapacityInterruptionService:
         } and (interruption.notice_at is None or current_time < interruption.notice_at)
         results: list[WorkerPreemptionResult] = []
         for worker in self.workers.list_workers_on_machine(interruption.machine_id):
-            if worker.pool != interruption.pool:
+            if worker.placement != interruption.placement:
                 continue
             operation = WorkerPreemptionOperation(
                 operation_id=(

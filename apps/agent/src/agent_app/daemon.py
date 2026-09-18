@@ -102,7 +102,6 @@ from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
     MachineBootstrapPhase,
 )
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.http.agent_identity import (
     AgentCertificateRequest,
@@ -266,7 +265,7 @@ class AgentDaemonOptions(ContractModel):
 
 class AgentDaemonRunResult(ContractModel):
     workspace_id: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: str = ""
     machine_id: str = ""
     stream_iterations: int = 0
     route_count: int = 0
@@ -1022,7 +1021,7 @@ class AgentDaemonService:
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
-            pool=state.pool,
+            placement=state.placement.key,
             machine_id=state.machine_id,
         )
         tunnel: AgentTunnelService | None = None
@@ -1271,7 +1270,7 @@ class AgentDaemonService:
             updater.install(release.agent, before_exec=before_agent_update)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
-            pool=state.pool,
+            placement=state.placement.key,
             machine_id=state.machine_id,
             stream_iterations=current_iterations,
             route_count=route_count,
@@ -1902,7 +1901,7 @@ def _agent_slot_from_gateway(slot: http.AgentWorkerSlot) -> AgentWorkerSlot:
     return AgentWorkerSlot(
         worker_id=slot.worker_id,
         worker_token=slot.worker_token,
-        pool=slot.pool,
+        placement=slot.placement,
         capacity_owner_id=slot.capacity_owner_id,
         billing_owner=slot.billing_owner,
         machine_id=slot.machine_id,
@@ -1949,7 +1948,7 @@ def _agent_state_from_join_response(
     return AgentState(
         gateway_url=gateway_url,
         workspace_id=response.workspace_id,
-        pool=response.pool,
+        placement=response.placement,
         machine_id=response.machine_id,
         agent_token=response.agent_token,
         credential_id=response.credential_id,
@@ -2009,7 +2008,7 @@ def _capacity_interruption_result(
 ) -> AgentDaemonRunResult:
     return AgentDaemonRunResult(
         workspace_id=state.workspace_id,
-        pool=state.pool,
+        placement=state.placement.key,
         machine_id=state.machine_id,
         stream_iterations=current_iterations,
         tunnel_connected=tunnel_connected,

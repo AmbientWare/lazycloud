@@ -6,6 +6,7 @@ from images.building import build_image_plan, plan_image_build_session
 from images.execution import ImageBuildExecutionRequest
 from images.scheduling import plan_image_build_container_request
 from shared.image_building.authoring import ImageSpec, LinuxArchitecture
+from shared.placement import Placement
 
 
 def test_image_architecture_changes_cache_identity_and_scheduler_contract(
@@ -38,7 +39,9 @@ def test_image_architecture_changes_cache_identity_and_scheduler_contract(
         ),
     )
 
-    scheduled = plan_image_build_container_request(request, workspace_id="workspace-1")
+    scheduled = plan_image_build_container_request(
+        request, workspace_id="workspace-1", placement=Placement.platform()
+    )
 
     assert scheduled.scheduler_request.architecture == "amd64"
     assert scheduled.build_options.architecture is LinuxArchitecture.Amd64

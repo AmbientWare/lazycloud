@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
-import pytest
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
 from compute.policy import WorkspaceComputePolicyService
@@ -22,10 +21,10 @@ from gateway.http import JoinAgentRequest, LeaveAgentRequest
 from operations.container_shutdown import DatabaseDurableWorkerAbsence
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import MachinePool, UnitName
+from shared.compute_policy import UnitName
 from shared.container_requests import ContainerShutdownTarget
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import NotFoundError
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
@@ -37,7 +36,12 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
     real_redis_actors: RealRedisActors,
 ) -> None:
     services = isolated_services
-    workspace = owned_workspace(ControlPlaneService(services.context), "machine-retirement")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ),
+        "machine-retirement",
+    )
     unit = services.compute.create_unit(
         UnitName("retirement"), provider="agent", workspace=workspace.id
     )
@@ -109,7 +113,7 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
         SchedulerWorkerRecord(
             worker_id=worker_id,
             machine_id=agent.machine_id,
-            pool=agent.pool,
+            placement=agent.placement,
             capacity_owner_id=unit.capacity_owner_id,
         )
     )
@@ -125,14 +129,18 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
     isolated_services: ApiServices,
 ) -> None:
     services = isolated_services
-    workspace = owned_workspace(ControlPlaneService(services.context), "pending-machine-join")
-    policies = WorkspaceComputePolicyService(services.context)
+    workspace = owned_workspace(
+        ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ),
+        "pending-machine-join",
+    )
     gateway = services.gateway_service
     unit = services.compute.create_unit(
         UnitName("pending-join"),
         provider="agent",
         workspace=workspace.id,
-        pool=MachinePool("on-prem"),
+        placement=Placement.machine("on-prem"),
     )
     credential = gateway.unit_state_coordinator.create_unit_join_token(
         unit, workspace_id=workspace.id, owner_token_id="pending-join-owner"
@@ -154,7 +162,6 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
     )
     gateway.leave_agent(LeaveAgentRequest(agent_token=agent.agent_token))
     assert not services.compute.delete_empty_joined_unit(unit)
-    assert policies.resolve_machine_pool("on-prem", workspace=workspace.id) == "on-prem"
     with services.context.database.session() as session:
         credentials = ComputeJoinCredentialRepository(session)
         for issued in credentials.list_for_unit(workspace.id, unit.capacity_owner_id):
@@ -164,12 +171,10 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
     assert unit.id in {candidate.id for candidate in services.compute.empty_joined_units()}
     assert services.compute.delete_empty_joined_unit(unit)
     assert not services.compute.delete_empty_joined_unit(unit)
-    with pytest.raises(NotFoundError, match="compute pool 'on-prem' not found"):
-        policies.resolve_machine_pool("on-prem", workspace=workspace.id)
     replacement = services.compute.create_unit(
         UnitName("pending-join"),
         provider="agent",
         workspace=workspace.id,
-        pool=MachinePool("on-prem"),
+        placement=Placement.machine("on-prem"),
     )
     assert replacement.id != unit.id

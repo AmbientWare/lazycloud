@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import typer
-from shared.compute_policy import MachinePool
 from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.gpu import GpuInput
 
@@ -38,7 +37,7 @@ class DeploymentOverrides:
     ports: dict[str, int] = field(default_factory=dict)
     keep_warm: int | None = None
     tcp: bool | None = None
-    pool: MachinePool | None = None
+    machine: str | None = None
     region: str | None = None
     availability_zone: str | None = None
     preemptible: bool | None = None
@@ -61,7 +60,7 @@ class DeploymentOverrides:
                 self.ports,
                 self.keep_warm is not None,
                 self.tcp is not None,
-                self.pool,
+                self.machine,
                 self.region,
                 self.availability_zone,
                 self.preemptible is not None,
@@ -87,7 +86,7 @@ def build_deployment_overrides(
     ports: list[str] | None = None,
     keep_warm: int | None = None,
     tcp: bool | None = None,
-    pool: MachinePool | None = None,
+    machine: str | None = None,
     region: str | None = None,
     availability_zone: str | None = None,
     preemptible: bool | None = None,
@@ -109,7 +108,7 @@ def build_deployment_overrides(
         ports=_parse_ports(ports or []),
         keep_warm=keep_warm,
         tcp=tcp,
-        pool=pool,
+        machine=machine,
         region=region,
         availability_zone=availability_zone,
         preemptible=preemptible,
@@ -148,7 +147,7 @@ def workflow_kwargs(
         "ports": dict(overrides.ports),
         "keep_warm": overrides.keep_warm,
         "tcp": overrides.tcp,
-        "pool": overrides.pool,
+        "machine": overrides.machine,
         "region": overrides.region,
         "availability_zone": overrides.availability_zone,
         "preemptible": overrides.preemptible,

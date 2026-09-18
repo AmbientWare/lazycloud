@@ -223,15 +223,16 @@ class ContainerSchedulingPersistenceService:
 
     def mark_scheduling_failed(
         self,
-        request: SchedulerWorkerRequest,
-        reason: str,
+        container_id: str,
         *,
+        workspace_id: str,
+        reason: str,
         now: datetime | None = None,
     ) -> bool:
         current_time = now or utc_now()
         task: Task | None = None
         with self.context.database.session() as session:
-            container = ContainerRepository(session).lock_across_workspaces(request.container_id)
+            container = ContainerRepository(session).lock_across_workspaces(container_id)
             if (
                 container is None
                 or container.status is not ContainerStatus.Pending
@@ -262,11 +263,11 @@ class ContainerSchedulingPersistenceService:
                 session,
                 "container.schedule.failed",
                 resource_type="container",
-                resource_id=request.container_id,
-                message=reason or f"failed to schedule container {request.container_id}",
+                resource_id=container_id,
+                message=reason or f"failed to schedule container {container_id}",
                 level=EventLevel.Error,
                 data={"scheduler_failure": True},
-                workspace_id=request.workspace_id,
+                workspace_id=workspace_id,
             )
         self._publish_container_change(container)
         if task is not None:

@@ -12,12 +12,9 @@ for setup and host requirements.
 ## lazycloud compute
 
 ```bash
-uv run lazycloud compute status       # capacity and the workspace's default pool
+uv run lazycloud compute status       # capacity, connection, and workload count
 uv run lazycloud compute instances    # running instances
-uv run lazycloud compute pools        # pools this workspace can use
-uv run lazycloud compute workloads    # which pool each workload runs in
-uv run lazycloud compute policy show
-uv run lazycloud compute policy update --default-pool <pool>
+uv run lazycloud compute workloads    # each workload and the machine it is pinned to
 ```
 
 ## lazycloud cloud
@@ -45,22 +42,29 @@ credentials stay on your machine.
 `cloud status --until <phase>` waits for the connection to reach a phase, such
 as `ready`.
 
-LazyCloud manages provisioning settings for connected AWS accounts. Workloads
-select their CPU, memory, GPU, and pool.
+LazyCloud manages provisioning settings for connected AWS accounts. A workload
+runs where its workspace lives and selects its CPU, memory, and GPU.
 
 ## lazycloud machine
 
 ```bash
 uv run lazycloud machine list
-uv run lazycloud machine join [options]     # run on the machine you are joining
+uv run lazycloud machine join --name <name> --workspaces <a,b> [options]   # run on the machine you are joining
+uv run lazycloud machine update <name-or-id> --workspaces <a,b>
 uv run lazycloud machine remove MACHINE_ID
 ```
+
+A joined machine has a name that is unique across your account and a list of
+workspaces whose workloads may run on it. Pin a workload to it with
+`machine="<name>"` in the decorator or `--machine <name>` on the command line;
+the workload then runs on that machine or fails.
 
 `machine join` options:
 
 | Option | What it does |
 | --- | --- |
-| `--pool <name>` | Pool to join, created if new. Default `self-hosted`. |
+| `--name <name>` | Machine name workloads pin to. Lowercase letters, digits, and hyphens. Required. |
+| `--workspaces <a,b>` | Workspace names whose workloads may run here, comma-separated or repeated. Required. |
 | `--gpu <model>` | GPU model this machine contributes. |
 | `--max-cpu`, `--max-memory`, `--max-gpus` | Capacity to advertise, for example `--max-memory 32Gi`. |
 | `--gpu-ids <ids>` | Comma-separated GPU device ids to expose, instead of `--max-gpus`. |

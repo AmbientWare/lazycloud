@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
@@ -18,11 +19,12 @@ from database.repositories.orchestration import ContainerRepository
 from execution.functions.service import FunctionControlService
 from observability.stream_state import AsyncTaskChangeReader
 from shared.capacity import CapacityAcquisitionShape, CapacityFailureCode, CapacityOperationStatus
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.function_payloads import FunctionJsonInvocation, FunctionJsonResult
 from shared.http.functions import FunctionInvokeResponse
 from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
+from shared.placement import Placement
 from shared.scheduling import SchedulerContainerState
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
@@ -33,9 +35,9 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
 ) -> None:
     services = isolated_services
     now = utc_now()
-    stub = ControlPlaneService(services.context).create_stub(
-        "capacity-progress", kind=StubKind.Function, handler="main:hello"
-    )
+    stub = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    ).create_stub("capacity-progress", kind=StubKind.Function, handler="main:hello")
     container = ContainerRecord(
         id=str(uuid4()),
         name="pending",
@@ -60,7 +62,7 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
                 id=str(uuid4()),
                 workspace_id=platform.id,
                 name=UnitName("capacity"),
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
             )
         )
         for index, (demand, code) in enumerate(

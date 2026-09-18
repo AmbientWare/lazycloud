@@ -31,9 +31,9 @@ from scheduler.state import (
 from shared.capacity import CapacityPoolSizingSnapshot
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
     UnitName,
 )
+from shared.placement import Placement
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 
 WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
@@ -111,7 +111,7 @@ class _Compute:
             capacity_owner_id=PROVIDER_OWNER_ID,
             workspace_id=WORKSPACE_ID,
             name=UnitName(POOL),
-            pool=MachinePool(POOL),
+            placement=Placement.platform(),
             desired_machines=self._logical_desired(),
             max_machines=max(self._logical_desired(), 4),
             observed_machines=len(self.instances),
@@ -245,6 +245,7 @@ def _seed_pool_state(
 ) -> None:
     compute_states.save_unit_state(
         ComputeUnitState(
+            placement=Placement.platform(),
             workspace_id=WORKSPACE_ID,
             name=UnitName(POOL),
             capacity_owner_id=capacity_owner_id,
@@ -273,7 +274,7 @@ def _add_worker(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=worker_id,
-            pool=MachinePool(POOL),
+            placement=Placement.platform(),
             capacity_owner_id=capacity_owner_id,
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -310,7 +311,7 @@ def _drain_service(
     return WorkerPoolDrainService(
         lambda: managed_compute_drain_controllers(
             compute,  # pyright: ignore[reportArgumentType]
-            compute_states.list_all_pool_states(),
+            compute_states.list_all_unit_states(),
             workers,
             RedisSchedulerContainerRepository(redis),
         ),

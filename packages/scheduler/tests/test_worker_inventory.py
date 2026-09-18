@@ -8,8 +8,8 @@ from scheduler.state import RedisSchedulerContainerRepository, RedisSchedulerWor
 from scheduler.worker_inventory import WorkerCapacityRecovery
 from scheduler.worker_rollout import worker_rollout_allowance
 from shared.billing_quotes import ContainerShape
-from shared.compute_policy import MachinePool
 from shared.containers import ContainerRecord, ContainerStatus
+from shared.placement import Placement
 from shared.scheduling import SchedulerContainerStatus, SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -52,7 +52,7 @@ def test_worker_recovery_reserves_durable_running_capacity_before_admission(
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=worker_id,
-            pool=MachinePool("fleet"),
+            placement=Placement.machine("fleet"),
             capacity_owner_id=str(uuid4()),
             status=SchedulerWorkerStatus.Pending,
             total_cpu_millicores=4000,
@@ -80,7 +80,7 @@ def test_platform_rollout_preserves_request_intake_across_pools() -> None:
     now = utc_now()
     current = SchedulerWorkerRecord(
         worker_id="current",
-        pool=MachinePool("fleet"),
+        placement=Placement.machine("fleet"),
         capacity_owner_id=str(uuid4()),
         billing_owner=UsageBillingOwner.PlatformFleet,
         status=SchedulerWorkerStatus.Available,

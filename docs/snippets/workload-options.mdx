@@ -26,8 +26,8 @@ many containers run and how much each handles.
 | `inputs` / `outputs` | schema | Optional schema metadata for clients and validation. |
 | `docker_enabled` | `bool` | Give the container its own Docker daemon. |
 | `preemptible` | `bool` | Defaults to `True`, allowing capacity that can be reclaimed. Set `False` to require non-preemptible capacity, including for GPU workloads. |
-| `pool` | `str` | Compute pool to run in. See [Compute](/platform/compute). |
-| `region`, `availability_zone` | `str` | Placement inside the pool, where the pool supports it. Regions are `"us-east"`, `"us-west"`, `"eu-central"`, `"eu-north"`, and `"ap-southeast"`. |
+| `machine` | `str` | A joined machine this workload must run on, by name. Unset runs where the workspace lives. See [Compute](/platform/compute). |
+| `region`, `availability_zone` | `str` | Placement inside the workspace's cloud, where it supports it. Not combinable with `machine`. Regions are `"us-east"`, `"us-west"`, `"eu-central"`, `"eu-north"`, and `"ap-southeast"`. |
 | `metadata` | `dict` | Custom metadata stored with the deployment. |
 
 Preemptible capacity can be interrupted, sometimes without notice. Interrupted

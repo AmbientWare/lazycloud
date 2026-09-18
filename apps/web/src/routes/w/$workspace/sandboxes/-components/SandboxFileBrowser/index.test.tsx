@@ -16,6 +16,7 @@ const workspace: Workspace = {
   signing_key_prefix: null,
   primary_token_id: null,
   concurrency_limit_id: null,
+  connection_id: null,
   storage: { backend: "s3", bucket: null, prefix: "" },
   labels: {},
   metadata: {},

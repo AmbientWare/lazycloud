@@ -11,6 +11,7 @@ from uuid import NAMESPACE_DNS, uuid5
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.records.apps import AppRecord
 from database.repositories.apps import AppRepository, StubRepository
@@ -44,7 +45,10 @@ def test_pod_id_proxy_preserves_request_and_selects_port_ready_container(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         stub = control.create_stub("web", kind=StubKind.Pod)
         missing_port = _create_container(isolated_services, stub, "missing-port")
         busy = _create_container(isolated_services, stub, "busy")
@@ -99,7 +103,10 @@ def test_pod_proxy_records_demand_before_waiting_for_scale_from_zero(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         stub = control.create_stub("cold-web", kind=StubKind.Pod)
         container = _create_container(isolated_services, stub, "cold")
         scheduler = _FakeSchedulerContainers()
@@ -152,7 +159,10 @@ def test_pod_websocket_proxies_subprotocol_text_binary_and_balances_demand(
     with ExitStack() as client_stack:
         if route_mode == "host":
             monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         stub = control.create_stub(
             f"socket-{stub_kind.value}-{route_mode}",
             kind=stub_kind,
@@ -274,7 +284,10 @@ def test_pod_websocket_upgrade_withholds_proxy_credentials_from_the_backend(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         stub = control.create_stub("credential-scope", kind=StubKind.Pod)
         container = _create_container(isolated_services, stub, "socket")
         scheduler = _FakeSchedulerContainers.running(
@@ -339,7 +352,10 @@ def test_pinned_sandbox_routes_never_wait_or_fall_through_to_a_sibling(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        stub = ControlPlaneService(isolated_services.context).create_stub(
+        stub = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).create_stub(
             "pinned-siblings",
             kind=StubKind.Sandbox,
         )
@@ -408,7 +424,10 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        stub = ControlPlaneService(isolated_services.context).create_stub(
+        stub = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).create_stub(
             "pinned-route-ownership",
             kind=StubKind.Sandbox,
         )
@@ -487,7 +506,10 @@ def test_pinned_sandbox_backend_failures_are_bounded_and_typed(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        stub = ControlPlaneService(isolated_services.context).create_stub(
+        stub = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).create_stub(
             "pinned-backend-failure",
             kind=StubKind.Sandbox,
         )
@@ -536,7 +558,10 @@ def test_sandbox_proxy_supports_id_deployment_and_public_path_forms(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         deployment, stub = _manual_deployment_stub(
             isolated_services,
             name="sandbox-web",
@@ -604,7 +629,10 @@ def test_pod_proxy_returns_service_unavailable_when_port_is_missing(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         stub = control.create_stub("missing", kind=StubKind.Pod)
         container = _create_container(isolated_services, stub, "missing")
         scheduler = _FakeSchedulerContainers.running(
@@ -637,7 +665,10 @@ def test_pod_and_sandbox_private_routes_use_token_workspace(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         owned_workspace(control, "pod-owner")
         owned_workspace(control, "pod-other")
         owned_workspace(control, "pod-public")
@@ -709,7 +740,10 @@ def test_cross_workspace_public_app_does_not_publish_a_private_sandbox(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         owned_workspace(control, "sandbox-owner")
         foreign_workspace = owned_workspace(control, "foreign-app-owner")
         stub = control.create_stub(
@@ -1027,7 +1061,9 @@ def _store_sandbox_exposure(
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
     matches = [
         stub
-        for stub in ControlPlaneService(services.context).list_stubs()
+        for stub in ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ).list_stubs()
         if stub.deployment_id == deployment_id
     ]
     assert len(matches) == 1

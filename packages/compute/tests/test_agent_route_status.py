@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from compute.agent_control import AgentRouteStatusRequest, plan_route_status_update
 from compute.state import ComputeAgentTokenState
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.routing import AgentBackendRoute, BackendRouteState
 
 
@@ -11,7 +11,7 @@ def _agent() -> ComputeAgentTokenState:
         token_hash="hash",
         workspace_id="ws-1",
         capacity_owner_id="unit-1",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         machine_id="machine-1",
     )
 
@@ -45,7 +45,7 @@ def test_a_route_owned_by_another_agent_is_still_refused() -> None:
         AgentBackendRoute(
             route_id="route-1",
             workspace_id="ws-2",
-            pool=MachinePool("default"),
+            placement=Placement.platform(),
             machine_id="machine-1",
         ),
         AgentRouteStatusRequest(route_id="route-1", state=BackendRouteState.Ready),

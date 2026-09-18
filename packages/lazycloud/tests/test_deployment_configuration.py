@@ -64,4 +64,4 @@ def test_every_workload_preserves_region_intent_through_the_gateway_contract() -
     assert app.pod(name="automatic").spec().resources.region is None
 
     with pytest.raises(ValidationError):
-        app.pod(name="conflicting", region="eu-central", pool="private").spec()
+        app.pod(name="conflicting", region="eu-central", machine="private").spec()

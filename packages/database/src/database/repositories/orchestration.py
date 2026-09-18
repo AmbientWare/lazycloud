@@ -29,6 +29,7 @@ from database.tables.orchestration import (
     AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
+    MachineWorkspaceTable,
     WorkerTable,
 )
 from foundation.ids import try_uuid
@@ -327,14 +328,40 @@ class AutoscalerStateRepository:
 class MachineRepository:
     session: Session
 
-    def upsert(self, machine: Machine, *, workspace_id: str | None = None) -> Machine:
+    def upsert(
+        self,
+        machine: Machine,
+        *,
+        workspace_id: str | None = None,
+        owner_user_id: str | None = None,
+    ) -> Machine:
+        """Write a machine. `owner_user_id` is the account a named machine is unique in.
+
+        Given by the caller that minted the join, because a workspace may have
+        several owners and the first row is not the one who joined it.
+        """
         machine = Machine.model_validate(dict(machine))
         row = self.session.get(MachineTable, machine.id)
         owner_id = workspace_id if workspace_id is not None else row.workspace_id if row else None
         if owner_id is not None:
             WorkspaceRepository(self.session).lock_active_owner(owner_id)
         if row is None:
-            row = MachineTable(id=machine.id, workspace_id=owner_id, created_at=machine.created_at)
+            owner = owner_user_id or (
+                self.session.scalar(
+                    select(WorkspaceMemberTable.user_id).where(
+                        WorkspaceMemberTable.workspace_id == owner_id,
+                        WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                    )
+                )
+                if owner_id is not None
+                else None
+            )
+            row = MachineTable(
+                id=machine.id,
+                workspace_id=owner_id,
+                owner_user_id=owner,
+                created_at=machine.created_at,
+            )
             self.session.add(row)
         elif row.workspace_id != owner_id:
             raise ConflictError("machine workspace cannot change")
@@ -342,6 +369,49 @@ class MachineRepository:
         row.updated_at = utc_now()
         self.session.flush()
         return machine_from_row(row)
+
+    def get_by_owner_name(self, owner_user_id: str, name: str) -> Machine | None:
+        """The account's live machine with this name, if one exists.
+
+        Deleted rows keep their name for history; the partial unique index and
+        this lookup both leave them out so a name can be joined again.
+        """
+        row = self.session.scalar(
+            select(MachineTable).where(
+                MachineTable.owner_user_id == owner_user_id,
+                MachineTable.name == name,
+                MachineTable.status != ResourceStatus.Deleted.value,
+            )
+        )
+        return machine_from_row(row) if row is not None else None
+
+    def get_serving_by_name(self, workspace_id: str, name: str) -> Machine | None:
+        """The live machine with this name that lists the workspace among those it serves.
+
+        Reached through the served-workspace link rather than an owner account, so a
+        workspace with several owners resolves the same machine whoever created it.
+        """
+        row = self.session.scalar(
+            select(MachineTable)
+            .join(MachineWorkspaceTable, MachineWorkspaceTable.machine_id == MachineTable.id)
+            .where(
+                MachineWorkspaceTable.workspace_id == workspace_id,
+                MachineTable.name == name,
+                MachineTable.status != ResourceStatus.Deleted.value,
+            )
+        )
+        return machine_from_row(row) if row is not None else None
+
+    def list_named_for_owner(self, owner_user_id: str) -> list[Machine]:
+        statement = select(MachineTable).where(
+            MachineTable.owner_user_id == owner_user_id,
+            MachineTable.name.is_not(None),
+            MachineTable.status != ResourceStatus.Deleted.value,
+        )
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(statement.order_by(MachineTable.name))
+        ]
 
     def get(self, machine_id: str, *, workspace_id: str) -> Machine | None:
         if try_uuid(machine_id) is None:

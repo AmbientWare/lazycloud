@@ -109,8 +109,8 @@ the port accepts connections.
 `checkpoint_readiness_path` and `checkpoint_readiness_port`, an HTTP probe
 checked before the snapshot is taken.
 
-`docker_enabled=True` gives the pod its own Docker daemon. `pool` picks the
-compute pool.
+`docker_enabled=True` gives the pod its own Docker daemon. `machine` names a
+joined machine the pod must run on.
 
 `web.configure(...)` returns the pod with changed settings, and `web.shell()`
 opens a shell in a pod container.

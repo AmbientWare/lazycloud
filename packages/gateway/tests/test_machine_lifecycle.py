@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 import pytest
 from gateway.machine_lifecycle import MachineLifecycleService
-from shared.compute_policy import MachinePool
 from shared.errors import NotFoundError
 
 MACHINE_ID = "11111111-1111-4111-8111-111111111111"
@@ -15,14 +14,7 @@ WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 class _Gateway:
     machines: set[tuple[str, str]]
 
-    def delete_machine(
-        self,
-        machine_id: str,
-        *,
-        workspace_id: str,
-        pool: MachinePool = MachinePool(""),
-    ) -> None:
-        del pool
+    def delete_machine(self, machine_id: str, *, workspace_id: str) -> None:
         self.machines.remove((workspace_id, machine_id))
 
 

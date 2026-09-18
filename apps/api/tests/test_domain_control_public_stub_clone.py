@@ -8,6 +8,7 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from apps.api.tests.runtime import services_with_object_storage
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.identity import SecretRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
@@ -28,7 +29,10 @@ def test_public_stub_config_allows_public_and_same_workspace_private_only(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         owner = owned_workspace(control, "owner")
         other = owned_workspace(control, "other")
         private_stub = control.create_stub(
@@ -84,7 +88,10 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
     tmp_path: Path,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         owner = owned_workspace(control, "clone-owner")
         target = owned_workspace(control, "clone-target")
         source = control.create_stub(
@@ -171,7 +178,10 @@ def test_cross_workspace_private_clone_is_denied(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         owner = owned_workspace(control, "private-owner")
         other = owned_workspace(control, "private-other")
         source = control.create_stub("private", workspace=owner.id, public=False)
@@ -193,7 +203,10 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
     request: pytest.FixtureRequest,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         workspace = owned_workspace(control, "packages")
         local_stub = control.create_stub("local-package", workspace=workspace.id)
         remote_stub = control.create_stub("remote-package", workspace=workspace.id)

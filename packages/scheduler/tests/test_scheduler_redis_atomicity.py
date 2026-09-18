@@ -19,8 +19,7 @@ from scheduler.state import (
     SchedulerWorkerStatus,
     WorkerRequestCancellation,
 )
-from shared.compute_policy import MachinePool
-from shared.placement import ProductRegion
+from shared.placement import Placement, ProductRegion
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
@@ -39,6 +38,7 @@ class _FailingEvalRedis(FakeRedis):
 
 def _request(container_id: str, *, now: datetime) -> SchedulerWorkerRequest:
     return SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="workspace-1",
         stub_id="stub-1",
         container_id=container_id,
@@ -52,7 +52,7 @@ def _available_worker(worker_id: str, *, now: datetime) -> SchedulerWorkerRecord
     return SchedulerWorkerRecord(
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         worker_id=worker_id,
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         status=SchedulerWorkerStatus.Available,
         request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
         free_cpu_millicores=10_000,

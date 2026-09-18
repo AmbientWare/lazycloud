@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 
 from pydantic import JsonValue
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.scheduling import WorkerExecutionRecord, WorkerExecutionRequest
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.origin_access import CacheOriginCredentialRequest, CacheOriginCredentials
@@ -34,6 +34,7 @@ def test_idle_worker_request_response_returns_control_to_maintenance() -> None:
                 GetNextContainerRequestResponse().model_dump(mode="json"),
                 GetNextContainerRequestResponse(
                     container_request=WorkerExecutionRequest(
+                        placement=Placement.platform(),
                         workspace_id="workspace-1",
                         stub_id="stub-1",
                         container_id="next-container",
@@ -55,7 +56,7 @@ def test_idle_worker_request_response_returns_control_to_maintenance() -> None:
 def test_worker_repository_client_preserves_session_auth_and_scoped_credentials() -> None:
     worker = WorkerExecutionRecord(
         worker_id="worker-1",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         capacity_owner_id=_CAPACITY_OWNER_ID,
     )
     transport = _FakeWorkerRepositoryTransport(

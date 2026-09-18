@@ -5,7 +5,6 @@ from typing import Literal
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 
 from shared.callbacks import normalize_callback_url
-from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.deployment_records import CpuRequest, MemoryRequest, request_and_limit
@@ -138,7 +137,6 @@ class StubRuntimeConfig(ContractModel):
 
         return absolute_health_check_path(value)
 
-    pool_selector: str | None = None
     runtime: str = OciRuntimeName.Runsc.value
     runtime_class: str | None = None
     docker_enabled: bool = False
@@ -275,7 +273,8 @@ class StubConfig(ContractModel):
         serialization_alias="schema",
     )
     tcp: bool = False
-    pool: MachinePool = MachinePool("")
+    machine: str = ""
+    """A joined machine this workload must run on, by name. Empty runs in the workspace."""
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
     outputs: dict[str, JsonValue] = Field(default_factory=dict)
     python_version: str | None = None

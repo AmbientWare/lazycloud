@@ -215,7 +215,6 @@ class AwsAccountConnectionRepository:
             or row.user_id != connection.user_id
             or row.account_id != connection.account_id
             or row.external_id != connection.external_id
-            or row.pool != connection.pool
         ):
             raise ConflictError("AWS connection identity cannot change")
         write_connection(row, connection)

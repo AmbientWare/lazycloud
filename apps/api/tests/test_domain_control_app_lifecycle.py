@@ -5,6 +5,7 @@ from typing import Protocol
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -32,7 +33,10 @@ def test_app_and_deployment_http_actions_follow_authorization_and_lifecycle_stat
                 metadata={"app": app.name, "app_id": app.id},
             )
         )
-        workspace = ControlPlaneService(isolated_services.context).get_workspace(app.workspace_id)
+        workspace = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).get_workspace(app.workspace_id)
         auth = AuthService(isolated_services.context)
         writer_token, _ = auth.create_token(
             "lifecycle-writer",

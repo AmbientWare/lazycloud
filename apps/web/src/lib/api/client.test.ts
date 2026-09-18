@@ -48,7 +48,7 @@ describe("responseErrorMessage", () => {
       ),
     );
 
-    await expect(apiRequest("/api/v1/pools", z.object({}))).rejects.toThrow(
+    await expect(apiRequest("/api/v1/machines", z.object({}))).rejects.toThrow(
       "The API route returned the frontend shell instead of JSON",
     );
   });

@@ -6,7 +6,6 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 from shared.bytes_transport import EncodedBytesBody
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
-from shared.compute_policy import MachinePool
 from shared.function_payloads import (
     FunctionJsonResult,
     FunctionPayloadEncoding,
@@ -20,6 +19,7 @@ from shared.http.operations import CronJobResponse
 from shared.http.pods import PodSandboxExposePortRequest
 from shared.http.stubs import StubConfigUpdateRequest
 from shared.http.tasks import TaskResponse
+from shared.placement import Placement
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -99,7 +99,7 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
                 {
                     "id": "worker-1",
                     "status": "available",
-                    "pool": "default",
+                    "placement": Placement.platform(),
                     "machine_id": "machine-1",
                     "created_at": NOW,
                     "updated_at": NOW,
@@ -110,7 +110,7 @@ def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> No
     pool = UnitResponse(
         id="cu_01J8Z9QK2M0000000000000000",
         name="default",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         provider="agent",
         capacity_owner_id="6fb19db5-ddd0-478d-8f4a-cdf422ad438c",
         capacity_owner_kind=CapacityOwnerKind.WorkspaceAgent,

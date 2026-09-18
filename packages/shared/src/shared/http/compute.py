@@ -16,13 +16,14 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeUnitPhase, MachinePool
+from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
 from shared.http.base import HttpModel
 from shared.http.deployments import DeploymentResponse
 from shared.http.stubs import StubResponse
+from shared.placement import Placement
 from shared.tasks import TaskStatus
 
 
@@ -38,7 +39,6 @@ class UnitPolicy(HttpModel):
     min_machines: int = Field(default=0, ge=0)
     max_machines: int = Field(default=1, ge=0)
     scaling_enabled: bool = False
-    default_eligible: bool = False
     priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
     """Preference for this unit over another that could serve the same work.
 
@@ -66,7 +66,6 @@ class UnitPolicy(HttpModel):
 
 class UnitCreateRequest(UnitPolicy):
     name: str
-    pool: MachinePool = MachinePool("")
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
 
@@ -80,7 +79,7 @@ class UnitResponse(UnitPolicy):
     capacity_owner_kind: CapacityOwnerKind
     capacity_owner_source: CapacityOwnerSource
     name: str
-    pool: MachinePool
+    placement: Placement
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
@@ -116,19 +115,11 @@ class UnitScaleResponse(HttpModel):
     degraded_reason: str | None = None
 
 
-class MachineCreateRequest(HttpModel):
-    provider: str = "local"
-    cpu: float | None = None
-    memory: str | None = None
-    gpu: str | None = None
-    gpu_count: int = Field(default=0, ge=0)
-    address: str | None = None
-    labels: dict[str, str] = Field(default_factory=dict)
-
-
 class MachineResponse(HttpModel):
     id: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    name: str = ""
+    workspaces: list[str] = Field(default_factory=list)
+    """Names of the workspaces this machine may run workloads for."""
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
     cpu: float | None = None
@@ -146,15 +137,17 @@ class MachineListResponse(HttpModel):
 
 
 class MachineJoinCommandRequest(HttpModel):
-    """Request the join command for a workspace's self-hosted fleet.
+    """Request the join command for one machine the account owns.
 
-    Naming a pool creates it: a caller may join machines into any group they
-    choose, including one an auto-scaling unit already feeds. Left empty, the
-    workspace's implicit self-hosted fleet answers.
+    The name is how workloads pin to it, so it is unique across the account.
+    The workspaces are the only ones whose workloads may land on it.
     """
 
     ttl: str = ""
-    pool: MachinePool = MachinePool(Field(default="", max_length=240))
+    name: str = Field(
+        min_length=1, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$"
+    )
+    workspaces: list[str] = Field(min_length=1)
     gpu: list[str] = Field(default_factory=list)
 
 
@@ -163,15 +156,10 @@ class MachineJoinCommandResponse(HttpModel):
     expires_at: datetime
 
 
-class MachineJoinTokenResponse(HttpModel):
-    """The same credential the join command embeds, for a machine-readable caller.
+class MachineUpdateRequest(HttpModel):
+    """Replace the workspaces one joined machine serves."""
 
-    A process that has to write the token to a file should not have to parse it
-    back out of a shell string.
-    """
-
-    token: str
-    expires_at: datetime
+    workspaces: list[str] = Field(min_length=1)
 
 
 class WorkerContainerResponse(HttpModel):
@@ -186,7 +174,7 @@ class WorkerContainerResponse(HttpModel):
 class WorkerResponse(HttpModel):
     id: str
     status: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""
@@ -197,7 +185,6 @@ class WorkerResponse(HttpModel):
     free_memory: int = 0
     free_gpu_count: int = 0
     resource_version: int = 0
-    requires_pool_selector: bool = False
     preemptible: bool = False
     created_at: datetime
     updated_at: datetime
@@ -252,7 +239,9 @@ class UnitMachineResponse(HttpModel):
     gpu: str = ""
     gpu_count: int = 0
     status: str = ""
-    pool: MachinePool
+    name: str = ""
+    workspaces: list[str] = Field(default_factory=list)
+    """Names of the workspaces this machine may run workloads for."""
     provider_name: str = "agent"
     readiness_phase: MachineReadinessPhase = MachineReadinessPhase.Joining
     readiness_message: str = "Waiting for the agent to connect"
@@ -355,11 +344,11 @@ __all__ = [
     "ContainerStopAllResponse",
     "ContainerWithAppPageResponse",
     "ContainerWithAppResponse",
-    "MachineCreateRequest",
     "MachineJoinCommandRequest",
     "MachineJoinCommandResponse",
     "MachineListResponse",
     "MachineResponse",
+    "MachineUpdateRequest",
     "UnitCreateRequest",
     "UnitJoinCommandRequest",
     "UnitJoinCommandResponse",

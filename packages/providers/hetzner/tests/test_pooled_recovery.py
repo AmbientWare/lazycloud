@@ -21,9 +21,9 @@ from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
+from shared.placement import Placement
 
 
 class _IPUpdate(BaseModel):
@@ -43,7 +43,7 @@ def test_observation_does_not_mutate_and_ensure_recovers_unbound_nodes(
                 id=unit_id,
                 workspace_id=namespace_id,
                 name=UnitName("hetzner-recovery"),
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
                 capacity_owner_id=unit_id,
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider,
                 capacity_owner_source=CapacityOwnerSource.Provider,

@@ -8,7 +8,8 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerWorkerRecord,
 )
-from shared.compute_policy import MachinePool, UnitName
+from shared.compute_policy import UnitName
+from shared.placement import Placement
 from tests.real_redis import RealRedisActors
 
 _FOREIGN_CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
@@ -29,13 +30,14 @@ def test_delete_pool_cleans_private_agent_state(
         unit.capacity_owner_id,
         WorkerPoolStateSnapshot(
             capacity_owner_id=unit.capacity_owner_id,
-            pool=unit.pool,
+            placement=unit.placement,
         ),
     )
-    scheduler_replicas_key = scheduler_pool_states.keys.worker_pool_replicas(unit.capacity_owner_id)
+    scheduler_replicas_key = scheduler_pool_states.keys.unit_replicas(unit.capacity_owner_id)
     redis.set(scheduler_replicas_key, "replica-state")
     compute_states.save_unit_state(
         ComputeUnitState(
+            placement=Placement.platform(),
             workspace_id=workspace_id,
             name=UnitName("cleanup-pool"),
             capacity_owner_id=unit.capacity_owner_id,
@@ -46,30 +48,28 @@ def test_delete_pool_cleans_private_agent_state(
         SchedulerWorkerRecord(
             capacity_owner_id=unit.capacity_owner_id,
             worker_id="worker-one",
-            pool=MachinePool("cleanup-pool"),
+            placement=Placement.platform(),
             machine_id="machine-one",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
-            requires_pool_selector=True,
         )
     )
-    # A worker owned by a different pool must survive this deletion even though
-    # it reports the same pool name.
+    # A worker owned by a different unit must survive this deletion even though
+    # it reports the same placement.
     scheduler_workers.add_worker(
         SchedulerWorkerRecord(
             capacity_owner_id=_FOREIGN_CAPACITY_OWNER_ID,
             worker_id="worker-foreign",
-            pool=MachinePool("cleanup-pool"),
+            placement=Placement.platform(),
             machine_id="machine-two",
             status=SchedulerWorkerStatus.Available,
             free_cpu_millicores=1000,
             free_memory_mib=1024,
             total_cpu_millicores=1000,
             total_memory_mib=1024,
-            requires_pool_selector=True,
         )
     )
     gateway = isolated_services.gateway_service
@@ -78,7 +78,8 @@ def test_delete_pool_cleans_private_agent_state(
 
     assert compute_states.get_unit_state(workspace_id, unit.capacity_owner_id) is None
     assert [
-        worker.worker_id for worker in scheduler_workers.list_workers_in_pool("cleanup-pool")
+        worker.worker_id
+        for worker in scheduler_workers.list_workers_in_placement(Placement.platform())
     ] == ["worker-foreign"]
     assert not scheduler_pool_states.delete_unit_state(unit.capacity_owner_id)
     assert redis.get(scheduler_replicas_key) is None

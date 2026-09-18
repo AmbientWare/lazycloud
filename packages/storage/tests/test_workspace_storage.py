@@ -5,11 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from control.service import (
-    ControlPlaneService,
-    WorkspaceStorageAlreadyExistsError,
-    WorkspaceStorageError,
-)
+from compute.policy import WorkspaceComputePolicyService
+from control.service import ControlPlaneService, WorkspaceStorageError
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageRepository
@@ -23,42 +20,12 @@ from shared.app_identity import (
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.identity import (
     WorkspaceStatus,
-    WorkspaceStorageConfig,
 )
 from shared.image_building.records import ImageRecord
 from storage.service import OBJECT_SHA256_METADATA_KEY, ObjectStorage
-from storage.workspace_storage_issuers import external_workspace_storage_settings
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
 from tests.fakes import FakeObjectClient
 from tests.workspaces import owned_workspace
-
-
-def test_external_storage_never_inherits_platform_credentials(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", "platform-access")
-    monkeypatch.setenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY", "platform-secret")
-    monkeypatch.setenv("LAZYCLOUD_OBJECT_STORE_SESSION_TOKEN", "platform-session")
-    storage = WorkspaceStorageConfig(
-        backend="s3",
-        bucket="customer-bucket",
-        config={"endpoint_url": "https://customer-storage.example", "region": "us-east-1"},
-    )
-    with pytest.raises(ValueError, match="own endpoint and key pair"):
-        external_workspace_storage_settings(storage)
-    supplied = storage.model_copy(
-        update={
-            "config": {
-                **storage.config,
-                "access_key": "customer-access",
-                "secret_key": "customer-secret",
-            }
-        }
-    )
-    settings = external_workspace_storage_settings(supplied)
-    assert settings.access_key_id == "customer-access"
-    assert settings.secret_access_key == "customer-secret"
-    assert settings.session_token == ""
 
 
 @dataclass
@@ -159,6 +126,7 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     bucket_client = BucketClient()
     service = ControlPlaneService(
         service_context,
+        placement_resolver=WorkspaceComputePolicyService(service_context),
         workspace_storage_client=bucket_client,
     )
 
@@ -171,12 +139,8 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     assert workspace.storage.bucket == f"workspace-{created.workspace_id}"
     assert workspace.storage.backend == "s3"
     assert workspace.storage.prefix == ""
-    assert workspace.storage.config["endpoint_url"] == "http://storage:9000"
-    # The platform's own credentials are not copied here. They open every
-    # workspace's bucket, and this record is read to build a credential handed to
-    # a worker running other customers' containers.
-    assert "access_key" not in workspace.storage.config
-    assert "secret_key" not in workspace.storage.config
+    assert workspace.storage.endpoint_url == "http://storage:9000"
+    assert workspace.storage.region == "us-test-1"
     assert bucket_client.created == [f"workspace-{created.workspace_id}"]
     assert bucket_client.validated == [f"workspace-{created.workspace_id}"]
     assert AuthService(service_context).authenticate(created.token).workspace_id == (
@@ -190,6 +154,7 @@ def test_workspace_storage_creation_validates_before_persisting(
     bucket_client = BucketClient(fail_validate=True)
     service = ControlPlaneService(
         service_context,
+        placement_resolver=WorkspaceComputePolicyService(service_context),
         workspace_storage_client=bucket_client,
     )
     workspace = owned_workspace(service, "broken")
@@ -203,43 +168,6 @@ def test_workspace_storage_creation_validates_before_persisting(
     assert bucket_client.validated == [f"workspace-{workspace.id}"]
 
 
-def test_external_workspace_storage_validates_and_rejects_duplicates(
-    service_context: ServiceContext,
-) -> None:
-    external_client = BucketClient()
-    validated_configs: list[WorkspaceStorageConfig] = []
-
-    def client_factory(storage: WorkspaceStorageConfig) -> BucketClient:
-        validated_configs.append(storage)
-        return external_client
-
-    service = ControlPlaneService(
-        service_context,
-        workspace_storage_client_factory=client_factory,
-    )
-    workspace = owned_workspace(service, "tenant")
-    storage = WorkspaceStorageConfig(
-        backend="s3",
-        bucket="external-bucket",
-        config={
-            "endpoint_url": "https://s3.example.test",
-            "region": "us-east-1",
-            "access_key": "external-access",
-            "secret_key": "external-secret",
-        },
-    )
-
-    updated = service.attach_external_workspace_storage(workspace.id, storage)
-
-    assert updated.storage.bucket == "external-bucket"
-    assert external_client.created == []
-    assert external_client.validated == ["external-bucket"]
-    assert external_client.close_count == 1
-    assert validated_configs == [storage]
-    with pytest.raises(WorkspaceStorageAlreadyExistsError, match="already exists"):
-        service.attach_external_workspace_storage(workspace.id, storage)
-
-
 def test_workspace_objects_with_same_logical_location_are_physically_isolated(
     service_context: ServiceContext,
 ) -> None:
@@ -249,7 +177,9 @@ def test_workspace_objects_with_same_logical_location_are_physically_isolated(
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     first = owned_workspace(control, "first-object-owner")
     second = owned_workspace(control, "second-object-owner")
 
@@ -302,7 +232,10 @@ def test_logical_object_purposes_share_one_physical_bucket_with_distinct_prefixe
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(service_context), "logical-object-purpose-owner"
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "logical-object-purpose-owner",
     )
 
     records = tuple(
@@ -343,7 +276,12 @@ def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
         object_client=client,
         default_bucket="physical-objects",
     )
-    workspace = owned_workspace(ControlPlaneService(service_context), "immutable-object-owner")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "immutable-object-owner",
+    )
     source = tmp_path / "artifact.bin"
     source.write_bytes(b"immutable payload")
 
@@ -401,7 +339,12 @@ def test_object_completeness_requires_exact_metadata_and_maps_store_outages(
         object_client=client,
         default_bucket="physical-objects",
     )
-    workspace = owned_workspace(ControlPlaneService(service_context), "object-completeness-owner")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "object-completeness-owner",
+    )
     record = storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket=WORKSPACE_OBJECT_BUCKET,
@@ -438,7 +381,9 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     leaving = owned_workspace(control, "archive-leaving-owner")
     staying = owned_workspace(control, "archive-staying-owner")
     image_id = "shared-image"

@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Annotated, Any, Protocol, runtime_checkable
 
 import typer
-from shared.compute_policy import MachinePool
 
 from lazycloud._invocation import prepare_arguments
 from lazycloud.abstractions.app import App, AppDeployResult
@@ -84,7 +83,10 @@ def deploy(
     availability_zone: Annotated[
         str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
     ] = None,
-    pool: Annotated[str | None, typer.Option("--pool")] = None,
+    machine: Annotated[
+        str | None,
+        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
+    ] = None,
     preemptible: Annotated[
         bool | None,
         typer.Option("--preemptible/--no-preemptible"),
@@ -107,7 +109,7 @@ def deploy(
         tcp=tcp,
         region=region,
         availability_zone=availability_zone,
-        pool=MachinePool(pool) if pool else None,
+        machine=machine,
         preemptible=preemptible,
         entrypoint=entrypoint,
     )
@@ -135,7 +137,7 @@ def deploy(
                 secrets=overrides.secrets,
                 region=overrides.region,
                 availability_zone=overrides.availability_zone,
-                pool=overrides.pool,
+                machine=overrides.machine,
                 preemptible=overrides.preemptible,
             )
         elif not isinstance(user_object, App) and overrides.has_values():
@@ -159,7 +161,7 @@ def deploy(
                 tcp=overrides.tcp,
                 region=overrides.region,
                 availability_zone=overrides.availability_zone,
-                pool=overrides.pool,
+                machine=overrides.machine,
                 preemptible=overrides.preemptible,
                 entrypoint=overrides.entrypoint,
             )
@@ -219,7 +221,10 @@ def run(
     availability_zone: Annotated[
         str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
     ] = None,
-    pool: Annotated[str | None, typer.Option("--pool")] = None,
+    machine: Annotated[
+        str | None,
+        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
+    ] = None,
     preemptible: Annotated[
         bool | None,
         typer.Option("--preemptible/--no-preemptible"),
@@ -254,7 +259,7 @@ def run(
         tcp=tcp,
         region=region,
         availability_zone=availability_zone,
-        pool=MachinePool(pool) if pool else None,
+        machine=machine,
         preemptible=preemptible,
         entrypoint=entrypoint,
     )
@@ -285,7 +290,7 @@ def run(
                 secrets=overrides.secrets,
                 region=overrides.region,
                 availability_zone=overrides.availability_zone,
-                pool=overrides.pool,
+                machine=overrides.machine,
                 preemptible=overrides.preemptible,
             )
             response = call_handler(target.remote, args=list(prepared_args), kwargs=prepared_kwargs)
@@ -326,7 +331,10 @@ def shell(
     availability_zone: Annotated[
         str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
     ] = None,
-    pool: Annotated[str | None, typer.Option("--pool")] = None,
+    machine: Annotated[
+        str | None,
+        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
+    ] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
     _require_interactive_output(ctx)
@@ -356,7 +364,7 @@ def shell(
         tcp=tcp,
         region=region,
         availability_zone=availability_zone,
-        pool=MachinePool(pool) if pool else None,
+        machine=machine,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
         container_id=container_id,
@@ -582,7 +590,7 @@ def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
         tcp=overrides.tcp,
         region=overrides.region,
         availability_zone=overrides.availability_zone,
-        pool=overrides.pool,
+        machine=overrides.machine,
         preemptible=overrides.preemptible,
     )
 

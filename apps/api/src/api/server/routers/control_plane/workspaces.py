@@ -6,7 +6,6 @@ from urllib.parse import urlparse
 from control.service import (
     ControlPlaneService,
     WorkspaceStorageAlreadyExistsError,
-    WorkspaceStorageAuthorizationError,
     WorkspaceStorageError,
 )
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,10 +20,8 @@ from shared.http.workspaces import (
     WorkspaceListResponse,
     WorkspaceResponse,
     WorkspaceSetRequest,
-    WorkspaceStorageRequest,
     WorkspaceUpdateRequest,
     workspace_response,
-    workspace_storage_config,
 )
 from shared.identity import PlatformRole, WorkspaceRecord
 
@@ -38,8 +35,6 @@ router = APIRouter()
 
 
 def _storage_http_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, WorkspaceStorageAuthorizationError):
-        return HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
     if isinstance(exc, WorkspaceStorageAlreadyExistsError):
         return HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     if isinstance(exc, WorkspaceStorageError):
@@ -75,43 +70,13 @@ def api_v1_create_workspace(
     authority over any account, so there would be nobody to own what it created.
     """
     try:
-        storage = workspace_storage_config(request.storage) if request.storage is not None else None
         result = service.create_workspace(
             request.name,
             owner_user_id=require_user_principal(token),
-            storage=storage,
+            connection_id=request.connection_id,
         )
         return workspace_response(result.workspace)
     except (KeyError, WorkspaceStorageError) as exc:
-        raise _storage_http_error(exc) from exc
-
-
-@router.post(
-    "/api/v1/workspaces/set-external-storage",
-    response_model=WorkspaceResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="set_external_workspace_storage",
-)
-def api_v1_set_external_workspace_storage(
-    request: WorkspaceStorageRequest,
-    workspace_id: write_workspace,
-    token: write_token,
-    service: ControlPlaneService = Depends(control_plane_service),
-) -> WorkspaceResponse:
-    try:
-        return workspace_response(
-            service.attach_external_workspace_storage(
-                workspace_id,
-                request.workspace_storage(),
-                token_id_for_cache_invalidation=token.id,
-            )
-        )
-    except (
-        KeyError,
-        WorkspaceStorageAlreadyExistsError,
-        WorkspaceStorageAuthorizationError,
-        WorkspaceStorageError,
-    ) as exc:
         raise _storage_http_error(exc) from exc
 
 
@@ -164,9 +129,6 @@ def upsert_workspace(
         service.set_workspace(
             name,
             owner_user_id=require_user_principal(token),
-            storage=(
-                workspace_storage_config(request.storage) if request.storage is not None else None
-            ),
             signing_key_prefix=request.signing_key_prefix,
             primary_token_id=request.primary_token_id,
             labels=request.labels,
@@ -304,16 +266,6 @@ def api_v1_create_workspace_storage(
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     try:
-        return workspace_response(
-            service.create_workspace_storage(
-                workspace_id,
-                token_id_for_cache_invalidation=token.id,
-            )
-        )
-    except (
-        KeyError,
-        WorkspaceStorageAlreadyExistsError,
-        WorkspaceStorageAuthorizationError,
-        WorkspaceStorageError,
-    ) as exc:
+        return workspace_response(service.create_workspace_storage(workspace_id))
+    except (KeyError, WorkspaceStorageAlreadyExistsError, WorkspaceStorageError) as exc:
         raise _storage_http_error(exc) from exc
