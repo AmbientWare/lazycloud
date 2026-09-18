@@ -27,7 +27,8 @@ web = app.pod(
 ```
 
 Pods default to `cpu=1.0`, `memory="128Mi"`, `keep_warm=600`, and
-`authorized=False`.
+`authorized=False`. `keep_warm` is how long a container stays up with no
+connections; `keep_warm=-1` keeps it up regardless.
 
 ## Deploy it
 
@@ -43,14 +44,22 @@ uv run lazycloud deploy tools:app --resource pod:web
 Keep the pod's image, command, resources, and mounts in this Python definition.
 Edit it and deploy again to change the service configuration.
 
-For operational changes, manage the deployment from Python with `web.scale(containers)`,
-`web.pause()`, `web.resume()`, and `web.delete()`, or from the CLI:
+A deployed pod runs one container while it has connections and stops it after
+`keep_warm` seconds without any. The next request starts a container and waits
+for it, so a model server that must answer without a start delay wants
+`keep_warm=-1`, which holds one container up until you stop the deployment.
+Pods do not autoscale on load. To run more than one container, set the count
+by hand:
 
 ```bash
 uv run lazycloud deployment list --app tools
 uv run lazycloud deployment scale web --containers 2
 uv run lazycloud deployment stop web
 ```
+
+`scale` pins the deployment to that many containers until you scale again;
+`--containers 0` stops them all unless the pod is always-on. From Python, use
+`web.scale(containers)`, `web.pause()`, `web.resume()`, and `web.delete()`.
 
 ## Or create an instance on demand
 

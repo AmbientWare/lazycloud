@@ -17,6 +17,14 @@ A task is `pending` until a container picks it up, then `running`. If an
 attempt fails and retries remain it is `retry`. It ends as `complete`,
 `failed`, `timeout`, `cancelled`, or `expired`. Retries stay on the same task.
 
+A task that stays `pending` is waiting for a container. After five seconds the
+live progress in `lazycloud run` and the dashboard say what for: compute is
+being started, the container is starting, every container is busy, the
+workspace is at its compute limit, an input call has not finished, or a retry
+delay is running. "Every container is busy" for longer than a container start
+takes means the workload is at its `max_containers`; see
+[Scaling and concurrency](/concepts/scaling).
+
 ## From the CLI
 
 ```bash
