@@ -42,10 +42,8 @@ belongs to the connected account, then submits the connection template directly
 to CloudFormation. Run `cloud validate` after the stack finishes. Your AWS
 credentials stay on your machine.
 
-`cloud status --until` accepts `awaiting_authorization`, `validating`,
-`ready`, `degraded`, `reconnect_pending`, `retiring_authorization`,
-`disconnect_draining`, `revoking`, `verifying_revocation`, and
-`action_required`.
+`cloud status --until <phase>` waits for the connection to reach a phase, such
+as `ready`.
 
 LazyCloud manages provisioning settings for connected AWS accounts. Workloads
 select their CPU, memory, GPU, and pool.

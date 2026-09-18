@@ -127,11 +127,9 @@ The command runs the agent in the foreground. Add `--background` to install a
 service that keeps running after the terminal closes. The machine joins the pool
 you name, or `self-hosted` if you name none, and creates the pool if it is new.
 
-A machine pool is removed after its last machine leaves and cleanup finishes.
-An unexpired join credential keeps the pool available for the joining machine.
-Going offline does not remove a machine or its pool. Workloads targeting a
-removed pool fail until you join a machine with that pool name again. Connected
-AWS pools and LazyCloud capacity remain available when they scale to zero.
+A pool is removed after its last machine leaves; going offline does not remove
+a machine. Workloads targeting a removed pool fail until a machine joins it
+again.
 
 The dashboard has the same flow under Settings, then Compute, then Join a
 machine, and shows the host checks as they pass. Select that pool with
