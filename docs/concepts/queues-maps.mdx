@@ -54,12 +54,9 @@ days is the maximum timed expiry. Use `ttl=0` to keep a key until you delete it.
 Open **Storage**, then **Queues** or **Maps**. Keep repeatable setup in your
 Python code; use the dashboard to inspect data or make an ad hoc correction.
 
-For a map, filter keys by prefix and scroll to load more. Select a key to
-view its value and expiry. **Edit value** accepts JSON and keeps the existing
-expiry unless you choose a new one. If a workload changes the value or expiry
-while you edit, saving fails and leaves your draft intact. **Discard draft and
-reload** loads the current value so you can start again. Binary Python values
-can be inspected and deleted, but cannot be edited in the dashboard.
+For a map, select a key to view or edit its value and expiry. Saving fails if a
+workload changed the key meanwhile; reload and try again. Binary Python values
+can be inspected and deleted but not edited.
 
 **Add key** creates a key without overwriting an existing one. To create a
 map, choose **New map** and enter its name and first key/value.

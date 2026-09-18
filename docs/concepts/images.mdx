@@ -32,8 +32,7 @@ The result reports the remote ffmpeg version. Your machine does not need ffmpeg.
 Use `.add_python_packages(["httpx"])` to install a Python dependency.
 
 Images are cached by content. Keep dependency versions pinned when you need
-reproducible builds. A confirmed provider interruption permits one automatic
-retry within the build's original deadline.
+reproducible builds.
 
 `Image()` with no arguments is the managed Python 3.12 image. Python 3.10
 through 3.14 are available. You can also pin a patch release, such as `3.12.11`.
@@ -85,10 +84,8 @@ required. Dependencies are resolved during the build; this factory does not use
 uv or Poetry lockfiles as installation guarantees. Use the corresponding
 factory when you need locked dependencies.
 
-The declared build backend builds packaged projects and resolves dynamic
-dependency metadata. Projects without a build backend install dependencies
-without installing the root project. Package-manager-specific dependency source
-overrides are not used.
+Packaged projects are built with their declared build backend; projects without
+one install only their dependencies.
 
 ### Micromamba
 
@@ -118,12 +115,9 @@ An explicit `python_version` overrides the project's interpreter pin:
 image = Image.from_uv(".", python_version="3.12.11")
 ```
 
-Otherwise, Python projects use `.python-version`, and Micromamba uses the Python
-pin in the environment file. Without a pin, LazyCloud selects Python 3.12 when
-compatible, otherwise the lowest supported compatible minor version.
-`requires-python` is a compatibility constraint, not an interpreter pin.
-Unsupported pins and incompatible requirements fail instead of silently
-changing versions. Exact patch pins are preserved.
+Otherwise the project's pin is used: `.python-version` for Python projects, the
+`python=` entry for Micromamba. Without a pin, Python 3.12 is used when
+compatible. Unsupported pins fail rather than change versions.
 
 Factories return an ordinary image that you can extend:
 
