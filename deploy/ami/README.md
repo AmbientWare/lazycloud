@@ -5,10 +5,13 @@ dependencies needed before an agent can start. They do not contain a LazyCloud r
 image.
 
 The `Connected AWS Node Images` workflow runs only by explicit dispatch from
-`main`. Its CPU and GPU jobs run in parallel. Each job resolves the latest Amazon
-Linux 2023 x86_64 image, launches a temporary bake instance, installs Docker,
-host networking tools, zram, and SSM, then registers an immutable AMI. The GPU variant
-also installs and verifies the pinned NVIDIA driver and container toolkit.
+`main`. Its CPU and GPU jobs run in parallel. Each job bakes once, in the first
+region it is given, and copies that AMI into every other region. The bake
+resolves the latest Amazon Linux 2023 x86_64 image, launches a temporary bake
+instance, installs Docker, host networking tools, zram, and SSM, then registers
+an immutable AMI. The GPU variant also installs and verifies the pinned NVIDIA
+driver and container toolkit. Copies carry the source's tags and proof; only the
+bake region needs a public fleet subnet.
 
 The instance syncs its filesystem and prints the completion marker, then stays
 running. The controller reads that marker from EC2 console output, stops the
@@ -56,7 +59,8 @@ uv run --group workspace python -m deploy.ami.bake \
   --regions us-east-1
 ```
 
-`bake.py` prints a JSON region-to-AMI map on stdout and progress on stderr. CPU
+`bake.py` prints a JSON region-to-AMI map on stdout and progress on stderr. The
+first `--regions` entry is where the bake runs; the rest receive copies. CPU
 bakes use `c7i.large` with a 16 GiB volume. GPU bakes use `g4dn.xlarge` with a 40
 GiB volume so the bake can prove `nvidia-smi` and the Docker NVIDIA runtime before
 publishing an image.

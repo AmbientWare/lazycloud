@@ -162,6 +162,7 @@ Resources:
                     ec2:CreateAction:
                       - RunInstances
                       - CreateImage
+                      - CopyImage
               - Sid: CaptureBakeImageFromInstance
                 Effect: Allow
                 Action: ec2:CreateImage
@@ -171,7 +172,9 @@ Resources:
                     ec2:ResourceTag/cloud-pool:managed-by: control-plane
               - Sid: CaptureBakeImageArtifacts
                 Effect: Allow
-                Action: ec2:CreateImage
+                Action:
+                  - ec2:CreateImage
+                  - ec2:CopyImage
                 Resource:
                   - arn:aws:ec2:*::image/*
                   - arn:aws:ec2:*::snapshot/*

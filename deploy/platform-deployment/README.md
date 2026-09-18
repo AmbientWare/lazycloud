@@ -45,6 +45,7 @@ connection networks and customer-managed authorization stacks.
 Image baking selects tagged public fleet subnets with an active internet route
 and their fleet security group. Apply the release-assets stack's EC2 inventory
 permissions before running the image workflow. It does not rely on default VPCs.
+Only the bake region needs a public subnet; other regions receive AMI copies.
 
 Set `region="us-west"` in SDK workload configuration to require Oregon.
 Automatic placement may choose either approved region. A region needs its
