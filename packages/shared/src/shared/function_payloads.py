@@ -69,13 +69,6 @@ FunctionResultRichDisplay: TypeAlias = Annotated[
 
 
 class FunctionResultDisplay(ContractModel):
-    """How a Python result looks without loading it.
-
-    `text` is always present so a terminal has something to print. `rich` is the
-    object's own HTML or PNG rendering when it offers one, for surfaces that can
-    show it.
-    """
-
     text: str = Field(max_length=FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS)
     rich: FunctionResultRichDisplay | None = None
 

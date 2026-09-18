@@ -1,8 +1,7 @@
-"""Describe a Python result for surfaces that will never load it.
+"""Describe a Python result for surfaces that never load it.
 
-Any object has a `repr`; objects that care how they look also implement
-`_repr_png_` or `_repr_html_`. Both are the object's own decision, so no type
-needs naming here and libraries that were never imported still render.
+Rendering is the object's decision: `repr` for text, `_repr_png_` or
+`_repr_html_` when it defines them. No type is named here.
 """
 
 from __future__ import annotations
@@ -60,10 +59,9 @@ def _call_repr_method(value: object, name: str) -> object:
     try:
         result: object = method()
     except Exception:
-        # The object's rendering failed; its text still stands, so the result does.
         LOGGER.debug("%s.%s failed", type(value).__name__, name, exc_info=True)
         return None
-    # The display protocol allows `(data, metadata)`; only the data matters here.
+    # `_repr_*_` may return `(data, metadata)`.
     if _is_tuple(result):
         return result[0] if result else None
     return result

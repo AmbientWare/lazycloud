@@ -100,14 +100,6 @@ JSON-compatible contracts. Call Python-only functions through their source SDK
 objects by importing the decorated function and calling `.remote()`. Only load
 Python objects from code you trust. Unpickling can execute code.
 
-The dashboard and `lazycloud task result` never load a stored Python object.
-They show the description the container recorded when the function returned:
-the object's text, and its own HTML or PNG rendering when it defines
-`_repr_html_` or `_repr_png_`, as data frames, plots, and images do. Text is
-kept to 64 KiB, HTML to 256 KiB, and images to 1 MiB. Either surface can hand
-you the pickled object as a file; `--output result.pkl` on the CLI, a download
-button in the dashboard.
-
 Serialized arguments and results are limited to 16 MiB each. Store larger outputs
 as artifacts and return a reference. Live connections, locks, and generators
 are not portable return values.

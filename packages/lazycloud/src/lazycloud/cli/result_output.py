@@ -66,7 +66,6 @@ def task_result_export(task: TaskResponse) -> ResultExport:
 
 
 def _task_result_payload(task: TaskResponse) -> FunctionResultPayload | None:
-    """The typed envelope of a function task, or None for any other stored result."""
     workload = task.workload
     if task.result is None or workload is None or workload.kind is not StubKind.Function:
         return None
@@ -90,11 +89,7 @@ def rich_display_hint(rich: FunctionResultRichDisplay) -> Text:
 
 
 class ResultExport:
-    """Write one result to a file named by its extension.
-
-    `.png` and `.html` are the object's own renderings, `.txt` is its text, `.json`
-    is a JSON result, and `.pkl` is the pickled Python object.
-    """
+    """Write one result to a file; the extension picks the form."""
 
     def __init__(
         self,

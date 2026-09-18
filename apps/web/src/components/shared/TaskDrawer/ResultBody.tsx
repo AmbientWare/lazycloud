@@ -14,13 +14,8 @@ import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
- * A task's recorded outcome.
- *
- * A function result arrives as a typed envelope. JSON results show their value;
- * Python results show the description the runner wrote beside the pickle,
- * which is the object's own HTML or PNG when it offers one and its text
- * otherwise. The pickle itself is never loaded here; it is offered as a file.
- * Anything that is not a function envelope is shown as the JSON it is.
+ * A task's recorded outcome. A Python result shows the display the runner
+ * stored beside the pickle; the pickle itself is only ever offered as a file.
  */
 export function ResultBody({
   error,
@@ -179,9 +174,8 @@ function RichDisplay({ rich }: { rich: FunctionResultRichDisplay }) {
 }
 
 /**
- * The frame is sandboxed with no permissions, so the markup cannot run script or
- * reach this origin. It also cannot read our stylesheet, so the few rules a bare
- * table needs to sit on the dark panel travel with the document.
+ * The sandboxed frame cannot read our stylesheet, so the rules a bare table
+ * needs on the dark panel travel with the document.
  */
 function htmlDocument(html: string): string {
   return (

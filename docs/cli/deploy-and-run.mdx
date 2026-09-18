@@ -72,11 +72,9 @@ objects. `--json` requires a JSON-compatible result and reports an output error
 if the completed call returned a Python-only value. Use the Python SDK to work
 with the returned object and preserve its type.
 
-`--output FILE` saves the result as well, and the file name decides the form:
-`.pkl` is the pickled object, `.txt` its text, `.json` a JSON-compatible value,
-and `.png` or `.html` the object's own rendering when it defines `_repr_png_` or
-`_repr_html_`. When a result renders that way, the terminal says so under the
-value.
+`--output FILE` also saves the result. The extension picks the form: `.pkl`,
+`.txt`, `.json`, or `.png`/`.html` when the object defines `_repr_png_` or
+`_repr_html_`.
 Build logs remain in terminal history instead of disappearing from the live
 display. Local Python `.remote()` calls also show output by default; see
 [Progress and logs](/concepts/functions#progress-and-logs).

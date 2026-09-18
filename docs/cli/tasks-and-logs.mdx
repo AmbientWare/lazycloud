@@ -25,10 +25,7 @@ uv run lazycloud task result <task-id> --timeout 60
 uv run lazycloud task result <task-id> --output result.pkl
 ```
 
-`task result` prints a Python result's recorded text without loading the
-object. `--output` saves it: `.pkl` for the pickled object, `.txt` for the text,
-`.json` for a JSON result, and `.png` or `.html` for the rendering the object
-defined through `_repr_png_` or `_repr_html_`.
+`--output` takes the same file types as [`lazycloud run`](/cli/deploy-and-run#lazycloud-run).
 
 ## lazycloud logs
 
