@@ -72,6 +72,7 @@ from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
 from coordination.wake_signal import WakeSignalPublisher
 from database.context import ServiceContext
+from database.repositories.apps import StubRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
@@ -118,7 +119,7 @@ from scheduler.workers import (
 )
 from shared.app_identity import AGENT_NAME
 from shared.app_slug import app_slug_or_default, validate_app_slug
-from shared.aws_connections import AWS_CONNECTED_MACHINE_POOL
+from shared.capacity import UnitName
 from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
@@ -128,9 +129,7 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
-    LAZYCLOUD_MACHINE_POOL,
     ComputeUnitRecord,
-    MachinePool,
 )
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
@@ -200,6 +199,7 @@ from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
 from shared.logs import LogEntry
 from shared.objects import ObjectRecord
+from shared.placement import Placement, PlacementKind
 from shared.realtime.streams import LogStreamQuery
 from shared.releases import ActiveRelease
 from shared.routing import AgentBackendRoute
@@ -217,6 +217,7 @@ from shared.source_cache_cleanup import (
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit, usage_record_id
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
 from worker.container_client.scheduler import SchedulerContainerClientFactory
@@ -344,9 +345,6 @@ def _request_with_workload_defaults(
         updates["retries"] = resolve_retries(kind.value, None)
     return request.model_copy(update=updates) if updates else request
 
-
-RESERVED_MACHINE_NAMES = frozenset({LAZYCLOUD_MACHINE_POOL, AWS_CONNECTED_MACHINE_POOL})
-"""Labels the platform derives for its own and connected capacity; no machine may take them."""
 
 MACHINE_STATUS_FOR_READINESS = {
     MachineReadinessPhase.Ready: ResourceStatus.Running,
@@ -792,10 +790,6 @@ class GatewayControlService:
             kind = stub_kind(request.stub_type)
             request = _request_with_workload_defaults(request, kind)
             config = stub_config(request)
-            pool = self.services.workspace_compute_policy_service.resolve_placement(
-                workspace_id=request.workspace,
-                machine=request.machine,
-            )
             app_name = app_slug_or_default(request.app_name, default=request.name)
             metadata: dict[str, JsonValue] = {
                 "object_id": request.object_id,
@@ -813,7 +807,6 @@ class GatewayControlService:
                 handler=request.handler or None,
                 public=not request.authorized,
                 config=config,
-                pool=pool,
                 metadata=metadata,
             )
         except (KeyError, ValueError) as exc:
@@ -986,7 +979,7 @@ class GatewayControlService:
                     raise ConflictError(f"compute pool {name!r} has active capacity reservations")
                 if self._unit_has_active_containers(
                     workspace_id=workspace_id,
-                    pool=owner.pool,
+                    placement=owner.placement,
                     capacity_owner_id=owner.capacity_owner_id,
                 ):
                     raise ConflictError(
@@ -1038,7 +1031,7 @@ class GatewayControlService:
         self,
         *,
         workspace_id: str,
-        pool: MachinePool,
+        placement: Placement,
         capacity_owner_id: str,
     ) -> bool:
         owner_worker_ids = {
@@ -1073,7 +1066,7 @@ class GatewayControlService:
                     container.stub_id,
                     workspace=workspace_id,
                 )
-                if stub.pool == pool:
+                if stub.placement == placement:
                     return True
         return False
 
@@ -1138,8 +1131,6 @@ class GatewayControlService:
         token_id: str,
     ) -> JoinTokenCreationPlan:
         name = request.name
-        if name in RESERVED_MACHINE_NAMES:
-            raise InvalidInputError(f"machine name {name!r} is reserved")
         workspace_ids = self._owned_workspace_ids(user_id, request.workspaces)
         anchor_workspace_id = workspace_ids[0]
         with self.services.context.database.session() as session:
@@ -1160,9 +1151,15 @@ class GatewayControlService:
                         f"machine {name!r} is already joined; run 'lazycloud-agent leave' "
                         "on it before joining a machine under that name"
                     )
-        unit = self._resolve_machine_unit(anchor_workspace_id, name=name, gpu=list(request.gpu))
         now = utc_now()
         reuse = existing is not None and existing_workspace_id == anchor_workspace_id
+        machine_id = existing.id if existing is not None and reuse else str(uuid4())
+        placement = Placement.machine(machine_id)
+        # The machine row exists before its unit: the unit is derived from the
+        # machine's identity, and a workload names the machine, never the unit.
+        unit_id, unit_name = joined_unit_identity(
+            workspace_id=anchor_workspace_id, placement=placement, provider="agent"
+        )
         with self.services.context.database.session() as session:
             machines = MachineRepository(session)
             if existing is not None and not reuse:
@@ -1173,21 +1170,33 @@ class GatewayControlService:
                     ),
                     workspace_id=existing_workspace_id,
                 )
-            machine = machines.upsert(
-                Machine(
-                    id=existing.id if existing is not None and reuse else str(uuid4()),
-                    name=name,
-                    workspace_ids=tuple(workspace_ids),
-                    pool=unit.pool,
-                    capacity_owner_id=unit.capacity_owner_id,
-                    provider="agent",
-                    status=ResourceStatus.Created,
-                    labels={"source": "attached"},
-                    created_at=existing.created_at if existing is not None and reuse else now,
-                    updated_at=now,
-                ),
-                workspace_id=anchor_workspace_id,
-            )
+            try:
+                machine = machines.upsert(
+                    Machine(
+                        id=machine_id,
+                        name=name,
+                        workspace_ids=tuple(workspace_ids),
+                        placement=placement,
+                        capacity_owner_id=unit_id,
+                        provider="agent",
+                        status=ResourceStatus.Created,
+                        labels={"source": "attached"},
+                        created_at=existing.created_at if existing is not None and reuse else now,
+                        updated_at=now,
+                    ),
+                    workspace_id=anchor_workspace_id,
+                    owner_user_id=user_id,
+                )
+            except IntegrityError as exc:
+                # Two joins under one name raced past the lookup; the index settles it.
+                raise ConflictError(f"machine {name!r} is already joined") from exc
+        unit = self._resolve_machine_unit(
+            anchor_workspace_id,
+            unit_id=unit_id,
+            unit_name=unit_name,
+            placement=placement,
+            gpu=list(request.gpu),
+        )
         return self.unit_state_coordinator.create_unit_join_token(
             unit,
             workspace_id=anchor_workspace_id,
@@ -1220,40 +1229,37 @@ class GatewayControlService:
         self,
         workspace_id: str,
         *,
-        name: str,
+        unit_id: str,
+        unit_name: UnitName,
+        placement: Placement,
         gpu: list[str],
     ) -> ComputeUnitRecord:
         """Find or create the unit that owns one joined machine.
 
-        One unit per machine, labelled by the machine's name, which is the only
-        label a workload can select it by. Nothing declares this unit; it exists
-        because a machine asked to join, and the identity is derived so asking
-        twice resolves the same row.
+        One unit per machine, placed on that machine. Nothing declares this
+        unit; it exists because a machine asked to join, and the identity is
+        derived so asking twice resolves the same row.
         """
-        _, unit_name = joined_unit_identity(
-            workspace_id=workspace_id,
-            pool=MachinePool(name),
-            provider="agent",
-        )
         try:
             current = self.unit_state_coordinator.unit_by_name(
                 unit_name,
                 workspace_id=workspace_id,
             )
         except NotFoundError:
-            return self.unit_state_coordinator.create_or_update_pool(
+            return self.unit_state_coordinator.create_or_update_unit(
                 PoolConfig(name=unit_name, providers=["agent"], gpu=gpu),
                 workspace_id=workspace_id,
-                pool=MachinePool(name),
+                placement=placement,
+                capacity_owner_id=unit_id,
             )
         config = pool_config_from_unit(current)
         merged = [*config.gpu, *[item for item in gpu if item not in config.gpu]]
         if merged == config.gpu:
             return current
-        return self.unit_state_coordinator.create_or_update_pool(
+        return self.unit_state_coordinator.create_or_update_unit(
             config.model_copy(update={"providers": ["agent"], "gpu": merged}),
             workspace_id=workspace_id,
-            pool=current.pool,
+            placement=current.placement,
         )
 
     def machine_responses(self, *, workspace_id: str) -> list[MachineResponse]:
@@ -1281,6 +1287,17 @@ class GatewayControlService:
             anchor_workspace_id = machines.workspace_id(current.id)
             if anchor_workspace_id is None:
                 raise NotFoundError(f"machine not found: {machine}")
+            # A workload already pinned to this machine keeps scheduling onto it, so
+            # a workspace cannot be dropped from the list while one of its workloads
+            # still names the machine; the owner removes those first.
+            removed = set(current.workspace_ids) - set(workspace_ids)
+            pinned = StubRepository(session).workspaces_pinned_to(current.placement, removed)
+            if pinned:
+                names = WorkspaceRepository(session).names_for_ids(pinned)
+                raise ConflictError(
+                    f"workloads in {', '.join(sorted(names.values()))} still name machine "
+                    f"{current.name!r}; remove them before dropping those workspaces"
+                )
             updated = machines.upsert(
                 current.model_copy(
                     update={"workspace_ids": tuple(workspace_ids), "updated_at": utc_now()}
@@ -1717,7 +1734,7 @@ class GatewayControlService:
         bootstrap_pool = private_unit_for_enrollment(pool)
         response = JoinAgentResponse(
             workspace_id=state.workspace_id,
-            pool=state.pool,
+            placement=state.placement,
             machine_id=state.machine_id,
             agent_token=raw_token,
             credential_id=state.credential_id,
@@ -1904,7 +1921,7 @@ class GatewayControlService:
                     workspace_ids=(
                         durable_machine.workspace_ids if durable_machine is not None else ()
                     ),
-                    pool=agent_state.pool,
+                    placement=agent_state.placement,
                     capacity_owner_id=agent_state.capacity_owner_id,
                     provider="agent",
                     status=(
@@ -1939,7 +1956,7 @@ class GatewayControlService:
                 Worker(
                     id=worker_id,
                     machine_id=agent_state.machine_id,
-                    pool=agent_state.pool,
+                    placement=agent_state.placement,
                     status=(
                         durable_worker.status
                         if durable_worker is not None
@@ -1993,7 +2010,7 @@ class GatewayControlService:
             )
             response = JoinAgentResponse(
                 workspace_id=agent_state.workspace_id,
-                pool=agent_state.pool,
+                placement=agent_state.placement,
                 machine_id=plan.machine_id,
                 agent_token=plan.agent_token,
                 credential_id=agent_state.credential_id,
@@ -2047,8 +2064,8 @@ class GatewayControlService:
                 "agent.join",
                 resource_type="agent",
                 resource_id=state.machine_id,
-                message=f"agent joined pool {state.pool}",
-                data={"pool": state.pool, "machine_id": state.machine_id},
+                message=f"agent joined {state.placement}",
+                data={"placement": state.placement.key, "machine_id": state.machine_id},
                 workspace_id=state.workspace_id,
             )
 
@@ -2060,7 +2077,7 @@ class GatewayControlService:
             enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                 state.workspace_id,
                 state.machine_id,
-                pool=state.pool,
+                placement=state.placement,
             )
         if enrollment is None or enrollment.credential_hash != state.token_hash:
             raise InvalidInputError("agent credential is no longer current")
@@ -2389,7 +2406,7 @@ class GatewayControlService:
                 resource_id=state.machine_id,
                 message=f"agent capacity changed to {state.capacity_state.value}",
                 data={
-                    "pool": state.pool,
+                    "placement": state.placement.key,
                     "machine_id": state.machine_id,
                     "state": state.capacity_state.value,
                     "reason": state.capacity_reason,
@@ -2573,7 +2590,7 @@ class GatewayControlService:
                 resource_id=agent_state.machine_id,
                 message=f"agent worker slot created for {worker_id}",
                 data={
-                    "pool": agent_state.pool,
+                    "placement": agent_state.placement.key,
                     "machine_id": agent_state.machine_id,
                     "worker_id": worker_id,
                 },
@@ -2719,7 +2736,7 @@ class GatewayControlService:
         )
         if worker is None:
             return None
-        if worker.machine_id != agent_state.machine_id or worker.pool != agent_state.pool:
+        if worker.machine_id != agent_state.machine_id or worker.placement != agent_state.placement:
             return None
         with suppress(SchedulerRepositoryError):
             worker = self.scheduler_worker_lookup.reconcile_worker_capacity(worker.worker_id)
@@ -2758,9 +2775,12 @@ class GatewayControlService:
         raw_token, token_record = self.services.auth.create_token(
             f"agent-worker-{agent_state.machine_id}-{uuid4().hex[:8]}",
             scopes=[AuthScope.Worker.value],
+            # Private follows the placement, like the worker record it will
+            # register: platform capacity is the shared fleet, anything else is
+            # hardware or an account a customer owns.
             kind=(
                 TokenKind.Worker
-                if billing_owner is UsageBillingOwner.PlatformFleet
+                if agent_state.placement.kind is PlacementKind.Platform
                 else TokenKind.WorkerPrivate
             ),
             workspace_id=agent_state.workspace_id,
@@ -2839,7 +2859,7 @@ class GatewayControlService:
                 resource_id=agent_state.machine_id,
                 message=f"agent worker slot pruned for {slot.worker_id}",
                 data={
-                    "pool": agent_state.pool,
+                    "placement": agent_state.placement.key,
                     "machine_id": agent_state.machine_id,
                     "worker_id": slot.worker_id,
                 },
@@ -2941,7 +2961,7 @@ class GatewayControlService:
             quantity=float(seconds),
             unit=UsageUnit.Seconds,
             labels={
-                "pool": state.pool,
+                "placement": state.placement.key,
                 "machine_id": state.machine_id,
                 "node_type": str(metadata.get("node_type") or ""),
                 "capacity_source": str(metadata.get("capacity_source") or ""),
@@ -3097,7 +3117,7 @@ class GatewayControlService:
         enrollment = enrollments.by_machine(
             candidate.workspace_id,
             candidate.machine_id,
-            pool=candidate.pool,
+            placement=candidate.placement,
             for_update=True,
         )
         if enrollment is None or enrollment.status is not ComputeMachineEnrollmentStatus.Active:
@@ -3161,7 +3181,7 @@ class GatewayControlService:
                 level=EventLevel.Error,
                 data={
                     "machine_id": candidate.machine_id,
-                    "pool": candidate.pool,
+                    "placement": candidate.placement.key,
                     "workspace_id": candidate.workspace_id,
                     "error_type": type(exc).__name__,
                 },
@@ -3190,7 +3210,7 @@ class GatewayControlService:
         silence = agent_silence_description(telemetry, now=now)
         data: dict[str, JsonValue] = {
             "machine_id": state.machine_id,
-            "pool": state.pool,
+            "placement": state.placement.key,
             "capacity_owner_id": state.capacity_owner_id,
             "last_seen_at": last_seen.isoformat() if last_seen is not None else None,
             "reason": reason,
@@ -3214,7 +3234,7 @@ class GatewayControlService:
             enrollment = enrollments.by_machine(
                 state.workspace_id,
                 state.machine_id,
-                pool=state.pool,
+                placement=state.placement,
                 for_update=True,
             )
             if (
@@ -3255,7 +3275,7 @@ class GatewayControlService:
                     id=machine.id,
                     name=machine.name,
                     workspace_ids=machine.workspace_ids,
-                    pool=machine.pool,
+                    placement=machine.placement,
                     # Rebuilt field by field, so anything omitted here is reset
                     # on every heartbeat.
                     capacity_owner_id=state.capacity_owner_id,
@@ -3311,7 +3331,7 @@ def _join_token_state(
         owner_user_id=credential.user_id,
         workspace_id=credential.workspace_id,
         capacity_owner_id=credential.capacity_owner_id,
-        pool=credential.pool,
+        placement=credential.placement,
         machine_id=credential.machine_id,
         credential_id=credential.id,
         created_by_token_id=credential.created_by_token_id or "workspace",
@@ -3333,7 +3353,7 @@ def _agent_state_from_enrollment(
         owner_user_id=enrollment.user_id,
         workspace_id=enrollment.workspace_id,
         capacity_owner_id=enrollment.capacity_owner_id,
-        pool=enrollment.pool,
+        placement=enrollment.placement,
         machine_id=enrollment.machine_id,
         credential_id=enrollment.id,
         credential_generation=enrollment.credential_generation,
@@ -3407,7 +3427,7 @@ def _machine_enrollment_snapshot(
         user_id=state.owner_user_id,
         workspace_id=state.workspace_id,
         capacity_owner_id=state.capacity_owner_id,
-        pool=state.pool,
+        placement=state.placement,
         machine_id=state.machine_id,
         machine_fingerprint_hash=fingerprint_hash,
         join_credential_id=join_credential_id,

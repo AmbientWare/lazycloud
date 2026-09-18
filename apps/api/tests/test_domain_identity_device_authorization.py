@@ -6,6 +6,7 @@ from datetime import timedelta
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.identity import WorkspaceMemberRepository
 from fastapi.testclient import TestClient
@@ -154,7 +155,13 @@ def test_device_code_approval_requires_a_user_credential(
     with ExitStack() as client_stack:
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         auth = AuthService(isolated_services.context)
-        other_workspace = owned_workspace(ControlPlaneService(isolated_services.context), "other")
+        other_workspace = owned_workspace(
+            ControlPlaneService(
+                isolated_services.context,
+                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+            ),
+            "other",
+        )
         raw_other, _ = auth.create_token(
             "other-workspace",
             kind=TokenKind.Workspace,

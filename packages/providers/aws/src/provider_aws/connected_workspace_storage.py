@@ -20,6 +20,7 @@ from shared.workspace_storage import WorkspaceStorageGrant
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
 from provider_aws.account_connection import (
+    AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION,
     AwsConnectionSessionFactory,
     _AssumeRoleResponse,
     _client_error,
@@ -54,6 +55,23 @@ def connection_storage_region(connection: AwsAccountConnection) -> str:
     if connection.networks:
         return sorted(connection.networks)[0]
     raise ValueError("connected AWS account has no region to keep workspace storage in")
+
+
+def _require_current_template(connection: AwsAccountConnection) -> None:
+    """Refuse an account authorized before bucket permissions joined the template.
+
+    A ready connection is not enough: the role it holds may predate the
+    statement that lets it create buckets, and the failure would otherwise
+    arrive as AccessDenied halfway through creating a workspace.
+    """
+    authorization = connection.active_authorization
+    managed = authorization.managed_authorization if authorization is not None else None
+    if managed is not None and managed.template_version != AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION:
+        raise ValueError(
+            f"AWS account {connection.account_id} was authorized with connection template "
+            f"{managed.template_version}; run `lazycloud cloud reconnect` to authorize "
+            f"{AWS_ACCOUNT_CONNECTION_TEMPLATE_VERSION} before creating a workspace there"
+        )
 
 
 def _endpoint(region: str) -> str:
@@ -103,6 +121,7 @@ class AwsConnectedWorkspaceStorage:
     def provision(
         self, workspace: WorkspaceRecord, connection: AwsAccountConnection
     ) -> WorkspaceStorageConfig:
+        _require_current_template(connection)
         region = connection_storage_region(connection)
         bucket = connected_workspace_bucket(workspace.id)
         client = self._client(workspace, connection, region=region, bucket=bucket, scoped=False)
@@ -174,9 +193,11 @@ class AwsConnectedWorkspaceStorage:
         credentials = self._assume(
             workspace, connection, region=region, bucket=bucket, scoped=scoped
         )
+        # The settings bucket is the client's notion of a shared platform bucket it
+        # must never purge; every call here names the workspace bucket explicitly.
         return S3ObjectStoreClient.from_settings(
             S3ObjectStoreSettings(
-                bucket=bucket,
+                bucket=CONNECTED_WORKSPACE_BUCKET_PREFIX,
                 endpoint_url=_endpoint(region),
                 region_name=region,
                 access_key_id=credentials.access_key_id.get_secret_value(),

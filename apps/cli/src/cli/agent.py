@@ -127,7 +127,7 @@ def agent_list(ctx: typer.Context) -> None:
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in records])
     else:
-        rows = [[item.name, str(item.pool), item.status.value, item.id] for item in records]
+        rows = [[item.name, str(item.placement), item.status.value, item.id] for item in records]
         console.print(table("Agents", ["name", "pool", "status", "id"], rows))
 
 

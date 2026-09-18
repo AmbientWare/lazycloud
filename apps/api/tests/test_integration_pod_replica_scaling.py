@@ -4,6 +4,7 @@ from contextlib import ExitStack
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -32,7 +33,10 @@ def test_pod_replica_scaling_is_typed_authorized_and_lifecycle_gated(
         function = isolated_services.deployments.deploy(
             DeploymentSpec(name="calculate", kind=DeploymentKind.Function)
         )
-        workspace = ControlPlaneService(isolated_services.context).get_workspace(app.workspace_id)
+        workspace = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ).get_workspace(app.workspace_id)
         auth = AuthService(isolated_services.context)
         writer_token, _ = auth.create_token(
             "pod-scale-writer",
@@ -137,9 +141,10 @@ def test_pod_replica_scaling_is_typed_authorized_and_lifecycle_gated(
 
         pod_stub = next(
             stub
-            for stub in ControlPlaneService(isolated_services.context).list_stubs(
-                workspace=workspace.id
-            )
+            for stub in ControlPlaneService(
+                isolated_services.context,
+                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+            ).list_stubs(workspace=workspace.id)
             if stub.deployment_id == deployment.id and stub.kind is StubKind.Pod
         )
         assert pod_stub.config.runtime.keep_warm == 120
@@ -168,7 +173,10 @@ def test_pod_scale_rejects_incompatible_checkpoint_before_mutation(
                 },
             )
         )
-        control_plane = ControlPlaneService(isolated_services.context)
+        control_plane = ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        )
         workspace = control_plane.get_workspace(app.workspace_id)
         token, _ = AuthService(isolated_services.context).create_token(
             "checkpoint-scale-writer",

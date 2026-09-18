@@ -5,6 +5,7 @@ from datetime import datetime
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
@@ -51,8 +52,9 @@ def test_container_scheduling_failure_syncs_container_and_task(
         isolated_services.events,
         isolated_services.workspace_changes,
     ).mark_scheduling_failed(
-        request,
-        "retry-limit",
+        request.container_id,
+        workspace_id=request.workspace_id,
+        reason="retry-limit",
         now=datetime(2026, 1, 1),
     )
 
@@ -73,7 +75,10 @@ def test_function_dependency_waits_then_schedules_materialized_args(
 ) -> None:
     scheduler = _Scheduler()
     isolated_services.containers.scheduler = scheduler
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     stub = control.create_stub(
         "nested-fn",
         kind=StubKind.Function,
@@ -180,7 +185,10 @@ def test_function_result_and_completion_reject_stale_container_attempt(
 ) -> None:
     scheduler = _Scheduler()
     isolated_services.containers.scheduler = scheduler
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "stale-result-function",
         kind=StubKind.Function,
         handler="pkg.fn:handler",
@@ -239,7 +247,9 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
             ),
         ),
     )
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    ).create_stub(
         "cancelled-result-function",
         kind=StubKind.Function,
         handler="pkg.fn:handler",
@@ -300,7 +310,10 @@ def test_function_dependency_failure_fails_downstream_without_scheduling(
 ) -> None:
     scheduler = _Scheduler()
     isolated_services.containers.scheduler = scheduler
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     stub = control.create_stub(
         "nested-fn-failure",
         kind=StubKind.Function,

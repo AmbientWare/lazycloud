@@ -19,7 +19,6 @@ from database.repositories.aws_connections import (
 )
 from database.types import DatabaseSession
 from shared.aws_connections import (
-    AWS_CONNECTED_MACHINE_POOL,
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPlan,
@@ -39,6 +38,7 @@ from shared.http.aws_connections import (
     AwsConnectionCreateRequest,
     AwsConnectionReconnectRequest,
 )
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from tests.workspaces import workspace_owner_user_id
 
@@ -260,7 +260,7 @@ def test_connection_setup_survives_retries_and_stamps_the_connected_label(
     retried = service.connect(request, user_id=owner)
 
     assert retried.connection.id == created.connection.id
-    assert service.get(user_id=owner).pool == AWS_CONNECTED_MACHINE_POOL
+    assert service.get(user_id=owner).placement == Placement.connection(created.connection.id)
     with pytest.raises(ConflictError, match="already has"):
         service.connect(
             AwsConnectionCreateRequest(account_id="210987654321"),
@@ -515,7 +515,7 @@ def test_first_connection_reaching_ready_holds_the_accounts_warm_baseline(
 
     assert ready.phase is AwsAccountConnectionPhase.Ready
     assert ready.next_reconcile_at is None
-    assert ready.pool == "aws"
+    assert ready.placement == Placement.connection(ready.id)
     with service_context.database.session() as session:
         workspace_id = service_context.workspace(session, "default").id
     assert baseline.workspaces == [workspace_id]

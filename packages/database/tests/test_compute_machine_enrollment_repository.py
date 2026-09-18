@@ -12,14 +12,15 @@ from database.repositories.identity import WorkspaceMemberRepository
 from database.repositories.orchestration import MachineRepository
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_fleet import Machine
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, UnitName
+from shared.placement import Placement
 from shared.timestamps import utc_now
 
 
 def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
     service_context: ServiceContext,
 ) -> None:
-    pool = MachinePool("interruption-test")
+    pool = Placement.machine("interruption-test")
     now = utc_now()
     with service_context.database.session() as session:
         workspace_id = service_context.default_workspace_id(session)
@@ -30,7 +31,7 @@ def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
                 id=str(uuid4()),
                 workspace_id=workspace_id,
                 name=UnitName("interruptions"),
-                pool=pool,
+                placement=pool,
             )
         )
         machines = MachineRepository(session)
@@ -42,7 +43,7 @@ def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
         ):
             machine_id = str(uuid4())
             machines.upsert(
-                Machine(id=machine_id, pool=pool, capacity_owner_id=unit.id, provider="aws"),
+                Machine(id=machine_id, placement=pool, capacity_owner_id=unit.id, provider="aws"),
                 workspace_id=workspace_id,
             )
             enrollments.create(
@@ -50,7 +51,7 @@ def test_active_capacity_interruptions_return_planned_drains_and_preemptions(
                     user_id=owner.user_id,
                     workspace_id=workspace_id,
                     capacity_owner_id=unit.id,
-                    pool=pool,
+                    placement=pool,
                     machine_id=machine_id,
                     machine_fingerprint_hash=uuid4().hex,
                     credential_hash=uuid4().hex,

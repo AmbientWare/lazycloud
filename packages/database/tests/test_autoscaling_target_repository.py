@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
@@ -20,7 +21,9 @@ def test_activation_during_claim_is_not_lost(
     context = ServiceContext.create(database, root=tmp_path)
     with database.session() as session:
         workspace = WorkspaceRepository(session).create(name="target-owner")
-    stub = ControlPlaneService(context).create_stub(
+    stub = ControlPlaneService(
+        context, placement_resolver=WorkspaceComputePolicyService(context)
+    ).create_stub(
         "claimed-target",
         workspace=workspace.id,
     )

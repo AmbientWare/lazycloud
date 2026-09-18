@@ -17,7 +17,8 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     PreflightSeverity,
 )
-from shared.compute_policy import MachinePool, UnitName
+from shared.compute_policy import UnitName
+from shared.placement import Placement
 
 
 def test_join_token_binding_and_agent_join_gpu_locking() -> None:
@@ -27,7 +28,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
         token_hash=hash_compute_token("join-token"),
         owner_user_id="22222222-2222-4222-8222-222222222222",
         workspace_id="workspace-one",
-        pool=MachinePool("gpu-pool"),
+        placement=Placement.machine("gpu-pool"),
         machine_id="machine-fixed",
         created_by_token_id="token-owner",
         expires_at=now + timedelta(hours=1),
@@ -46,7 +47,7 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
     pool = PrivateUnitState(
         workspace_id="workspace-one",
         name=UnitName("gpu-unit"),
-        pool=MachinePool("gpu-pool"),
+        placement=Placement.machine("gpu-pool"),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         config=PoolConfig(name="gpu-unit"),
         created_by_token_id="token-owner",
@@ -81,7 +82,9 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
     assert join.pool_config_update is not None
     assert join.pool_config_update.gpu == ["A4000"]
 
-    rtx_token = token.model_copy(update={"pool": "rtx-pool", "machine_id": "rtx-machine"})
+    rtx_token = token.model_copy(
+        update={"placement": Placement.machine("rtx-pool"), "machine_id": "rtx-machine"}
+    )
     rtx_pool = pool.model_copy(update={"name": "rtx-pool", "config": PoolConfig(name="rtx-pool")})
     rtx_request = request.model_copy(
         update={

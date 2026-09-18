@@ -36,12 +36,12 @@ from shared.capacity import (
     CapacityPoolSizingSnapshot,
 )
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.container_requests import OciRuntimeName, capacity_memory_mib
 from shared.contracts import ContractModel
 from shared.errors import CapacityLimitReachedError, UpstreamUnavailableError
 from shared.gpu import gpu_preference_accepts
-from shared.placement import ProductRegion, product_region
+from shared.placement import Placement, ProductRegion, product_region
 from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
@@ -221,7 +221,7 @@ class CapacityProvisioningReservation(ContractModel):
     demand_container_id: str | None = None
     resource_version: int = Field(default=0, ge=0)
     capacity_owner_id: str
-    pool: MachinePool
+    placement: Placement
     owner_kind: CapacityOwnerKind
     status: CapacityReservationStatus = CapacityReservationStatus.Pending
     acquisition_shape: CapacityRequestShape
@@ -293,7 +293,7 @@ class CapacityAcquisitionController(Protocol):
     def unit_name(self) -> UnitName: ...
 
     @property
-    def pool(self) -> MachinePool: ...
+    def placement(self) -> Placement: ...
 
     @property
     def registration_timeout(self) -> timedelta: ...
@@ -394,8 +394,8 @@ class ComputeUnitCapacityController:
         return self.unit.name
 
     @property
-    def pool(self) -> MachinePool:
-        return self.unit.pool
+    def placement(self) -> Placement:
+        return self.unit.placement
 
     @property
     def registration_timeout(self) -> timedelta:
@@ -426,9 +426,8 @@ class ComputeUnitCapacityController:
     def accepts(self, request: SchedulerWorkerRequest) -> bool:
         """Whether this unit is a candidate for the request.
 
-        A named group admits every unit feeding it, which is what gives the
-        acquisition loop more than one candidate to fail over between. A request
-        that names no group falls back to the units marked default-eligible.
+        A placement admits every unit serving it, which is what gives the
+        acquisition loop more than one candidate to fail over between.
         """
         if not self.unit.scaling_enabled:
             return False
@@ -436,10 +435,7 @@ class ComputeUnitCapacityController:
             return False
         if not self.unit.platform_fleet and request.workspace_id != self.workspace_id:
             return False
-        if request.pool_selector:
-            if request.pool_selector != self.unit.pool:
-                return False
-        elif not self.unit.default_eligible:
+        if request.placement != self.unit.placement:
             return False
         return self.reservation_shape(request).can_host(request)
 
@@ -868,7 +864,7 @@ class RedisCapacityReservationRepository:
         self,
         *,
         capacity_owner_id: str,
-        pool: MachinePool,
+        placement: Placement,
         owner_kind: CapacityOwnerKind,
         request: SchedulerWorkerRequest,
         shape: CapacityRequestShape,
@@ -908,7 +904,7 @@ class RedisCapacityReservationRepository:
                 id=reservation_id,
                 demand_container_id=request.container_id,
                 capacity_owner_id=capacity_owner_id,
-                pool=pool,
+                placement=placement,
                 owner_kind=owner_kind,
                 acquisition_shape=shape,
                 workload_preemptible=request.preemptible,
@@ -1419,7 +1415,7 @@ class CapacityReservationService:
                 )
             decision = self.reservations.reserve(
                 capacity_owner_id=controller.capacity_owner_id,
-                pool=controller.pool,
+                placement=controller.placement,
                 owner_kind=controller.owner_kind,
                 request=request,
                 shape=controller.reservation_shape(request),

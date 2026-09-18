@@ -16,13 +16,14 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import ComputeUnitPhase, MachinePool
+from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
 from shared.http.base import HttpModel
 from shared.http.deployments import DeploymentResponse
 from shared.http.stubs import StubResponse
+from shared.placement import Placement
 from shared.tasks import TaskStatus
 
 
@@ -38,7 +39,6 @@ class UnitPolicy(HttpModel):
     min_machines: int = Field(default=0, ge=0)
     max_machines: int = Field(default=1, ge=0)
     scaling_enabled: bool = False
-    default_eligible: bool = False
     priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
     """Preference for this unit over another that could serve the same work.
 
@@ -66,7 +66,6 @@ class UnitPolicy(HttpModel):
 
 class UnitCreateRequest(UnitPolicy):
     name: str
-    pool: MachinePool = MachinePool("")
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
 
@@ -80,7 +79,7 @@ class UnitResponse(UnitPolicy):
     capacity_owner_kind: CapacityOwnerKind
     capacity_owner_source: CapacityOwnerSource
     name: str
-    pool: MachinePool
+    placement: Placement
     provider: str = "local"
     labels: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
@@ -175,7 +174,7 @@ class WorkerContainerResponse(HttpModel):
 class WorkerResponse(HttpModel):
     id: str
     status: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""
@@ -186,7 +185,6 @@ class WorkerResponse(HttpModel):
     free_memory: int = 0
     free_gpu_count: int = 0
     resource_version: int = 0
-    requires_pool_selector: bool = False
     preemptible: bool = False
     created_at: datetime
     updated_at: datetime

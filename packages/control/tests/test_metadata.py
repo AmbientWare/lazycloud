@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from pydantic import JsonValue, TypeAdapter
 from shared.deployment_records import DeploymentSpec
@@ -24,7 +25,10 @@ def test_sandbox_deployment_preserves_startup_network_policy(
         )
     )
 
-    stub = ControlPlaneService(isolated_services.context).get_stub(deployment.stub_id or "")
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).get_stub(deployment.stub_id or "")
 
     assert stub.config.runtime.block_network is False
     assert stub.config.runtime.allow_list == ["10.0.0.0/8"]

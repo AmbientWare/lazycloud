@@ -7,7 +7,7 @@ from compute.agent_control import (
 )
 from compute.state import ComputeAgentTokenState
 from shared.compute_enrollment import AgentCapacityState
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.usage import UsageBillingOwner
 
 
@@ -17,7 +17,7 @@ def test_enrolled_machine_owns_runtime_independently_of_placement_availability()
         workspace_id="workspace-one",
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         machine_id="machine-one",
-        pool=MachinePool("cpu"),
+        placement=Placement.machine("cpu"),
         cpu_millicores=2000,
         memory_mb=4096,
         capacity_state=AgentCapacityState.Draining,

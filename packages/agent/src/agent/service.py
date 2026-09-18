@@ -10,9 +10,9 @@ from database.types import DatabaseSession
 from foundation.ids import required_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.compute_fleet import AgentLease, AgentRecord, LeaseStatus, ResourceStatus
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceRecord
+from shared.placement import Placement
 from shared.timestamps import utc_now
 
 from database import DatabaseClient
@@ -52,7 +52,7 @@ class AgentService:
         self,
         name: str,
         *,
-        pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL),
+        placement: Placement = Placement.platform(),
         version: str = "local",
         capacity: dict[str, int | float | str] | None = None,
         labels: dict[str, str] | None = None,
@@ -64,7 +64,7 @@ class AgentService:
                 AgentRecord(
                     id=str(uuid4()),
                     name=name,
-                    pool=pool,
+                    placement=placement,
                     version=version,
                     capacity=capacity or {},
                     labels=labels or {},

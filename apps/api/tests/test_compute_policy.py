@@ -41,11 +41,9 @@ from shared.compute_enrollment import (
 )
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
-    LAZYCLOUD_MACHINE_POOL,
     ComputeCapacityMode,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.deployment_records import DeploymentSpec
@@ -55,6 +53,7 @@ from shared.http.compute_policy import (
     WorkspaceComputeSummaryResponse,
 )
 from shared.identity import WorkspaceStatus
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import workspace_owner_user_id
@@ -112,7 +111,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
                 name=UnitName("current-aws-inventory"),
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 provider_ref=f"aws:{connection.id}",
                 provider_connection_id=connection.id,
                 capacity_mode=ComputeCapacityMode.Pooled,
@@ -126,7 +125,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         MachineRepository(session).upsert(
             Machine(
                 id=ready_machine_id,
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 provider="aws",
                 status=ResourceStatus.Running,
                 created_at=now,
@@ -139,7 +138,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 user_id=owner_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=pool_id,
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,
                 credential_hash="c" * 64,
@@ -155,7 +154,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             Worker(
                 id=agent_machine_worker_id(ready_machine_id),
                 machine_id=ready_machine_id,
-                pool=MachinePool("aws"),
+                placement=Placement.machine("aws"),
                 status=ResourceStatus.Running,
                 last_seen_at=now,
                 created_at=now,
@@ -196,7 +195,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=agent_machine_worker_id(ready_machine_id),
-            pool=MachinePool("aws"),
+            placement=Placement.machine("aws"),
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id=ready_machine_id,
             status=SchedulerWorkerStatus.Available,
@@ -299,13 +298,14 @@ def test_deployment_refuses_a_machine_that_is_unknown_or_serves_another_workspac
     elsewhere = isolated_services.control_plane_service.set_workspace(
         "machine-elsewhere", owner_user_id=owner_id
     )
+    machine_id = str(uuid4())
     with isolated_services.context.database.session() as session:
         MachineRepository(session).upsert(
             Machine(
-                id=str(uuid4()),
+                id=machine_id,
                 name="rack-7",
                 workspace_ids=(elsewhere.id,),
-                pool=MachinePool("rack-7"),
+                placement=Placement.machine(machine_id),
                 provider="agent",
                 status=ResourceStatus.Running,
             ),
@@ -330,8 +330,8 @@ def test_deployment_refuses_a_machine_that_is_unknown_or_serves_another_workspac
         DeploymentSpec(name="located"), workspace="default"
     )
 
-    assert (pinned.pool, pinned.machine) == ("rack-7", "rack-7")
-    assert (located.pool, located.machine) == (LAZYCLOUD_MACHINE_POOL, "")
+    assert (pinned.placement, pinned.machine) == (Placement.machine(machine_id), "rack-7")
+    assert (located.placement, located.machine) == (Placement.platform(), "")
     assert workspace_id != elsewhere.id
 
 
@@ -386,7 +386,6 @@ def _seed_ready_aws_connection(
                 user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
-                pool=MachinePool("aws"),
                 phase=(
                     AwsAccountConnectionPhase.ReconnectPending
                     if reconnecting

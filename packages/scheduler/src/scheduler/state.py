@@ -33,7 +33,7 @@ from shared.http.task_progress import (
     TaskPendingProgress,
     TaskPendingReason,
 )
-from shared.placement import ProductRegion
+from shared.placement import Placement, ProductRegion
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     DEFAULT_CONTAINER_STATE_TTL_SECONDS,
@@ -235,7 +235,7 @@ if request.backfill == true then
         local queued = cjson.decode(payload)
         local requested_gpu = math.max(queued.gpu_count, #queued.gpu > 0 and 1 or 0)
         if requested_gpu > 0 and requested_gpu <= total_gpu
-            and (queued.pool_selector == "" or queued.pool_selector == worker_field("pool", ""))
+            and queued.placement == worker_field("placement", "")
             and (queued.region == cjson.null or queued.region == nil
                 or queued.region == worker_field("region", cjson.null))
             and (queued.availability_zone == nil or queued.availability_zone == ""
@@ -814,11 +814,11 @@ class SchedulerStateKeys:
     def workspace_concurrency_lock(self, workspace_id: str) -> str:
         return self.redis.key(self.namespace, "workspace-concurrency", workspace_id, "lock")
 
-    def worker_pool_state(self, pool: str) -> str:
-        return self.redis.key(self.namespace, "worker-pools", pool, "state")
+    def unit_state(self, capacity_owner_id: str) -> str:
+        return self.redis.key(self.namespace, "units", capacity_owner_id, "state")
 
-    def worker_pool_replicas(self, pool: str) -> str:
-        return self.redis.key(self.namespace, "worker-pools", pool, "replicas")
+    def unit_replicas(self, capacity_owner_id: str) -> str:
+        return self.redis.key(self.namespace, "units", capacity_owner_id, "replicas")
 
     def worker_rollout_slots(self, capacity_owner_id: str) -> str:
         return self.redis.key(
@@ -1036,8 +1036,8 @@ class RedisSchedulerWorkerRepository:
             request_ids=request_ids,
         )
 
-    def list_workers_in_pool(self, pool: str) -> list[SchedulerWorkerRecord]:
-        return [worker for worker in self.list_workers() if worker.pool == pool]
+    def list_workers_in_placement(self, placement: Placement) -> list[SchedulerWorkerRecord]:
+        return [worker for worker in self.list_workers() if worker.placement == placement]
 
     def list_workers_for_capacity_owner(
         self,
@@ -3687,13 +3687,13 @@ class RedisWorkerPoolStateRepository:
                 "worker pool state capacity owner does not match its repository key"
             )
         self.redis.hash_set(
-            self.keys.worker_pool_state(capacity_owner_id),
+            self.keys.unit_state(capacity_owner_id),
             mapping=redis_serialization.dump_model_hash(state),
         )
         return state
 
     def get_state(self, capacity_owner_id: str) -> WorkerPoolStateSnapshot:
-        raw = self.redis.hash_get_all(self.keys.worker_pool_state(capacity_owner_id))
+        raw = self.redis.hash_get_all(self.keys.unit_state(capacity_owner_id))
         if not raw:
             raise WorkerPoolStateNotFoundError(capacity_owner_id)
         return redis_serialization.load_model_hash(WorkerPoolStateSnapshot, raw)
@@ -3701,8 +3701,8 @@ class RedisWorkerPoolStateRepository:
     def delete_unit_state(self, capacity_owner_id: str) -> bool:
         return bool(
             self.redis.delete(
-                self.keys.worker_pool_state(capacity_owner_id),
-                self.keys.worker_pool_replicas(capacity_owner_id),
+                self.keys.unit_state(capacity_owner_id),
+                self.keys.unit_replicas(capacity_owner_id),
             )
         )
 

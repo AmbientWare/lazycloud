@@ -6,15 +6,13 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Protocol
 
-from database.repositories.apps import DeploymentRepository
-from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord, MachinePool
+from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord
 from shared.contracts import ContractModel
-from shared.errors import InvalidInputError, UpstreamUnavailableError
-from shared.placement import ProductRegion, product_region
+from shared.errors import UpstreamUnavailableError
+from shared.placement import Placement, ProductRegion, product_region
 
 from compute.context import ComputeContext
 from compute.offers import ComputeOffer, OfferRequest, filter_offers, offer_selection_key
-from compute.policy import WorkspaceComputePolicyService
 from compute.providers import ResolvedComputeProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -47,15 +45,10 @@ class PooledCapacityOwner(Protocol):
 class ComputeCapacityPlacementRequest(ContractModel):
     workspace_id: str
     deployment_id: str = ""
-    pool_selector: str = ""
-    """Label already pinned on the workload's config, or empty to resolve one."""
+    placement: Placement
+    """Where the workload's stub was pinned when it was created."""
     region: ProductRegion | None = None
     requirements: ComputeResourceRequirements
-
-
-@dataclass(frozen=True, slots=True)
-class ComputeCapacityPlacementResult:
-    pool: MachinePool
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,21 +60,16 @@ class ComputeCapacityPurchase:
 @dataclass(slots=True)
 class ComputeCapacityPlacementService:
     context: ComputeContext
-    policies: WorkspaceComputePolicyService
     compute: PooledCapacityOwner
-
-    def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
-        return ComputeCapacityPlacementResult(pool=self._machine_pool_for(request))
 
     def purchase_candidates(
         self, request: ComputeCapacityPlacementRequest
     ) -> tuple[ComputeCapacityPurchase, ...]:
         """Return approved purchase candidates in GPU-preference and cost order."""
-        pool = self._machine_pool_for(request)
         providers = tuple(
             provider
             for provider in self.compute.pooled_providers(request.workspace_id)
-            if provider.policy is not None and provider.policy.pool == pool
+            if provider.policy is not None and provider.policy.placement == request.placement
         )
         requirements = request.requirements
         purchase = OfferRequest(
@@ -156,33 +144,9 @@ class ComputeCapacityPlacementService:
     ) -> None:
         self.compute.prepare_pooled_offer(provider=provider, offer=offer, requirements=requirements)
 
-    def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> MachinePool:
-        """The label this request is served under.
-
-        A deployment keeps the label it was pinned to when it was created, so a
-        workspace whose location later changes never moves running workloads. A
-        label already on the request was derived the same way when its stub was
-        created; nothing user-facing writes one.
-        """
-        if request.pool_selector:
-            return MachinePool(request.pool_selector)
-        if request.deployment_id:
-            with self.context.database.session() as session:
-                deployment = DeploymentRepository(session).get(
-                    request.deployment_id,
-                    workspace_id=request.workspace_id,
-                )
-            if deployment is None:
-                raise InvalidInputError(
-                    f"deployment {request.deployment_id!r} was not found in the workspace"
-                )
-            return deployment.pool
-        return self.policies.resolve_placement(workspace_id=request.workspace_id)
-
 
 __all__ = [
     "ComputeCapacityPlacementRequest",
-    "ComputeCapacityPlacementResult",
     "ComputeCapacityPlacementService",
     "ComputeCapacityPurchase",
 ]

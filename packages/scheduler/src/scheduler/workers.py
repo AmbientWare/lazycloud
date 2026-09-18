@@ -6,9 +6,9 @@ from datetime import datetime
 from typing import Protocol
 
 from pydantic import Field
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.errors import ConflictError, NotFoundError
+from shared.placement import Placement
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
     SchedulerContainerState,
@@ -101,7 +101,7 @@ class SchedulerWorkerContainerView(ContractModel):
 class SchedulerWorkerView(ContractModel):
     id: str
     status: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str = ""
     gpu: str = ""
     runtime: str = ""
@@ -112,7 +112,6 @@ class SchedulerWorkerView(ContractModel):
     free_memory: int = 0
     free_gpu_count: int = 0
     resource_version: int = 0
-    requires_pool_selector: bool = False
     preemptible: bool = False
     created_at: datetime
     updated_at: datetime
@@ -130,12 +129,12 @@ class SchedulerWorkerAdminService:
     containers: SchedulerWorkerContainerRepository
     stop_container: Callable[[str], None] | SchedulerWorkerContainerStopper | None = None
 
-    def list_workers(self, *, pool: str | None = None) -> list[SchedulerWorkerView]:
+    def list_workers(self, *, placement: Placement | None = None) -> list[SchedulerWorkerView]:
         workers = self.workers.list_workers()
-        if pool:
-            workers = [worker for worker in workers if worker.pool == pool]
+        if placement is not None:
+            workers = [worker for worker in workers if worker.placement == placement]
         views = [self._worker_view(worker) for worker in workers]
-        views.sort(key=lambda item: (item.pool, item.status, item.machine_id, item.id))
+        views.sort(key=lambda item: (item.placement.key, item.status, item.machine_id, item.id))
         return views
 
     def get_worker(self, worker_id: str) -> SchedulerWorkerView:
@@ -185,7 +184,7 @@ class SchedulerWorkerAdminService:
         return SchedulerWorkerView(
             id=worker.worker_id,
             status=worker.status.value,
-            pool=worker.pool,
+            placement=worker.placement,
             machine_id=worker.machine_id,
             gpu=worker.gpu_type,
             runtime=worker.runtime_class,
@@ -196,7 +195,6 @@ class SchedulerWorkerAdminService:
             free_memory=worker.free_memory_mib,
             free_gpu_count=worker.free_gpu_count,
             resource_version=worker.resource_version,
-            requires_pool_selector=worker.requires_pool_selector,
             preemptible=worker.preemptible,
             created_at=worker.created_at,
             updated_at=worker.updated_at,

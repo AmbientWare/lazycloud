@@ -15,8 +15,8 @@ from typing import Protocol, runtime_checkable
 
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
-from shared.compute_policy import MachinePool
 from shared.container_requests import StopContainerReason
+from shared.placement import Placement
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from shared.scheduling import WorkerUnavailableReason
 from worker.events import WorkerStreamEventKind
@@ -64,7 +64,7 @@ class ContainerWorkerArguments(argparse.Namespace):
     """
 
     worker_id: str | None = None
-    pool: MachinePool | None = None
+    placement: Placement | None = None
     machine_id: str | None = None
     pod_address: str | None = None
     container_service_port: int | None = None
@@ -660,7 +660,7 @@ def _settings_from_args(args: ContainerWorkerArguments) -> WorkerSettings:
     loaded = WorkerSettings()
     return WorkerSettings(
         worker_id=_override(args.worker_id, loaded.worker_id),
-        pool=_override(args.pool, loaded.pool),
+        placement=_override(args.placement, loaded.placement),
         machine_id=_override(args.machine_id, loaded.machine_id),
         pod_address=_override(args.pod_address, loaded.pod_address),
         container_service_port=_override(

@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.scheduling import SchedulerContainerStatus, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 
@@ -54,7 +54,7 @@ class SchedulerRetryReason(StrEnum):
 class SchedulerWorkerSnapshot(ContractModel):
     worker_id: str
     status: SchedulerWorkerStatus
-    pool: MachinePool
+    placement: Placement
     active_containers: list[str] = Field(default_factory=list)
 
 
@@ -72,7 +72,7 @@ class SchedulerMachineSnapshot(ContractModel):
 
 class WorkerPoolStateSnapshot(ContractModel):
     capacity_owner_id: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: Placement = Placement.platform()
     status: WorkerPoolStatus = WorkerPoolStatus.Healthy
     scheduling_latency_ms: int = 0
     pending_workers: int = 0

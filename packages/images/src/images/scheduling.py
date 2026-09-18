@@ -6,6 +6,7 @@ from uuid import uuid4
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
 from shared.image_building.authoring import LinuxArchitecture
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRequest
 from shared.usage import IMAGE_BUILD_WORKLOAD_ID
 
@@ -65,7 +66,7 @@ def plan_image_build_container_request(
     *,
     workspace_id: str,
     stub_id: str = "",
-    pool_selector: str = "",
+    placement: Placement,
     cpu_millicores: int = DEFAULT_IMAGE_BUILD_CONTAINER_CPU_MILLICORES,
     memory_mib: int = DEFAULT_IMAGE_BUILD_CONTAINER_MEMORY_MIB,
 ) -> ImageBuildContainerRequestPlan:
@@ -129,11 +130,7 @@ def plan_image_build_container_request(
         # preference, so it does not take an ordered chain.
         gpu=[gpu] if gpu else [],
         gpu_count=1 if gpu else 0,
-        pool_selector="" if gpu else pool_selector.strip(),
-        # No explicit selector means the workspace policy decides where the build
-        # runs. Forcing Managed strands every build on a deployment whose capacity
-        # is a connected provider: the request queues for local capacity that does
-        # not exist and retries until it gives up.
+        placement=placement,
         architecture=request.plan.spec.architecture.value,
         payload=payload,
     )

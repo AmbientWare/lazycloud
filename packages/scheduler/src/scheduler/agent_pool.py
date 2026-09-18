@@ -14,11 +14,10 @@ from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityOwnerKind
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
 )
 from shared.container_requests import OciRuntimeName, schedulable_capacity
 from shared.contracts import ContractModel
-from shared.placement import ProductRegion, product_region
+from shared.placement import Placement, PlacementKind, ProductRegion, product_region
 from shared.scheduling import (
     SchedulerWorkerRecord,
     SchedulerWorkerStatus,
@@ -41,12 +40,11 @@ class AgentPoolWorkerAction(StrEnum):
 class AgentPoolConfig(ContractModel):
     region: ProductRegion | None = None
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     gpu_type: str = ""
     worker_build_version: str = DEFAULT_AGENT_WORKER_BUILD_VERSION
     platform_fleet: bool = False
-    default_eligible: bool = False
     priority: int = 0
 
 
@@ -59,7 +57,7 @@ class AgentPoolWorkerResult(ContractModel):
 
 class AgentPoolReconcileResult(ContractModel):
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     ensured_worker_ids: list[str] = Field(default_factory=list)
     existing_worker_ids: list[str] = Field(default_factory=list)
     disabled_worker_ids: list[str] = Field(default_factory=list)
@@ -133,7 +131,7 @@ class AgentWorkerPoolController:
         current_time = now or utc_now()
         result = AgentPoolReconcileResult(
             workspace_id=self.config.workspace_id,
-            pool=self.config.pool,
+            placement=self.config.placement,
         )
         for machine in self.machines.list_agent_token_states(
             self.config.workspace_id,
@@ -329,7 +327,7 @@ def agent_pool_config_from_pool(pool: ComputeUnitRecord) -> AgentPoolConfig | No
     return AgentPoolConfig(
         region=product_region(pool.region),
         workspace_id=pool.workspace_id,
-        pool=pool.pool,
+        placement=pool.placement,
         capacity_owner_id=pool.capacity_owner_id,
         gpu_type=pool.worker_gpu_type,
         worker_build_version=DEFAULT_AGENT_WORKER_BUILD_VERSION,
@@ -343,14 +341,13 @@ def agent_pool_config_from_compute_state(state: ComputeUnitState) -> AgentPoolCo
     return AgentPoolConfig(
         region=product_region(str(state.metadata.get("region") or "")),
         workspace_id=state.workspace_id,
-        pool=state.pool,
+        placement=state.placement,
         capacity_owner_id=state.capacity_owner_id,
         gpu_type=(normalized.gpu[0] if normalized and normalized.gpu else ""),
         worker_build_version=str(
             state.metadata.get("worker_build_version") or DEFAULT_AGENT_WORKER_BUILD_VERSION
         ),
         platform_fleet=state.platform_fleet,
-        default_eligible=state.default_eligible,
         priority=normalized.priority if normalized else 0,
     )
 
@@ -380,22 +377,20 @@ def agent_machine_worker_record(
     return SchedulerWorkerRecord(
         region=config.region,
         worker_id=agent_machine_worker_id(machine.machine_id),
-        pool=config.pool,
+        placement=config.placement,
         # The machine's own owner, not the controller's: a joined machine in a
         # group an auto-scaling unit also feeds carries the unit that issued its
         # credential, which is what keeps that unit's drain from terminating it.
         capacity_owner_id=machine.capacity_owner_id or config.capacity_owner_id,
         workspace_id=machine.workspace_id,
-        # Empty on the fleet: an owner serves the comparison that decides who may
-        # be placed here, and platform capacity answers to everyone.
+        # Empty on the fleet; kept for attribution and billing, not compared.
         owner_user_id=_worker_owner(machine, config),
         machine_id=machine.machine_id,
         status=SchedulerWorkerStatus.Pending,
         gpu_type=gpu_types[0] if gpu_types else "",
         runtime_class=OciRuntimeName.Runsc.value,
         runtime_classes=[OciRuntimeName.Runsc.value],
-        private_worker=not config.platform_fleet,
-        requires_pool_selector=not config.default_eligible,
+        private_worker=config.placement.kind is not PlacementKind.Platform,
         priority=config.priority,
         free_cpu_millicores=cpu_millicores,
         free_memory_mib=memory_mib,
@@ -444,14 +439,14 @@ def machine_accepts_work(machine: ComputeAgentTokenState) -> bool:
 def _machine_owned_by(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> bool:
     """Whether this unit's controller owns the machine.
 
-    Several units may feed one pool, so matching on the pool label alone would
+    Several units may serve one placement, so matching on placement alone would
     have every one of their controllers claim every machine in it. The worker id
     is derived from the machine, so they would each write the same worker with a
     different owner and alternate it on every reconcile.
     """
     if machine.capacity_owner_id:
         return machine.capacity_owner_id == config.capacity_owner_id
-    return machine.pool == config.pool
+    return machine.placement == config.placement
 
 
 def _machine_gpu_types(machine: ComputeAgentTokenState, config: AgentPoolConfig) -> list[str]:

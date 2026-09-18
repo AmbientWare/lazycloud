@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from execution.callbacks import (
     CallbackDeliveryError,
@@ -52,7 +53,10 @@ def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
         now=lambda: 1_720_000_000.0,
     )
     isolated_services.tasks.callback_dispatcher = callback_service
-    control_plane = ControlPlaneService(isolated_services.context)
+    control_plane = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     stub = control_plane.create_stub(
         "callback-function",
         kind=StubKind.Function,
@@ -119,7 +123,10 @@ def test_retry_callback_uses_bounded_delivery_retries_and_stable_idempotency(
         sleep=delays.append,
         now=lambda: 1_720_000_000.0,
     )
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "retry-callback",
         kind=StubKind.Function,
         config={"callback_url": "https://callbacks.example.com/task"},
@@ -157,7 +164,10 @@ def test_permanent_callback_failure_is_observable_without_exposing_target_query(
         isolated_services.events,
         sender=sender,
     )
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    ).create_stub(
         "failed-callback",
         kind=StubKind.Function,
         config={"callback_url": "https://callbacks.example.com/task?token=secret-value"},

@@ -7,14 +7,18 @@ from typing import Annotated
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.custom_domains import normalize_assignable_hostname
 from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
-from shared.placement import AvailabilityZone, ProductRegion, validate_placement_machine
+from shared.placement import (
+    AvailabilityZone,
+    Placement,
+    ProductRegion,
+    validate_placement_machine,
+)
 from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
@@ -408,8 +412,8 @@ class Deployment(ContractModel):
     resources sharing a hostname does not treat every unclaimed resource as sharing
     one.
     """
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
-    """Capacity label this deployment was pinned to when it was created.
+    placement: Placement = Placement.platform()
+    """Where this deployment was pinned when it was created.
 
     Derived, never chosen: the workspace's location, or the named machine.
     Resolved once at deploy time so running workloads never move.

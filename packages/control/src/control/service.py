@@ -32,7 +32,6 @@ from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import DEFAULT_RESOURCE_TYPE
 from shared.autoscaler_state import autoscaler_target_kind
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_policy import MachinePool
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
@@ -54,6 +53,7 @@ from shared.identity import (
     WorkspaceStorageConfig,
 )
 from shared.objects import ObjectRecord
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.urls import (
     StubUrlTarget,
@@ -80,6 +80,7 @@ from control.models import (
     WorkspaceConfigExport,
     WorkspaceCreateResult,
 )
+from control.placement import PlacementResolver
 from control.tcp_ingress import tcp_pod_url
 
 
@@ -188,7 +189,9 @@ def _stub_config_payload(config: StubConfig) -> dict[str, JsonValue]:
 
 
 def _stub_preparation_fingerprint(stub: StubRecord) -> str:
-    payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at"})
+    # Placement is derived from the workspace and `config.machine`, both in the
+    # payload, so leaving it out lets a caller resolve it only on creation.
+    payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at", "placement"})
     config = _stub_config_payload(stub.config)
     if not config.get("object_id"):
         config.pop("object_id", None)
@@ -322,6 +325,7 @@ class ControlPlaneService:
     public_http_origin: str = ""
     connected_workspace_storage: ConnectedWorkspaceStorageIssuer | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
+    placement_resolver: PlacementResolver | None = None
     workspace_admission: WorkspaceCreationAdmission = field(
         default_factory=DatabaseBillingAdmission
     )
@@ -397,6 +401,10 @@ class ControlPlaneService:
             owner_user_id=owner_user_id,
             connection_id=connection_id,
         )
+        # Storage first. Provisioning reaches another system and can fail; a
+        # workspace left without a bucket is retried by adopting the name, while a
+        # primary token minted before that failure would never be handed back.
+        workspace = self.ensure_workspace_storage(workspace.id)
         # Adopting an existing workspace keeps the credential it already has. Minting
         # unconditionally repointed `primary_token_id` at a new token on every call, so
         # asking for a workspace that was already there re-keyed it and left the
@@ -414,7 +422,6 @@ class ControlPlaneService:
                     workspace.name,
                     primary_token_id=token_record.id,
                 )
-        workspace = self.ensure_workspace_storage(workspace.id)
         return WorkspaceCreateResult(
             workspace_id=workspace.id,
             token=raw_token,
@@ -592,11 +599,13 @@ class ControlPlaneService:
         app_id: str | None = None,
         public: bool = False,
         config: StubConfig | Mapping[str, JsonValue] | None = None,
-        pool: MachinePool = MachinePool(""),
         metadata: Mapping[str, JsonValue] | None = None,
         reuse_existing: bool = True,
     ) -> StubRecord:
         workspace_record = self.get_workspace(workspace)
+        resolver = self.placement_resolver
+        if resolver is None:
+            raise RuntimeError("control plane placement resolver was not injected")
         metadata_payload = dict(metadata) if metadata is not None else {}
         now = utc_now()
         requested = StubRecord(
@@ -613,7 +622,9 @@ class ControlPlaneService:
                 if isinstance(config, StubConfig)
                 else StubConfig.model_validate(dict(config) if config is not None else {})
             ),
-            pool=pool,
+            # Resolved only when the stub is created below; the fingerprint leaves
+            # placement out, so reusing an existing stub never pays for it.
+            placement=Placement.platform(),
             metadata=metadata_payload,
             created_at=now,
             updated_at=now,
@@ -641,7 +652,10 @@ class ControlPlaneService:
                 metadata=requested.metadata,
             )
             if existing is None:
-                record = repository.upsert(requested)
+                placement = resolver.resolve_placement(
+                    session, workspace_record, requested.config.machine
+                )
+                record = repository.upsert(requested.model_copy(update={"placement": placement}))
                 if reuse_existing:
                     repository.set_preparation_fingerprint(
                         record.id, workspace_id=workspace_record.id, fingerprint=fingerprint
@@ -892,7 +906,6 @@ class ControlPlaneService:
                 deployment_id=source.deployment_id,
                 public=source.public,
                 config=config,
-                pool=source.pool,
                 metadata=metadata,
             )
         except Exception as clone_failure:

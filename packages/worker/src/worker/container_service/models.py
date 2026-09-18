@@ -4,9 +4,9 @@ from enum import StrEnum
 from pathlib import Path
 
 from pydantic import Field
-from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.contracts import ContractModel
+from shared.placement import Placement
 
 from worker.checkpoint_readiness import CheckpointReadinessProbe
 from worker.routes import WorkerRouteContext
@@ -102,7 +102,7 @@ class WorkerContainerServiceInstance(ContractModel):
     stub_type: str = ""
     worker_id: str = ""
     machine_id: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: Placement = Placement.platform()
     image_id: str = ""
     build_archive_object_key: str = ""
     build_archive_size_bytes: int = 0
@@ -123,11 +123,11 @@ class WorkerContainerServiceInstance(ContractModel):
 
     @property
     def route_context(self) -> WorkerRouteContext | None:
-        if not (self.workspace_id and self.machine_id and self.worker_id and self.pool):
+        if not (self.workspace_id and self.machine_id and self.worker_id and self.placement):
             return None
         return WorkerRouteContext(
             workspace_id=self.workspace_id,
-            pool=self.pool,
+            placement=self.placement,
             machine_id=self.machine_id,
             worker_id=self.worker_id,
             container_id=self.container_id,

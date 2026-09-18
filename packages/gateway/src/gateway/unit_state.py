@@ -28,10 +28,10 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.errors import InvalidInputError, NotFoundError
+from shared.placement import Placement
 from shared.routing import PrivateUnitFallback
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -59,8 +59,9 @@ class GatewayComputeService(Protocol):
         self,
         name: UnitName,
         *,
-        pool: MachinePool | None = None,
+        placement: Placement | None = None,
         provider: str,
+        capacity_owner_id: str | None = None,
         min_machines: int,
         max_machines: int,
         worker_gpu_type: str = "",
@@ -107,15 +108,16 @@ class GatewayUnitStateCoordinator:
             raise NotFoundError(f"unit not found: {reference}")
         return unit
 
-    def create_or_update_pool(
+    def create_or_update_unit(
         self,
         config: projection.PoolConfig,
         *,
         workspace_id: str,
-        pool: MachinePool = MachinePool(""),
+        placement: Placement | None = None,
+        capacity_owner_id: str | None = None,
     ) -> ComputeUnitRecord:
         if not config.name:
-            msg = "pool name is required"
+            msg = "unit name is required"
             raise InvalidInputError(msg)
         try:
             normalized = projection.normalize_unit_config(config)
@@ -129,8 +131,9 @@ class GatewayUnitStateCoordinator:
         gpu_type = normalized.gpu[0] if normalized.gpu else ""
         return self.compute.create_unit(
             UnitName(normalized.name),
-            pool=MachinePool(pool) if pool else None,
+            placement=placement,
             provider=provider,
+            capacity_owner_id=capacity_owner_id,
             min_machines=0,
             max_machines=max(normalized.nodes, 1),
             worker_gpu_type=gpu_type,
@@ -162,8 +165,7 @@ class GatewayUnitStateCoordinator:
             workspace_id=workspace_id,
             name=unit.name,
             platform_fleet=unit.platform_fleet,
-            default_eligible=unit.default_eligible,
-            pool=unit.pool,
+            placement=unit.placement,
             capacity_owner_id=unit.capacity_owner_id,
             provider=unit.provider,
             max_machines=max(unit.max_machines, 1),
@@ -271,7 +273,7 @@ class GatewayUnitStateCoordinator:
                 user_id=plan.state.owner_user_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
-                pool=unit.pool,
+                placement=unit.placement,
                 machine_id=machine_id,
                 created_by_token_id=try_uuid(owner_token_id),
                 max_uses=plan.state.max_uses,
@@ -335,7 +337,7 @@ class GatewayUnitStateCoordinator:
                     workspace_id=pool_state.workspace_id or "default",
                     owner_token_id=pool_state.created_by_token_id or "gateway",
                 ),
-                unit.pool,
+                unit.placement,
                 capacity_owner_id=unit.capacity_owner_id,
                 owner_user_id=self.workspace_owner_user_id(workspace_id),
                 ttl=ttl,
@@ -371,8 +373,7 @@ class GatewayUnitStateCoordinator:
             workspace_id=workspace_id,
             name=pool_state.name,
             platform_fleet=pool_state.platform_fleet,
-            default_eligible=current.default_eligible if current is not None else False,
-            pool=(current.pool if current is not None else pool_state.pool),
+            placement=(current.placement if current is not None else pool_state.placement),
             capacity_owner_id=(
                 current.capacity_owner_id if current is not None else pool_state.capacity_owner_id
             ),

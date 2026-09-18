@@ -7,10 +7,10 @@ from enum import StrEnum
 from pydantic import Field, field_validator
 from shared.capacity import CapacityOwnerIdentity
 from shared.compute_policy import (
-    MachinePool,
     UnitName,
 )
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.routing import PrivateUnitFallback
 
 DEFAULT_PRIVATE_FALLBACK = "internal"
@@ -85,7 +85,7 @@ class ComputeUnitPlan(ContractModel):
 
 class ProviderReservation(ContractModel):
     id: str
-    pool: MachinePool = MachinePool("")
+    placement: Placement = Placement.platform()
     selector: str = ""
     provider: str = ""
     cloud: str = ""
@@ -122,9 +122,8 @@ class PrivateUnitState(CapacityOwnerIdentity):
     platform_fleet: bool = False
     workspace_id: str = ""
     name: UnitName
-    pool: MachinePool = MachinePool("")
-    """Pool this unit's machines serve, so the agent bootstrap never has to
-    substitute the unit's name for the label it must advertise."""
+    placement: Placement = Placement.platform()
+    """Where this unit's machines are, so the agent bootstrap advertises it."""
     selector: str = ""
     config: PoolConfig | None = None
     reservations: list[ProviderReservation] = Field(default_factory=list)

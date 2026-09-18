@@ -73,7 +73,7 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("workspace_id", "name", name="uq_compute_units_workspace_name"),
         UniqueConstraint("capacity_owner_id", name="uq_compute_units_capacity_owner_id"),
-        Index("ix_compute_units_workspace_pool", "workspace_id", "pool"),
+        Index("ix_compute_units_workspace_placement", "workspace_id", "placement"),
         Index(
             "ix_compute_units_active_provider_gpu",
             "provider_ref",
@@ -135,7 +135,7 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     capacity_owner_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     capacity_owner_source: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(240), nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    placement: Mapped[str] = mapped_column(String(120), nullable=False)
     provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     selector: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(80), nullable=False, default="active")
@@ -165,7 +165,6 @@ class ComputeUnitTable(IdTable, DatabaseBase):
         default=dict,
     )
     scaling_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    default_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     min_free_cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     min_free_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -441,7 +440,7 @@ class ComputeJoinCredentialTable(IdTable, DatabaseBase):
         nullable=False,
     )
     capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    placement: Mapped[str] = mapped_column(String(120), nullable=False)
     machine_id: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_by_token_id: Mapped[str | None] = mapped_column(
@@ -553,7 +552,7 @@ class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
         nullable=False,
     )
     capacity_owner_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    placement: Mapped[str] = mapped_column(String(120), nullable=False)
     machine_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("machines.id", ondelete="CASCADE"),

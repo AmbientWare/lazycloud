@@ -142,11 +142,12 @@ class ComputeClient:
     def remove_machine(self, machine_id: str) -> None:
         self.channel.request("DELETE", self._machines_path(f"/{machine_id}"))
 
-    def update_machine(self, machine_id: str, *, workspaces: list[str]) -> MachineResponse:
+    def update_machine(self, machine: str, *, workspaces: list[str]) -> MachineResponse:
+        """`machine` is a name or an id; the route resolves both within the account."""
         return MachineResponse.model_validate(
             self.channel.request(
                 "PATCH",
-                self._machines_path(f"/{machine_id}"),
+                self._machines_path(f"/{machine}"),
                 payload={"workspaces": list(workspaces)},
             )
         )

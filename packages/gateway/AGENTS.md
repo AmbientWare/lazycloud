@@ -20,10 +20,13 @@ after commit, and recover retries from durable authority rather than issuing
 another credential because a cache write failed.
 
 A machine join command names the machine and the workspaces it serves. Minting
-it writes the machine row, its workspace links, and a unit labelled by the name,
-then issues one credential bound to that machine id. Reissuing for a pending
-name revokes the earlier credential; reissuing for a name that is already
-joined is a conflict until the host leaves. `lazycloud` and `aws` are refused as
-names because they are the labels the platform derives for its own and
-connected capacity. Leaving marks the machine deleted, which frees the name, and
-removes the unit once nothing else holds it.
+it writes the machine row and its workspace links first, then the unit placed on
+that machine id, then issues one credential bound to the machine. The machine's
+name is an account-unique lookup key and nothing more; the placement is the
+machine id, so two accounts joining the same name never share capacity.
+Reissuing for a pending name revokes the earlier credential; reissuing for a
+name that is already joined is a conflict until the host leaves, and two joins
+racing under one name settle on the unique index. A workspace cannot be dropped
+from a machine's list while a stub in it is still pinned to that machine.
+Leaving marks the machine deleted, which frees the name, and removes the unit
+once nothing else holds it.

@@ -8,7 +8,6 @@ from database.records.apps import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.app_slug import app_slug_or_default
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import MachinePool
 from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
@@ -45,7 +44,6 @@ class DeploymentStubRegistry(Protocol):
         app_id: str | None = None,
         public: bool = False,
         config: StubConfig | Mapping[str, JsonValue] | None = None,
-        pool: MachinePool = MachinePool(""),
         metadata: Mapping[str, JsonValue] | None = None,
         reuse_existing: bool = True,
     ) -> StubRecord: ...
@@ -146,7 +144,6 @@ class DeploymentRegistrationService:
                 if source_stub is not None
                 else _stub_config_from_deployment_spec(deployment.spec)
             ).model_copy(update={"machine": deployment.machine}),
-            pool=deployment.pool,
             metadata={
                 **(source_stub.metadata if source_stub is not None else {}),
                 "deployment_id": deployment.id,

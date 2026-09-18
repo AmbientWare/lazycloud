@@ -327,16 +327,25 @@ class AutoscalerStateRepository:
 class MachineRepository:
     session: Session
 
-    def upsert(self, machine: Machine, *, workspace_id: str | None = None) -> Machine:
+    def upsert(
+        self,
+        machine: Machine,
+        *,
+        workspace_id: str | None = None,
+        owner_user_id: str | None = None,
+    ) -> Machine:
+        """Write a machine. `owner_user_id` is the account a named machine is unique in.
+
+        Given by the caller that minted the join, because a workspace may have
+        several owners and the first row is not the one who joined it.
+        """
         machine = Machine.model_validate(dict(machine))
         row = self.session.get(MachineTable, machine.id)
         owner_id = workspace_id if workspace_id is not None else row.workspace_id if row else None
         if owner_id is not None:
             WorkspaceRepository(self.session).lock_active_owner(owner_id)
         if row is None:
-            # The account the name is unique within is the workspace owner's,
-            # fixed here because a machine never changes workspace.
-            owner = (
+            owner = owner_user_id or (
                 self.session.scalar(
                     select(WorkspaceMemberTable.user_id).where(
                         WorkspaceMemberTable.workspace_id == owner_id,

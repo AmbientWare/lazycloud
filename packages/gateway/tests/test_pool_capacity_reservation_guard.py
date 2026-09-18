@@ -47,12 +47,12 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.releases import AGENT_RELEASE_GENERATION_HEADER, AgentReleaseRequest
+from shared.placement import Placement
 from shared.releases import AgentArtifact
 from shared.scheduling import (
     SchedulerContainerState,
@@ -158,15 +158,19 @@ def _join_request(join_token: str) -> JoinAgentRequest:
     )
 
 
+_CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
+
+
 def _scalable_pool(
     services: ApiServices,
     *,
     workspace_id: str,
-    pool: MachinePool,
+    name: str,
     capacity_owner_id: str,
 ) -> ComputeUnitRecord:
     services.compute.create_unit(
-        UnitName(pool),
+        UnitName(name),
+        placement=Placement.connection(_CONNECTION_ID),
         workspace=workspace_id,
         provider="aws:test-connection",
         capacity_owner_id=capacity_owner_id,
@@ -183,10 +187,10 @@ def _scalable_pool(
         capacity_owner_id=capacity_owner_id,
         capacity_owner_kind=CapacityOwnerKind.PooledProvider,
         capacity_owner_source=CapacityOwnerSource.Provider,
-        name=UnitName(pool),
-        pool=MachinePool(pool),
+        name=UnitName(name),
+        placement=Placement.connection(_CONNECTION_ID),
         provider_ref="aws:test-connection",
-        provider_connection_id="11111111-1111-4111-8111-111111111111",
+        provider_connection_id=_CONNECTION_ID,
         capacity_mode=ComputeCapacityMode.Pooled,
         visibility=ComputeUnitVisibility.Internal,
         region="us-east-1",
@@ -276,7 +280,7 @@ def test_pool_scale_delegates_to_compute_while_capacity_owner_lock_is_held(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=MachinePool(pool),
+        name=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
@@ -314,7 +318,7 @@ def test_pool_scale_refuses_open_reservation_before_compute_mutation(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=MachinePool(pool),
+        name=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
@@ -349,7 +353,7 @@ def test_pool_scale_zero_refuses_active_reservation_when_stored_capacity_is_zero
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=MachinePool(pool),
+        name=pool,
         capacity_owner_id=capacity_owner_id,
     ).model_copy(update={"desired_machines": 0, "observed_machines": 0})
     guard = _RecordingCapacityReservationGuard(open_reservations=True)
@@ -384,7 +388,7 @@ def test_pool_scale_zero_refuses_unassigned_pending_workspace_container(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=MachinePool(pool),
+        name=pool,
         capacity_owner_id=capacity_owner_id,
     )
     with isolated_services.context.database.session() as session:
@@ -423,14 +427,14 @@ def test_pool_scale_zero_disables_owner_worker_before_compute_mutation(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=MachinePool(pool),
+        name=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
     gateway = _gateway(isolated_services, guard, key_prefix="pool-dispatch-fence")
     worker = SchedulerWorkerRecord(
         worker_id="idle-provider-worker",
-        pool=MachinePool(pool),
+        placement=Placement.connection(_CONNECTION_ID),
         capacity_owner_id=capacity_owner_id,
         status=SchedulerWorkerStatus.Available,
     )
@@ -478,7 +482,7 @@ def test_pool_state_refuses_mismatched_durable_capacity_owner(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=MachinePool(pool),
+        name=pool,
         capacity_owner_id="25555555-3666-4777-8888-999999999999",
     )
 
@@ -521,7 +525,7 @@ def test_pool_scale_refuses_active_pool_container_before_compute_mutation(
     current = _scalable_pool(
         isolated_services,
         workspace_id=workspace_id,
-        pool=MachinePool(pool),
+        name=pool,
         capacity_owner_id=capacity_owner_id,
     )
     guard = _RecordingCapacityReservationGuard(open_reservations=False)
@@ -533,7 +537,7 @@ def test_pool_scale_refuses_active_pool_container_before_compute_mutation(
     worker_id = f"worker-{container_status.value}"
     worker = SchedulerWorkerRecord(
         worker_id=worker_id,
-        pool=MachinePool(pool),
+        placement=Placement.connection(_CONNECTION_ID),
         capacity_owner_id=capacity_owner_id,
         status=SchedulerWorkerStatus.Available,
     )
@@ -614,7 +618,7 @@ def test_pool_delete_refuses_open_capacity_reservation_without_mutating_owned_st
     worker_id = agent_machine_worker_id(enrolled.machine_id)
     scheduler_pool_state = WorkerPoolStateSnapshot(
         capacity_owner_id=capacity_owner_id,
-        pool=MachinePool(unit_name),
+        placement=Placement.platform(),
         available_workers=1,
         registered_machines=1,
     )
@@ -681,7 +685,7 @@ def test_pool_delete_uses_durable_capacity_owner_for_guard_and_scheduler_state(
         capacity_owner_id,
         WorkerPoolStateSnapshot(
             capacity_owner_id=capacity_owner_id,
-            pool=MachinePool(unit_name),
+            placement=Placement.platform(),
         ),
     )
 
@@ -779,7 +783,7 @@ def test_rollout_contention_preserves_worker_without_restart_authorization(
             worker_id=worker_id,
             machine_id=enrolled.machine_id,
             capacity_owner_id=unit.capacity_owner_id,
-            pool=unit.pool,
+            placement=unit.placement,
             status=worker_status,
         )
     )
@@ -899,6 +903,7 @@ def test_agent_update_preserves_durable_work_after_hot_worker_state_is_lost(
         ContainerRepository(session).upsert(container)
     assert not gateway.agent_release(instruction).update_agent
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         container_id=container.id,
         workspace_id=workspace_id,
         stub_id="owned-during-update",

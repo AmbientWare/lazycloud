@@ -35,7 +35,6 @@ from shared.compute_policy import (
     ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
 )
 from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -46,6 +45,7 @@ from shared.http.provider_nodes import (
     ProviderNodeEnrollmentRequest,
 )
 from shared.identity import WorkspaceKind
+from shared.placement import Placement
 from shared.provider_config import ProviderKind
 
 from gateway.agent_enrollment import AgentJoinResult
@@ -150,7 +150,7 @@ class ProviderNodeEnrollmentService:
             session,
             pool.id,
             pool.workspace_id,
-            pool.pool,
+            pool.placement,
             pool.capacity_owner_id,
             owner_user_id=self._pool_owner(session, pool),
         )
@@ -187,7 +187,7 @@ class ProviderNodeEnrollmentService:
         pool: ComputeUnitRecord,
         joined: JoinAgentResponse,
     ) -> None:
-        if joined.workspace_id != pool.workspace_id or joined.pool != pool.pool:
+        if joined.workspace_id != pool.workspace_id or joined.placement != pool.placement:
             raise ConflictError("provider node joined a different compute pool")
         instances = ComputeProviderInstanceRepository(session)
         instance = instances.get_for_pool_instance(
@@ -255,7 +255,7 @@ class ProviderNodeEnrollmentService:
                     ),
                     level=EventLevel.Error,
                     data={
-                        "pool": pool.name,
+                        "placement": pool.name,
                         "failure_reason": request.failure_reason.value,
                         "diagnostic_excerpt": excerpt,
                     },
@@ -496,7 +496,7 @@ class ProviderNodeEnrollmentService:
         session: DatabaseSession,
         unit_id: str,
         workspace_id: str,
-        pool: MachinePool,
+        placement: Placement,
         capacity_owner_id: str,
         *,
         owner_user_id: str | None,
@@ -507,7 +507,7 @@ class ProviderNodeEnrollmentService:
                 owner_token_id=unit_id,
                 platform_fleet=owner_user_id is None,
             ),
-            pool,
+            placement,
             capacity_owner_id=capacity_owner_id,
             owner_user_id=owner_user_id,
             ttl="2m",
@@ -518,7 +518,7 @@ class ProviderNodeEnrollmentService:
             user_id=owner_user_id,
             workspace_id=workspace_id,
             capacity_owner_id=capacity_owner_id,
-            pool=pool,
+            placement=placement,
             created_by_token_id=None,
             max_uses=1,
             expires_at=plan.expires_at,

@@ -88,7 +88,7 @@ class AgentTunnelAuthority:
                 or route.workspace_id != enrollment.workspace_id
                 or route.capacity_owner_id != enrollment.capacity_owner_id
                 or route.machine_id != enrollment.machine_id
-                or route.pool != enrollment.pool
+                or route.placement != enrollment.placement
             ):
                 raise NotFoundError("Agent backend route is unavailable")
             if route.state is not BackendRouteState.Ready:
@@ -109,7 +109,7 @@ class AgentTunnelAuthority:
                 or machine.capacity_owner_id != enrollment.capacity_owner_id
                 or worker is None
                 or worker.machine_id != enrollment.machine_id
-                or worker.pool != enrollment.pool
+                or worker.placement != enrollment.placement
             ):
                 raise NotFoundError("Agent backend worker is unavailable")
             container = ContainerRepository(session).get_across_workspaces(route.container_id)

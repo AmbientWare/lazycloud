@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import (
@@ -33,7 +34,12 @@ def test_storage_observations_dedupe_survive_deletion_and_exclude_customer_stora
         user = UserRepository(session).create(display_name="storage accounting")
         workspace = WorkspaceRepository(session).create(name="storage accounting")
         WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace.id, user_id=user.id)
-    external = connected_workspace(ControlPlaneService(service_context), "customer storage")
+    external = connected_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "customer storage",
+    )
     with database.session() as session:
         # A workspace in a connected account keeps its bucket there; a log line
         # naming that bucket is never platform storage, whatever the bucket is called.

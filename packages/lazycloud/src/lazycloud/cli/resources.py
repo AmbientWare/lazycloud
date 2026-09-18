@@ -748,11 +748,7 @@ def machine_update(
     names = _workspace_names(workspaces)
     if not names:
         raise typer.BadParameter("--workspaces needs at least one workspace name")
-    machines = resource_client().list_machines().machines
-    matches = [item for item in machines if machine in (item.name, item.id)]
-    if not matches:
-        raise ClientError(f"No joined machine is named {machine}.")
-    response = compute_client().update_machine(matches[0].id, workspaces=names)
+    response = compute_client().update_machine(machine, workspaces=names)
     emit(
         ctx,
         payload=response.model_dump(mode="json"),

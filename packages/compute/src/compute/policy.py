@@ -15,7 +15,11 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
-from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
+from database.repositories.identity import (
+    WorkspaceMemberRepository,
+    WorkspaceRecord,
+    WorkspaceRepository,
+)
 from database.repositories.orchestration import MachineRepository
 from database.types import DatabaseSession
 from shared.aws_connections import AwsAccountConnection
@@ -25,15 +29,15 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     MachineServiceState,
 )
+from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
-    LAZYCLOUD_MACHINE_POOL,
     ComputeResourceRequirements,
     ComputeUnitRecord,
-    MachinePool,
 )
 from shared.deployment_records import Deployment, DeploymentSpec, request_and_limit
 from shared.errors import InvalidInputError
 from shared.identity import WorkspaceStatus
+from shared.placement import Placement
 from shared.resources import parse_memory_mib
 
 from compute.agent_control import (
@@ -218,37 +222,40 @@ class WorkspaceComputePolicyService:
             if workspace_id in active_workspace_ids
         ]
 
-    def resolve_placement(self, *, workspace_id: str, machine: str = "") -> MachinePool:
-        """The capacity label a workload of this workspace runs under.
+    def resolve_placement(
+        self, session: DatabaseSession, workspace: WorkspaceRecord, machine: str
+    ) -> Placement:
+        """Where a workload of this workspace runs.
 
         Without a machine it is the workspace's location: the platform fleet, or
         the connected account the workspace was created in. With one it is that
-        machine's own label, and only if the machine exists in the owner's
-        account and lists this workspace. There is no fallback in either
-        direction; a workload that names a machine runs there or not at all.
+        machine, and only if the machine exists in the owner's account and lists
+        this workspace. There is no fallback in either direction; a workload that
+        names a machine runs there or not at all.
         """
-        with self.context.database.session() as session:
-            workspace = self.context.workspace(session, workspace_id)
-            members = WorkspaceMemberRepository(session)
-            if not machine:
-                if workspace.connection_id is None:
-                    return MachinePool(LAZYCLOUD_MACHINE_POOL)
-                connection = AwsAccountConnectionRepository(session).get(workspace.connection_id)
-                if connection is None or connection.user_id != members.owner_user_id(workspace.id):
-                    raise InvalidInputError(
-                        f"workspace {workspace.name!r} is pinned to a connected account "
-                        "that no longer belongs to its owner"
-                    )
-                return connection.pool
-            record = MachineRepository(session).get_by_owner_name(
-                members.owner_user_id(workspace.id), machine
-            )
-            if record is None or workspace.id not in record.workspace_ids:
+        if not machine:
+            if workspace.connection_id is None:
+                return Placement.platform()
+            owner_user_id = WorkspaceMemberRepository(session).owner_user_id(workspace.id)
+            connection = AwsAccountConnectionRepository(session).get(workspace.connection_id)
+            if connection is None or connection.user_id != owner_user_id:
                 raise InvalidInputError(
-                    f"machine {machine!r} is not joined to this account or does not serve "
-                    f"workspace {workspace.name!r}"
+                    f"workspace {workspace.name!r} is pinned to a connected account "
+                    "that no longer belongs to its owner"
                 )
-            return record.pool
+            return connection.placement
+        owner_user_id = WorkspaceMemberRepository(session).owner_user_id(workspace.id)
+        record = MachineRepository(session).get_by_owner_name(owner_user_id, machine)
+        if (
+            record is None
+            or record.status is ResourceStatus.Deleted
+            or workspace.id not in record.workspace_ids
+        ):
+            raise InvalidInputError(
+                f"machine {machine!r} is not joined to this account or does not serve "
+                f"workspace {workspace.name!r}"
+            )
+        return Placement.machine(record.id)
 
     def catalog(self) -> tuple[tuple[str, tuple[ComputeCatalogInstance, ...]], ...]:
         """Provider inventory: what may be launched, independent of who is asking."""
@@ -296,7 +303,7 @@ class WorkspaceComputePolicyService:
                 record,
                 region=pool.region,
                 workspace_id=workspace_id,
-                pool=pool.pool,
+                placement=pool.placement,
                 enrollments=enrollments,
                 worker_state=self.worker_state,
             )
@@ -432,7 +439,7 @@ def _compute_instance_view(
     *,
     region: str,
     workspace_id: str,
-    pool: MachinePool,
+    placement: Placement,
     enrollments: ComputeMachineEnrollmentRepository,
     worker_state: MachineWorkerState,
 ) -> ComputeInstanceView:
@@ -453,7 +460,7 @@ def _compute_instance_view(
         enrollment = enrollments.by_machine(
             workspace_id,
             record.machine_id,
-            pool=pool,
+            placement=placement,
         )
         if machine_serves_workloads(
             enrollment,

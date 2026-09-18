@@ -20,9 +20,7 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
 )
-from shared.compute_policy import (
-    MachinePool,
-)
+from shared.placement import Placement
 
 if TYPE_CHECKING:
     from database.repositories.compute import ComputeMachineEnrollmentRecord
@@ -195,7 +193,7 @@ class AgentBootstrapConfig(ContractModel):
     gateway_grpc_port: int = 443
     gateway_grpc_tls: bool = True
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     executor: str = DEFAULT_PRIVATE_EXECUTOR
     fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
     image_registry_store: str = ""
@@ -299,9 +297,13 @@ def hash_machine_fingerprint(fingerprint: str) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
-def agent_machine_id(workspace_id: str, pool: str, fingerprint: str, *, seed: str = "") -> str:
+def agent_machine_id(
+    workspace_id: str, placement: Placement, fingerprint: str, *, seed: str = ""
+) -> str:
     id_seed = fingerprint or seed or str(int(utc_now().timestamp() * 1_000_000_000))
-    return str(uuid5(NAMESPACE_URL, f"agent-machine\x00{workspace_id}\x00{pool}\x00{id_seed}"))
+    return str(
+        uuid5(NAMESPACE_URL, f"agent-machine\x00{workspace_id}\x00{placement.key}\x00{id_seed}")
+    )
 
 
 def agent_machine_worker_id(machine_id: str) -> str:
@@ -372,7 +374,7 @@ def join_token_ttl_seconds(value: str) -> int:
 
 def plan_join_token_creation(
     principal: ComputePrincipal,
-    pool: MachinePool,
+    placement: Placement,
     *,
     capacity_owner_id: str,
     owner_user_id: str | None,
@@ -382,10 +384,6 @@ def plan_join_token_creation(
     max_uses: int = 1,
     now: datetime | None = None,
 ) -> JoinTokenCreationPlan:
-    normalized_pool = pool.strip()
-    if normalized_pool == "":
-        msg = "pool name is required"
-        raise ValueError(msg)
     if capacity_owner_id.strip() == "":
         msg = "join token requires the issuing capacity owner"
         raise ValueError(msg)
@@ -409,7 +407,7 @@ def plan_join_token_creation(
         owner_user_id=owner_user_id.strip() if owner_user_id is not None else None,
         workspace_id=principal.workspace_id,
         capacity_owner_id=capacity_owner_id,
-        pool=MachinePool(normalized_pool),
+        placement=placement,
         machine_id=machine_id.strip(),
         created_by_token_id=principal.owner_token_id,
         max_uses=max_uses,
@@ -540,7 +538,7 @@ def plan_agent_join(
         else active_token.machine_id.strip()
         or agent_machine_id(
             active_token.workspace_id,
-            active_token.pool,
+            active_token.placement,
             request.machine_fingerprint,
         )
     )
@@ -582,7 +580,7 @@ def plan_agent_join(
         owner_user_id=active_token.owner_user_id,
         workspace_id=active_token.workspace_id,
         capacity_owner_id=active_token.capacity_owner_id,
-        pool=active_token.pool,
+        placement=active_token.placement,
         machine_id=machine_id,
         credential_id=credential_id,
         credential_generation=(
@@ -873,7 +871,7 @@ def build_agent_bootstrap_config(
         gateway_grpc_port=gateway.grpc_port,
         gateway_grpc_tls=gateway.grpc_tls,
         workspace_id=workspace_id,
-        pool=pool_state.pool,
+        placement=pool_state.placement,
         executor=executor,
         fallback=normalized.fallback,
         image_registry_store=image.registry_store,
@@ -974,7 +972,7 @@ def plan_route_status_update(
         return AgentRouteStatusPlan(accepted=True, already_gone=True)
     if (
         route.workspace_id != agent_state.workspace_id
-        or route.pool != agent_state.pool
+        or route.placement != agent_state.placement
         or route.machine_id != agent_state.machine_id
     ):
         return AgentRouteStatusPlan(accepted=False, err_msg="route does not belong to this agent")
@@ -1138,7 +1136,7 @@ def agent_worker_slot_state(
         worker_token_id=token_id,
         worker_token_hash=token_hash,
         workspace_id=agent_state.workspace_id,
-        pool=agent_state.pool,
+        placement=agent_state.placement,
         capacity_owner_id=agent_state.capacity_owner_id,
         machine_id=agent_state.machine_id,
         cpu=schedulable_capacity(agent_state.cpu_millicores or agent_state.cpu_count * 1000),

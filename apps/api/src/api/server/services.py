@@ -208,7 +208,6 @@ from shared.http.functions import (
 )
 from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
-from shared.scheduling import SchedulerWorkerRequest
 from shared.workspace_storage import WorkspaceStorageIssuer
 from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
@@ -265,16 +264,17 @@ class ApiContainerSchedulingFailureHandler:
 
     def mark_scheduling_failed(
         self,
-        request: SchedulerWorkerRequest,
-        reason: str,
+        container_id: str,
         *,
+        workspace_id: str,
+        reason: str,
         now: datetime | None = None,
     ) -> bool:
-        if not self.containers.mark_scheduling_failed(request, reason, now=now):
+        if not self.containers.mark_scheduling_failed(
+            container_id, workspace_id=workspace_id, reason=reason, now=now
+        ):
             return False
-        self.images.fail_container_build(
-            request.container_id, reason, workspace_id=request.workspace_id
-        )
+        self.images.fail_container_build(container_id, reason, workspace_id=workspace_id)
         return True
 
 
@@ -291,7 +291,7 @@ class SchedulerAgentCapacityInterruptionSink:
                 enrollment_id=state.credential_id,
                 credential_generation=state.credential_generation,
                 workspace_id=state.workspace_id,
-                pool=state.pool,
+                placement=state.placement,
                 machine_id=state.machine_id,
                 state=state.capacity_state,
                 reason=state.capacity_reason,
@@ -689,6 +689,7 @@ class ApiServices(ApiServiceCore):
         control_plane = ControlPlaneService(
             context,
             public_http_origin=gateway_config.public_http_url,
+            placement_resolver=compute_policies,
             workspace_storage_client=(
                 workspace_storage_client
                 or _workspace_bucket_client(object_storage_service.object_client)
@@ -838,13 +839,7 @@ class ApiServices(ApiServiceCore):
         container_scheduler = SchedulerContainerRequestService(
             worker_repository,
             container_repository,
-            placement=SchedulerComputePlacement(
-                ComputeCapacityPlacementService(
-                    context,
-                    compute_policies,
-                    compute,
-                )
-            ),
+            placement=SchedulerComputePlacement(ComputeCapacityPlacementService(context, compute)),
             failure_handler=scheduling_persistence,
             assignments=scheduling_persistence,
             usage=usage,
@@ -925,7 +920,11 @@ class ApiServices(ApiServiceCore):
             ImageBuildSubmissionService(
                 context.database,
                 DurableImageBuildDispatch(
-                    context.database, container_scheduler, containers, image_build_container_config
+                    context.database,
+                    container_scheduler,
+                    containers,
+                    image_build_container_config,
+                    compute_policies,
                 ),
                 resolved_image_archive_store,
                 ImageBuildChanges(redis),

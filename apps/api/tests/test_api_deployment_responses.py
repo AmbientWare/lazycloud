@@ -1,7 +1,7 @@
 from api.server.response_mapping import deployment_response
-from shared.compute_policy import MachinePool
 from shared.deployment_records import Deployment, DeploymentSpec, Resources
 from shared.deployments import DeploymentKind
+from shared.placement import Placement
 
 
 def test_deployment_response_exposes_safe_workload_configuration() -> None:
@@ -28,7 +28,7 @@ def test_deployment_response_exposes_safe_workload_configuration() -> None:
             env={"MODEL_TOKEN": "must-not-leave-the-control-plane"},
             secrets=["production-model-token"],
         ),
-        pool=MachinePool("aws"),
+        placement=Placement.machine("aws"),
     )
 
     response = deployment_response(deployment).model_dump(mode="json")

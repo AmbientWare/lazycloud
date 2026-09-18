@@ -19,7 +19,6 @@ from database.repositories.identity import WorkspaceMemberRepository, WorkspaceR
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.aws_connections import (
-    AWS_CONNECTED_MACHINE_POOL,
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
@@ -33,7 +32,6 @@ from shared.aws_connections import (
     AwsAuthorizationCleanupTombstone,
     AwsConnectionStackAction,
 )
-from shared.capacity import MachinePool
 from shared.compute_policy import ComputeUnitPhase
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.aws_connections import (
@@ -187,12 +185,11 @@ class AwsAccountConnectionService:
         user_id: str,
     ) -> AwsAccountConnectionAuthorization:
         """Connect a customer's AWS account."""
-        pool = MachinePool(AWS_CONNECTED_MACHINE_POOL)
         with self.context.database.session() as session:
             self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             existing = AwsAccountConnectionRepository(session).get_for_user(user_id)
             if existing is not None:
-                if self._matches_existing_draft(existing, request, pool=pool):
+                if self._matches_existing_draft(existing, request):
                     pending = existing.pending_authorization
                     if pending is None:
                         raise ConflictError("AWS account connection setup was superseded")
@@ -226,7 +223,6 @@ class AwsAccountConnectionService:
         connection = AwsAccountConnection(
             id=connection_id,
             user_id=user_id,
-            pool=pool,
             account_id=request.account_id,
             external_id=external_id,
             phase=AwsAccountConnectionPhase.AwaitingAuthorization,
@@ -717,8 +713,8 @@ class AwsAccountConnectionService:
                 "phase": phase,
                 "provider_operation_id": operation_id,
                 "provider_operation_started_at": operation_started_at,
-                "drain_total_pools": drain.total_pools,
-                "drain_remaining_pools": drain.remaining_pools,
+                "drain_total_units": drain.total_pools,
+                "drain_remaining_units": drain.remaining_pools,
                 "next_reconcile_at": next_reconcile_at,
                 "reconcile_attempt_count": 0,
                 "last_error": "",
@@ -1447,8 +1443,6 @@ class AwsAccountConnectionService:
     def _matches_existing_draft(
         existing: AwsAccountConnection,
         request: AwsConnectionCreateRequest,
-        *,
-        pool: MachinePool,
     ) -> bool:
         pending = existing.pending_authorization
         mode = (
@@ -1458,7 +1452,6 @@ class AwsAccountConnectionService:
         )
         return (
             existing.account_id == request.account_id
-            and existing.pool == pool
             and existing.active_authorization is None
             and pending is not None
             and pending.authorization_mode is mode

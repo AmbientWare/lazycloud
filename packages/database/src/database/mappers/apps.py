@@ -6,10 +6,10 @@ from shared.app_lifecycle import (
     AppLifecycleState,
     AppLifecycleTarget,
 )
-from shared.compute_policy import MachinePool
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind, StubKind
+from shared.placement import Placement
 from shared.timestamps import to_utc, to_utc_or_none
 from shared.workload_config import StubConfig
 
@@ -100,7 +100,7 @@ def deployment_from_table(row: DeploymentTable) -> Deployment:
         spec=DeploymentSpec.model_validate(row.spec),
         subdomain=row.subdomain,
         custom_hostname=row.custom_hostname,
-        pool=MachinePool(row.pool),
+        placement=Placement.parse(row.placement),
         machine=row.machine,
         active=row.active,
         deleted_at=to_utc_or_none(row.deleted_at),
@@ -118,7 +118,7 @@ def write_deployment_row(row: DeploymentTable, deployment: Deployment) -> None:
     row.spec = deployment.spec.model_dump(mode="json")
     row.subdomain = deployment.subdomain
     row.custom_hostname = deployment.custom_hostname
-    row.pool = deployment.pool
+    row.placement = deployment.placement.key
     row.machine = deployment.machine
     row.active = deployment.active
     row.deleted_at = deployment.deleted_at
@@ -307,7 +307,7 @@ def stub_from_table(row: StubTable) -> StubRecord:
         app_id=row.app_id,
         public=row.public,
         config=StubConfig.model_validate(config),
-        pool=MachinePool(row.pool),
+        placement=Placement.parse(row.placement),
         metadata=metadata,
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
@@ -322,7 +322,7 @@ def write_stub_row(row: StubTable, stub: StubRecord) -> None:
     row.deployment_id = stub.deployment_id
     row.app_id = stub.app_id
     row.public = stub.public
-    row.pool = stub.pool
+    row.placement = stub.placement.key
     row.created_at = stub.created_at
     row.updated_at = stub.updated_at
     row.object_id = stub.config.object_id or None

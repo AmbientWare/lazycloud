@@ -79,7 +79,7 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.identity import AuthScope, TokenStatus
 from shared.image_building.records import BuildStatus
 from shared.objects import ObjectRecord
-from shared.placement import product_region
+from shared.placement import PlacementKind, product_region
 from shared.realtime.contracts import EventRecordType
 from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from shared.scheduling import (
@@ -89,7 +89,6 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
     WorkerExecutionRecord,
     WorkerUnavailableReason,
-    worker_serves_owner,
 )
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
@@ -437,10 +436,8 @@ class WorkerRepositoryService:
         worker = self.workers.get_worker(principal.worker_id) if principal.worker_id else None
         if worker is None:
             raise AuthorizationDeniedError(f"{operation} worker is no longer registered")
-        if not worker_serves_owner(
-            private_worker=True,
-            worker_owner_user_id=worker.owner_user_id,
-            request_owner_user_id=self._workspace_owner_user_id(workspace_id),
+        if not worker.owner_user_id or worker.owner_user_id != self._workspace_owner_user_id(
+            workspace_id
         ):
             raise AuthorizationDeniedError(
                 f"{operation} workspace does not belong to the worker's account"
@@ -521,7 +518,7 @@ class WorkerRepositoryService:
             worker.worker_id,
             workspace_id=principal.workspace_id,
         )
-        if durable_worker is None or durable_worker.pool != worker.pool:
+        if durable_worker is None or durable_worker.placement != worker.placement:
             raise ConflictError(
                 f"worker {worker.worker_id} enrollment does not match scheduler state"
             )
@@ -880,16 +877,10 @@ class WorkerRepositoryService:
                 # registration's own value would let a worker name any workspace and
                 # be scheduled that workspace's work.
                 "workspace_id": principal.workspace_id,
-                # The switch the owner comparison hangs on, so it answers to the
-                # token like the others. Left to the registration, a machine its
-                # customer holds root on can call itself public, and placement
-                # then skips the owner check entirely and offers it every
-                # account's work — the default pool carries one name for every
-                # workspace, so it does not even have to guess which.
-                "private_worker": principal.is_private_worker,
-                # Stamped with it, because placement compares accounts: a private
-                # worker whose owner is unset serves nobody, so registering without
-                # one refuses the machine every request until a reconcile repairs it.
+                # Follows the placement rather than the registration: a machine its
+                # customer holds root on cannot call itself platform capacity.
+                "private_worker": unit.placement.kind is not PlacementKind.Platform,
+                # For attribution and billing; placement itself is what is compared.
                 "owner_user_id": (
                     self._workspace_owner_user_id(principal.workspace_id)
                     if principal.is_private_worker
@@ -900,21 +891,14 @@ class WorkerRepositoryService:
                 # naming its own billing owner could mark every container it runs
                 # self-hosted and drop them from the bill.
                 "billing_owner": self._billing_owner_for(unit, principal),
-                # The pool the unit feeds, not the one the worker arrived with.
-                # A machine carries the pool its join credential named at launch,
-                # so a unit corrected afterwards leaves every worker it starts in
-                # a pool no workload asks for, and the machine has to be replaced
-                # for a name to change. Told, not asserted.
-                "pool": unit.pool,
+                # The unit's placement, not the one the worker arrived with: a
+                # machine carries what its join credential named at launch, and a
+                # unit corrected afterwards would otherwise leave every worker it
+                # starts where no workload asks. Told, not asserted.
+                "placement": unit.placement,
                 "region": product_region(unit.region),
                 "availability_zone": availability_zone,
                 "preemptible": unit.worker_preemptible,
-                # Whose pool this is decides who may land on it, so the unit
-                # answers rather than the machine. A worker is launched by an
-                # agent holding a config that cannot see the unit, so left to the
-                # registration every worker declares itself selector-only and a
-                # pool that serves general work has none that will take it.
-                "requires_pool_selector": not unit.default_eligible,
                 # Which capacity an account's work prefers, so it answers to the
                 # unit for the same reason the rest of this block does. A machine
                 # its customer holds root on could otherwise register the largest
@@ -971,9 +955,9 @@ class WorkerRepositoryService:
         """The unit a registering worker belongs to.
 
         Resolved by the capacity owner the join credential stamped onto the
-        machine, never by the pool name the worker arrives holding: a pool is fed
-        by any number of units, so the name identifies none of them, and the unit
-        is what says which pool this worker is in.
+        machine, never by the placement the worker arrives holding: a placement
+        is served by any number of units, so it identifies none of them, and the
+        unit is what says where this worker is.
 
         The two failures stay distinct. A machine can reach registration while
         the unit that owns it is still being written, which is worth retrying; a
@@ -1082,7 +1066,7 @@ class WorkerRepositoryService:
                 durable_worker.model_copy(
                     update={
                         "machine_id": worker.machine_id,
-                        "pool": worker.pool,
+                        "placement": worker.placement,
                         "last_seen_at": now,
                     }
                 ),
@@ -1616,7 +1600,7 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError("Backend route does not match the assigned container")
         with self.services.context.database.session() as session:
             enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-                worker.workspace_id, worker.machine_id, pool=worker.pool
+                worker.workspace_id, worker.machine_id, placement=worker.placement
             )
         if (
             enrollment is None
@@ -1629,7 +1613,7 @@ class WorkerRepositoryService:
                 "workspace_id": enrollment.workspace_id,
                 "capacity_owner_id": enrollment.capacity_owner_id,
                 "enrollment_id": enrollment.id,
-                "pool": enrollment.pool,
+                "placement": enrollment.placement,
                 "state": BackendRouteState.Opening,
                 "error": "",
             }
@@ -1664,7 +1648,7 @@ class WorkerRepositoryService:
         # same way, or the route outlives its container.
         unique_routes: set[tuple[str, str, str, str]] = set()
         for route in routes:
-            if not (route.route_id and route.workspace_id and route.pool and route.machine_id):
+            if not (route.route_id and route.workspace_id and route.placement and route.machine_id):
                 continue
             worker = self.workers.get_worker(route.worker_id)
             if worker is None or not (worker.capacity_owner_id and worker.workspace_id):

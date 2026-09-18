@@ -7,7 +7,6 @@ from typing import TypeAlias
 from pydantic import Field, JsonValue, TypeAdapter, field_validator
 
 from shared.app_identity import EVENT_SOURCE
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.serialization import to_json_value
@@ -93,7 +92,8 @@ class EventMetadata(ContractModel):
     service_name: str = ""
     instance_id: str = ""
     app_id: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: str = ""
+    """Placement key of the worker the event concerns, empty when none."""
     action: str = ""
 
     @field_validator("*", mode="before")
@@ -115,7 +115,7 @@ class EventMetadata(ContractModel):
             "servicename": self.service_name,
             "instanceid": self.instance_id,
             "appid": self.app_id,
-            "poolname": str(self.pool),
+            "placement": self.placement,
         }
         return {key: value for key, value in extension_keys.items() if value}
 
@@ -194,7 +194,7 @@ def event_metadata_from_data(
         service_name=_first_text(data, "service_name", "service"),
         instance_id=_first_text(data, "instance_id"),
         app_id=_first_text(data, "app_id"),
-        pool=MachinePool(_first_text(data, "pool")),
+        placement=_first_text(data, "placement"),
         action=_first_text(data, "action"),
     )
 
@@ -221,7 +221,7 @@ def event_metadata_from_cloud_event(
         service_name=_extension_text(extensions, "servicename"),
         instance_id=_extension_text(extensions, "instanceid"),
         app_id=_extension_text(extensions, "appid"),
-        pool=MachinePool(_extension_text(extensions, "poolname")),
+        placement=_extension_text(extensions, "placement"),
     )
 
 

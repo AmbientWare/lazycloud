@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import JsonValue
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
+from shared.placement import Placement
 from sqlalchemy import (
     DDL,
     BigInteger,
@@ -122,7 +122,7 @@ class MachineTable(IdTable, DatabaseBase):
     __tablename__ = "machines"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_machines_workspace_created", "workspace_id", "created_at"),
-        Index("ix_machines_pool_status", "pool", "status"),
+        Index("ix_machines_placement_status", "placement", "status"),
         Index("ix_machines_workspace_owner", "workspace_id", "capacity_owner_id"),
         Index("ix_machines_provider_status", "provider", "status"),
         Index(
@@ -147,7 +147,9 @@ class MachineTable(IdTable, DatabaseBase):
         nullable=True,
     )
     name: Mapped[str | None] = mapped_column(String(63), nullable=True)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
+    placement: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=Placement.platform().key
+    )
     capacity_owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -189,7 +191,7 @@ class WorkerTable(IdTable, DatabaseBase):
     __tablename__ = "workers"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_workers_workspace_created", "workspace_id", "created_at"),
-        Index("ix_workers_pool_status", "pool", "status"),
+        Index("ix_workers_placement_status", "placement", "status"),
         Index("ix_workers_machine", "machine_id"),
         CheckConstraint("admitted_release_generation >= 0", name="ck_workers_release_generation"),
         CheckConstraint("update_generation >= 0", name="ck_workers_update_generation"),
@@ -205,7 +207,9 @@ class WorkerTable(IdTable, DatabaseBase):
         ForeignKey("machines.id", ondelete="SET NULL"),
         nullable=True,
     )
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
+    placement: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=Placement.platform().key
+    )
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     admitted_release_generation: Mapped[int] = mapped_column(BigInteger, server_default="0")
@@ -381,7 +385,8 @@ class ContainerTable(IdTable, DatabaseBase):
     scheduling_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     scheduling_gpu_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    scheduling_pool_selector: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_placement: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    """Where the scheduling request lands; null until a request is recorded."""
     scheduling_architecture: Mapped[str] = mapped_column(Text, nullable=False, default="")
     scheduling_provider_runtime: Mapped[str] = mapped_column(Text, nullable=False, default="")
     scheduling_runtime_class: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -454,7 +459,7 @@ class AgentTable(IdTable, DatabaseBase):
     __tablename__ = "agents"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_agents_workspace_created", "workspace_id", "created_at"),
-        Index("ix_agents_pool_status", "pool", "status"),
+        Index("ix_agents_placement_status", "placement", "status"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -463,7 +468,9 @@ class AgentTable(IdTable, DatabaseBase):
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
+    placement: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=Placement.platform().key
+    )
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     version: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -14,11 +14,11 @@ from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
     ComputeUnitRecord,
-    MachinePool,
     UnitName,
 )
 from shared.contracts import ContractModel
 from shared.network_egress import NetworkEgressRouteEvidence
+from shared.placement import Placement
 from shared.timestamps import to_utc
 from shared.urls import normalize_http_origin
 
@@ -156,7 +156,7 @@ class ProviderCapacityPolicy(ContractModel):
 
 class ResolvedProviderPolicy(ProviderCapacityPolicy):
     workspace_id: str = Field(min_length=1)
-    pool: MachinePool = Field(min_length=1)
+    placement: Placement
     platform_fleet: bool
 
     @property
@@ -331,21 +331,19 @@ def internal_unit_identity(
 def joined_unit_identity(
     *,
     workspace_id: str,
-    pool: MachinePool,
+    placement: Placement,
     provider: str,
 ) -> tuple[str, UnitName]:
     """Derive the durable id and name of one joined-capacity unit.
 
     Machines reach this unit by joining rather than being bought, so the seed is
-    only what decides which fleet a host lands in: the workspace, the pool it
-    serves, and the kind of agent running it. Deriving rather than naming keeps
-    find-or-create idempotent across restarts, and keeps the name out of the
-    shape a pool label has — a unit called `lazycloud` sitting in pool
-    `lazycloud` is the ambiguity this whole vocabulary exists to prevent.
+    only what decides which fleet a host lands in: the workspace, the placement
+    it serves, and the kind of agent running it. Deriving rather than naming keeps
+    find-or-create idempotent across restarts.
     """
     identity = uuid5(
         NAMESPACE_URL,
-        "\0".join(("compute-joined", workspace_id, pool, provider)),
+        "\0".join(("compute-joined", workspace_id, placement.key, provider)),
     )
     return str(identity), UnitName(f"joined-{identity.hex[:24]}")
 

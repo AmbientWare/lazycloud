@@ -15,6 +15,7 @@ from typing import Protocol
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
 from coordination.redis_client import AsyncRedisClient, RedisClient
 from coordination.wake_signal import RedisWakeSignal
@@ -47,6 +48,7 @@ from shared.deployment_records import DeploymentSpec, Resources
 from shared.deployments import DeploymentKind
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
+from shared.placement import Placement
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
@@ -245,6 +247,7 @@ async def test_function_autoscaler_reclaims_a_container_that_never_started(
             async_redis,
             stranded.runtime_worker_id,
             SchedulerWorkerRequest(
+                placement=Placement.platform(),
                 container_id=stranded.id,
                 workspace_id=stub.workspace_id,
                 stub_id=stub.id,
@@ -359,6 +362,7 @@ def test_function_recovery_preserves_capacity_waits_and_acknowledged_preparation
     waiting = _record_pending_container(services, stub, created_at=old)
     RedisSchedulerWorkerRepository(redis).enqueue_container_request(
         SchedulerWorkerRequest(
+            placement=Placement.platform(),
             container_id=waiting.id,
             workspace_id=stub.workspace_id,
             stub_id=stub.id,
@@ -443,7 +447,9 @@ def _create_function_stub(runtime: ApiServices, *, max_containers: int) -> StubR
             resources=Resources(timeout_seconds=30, concurrency=1),
         )
     )
-    control = ControlPlaneService(runtime.context)
+    control = ControlPlaneService(
+        runtime.context, placement_resolver=WorkspaceComputePolicyService(runtime.context)
+    )
     stub = next(
         item
         for item in control.list_stubs()

@@ -5,11 +5,9 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field, JsonValue, model_validator
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts
-from shared.placement import ProductRegion
-from shared.scheduling import worker_serves_owner
+from shared.placement import Placement, ProductRegion
 from shared.timestamps import utc_now
 
 
@@ -36,7 +34,7 @@ class SchedulingRequest(ContractModel):
     availability_zone: str = ""
     id: str
     owner_user_id: str = ""
-    """Account that owns the requesting workspace; what private placement compares."""
+    """Account that owns the requesting workspace, for attribution."""
 
     queue: str = "tasks"
     payload: JsonValue = None
@@ -46,7 +44,7 @@ class SchedulingRequest(ContractModel):
     """Models this request accepts, best first; empty asks for no GPU."""
 
     gpu_count: int = 0
-    pool_selector: str = ""
+    placement: Placement
     required_worker_id: str = ""
     runtime_class: str = ""
     docker_enabled: bool = False
@@ -60,7 +58,9 @@ class WorkerCapacity(ContractModel):
     region: ProductRegion | None = None
     availability_zone: str = ""
     worker_id: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    placement: Placement
+    """Where this worker is; a request lands here only when its placement is equal."""
+
     owner_user_id: str = ""
     """Account whose machine this is; empty on the shared platform fleet."""
 
@@ -75,7 +75,6 @@ class WorkerCapacity(ContractModel):
     gpu_type: str = ""
     runtime_class: str = ""
     runtime_classes: list[str] = Field(default_factory=list)
-    requires_pool_selector: bool = False
     preemptible: bool = False
     free_cpu: float = Field(default=0, ge=0)
     free_memory_mib: int = Field(default=0, ge=0)
@@ -95,13 +94,6 @@ class WorkerCapacity(ContractModel):
             raise ValueError("free GPU count cannot exceed total GPU count")
         return self
 
-    def serves_owner(self, owner_user_id: str) -> bool:
-        return worker_serves_owner(
-            private_worker=self.private_worker,
-            worker_owner_user_id=self.owner_user_id,
-            request_owner_user_id=owner_user_id,
-        )
-
     def fit_rejection(self, request: SchedulingRequest) -> str:
         """Name the first reason this worker cannot take the request, else "".
 
@@ -109,20 +101,16 @@ class WorkerCapacity(ContractModel):
         retry-limit with nothing describing the mismatch. Keep the checks in the
         same order as can_fit so the reported reason is the deciding one.
         """
-        # Names no owner: this reaches the requesting tenant as task error text, and
-        # which other tenant owns the worker is not theirs to learn.
-        if not self.serves_owner(request.owner_user_id):
-            return "worker is private to another account"
+        # Names no other placement: this reaches the requesting tenant as task error
+        # text, and which other tenant's capacity this is is not theirs to learn.
+        if request.placement != self.placement:
+            return f"worker is not in placement {request.placement}"
         if request.required_worker_id and self.worker_id != request.required_worker_id:
             return "request requires the worker holding its source container"
         if request.region is not None and self.region != request.region:
             return "worker is outside the selected region"
         if request.availability_zone and self.availability_zone != request.availability_zone:
             return "worker is outside the selected availability zone"
-        if request.pool_selector and request.pool_selector != self.pool:
-            return f"pool selector {request.pool_selector!r} != pool {self.pool!r}"
-        if not request.pool_selector and self.requires_pool_selector:
-            return "worker requires an explicit pool selector"
         if request.runtime_class and request.runtime_class not in self.runtime_classes:
             return f"runtime {request.runtime_class!r} not in {self.runtime_classes}"
         if not request.preemptible and self.preemptible:
@@ -140,17 +128,13 @@ class WorkerCapacity(ContractModel):
         return ""
 
     def can_fit(self, request: SchedulingRequest) -> bool:
-        if not self.serves_owner(request.owner_user_id):
+        if request.placement != self.placement:
             return False
         if request.required_worker_id and self.worker_id != request.required_worker_id:
             return False
         if request.region is not None and self.region != request.region:
             return False
         if request.availability_zone and self.availability_zone != request.availability_zone:
-            return False
-        if request.pool_selector and request.pool_selector != self.pool:
-            return False
-        if not request.pool_selector and self.requires_pool_selector:
             return False
         if request.runtime_class and request.runtime_class not in self.runtime_classes:
             return False
@@ -188,7 +172,7 @@ class WorkerCapacity(ContractModel):
 class PlannedDispatch(ContractModel):
     worker_id: str
     request_id: str
-    pool: MachinePool
+    placement: Placement
 
 
 def select_backfill_worker(
@@ -333,7 +317,7 @@ def plan_scheduling_batch(
                 PlannedDispatch(
                     worker_id=worker.worker_id,
                     request_id=request.id,
-                    pool=worker.pool,
+                    placement=worker.placement,
                 )
             )
             plan.reservations.append(

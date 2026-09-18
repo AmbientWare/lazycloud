@@ -9,8 +9,8 @@ import httpx
 from networking.internal_http import InternalHttpClient
 from pydantic import JsonValue, TypeAdapter
 from shared.checkpoints import CheckpointRecord
-from shared.compute_policy import MachinePool
 from shared.container_requests import WORKER_USER_ARTIFACT_VOLUME
+from shared.placement import Placement
 from worker.checkpoint_activity import CheckpointLeaseRegistry
 from worker.checkpoint_transfer import RemoteCheckpointPersister
 from worker.checkpoints import CheckpointStatePayload, WorkerCheckpointStatus
@@ -82,7 +82,7 @@ def test_runtime_checkpoint_creator_runs_runtime_persists_archive_and_records_st
         container_ip="192.168.0.2",
         stub_id="stub-1",
         exposed_ports=[8001],
-        pool=MachinePool("pool-a"),
+        placement=Placement.machine("pool-a"),
         workspace_storage_available=True,
         cache_available=True,
         gpu="l4",

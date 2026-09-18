@@ -24,7 +24,6 @@ from lazycloud.clients.map.control import MapControlClient
 from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
 from lazycloud.terminal import humanize_bytes
 from pydantic import JsonValue
-from shared.compute_policy import MachinePool
 from shared.container_requests import OciRuntimeName
 from shared.http.collections import MAX_MAP_TTL_SECONDS
 from shared.http.compute import (
@@ -400,13 +399,11 @@ def container_stop(
 def unit_create(
     ctx: typer.Context,
     name: str,
-    pool: Annotated[str, typer.Option("--pool")] = "",
     provider: Annotated[str, typer.Option("--provider")] = "agent",
     initial_machines: Annotated[int, typer.Option("--initial-machines", min=0)] = 0,
     min_machines: Annotated[int, typer.Option("--min-machines", min=0)] = 0,
     max_machines: Annotated[int, typer.Option("--max-machines", min=0)] = 1,
     scaling_enabled: Annotated[bool, typer.Option("--scaling-enabled")] = False,
-    default_eligible: Annotated[bool, typer.Option("--default-eligible")] = False,
     priority: Annotated[
         int,
         typer.Option(
@@ -441,13 +438,11 @@ def unit_create(
     response = admin_api_client().create_unit(
         UnitCreateRequest(
             name=name,
-            pool=MachinePool(pool),
             provider=provider,
             initial_machines=initial_machines,
             min_machines=min_machines,
             max_machines=max_machines,
             scaling_enabled=scaling_enabled,
-            default_eligible=default_eligible,
             priority=priority,
             worker_cpu_millicores=worker_cpu_millicores,
             worker_memory_mib=worker_memory_mib,
@@ -465,7 +460,7 @@ def unit_create(
         title="Unit created",
         fields={
             "name": response.name,
-            "pool": str(response.pool),
+            "placement": str(response.placement),
             "provider": response.provider,
             "scaling": response.scaling_enabled,
             "id": response.id,
@@ -477,7 +472,6 @@ def unit_create(
 def unit_ensure(
     ctx: typer.Context,
     name: str,
-    pool: Annotated[str, typer.Option("--pool")] = "",
     provider: Annotated[str, typer.Option("--provider")] = "agent",
     capacity_owner_output: Annotated[
         Path | None,
@@ -487,18 +481,16 @@ def unit_ensure(
             resolve_path=True,
             help=(
                 "Write the unit's capacity owner id here. A worker is admitted only "
-                "into a pool some unit already feeds, and this id is assigned at "
-                "creation rather than derived from the pool name."
+                "into a unit that already exists, and this id is assigned at "
+                "creation rather than derived from the unit name."
             ),
         ),
     ] = None,
 ) -> None:
     """Return the unit with this name, creating it only if none exists.
 
-    Looked up by name rather than by pool: several units may feed one pool, so a
-    pool lookup can return somebody else's unit. The shared fleet and a joined
-    machine both file a unit against the platform pool, and registering the fleet
-    against the machine's unit fails no visible check.
+    Looked up by name rather than by placement: several units may serve one
+    placement, so a placement lookup can return somebody else's unit.
     """
     client = admin_api_client()
     record = next(
@@ -506,9 +498,7 @@ def unit_ensure(
         None,
     )
     if record is None:
-        record = client.create_unit(
-            UnitCreateRequest(name=name, pool=MachinePool(pool), provider=provider)
-        )
+        record = client.create_unit(UnitCreateRequest(name=name, provider=provider))
     if capacity_owner_output is not None:
         # An identifier, not a credential: it grants nothing without the worker
         # token that accompanies it, so it is written in the clear.
@@ -519,7 +509,7 @@ def unit_ensure(
         title="Unit ready",
         fields={
             "name": record.name,
-            "pool": str(record.pool),
+            "placement": str(record.placement),
             "provider": record.provider,
             "id": record.id,
         },
@@ -535,11 +525,11 @@ def unit_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Units",
-            ["name", "pool", "provider", "machines", "scaling", "id"],
+            ["name", "placement", "provider", "machines", "scaling", "id"],
             [
                 [
                     item.name,
-                    item.pool,
+                    item.placement.key,
                     item.provider,
                     (
                         f"{item.min_machines} min, {item.initial_machines} initial, "
@@ -647,10 +637,10 @@ def worker_list(ctx: typer.Context) -> None:
     console.print(
         table(
             "Workers",
-            ["pool", "status", "free cpu", "free memory", "free gpu", "machine", "id"],
+            ["placement", "status", "free cpu", "free memory", "free gpu", "machine", "id"],
             [
                 [
-                    item.pool,
+                    item.placement.key,
                     item.status,
                     str(item.free_cpu),
                     f"{item.free_memory} MiB",

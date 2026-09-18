@@ -15,10 +15,10 @@ from shared.app_lifecycle import (
     AppLifecycleState,
     AppLifecycleTarget,
 )
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
 from shared.deployment_records import CpuRequest
 from shared.deployments import StubKind
+from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.workload_config import (
     StubAutoscalerConfig,
@@ -39,12 +39,11 @@ class StubRecord(ContractModel):
     app_id: str | None = None
     public: bool = False
     config: StubConfig = Field(default_factory=StubConfig)
-    pool: MachinePool = MachinePool("")
-    """Capacity label the scheduler places this stub's containers under.
+    placement: Placement
+    """Where the scheduler places this stub's containers.
 
-    Derived when the stub is created, from the workspace's location or the
-    machine its config names; empty leaves the scheduler to resolve the
-    workspace's location at placement. Never chosen by the caller.
+    Resolved once when the stub is created, from the workspace's location or the
+    machine its config names. Never chosen by the caller.
     """
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)

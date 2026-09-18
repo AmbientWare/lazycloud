@@ -10,6 +10,21 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # The stored key pair has no successor. A workspace that still holds one
+    # would keep its bucket coordinates with nothing able to reach them, so the
+    # operator detaches or deletes those workspaces before this runs.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM workspaces WHERE storage_credential_key IS NOT NULL) THEN
+                RAISE EXCEPTION
+                    'workspaces still hold externally attached storage credentials; '
+                    'delete those workspaces before upgrading';
+            END IF;
+        END $$
+        """
+    )
     op.drop_constraint("ck_workspaces_storage_credentials", "workspaces", type_="check")
     op.drop_constraint("ck_workspaces_platform_namespace", "workspaces", type_="check")
     op.drop_column("workspaces", "storage_access_key_ciphertext")

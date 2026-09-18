@@ -7,7 +7,6 @@ from pathlib import Path
 from threading import Event
 
 import pytest
-from shared.compute_policy import MachinePool
 from shared.deployments import StubKind
 from shared.http.workspace_sync import (
     WorkspaceSyncBatch,
@@ -15,6 +14,7 @@ from shared.http.workspace_sync import (
     WorkspaceSyncManifest,
     WorkspaceSyncOperation,
 )
+from shared.placement import Placement
 from worker.container_client.models import (
     ContainerCheckpointRequest,
     ContainerExecRequest,
@@ -440,7 +440,7 @@ def test_worker_container_service_exposes_ports_and_updates_network(tmp_path: Pa
             workspace_id="workspace-1",
             machine_id="machine-1",
             worker_id="worker-1",
-            pool=MachinePool("pool-1"),
+            placement=Placement.machine("pool-1"),
         )
     )
     network_policy = NetworkPolicyUpdater()
@@ -569,7 +569,7 @@ def _instance(
     stub_id: str = "stub-1",
     worker_id: str = "worker-1",
     machine_id: str = "",
-    pool: MachinePool = MachinePool(""),
+    placement: Placement = Placement.platform(),
 ) -> WorkerContainerServiceInstance:
     (root / "workspace").mkdir(parents=True, exist_ok=True)
     return WorkerContainerServiceInstance(
@@ -585,6 +585,6 @@ def _instance(
         stub_id=stub_id,
         worker_id=worker_id,
         machine_id=machine_id,
-        pool=pool,
+        placement=placement,
         container_ip="10.32.0.2",
     )

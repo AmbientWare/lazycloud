@@ -319,13 +319,22 @@ class WorkspaceVolumeFilesystem:
 
     resolve_store: WorkspaceVolumeStoreResolver
     _stores: dict[str, WorkspaceVolumeStore] = field(default_factory=dict)
+    _retired: list[tuple[datetime, _ClosableVolumeClient]] = field(default_factory=list)
+    """Clients replaced by a fresh grant, closed once nothing can still hold them.
+
+    A caller may have fetched a store just before it was replaced and still be
+    mid-request on its client, so closing at replacement would cut that request.
+    The renewal margin is the longest such a request can outlive the swap.
+    """
     _stores_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def close(self) -> None:
         with self._stores_lock:
             stores = tuple(self._stores.values())
             self._stores.clear()
-        clients: list[_ClosableVolumeClient] = []
+            retired = [client for _, client in self._retired]
+            self._retired.clear()
+        clients: list[_ClosableVolumeClient] = retired
         for store in stores:
             if isinstance(store.client, _ClosableVolumeClient) and all(
                 store.client is not client for client in clients
@@ -370,8 +379,19 @@ class WorkspaceVolumeFilesystem:
             and retired.client is not stored.client
             and isinstance(retired.client, _ClosableVolumeClient)
         ):
-            retired.client.close()
+            with self._stores_lock:
+                self._retired.append((now, retired.client))
+        self._close_retired(now)
         return stored
+
+    def _close_retired(self, now: datetime) -> None:
+        with self._stores_lock:
+            due = [c for at, c in self._retired if now - at >= _CREDENTIAL_RENEWAL_MARGIN]
+            self._retired = [
+                (at, c) for at, c in self._retired if now - at < _CREDENTIAL_RENEWAL_MARGIN
+            ]
+        for client in due:
+            client.close()
 
     def write_path(
         self,

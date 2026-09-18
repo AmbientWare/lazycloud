@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import UserIdentityRepository, WorkspaceMemberRepository
@@ -73,7 +74,9 @@ def test_a_sign_in_whose_provisioning_fails_mints_no_session(
         redis=real_redis_actors.client(),
         provider_factory=lambda: identity,
         provision_default_workspace=ControlPlaneService(
-            service_context, workspace_storage_client=FakeWorkspaceBuckets()
+            service_context,
+            placement_resolver=WorkspaceComputePolicyService(service_context),
+            workspace_storage_client=FakeWorkspaceBuckets(),
         ).ensure_default_workspace,
         provision_billing_account=provisioner,
     )

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
@@ -20,9 +21,10 @@ from gateway.http import JoinAgentRequest, LeaveAgentRequest
 from operations.container_shutdown import DatabaseDurableWorkerAbsence
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import MachinePool, UnitName
+from shared.compute_policy import UnitName
 from shared.container_requests import ContainerShutdownTarget
 from shared.containers import ContainerRecord, ContainerStatus
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
@@ -34,7 +36,12 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
     real_redis_actors: RealRedisActors,
 ) -> None:
     services = isolated_services
-    workspace = owned_workspace(ControlPlaneService(services.context), "machine-retirement")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ),
+        "machine-retirement",
+    )
     unit = services.compute.create_unit(
         UnitName("retirement"), provider="agent", workspace=workspace.id
     )
@@ -106,7 +113,7 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
         SchedulerWorkerRecord(
             worker_id=worker_id,
             machine_id=agent.machine_id,
-            pool=agent.pool,
+            placement=agent.placement,
             capacity_owner_id=unit.capacity_owner_id,
         )
     )
@@ -122,13 +129,18 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
     isolated_services: ApiServices,
 ) -> None:
     services = isolated_services
-    workspace = owned_workspace(ControlPlaneService(services.context), "pending-machine-join")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ),
+        "pending-machine-join",
+    )
     gateway = services.gateway_service
     unit = services.compute.create_unit(
         UnitName("pending-join"),
         provider="agent",
         workspace=workspace.id,
-        pool=MachinePool("on-prem"),
+        placement=Placement.machine("on-prem"),
     )
     credential = gateway.unit_state_coordinator.create_unit_join_token(
         unit, workspace_id=workspace.id, owner_token_id="pending-join-owner"
@@ -163,6 +175,6 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
         UnitName("pending-join"),
         provider="agent",
         workspace=workspace.id,
-        pool=MachinePool("on-prem"),
+        placement=Placement.machine("on-prem"),
     )
     assert replacement.id != unit.id

@@ -61,7 +61,6 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
     UnitName,
 )
 from shared.compute_reconciliation import (
@@ -81,6 +80,7 @@ from shared.errors import (
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
+from shared.placement import Placement
 from shared.routing import PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
@@ -1051,14 +1051,13 @@ class ComputeService:
         name: UnitName,
         *,
         workspace: str = "default",
-        pool: MachinePool | None = None,
+        placement: Placement | None = None,
         provider: str = "local",
         capacity_owner_id: str | None = None,
         initial_machines: int = 0,
         min_machines: int = 0,
         max_machines: int = 1,
         scaling_enabled: bool = False,
-        default_eligible: bool = False,
         priority: int = 0,
         min_free_cpu_millicores: int = 0,
         min_free_memory_mib: int = 0,
@@ -1077,8 +1076,7 @@ class ComputeService:
     ) -> ComputeUnitRecord:
         """Create or update a provisioning unit the workspace owns directly.
 
-        `machine_pool` defaults to the unit's own name, which is what makes a
-        unit nobody grouped explicitly reachable by its own label.
+        Without a placement the unit is platform capacity.
         """
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
@@ -1108,7 +1106,7 @@ class ComputeService:
                     ),
                     workspace_id=workspace_id,
                     name=name,
-                    pool=pool or MachinePool(name),
+                    placement=placement or Placement.platform(),
                     provider=provider,
                     selector=name,
                     status=ComputeUnitPhase.Ready.value,
@@ -1123,7 +1121,6 @@ class ComputeService:
                     generation=existing.generation if existing is not None else 1,
                     phase=ComputeUnitPhase.Ready,
                     scaling_enabled=scaling_enabled,
-                    default_eligible=default_eligible,
                     priority=priority,
                     min_free_cpu_millicores=min_free_cpu_millicores,
                     min_free_memory_mib=min_free_memory_mib,
@@ -1772,7 +1769,7 @@ class ComputeService:
             root_volume_gib=root_volume_gib,
         )
         with self.context.database.session() as session:
-            unit_pool = provider.policy.pool
+            unit_pool = provider.policy.placement
             unit_platform_fleet = provider.policy.platform_fleet
             repository = ComputeUnitRepository(session)
             if unit_platform_fleet:
@@ -2019,7 +2016,7 @@ class ComputeService:
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
                 name=unit_name,
-                pool=unit_pool,
+                placement=unit_pool,
                 platform_fleet=unit_platform_fleet,
                 provider=provider.ref,
                 selector=unit_name,
@@ -2051,7 +2048,6 @@ class ComputeService:
                 # capacity, so the work it serves is whatever that workspace runs.
                 # A pool created by name through `create_unit` is the one that
                 # earns an opt-in, and keeps the flag for it.
-                default_eligible=True,
                 worker_cpu_millicores=offer.cpu_millicores,
                 worker_memory_mib=offer.memory_mb,
                 worker_gpu_type=offer.gpu or "",
@@ -3591,23 +3587,23 @@ class ComputeService:
         policy = provider.policy
         if policy is None:
             raise UpstreamUnavailableError("compute provider policy is unavailable")
-        if unit.pool == policy.pool and unit.platform_fleet == policy.platform_fleet:
+        if unit.placement == policy.placement and unit.platform_fleet == policy.platform_fleet:
             return unit
         with self.context.database.session() as session:
             updated = ComputeUnitRepository(session).upsert(
                 unit.model_copy(
                     update={
-                        "pool": policy.pool,
+                        "placement": policy.placement,
                         "platform_fleet": policy.platform_fleet,
                         "updated_at": now,
                     }
                 )
             )
         LOGGER.info(
-            "compute unit %s follows its provider: pool %s -> %s, platform fleet %s -> %s",
+            "compute unit %s follows its provider: placement %s -> %s, platform fleet %s -> %s",
             unit.name,
-            unit.pool,
-            updated.pool,
+            unit.placement,
+            updated.placement,
             unit.platform_fleet,
             updated.platform_fleet,
         )
@@ -3779,7 +3775,7 @@ class ComputeService:
                 "reclaimed pooled provider machine that did not become ready",
                 extra={
                     "provider": record.provider,
-                    "pool": current.name,
+                    "placement": current.name,
                     "machine_id": record.machine_id,
                     "provider_instance_id": record.instance_id or record.id,
                     "launch_attempt": record.launch_attempt,
@@ -3793,7 +3789,7 @@ class ComputeService:
         *,
         workspace_ids: Sequence[str],
     ) -> AwsAccountPoolDrain:
-        """Drain every pool the connection feeds, across all the owner's workspaces.
+        """Drain every unit the connection provisions, across all the owner's workspaces.
 
         A connection backs each of them, so a unit in any one is capacity this
         disconnect has to take down; a unit in none of them means the connection and

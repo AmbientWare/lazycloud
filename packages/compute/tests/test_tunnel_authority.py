@@ -5,6 +5,7 @@ from hashlib import sha256
 from uuid import uuid4
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from compute.state import RedisComputeStateRepository
 from compute.tunnel_authority import AgentTunnelAuthority
 from control.service import ControlPlaneService
@@ -22,10 +23,11 @@ from database.repositories.orchestration import (
 )
 from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.compute_fleet import Machine, ResourceStatus, Worker
-from shared.compute_policy import ComputeUnitRecord, MachinePool, UnitName
+from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError
 from shared.http.agent_identity import AgentTunnelIdentity
+from shared.placement import Placement
 from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
@@ -83,7 +85,7 @@ def test_tunnel_key_binding_serializes_and_fences_reenrollment_and_revocation(
         user_id=enrollment.user_id,
         workspace_id=enrollment.workspace_id,
         capacity_owner_id=enrollment.capacity_owner_id,
-        pool=enrollment.pool,
+        placement=enrollment.placement,
         machine_id=enrollment.machine_id,
         machine_fingerprint_hash=enrollment.machine_fingerprint_hash,
         credential_hash=enrollment.credential_hash,
@@ -129,7 +131,12 @@ def test_tunnel_routes_require_live_destination_assignment_within_enrollment_sco
         enrollment.id, enrollment.workspace_id, enrollment.credential_hash, "a" * 64
     )
     worker_id, foreign_worker_id, foreign_machine_id = (str(uuid4()) for _ in range(3))
-    workload_workspace = owned_workspace(ControlPlaneService(service_context), "tunnel-workload")
+    workload_workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "tunnel-workload",
+    )
     with service_context.database.session() as session:
         MachineRepository(session).upsert(
             Machine(
@@ -145,7 +152,7 @@ def test_tunnel_routes_require_live_destination_assignment_within_enrollment_sco
                 Worker(
                     id=worker,
                     machine_id=machine,
-                    pool=enrollment.pool,
+                    placement=enrollment.placement,
                     status=ResourceStatus.Created,
                 ),
                 workspace_id=enrollment.workspace_id,
@@ -167,7 +174,7 @@ def test_tunnel_routes_require_live_destination_assignment_within_enrollment_sco
         enrollment_id=enrollment.id,
         workspace_id=enrollment.workspace_id,
         capacity_owner_id=enrollment.capacity_owner_id,
-        pool=enrollment.pool,
+        placement=enrollment.placement,
         machine_id=enrollment.machine_id,
         worker_id=worker_id,
         container_id=container.id,
@@ -228,7 +235,7 @@ def _enroll(context: ServiceContext) -> ComputeMachineEnrollmentRecord:
                 capacity_owner_id=capacity_owner_id,
                 workspace_id=workspace_id,
                 name=UnitName("tunnel-machine"),
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
             )
         )
         MachineRepository(session).upsert(
@@ -242,7 +249,7 @@ def _enroll(context: ServiceContext) -> ComputeMachineEnrollmentRecord:
                 user_id=user_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=capacity_owner_id,
-                pool=MachinePool("lazycloud"),
+                placement=Placement.platform(),
                 machine_id=machine_id,
                 machine_fingerprint_hash=sha256(machine_id.encode()).hexdigest(),
                 credential_hash=sha256(uuid4().bytes).hexdigest(),
