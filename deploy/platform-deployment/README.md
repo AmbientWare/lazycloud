@@ -32,8 +32,8 @@ declares verified image inputs. Provider definitions own node catalogs;
 `LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` to the existing operator secret.
 Only credentials are operator-owned; capacity policy is deployment-owned.
 
-AWS fleet workers can launch in `us-east-1` and `us-west-2`. The deployment
-owns a VPC in each region, one `fleet-network` module call per region in
+AWS fleet workers can launch in `us-east-1`, `us-east-2`, `us-west-1` and
+`us-west-2`. The deployment owns a VPC in each region, one `fleet-network` module call per region in
 `fleet.tf`, and exports them all through `fleet.networks`. The
 connection role and node identity are shared across regions. Preserve networks
 while units still own resources there. The initializer validates provider access
@@ -51,8 +51,8 @@ and their fleet security group. Apply the release-assets stack's EC2 inventory
 permissions before running the image workflow. It does not rely on default VPCs.
 Only the bake region needs a public subnet; other regions receive AMI copies.
 
-Set `region="us-west"` in SDK workload configuration to require Oregon.
-Automatic placement may choose either approved region. A region needs its
+Set `region="us-west"` in SDK workload configuration to require the West Coast.
+Automatic placement may choose any approved region. A region needs its
 network, image, eligible offer and supplier quote before it can supply capacity.
 Customer rates and the selected-location multiplier remain unchanged. Storage
 stays in its existing region; cross-region transfer remains a supplier expense.
