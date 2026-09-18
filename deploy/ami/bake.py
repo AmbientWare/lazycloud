@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from agent.operations import build_agent_install_script
+from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from deploy.ami.recipe import host_recipe_sha256
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from shared.app_identity import AGENT_NAME
@@ -118,7 +119,8 @@ class _GetParameterResponse(_BakeModel):
 
 
 class _ImageDisk(_BakeModel):
-    snapshot_id: str = Field(alias="SnapshotId")
+    # Absent while a copy is still creating its destination snapshot.
+    snapshot_id: str = Field(default="", alias="SnapshotId")
 
 
 class _ImageDevice(_BakeModel):
@@ -259,7 +261,12 @@ def main() -> None:
         default=_BakeVariant.Cpu.value,
         help="cpu bakes the default node image; gpu adds the NVIDIA driver and toolkit",
     )
-    parser.add_argument("--regions", nargs="+", default=["us-east-1"])
+    parser.add_argument(
+        "--regions",
+        nargs="+",
+        default=list(AWS_COMPUTE_CONFIGURATION.allowed_regions),
+        help="first region bakes, the rest receive copies; defaults to every allowed region",
+    )
     parser.add_argument(
         "--instance-type",
         default=None,
@@ -750,7 +757,7 @@ def _wait_for_image(request: _BakeRequest, *, region: str, image_id: str) -> Non
         snapshot_ids = [
             device.disk.snapshot_id
             for device in images.images[0].devices
-            if device.disk is not None
+            if device.disk is not None and device.disk.snapshot_id
         ]
         _log(f"{region}: image {image_id}: {state}")
         if snapshot_ids:

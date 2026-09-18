@@ -23,82 +23,114 @@
 # policy that reads them.
 locals {
   fleet_launch_tag = { "cloud-pool:managed-by" = "control-plane" }
-}
 
-data "aws_availability_zones" "available" {
-  state = "available"
-
-  filter {
-    name   = "zone-type"
-    values = ["availability-zone"]
+  # Published in the descriptor as `fleet.networks`. A new region is a provider
+  # alias in versions.tf, a module call below, and an entry here, and must also
+  # be allowed in `compute.aws_configuration`, which owns the product's region
+  # list for our fleet and customer connections alike.
+  fleet_networks = {
+    (var.region) = module.fleet
+    "us-west-2"  = module.fleet_west
   }
 }
 
-resource "aws_vpc" "fleet" {
-  cidr_block           = var.fleet_cidr
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+module "fleet" {
+  source = "./fleet-network"
 
-  tags = merge(local.fleet_launch_tag, { Name = "${var.deployment}-fleet" })
+  deployment = var.deployment
+  name       = "${var.deployment}-fleet"
+  cidr       = var.fleet_cidr
+  launch_tag = local.fleet_launch_tag
 }
 
-resource "aws_internet_gateway" "fleet" {
-  vpc_id = aws_vpc.fleet.id
+module "fleet_west" {
+  source    = "./fleet-network"
+  providers = { aws = aws.west }
 
-  tags = { Name = "${var.deployment}-fleet" }
+  deployment = var.deployment
+  name       = "${var.deployment}-fleet-west"
+  cidr       = var.fleet_cidr
+  launch_tag = local.fleet_launch_tag
 }
 
-resource "aws_subnet" "fleet" {
-  count = length(data.aws_availability_zones.available.names)
-
-  vpc_id                  = aws_vpc.fleet.id
-  cidr_block              = cidrsubnet(var.fleet_cidr, 8, count.index + 1)
-  availability_zone       = data.aws_availability_zones.available.names[count.index]
-  map_public_ip_on_launch = true
-
-  tags = merge(
-    local.fleet_launch_tag,
-    { Name = "${var.deployment}-fleet-${data.aws_availability_zones.available.names[count.index]}" },
-  )
+moved {
+  from = aws_vpc.fleet
+  to   = module.fleet.aws_vpc.this
 }
 
-resource "aws_route_table" "fleet" {
-  vpc_id = aws_vpc.fleet.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.fleet.id
-  }
-
-  tags = { Name = "${var.deployment}-fleet" }
+moved {
+  from = aws_internet_gateway.fleet
+  to   = module.fleet.aws_internet_gateway.this
 }
 
-resource "aws_route_table_association" "fleet" {
-  count = length(aws_subnet.fleet)
-
-  subnet_id      = aws_subnet.fleet[count.index].id
-  route_table_id = aws_route_table.fleet.id
+moved {
+  from = aws_subnet.fleet
+  to   = module.fleet.aws_subnet.this
 }
 
-# Public subnets with public addressing rather than private ones behind NAT. The
-# nodes need egress to pull images and reach the control plane, they accept nothing
-# inbound, and a NAT gateway per zone would cost more than the instances it
-# serves at this size.
-resource "aws_security_group" "fleet_node" {
-  name        = "${var.deployment}-fleet-node"
-  description = "Shared fleet nodes: egress only."
-  vpc_id      = aws_vpc.fleet.id
-
-  tags = merge(local.fleet_launch_tag, { Name = "${var.deployment}-fleet-node" })
+moved {
+  from = aws_route_table.fleet
+  to   = module.fleet.aws_route_table.this
 }
 
-# No inbound rule, and none should be added. A worker is reached over the
-# agent tunnel, which the node establishes outbound over TLS.
-resource "aws_vpc_security_group_egress_rule" "fleet_node" {
-  security_group_id = aws_security_group.fleet_node.id
-  description       = "Image pulls, outbound agent TLS, and the control plane."
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
+moved {
+  from = aws_route_table_association.fleet
+  to   = module.fleet.aws_route_table_association.this
+}
+
+moved {
+  from = aws_security_group.fleet_node
+  to   = module.fleet.aws_security_group.node
+}
+
+moved {
+  from = aws_vpc_security_group_egress_rule.fleet_node
+  to   = module.fleet.aws_vpc_security_group_egress_rule.node
+}
+
+moved {
+  from = aws_vpc_endpoint.fleet_storage
+  to   = module.fleet.aws_vpc_endpoint.storage
+}
+
+moved {
+  from = aws_vpc.fleet_west
+  to   = module.fleet_west.aws_vpc.this
+}
+
+moved {
+  from = aws_internet_gateway.fleet_west
+  to   = module.fleet_west.aws_internet_gateway.this
+}
+
+moved {
+  from = aws_subnet.fleet_west
+  to   = module.fleet_west.aws_subnet.this
+}
+
+moved {
+  from = aws_route_table.fleet_west
+  to   = module.fleet_west.aws_route_table.this
+}
+
+moved {
+  from = aws_route_table_association.fleet_west
+  to   = module.fleet_west.aws_route_table_association.this
+}
+
+moved {
+  from = aws_security_group.fleet_west_node
+  to   = module.fleet_west.aws_security_group.node
+}
+
+moved {
+  from = aws_vpc_security_group_egress_rule.fleet_west_node
+  to   = module.fleet_west.aws_vpc_security_group_egress_rule.node
+}
+
+moved {
+  from = aws_vpc_endpoint.fleet_west_storage
+  to   = module.fleet_west.aws_vpc_endpoint.storage
 }
 
 # The role the control plane assumes to manage this account's capacity. Same

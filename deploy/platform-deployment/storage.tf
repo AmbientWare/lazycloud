@@ -92,14 +92,6 @@ resource "aws_iam_role_policy" "workspace_storage" {
   })
 }
 
-resource "aws_vpc_endpoint" "fleet_storage" {
-  vpc_id            = aws_vpc.fleet.id
-  service_name      = "com.amazonaws.${var.region}.s3"
-  vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.fleet.id]
-  tags              = { Name = "${var.deployment}-fleet-storage" }
-}
-
 resource "aws_s3_bucket" "storage_access" {
   bucket = "${var.deployment}-storage-access-${data.aws_caller_identity.current.account_id}"
   lifecycle { prevent_destroy = true }
