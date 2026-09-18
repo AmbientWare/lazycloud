@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -36,13 +37,14 @@ from lazycloud.cli.components.formatting import duration, timestamp
 from lazycloud.cli.components.output import (
     console,
     emit,
+    error_console,
     json_default,
     json_output_enabled,
     print_payload,
     table,
     write_stream,
 )
-from lazycloud.cli.components.theme import state_style, styled
+from lazycloud.cli.components.theme import MUTED, state_style, styled
 from lazycloud.cli.control import (
     compute_client,
     gateway_client,
@@ -50,7 +52,7 @@ from lazycloud.cli.control import (
     task_client,
 )
 from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
-from lazycloud.cli.task_results import task_result_human_value
+from lazycloud.cli.result_output import task_result_export, task_result_view
 from lazycloud.clients.aws import create_connection_stack
 
 task_app = typer.Typer(help="Inspect and manage tasks.")
@@ -602,6 +604,15 @@ def task_result(
     wait: Annotated[bool, typer.Option("--wait/--no-wait")] = True,
     timeout_seconds: Annotated[float | None, typer.Option("--timeout", min=0)] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            help="Save the result to a .png, .html, .txt, .json, or .pkl file.",
+            dir_okay=False,
+            writable=True,
+        ),
+    ] = None,
 ) -> None:
     client = task_client(workspace=workspace)
     if wait and not json_output_enabled(ctx):
@@ -617,14 +628,11 @@ def task_result(
         )
     task = client.detail(task_id)
     if result.ok:
-        emit(
-            ctx,
-            payload=task.model_dump(mode="json"),
-            view=result_card(
-                json_default(task_result_human_value(task)),
-                tone="success",
-            ),
-        )
+        if output is not None:
+            task_result_export(task).write(output)
+        emit(ctx, payload=task.model_dump(mode="json"), view=task_result_view(task))
+        if output is not None and not json_output_enabled(ctx):
+            error_console.print(styled(f"Saved {output}", MUTED))
         return
     if is_terminal_task_status(result.status):
         raise ClientError(

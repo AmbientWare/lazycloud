@@ -70,7 +70,7 @@ results. The CLI shows them even when redirected, including with `--json`.
 Human output displays Python results directly, including NumPy arrays and custom
 objects. `--json` requires a JSON-compatible result and reports an output error
 if the completed call returned a Python-only value. Use the Python SDK to work
-with the returned object and preserve its type.
+with the returned object and preserve its type. `--output result.pkl` saves it.
 Build logs remain in terminal history instead of disappearing from the live
 display. Local Python `.remote()` calls also show output by default; see
 [Progress and logs](/concepts/functions#progress-and-logs).
