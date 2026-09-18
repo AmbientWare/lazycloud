@@ -32,6 +32,10 @@
   gap: 16px;
 }
 
+.cloud-hero {
+  touch-action: manipulation;
+}
+
 .cloud-stage {
   position: relative;
   top: clamp(28px, 5svh, 56px);

@@ -69,7 +69,7 @@ export function CloudHero() {
         <canvas
           ref={canvas}
           role="img"
-          aria-label="A blue ASCII cloud friend. It follows your cursor and laughs at fireworks when you click the hero background."
+          aria-label="A blue ASCII cloud friend. It looks around, follows your cursor, and laughs at fireworks when you tap or click the hero background."
         />
         {error && (
           <p className="cloud-error" role="status">

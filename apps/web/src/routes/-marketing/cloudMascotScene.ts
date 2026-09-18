@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { createAsciiRenderer } from "@/components/canvasui/asciiRenderer";
 import { createHeroFireworks } from "./heroFireworks";
 
+const IDLE_AFTER = 2500;
+
 export function createCloudMascotScene(
   canvas: HTMLCanvasElement,
   stage: HTMLDivElement,
@@ -109,7 +111,11 @@ export function createCloudMascotScene(
 
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const pointer = new THREE.Vector2();
+  const glance = new THREE.Vector2();
   const look = new THREE.Vector2();
+  let hovering = false;
+  let pointerSeenAt = -Infinity;
+  let nextGlanceAt = 0;
   let visible = true;
   let disposed = false;
   let animation = 0;
@@ -119,9 +125,19 @@ export function createCloudMascotScene(
   let celebrationCount = 0;
   let reactionTimer = 0;
 
+  function wander() {
+    if (elapsed < nextGlanceAt) return;
+    nextGlanceAt = elapsed + 1.4 + Math.random() * 2.6;
+    if (glance.lengthSq() > 0.05 && Math.random() < 0.45) glance.set(0, 0);
+    else glance.set((Math.random() * 2 - 1) * 0.85, Math.random() * 0.9 - 0.4);
+  }
+
   function draw(delta = 0) {
+    const attentive = hovering || performance.now() - pointerSeenAt < IDLE_AFTER;
+    if (attentive) glance.set(0, 0);
+    else wander();
     if (motion.matches) look.set(0, 0);
-    else look.lerp(pointer, 1 - Math.exp(-delta * 7));
+    else look.lerp(attentive ? pointer : glance, 1 - Math.exp(-delta * 7));
     cloud.rotation.set(-0.07 - look.y * 0.18, -0.15 + look.x * 0.35, -0.035 + look.x * 0.07);
     cloud.position.y = 0.18 + (motion.matches ? 0 : Math.sin(elapsed * 1.4) * 0.08);
     face.position.x = look.x * 0.085;
@@ -187,6 +203,7 @@ export function createCloudMascotScene(
   }
   function follow(event: PointerEvent) {
     if (event.pointerType === "touch" || motion.matches) return;
+    hovering = true;
     const rect = stage.getBoundingClientRect();
     pointer.set(
       THREE.MathUtils.clamp((event.clientX - rect.left - rect.width / 2) / (rect.width / 2), -1, 1),
@@ -199,9 +216,12 @@ export function createCloudMascotScene(
   }
   function reset() {
     pointer.set(0, 0);
+    hovering = false;
+    pointerSeenAt = performance.now() - IDLE_AFTER + 1200;
   }
   function celebrate(x: number, y: number) {
     celebrationAt = performance.now();
+    pointerSeenAt = celebrationAt;
     celebrationCount++;
     const rect = stage.getBoundingClientRect();
     pointer.set(

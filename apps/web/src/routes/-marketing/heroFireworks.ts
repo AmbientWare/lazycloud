@@ -8,6 +8,9 @@ type Spark = {
 
 type Burst = { x: number; y: number; born: number; sparks: Spark[] };
 
+const TAP_MAX_MS = 400;
+const TAP_MAX_TRAVEL = 12;
+const TAP_CLICK_SUPPRESSION = 700;
 const INTERACTIVE =
   'a, button, input, textarea, select, summary, [role="button"], [role="link"], [role="tab"], [contenteditable]:not([contenteditable="false"])';
 
@@ -28,7 +31,9 @@ export function createHeroFireworks(
   let height = 0;
   let animation = 0;
   let clearTimer = 0;
-  let lastClick = -Infinity;
+  let lastBurst = -Infinity;
+  let lastTapAt = -Infinity;
+  let tap: { id: number; x: number; y: number; at: number } | undefined;
   let count = 0;
   let bursts: Burst[] = [];
 
@@ -79,29 +84,18 @@ export function createHeroFireworks(
     animation = bursts.length ? requestAnimationFrame(draw) : 0;
   }
 
-  function click(event: MouseEvent) {
-    if (
-      event.defaultPrevented ||
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey ||
-      !(event.target instanceof Element) ||
-      event.target.closest(INTERACTIVE) ||
-      document.hidden
-    )
-      return;
+  function burst(target: EventTarget | null, clientX: number, clientY: number) {
+    if (!(target instanceof Element) || target.closest(INTERACTIVE) || document.hidden) return;
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed && hero.contains(selection.anchorNode)) return;
     const now = performance.now();
-    if (now - lastClick < 140) return;
-    lastClick = now;
+    if (now - lastBurst < 140) return;
+    lastBurst = now;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
     const color = colors[count++ % colors.length];
-    react(event.clientX, event.clientY);
+    react(clientX, clientY);
     if (motion.matches) {
       clear();
       ctx.strokeStyle = color;
@@ -126,6 +120,42 @@ export function createHeroFireworks(
     if (!animation) animation = requestAnimationFrame(draw);
   }
 
+  function click(event: MouseEvent) {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      performance.now() - lastTapAt < TAP_CLICK_SUPPRESSION
+    )
+      return;
+    burst(event.target, event.clientX, event.clientY);
+  }
+
+  function pointerDown(event: PointerEvent) {
+    if (event.pointerType === "mouse" || !event.isPrimary) {
+      tap = undefined;
+      return;
+    }
+    tap = { id: event.pointerId, x: event.clientX, y: event.clientY, at: performance.now() };
+  }
+
+  function pointerUp(event: PointerEvent) {
+    if (!tap || tap.id !== event.pointerId) return;
+    const { x, y, at } = tap;
+    tap = undefined;
+    if (event.defaultPrevented || performance.now() - at > TAP_MAX_MS) return;
+    if (Math.hypot(event.clientX - x, event.clientY - y) > TAP_MAX_TRAVEL) return;
+    lastTapAt = performance.now();
+    burst(event.target, event.clientX, event.clientY);
+  }
+
+  function pointerCancel(event: PointerEvent) {
+    if (tap?.id === event.pointerId) tap = undefined;
+  }
+
   function resize() {
     clear();
     const rect = canvas.getBoundingClientRect();
@@ -144,6 +174,9 @@ export function createHeroFireworks(
   });
   intersection.observe(hero);
   hero.addEventListener("click", click);
+  hero.addEventListener("pointerdown", pointerDown);
+  hero.addEventListener("pointerup", pointerUp);
+  hero.addEventListener("pointercancel", pointerCancel);
   document.addEventListener("visibilitychange", clear);
   motion.addEventListener("change", clear);
   resize();
@@ -154,6 +187,9 @@ export function createHeroFireworks(
       resizeObserver.disconnect();
       intersection.disconnect();
       hero.removeEventListener("click", click);
+      hero.removeEventListener("pointerdown", pointerDown);
+      hero.removeEventListener("pointerup", pointerUp);
+      hero.removeEventListener("pointercancel", pointerCancel);
       document.removeEventListener("visibilitychange", clear);
       motion.removeEventListener("change", clear);
     },
