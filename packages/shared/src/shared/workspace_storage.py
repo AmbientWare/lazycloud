@@ -5,9 +5,10 @@ from typing import Protocol
 
 from pydantic import Field, field_validator, model_validator
 
+from shared.aws_connections import AwsAccountConnection
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
-from shared.identity import WorkspaceStorageConfig
+from shared.identity import WorkspaceRecord, WorkspaceStorageConfig
 
 
 class WorkspaceStorageProvider(StringEnum):
@@ -47,18 +48,38 @@ class WorkspaceStorageGrant(ContractModel):
 
 
 class WorkspaceStorageIssuer(Protocol):
-    """The authority for workspace storage grants and their retirement."""
+    """The authority for a workspace's storage grants and their retirement."""
 
-    def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
+    def issue(self, workspace: WorkspaceRecord) -> WorkspaceStorageGrant:
         """Vend a credential for this workspace's bucket, and no other."""
         ...
 
-    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
-        """Retire platform-owned storage after workspace writers have stopped."""
+    def retire(self, workspace: WorkspaceRecord) -> None:
+        """Delete the workspace's bucket after its writers have stopped."""
         ...
 
 
+class ConnectedWorkspaceStorageIssuer(Protocol):
+    """Storage for a workspace that lives in a connected cloud account.
+
+    The bucket is created in, credentialed from, and deleted from the customer's
+    account through the connection's role. The platform never holds a static key
+    for it.
+    """
+
+    def provision(
+        self, workspace: WorkspaceRecord, connection: AwsAccountConnection
+    ) -> WorkspaceStorageConfig: ...
+
+    def issue(
+        self, workspace: WorkspaceRecord, connection: AwsAccountConnection
+    ) -> WorkspaceStorageGrant: ...
+
+    def retire(self, workspace: WorkspaceRecord, connection: AwsAccountConnection) -> None: ...
+
+
 __all__ = [
+    "ConnectedWorkspaceStorageIssuer",
     "WorkspaceStorageGrant",
     "WorkspaceStorageIssuer",
     "WorkspaceStorageProvider",

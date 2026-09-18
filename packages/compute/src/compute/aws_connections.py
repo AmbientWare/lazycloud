@@ -15,7 +15,7 @@ from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeUnitRepository,
 )
-from database.repositories.identity import WorkspaceMemberRepository
+from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.aws_connections import (
@@ -441,6 +441,14 @@ class AwsAccountConnectionService:
             current = repository.get_for_user(user_id, for_update=True)
             if current is None:
                 return None
+            resident = WorkspaceRepository(session).active_names_for_connection(current.id)
+            if resident:
+                # A workspace never leaves the account it was created in, so the
+                # account cannot leave while one is there.
+                raise ConflictError(
+                    "delete the workspaces that live in this AWS account before "
+                    f"disconnecting it: {', '.join(resident)}"
+                )
             if current.active_authorization is None:
                 if current.pending_authorization is not None:
                     self._create_tombstone(

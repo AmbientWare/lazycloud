@@ -6,7 +6,7 @@ from datetime import timedelta
 import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.identity import WorkspaceStorageConfig
+from shared.identity import WorkspaceRecord
 from shared.timestamps import utc_now
 from shared.workspace_storage import WorkspaceStorageGrant
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
@@ -75,9 +75,11 @@ class GarageWorkspaceStorageIssuer:
     admin: GarageSettings
     credential_lifetime: timedelta = timedelta(minutes=15)
 
-    def _bucket(self, workspace_id: str, storage: WorkspaceStorageConfig) -> str:
-        if storage.access_key or storage.secret_key:
-            raise ValueError("managed workspace storage cannot use customer credentials")
+    def _bucket(self, workspace: WorkspaceRecord) -> str:
+        workspace_id = workspace.id
+        storage = workspace.storage
+        if workspace.connection_id is not None:
+            raise ValueError("a workspace in a connected account has no platform Garage bucket")
         expected_bucket = f"{self.settings.workspace_bucket_prefix}-{workspace_id}".replace(
             "_", "-"
         )
@@ -124,8 +126,8 @@ class GarageWorkspaceStorageIssuer:
             return None
         return key
 
-    def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
-        expected_bucket = self._bucket(workspace_id, storage)
+    def issue(self, workspace: WorkspaceRecord) -> WorkspaceStorageGrant:
+        expected_bucket = self._bucket(workspace)
         if self.credential_lifetime <= timedelta(0):
             raise ValueError("workspace credentials require a positive lifetime")
         name = f"lazycloud-workspace:{expected_bucket}"
@@ -190,8 +192,8 @@ class GarageWorkspaceStorageIssuer:
                 _request(client, "POST", "DeleteKey", params={"id": key.access_key_id})
                 raise
 
-    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
-        expected_bucket = self._bucket(workspace_id, storage)
+    def retire(self, workspace: WorkspaceRecord) -> None:
+        expected_bucket = self._bucket(workspace)
         with httpx.Client(
             base_url=self.admin.admin_endpoint_url,
             headers={"Authorization": f"Bearer {self.admin.admin_token.get_secret_value()}"},

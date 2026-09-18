@@ -6,7 +6,7 @@ from pydantic import Field, JsonValue, field_validator
 
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
-from shared.identity import WorkspaceRecord, WorkspaceStatus, WorkspaceStorageConfig
+from shared.identity import WorkspaceRecord, WorkspaceStatus
 
 
 class WorkspaceStorageResponse(HttpModel):
@@ -22,6 +22,7 @@ class WorkspaceResponse(HttpModel):
     signing_key_prefix: str | None = None
     primary_token_id: str | None = None
     concurrency_limit_id: str | None = None
+    connection_id: str | None = None
     storage: WorkspaceStorageResponse = Field(default_factory=WorkspaceStorageResponse)
     labels: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
@@ -39,14 +40,17 @@ def workspace_response(record: WorkspaceRecord) -> WorkspaceResponse:
     return WorkspaceResponse.model_validate(
         record.model_dump(
             mode="json",
-            exclude={"kind": True, "signing_key": True, "storage": {"config"}},
+            exclude={
+                "kind": True,
+                "signing_key": True,
+                "storage": {"endpoint_url", "region"},
+            },
         )
     )
 
 
 class WorkspaceSetRequest(HttpModel):
     name: str = "default"
-    storage: WorkspaceStorageResponse | None = None
     signing_key_prefix: str | None = None
     primary_token_id: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
@@ -55,7 +59,8 @@ class WorkspaceSetRequest(HttpModel):
 
 class WorkspaceCreateRequest(HttpModel):
     name: str | None = None
-    storage: WorkspaceStorageResponse | None = None
+    connection_id: str | None = None
+    """A connected cloud account to create the workspace in. Omitted means LazyCloud."""
 
 
 class WorkspaceUpdateRequest(HttpModel):
@@ -119,36 +124,6 @@ class WorkspaceAuditListResponse(HttpModel):
     next: str = ""
 
 
-class WorkspaceStorageRequest(HttpModel):
-    bucket_name: str = Field(min_length=1)
-    access_key: str = Field(min_length=1, repr=False)
-    secret_key: str = Field(min_length=1, repr=False)
-    endpoint_url: str = Field(min_length=1)
-    region: str = Field(min_length=1)
-    force_path_style: bool = False
-
-    def workspace_storage(self) -> WorkspaceStorageConfig:
-        return WorkspaceStorageConfig(
-            backend="s3",
-            bucket=self.bucket_name,
-            config={
-                "access_key": self.access_key,
-                "secret_key": self.secret_key,
-                "endpoint_url": self.endpoint_url,
-                "region": self.region,
-                "force_path_style": self.force_path_style,
-            },
-        )
-
-
-def workspace_storage_config(value: WorkspaceStorageResponse) -> WorkspaceStorageConfig:
-    return WorkspaceStorageConfig(
-        backend=value.backend,
-        bucket=value.bucket,
-        prefix=value.prefix,
-    )
-
-
 class WorkspaceListResponse(HttpModel):
     workspaces: list[WorkspaceResponse] = Field(default_factory=list)
 
@@ -174,7 +149,6 @@ __all__ = [
     "WorkspaceListResponse",
     "WorkspaceResponse",
     "WorkspaceSetRequest",
-    "WorkspaceStorageRequest",
     "WorkspaceStorageResponse",
     "WorkspaceUpdateRequest",
     "workspace_response",

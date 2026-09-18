@@ -47,8 +47,7 @@ def record_storage_access(
                 if workspace is None or (
                     observation.bucket != settings.bucket
                     and (
-                        workspace.storage.access_key
-                        or workspace.storage.secret_key
+                        workspace.connection_id is not None
                         or workspace.storage.bucket != observation.bucket
                         or workspace.storage.endpoint_url != settings.endpoint_url
                     )

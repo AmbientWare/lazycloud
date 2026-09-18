@@ -64,6 +64,7 @@ from provider_clients.settings import (
     PlatformCapacitySettings,
 )
 from provider_clients.workspace_compute import configured_platform_compute_providers
+from provider_clients.workspace_storage import workspace_storage_router
 from provider_cloudflare import CloudflareSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
@@ -218,6 +219,9 @@ class SchedulerAppServices:
             resolve_store=workspace_volume_store_resolver(
                 context.database,
                 object_store=object_client,
+                storage_issuer=workspace_storage_router(
+                    context.database, storage.object_store, public_origin=gateway_origin
+                ),
             )
         )
         volume_metering = PersistentVolumeMeteringService.from_settings(

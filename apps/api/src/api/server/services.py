@@ -138,6 +138,10 @@ from provider_clients.settings import (
     PlatformCapacitySettings,
 )
 from provider_clients.workspace_compute import configured_platform_compute_providers
+from provider_clients.workspace_storage import (
+    connected_workspace_storage,
+    workspace_storage_router,
+)
 from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
 from provider_resend import ResendSettings
@@ -216,11 +220,7 @@ from storage.volume_filesystem import (
     workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
-from storage.workspace_storage_issuers import (
-    WorkspaceStorageRouter,
-    external_workspace_storage_settings,
-)
-from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
+from storage_client.s3 import S3ObjectStoreSettings
 from worker.container_client.scheduler import (
     SchedulerContainerClientFactory,
     SchedulerContainerServiceStopper,
@@ -249,7 +249,6 @@ from api.server.worker_repository_service import (
     WorkerRepositoryDependencies,
     WorkerRepositoryService,
 )
-from api.server.workspace_storage_composition import managed_workspace_storage_issuer
 from api.settings import (
     AgentDisconnectReconciliationSettings,
     AgentRouteReconciliationSettings,
@@ -694,13 +693,15 @@ class ApiServices(ApiServiceCore):
                 workspace_storage_client
                 or _workspace_bucket_client(object_storage_service.object_client)
             ),
-            workspace_storage_client_factory=lambda storage: S3ObjectStoreClient.from_settings(
-                external_workspace_storage_settings(storage)
+            connected_workspace_storage=connected_workspace_storage(
+                public_origin=gateway_config.public_http_url
             ),
             workspace_changes=workspace_changes,
         )
-        workspace_storage_issuer = workspace_storage_issuer or WorkspaceStorageRouter(
-            managed=managed_workspace_storage_issuer(object_store_config)
+        workspace_storage_issuer = workspace_storage_issuer or workspace_storage_router(
+            context.database,
+            object_store_config,
+            public_origin=gateway_config.public_http_url,
         )
         payment_provider = stripe_config.provider_factory()
         # No mailer here. Inviting queues a message and returns. The scheduler's
@@ -726,6 +727,7 @@ class ApiServices(ApiServiceCore):
             resolve_store=workspace_volume_store_resolver(
                 context.database,
                 object_store=object_storage_service.object_client,
+                storage_issuer=workspace_storage_issuer,
             )
         )
         owned_runtime_resources.append(resolved_volume_filesystem)

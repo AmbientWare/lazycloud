@@ -14,7 +14,7 @@ from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 from pydantic import Field, JsonValue, TypeAdapter
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from shared.identity import WorkspaceStorageConfig
+from shared.identity import WorkspaceRecord
 from shared.workspace_storage import WorkspaceStorageGrant
 from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
 
@@ -120,9 +120,11 @@ class AwsWorkspaceStorageIssuer:
         ):
             raise ValueError("managed AWS workspace storage requires the workload credential chain")
 
-    def _bucket(self, workspace_id: str, storage: WorkspaceStorageConfig) -> str:
-        if storage.access_key or storage.secret_key or storage.config.get("session_token"):
-            raise ValueError("managed workspace storage cannot use customer credentials")
+    def _bucket(self, workspace: WorkspaceRecord) -> str:
+        workspace_id = workspace.id
+        storage = workspace.storage
+        if workspace.connection_id is not None:
+            raise ValueError("a workspace in a connected account has no platform S3 bucket")
         expected = f"{self.settings.workspace_bucket_prefix}-{workspace_id}".replace("_", "-")
         if (
             not workspace_id
@@ -137,8 +139,9 @@ class AwsWorkspaceStorageIssuer:
             raise ValueError("workspace storage does not name its deployment-owned S3 bucket")
         return expected
 
-    def issue(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> WorkspaceStorageGrant:
-        bucket = self._bucket(workspace_id, storage)
+    def issue(self, workspace: WorkspaceRecord) -> WorkspaceStorageGrant:
+        workspace_id = workspace.id
+        bucket = self._bucket(workspace)
         administration = _client("s3", self.settings.region_name)
         if not isinstance(administration, _BucketAdministration):
             raise TypeError("AWS S3 client is missing bucket administration operations")
@@ -212,8 +215,8 @@ class AwsWorkspaceStorageIssuer:
             expires_at=credentials["Expiration"],
         )
 
-    def retire(self, *, workspace_id: str, storage: WorkspaceStorageConfig) -> None:
-        bucket = self._bucket(workspace_id, storage)
+    def retire(self, workspace: WorkspaceRecord) -> None:
+        bucket = self._bucket(workspace)
         owner = self.authority.role_arn.split(":")[4]
         partition = self.authority.role_arn.split(":")[1]
         bucket_arn = f"arn:{partition}:s3:::{bucket}"

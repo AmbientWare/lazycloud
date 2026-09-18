@@ -67,16 +67,13 @@ class WorkspaceDeletionService:
             with self.services.database.session() as session:
                 self._assert_storage_drained(session, workspace.id)
             try:
-                self.services.workspace_storage_issuer.retire(
-                    workspace_id=workspace.id, storage=workspace.storage
-                )
+                self.services.workspace_storage_issuer.retire(workspace)
             except Exception as exc:
                 raise UpstreamUnavailableError(
                     "workspace storage retirement is incomplete"
                 ) from exc
-            if not workspace.storage.access_key and not workspace.storage.secret_key:
-                with self.services.database.session() as session:
-                    VolumeRepository(session).retire_cleanup(workspace.id)
+            with self.services.database.session() as session:
+                VolumeRepository(session).retire_cleanup(workspace.id)
             deleted = self._finalize(identity, workspace.id, audit_actor=audit_actor)
         return deleted
 

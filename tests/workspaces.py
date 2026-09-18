@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from control.service import ControlPlaneService
 from database.context import ServiceContext
+from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
@@ -17,6 +18,7 @@ from database.repositories.identity import (
 from identity.auth import TokenIssuer
 from identity.users import UserService
 from pydantic import JsonValue
+from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
@@ -81,7 +83,6 @@ def owned_workspace(
     control: ControlPlaneService,
     name: str = "default",
     *,
-    storage: WorkspaceStorageConfig | None = None,
     labels: dict[str, str] | None = None,
     metadata: Mapping[str, JsonValue] | None = None,
 ) -> WorkspaceRecord:
@@ -93,9 +94,43 @@ def owned_workspace(
     return control.set_workspace(
         name,
         owner_user_id=owner_user_id,
-        storage=storage,
         labels=labels,
         metadata=metadata,
+    )
+
+
+def connected_workspace(
+    control: ControlPlaneService,
+    name: str,
+    *,
+    owner_user_id: str | None = None,
+) -> WorkspaceRecord:
+    """A workspace that lives in its owner's connected AWS account.
+
+    The connection row is the minimum that satisfies the foreign key; nothing here
+    reaches AWS. Storage coordinates name the bucket that account would hold.
+    """
+    owner = owner_user_id or _fixture_account(control.context.database, f"{name}-owner")
+    connection = AwsAccountConnection(
+        id=str(uuid4()),
+        user_id=owner,
+        account_id="123456789012",
+        external_id=uuid4().hex,
+        phase=AwsAccountConnectionPhase.AwaitingAuthorization,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    with control.context.database.session() as session:
+        AwsAccountConnectionRepository(session).create(connection)
+    workspace = control.set_workspace(name, owner_user_id=owner, connection_id=connection.id)
+    return control.set_workspace_storage(
+        workspace.id,
+        WorkspaceStorageConfig(
+            backend="s3",
+            bucket=f"lazycloud-workspace-{workspace.id}",
+            endpoint_url="https://s3.us-east-1.amazonaws.com",
+            region="us-east-1",
+        ),
     )
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Protocol, runtime_checkable
@@ -14,11 +14,11 @@ from database.repositories.storage import VolumeRepository
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.volumes import PresignedUrlMethod
 from shared.identity import WorkspaceStatus
+from shared.workspace_storage import WorkspaceStorageIssuer
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreClient, S3ObjectStoreSettings
 
-from storage.workspace_storage_issuers import external_workspace_storage_settings
-
 VOLUME_NAMESPACE_PREFIX = "volumes"
+_CREDENTIAL_RENEWAL_MARGIN = timedelta(minutes=2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +206,11 @@ class WorkspaceVolumeStore:
     client: VolumeObjectClient
     bucket: str
     prefix: str = ""
+    expires_at: datetime | None = None
+    """When the client's credentials lapse, for stores vended by an issuer."""
+
+    def stale(self, now: datetime) -> bool:
+        return self.expires_at is not None and now >= self.expires_at - _CREDENTIAL_RENEWAL_MARGIN
 
     def root_key(self, namespace: VolumeNamespace) -> str:
         # The bucket already belongs to one workspace, so the key carries no
@@ -249,7 +254,16 @@ def workspace_volume_store_resolver(
     database: DatabaseClient,
     *,
     object_store: WorkspaceVolumeObjectClient,
+    storage_issuer: WorkspaceStorageIssuer,
 ) -> WorkspaceVolumeStoreResolver:
+    """Reach a workspace's volumes where the workspace lives.
+
+    Platform workspaces share the deployment's object client, which already holds
+    the platform credential for every workspace bucket. A workspace in a connected
+    account gets its own client from a short-lived grant, since the platform holds
+    no standing credential for that account.
+    """
+
     def resolve(workspace_id: str) -> WorkspaceVolumeStore:
         with database.session() as session:
             workspace = WorkspaceRepository(session).get(workspace_id)
@@ -259,13 +273,25 @@ def workspace_volume_store_resolver(
         ):
             raise NotFoundError(f"workspace storage not found: {workspace_id}")
         storage = workspace.storage
-        if storage.access_key or storage.secret_key:
+        if workspace.connection_id is not None:
+            grant = storage_issuer.issue(workspace)
             return WorkspaceVolumeStore(
                 client=S3ObjectStoreClient.from_settings(
-                    external_workspace_storage_settings(storage)
+                    S3ObjectStoreSettings(
+                        bucket=grant.bucket_name,
+                        endpoint_url=grant.endpoint_url,
+                        region_name=grant.region,
+                        access_key_id=grant.access_key,
+                        secret_access_key=grant.secret_key,
+                        session_token=grant.session_token,
+                        credential_expires_at=grant.expires_at,
+                        force_path_style=grant.force_path_style,
+                        workspace_bucket_prefix="",
+                    )
                 ),
-                bucket=storage.bucket or "",
-                prefix=storage.key_prefix,
+                bucket=grant.bucket_name,
+                prefix=grant.prefix,
+                expires_at=grant.expires_at,
             )
         expected_bucket = f"{object_store.settings.workspace_bucket_prefix}-{workspace_id}".replace(
             "_", "-"
@@ -276,7 +302,7 @@ def workspace_volume_store_resolver(
             or storage.key_prefix
         ):
             raise UpstreamUnavailableError(
-                "workspace storage without customer credentials must belong to this deployment"
+                "workspace storage without a connected account must belong to this deployment"
             )
         return WorkspaceVolumeStore(client=object_store, bucket=expected_bucket, prefix="")
 
@@ -326,19 +352,25 @@ class WorkspaceVolumeFilesystem:
     def _store(self, namespace: VolumeNamespace) -> WorkspaceVolumeStore:
         _validate_namespace(namespace)
         workspace_id = namespace.workspace_id
+        now = datetime.now(UTC)
         with self._stores_lock:
             cached = self._stores.get(workspace_id)
-        if cached is not None:
+        if cached is not None and not cached.stale(now):
             return cached
         resolved = self.resolve_store(workspace_id)
         with self._stores_lock:
-            stored = self._stores.setdefault(workspace_id, resolved)
+            current = self._stores.get(workspace_id)
+            if current is None or current.stale(now):
+                self._stores[workspace_id] = resolved
+                retired, stored = current, resolved
+            else:
+                retired, stored = resolved, current
         if (
-            stored is not resolved
-            and stored.client is not resolved.client
-            and isinstance(resolved.client, _ClosableVolumeClient)
+            retired is not None
+            and retired.client is not stored.client
+            and isinstance(retired.client, _ClosableVolumeClient)
         ):
-            resolved.client.close()
+            retired.client.close()
         return stored
 
     def write_path(

@@ -865,17 +865,10 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
 def test_cache_origin_broker_returns_urls_without_storage_credentials(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = owned_workspace(
-        ControlPlaneService(isolated_services.context),
-        "brokered-worker",
-        storage=WorkspaceStorageConfig(
-            backend="s3",
-            bucket="workspace-bucket",
-            config={
-                "access_key": "workspace-access",
-                "secret_key": "workspace-secret",
-            },
-        ),
+    control = ControlPlaneService(isolated_services.context)
+    workspace = control.set_workspace_storage(
+        owned_workspace(control, "brokered-worker").id,
+        WorkspaceStorageConfig(backend="s3", bucket="workspace-bucket"),
     )
     image_id = "image-brokered"
     with isolated_services.context.database.session() as session:
