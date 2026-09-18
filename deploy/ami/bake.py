@@ -125,10 +125,16 @@ class _ImageDevice(_BakeModel):
     disk: _ImageDisk | None = Field(default=None, alias="Ebs")
 
 
+class _Tag(_BakeModel):
+    key: str = Field(alias="Key")
+    value: str = Field(alias="Value")
+
+
 class _DescribedImage(_BakeModel):
     image_id: str = Field(alias="ImageId")
     state: str = Field(alias="State")
     devices: list[_ImageDevice] = Field(default_factory=list, alias="BlockDeviceMappings")
+    tags: list[_Tag] = Field(default_factory=list, alias="Tags")
 
 
 class _Snapshot(_BakeModel):
@@ -286,22 +292,24 @@ def main() -> None:
         image_timeout_seconds=args.image_timeout_seconds,
         aws_cli=args.aws_cli,
     )
-    ami_ids = {region: _bake_region(request, region=region) for region in regions}
+    source, *destinations = regions
+    ami_ids = {source: _bake_region(request, region=source)}
+    # Start every copy before waiting on any: a copy takes minutes, and the
+    # destinations do not depend on each other.
+    for region in destinations:
+        ami_ids[region] = _existing_image_id(request, region=region) or _copy_image(
+            request, region=region, source_region=source, source_image_id=ami_ids[source]
+        )
+    for region in destinations:
+        _wait_for_image(request, region=region, image_id=ami_ids[region])
     print(json.dumps(ami_ids, sort_keys=True, separators=(",", ":")))
 
 
 def _bake_region(request: _BakeRequest, *, region: str) -> str:
-    existing = _find_existing_image(request, region=region)
-    if existing is not None:
-        if existing.state == "available":
-            _log(f"{region}: reusing {existing.image_id} for recipe {request.recipe_sha256}")
-            return existing.image_id
-        if existing.state != "pending":
-            raise SystemExit(
-                f"{region}: node image {existing.image_id} entered state {existing.state}"
-            )
-        _wait_for_image(request, region=region, image_id=existing.image_id)
-        return existing.image_id
+    existing_id = _existing_image_id(request, region=region)
+    if existing_id is not None:
+        _wait_for_image(request, region=region, image_id=existing_id)
+        return existing_id
 
     base_ami = _latest_al2023_ami(request, region=region)
     _log(f"{region}: baking {request.image_name} from {base_ami}")
@@ -314,6 +322,18 @@ def _bake_region(request: _BakeRequest, *, region: str) -> str:
         _terminate_instance(request, region=region, instance_id=instance_id)
     _log(f"{region}: baked {image_id}")
     return image_id
+
+
+def _existing_image_id(request: _BakeRequest, *, region: str) -> str | None:
+    existing = _find_existing_image(request, region=region)
+    if existing is None:
+        return None
+    if existing.state not in {"available", "pending"}:
+        raise SystemExit(f"{region}: node image {existing.image_id} entered state {existing.state}")
+    _log(
+        f"{region}: reusing {existing.state} {existing.image_id} for recipe {request.recipe_sha256}"
+    )
+    return existing.image_id
 
 
 def _find_existing_image(request: _BakeRequest, *, region: str) -> _DescribedImage | None:
@@ -638,11 +658,7 @@ def _stop_completed_bake_instance(request: _BakeRequest, *, region: str, instanc
 
 
 def _create_image(request: _BakeRequest, *, region: str, instance_id: str) -> str:
-    tags = (
-        f"{{Key={_MANAGED_TAG_KEY},Value={_MANAGED_TAG_VALUE}}},"
-        f"{{Key={_RECIPE_TAG_KEY},Value={request.recipe_sha256}}},"
-        f"{{Key=lazycloud:node-variant,Value={request.variant.value}}}"
-    )
+    tags = ",".join(f"{{Key={key},Value={value}}}" for key, value in _image_tags(request).items())
     result = _run_aws(
         request.aws_cli,
         [
@@ -653,7 +669,7 @@ def _create_image(request: _BakeRequest, *, region: str, instance_id: str) -> st
             "--name",
             request.image_name,
             "--description",
-            f"LazyCloud connected-AWS {request.variant.value} host runtime",
+            _image_description(request),
             "--tag-specifications",
             f"ResourceType=image,Tags=[{tags}]",
             f"ResourceType=snapshot,Tags=[{tags}]",
@@ -667,6 +683,48 @@ def _create_image(request: _BakeRequest, *, region: str, instance_id: str) -> st
     if not _AMI_PATTERN.fullmatch(image_id):
         raise SystemExit(f"{region}: AWS returned an invalid image ID")
     return image_id
+
+
+def _copy_image(
+    request: _BakeRequest, *, region: str, source_region: str, source_image_id: str
+) -> str:
+    _log(f"{region}: copying {source_image_id} from {source_region}")
+    result = _run_aws(
+        request.aws_cli,
+        [
+            "ec2",
+            "copy-image",
+            "--source-region",
+            source_region,
+            "--source-image-id",
+            source_image_id,
+            "--name",
+            request.image_name,
+            "--description",
+            _image_description(request),
+            "--copy-image-tags",
+            "--region",
+            region,
+            "--output",
+            "json",
+        ],
+    )
+    image_id = _parse(_CreateImageResponse, result.stdout, operation="copy node image").image_id
+    if not _AMI_PATTERN.fullmatch(image_id):
+        raise SystemExit(f"{region}: AWS returned an invalid image ID")
+    return image_id
+
+
+def _image_description(request: _BakeRequest) -> str:
+    return f"LazyCloud connected-AWS {request.variant.value} host runtime"
+
+
+def _image_tags(request: _BakeRequest) -> dict[str, str]:
+    return {
+        _MANAGED_TAG_KEY: _MANAGED_TAG_VALUE,
+        _RECIPE_TAG_KEY: request.recipe_sha256,
+        "lazycloud:node-variant": request.variant.value,
+    }
 
 
 def _wait_for_image(request: _BakeRequest, *, region: str, image_id: str) -> None:
@@ -715,6 +773,12 @@ def _wait_for_image(request: _BakeRequest, *, region: str, image_id: str) -> Non
                 if snapshot.state == "error":
                     raise SystemExit(f"{region}: image snapshot {snapshot.id} failed")
         if state == "available":
+            # Publish refuses an untagged image, so a copy that dropped its tags
+            # fails here, where the source and region are still in view.
+            tags = {tag.key: tag.value for tag in images.images[0].tags}
+            missing = {k: v for k, v in _image_tags(request).items() if tags.get(k) != v}
+            if missing:
+                raise SystemExit(f"{region}: node image {image_id} lacks tags {sorted(missing)}")
             return
         if state not in {"pending"}:
             raise SystemExit(f"{region}: node image {image_id} entered state {state}")
