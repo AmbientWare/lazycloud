@@ -603,6 +603,12 @@ services:
         token_path="$$state_dir/join-token"
         mkdir -p "$$state_dir"
         chmod 0700 "$$state_dir"
+        # A machine keeps its name for as long as it is joined, and this agent
+        # keeps its identity across restarts, so a second mint would be refused.
+        if [ -f "$$state_dir/agent-state.json" ]; then
+          echo "compose agent already holds its identity; no join credential needed"
+          exit 0
+        fi
         export GATEWAY_TOKEN="$$(cat /run/secrets/lazycloud-administrator-token)"
         # The credential belongs to the customer even though the administrator mints
         # it: the enrollment names whoever asked, and placement compares that account
@@ -621,9 +627,6 @@ services:
         export GATEWAY_TOKEN="$$customer_token"
         lazycloud-admin --json workspace show "${LAZYCLOUD_COMPOSE_CUSTOMER_WORKSPACE:-tenant-customer}" >/dev/null 2>&1 \
           || lazycloud-admin --json workspace create "${LAZYCLOUD_COMPOSE_CUSTOMER_WORKSPACE:-tenant-customer}" >/dev/null
-        lazycloud-admin --json compute policy update \
-          --workspace "${LAZYCLOUD_COMPOSE_CUSTOMER_WORKSPACE:-tenant-customer}" \
-          --default-pool "${LAZYCLOUD_COMPOSE_SELF_HOSTED_POOL:-self-hosted}" >/dev/null
         temporary="$${token_path}.tmp"
         rm -f "$$temporary"
         # Retried, because health is a lagging signal: the ingress reports what
@@ -631,7 +634,10 @@ services:
         # until it is listening. One attempt turns that window into a stack with
         # no join credential and an agent that never arrives.
         attempt=1
-        until lazycloud-admin --json machine join-token --pool "${LAZYCLOUD_COMPOSE_SELF_HOSTED_POOL:-self-hosted}" --ttl 15m \
+        until lazycloud-admin --json machine join-token \
+          --name "${LAZYCLOUD_COMPOSE_AGENT_HOSTNAME:-compose-agent}" \
+          --workspaces "${LAZYCLOUD_COMPOSE_CUSTOMER_WORKSPACE:-tenant-customer}" \
+          --ttl 15m \
           | python -c \
               'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.load(sys.stdin)["token"], encoding="utf-8")' \
               "$$temporary"

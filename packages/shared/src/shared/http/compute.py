@@ -156,6 +156,13 @@ class MachineJoinCommandResponse(HttpModel):
     expires_at: datetime
 
 
+class MachineJoinTokenResponse(HttpModel):
+    """The bare one-use credential, for an operator who runs the agent themselves."""
+
+    token: str = Field(repr=False)
+    expires_at: datetime
+
+
 class MachineUpdateRequest(HttpModel):
     """Replace the workspaces one joined machine serves."""
 
@@ -346,6 +353,7 @@ __all__ = [
     "ContainerWithAppResponse",
     "MachineJoinCommandRequest",
     "MachineJoinCommandResponse",
+    "MachineJoinTokenResponse",
     "MachineListResponse",
     "MachineResponse",
     "MachineUpdateRequest",

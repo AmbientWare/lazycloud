@@ -770,7 +770,6 @@ def machine_join(
             help="Workspace names whose workloads may run on this machine, comma-separated.",
         ),
     ],
-    ttl: Annotated[str, typer.Option("--ttl", help="Join token lifetime.")] = "",
     gpu: Annotated[
         list[str] | None,
         typer.Option("--gpu", help="GPU type this machine contributes."),
@@ -824,7 +823,6 @@ def machine_join(
 
     response = compute_client().machine_join_command(
         MachineJoinCommandRequest(
-            ttl=ttl,
             name=name,
             workspaces=workspace_names,
             gpu=list(gpu or []),

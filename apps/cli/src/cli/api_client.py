@@ -17,6 +17,8 @@ from shared.http.compute import (
     ContainerResponse,
     ContainerRunRequest,
     ContainerWithAppPageResponse,
+    MachineJoinCommandRequest,
+    MachineJoinTokenResponse,
     MachineListResponse,
     UnitCreateRequest,
     UnitListResponse,
@@ -317,6 +319,11 @@ class AdminApiClient:
     def list_machines(self) -> MachineListResponse:
         return MachineListResponse.model_validate(
             self.channel.get(self._workspace_path("/api/v1/machines"))
+        )
+
+    def machine_join_token(self, request: MachineJoinCommandRequest) -> MachineJoinTokenResponse:
+        return MachineJoinTokenResponse.model_validate(
+            self.channel.post("/api/v1/machines/join-token", request.model_dump(mode="json"))
         )
 
     def delete_machine(self, machine_id: str) -> None:
