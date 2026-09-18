@@ -8,6 +8,7 @@ from gateway.service import GatewayControlService
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
+    MachineJoinTokenResponse,
     MachineListResponse,
     MachineResponse,
     MachineUpdateRequest,
@@ -74,6 +75,20 @@ def machine_join_command(
         user_id=user_id,
         owner_token_id=token.id,
     )
+
+
+@router.post(
+    "/api/v1/machines/join-token",
+    response_model=MachineJoinTokenResponse,
+    operation_id="get_machine_join_token",
+)
+def machine_join_token(
+    request: MachineJoinCommandRequest,
+    token: write_token,
+    user_id: write_user,
+    service: GatewayControlService = Depends(gateway_service),
+) -> MachineJoinTokenResponse:
+    return service.machine_join_token(request, user_id=user_id, owner_token_id=token.id)
 
 
 @router.patch(

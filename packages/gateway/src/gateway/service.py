@@ -152,6 +152,7 @@ from shared.http.client_manifests import (
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
+    MachineJoinTokenResponse,
     MachineResponse,
     UnitJoinCommandResponse,
     UnitMachineListResponse,
@@ -1122,6 +1123,17 @@ class GatewayControlService:
             ),
             expires_at=plan.expires_at,
         )
+
+    def machine_join_token(
+        self,
+        request: MachineJoinCommandRequest,
+        *,
+        user_id: str,
+        owner_token_id: str,
+    ) -> MachineJoinTokenResponse:
+        """The same mint as the join command, handed back bare for a host the operator drives."""
+        plan = self._mint_machine_join_credential(request, user_id=user_id, token_id=owner_token_id)
+        return MachineJoinTokenResponse(token=plan.token, expires_at=plan.expires_at)
 
     def _mint_machine_join_credential(
         self,

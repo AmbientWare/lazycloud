@@ -29,6 +29,7 @@ from shared.http.collections import MAX_MAP_TTL_SECONDS
 from shared.http.compute import (
     ContainerResponse,
     ContainerRunRequest,
+    MachineJoinCommandRequest,
     UnitCreateRequest,
 )
 from shared.http.observability import EventHistoryRequest, LogQueryRequest
@@ -573,6 +574,27 @@ def unit_clear_degraded(
     )
 
 
+def machine_join_token(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Option("--name", help="Name workloads pin to.")],
+    workspaces: Annotated[
+        list[str], typer.Option("--workspaces", help="Workspace names the machine serves.")
+    ],
+    gpu: Annotated[list[str] | None, typer.Option("--gpu")] = None,
+    ttl: Annotated[str, typer.Option("--ttl")] = "",
+) -> None:
+    """Mint a bare join credential for a host you start the agent on yourself."""
+    names = [item for value in workspaces for item in value.split(",") if item]
+    response = admin_api_client().machine_join_token(
+        MachineJoinCommandRequest(name=name, workspaces=names, gpu=gpu or [], ttl=ttl)
+    )
+    emit_notice(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        message=f"Join credential for {name} expires at {response.expires_at.isoformat()}.",
+    )
+
+
 def machine_delete(ctx: typer.Context, machine_id: str) -> None:
     admin_api_client().delete_machine(machine_id)
     emit_notice(
@@ -739,6 +761,7 @@ unit_app.command(
 
 
 def register_machine_extensions(group: typer.Typer) -> None:
+    group.command("join-token")(machine_join_token)
     group.command("delete")(machine_delete)
     group.command("cordon")(machine_cordon)
     group.command("uncordon")(machine_uncordon)
