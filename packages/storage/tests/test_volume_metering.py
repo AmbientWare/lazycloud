@@ -27,7 +27,7 @@ from storage.volume_filesystem import (
     workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
-from tests.fakes import FakeObjectClient
+from tests.fakes import FakeObjectClient, FakeWorkspaceStorageIssuer
 
 from storage import volume_metering
 
@@ -52,7 +52,11 @@ def test_volume_metering_records_byte_seconds_and_advances_checkpoint(
     )
     payload = b"persistent-volume-payload"
     filesystem = WorkspaceVolumeFilesystem(
-        workspace_volume_store_resolver(service_context.database, object_store=FakeObjectClient())
+        workspace_volume_store_resolver(
+            service_context.database,
+            object_store=FakeObjectClient(),
+            storage_issuer=FakeWorkspaceStorageIssuer(),
+        )
     )
     namespace = VolumeNamespace(workspace_id=workspace_id, volume_id=record.id)
     filesystem.ensure_volume(namespace)
@@ -111,7 +115,11 @@ def test_volume_metering_scans_only_the_stable_volume_namespace(
         metered_at=started_at,
     )
     filesystem = WorkspaceVolumeFilesystem(
-        workspace_volume_store_resolver(service_context.database, object_store=FakeObjectClient())
+        workspace_volume_store_resolver(
+            service_context.database,
+            object_store=FakeObjectClient(),
+            storage_issuer=FakeWorkspaceStorageIssuer(),
+        )
     )
     first_namespace = VolumeNamespace(workspace_id, first.id)
     second_namespace = VolumeNamespace(workspace_id, second.id)
@@ -149,7 +157,11 @@ def test_final_volume_metering_closes_checkpoint_window_when_scan_fails(
         metered_at=started_at,
     )
     filesystem = WorkspaceVolumeFilesystem(
-        workspace_volume_store_resolver(service_context.database, object_store=FakeObjectClient())
+        workspace_volume_store_resolver(
+            service_context.database,
+            object_store=FakeObjectClient(),
+            storage_issuer=FakeWorkspaceStorageIssuer(),
+        )
     )
 
     def unavailable(self: WorkspaceVolumeFilesystem, namespace: VolumeNamespace) -> int:
@@ -210,7 +222,9 @@ def test_a_metered_volume_window_prices_byte_seconds_exactly(
         service_context,
         WorkspaceVolumeFilesystem(
             workspace_volume_store_resolver(
-                service_context.database, object_store=FakeObjectClient()
+                service_context.database,
+                object_store=FakeObjectClient(),
+                storage_issuer=FakeWorkspaceStorageIssuer(),
             )
         ),
     ).reconcile_volume(record.name, workspace_id=workspace_id, now=observed_at)

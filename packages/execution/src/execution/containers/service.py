@@ -46,7 +46,7 @@ from shared.events import EventLevel
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
 from shared.image_building.records import BuildStatus
-from shared.placement import ProductRegion
+from shared.placement import Placement, ProductRegion
 from shared.scheduling import (
     SchedulerContainerCancellationResult,
     SchedulerContainerSubmitResult,
@@ -321,7 +321,7 @@ class ContainerService:
         disk_mib: int = DEFAULT_CONTAINER_DISK_MIB,
         gpu: Sequence[str] = (),
         gpu_count: int = 0,
-        pool_selector: str = "",
+        placement: Placement = Placement.platform(),
         region: ProductRegion | None = None,
         availability_zone: str = "",
         runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
@@ -392,7 +392,7 @@ class ContainerService:
                 disk_mib=disk_mib,
                 gpu=list(record.gpu),
                 gpu_count=record.gpu_count,
-                pool_selector=pool_selector,
+                placement=placement,
                 region=region,
                 availability_zone=availability_zone,
                 runtime=runtime,
@@ -528,7 +528,7 @@ class ContainerService:
             memory_mib=options.memory_mib,
             gpu=list(options.gpu),
             gpu_count=options.gpu_count,
-            pool_selector=options.pool_selector,
+            placement=options.placement,
             region=options.region,
             availability_zone=options.availability_zone,
             runtime_class=runtime_constraint,

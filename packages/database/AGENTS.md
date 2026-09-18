@@ -53,3 +53,9 @@ values a caller computed and passed. Cost is append-only. A written
 published later must not reprice usage a customer has already been shown, and
 that same row carries the attribution the cost is read back by, so no second
 projection has to be kept in step with it.
+
+A machine's `name` is unique per `owner_user_id` among rows that are not
+deleted, through a partial unique index rather than a Python check, because the
+name is claimed the moment a join command is minted and two mints can race. A
+deleted row keeps its name as history and stops holding it. `machine_workspaces`
+lists the workspaces a joined machine serves and cascades with both sides.

@@ -18,8 +18,8 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
-from shared.capacity import MachinePool
 from shared.deployment_records import DeploymentSpec, VolumeMount
+from shared.identity import WorkspaceRecord
 from shared.mounts import MountAuthMode
 from tests.workspaces import workspace_owner_user_id
 
@@ -40,7 +40,7 @@ class _BucketAccessController:
 def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
     isolated_services: ApiServices,
 ) -> None:
-    _seed_ready_connection(isolated_services)
+    workspace = _seed_connected_workspace(isolated_services)
     controller = _BucketAccessController()
     bucket_access = AwsDeploymentBucketAccessService(
         context=isolated_services.context,
@@ -48,14 +48,13 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
     )
     deployments = replace(
         isolated_services.deployments,
-        pool_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        placement=WorkspaceComputePolicyService(isolated_services.context),
         placement_resources=bucket_access,
     )
 
     first = deployments.deploy(
         DeploymentSpec(
             name="bucket-reader",
-            metadata={"pool": "aws"},
             volumes=[
                 VolumeMount(
                     name="customer-data",
@@ -68,12 +67,12 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
                     },
                 )
             ],
-        )
+        ),
+        workspace=workspace.id,
     )
     deployments.deploy(
         DeploymentSpec(
             name="secret-backed-bucket",
-            metadata={"pool": "aws"},
             volumes=[
                 VolumeMount(
                     name="other-data",
@@ -86,7 +85,8 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
                     },
                 )
             ],
-        )
+        ),
+        workspace=workspace.id,
     )
 
     assert controller.grants == (
@@ -100,8 +100,8 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
     assert controller.grants == ()
 
 
-def _seed_ready_connection(isolated_services: ApiServices) -> None:
-    """A ready connection owned by the account that owns the default workspace."""
+def _seed_connected_workspace(isolated_services: ApiServices) -> WorkspaceRecord:
+    """A workspace living in a ready connection owned by the default workspace's owner."""
     now = datetime.now(UTC)
     account_id = "123456789012"
     authorization = AwsAccountAuthorizationGeneration(
@@ -117,14 +117,14 @@ def _seed_ready_connection(isolated_services: ApiServices) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     owner_id = workspace_owner_user_id(isolated_services.context, workspace_id)
+    connection_id = str(uuid4())
     with isolated_services.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(
             AwsAccountConnection(
-                id=str(uuid4()),
+                id=connection_id,
                 user_id=owner_id,
                 account_id=account_id,
                 external_id="x" * 48,
-                pool=MachinePool("aws"),
                 phase=AwsAccountConnectionPhase.Ready,
                 active_authorization=authorization,
                 node_role_arn=f"arn:aws:iam::{account_id}:role/compute-node",
@@ -135,3 +135,6 @@ def _seed_ready_connection(isolated_services: ApiServices) -> None:
                 updated_at=now,
             )
         )
+    return isolated_services.control_plane_service.set_workspace(
+        "bucket-access", owner_user_id=owner_id, connection_id=connection_id
+    )

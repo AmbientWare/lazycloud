@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import JsonValue
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -115,7 +114,7 @@ class AwsAccountConnectionTable(IdTable, DatabaseBase):
             name="ck_aws_account_connections_node_identity",
         ),
         CheckConstraint(
-            "drain_remaining_pools >= 0 AND drain_total_pools >= drain_remaining_pools",
+            "drain_remaining_units >= 0 AND drain_total_units >= drain_remaining_units",
             name="ck_aws_account_connections_drain",
         ),
         CheckConstraint(
@@ -131,7 +130,6 @@ class AwsAccountConnectionTable(IdTable, DatabaseBase):
     )
     account_id: Mapped[str] = mapped_column(String(12), nullable=False)
     external_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
     phase: Mapped[str] = mapped_column(String(32), nullable=False)
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     next_reconcile_at: Mapped[datetime | None] = mapped_column(
@@ -149,8 +147,8 @@ class AwsAccountConnectionTable(IdTable, DatabaseBase):
 
     node_role_arn: Mapped[str | None] = mapped_column(Text, nullable=True)
     node_instance_profile_arn: Mapped[str | None] = mapped_column(Text, nullable=True)
-    drain_total_pools: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    drain_remaining_pools: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    drain_total_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    drain_remaining_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
     customer_action_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     customer_action_label: Mapped[str] = mapped_column(Text, nullable=False)
     bucket_access_reconcile_pending: Mapped[bool] = mapped_column(Boolean, nullable=False)

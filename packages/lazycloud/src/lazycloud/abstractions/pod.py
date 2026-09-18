@@ -29,7 +29,7 @@ from shared.placement import ProductRegion
 from typing_extensions import Self
 
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import PoolInput, build_resource_metadata
+from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
 from lazycloud.abstractions.serve import ContainerWorkspaceSyncer
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import volume_mounts
@@ -103,7 +103,7 @@ class PodOptions(TypedDict, total=False):
     preemptible: bool
     region: str | None
     availability_zone: str
-    pool: PoolInput
+    machine: MachineInput
     metadata: dict[str, Any]
 
 
@@ -230,7 +230,7 @@ class Pod(ControlClientConfigMixin):
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
     availability_zone: str = ""
-    pool: PoolInput = None
+    machine: MachineInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
     deployment_id: str = field(default="", init=False)
@@ -316,7 +316,7 @@ class Pod(ControlClientConfigMixin):
                 block_network=self.block_network,
                 allow_list=self.allow_list,
                 docker_enabled=self.docker_enabled,
-                pool=self.pool,
+                machine=self.machine,
                 extra={
                     **self.metadata,
                     "checkpoint_readiness_path": self.checkpoint_readiness_path or "",
@@ -350,7 +350,7 @@ class Pod(ControlClientConfigMixin):
         tcp: bool | None = None,
         region: str | None = None,
         availability_zone: str | None = None,
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         preemptible: bool | None = None,
     ) -> Self:
         if image is not None:
@@ -378,8 +378,8 @@ class Pod(ControlClientConfigMixin):
             self.secrets.extend(secret for secret in secrets if secret not in self.secrets)
         if tcp is not None:
             self.tcp = tcp
-        if pool is not None:
-            self.pool = pool
+        if machine is not None:
+            self.machine = machine
         if region is not None:
             self.region = region
         if availability_zone is not None:

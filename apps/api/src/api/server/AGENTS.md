@@ -19,10 +19,10 @@ through compute policy, compute instances, and machine join. An operator route
 that read workspace from the bearer token would let a customer-triggered delete
 strand provider capacity nothing durable can name.
 
-Units are addressed by id, never by name. `pool` names the scheduling pool a
-workload asks for, and several units feed one pool; a route keyed on a name
-could resolve a unit through a value that meant a pool, which is how the two
-were confused before they were separated.
+Units are addressed by id, never by name. `placement` is where a workload runs,
+and several units may serve one placement; a route keyed on a name could resolve
+a unit through a value that meant something else, which is how the two were
+confused before they were separated.
 
 Every bearer-authenticated request resolves its workspace through
 `authorize_token_workspace`: the shared dependency calls it for a route that takes

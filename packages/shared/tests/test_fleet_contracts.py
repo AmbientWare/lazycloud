@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import ComputeUnitRecord
+from shared.placement import Placement
 
 _UNIT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _WORKSPACE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -15,7 +16,7 @@ def _unit(name: str, **overrides: object) -> ComputeUnitRecord:
             "id": _UNIT_ID,
             "workspace_id": _WORKSPACE_ID,
             "name": name,
-            "pool": name,
+            "placement": Placement.platform(),
             **overrides,
         }
     )

@@ -616,7 +616,7 @@ class FunctionControlService:
                 disk_mib=container_plan.disk_mib,
                 gpu=list(container.gpu),
                 gpu_count=container.gpu_count,
-                pool_selector=config.runtime.pool_selector or "",
+                placement=stub.placement,
                 region=config.runtime.region,
                 availability_zone=config.runtime.availability_zone,
                 runtime=config.runtime.runtime,

@@ -44,7 +44,7 @@ from lazycloud.abstractions.function import _function as function_decorator
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PoolInput,
+    MachineInput,
     RetryPolicyInput,
     SchemaInput,
 )
@@ -140,7 +140,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R]: ...
 
@@ -185,7 +185,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
 
@@ -229,7 +229,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Function[P, R] | Callable[[Callable[P, R]], Function[P, R]]:
         """Register a Python callable as an app-owned remote function.
@@ -262,7 +262,8 @@ class App:
             task_policy: Scheduling policy for invocation retries and timeouts.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, metadata: Scheduling group and custom metadata.
+            machine, metadata: A joined machine this workload must run on, by name
+                (unset runs in the workspace), and custom metadata.
         """
         kwargs = FunctionOptions(
             image=image,
@@ -301,7 +302,7 @@ class App:
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             metadata=metadata,
         )
 
@@ -348,7 +349,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R]: ...
 
@@ -390,7 +391,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[Callable[P, R]], Endpoint[P, R]]: ...
 
@@ -431,7 +432,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: dict[str, Any] | None = None,
     ) -> Endpoint[P, R] | Callable[[Callable[P, R]], Endpoint[P, R]]:
         """Register a typed Python callable as an HTTP endpoint.
@@ -459,7 +460,8 @@ class App:
             autoscaler, task_policy: Scheduling policies.
             inputs, outputs: Optional schema metadata for clients and validation.
             docker_enabled: Whether the execution container needs an isolated Docker daemon.
-            pool, metadata: Scheduling group and custom metadata.
+            machine, metadata: A joined machine this workload must run on, by name
+                (unset runs in the workspace), and custom metadata.
         """
         kwargs = EndpointOptions(
             image=image,
@@ -495,7 +497,7 @@ class App:
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             metadata=metadata,
         )
 
@@ -533,7 +535,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
     ) -> Callable[[Callable[..., Awaitable[Any]] | Callable[..., Any]], ASGI]:
         """Register an ASGI application owned by this app.
 
@@ -555,7 +557,8 @@ class App:
             env, secrets, volumes: Runtime configuration injected into workers.
             on_start: Startup hook invoked by the workload runner.
             autoscaler, task_policy: Scheduling policies.
-            pool: Scheduling group name.
+            machine: A joined machine this workload must run on, by name; unset runs
+                in the workspace.
         """
         kwargs = ASGIOptions(
             name=name,
@@ -584,7 +587,7 @@ class App:
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
         )
         factory = asgi_decorator(resource_type=ASGI, _app_slug=self.slug, **kwargs)
 
@@ -624,7 +627,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
     ) -> Callable[[Callable[..., Any]], RealtimeASGI]:
         """Register a realtime WebSocket-style handler owned by this app.
 
@@ -645,7 +648,8 @@ class App:
             env, secrets, volumes: Runtime configuration injected into workers.
             on_start: Startup hook invoked by the workload runner.
             autoscaler, task_policy: Scheduling policies.
-            pool: Scheduling group name.
+            machine: A joined machine this workload must run on, by name; unset runs
+                in the workspace.
         """
         kwargs = ASGIOptions(
             name=name,
@@ -674,7 +678,7 @@ class App:
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
         )
         factory = asgi_decorator(resource_type=RealtimeASGI, _app_slug=self.slug, **kwargs)
 
@@ -714,7 +718,7 @@ class App:
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> Pod:
         """Create an app-owned long-running pod resource.
@@ -740,7 +744,8 @@ class App:
                 to a container. Unset, it connects to the port instead, which proves only
                 that something is listening.
             tcp, block_network, allow_list, docker_enabled: Network and Docker policy.
-            pool, metadata: Placement and custom metadata.
+            machine, metadata: A joined machine this workload must run on, by name
+                (unset runs in the workspace), and custom metadata.
         """
         kwargs = PodOptions(
             name=name,
@@ -771,7 +776,7 @@ class App:
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             metadata=dict(metadata or {}),
         )
         return self._register(Pod(_app_slug=self.slug, **kwargs))
@@ -799,7 +804,7 @@ class App:
         ports: Iterable[int] | None = None,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
     ) -> Sandbox:
@@ -819,7 +824,8 @@ class App:
             sync_local_dir: Sync the local working directory into the sandbox.
             block_network, allow_list, docker_enabled: Network and Docker policy.
             ports: Container ports exposed from the sandbox.
-            pool, metadata: Placement and custom metadata.
+            machine, metadata: A joined machine this workload must run on, by name
+                (unset runs in the workspace), and custom metadata.
             command: Optional initial command run by the sandbox container.
         """
         kwargs = SandboxOptions(
@@ -843,7 +849,7 @@ class App:
             ports=ports,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             metadata=metadata,
             command=command,
         )
@@ -870,7 +876,7 @@ class App:
         tcp: bool | None = None,
         region: str | None = None,
         availability_zone: str | None = None,
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         preemptible: bool | None = None,
         entrypoint: Iterable[str] | None = None,
     ) -> AppDeployResult:
@@ -891,7 +897,7 @@ class App:
             external_url: External URL to attach to endpoint-style deployments.
             source_root: Local source directory shared by the selected resources.
             image, cpu, memory, gpu, gpu_count: Runtime overrides applied before deployment.
-            env, secrets, ports, keep_warm, tcp, pool, entrypoint: Additional runtime
+            env, secrets, ports, keep_warm, tcp, machine, entrypoint: Additional runtime
                 overrides. Target-specific options fail explicitly when unsupported.
         """
         deployable = self._select_many(resource=resource, method="deploy")
@@ -911,7 +917,7 @@ class App:
                 tcp=tcp,
                 region=region,
                 availability_zone=availability_zone,
-                pool=pool,
+                machine=machine,
                 preemptible=preemptible,
                 entrypoint=entrypoint,
             )
@@ -1059,7 +1065,7 @@ def _configure_deployable_resource(
     tcp: bool | None,
     region: str | None,
     availability_zone: str | None,
-    pool: PoolInput,
+    machine: MachineInput,
     preemptible: bool | None,
     entrypoint: Iterable[str] | None,
 ) -> None:
@@ -1084,7 +1090,7 @@ def _configure_deployable_resource(
             secrets=secrets,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             preemptible=preemptible,
         )
         return
@@ -1113,8 +1119,8 @@ def _configure_deployable_resource(
             resource.secrets.extend(secret for secret in secrets if secret not in resource.secrets)
         if keep_warm is not None:
             resource.keep_warm = keep_warm
-        if pool is not None:
-            resource.pool = pool
+        if machine is not None:
+            resource.machine = machine
         if region is not None:
             resource.region = region
         if availability_zone is not None:
@@ -1147,8 +1153,8 @@ def _configure_deployable_resource(
             resource.secrets.extend(secret for secret in secrets if secret not in resource.secrets)
         if keep_warm is not None:
             resource.keep_warm_seconds = keep_warm
-        if pool is not None:
-            resource.pool = pool
+        if machine is not None:
+            resource.machine = machine
         if region is not None:
             resource.region = region
         if availability_zone is not None:
@@ -1172,7 +1178,7 @@ def _configure_deployable_resource(
             tcp=tcp,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             preemptible=preemptible,
         )
         return

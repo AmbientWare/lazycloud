@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 import pytest
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from execution.mounts import (
@@ -24,7 +25,12 @@ def test_source_code_mounts_presign_for_the_source_workspace(
 ) -> None:
     object_client = FakeObjectClient()
     object_storage = ObjectStorage(service_context, object_client=object_client)
-    workspace = owned_workspace(ControlPlaneService(service_context), "source-owner")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "source-owner",
+    )
     record = object_storage.put_bytes_for_workspace(
         workspace_id=workspace.id,
         bucket=SOURCE_PACKAGE_BUCKET,
@@ -46,7 +52,12 @@ def test_source_code_mounts_presign_for_the_source_workspace(
     selected = urlsplit(mounts[0].source_download_url)
     assert selected.netloc == physical_bucket
     assert selected.path == f"/{physical_key}"
-    foreign = owned_workspace(ControlPlaneService(service_context), "other-source-owner")
+    foreign = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "other-source-owner",
+    )
     assert (
         source_code_mounts(
             context=service_context,
@@ -62,7 +73,9 @@ def test_source_code_mounts_presign_for_the_source_workspace(
 def test_container_resource_mounts_require_workspace_storage_when_workspace_has_bucket(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     unprovisioned = owned_workspace(control, "mount-storage-unprovisioned")
     mounts = container_resource_mounts(
         context=service_context,
@@ -89,13 +102,8 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
         WorkspaceStorageConfig(
             backend="s3",
             bucket="workspace-bucket",
-            config={
-                "endpoint_url": "http://object-store:9000",
-                "region": "us-east-1",
-                "access_key": "access",
-                "secret_key": "secret",
-                "force_path_style": True,
-            },
+            endpoint_url="http://object-store:9000",
+            region="us-east-1",
         ),
     )
 

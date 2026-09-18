@@ -14,6 +14,7 @@ import pytest
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from apps.api.tests.runtime import service_graph
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import RedisSettings
 from database.tables.endpoint_dispatch import EndpointDispatchTable
@@ -101,7 +102,9 @@ async def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replic
     seeded_database_url: URL,
 ) -> None:
     async with _postgres_services(tmp_path, real_redis_actors, seeded_database_url) as services:
-        stub = ControlPlaneService(services.context).create_stub(
+        stub = ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        ).create_stub(
             "concurrent-endpoint-admission",
             kind=StubKind.Endpoint,
             handler="module:handler",

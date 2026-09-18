@@ -13,8 +13,8 @@ from agent.operations import (
     plan_worker_slot_reconciliation,
 )
 from agent_app.daemon import CommandResult, DockerAgentWorkerController
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.usage import UsageBillingOwner
 from worker.configuration import WorkerConfiguration
 
@@ -60,7 +60,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
     slot = AgentWorkerSlot(
         worker_id="worker-one",
         worker_token="worker-secret",
-        pool=MachinePool("private-pool"),
+        placement=Placement.machine("private-pool"),
         billing_owner=UsageBillingOwner.SelfHosted,
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         machine_id="machine-one",
@@ -108,7 +108,7 @@ def test_agent_gives_all_workers_one_bounded_graceful_shutdown_window(
     slots = [
         AgentWorkerSlot(
             worker_id=f"worker-{index}",
-            pool=MachinePool("private-pool"),
+            placement=Placement.machine("private-pool"),
             billing_owner=UsageBillingOwner.SelfHosted,
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             machine_id="machine-one",
@@ -167,7 +167,7 @@ def test_agent_stop_treats_concurrent_container_removal_as_settled(
     slot = AgentWorkerSlot(
         worker_id="worker-one",
         worker_token="worker-secret",
-        pool=MachinePool("private-pool"),
+        placement=Placement.machine("private-pool"),
         billing_owner=UsageBillingOwner.SelfHosted,
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
     )

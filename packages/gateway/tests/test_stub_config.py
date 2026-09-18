@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
@@ -14,7 +15,7 @@ from pydantic import ValidationError
 from shared.deployment_records import request_and_limit
 from shared.deployments import DeploymentKind
 from shared.http.gateway import DeployStubRequest, GetOrCreateStubRequest
-from shared.placement import ProductRegion
+from shared.placement import Placement, ProductRegion
 from shared.workload_config import StubConfig
 from tests.redis_fakes import FakeRedis
 
@@ -48,7 +49,10 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
         ),
     )
     prepared = gateway.get_or_create_stub(request)
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     source = control.get_stub(prepared.stub_id)
     assert source.config.runtime == normalized
 
@@ -83,7 +87,10 @@ def test_runtime_prepare_stays_outside_apps_and_deployments_until_publish(
     repeated = gateway.get_or_create_stub(request)
     peer = gateway.get_or_create_stub(request.model_copy(update={"app_name": "peer_runtime"}))
 
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     runtime = control.get_stub(prepared.stub_id)
     assert repeated.stub_id == runtime.id
     assert peer.stub_id != runtime.id
@@ -136,6 +143,7 @@ def test_resource_requests_and_placement_survive_storage() -> None:
 
     spec = deployment_spec_from_stub(
         StubRecord(
+            placement=Placement.platform(),
             id="stub-1",
             workspace_id="workspace-1",
             name="paired-resources",

@@ -43,7 +43,6 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    WorkspaceComputePolicyTable,
 )
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.credit_purchases import CreditPurchaseTable
@@ -89,6 +88,7 @@ from database.tables.orchestration import (
     AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
+    MachineWorkspaceTable,
     WorkerTable,
 )
 from database.tables.provider_launches import ProviderNodeLaunchTable
@@ -153,6 +153,7 @@ __all__ = [
     "ImageTable",
     "LogTable",
     "MachineTable",
+    "MachineWorkspaceTable",
     "ObjectTable",
     "PlatformRateTable",
     "PodUrlTable",
@@ -174,7 +175,6 @@ __all__ = [
     "WorkerCacheGenerationTable",
     "WorkerEventTable",
     "WorkerTable",
-    "WorkspaceComputePolicyTable",
     "WorkspaceInvitationTable",
     "WorkspaceMemberTable",
     "WorkspaceTable",

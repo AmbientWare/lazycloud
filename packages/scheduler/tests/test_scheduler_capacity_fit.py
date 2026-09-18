@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import pytest
 from scheduler.tools import SchedulingRequest, WorkerCapacity, select_worker_for_request
-from shared.compute_policy import MachinePool
+from shared.placement import Placement, PlacementKind
 
 
 def _gpu_worker(gpu_type: str) -> WorkerCapacity:
     return WorkerCapacity(
+        placement=Placement.platform(),
         worker_id="worker-1",
         gpu_type=gpu_type,
         free_cpu=4,
@@ -19,7 +20,14 @@ def _gpu_worker(gpu_type: str) -> WorkerCapacity:
 
 
 def _gpu_request(gpu_type: str) -> SchedulingRequest:
-    return SchedulingRequest(id="request-1", cpu=1, memory_mib=512, gpu=[gpu_type], gpu_count=1)
+    return SchedulingRequest(
+        placement=Placement.platform(),
+        id="request-1",
+        cpu=1,
+        memory_mib=512,
+        gpu=[gpu_type],
+        gpu_count=1,
+    )
 
 
 @pytest.mark.parametrize("requested", ["L4", "l4", "nvidia-l4", "NVIDIA L4"])
@@ -40,13 +48,11 @@ def test_a_gpu_worker_still_refuses_a_different_card() -> None:
     assert not _gpu_worker("L4").can_fit(_gpu_request("A100-80"))
 
 
-def _private_worker(owner_user_id: str) -> WorkerCapacity:
+def _worker_in(placement: Placement) -> WorkerCapacity:
     return WorkerCapacity(
         worker_id="worker-1",
-        pool=MachinePool("lazycloud"),
-        owner_user_id=owner_user_id,
-        private_worker=True,
-        requires_pool_selector=True,
+        placement=placement,
+        private_worker=placement.kind is not PlacementKind.Platform,
         free_cpu=4,
         free_memory_mib=8192,
         total_cpu=4,
@@ -55,62 +61,32 @@ def _private_worker(owner_user_id: str) -> WorkerCapacity:
     )
 
 
-def _account_request(owner_user_id: str) -> SchedulingRequest:
-    return SchedulingRequest(
-        id="request-1",
-        owner_user_id=owner_user_id,
-        pool_selector="lazycloud",
-        cpu=1,
-        memory_mib=512,
-    )
+def _request_in(placement: Placement) -> SchedulingRequest:
+    return SchedulingRequest(id="request-1", placement=placement, cpu=1, memory_mib=512)
 
 
-def test_a_private_worker_refuses_another_accounts_request() -> None:
+def test_a_worker_serves_only_its_own_placement() -> None:
     """Tenant isolation has to hold where the worker is chosen, not only where it is used.
 
-    Every workspace's default pool carries the same name, so matching on the pool label
-    alone put one tenant's request on another tenant's machine. The worker then refused
-    it on arrival and it was offered straight back to the same worker, so the request
-    never placed, never failed, and reported nothing.
-
-    The comparison is the owning account, not the workspace: a customer's own machine
-    serves every workspace they own, and stops at the boundary of their account.
+    A placement is an identity, so one comparison decides: a machine worker takes only
+    work that names that machine, a connection worker only work pinned to that
+    connection, and the platform fleet only platform work. No owner comparison sits
+    beside it; two accounts' machines never compare equal because their ids differ.
     """
-    worker = _private_worker("account-a")
+    machine = _worker_in(Placement.machine("machine-a"))
+    connection = _worker_in(Placement.connection("connection-a"))
+    platform = _worker_in(Placement.platform())
 
-    assert not worker.can_fit(_account_request("account-b"))
-    assert worker.fit_rejection(_account_request("account-b")) == (
-        "worker is private to another account"
+    assert machine.can_fit(_request_in(Placement.machine("machine-a")))
+    assert not machine.can_fit(_request_in(Placement.machine("machine-b")))
+    assert not machine.can_fit(_request_in(Placement.platform()))
+    assert not connection.can_fit(_request_in(Placement.connection("connection-b")))
+    assert not platform.can_fit(_request_in(Placement.connection("connection-a")))
+    assert platform.can_fit(_request_in(Placement.platform()))
+    assert machine.fit_rejection(_request_in(Placement.platform())) == (
+        "worker is not in placement platform"
     )
-    assert worker.can_fit(_account_request("account-a"))
-
-
-def test_the_shared_fleet_serves_an_account_it_does_not_belong_to() -> None:
-    """The shared fleet is what an unconfigured workspace lands on, so it serves anyone.
-
-    Its counterpart above refuses a foreign account. The pair is the whole rule: a
-    machine somebody connected is theirs, and platform capacity is not. Asserted with
-    a mismatched owner because equal owners would pass either way and prove nothing.
-    """
-    shared = WorkerCapacity(
-        worker_id="worker-1",
-        pool=MachinePool("lazycloud"),
-        owner_user_id="account-a",
-        private_worker=False,
-        free_cpu=4,
-        free_memory_mib=8192,
-        total_cpu=4,
-        total_memory_mib=8192,
-        total_gpu=0,
-    )
-
-    assert shared.can_fit(_account_request("account-b"))
-    assert shared.fit_rejection(_account_request("account-b")) == ""
-
-
-def test_a_private_worker_naming_no_account_serves_none() -> None:
-    """A record written without the authority to name a tenant cannot serve every tenant."""
-    assert not _private_worker("").can_fit(_account_request("account-a"))
+    assert platform.fit_rejection(_request_in(Placement.platform())) == ""
 
 
 def test_work_packs_onto_the_fullest_worker_that_fits() -> None:
@@ -123,7 +99,7 @@ def test_work_packs_onto_the_fullest_worker_that_fits() -> None:
 
     busy = WorkerCapacity(
         worker_id="busy",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         total_cpu=4,
         free_cpu=2,
         total_memory_mib=8192,
@@ -133,7 +109,7 @@ def test_work_packs_onto_the_fullest_worker_that_fits() -> None:
     )
     empty = WorkerCapacity(
         worker_id="empty",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         total_cpu=4,
         free_cpu=4,
         total_memory_mib=8192,
@@ -141,7 +117,7 @@ def test_work_packs_onto_the_fullest_worker_that_fits() -> None:
         total_gpu=0,
         free_gpu=0,
     )
-    request = SchedulingRequest(id="c-1", cpu=1, memory_mib=1024)
+    request = SchedulingRequest(placement=Placement.platform(), id="c-1", cpu=1, memory_mib=1024)
 
     chosen = select_worker_for_request(request, [empty, busy])
 
@@ -160,7 +136,7 @@ def test_priority_tiers_above_packing_without_replacing_it() -> None:
     """
     preferred = WorkerCapacity(
         worker_id="preferred",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         priority=10,
         total_cpu=4,
         free_cpu=4,
@@ -171,7 +147,7 @@ def test_priority_tiers_above_packing_without_replacing_it() -> None:
     )
     preferred_fuller = WorkerCapacity(
         worker_id="preferred-fuller",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         priority=10,
         total_cpu=4,
         free_cpu=3,
@@ -182,7 +158,7 @@ def test_priority_tiers_above_packing_without_replacing_it() -> None:
     )
     spare_fuller = WorkerCapacity(
         worker_id="spare-fuller",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         priority=0,
         total_cpu=4,
         free_cpu=2,
@@ -191,7 +167,7 @@ def test_priority_tiers_above_packing_without_replacing_it() -> None:
         total_gpu=0,
         free_gpu=0,
     )
-    request = SchedulingRequest(id="c-1", cpu=1, memory_mib=1024)
+    request = SchedulingRequest(placement=Placement.platform(), id="c-1", cpu=1, memory_mib=1024)
 
     # Packing alone would take the fuller spare. The ranking outranks it.
     assert select_worker_for_request(request, [spare_fuller, preferred]) is preferred
@@ -201,7 +177,7 @@ def test_priority_tiers_above_packing_without_replacing_it() -> None:
         is preferred_fuller
     )
     # A request the preferred tier cannot hold still falls through to the spare.
-    large = SchedulingRequest(id="c-2", cpu=4, memory_mib=1024)
+    large = SchedulingRequest(placement=Placement.platform(), id="c-2", cpu=4, memory_mib=1024)
     assert select_worker_for_request(large, [spare_fuller, preferred_fuller]) is None
 
 
@@ -214,7 +190,7 @@ def test_a_preference_falls_through_to_the_next_card_it_named() -> None:
     """
     preferred = WorkerCapacity(
         worker_id="h100",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         gpu_type="H100",
         total_cpu=8,
         free_cpu=8,
@@ -225,7 +201,7 @@ def test_a_preference_falls_through_to_the_next_card_it_named() -> None:
     )
     fallback = WorkerCapacity(
         worker_id="l4",
-        pool=MachinePool("lazycloud"),
+        placement=Placement.platform(),
         gpu_type="L4",
         total_cpu=8,
         free_cpu=8,
@@ -235,6 +211,7 @@ def test_a_preference_falls_through_to_the_next_card_it_named() -> None:
         free_gpu=1,
     )
     request = SchedulingRequest(
+        placement=Placement.platform(),
         id="c-1",
         cpu=1,
         memory_mib=1024,

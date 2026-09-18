@@ -74,7 +74,7 @@ from shared.transport_retry import call_with_transient_retry
 from typing_extensions import Never, Self
 
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import PoolInput, build_resource_metadata
+from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
 from lazycloud.control import ControlClientConfigMixin
@@ -237,7 +237,7 @@ class SandboxOptions(TypedDict, total=False):
     ports: Iterable[int] | None
     region: str | None
     availability_zone: str
-    pool: PoolInput
+    machine: MachineInput
     metadata: Mapping[str, Any] | None
     command: Iterable[str] | None
 
@@ -1562,7 +1562,7 @@ class Sandbox(ControlClientConfigMixin):
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
     availability_zone: str = ""
-    pool: PoolInput = None
+    machine: MachineInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = ""
     image_id: str | None = None
@@ -1599,7 +1599,7 @@ class Sandbox(ControlClientConfigMixin):
         ports: Iterable[int] | None = None,
         region: str | None = None,
         availability_zone: str = "",
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         metadata: Mapping[str, Any] | None = None,
         command: Iterable[str] | None = None,
         timeout_seconds: float = SANDBOX_CONTROL_TIMEOUT_SECONDS,
@@ -1625,7 +1625,7 @@ class Sandbox(ControlClientConfigMixin):
         self.allow_list = list(allow_list) if allow_list is not None else None
         self.docker_enabled = docker_enabled
         self.preemptible = preemptible
-        self.pool = pool
+        self.machine = machine
         self.region = region
         self.availability_zone = availability_zone
         self.metadata = dict(metadata or {})
@@ -1676,7 +1676,7 @@ class Sandbox(ControlClientConfigMixin):
                 block_network=self.block_network,
                 allow_list=self.allow_list,
                 docker_enabled=self.docker_enabled,
-                pool=self.pool,
+                machine=self.machine,
                 extra={
                     **self.metadata,
                     "sync_local_dir": self.sync_local_dir,

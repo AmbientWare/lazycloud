@@ -9,13 +9,15 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from foundation.process import run_process
 from identity.users import UserService
 from pydantic import JsonValue
+from shared.identity import WorkspaceRecord
+from shared.workspace_storage import WorkspaceStorageGrant
 from storage.service import CacheStorage, ObjectStorage
-from storage.workspace_storage_issuers import StoredWorkspaceStorageIssuer
 from storage_client.s3 import S3ObjectInfo, S3PresignedUpload
 
 from benchmarks.harness.models import (
@@ -43,17 +45,29 @@ def _services(root: Path) -> ApiServices:
                 application_name=DatabaseApplicationName.Test,
             )
         ),
-        workspace_storage_issuer=StoredWorkspaceStorageIssuer(),
+        workspace_storage_issuer=_BenchmarkStorageIssuer(),
         root=root,
         redis_client=redis_client,
         binary_redis_client=binary_redis_client,
         owns_redis_client=True,
         owns_binary_redis_client=True,
     )
-    control = ControlPlaneService(services.context)
+    control = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    )
     owner = UserService(services.context).create(display_name="benchmark-owner")
     control.set_workspace("default", owner_user_id=owner.id)
     return services
+
+
+class _BenchmarkStorageIssuer:
+    """Benchmarks never mount workspace storage, so no grant is ever asked for."""
+
+    def issue(self, workspace: WorkspaceRecord) -> WorkspaceStorageGrant:
+        raise RuntimeError(f"benchmark workspace {workspace.id} has no storage authority")
+
+    def retire(self, workspace: WorkspaceRecord) -> None:
+        del workspace
 
 
 class _BenchmarkObjectClient:

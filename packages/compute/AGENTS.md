@@ -29,7 +29,7 @@ coordination package.
   actually protects against before relying on it, and say so where it is used.
 
 Platform capacity spans providers behind the pooled-capacity protocol. A stable
-`provider_ref` resolves ownership, pool, allowed offers, and lifecycle
+`provider_ref` resolves ownership, placement, allowed offers, and lifecycle
 policy. The AWS connection pointer belongs only to capacity backed by an actual
 AWS connection. Platform bindings need no customer connection row. Account
 admission owns plan concurrency and billing limits.
@@ -119,11 +119,27 @@ state to the scheduler's worker record, which is what placement compares. The
 fingerprint is unique per account, so one physical host is one machine however many
 workspaces its owner holds.
 
-The machine's workspace is provenance, not tenancy. A unit has to live in a
-workspace and so does the durable machine row, so the account's first workspace
-anchors both; which one it is has no effect on who the machine serves. Transferring
-that workspace to someone else therefore does not transfer the hardware, which is
-the intended answer. The machine stays with the person who connected it.
+A joined machine has a name, unique within its owner's account, and an explicit
+list of the workspaces it serves. Both live on the machine row and its
+`machine_workspaces` links, written when the join command is minted, so the name
+is taken before the host ever connects and the database refuses a second live
+machine with it. Each machine is its own unit, placed on the machine's id; the
+placement is the only thing that selects it, and the name is a lookup key. The
+first listed workspace anchors the unit and the machine row, which is provenance,
+not tenancy: the served list is what says who may run there, and changing it
+moves nothing. A workspace with a stub still pinned to the machine cannot be
+dropped from that list.
+
+Placement is an identity, `shared.placement.Placement`: the platform, one
+connected account by connection id, or one joined machine by machine id. It has
+no policy. `resolve_placement` answers with the workspace's location, the
+platform or the connected account named by the workspace's `connection_id`,
+unless the workload names a machine, in which case it answers with that
+machine's placement or refuses with the name in the error. There is no default
+to change and no fallback in either direction; a workload that names a machine
+runs there or nowhere. A deployment pins the placement and the name it resolved
+to, and a stub carries the placement as its own column, so a workspace whose
+location later changes moves nothing already running.
 
 Tenancy is stamped once, at the authority that decides it, and reconciled
 afterwards rather than re-derived. `AgentWorkerPoolController` compares each live

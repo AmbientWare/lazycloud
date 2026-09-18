@@ -4,7 +4,7 @@ import shlex
 import signal
 
 
-def build_pool_join_command(
+def build_machine_join_command(
     command: str,
     *,
     agent_bin: str = "",

@@ -193,3 +193,12 @@ starving the cloud pool that account is paying for.
 
 It is a property of capacity rather than of work, so there is no per-request
 priority. Requests are served oldest first.
+
+A worker fits a request only when the two placements are equal. A placement is
+an identity: the platform, one connected account by connection id, or one joined
+machine by machine id. Platform work never lands on a connection or machine
+worker because the kinds differ, and one account's connection never serves
+another's because the id differs, so no owner comparison sits beside it. The
+placement is never chosen by the caller; the control plane resolves it once when
+a stub is created, from the workspace's location or the machine its config
+names, and the request carries it from there.

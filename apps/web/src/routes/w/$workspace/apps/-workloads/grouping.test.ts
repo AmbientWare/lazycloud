@@ -23,7 +23,7 @@ function deployment(overrides: Partial<Deployment>): Deployment {
       methods: [],
       command: [],
       ports: {},
-      pool: "lazycloud",
+      machine: "",
     },
     active: false,
     actions: { can_start: false, can_stop: false, can_delete: false, can_scale: false },

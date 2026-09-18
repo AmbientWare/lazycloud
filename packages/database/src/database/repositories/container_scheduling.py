@@ -28,7 +28,7 @@ def _request_statement(*, include_payload: bool = True) -> Select[tuple[Containe
         ContainerTable.scheduling_gpu,
         ContainerTable.scheduling_gpu_count,
         ContainerTable.scheduling_memory_mib,
-        ContainerTable.scheduling_pool_selector,
+        ContainerTable.scheduling_placement,
         ContainerTable.scheduling_preemptible,
         ContainerTable.scheduling_provider_runtime,
         ContainerTable.scheduling_region,

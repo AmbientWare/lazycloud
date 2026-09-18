@@ -6,6 +6,7 @@ from types import TracebackType
 from compute.capacity_recovery import CAPACITY_RECOVERY_WAKE_SCOPE
 from compute.state import RedisComputeStateRepository
 from control.custom_domains import CustomDomainService
+from control.placement import PlacementResolver
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from execution.containers.preemption import PreemptedContainerService
@@ -125,6 +126,7 @@ class SchedulerRuntime:
                 redis_client=app_services.redis_client,
                 container_requests=_container_requests(app_services),
                 image_build_container_settings=image_build_container_settings,
+                placement_resolver=app_services.compute_policies,
                 retention_settings=storage.retention,
                 volume_metering=app_services.volume_metering,
                 storage_access=app_services.storage_access,
@@ -164,6 +166,7 @@ class SchedulerRuntime:
         redis_client: RedisClient,
         container_requests: SchedulerContainerRequestService,
         image_build_container_settings: ImageBuildContainerSettings,
+        placement_resolver: PlacementResolver,
         retention_settings: RetentionSettings,
         volume_metering: SchedulerVolumeMeteringService,
         storage_access: SchedulerStorageAccessService | None,
@@ -223,6 +226,7 @@ class SchedulerRuntime:
                         dispatch_requests,
                         execution_services.containers,
                         image_build_container_settings,
+                        placement_resolver,
                     ),
                     execution_services.object_storage.object_client,
                     ImageBuildChanges(redis_client),

@@ -20,6 +20,7 @@ from shared.autoscaler_state import (
 from shared.errors import NotFoundError
 from shared.identity import WorkspaceStatus
 from shared.objects import ObjectWriteCommand
+from shared.placement import Placement
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 from sqlalchemy import delete
@@ -404,6 +405,7 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
             StubTable(
                 id=stub_id,
                 workspace_id=workspace_id,
+                placement=Placement.platform().key,
                 name="releasable",
                 type="function",
             )
@@ -497,6 +499,7 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
             StubTable(
                 id=stub_id,
                 workspace_id=workspace_id,
+                placement=Placement.platform().key,
                 name="finished",
                 type="function",
             )
@@ -569,6 +572,7 @@ def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
             StubTable(
                 id=stub_id,
                 workspace_id=workspace_id,
+                placement=Placement.platform().key,
                 name="claimable",
                 type="function",
             )

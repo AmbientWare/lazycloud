@@ -18,12 +18,8 @@ def test_identity_records_round_trip_nested_json_without_default_loss() -> None:
         storage=WorkspaceStorageConfig(
             backend="s3",
             bucket="workspace-data",
-            config={
-                "endpoint_url": "https://storage.example.com",
-                "force_path_style": False,
-                "retry_delays": [0, 1.5],
-                "headers": {"x-workspace": "production"},
-            },
+            endpoint_url="https://storage.example.com",
+            region="us-east-1",
         ),
         metadata={"tier": 0, "features": ["private-compute"], "deleted": None},
     )
@@ -37,10 +33,10 @@ def test_identity_records_round_trip_nested_json_without_default_loss() -> None:
         "features": ["private-compute"],
         "deleted": None,
     }
-    assert payload["storage"]["config"]["force_path_style"] is False
+    assert payload["storage"]["region"] == "us-east-1"
 
 
-def test_identity_json_boundaries_reject_non_json_metadata_and_storage_config() -> None:
+def test_identity_json_boundaries_reject_non_json_metadata() -> None:
     invalid_value = datetime(2026, 7, 19, tzinfo=timezone.utc)
 
     with pytest.raises(ValidationError):
@@ -51,8 +47,6 @@ def test_identity_json_boundaries_reject_non_json_metadata_and_storage_config() 
                 "metadata": {"seen": invalid_value},
             }
         )
-    with pytest.raises(ValidationError):
-        WorkspaceStorageConfig.model_validate({"config": {"seen": invalid_value}})
 
 
 def test_concurrency_limits_require_positive_capacity_and_nonnegative_usage() -> None:

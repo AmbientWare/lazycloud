@@ -4,21 +4,25 @@ import hashlib
 import sys
 from contextlib import ExitStack
 from dataclasses import replace
+from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
+from database.repositories.orchestration import MachineRepository
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
+from shared.compute_fleet import Machine
 from shared.compute_policy import (
-    MachinePool,
     UnitName,
 )
 from shared.identity import TokenKind
+from shared.placement import Placement
 from storage.service import ObjectStorage
 from tests.redis_fakes import FakeRedis
 from tests.workspaces import owned_workspace
@@ -134,13 +138,21 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
     with ExitStack() as client_stack:
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         admin_token = _offline_admin_token(isolated_services, "compute-projection")
-        workspace = owned_workspace(ControlPlaneService(isolated_services.context), "compute-team")
+        workspace = owned_workspace(
+            ControlPlaneService(
+                isolated_services.context,
+                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+            ),
+            "compute-team",
+        )
 
         isolated_services.compute.create_unit(UnitName("default-pool"))
         isolated_services.compute.create_unit(UnitName("team-pool"), workspace=workspace.id)
-        isolated_services.compute.create_machine(
-            pool=MachinePool("team-pool"), workspace=workspace.id
-        )
+        with isolated_services.context.database.session() as session:
+            MachineRepository(session).upsert(
+                Machine(id=str(uuid4()), placement=Placement.machine("team-pool")),
+                workspace_id=workspace.id,
+            )
 
         pools = client.get(
             f"/api/v1/units?workspace={workspace.id}",
@@ -157,9 +169,9 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
         ] == ["team-pool"]
         assert machines.status_code == 200
         assert [
-            _required_string(machine, "pool")
+            _required_string(machine, "provider")
             for machine in _response_object_list(machines, "machines")
-        ] == ["team-pool"]
+        ] == ["local"]
 
         workspace_token, _record = AuthService(isolated_services.context).create_token(
             "workspace-user",
@@ -185,7 +197,13 @@ def test_object_upload_authorizes_before_creating_or_completing_a_claim(
     )
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    other = owned_workspace(ControlPlaneService(isolated_services.context), "other-upload-owner")
+    other = owned_workspace(
+        ControlPlaneService(
+            isolated_services.context,
+            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+        ),
+        "other-upload-owner",
+    )
     request: dict[str, JsonValue] = {
         "object_metadata": {"name": "source.zip", "size": 3},
         "hash": hashlib.sha256(b"abc").hexdigest(),
@@ -264,7 +282,9 @@ def test_gateway_task_routes_do_not_cross_workspace_boundaries(
     api_runtime: tuple[ApiServices, TestClient],
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(services.context)
+    control = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    )
     workspace_a = owned_workspace(control, "workspace-a")
     workspace_b = owned_workspace(control, "workspace-b")
     token_a, _ = AuthService(services.context).create_token(

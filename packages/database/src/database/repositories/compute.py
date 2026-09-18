@@ -13,7 +13,6 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    WorkspaceComputePolicyTable,
 )
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
 from pydantic import Field
@@ -38,13 +37,12 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
     ComputeUnitVisibility,
-    MachinePool,
-    WorkspaceComputePolicy,
 )
 from shared.compute_reconciliation import ComputeReconciliationKind
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
+from shared.placement import Placement
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import to_utc, to_utc_or_none, utc_now
 from sqlalchemy import (
@@ -62,7 +60,6 @@ from sqlalchemy import (
     tuple_,
     update,
 )
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -201,8 +198,8 @@ class ComputeJoinCredentialRecord(ContractModel):
     A machine joining with it is bought by that unit, which is what keeps an
     auto-scaling drain from selecting a machine some other unit owns.
     """
-    pool: MachinePool
-    """Pool the joining machine lands in, not the issuing unit's name."""
+    placement: Placement
+    """Where the joining machine lands, copied from the issuing unit."""
     machine_id: str = ""
     created_by_token_id: str | None = None
     status: ComputeCredentialStatus = ComputeCredentialStatus.Active
@@ -244,7 +241,7 @@ class ComputeMachineEnrollmentRecord(ContractModel):
     """Account this machine belongs to, stamped from the credential that enrolled it."""
     workspace_id: str
     capacity_owner_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None
@@ -285,7 +282,7 @@ class ComputeMachineCapacityInterruptionRecord:
     enrollment_id: str
     credential_generation: int
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     state: AgentCapacityState
     reason: str
@@ -297,7 +294,7 @@ class ComputeMachineEnrollmentCreate(ContractModel):
     user_id: str | None
     workspace_id: str
     capacity_owner_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     machine_fingerprint_hash: str
     join_credential_id: str | None = None
@@ -358,7 +355,7 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "id": row.id,
             "workspace_id": row.workspace_id,
             "name": row.name,
-            "pool": row.pool,
+            "placement": Placement.parse(row.placement),
             "provider": row.provider,
             "selector": row.selector,
             "status": row.status,
@@ -398,7 +395,6 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
                 launch_attempt_baseline=row.launch_attempt_baseline,
             ),
             "scaling_enabled": row.scaling_enabled,
-            "default_eligible": row.default_eligible,
             "priority": row.priority,
             "min_free_cpu_millicores": row.min_free_cpu_millicores,
             "min_free_memory_mib": row.min_free_memory_mib,
@@ -502,7 +498,7 @@ class ComputeUnitRepository:
             or current.capacity_owner_kind is not record.capacity_owner_kind
             or current.capacity_owner_source is not record.capacity_owner_source
         ):
-            raise ConflictError(f"compute pool capacity owner is immutable: {record.id}")
+            raise ConflictError(f"compute unit capacity owner is immutable: {record.id}")
         row = self.session.get(ComputeUnitTable, record.id)
         if row is None:
             row = ComputeUnitTable(id=record.id, created_at=record.created_at)
@@ -537,9 +533,8 @@ class ComputeUnitRepository:
         """Resolve a unit by name, which only a create path may do.
 
         A name is this table's creation-time natural key and nothing else.
-        Runtime callers address a unit by `id`/`capacity_owner_id`, because a
-        pool label and a unit name are both free-form strings and keying on the
-        name lets one be passed where the other was meant.
+        Runtime callers address a unit by `id`/`capacity_owner_id`; a name is a
+        free-form string and keying on it lets the wrong one be passed.
         """
         statement = select(ComputeUnitTable).where(
             ComputeUnitTable.workspace_id == workspace_id,
@@ -973,7 +968,7 @@ class ComputeUnitRepository:
         row.region = record.region
         row.offer_id = record.offer_id
         row.capability_key = record.capability_key
-        row.pool = record.pool
+        row.placement = record.placement.key
         row.provider = record.provider
         row.desired_machines = record.desired_machines
         row.initial_machines = record.initial_machines
@@ -1001,7 +996,6 @@ class ComputeUnitRepository:
         row.replacement_machine_id = record.replacement_machine_id
         row.replacement_template_version = record.replacement_template_version
         row.scaling_enabled = record.scaling_enabled
-        row.default_eligible = record.default_eligible
         row.priority = record.priority
         row.min_free_cpu_millicores = record.min_free_cpu_millicores
         row.min_free_memory_mib = record.min_free_memory_mib
@@ -1019,92 +1013,6 @@ class ComputeUnitRepository:
         row.root_volume_gib = record.root_volume_gib
         row.fallback = record.fallback.value
         self.session.flush()
-
-
-def _workspace_compute_policy_record(row: WorkspaceComputePolicyTable) -> WorkspaceComputePolicy:
-    return WorkspaceComputePolicy.model_validate(
-        {
-            "id": row.id,
-            "workspace_id": row.workspace_id,
-            "revision": row.revision,
-            "default_pool": row.default_pool,
-            "created_at": to_utc(row.created_at),
-            "updated_at": to_utc(row.updated_at),
-        }
-    )
-
-
-@dataclass(slots=True)
-class WorkspaceComputePolicyRepository:
-    session: Session
-
-    def create(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        policy = WorkspaceComputePolicy.model_validate(dict(policy))
-        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
-        row = WorkspaceComputePolicyTable(
-            id=policy.id,
-            workspace_id=policy.workspace_id,
-            revision=policy.revision,
-            default_pool=policy.default_pool,
-            created_at=policy.created_at,
-            updated_at=policy.updated_at,
-        )
-        self.session.add(row)
-        self.session.flush()
-        return _workspace_compute_policy_record(row)
-
-    def ensure_default(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        policy = WorkspaceComputePolicy.model_validate(dict(policy))
-        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
-        self.session.execute(
-            postgresql_insert(WorkspaceComputePolicyTable)
-            .values(
-                id=policy.id,
-                workspace_id=policy.workspace_id,
-                revision=policy.revision,
-                default_pool=policy.default_pool,
-                created_at=policy.created_at,
-                updated_at=policy.updated_at,
-            )
-            .on_conflict_do_nothing(constraint="uq_workspace_compute_policies_workspace")
-        )
-        current = self.get_for_workspace(policy.workspace_id)
-        if current is None:
-            raise RuntimeError("workspace compute policy insert did not persist")
-        return current
-
-    def get_for_workspace(
-        self,
-        workspace_id: str,
-        *,
-        for_update: bool = False,
-    ) -> WorkspaceComputePolicy | None:
-        statement = select(WorkspaceComputePolicyTable).where(
-            WorkspaceComputePolicyTable.workspace_id == workspace_id
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        row = self.session.scalars(statement).first()
-        return _workspace_compute_policy_record(row) if row is not None else None
-
-    def save(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        policy = WorkspaceComputePolicy.model_validate(dict(policy))
-        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
-        row = self.session.scalar(
-            select(WorkspaceComputePolicyTable)
-            .where(
-                WorkspaceComputePolicyTable.id == policy.id,
-                WorkspaceComputePolicyTable.workspace_id == policy.workspace_id,
-            )
-            .with_for_update()
-        )
-        if row is None:
-            raise LookupError("workspace compute policy does not exist")
-        row.revision = policy.revision
-        row.default_pool = policy.default_pool
-        row.updated_at = policy.updated_at
-        self.session.flush()
-        return _workspace_compute_policy_record(row)
 
 
 def _capacity_operation_record(
@@ -1645,7 +1553,7 @@ def _join_credential_record(row: ComputeJoinCredentialTable) -> ComputeJoinCrede
             "user_id": row.user_id,
             "workspace_id": row.workspace_id,
             "capacity_owner_id": row.capacity_owner_id,
-            "pool": row.pool,
+            "placement": Placement.parse(row.placement),
             "machine_id": row.machine_id,
             "created_by_token_id": row.created_by_token_id,
             "status": row.status,
@@ -1666,7 +1574,7 @@ def _write_join_credential_row(
     row.user_id = record.user_id
     row.workspace_id = record.workspace_id
     row.capacity_owner_id = record.capacity_owner_id
-    row.pool = record.pool
+    row.placement = record.placement.key
     row.machine_id = record.machine_id
     row.created_by_token_id = record.created_by_token_id
     row.status = record.status.value
@@ -1689,7 +1597,7 @@ class ComputeJoinCredentialRepository:
         user_id: str | None,
         workspace_id: str,
         capacity_owner_id: str,
-        pool: MachinePool,
+        placement: Placement,
         machine_id: str = "",
         created_by_token_id: str | None,
         max_uses: int,
@@ -1703,7 +1611,7 @@ class ComputeJoinCredentialRepository:
             user_id=user_id,
             workspace_id=workspace_id,
             capacity_owner_id=capacity_owner_id,
-            pool=pool,
+            placement=placement,
             machine_id=machine_id,
             created_by_token_id=created_by_token_id,
             max_uses=max(max_uses, 1),
@@ -1849,7 +1757,7 @@ def _machine_enrollment_record(
             "user_id": row.user_id,
             "workspace_id": row.workspace_id,
             "capacity_owner_id": row.capacity_owner_id,
-            "pool": row.pool,
+            "placement": Placement.parse(row.placement),
             "machine_id": row.machine_id,
             "machine_fingerprint_hash": row.machine_fingerprint_hash,
             "join_credential_id": row.join_credential_id,
@@ -1893,7 +1801,7 @@ def _write_machine_enrollment_row(
     row.user_id = record.user_id
     row.workspace_id = record.workspace_id
     row.capacity_owner_id = record.capacity_owner_id
-    row.pool = record.pool
+    row.placement = record.placement.key
     row.machine_id = record.machine_id
     row.machine_fingerprint_hash = record.machine_fingerprint_hash
     row.join_credential_id = record.join_credential_id
@@ -2030,7 +1938,7 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.id,
                 ComputeMachineEnrollmentTable.credential_generation,
                 ComputeMachineEnrollmentTable.workspace_id,
-                ComputeMachineEnrollmentTable.pool,
+                ComputeMachineEnrollmentTable.placement,
                 ComputeMachineEnrollmentTable.machine_id,
                 ComputeMachineEnrollmentTable.capacity_state,
                 ComputeMachineEnrollmentTable.capacity_reason,
@@ -2059,7 +1967,7 @@ class ComputeMachineEnrollmentRepository:
                 enrollment_id=enrollment_id,
                 credential_generation=credential_generation,
                 workspace_id=workspace_id,
-                pool=MachinePool(pool),
+                placement=Placement.parse(placement),
                 machine_id=machine_id,
                 state=AgentCapacityState(state),
                 reason=reason,
@@ -2070,7 +1978,7 @@ class ComputeMachineEnrollmentRepository:
                 enrollment_id,
                 credential_generation,
                 workspace_id,
-                pool,
+                placement,
                 machine_id,
                 state,
                 reason,
@@ -2188,15 +2096,15 @@ class ComputeMachineEnrollmentRepository:
         workspace_id: str,
         machine_id: str,
         *,
-        pool: MachinePool = MachinePool(""),
+        placement: Placement | None = None,
         for_update: bool = False,
     ) -> ComputeMachineEnrollmentRecord | None:
         statement = select(ComputeMachineEnrollmentTable).where(
             ComputeMachineEnrollmentTable.workspace_id == workspace_id,
             ComputeMachineEnrollmentTable.machine_id == machine_id,
         )
-        if pool:
-            statement = statement.where(ComputeMachineEnrollmentTable.pool == pool)
+        if placement is not None:
+            statement = statement.where(ComputeMachineEnrollmentTable.placement == placement.key)
         return self._one(statement, for_update=for_update)
 
     def list_for_unit(

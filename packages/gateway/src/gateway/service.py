@@ -36,6 +36,7 @@ from compute.capacity_errors import (
     CapacityReservationLockContendedError,
 )
 from compute.capacity_recovery import record_capacity_risk
+from compute.policy import WorkspaceComputePolicyService
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
 from compute.service import ComputeService
@@ -71,6 +72,7 @@ from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
 from coordination.wake_signal import WakeSignalPublisher
 from database.context import ServiceContext
+from database.repositories.apps import StubRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
@@ -117,6 +119,7 @@ from scheduler.workers import (
 )
 from shared.app_identity import AGENT_NAME
 from shared.app_slug import app_slug_or_default, validate_app_slug
+from shared.capacity import UnitName
 from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
@@ -127,7 +130,6 @@ from shared.compute_enrollment import (
 from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeUnitRecord,
-    MachinePool,
 )
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
@@ -150,7 +152,7 @@ from shared.http.client_manifests import (
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
-    MachineJoinTokenResponse,
+    MachineResponse,
     UnitJoinCommandResponse,
     UnitMachineListResponse,
     UnitMachineResponse,
@@ -197,6 +199,7 @@ from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
 from shared.logs import LogEntry
 from shared.objects import ObjectRecord
+from shared.placement import Placement, PlacementKind
 from shared.realtime.streams import LogStreamQuery
 from shared.releases import ActiveRelease
 from shared.routing import AgentBackendRoute
@@ -214,6 +217,7 @@ from shared.source_cache_cleanup import (
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit, usage_record_id
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
 from worker.container_client.scheduler import SchedulerContainerClientFactory
@@ -280,6 +284,9 @@ class GatewayServices(Protocol):
     def compute(self) -> ComputeService: ...
 
     @property
+    def workspace_compute_policy_service(self) -> WorkspaceComputePolicyService: ...
+
+    @property
     def containers(self) -> ContainerService: ...
 
     @property
@@ -338,9 +345,6 @@ def _request_with_workload_defaults(
         updates["retries"] = resolve_retries(kind.value, None)
     return request.model_copy(update=updates) if updates else request
 
-
-SELF_HOSTED_FLEET_POOL_NAME = "self-hosted"
-"""Server-owned name of each workspace's single implicit self-hosted machine fleet."""
 
 MACHINE_STATUS_FOR_READINESS = {
     MachineReadinessPhase.Ready: ResourceStatus.Running,
@@ -975,7 +979,7 @@ class GatewayControlService:
                     raise ConflictError(f"compute pool {name!r} has active capacity reservations")
                 if self._unit_has_active_containers(
                     workspace_id=workspace_id,
-                    pool=owner.pool,
+                    placement=owner.placement,
                     capacity_owner_id=owner.capacity_owner_id,
                 ):
                     raise ConflictError(
@@ -1027,7 +1031,7 @@ class GatewayControlService:
         self,
         *,
         workspace_id: str,
-        pool: MachinePool,
+        placement: Placement,
         capacity_owner_id: str,
     ) -> bool:
         owner_worker_ids = {
@@ -1062,7 +1066,7 @@ class GatewayControlService:
                     container.stub_id,
                     workspace=workspace_id,
                 )
-                if stub.config.runtime.pool_selector == pool:
+                if stub.placement == placement:
                     return True
         return False
 
@@ -1101,14 +1105,14 @@ class GatewayControlService:
         user_id: str,
         owner_token_id: str,
     ) -> MachineJoinCommandResponse:
-        """Mint the join command for the account's fleet in the pool it names.
+        """Mint the join command for one named machine of this account.
 
-        The self-hosted fleet is created on first join and owned server-side.
-        A caller may name any group, including one a connected account also
-        feeds — that is how a fleet mixes joined and provisioned machines.
-        Requested GPU types extend the fleet's accepted set.
+        The machine row exists from this moment, in `Created` status, so the
+        name is taken the instant the command is issued and the database is
+        what refuses a second machine with it. Its unit is minted alongside,
+        one per machine, labelled by the name workloads pin to.
         """
-        plan = self._mint_account_join_credential(request, user_id=user_id, token_id=owner_token_id)
+        plan = self._mint_machine_join_credential(request, user_id=user_id, token_id=owner_token_id)
         return MachineJoinCommandResponse(
             command=agent_install_command(
                 self.gateway_endpoint.http_url,
@@ -1119,101 +1123,196 @@ class GatewayControlService:
             expires_at=plan.expires_at,
         )
 
-    def machine_join_token(
-        self,
-        request: MachineJoinCommandRequest,
-        *,
-        user_id: str,
-        owner_token_id: str,
-    ) -> MachineJoinTokenResponse:
-        """Mint the bare join credential for the account's fleet.
-
-        Same fleet resolution and same mint as `machine_join_command`; only the
-        rendering differs.
-        """
-        plan = self._mint_account_join_credential(request, user_id=user_id, token_id=owner_token_id)
-        return MachineJoinTokenResponse(token=plan.token, expires_at=plan.expires_at)
-
-    def _mint_account_join_credential(
+    def _mint_machine_join_credential(
         self,
         request: MachineJoinCommandRequest,
         *,
         user_id: str,
         token_id: str,
     ) -> JoinTokenCreationPlan:
-        workspace_id = self.account_fleet_workspace_id(user_id)
-        try:
-            fleet = self._resolve_joined_fleet(
-                workspace_id,
-                gpu=list(request.gpu),
-                pool=MachinePool(request.pool.strip()),
+        name = request.name
+        workspace_ids = self._owned_workspace_ids(user_id, request.workspaces)
+        anchor_workspace_id = workspace_ids[0]
+        with self.services.context.database.session() as session:
+            machines = MachineRepository(session)
+            existing = machines.get_by_owner_name(user_id, name)
+            existing_workspace_id = (
+                machines.workspace_id(existing.id) if existing is not None else None
             )
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
+            if existing is not None and existing_workspace_id is not None:
+                enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                    existing_workspace_id, existing.id
+                )
+                if (
+                    enrollment is not None
+                    and enrollment.status is ComputeMachineEnrollmentStatus.Active
+                ):
+                    raise ConflictError(
+                        f"machine {name!r} is already joined; run 'lazycloud-agent leave' "
+                        "on it before joining a machine under that name"
+                    )
+        now = utc_now()
+        reuse = existing is not None and existing_workspace_id == anchor_workspace_id
+        machine_id = existing.id if existing is not None and reuse else str(uuid4())
+        placement = Placement.machine(machine_id)
+        # The machine row exists before its unit: the unit is derived from the
+        # machine's identity, and a workload names the machine, never the unit.
+        unit_id, unit_name = joined_unit_identity(
+            workspace_id=anchor_workspace_id, placement=placement, provider="agent"
+        )
+        with self.services.context.database.session() as session:
+            machines = MachineRepository(session)
+            if existing is not None and not reuse:
+                # A row whose anchor workspace was deleted has no unit left; it only
+                # holds the name, and gives it up here.
+                machines.upsert(
+                    existing.model_copy(
+                        update={"status": ResourceStatus.Deleted, "updated_at": now}
+                    ),
+                    workspace_id=existing_workspace_id,
+                )
+            try:
+                machine = machines.upsert(
+                    Machine(
+                        id=machine_id,
+                        name=name,
+                        workspace_ids=tuple(workspace_ids),
+                        placement=placement,
+                        capacity_owner_id=unit_id,
+                        provider="agent",
+                        status=ResourceStatus.Created,
+                        labels={"source": "attached"},
+                        created_at=existing.created_at if existing is not None and reuse else now,
+                        updated_at=now,
+                    ),
+                    workspace_id=anchor_workspace_id,
+                    owner_user_id=user_id,
+                )
+            except IntegrityError as exc:
+                # Two joins under one name raced past the lookup; the index settles it.
+                raise ConflictError(f"machine {name!r} is already joined") from exc
+        unit = self._resolve_machine_unit(
+            anchor_workspace_id,
+            unit_id=unit_id,
+            unit_name=unit_name,
+            placement=placement,
+            gpu=list(request.gpu),
+        )
         return self.unit_state_coordinator.create_unit_join_token(
-            fleet,
-            workspace_id=workspace_id,
+            unit,
+            workspace_id=anchor_workspace_id,
             owner_token_id=token_id,
             ttl=request.ttl,
+            machine_id=machine.id,
         )
 
-    def account_fleet_workspace_id(self, user_id: str) -> str:
-        """The workspace that anchors an account's joined machines.
+    def _owned_workspace_ids(self, user_id: str, workspace_names: Sequence[str]) -> list[str]:
+        """Resolve workspace names to ids, refusing any the account does not own.
 
-        A machine serves every workspace its account owns, but the unit that buys
-        it and the durable machine row still live in one workspace, so the account's
-        first workspace anchors them. Deriving it from the account rather than from
-        wherever the caller happens to be is what keeps joining twice from producing
-        two fleets for one account.
+        Named rather than found: a workspace another account shares with this
+        one is not one whose workloads may be sent to this account's hardware.
         """
+        names = list(dict.fromkeys(name.strip() for name in workspace_names))
+        if not names or any(not name for name in names):
+            raise InvalidInputError("a machine must serve at least one named workspace")
         with self.services.context.database.session() as session:
-            owned = WorkspaceMemberRepository(session).owned_workspace_ids(user_id)
-        if not owned:
-            raise ConflictError("this account owns no workspace to join a machine into")
-        return owned[0]
+            owned = set(WorkspaceMemberRepository(session).owned_workspace_ids(user_id))
+            workspaces = WorkspaceRepository(session)
+            resolved: list[str] = []
+            for name in names:
+                workspace = workspaces.by_name(name)
+                if workspace is None or workspace.id not in owned:
+                    raise InvalidInputError(f"workspace {name!r} is not owned by this account")
+                resolved.append(workspace.id)
+        return resolved
 
-    def _resolve_joined_fleet(
+    def _resolve_machine_unit(
         self,
         workspace_id: str,
         *,
+        unit_id: str,
+        unit_name: UnitName,
+        placement: Placement,
         gpu: list[str],
-        pool: MachinePool = MachinePool(""),
     ) -> ComputeUnitRecord:
-        """Find or create the unit that owns joined machines for one pool.
+        """Find or create the unit that owns one joined machine.
 
-        One unit per group. A workspace joining hosts into a pool a connected
-        account also feeds needs its own capacity owner there, or that account's
-        drain would treat the joined hosts as its own.
-
-        Nothing declares this unit; it exists because a host asked to join, and
-        the identity is derived so asking twice resolves the same row.
+        One unit per machine, placed on that machine. Nothing declares this
+        unit; it exists because a machine asked to join, and the identity is
+        derived so asking twice resolves the same row.
         """
-        group = pool or MachinePool(SELF_HOSTED_FLEET_POOL_NAME)
-        _, unit_name = joined_unit_identity(
-            workspace_id=workspace_id,
-            pool=group,
-            provider="agent",
-        )
         try:
             current = self.unit_state_coordinator.unit_by_name(
                 unit_name,
                 workspace_id=workspace_id,
             )
         except NotFoundError:
-            return self.unit_state_coordinator.create_or_update_pool(
+            return self.unit_state_coordinator.create_or_update_unit(
                 PoolConfig(name=unit_name, providers=["agent"], gpu=gpu),
                 workspace_id=workspace_id,
-                pool=group,
+                placement=placement,
+                capacity_owner_id=unit_id,
             )
         config = pool_config_from_unit(current)
         merged = [*config.gpu, *[item for item in gpu if item not in config.gpu]]
         if merged == config.gpu:
             return current
-        return self.unit_state_coordinator.create_or_update_pool(
+        return self.unit_state_coordinator.create_or_update_unit(
             config.model_copy(update={"providers": ["agent"], "gpu": merged}),
             workspace_id=workspace_id,
-            pool=current.pool,
+            placement=current.placement,
         )
+
+    def machine_responses(self, *, workspace_id: str) -> list[MachineResponse]:
+        machines = self.services.compute.list_machines(workspace=workspace_id)
+        names = self._workspace_names(machines)
+        return [_machine_response(machine, names) for machine in machines]
+
+    def update_machine_workspaces(
+        self,
+        machine: str,
+        *,
+        user_id: str,
+        workspace_names: Sequence[str],
+    ) -> MachineResponse:
+        """Replace the workspaces one of the account's joined machines serves."""
+        workspace_ids = self._owned_workspace_ids(user_id, workspace_names)
+        with self.services.context.database.session() as session:
+            machines = MachineRepository(session)
+            current = machines.get_by_owner_name(user_id, machine) or next(
+                (item for item in machines.list_named_for_owner(user_id) if item.id == machine),
+                None,
+            )
+            if current is None:
+                raise NotFoundError(f"machine not found: {machine}")
+            anchor_workspace_id = machines.workspace_id(current.id)
+            if anchor_workspace_id is None:
+                raise NotFoundError(f"machine not found: {machine}")
+            # A workload already pinned to this machine keeps scheduling onto it, so
+            # a workspace cannot be dropped from the list while one of its workloads
+            # still names the machine; the owner removes those first.
+            removed = set(current.workspace_ids) - set(workspace_ids)
+            pinned = StubRepository(session).workspaces_pinned_to(current.placement, removed)
+            if pinned:
+                names = WorkspaceRepository(session).names_for_ids(pinned)
+                raise ConflictError(
+                    f"workloads in {', '.join(sorted(names.values()))} still name machine "
+                    f"{current.name!r}; remove them before dropping those workspaces"
+                )
+            updated = machines.upsert(
+                current.model_copy(
+                    update={"workspace_ids": tuple(workspace_ids), "updated_at": utc_now()}
+                ),
+                workspace_id=anchor_workspace_id,
+            )
+        return _machine_response(updated, self._workspace_names([updated]))
+
+    def _workspace_names(self, machines: Sequence[Machine]) -> dict[str, str]:
+        ids = {workspace_id for machine in machines for workspace_id in machine.workspace_ids}
+        if not ids:
+            return {}
+        with self.services.context.database.session() as session:
+            return WorkspaceRepository(session).names_for_ids(ids)
 
     def create_unit_join_token(
         self,
@@ -1318,19 +1417,13 @@ class GatewayControlService:
 
     def machine_views(self, workspace_id: str) -> list[UnitMachineResponse]:
         machines = self.services.compute.list_machines(workspace=workspace_id)
+        workspace_names = self._workspace_names(machines)
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session)
             enrollment_by_machine = {
                 enrollment.machine_id: enrollment
                 for machine in machines
-                if (
-                    enrollment := enrollments.by_machine(
-                        workspace_id,
-                        machine.id,
-                        pool=machine.pool,
-                    )
-                )
-                is not None
+                if (enrollment := enrollments.by_machine(workspace_id, machine.id)) is not None
                 and enrollment.status is ComputeMachineEnrollmentStatus.Active
             }
         views: list[UnitMachineResponse] = []
@@ -1340,6 +1433,11 @@ class GatewayControlService:
                 machine_view(
                     machine,
                     _agent_state_from_enrollment(enrollment),
+                    workspace_names=[
+                        workspace_names[workspace_id]
+                        for workspace_id in machine.workspace_ids
+                        if workspace_id in workspace_names
+                    ],
                     tunnel_connected=(
                         enrollment is not None
                         and (
@@ -1377,25 +1475,18 @@ class GatewayControlService:
                 if enrollments.list_for_unit(workspace_id, unit.capacity_owner_id)
             }
         if enrolled_pool_names:
-            pools = ", ".join(sorted(enrolled_pool_names))
+            units = ", ".join(sorted(enrolled_pool_names))
             raise ConflictError(
-                "workspace still has enrolled self-hosted machines in pools "
-                f"{pools}; run 'lazycloud-agent leave' on each owning host before deletion"
+                f"workspace still has joined machines in units {units}; "
+                "run 'lazycloud-agent leave' on each host before deletion"
             )
 
-    def delete_machine(
-        self,
-        machine_id: str,
-        *,
-        workspace_id: str,
-        pool: MachinePool = MachinePool(""),
-    ) -> None:
+    def delete_machine(self, machine_id: str, *, workspace_id: str) -> None:
         try:
             with self.services.context.database.session() as session:
                 enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                     workspace_id,
                     machine_id,
-                    pool=pool,
                 )
             if enrollment is not None:
                 unit = self.unit_state_coordinator.unit_by_capacity_owner(
@@ -1404,17 +1495,10 @@ class GatewayControlService:
                 )
                 if unit.provider == "agent":
                     raise ConflictError(
-                        "enrolled self-hosted machines must be removed with "
-                        "'lazycloud-agent leave' on the owning host"
+                        "joined machines must be removed with 'lazycloud-agent leave' on the host"
                     )
                 self._delete_enrolled_machine(enrollment)
             else:
-                machine = self.services.compute.list_machines(workspace=workspace_id)
-                if pool and not any(
-                    item.id == machine_id and item.pool == pool for item in machine
-                ):
-                    msg = f"machine not found in pool: {machine_id}"
-                    raise KeyError(msg)
                 self.services.compute.delete_machine(machine_id, workspace=workspace_id)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
@@ -1434,7 +1518,6 @@ class GatewayControlService:
             current = enrollments.by_machine(
                 enrollment.workspace_id,
                 enrollment.machine_id,
-                pool=enrollment.pool,
                 for_update=True,
             )
             if current is None:
@@ -1496,8 +1579,8 @@ class GatewayControlService:
             )
         if require_host_decommission and enrollment_records:
             raise ConflictError(
-                f"compute pool {unit.name!r} still has enrolled self-hosted machines; "
-                "run 'lazycloud-agent leave' on each owning host before deletion"
+                f"unit {unit.name!r} still has joined machines; "
+                "run 'lazycloud-agent leave' on each host before deletion"
             )
         revoked_enrollments = [
             self._revoke_enrollment_authority(
@@ -1555,7 +1638,6 @@ class GatewayControlService:
             current = enrollments.by_machine(
                 enrollment.workspace_id,
                 enrollment.machine_id,
-                pool=enrollment.pool,
                 for_update=True,
             )
             if current is None:
@@ -1653,7 +1735,7 @@ class GatewayControlService:
         bootstrap_pool = private_unit_for_enrollment(pool)
         response = JoinAgentResponse(
             workspace_id=state.workspace_id,
-            pool=state.pool,
+            placement=state.placement,
             machine_id=state.machine_id,
             agent_token=raw_token,
             credential_id=state.credential_id,
@@ -1831,10 +1913,16 @@ class GatewayControlService:
                 agent_state.machine_id,
                 workspace_id=agent_state.workspace_id,
             )
+            # The row a join command created already carries the name and the
+            # workspaces it serves; the join fills in the hardware.
             machine_repository.upsert(
                 Machine(
                     id=agent_state.machine_id,
-                    pool=agent_state.pool,
+                    name=durable_machine.name if durable_machine is not None else "",
+                    workspace_ids=(
+                        durable_machine.workspace_ids if durable_machine is not None else ()
+                    ),
+                    placement=agent_state.placement,
                     capacity_owner_id=agent_state.capacity_owner_id,
                     provider="agent",
                     status=(
@@ -1869,7 +1957,7 @@ class GatewayControlService:
                 Worker(
                     id=worker_id,
                     machine_id=agent_state.machine_id,
-                    pool=agent_state.pool,
+                    placement=agent_state.placement,
                     status=(
                         durable_worker.status
                         if durable_worker is not None
@@ -1923,7 +2011,7 @@ class GatewayControlService:
             )
             response = JoinAgentResponse(
                 workspace_id=agent_state.workspace_id,
-                pool=agent_state.pool,
+                placement=agent_state.placement,
                 machine_id=plan.machine_id,
                 agent_token=plan.agent_token,
                 credential_id=agent_state.credential_id,
@@ -1977,8 +2065,8 @@ class GatewayControlService:
                 "agent.join",
                 resource_type="agent",
                 resource_id=state.machine_id,
-                message=f"agent joined pool {state.pool}",
-                data={"pool": state.pool, "machine_id": state.machine_id},
+                message=f"agent joined {state.placement}",
+                data={"placement": state.placement.key, "machine_id": state.machine_id},
                 workspace_id=state.workspace_id,
             )
 
@@ -1990,7 +2078,7 @@ class GatewayControlService:
             enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                 state.workspace_id,
                 state.machine_id,
-                pool=state.pool,
+                placement=state.placement,
             )
         if enrollment is None or enrollment.credential_hash != state.token_hash:
             raise InvalidInputError("agent credential is no longer current")
@@ -2319,7 +2407,7 @@ class GatewayControlService:
                 resource_id=state.machine_id,
                 message=f"agent capacity changed to {state.capacity_state.value}",
                 data={
-                    "pool": state.pool,
+                    "placement": state.placement.key,
                     "machine_id": state.machine_id,
                     "state": state.capacity_state.value,
                     "reason": state.capacity_reason,
@@ -2503,7 +2591,7 @@ class GatewayControlService:
                 resource_id=agent_state.machine_id,
                 message=f"agent worker slot created for {worker_id}",
                 data={
-                    "pool": agent_state.pool,
+                    "placement": agent_state.placement.key,
                     "machine_id": agent_state.machine_id,
                     "worker_id": worker_id,
                 },
@@ -2649,7 +2737,7 @@ class GatewayControlService:
         )
         if worker is None:
             return None
-        if worker.machine_id != agent_state.machine_id or worker.pool != agent_state.pool:
+        if worker.machine_id != agent_state.machine_id or worker.placement != agent_state.placement:
             return None
         with suppress(SchedulerRepositoryError):
             worker = self.scheduler_worker_lookup.reconcile_worker_capacity(worker.worker_id)
@@ -2688,9 +2776,12 @@ class GatewayControlService:
         raw_token, token_record = self.services.auth.create_token(
             f"agent-worker-{agent_state.machine_id}-{uuid4().hex[:8]}",
             scopes=[AuthScope.Worker.value],
+            # Private follows the placement, like the worker record it will
+            # register: platform capacity is the shared fleet, anything else is
+            # hardware or an account a customer owns.
             kind=(
                 TokenKind.Worker
-                if billing_owner is UsageBillingOwner.PlatformFleet
+                if agent_state.placement.kind is PlacementKind.Platform
                 else TokenKind.WorkerPrivate
             ),
             workspace_id=agent_state.workspace_id,
@@ -2769,7 +2860,7 @@ class GatewayControlService:
                 resource_id=agent_state.machine_id,
                 message=f"agent worker slot pruned for {slot.worker_id}",
                 data={
-                    "pool": agent_state.pool,
+                    "placement": agent_state.placement.key,
                     "machine_id": agent_state.machine_id,
                     "worker_id": slot.worker_id,
                 },
@@ -2871,7 +2962,7 @@ class GatewayControlService:
             quantity=float(seconds),
             unit=UsageUnit.Seconds,
             labels={
-                "pool": state.pool,
+                "placement": state.placement.key,
                 "machine_id": state.machine_id,
                 "node_type": str(metadata.get("node_type") or ""),
                 "capacity_source": str(metadata.get("capacity_source") or ""),
@@ -3027,7 +3118,7 @@ class GatewayControlService:
         enrollment = enrollments.by_machine(
             candidate.workspace_id,
             candidate.machine_id,
-            pool=candidate.pool,
+            placement=candidate.placement,
             for_update=True,
         )
         if enrollment is None or enrollment.status is not ComputeMachineEnrollmentStatus.Active:
@@ -3091,7 +3182,7 @@ class GatewayControlService:
                 level=EventLevel.Error,
                 data={
                     "machine_id": candidate.machine_id,
-                    "pool": candidate.pool,
+                    "placement": candidate.placement.key,
                     "workspace_id": candidate.workspace_id,
                     "error_type": type(exc).__name__,
                 },
@@ -3120,7 +3211,7 @@ class GatewayControlService:
         silence = agent_silence_description(telemetry, now=now)
         data: dict[str, JsonValue] = {
             "machine_id": state.machine_id,
-            "pool": state.pool,
+            "placement": state.placement.key,
             "capacity_owner_id": state.capacity_owner_id,
             "last_seen_at": last_seen.isoformat() if last_seen is not None else None,
             "reason": reason,
@@ -3144,7 +3235,7 @@ class GatewayControlService:
             enrollment = enrollments.by_machine(
                 state.workspace_id,
                 state.machine_id,
-                pool=state.pool,
+                placement=state.placement,
                 for_update=True,
             )
             if (
@@ -3183,7 +3274,9 @@ class GatewayControlService:
             machines.upsert(
                 Machine(
                     id=machine.id,
-                    pool=machine.pool,
+                    name=machine.name,
+                    workspace_ids=machine.workspace_ids,
+                    placement=machine.placement,
                     # Rebuilt field by field, so anything omitted here is reset
                     # on every heartbeat.
                     capacity_owner_id=state.capacity_owner_id,
@@ -3239,7 +3332,7 @@ def _join_token_state(
         owner_user_id=credential.user_id,
         workspace_id=credential.workspace_id,
         capacity_owner_id=credential.capacity_owner_id,
-        pool=credential.pool,
+        placement=credential.placement,
         machine_id=credential.machine_id,
         credential_id=credential.id,
         created_by_token_id=credential.created_by_token_id or "workspace",
@@ -3261,7 +3354,7 @@ def _agent_state_from_enrollment(
         owner_user_id=enrollment.user_id,
         workspace_id=enrollment.workspace_id,
         capacity_owner_id=enrollment.capacity_owner_id,
-        pool=enrollment.pool,
+        placement=enrollment.placement,
         machine_id=enrollment.machine_id,
         credential_id=enrollment.id,
         credential_generation=enrollment.credential_generation,
@@ -3335,7 +3428,7 @@ def _machine_enrollment_snapshot(
         user_id=state.owner_user_id,
         workspace_id=state.workspace_id,
         capacity_owner_id=state.capacity_owner_id,
-        pool=state.pool,
+        placement=state.placement,
         machine_id=state.machine_id,
         machine_fingerprint_hash=fingerprint_hash,
         join_credential_id=join_credential_id,
@@ -3368,8 +3461,29 @@ def _machine_enrollment_snapshot(
     )
 
 
+def _machine_response(machine: Machine, workspace_names: Mapping[str, str]) -> MachineResponse:
+    return MachineResponse(
+        id=machine.id,
+        name=machine.name,
+        workspaces=[
+            workspace_names[workspace_id]
+            for workspace_id in machine.workspace_ids
+            if workspace_id in workspace_names
+        ],
+        provider=machine.provider,
+        status=machine.status,
+        cpu=machine.cpu,
+        memory=machine.memory,
+        gpu=machine.gpu,
+        gpu_count=machine.gpu_count,
+        address=machine.address,
+        labels=machine.labels,
+        created_at=machine.created_at,
+        updated_at=machine.updated_at,
+    )
+
+
 __all__ = [
-    "SELF_HOSTED_FLEET_POOL_NAME",
     "AgentCapacityInterruptionSink",
     "GatewayControlService",
 ]

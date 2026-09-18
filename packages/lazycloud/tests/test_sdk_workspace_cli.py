@@ -44,7 +44,8 @@ class _WorkspaceClient:
     def list(self) -> WorkspaceListResponse:
         return WorkspaceListResponse(workspaces=self.workspaces)
 
-    def create(self, name: str) -> WorkspaceResponse:
+    def create(self, name: str, *, connection_id: str | None = None) -> WorkspaceResponse:
+        del connection_id
         created = _workspace(name)
         self.workspaces.append(created)
         self.selected = created

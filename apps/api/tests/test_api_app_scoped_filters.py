@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from shared.deployment_records import DeploymentSpec
@@ -23,7 +24,9 @@ def test_app_scoped_resource_lists_exclude_peer_apps(
 ) -> None:
     services, _ = api_runtime
     if resource == "stubs":
-        control = ControlPlaneService(services.context)
+        control = ControlPlaneService(
+            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+        )
         app = services.apps.create("scoped_list_app", workspace=api_workspace.id)
         expected = control.create_stub("scoped-stub", app_id=app.id, workspace=api_workspace.id)
         control.create_stub("peer-stub", workspace=api_workspace.id)
@@ -71,7 +74,9 @@ def test_deployed_stub_list_excludes_runtime_only_revisions(
     api_client: TestClient,
 ) -> None:
     services, _ = api_runtime
-    control = ControlPlaneService(services.context)
+    control = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    )
     runtime = control.create_stub("runtime-only", workspace=api_workspace.id)
     deployment = services.deployments.deploy(
         DeploymentSpec(
@@ -167,7 +172,9 @@ def test_aggregate_tasks_by_time_window_filters_by_stub_id(
     api_client: TestClient,
 ) -> None:
     services, _ = api_runtime
-    control = ControlPlaneService(services.context)
+    control = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    )
     app = services.apps.create("aggregate_app", workspace=api_workspace.id)
     services.deployments.deploy(
         DeploymentSpec(

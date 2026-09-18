@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.cleanup import CleanupRepository
@@ -258,7 +259,10 @@ def test_durable_retention_prunes_only_unreferenced_production_artifacts(
         isolated_services.context,
         cache_client=MountedCacheClient(MountedCacheSettings(root=tmp_path / "cache")),
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     workspace = owned_workspace(control, "default")
     retained_source = objects.put_bytes_for_workspace(
         workspace_id=workspace.id,
@@ -445,7 +449,12 @@ def test_source_retention_preserves_cleanup_target_through_later_workspace_delet
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(service_context), "retained-source-owner")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "retained-source-owner",
+    )
     generation_id = str(uuid4())
     with service_context.database.session() as session:
         generation = SourceCacheCleanupRepository(session).register_generation(
@@ -525,7 +534,12 @@ def test_checkpoint_retention_survives_empty_hot_state_index(
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     records = (
         CheckpointRecord(
             checkpoint_id="checkpoint-legacy",
@@ -594,7 +608,12 @@ def test_checkpoint_retention_survives_empty_hot_state_index(
 def test_checkpoint_creation_and_restore_record_durable_retention_deadline(
     service_context: ServiceContext,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     with service_context.database.session() as session:
         container = ContainerRepository(session).upsert(
             ContainerRecord(
@@ -688,7 +707,10 @@ def test_source_and_image_candidates_recheck_references_before_physical_delete(
         config=RetentionConfig(checkpoint_bucket="objects"),
         image_archive_settings=_archive_settings(),
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     workspace = owned_workspace(control, "default")
     source = objects.put_bytes_for_workspace(
         workspace_id=workspace.id,
@@ -754,7 +776,12 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     image = ImageRecord(workspace_id=workspace.id, image_id="image-cleaned")
     with service_context.database.session() as session:
         ImageRepository(session).upsert(image)
@@ -787,7 +814,9 @@ def test_cleaned_image_tombstone_blocks_reference_until_republication(
     assert cleaned is not None
     assert cleaned.cleanup_completed_at is not None
     with pytest.raises(ConflictError, match="cleanup is in progress"):
-        ControlPlaneService(service_context).create_stub(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ).create_stub(
             "cleaned-image",
             workspace=workspace.id,
             config=StubConfig(image=StubImageConfig(image_id=image.image_id)),
@@ -826,7 +855,9 @@ def test_image_archive_survives_until_the_last_authorized_workspace_is_cleaned(
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(service_context)
+    control = ControlPlaneService(
+        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+    )
     first = owned_workspace(control, "default")
     second = owned_workspace(control, "second-archive-owner")
     archive_settings = _archive_settings()
@@ -892,7 +923,12 @@ def test_duplicate_build_cleanup_preserves_shared_path_and_cache_key(
     tmp_path: Path,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     shared_path = service_context.paths.root / "image-builds" / "shared.rclip"
     shared_path.parent.mkdir(parents=True, exist_ok=True)
     shared_path.write_bytes(b"shared")
@@ -958,7 +994,12 @@ def test_build_retention_age_starts_when_the_build_finishes(
     service_context: ServiceContext,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     old_finished = ImageBuildRecord(
         id=str(uuid4()),
         image=ImageSpec(image_id="old-finished"),
@@ -997,7 +1038,12 @@ def test_image_cleanup_drains_high_cardinality_builds_in_bounded_batches(
     tmp_path: Path,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     image = ImageRecord(workspace_id=workspace.id, image_id="image-many-builds")
     shared_path = service_context.paths.root / "image-builds" / "many-shared.rclip"
     shared_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1091,7 +1137,12 @@ def test_resumed_image_cleanup_shares_one_build_budget_across_images(
     tmp_path: Path,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     image_ids = ("claimed-image-a", "claimed-image-b")
     with service_context.database.session() as session:
         images = ImageRepository(session)
@@ -1154,7 +1205,12 @@ def test_artifact_reference_age_starts_when_the_build_finishes(
 ) -> None:
     now = utc_now()
     recent_after = now - timedelta(minutes=1)
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     objects = ObjectStorage(
         service_context,
         object_client=_MemoryObjectClient(),
@@ -1240,7 +1296,12 @@ def test_build_candidate_rechecks_status_before_deleting_physical_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = utc_now()
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     artifact = service_context.paths.root / "image-builds" / "claimed.rclip"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_bytes(b"claimed")
@@ -1315,7 +1376,10 @@ def test_source_cleanup_claim_survives_crash_and_rejects_new_reference(
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlPlaneService(
+        isolated_services.context,
+        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
+    )
     workspace = owned_workspace(control, "default")
     source = objects.put_bytes_for_workspace(
         workspace_id=workspace.id,
@@ -1390,7 +1454,10 @@ def test_slow_object_delete_does_not_block_unrelated_database_write(
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(committed_service_context)
+    control = ControlPlaneService(
+        committed_service_context,
+        placement_resolver=WorkspaceComputePolicyService(committed_service_context),
+    )
     workspace = owned_workspace(control, "default")
     source = objects.put_bytes_for_workspace(
         workspace_id=workspace.id,
@@ -1453,7 +1520,10 @@ def test_object_delete_claim_does_not_block_another_workspace_location(
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(committed_service_context)
+    control = ControlPlaneService(
+        committed_service_context,
+        placement_resolver=WorkspaceComputePolicyService(committed_service_context),
+    )
     first = owned_workspace(control, "default")
     second = owned_workspace(control, "second-object-workspace")
     objects.put_bytes_for_workspace(
@@ -1500,7 +1570,10 @@ def test_object_write_claim_blocks_delete_without_holding_database_transaction(
         object_client=client,
         default_bucket="objects",
     )
-    control = ControlPlaneService(committed_service_context)
+    control = ControlPlaneService(
+        committed_service_context,
+        placement_resolver=WorkspaceComputePolicyService(committed_service_context),
+    )
     workspace = owned_workspace(control, "default")
     client.block_put = True
     errors: list[BaseException] = []
@@ -1547,7 +1620,12 @@ def test_stale_object_write_claim_finalizes_matching_atomic_upload(
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     physical_key = objects.physical_key_for_workspace(
         workspace.id,
         bucket="objects",
@@ -1596,7 +1674,12 @@ def test_stale_object_operations_roll_back_missing_write_and_resume_delete(
         object_client=client,
         default_bucket="objects",
     )
-    workspace = owned_workspace(ControlPlaneService(service_context), "default")
+    workspace = owned_workspace(
+        ControlPlaneService(
+            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
+        ),
+        "default",
+    )
     missing_physical_key = objects.physical_key_for_workspace(
         workspace.id,
         bucket="objects",

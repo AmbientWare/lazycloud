@@ -45,8 +45,8 @@ class SchedulerCapacityControllerProvider:
     def agent_pool_configs(self) -> list[AgentPoolConfig]:
         """One config per provisioning unit that runs agent machines.
 
-        Keyed by capacity owner, not by pool label: several units may feed one
-        group, and keying by the label would silently drop all but one of them.
+        Keyed by capacity owner, not by placement: several units may serve one
+        placement, and keying by it would silently drop all but one of them.
         """
         configs: dict[str, AgentPoolConfig] = {}
         for unit in self.services.compute.list_units_across_workspaces(
@@ -55,14 +55,14 @@ class SchedulerCapacityControllerProvider:
             config = agent_pool_config_from_pool(unit)
             if config is not None:
                 configs[config.capacity_owner_id] = config
-        for state in self.compute_states.list_all_pool_states():
+        for state in self.compute_states.list_all_unit_states():
             config = agent_pool_config_from_compute_state(state)
             configs[config.capacity_owner_id] = config
         return [
             configs[key]
             for key in sorted(
                 configs,
-                key=lambda item: (configs[item].workspace_id, configs[item].pool, item),
+                key=lambda item: (configs[item].workspace_id, configs[item].placement.key, item),
             )
         ]
 

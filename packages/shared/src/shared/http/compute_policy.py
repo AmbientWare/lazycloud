@@ -11,38 +11,8 @@ from shared.compute_enrollment import (
     MachineBootstrapPhase,
     MachineServiceState,
 )
-from shared.compute_policy import MachinePool
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
-
-
-class WorkspaceComputePolicyUpdateRequest(HttpModel):
-    expected_revision: int = Field(ge=1)
-    default_pool: str = Field(min_length=1, max_length=240)
-
-
-class WorkspaceComputePolicyResponse(HttpModel):
-    revision: int = Field(ge=1)
-    default_pool: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class MachinePoolResponse(HttpModel):
-    """One pool a workload may name, and what feeds it."""
-
-    name: str
-    is_default: bool = False
-    providers: tuple[str, ...] = ()
-    """Distinct providers behind this pool, e.g. `aws`, `agent`, `local`."""
-    unit_count: int = Field(default=0, ge=0)
-    gpu_types: tuple[str, ...] = ()
-    """GPU types this pool can host, empty when it hosts CPU workloads only."""
-
-
-class MachinePoolListResponse(HttpModel):
-    data: list[MachinePoolResponse] = Field(default_factory=list)
-    next: str = ""
 
 
 class ComputeCatalogInstanceResponse(HttpModel):
@@ -85,7 +55,6 @@ class ComputeCostSummaryResponse(HttpModel):
 
 
 class WorkspaceComputeSummaryResponse(HttpModel):
-    policy: WorkspaceComputePolicyResponse
     connection: ComputeConnectionSummaryResponse | None = None
     instances: ComputeCapacitySummaryResponse = Field(
         default_factory=ComputeCapacitySummaryResponse
@@ -132,7 +101,7 @@ class WorkspaceComputeWorkloadResponse(HttpModel):
     app_id: str | None = None
     name: str
     kind: DeploymentKind
-    pool: MachinePool
+    machine: str = ""
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
     gpu: list[str] = Field(default_factory=list)
@@ -151,12 +120,8 @@ __all__ = [
     "ComputeCatalogResponse",
     "ComputeConnectionSummaryResponse",
     "ComputeCostSummaryResponse",
-    "MachinePoolListResponse",
-    "MachinePoolResponse",
     "WorkspaceComputeInstanceListResponse",
     "WorkspaceComputeInstanceResponse",
-    "WorkspaceComputePolicyResponse",
-    "WorkspaceComputePolicyUpdateRequest",
     "WorkspaceComputeSummaryResponse",
     "WorkspaceComputeWorkloadListResponse",
     "WorkspaceComputeWorkloadResponse",

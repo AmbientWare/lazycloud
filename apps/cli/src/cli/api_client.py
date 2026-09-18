@@ -17,16 +17,8 @@ from shared.http.compute import (
     ContainerResponse,
     ContainerRunRequest,
     ContainerWithAppPageResponse,
-    MachineCreateRequest,
-    MachineJoinCommandRequest,
-    MachineJoinTokenResponse,
     MachineListResponse,
-    MachineResponse,
     UnitCreateRequest,
-    UnitJoinCommandRequest,
-    UnitJoinCommandResponse,
-    UnitJoinTokenRequest,
-    UnitJoinTokenResponse,
     UnitListResponse,
     UnitResponse,
     UnitScaleResponse,
@@ -322,52 +314,9 @@ class AdminApiClient:
             )
         )
 
-    def create_pool_join_token(
-        self,
-        request: MachineJoinCommandRequest,
-    ) -> MachineJoinTokenResponse:
-        return MachineJoinTokenResponse.model_validate(
-            self.channel.post(
-                self._workspace_path("/api/v1/machines/join-token"),
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def create_unit_join_token(
-        self,
-        unit_id: str,
-        request: UnitJoinTokenRequest,
-    ) -> UnitJoinTokenResponse:
-        return UnitJoinTokenResponse.model_validate(
-            self.channel.post(
-                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/join-token"),
-                request.model_dump(mode="json"),
-            )
-        )
-
-    def unit_join_command(
-        self,
-        unit_id: str,
-        request: UnitJoinCommandRequest,
-    ) -> UnitJoinCommandResponse:
-        return UnitJoinCommandResponse.model_validate(
-            self.channel.post(
-                self._workspace_path(f"/api/v1/units/{url_path_segment(unit_id)}/join-command"),
-                request.model_dump(mode="json"),
-            )
-        )
-
     def list_machines(self) -> MachineListResponse:
         return MachineListResponse.model_validate(
             self.channel.get(self._workspace_path("/api/v1/machines"))
-        )
-
-    def create_machine(self, request: MachineCreateRequest) -> MachineResponse:
-        return MachineResponse.model_validate(
-            self.channel.post(
-                self._workspace_path("/api/v1/machines"),
-                request.model_dump(mode="json"),
-            )
         )
 
     def delete_machine(self, machine_id: str) -> None:

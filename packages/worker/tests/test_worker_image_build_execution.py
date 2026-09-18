@@ -13,6 +13,7 @@ import pytest
 from networking.internal_http import InternalHttpClient
 from pydantic import JsonValue, TypeAdapter
 from scheduler.state import SchedulerWorkerRequest
+from shared.placement import Placement
 from worker.container_service.state import LocalWorkerContainerInstanceStore
 from worker.events import ContainerRequestContext, WorkerBuildCancelRegistry
 from worker.image_build_execution import (
@@ -82,6 +83,7 @@ def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
         ),
     )
     request = SchedulerWorkerRequest(
+        placement=Placement.platform(),
         workspace_id="workspace-1",
         stub_id="image-build",
         container_id="build-container-1",

@@ -47,7 +47,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import PoolInput
+from lazycloud.abstractions.metadata import MachineInput
 from lazycloud.json_contracts import parse_json_object
 from lazycloud.source_sync import SOURCE_IGNORE_FILE, SourceFileFilter
 from lazycloud.terminal import Terminal
@@ -70,7 +70,7 @@ class PreviewRuntime(Protocol):
     env: dict[str, str]
     secrets: list[str]
     region: str | None
-    pool: PoolInput
+    machine: MachineInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +84,7 @@ class ServeOptions:
     secrets: Sequence[str] = ()
     keep_warm: int | None = None
     region: str | None = None
-    pool: PoolInput = None
+    machine: MachineInput = None
     sync_dir: str | None = None
 
     def apply(self, owner: PreviewRuntime) -> None:
@@ -102,8 +102,8 @@ class ServeOptions:
         owner.secrets.extend(secret for secret in self.secrets if secret not in owner.secrets)
         if self.region is not None:
             owner.region = self.region
-        if self.pool is not None:
-            owner.pool = self.pool
+        if self.machine is not None:
+            owner.machine = self.machine
 
 
 class ServeUrlClient(Protocol):

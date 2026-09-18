@@ -178,7 +178,7 @@ class ShellControlService:
             disk_mib=plan.disk_mib,
             gpu=list(plan.gpu),
             gpu_count=plan.gpu_count,
-            pool_selector=runtime.pool_selector or "",
+            placement=stub.placement,
             runtime=runtime.runtime,
             runtime_class=runtime.runtime_class or "",
             docker_enabled=runtime.docker_enabled,

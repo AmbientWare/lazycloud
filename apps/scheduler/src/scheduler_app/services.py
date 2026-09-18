@@ -64,6 +64,7 @@ from provider_clients.settings import (
     PlatformCapacitySettings,
 )
 from provider_clients.workspace_compute import configured_platform_compute_providers
+from provider_clients.workspace_storage import workspace_storage_router
 from provider_cloudflare import CloudflareSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
@@ -152,6 +153,7 @@ class SchedulerAppServices:
     container_shutdowns: ContainerShutdownService
     scheduler_workloads: SchedulerWorkloadDirectory
     compute: ComputeService
+    compute_policies: WorkspaceComputePolicyService
     custom_domains: CustomDomainService
     tasks: TaskService
     usage: UsageService
@@ -193,11 +195,13 @@ class SchedulerAppServices:
                 max_length=observability.workspace_changes.max_length,
             )
         )
+        compute_policies = WorkspaceComputePolicyService(context)
         control_plane = ControlPlaneService(
             context,
             workspace_storage_client=object_client,
             public_http_origin=gateway_origin,
             workspace_changes=workspace_changes,
+            placement_resolver=compute_policies,
         )
         scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
         container_repository = RedisSchedulerContainerRepository(redis)
@@ -209,7 +213,6 @@ class SchedulerAppServices:
             progress=TaskProgressService(context, container_repository, worker_repository),
             workspace_changes=workspace_changes,
         )
-        compute_policies = WorkspaceComputePolicyService(context)
         usage = UsageService(
             context,
             workspace_changes=workspace_changes,
@@ -218,6 +221,9 @@ class SchedulerAppServices:
             resolve_store=workspace_volume_store_resolver(
                 context.database,
                 object_store=object_client,
+                storage_issuer=workspace_storage_router(
+                    context.database, storage.object_store, public_origin=gateway_origin
+                ),
             )
         )
         volume_metering = PersistentVolumeMeteringService.from_settings(
@@ -351,13 +357,7 @@ class SchedulerAppServices:
         container_scheduler = SchedulerContainerRequestService(
             worker_repository,
             container_repository,
-            placement=SchedulerComputePlacement(
-                ComputeCapacityPlacementService(
-                    context,
-                    compute_policies,
-                    compute,
-                )
-            ),
+            placement=SchedulerComputePlacement(ComputeCapacityPlacementService(context, compute)),
             failure_handler=scheduling_persistence,
             assignments=scheduling_persistence,
             usage=usage,
@@ -439,6 +439,7 @@ class SchedulerAppServices:
             container_shutdowns=container_shutdowns,
             scheduler_workloads=scheduler_workloads,
             compute=compute,
+            compute_policies=compute_policies,
             custom_domains=CustomDomainService(
                 context=context,
                 provider_factory=CloudflareSettings().provider,

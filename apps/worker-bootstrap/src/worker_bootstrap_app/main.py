@@ -14,8 +14,8 @@ from identity.credential_files import CredentialFilePublication
 from identity.platform import PlatformNamespaceService
 from scheduler.state import RedisSchedulerWorkerRepository
 from shared.app_identity import WORKER_BOOTSTRAP_PROCESS_NAME
-from shared.compute_policy import MachinePool
 from shared.identity import AuthScope, TokenKind
+from shared.placement import Placement
 from shared.scheduling import DEFAULT_PENDING_WORKER_STATE_TTL_SECONDS
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
@@ -30,7 +30,7 @@ class WorkerBootstrapArguments(argparse.Namespace):
     """
 
     worker_id: str | None
-    pool: MachinePool | None
+    placement: Placement | None
     machine_id: str | None
     ttl_seconds: int
 
@@ -44,7 +44,7 @@ class WorkerTokenArguments(argparse.Namespace):
 @dataclass(frozen=True)
 class WorkerBootstrapResult:
     worker_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     status: str
     ttl_seconds: int
@@ -52,7 +52,7 @@ class WorkerBootstrapResult:
     def to_dict(self) -> dict[str, str | int]:
         return {
             "worker_id": self.worker_id,
-            "pool": self.pool,
+            "placement": self.placement.key,
             "machine_id": self.machine_id,
             "status": self.status,
             "ttl_seconds": self.ttl_seconds,
@@ -90,7 +90,7 @@ def bootstrap_scheduler_worker(
     )
     return WorkerBootstrapResult(
         worker_id=worker.worker_id,
-        pool=worker.pool,
+        placement=worker.placement,
         machine_id=worker.machine_id,
         status=worker.status.value,
         ttl_seconds=ttl_seconds,
@@ -165,7 +165,7 @@ def _settings_from_args(args: WorkerBootstrapArguments) -> WorkerSettings:
     loaded = WorkerSettings()
     return WorkerSettings(
         worker_id=_override(args.worker_id, loaded.worker_id),
-        pool=_override(args.pool, loaded.pool),
+        placement=_override(args.placement, loaded.placement),
         machine_id=_override(args.machine_id, loaded.machine_id),
     )
 

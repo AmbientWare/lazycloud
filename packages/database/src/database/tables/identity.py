@@ -244,7 +244,7 @@ class WorkspaceTable(IdTable, DatabaseBase):
         CheckConstraint(
             "kind <> 'platform' OR (status = 'active' AND primary_token_id IS NULL "
             "AND concurrency_limit_id IS NULL AND storage_bucket IS NULL "
-            "AND storage_credential_key IS NULL)",
+            "AND connection_id IS NULL)",
             name="ck_workspaces_platform_namespace",
         ),
         # A workspace is never removed, so uniqueness on the bare name would retain
@@ -263,13 +263,7 @@ class WorkspaceTable(IdTable, DatabaseBase):
             "status IN ('active', 'disabled', 'deleting', 'deleted')",
             name="ck_workspaces_status",
         ),
-        CheckConstraint(
-            "(storage_credential_key IS NULL AND storage_access_key_ciphertext IS NULL "
-            "AND storage_secret_key_ciphertext IS NULL) OR "
-            "(storage_credential_key IS NOT NULL AND storage_access_key_ciphertext IS NOT NULL "
-            "AND storage_secret_key_ciphertext IS NOT NULL)",
-            name="ck_workspaces_storage_credentials",
-        ),
+        Index("ix_workspaces_connection_id", "connection_id"),
     )
 
     external_id: Mapped[str] = mapped_column(
@@ -293,15 +287,19 @@ class WorkspaceTable(IdTable, DatabaseBase):
     concurrency_limit_id: Mapped[str | None] = mapped_column(
         uuid_type, ForeignKey("concurrency_limits.id", ondelete="SET NULL", use_alter=True)
     )
+    connection_id: Mapped[str | None] = mapped_column(
+        uuid_type,
+        ForeignKey("aws_account_connections.id", ondelete="RESTRICT", use_alter=True),
+    )
+    """The connected account this workspace lives in. Written once at creation.
+
+    RESTRICT rather than SET NULL: a connection cannot leave while a workspace
+    still keeps its bucket and compute there. Finalizing a deletion clears it."""
     storage_backend: Mapped[str] = mapped_column(String(80), default="local")
     storage_bucket: Mapped[str | None] = mapped_column(String(255))
     storage_prefix: Mapped[str] = mapped_column(Text, default="")
-    storage_endpoint_url: Mapped[str | None] = mapped_column(Text)
-    storage_region: Mapped[str | None] = mapped_column(String(128))
-    storage_access_key_ciphertext: Mapped[str | None] = mapped_column(Text)
-    storage_secret_key_ciphertext: Mapped[str | None] = mapped_column(Text)
-    storage_credential_key: Mapped[str | None] = mapped_column(Text)
-    storage_force_path_style: Mapped[bool | None] = mapped_column(Boolean)
+    storage_endpoint_url: Mapped[str] = mapped_column(Text, default="")
+    storage_region: Mapped[str] = mapped_column(String(128), default="")
     labels: Mapped[dict[str, str]] = mapped_column(json_type, default=dict)
     metadata_json: Mapped[dict[str, JsonValue]] = mapped_column("metadata", json_type, default=dict)
 

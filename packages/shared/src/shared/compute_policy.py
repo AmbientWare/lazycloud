@@ -6,19 +6,16 @@ from typing import Annotated
 
 from pydantic import Field, JsonValue, model_validator
 
-from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind, MachinePool, UnitName
+from shared.capacity import CapacityOwnerIdentity, CapacityOwnerKind, UnitName
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.placement import Placement
 from shared.routing import PrivateUnitFallback
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import utc_now
 
 _UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-
-
-LAZYCLOUD_MACHINE_POOL = "lazycloud"
-"""Pool the platform's own fleet stamps on its machines."""
 
 
 class ComputeCapacityMode(StringEnum):
@@ -79,10 +76,6 @@ class WorkspaceComputePolicy(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
     revision: int = Field(default=1, ge=1)
-    default_pool: MachinePool = Field(
-        default=MachinePool(LAZYCLOUD_MACHINE_POOL), min_length=1, max_length=240
-    )
-    """Pool workloads land in when they name none."""
     created_at: datetime
     updated_at: datetime
 
@@ -122,14 +115,15 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     shape and a scaling policy, because worker admission, sizing and drain all
     key on the owning unit.
 
-    `machine_pool` is the pool this unit stamps on every machine it
-    produces. Several units may name one pool; a unit names exactly one.
+    `placement` is stamped on every machine this unit produces and on every
+    worker they run: the platform fleet, the connected account that provisioned
+    the unit, or the one joined machine the unit exists for.
     """
 
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
     name: UnitName = Field(min_length=1, max_length=240)
-    pool: MachinePool = Field(min_length=1, max_length=240)
+    placement: Placement
     provider: str = Field(default="local", min_length=1, max_length=120)
     selector: str = Field(default="", max_length=255)
     status: str = Field(default=ComputeUnitPhase.Ready.value, max_length=80)
@@ -140,9 +134,9 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     platform_fleet: bool = False
     """Whether this unit is the platform's own capacity rather than a customer's.
 
-    Copied from the resolved provider policy beside the pool, in the same statement and from
-    the same source, so a consumer reads one record to know both what this
-    capacity is called and whom it serves."""
+    Copied from the resolved provider policy beside the placement, in the same
+    statement and from the same source, so a consumer reads one record to know
+    both where this capacity is and whom it serves."""
     capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct
     visibility: ComputeUnitVisibility = ComputeUnitVisibility.Public
     region: str = Field(default="", max_length=64)
@@ -174,7 +168,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     phase: ComputeUnitPhase = ComputeUnitPhase.Ready
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)
     scaling_enabled: bool = False
-    default_eligible: bool = False
     priority: int = Field(default=0, ge=-(2**31), le=2**31 - 1)
     """Preference for this unit over another that could serve the same work.
 
@@ -264,14 +257,12 @@ def _unique_nonempty(values: Sequence[str]) -> tuple[str, ...]:
 
 
 __all__ = [
-    "LAZYCLOUD_MACHINE_POOL",
     "ComputeCapacityMode",
     "ComputeResourceRequirements",
     "ComputeUnitPhase",
     "ComputeUnitProviderState",
     "ComputeUnitRecord",
     "ComputeUnitVisibility",
-    "MachinePool",
     "UnitName",
     "WorkspaceComputePolicy",
 ]

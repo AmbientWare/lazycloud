@@ -252,6 +252,7 @@ function workspace(id: string, name: string): Workspace {
     signing_key_prefix: null,
     primary_token_id: null,
     concurrency_limit_id: null,
+    connection_id: null,
     storage: { backend: "local", bucket: null, prefix: "" },
     labels: {},
     metadata: {},

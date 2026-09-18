@@ -17,15 +17,6 @@ A unit is one capacity owner: one Auto Scaling group, or the workspace's agent
 or local fleet. This names exactly one durable row.
 """
 
-MachinePool = NewType("MachinePool", str)
-"""Scheduling pool a workload names, stamped on every machine serving it.
-
-Several units may feed one pool, so this names no single row. It is a routing
-label and must never be used to look a unit up — that is what made a pool label
-reaching a unit lookup silently return the wrong row while the two names
-happened to coincide.
-"""
-
 TERMINAL_REASON_MAX_LENGTH = 500
 
 
@@ -264,7 +255,6 @@ __all__ = [
     "CapacityOwnerSource",
     "CapacityPoolSizingSnapshot",
     "CapacityReleaseRequest",
-    "MachinePool",
     "UnitName",
     "capacity_owner_for_provider",
     "new_capacity_owner_id",

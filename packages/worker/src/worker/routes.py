@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pydantic import Field, field_validator
-from shared.compute_policy import MachinePool
 from shared.contracts import ContractModel
+from shared.placement import Placement
 from shared.routing import (
     AgentBackendRoute,
     BackendRouteKind,
@@ -23,7 +23,7 @@ class WorkerRouteRegistrationPlan(ContractModel):
 
 class WorkerRouteContext(ContractModel):
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     worker_id: str
     container_id: str
@@ -68,7 +68,7 @@ def build_agent_backend_route(
             port=port,
         ),
         workspace_id=context.workspace_id,
-        pool=MachinePool(context.pool),
+        placement=context.placement,
         machine_id=context.machine_id,
         worker_id=context.worker_id,
         container_id=context.container_id,

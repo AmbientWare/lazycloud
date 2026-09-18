@@ -5,14 +5,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.service import GatewayControlService
-from shared.compute_policy import MachinePool
 from shared.http.compute import (
-    MachineCreateRequest,
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
-    MachineJoinTokenResponse,
     MachineListResponse,
     MachineResponse,
+    MachineUpdateRequest,
     UnitMachineListResponse,
 )
 
@@ -23,9 +21,7 @@ from api.server.auth import (
     write_user,
     write_workspace,
 )
-from api.server.dependencies import current_services
 from api.server.service_dependencies import gateway_service, machine_lifecycle_service
-from api.server.services import ApiServices
 
 router = APIRouter()
 
@@ -33,14 +29,9 @@ router = APIRouter()
 @router.get("/api/v1/machines", response_model=MachineListResponse, operation_id="list_machines")
 def list_machines(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    gateway: GatewayControlService = Depends(gateway_service),
 ) -> MachineListResponse:
-    return MachineListResponse(
-        machines=[
-            MachineResponse.model_validate(item)
-            for item in services.compute.list_machines(workspace=workspace_id)
-        ]
-    )
+    return MachineListResponse(machines=gateway.machine_responses(workspace_id=workspace_id))
 
 
 @router.get(
@@ -50,22 +41,16 @@ def list_machines(
 )
 def list_self_hosted_machines(
     user_id: read_user,
-    pool: MachinePool = MachinePool(""),
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> UnitMachineListResponse:
-    """The account's joined machines, optionally narrowed to one pool.
+    """The account's joined machines.
 
     Account-scoped rather than workspace-scoped: a joined host belongs to the person
-    who connected it and serves every workspace they own, so answering per workspace
-    would hide their own hardware from them.
+    who connected it, and which workspaces it serves is a property of the machine.
     """
-    machines = [
-        item
-        for item in gateway.account_machine_views(user_id)
-        if item.id > cursor and (not pool or item.pool == pool)
-    ]
+    machines = [item for item in gateway.account_machine_views(user_id) if item.id > cursor]
     selected = machines[:limit]
     return UnitMachineListResponse(
         data=selected,
@@ -91,49 +76,21 @@ def machine_join_command(
     )
 
 
-@router.post(
-    "/api/v1/machines/join-token",
-    response_model=MachineJoinTokenResponse,
-    operation_id="get_machine_join_token",
+@router.patch(
+    "/api/v1/machines/{machine_id}",
+    response_model=MachineResponse,
+    operation_id="update_machine",
 )
-def machine_join_token(
-    request: MachineJoinCommandRequest,
-    token: write_token,
+def update_machine(
+    machine_id: str,
+    request: MachineUpdateRequest,
     user_id: write_user,
     service: GatewayControlService = Depends(gateway_service),
-) -> MachineJoinTokenResponse:
-    return service.machine_join_token(
-        request,
-        user_id=user_id,
-        owner_token_id=token.id,
-    )
-
-
-@router.post(
-    "/api/v1/machines",
-    response_model=MachineResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="create_machine",
-)
-def create_machine(
-    request: MachineCreateRequest,
-    workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
 ) -> MachineResponse:
-    return MachineResponse.model_validate(
-        services.compute.create_machine(
-            workspace=workspace_id,
-            pool=services.workspace_compute_policy_service.default_machine_pool(
-                workspace=workspace_id
-            ),
-            provider=request.provider,
-            cpu=request.cpu,
-            memory=request.memory,
-            gpu=request.gpu,
-            gpu_count=request.gpu_count,
-            address=request.address,
-            labels=request.labels,
-        )
+    return service.update_machine_workspaces(
+        machine_id,
+        user_id=user_id,
+        workspace_names=request.workspaces,
     )
 
 

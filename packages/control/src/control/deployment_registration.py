@@ -143,7 +143,7 @@ class DeploymentRegistrationService:
                 source_stub.config.model_copy(deep=True)
                 if source_stub is not None
                 else _stub_config_from_deployment_spec(deployment.spec)
-            ),
+            ).model_copy(update={"machine": deployment.machine}),
             metadata={
                 **(source_stub.metadata if source_stub is not None else {}),
                 "deployment_id": deployment.id,
@@ -204,7 +204,6 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
     image = spec.image
     resources = spec.resources
     metadata = _deployment_metadata(spec)
-    pool = _deployment_pool(metadata)
     return StubConfig.model_validate(
         {
             "object_id": "",
@@ -268,7 +267,6 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                 "docker_enabled": (_metadata_optional_bool(metadata, "docker_enabled") or False),
                 "block_network": _metadata_optional_bool(metadata, "block_network") or False,
                 "allow_list": _metadata_string_list(metadata, "allow_list"),
-                "pool_selector": pool,
             },
             "env": dict(spec.env),
             "route": spec.route,
@@ -299,7 +297,6 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                 "outputs": {},
             },
             "tcp": _metadata_optional_bool(metadata, "tcp") or False,
-            "pool": pool,
         }
     )
 
@@ -311,17 +308,6 @@ def _deployment_metadata(spec: DeploymentSpec) -> dict[str, JsonValue]:
         msg = "deployment metadata must be a JSON object"
         raise InvalidInputError(msg)
     return metadata
-
-
-def _deployment_pool(metadata: Mapping[str, JsonValue]) -> str:
-    """The scheduling group a workload named, from its decorator metadata."""
-    pool = metadata.get("pool")
-    if isinstance(pool, str):
-        return pool.strip()
-    if isinstance(pool, dict):
-        name = pool.get("name")
-        return name.strip() if isinstance(name, str) else ""
-    return ""
 
 
 def _resolved_keep_warm_seconds(spec: DeploymentSpec) -> int:

@@ -22,7 +22,7 @@ class DatabaseCapacityInterruptionSource:
                 enrollment_id=record.enrollment_id,
                 credential_generation=record.credential_generation,
                 workspace_id=record.workspace_id,
-                pool=record.pool,
+                placement=record.placement,
                 machine_id=record.machine_id,
                 state=record.state,
                 reason=record.reason,

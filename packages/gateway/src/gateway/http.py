@@ -10,9 +10,9 @@ from shared.compute_enrollment import (
     AgentWorkerSlotStatus,
     ComputePreflightCheck,
 )
-from shared.compute_policy import MachinePool
 from shared.http.base import HttpModel
 from shared.identity import AuthScope
+from shared.placement import Placement
 from shared.routing import (
     BackendRouteKind,
     BackendRouteProtocol,
@@ -76,7 +76,7 @@ class JoinAgentRequest(HttpModel):
 
 class JoinAgentResponse(HttpModel):
     workspace_id: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: Placement = Placement.platform()
     machine_id: str = ""
     agent_token: str = ""
     credential_id: str = ""
@@ -99,7 +99,7 @@ class LeaveAgentResponse(HttpModel):
 class AgentRoute(HttpModel):
     route_id: str
     workspace_id: str
-    pool: MachinePool
+    placement: Placement
     machine_id: str
     worker_id: str = ""
     container_id: str = ""
@@ -145,7 +145,7 @@ class UpdateAgentRouteStatusResponse(HttpModel):
 class AgentWorkerSlot(HttpModel):
     worker_id: str
     worker_token: str = ""
-    pool: MachinePool = MachinePool("")
+    placement: Placement = Placement.platform()
     capacity_owner_id: str = Field(pattern=CAPACITY_OWNER_ID_PATTERN)
     billing_owner: UsageBillingOwner
     machine_id: str = ""

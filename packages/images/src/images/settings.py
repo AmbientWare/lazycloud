@@ -67,7 +67,6 @@ class ImageBuildRegistrySettings(BaseSettings):
 
 
 class ImageBuildContainerSettings(BaseSettings):
-    pool_selector: str = ""
     cpu_millicores: int = Field(
         default=DEFAULT_IMAGE_BUILD_CONTAINER_CPU_MILLICORES,
         gt=0,

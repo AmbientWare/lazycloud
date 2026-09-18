@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from scheduler.state import RedisSchedulerContainerRepository
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.routing import BackendRouteKind, BackendRouteState
 from shared.scheduling import (
     SchedulerWorkerStatus,
@@ -29,7 +29,7 @@ def test_pending_worker_restores_live_routes_before_registration_recovers(
     worker = WorkerExecutionRecord(
         worker_id="worker-1",
         machine_id="machine-1",
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         capacity_owner_id=_CAPACITY_OWNER_ID,
         status=SchedulerWorkerStatus.Pending,
     )
@@ -42,7 +42,7 @@ def test_pending_worker_restores_live_routes_before_registration_recovers(
         workspace_id="workspace-1",
         worker_id=worker.worker_id,
         machine_id=worker.machine_id,
-        pool=worker.pool,
+        placement=worker.placement,
         address_map={8001: "", 8080: "192.168.0.2:8080"},
     )
     instances.save_container_instance(live)
@@ -60,7 +60,7 @@ def test_pending_worker_restores_live_routes_before_registration_recovers(
         identity=WorkerRouteIdentity(
             worker_id=worker.worker_id,
             machine_id=worker.machine_id,
-            pool=worker.pool,
+            placement=worker.placement,
             pod_address="127.0.0.1",
             container_service_port=9001,
         ),

@@ -171,7 +171,6 @@ class ContainerResourceConfig(BaseModel):
 
     gpu_count: int = Field(default=0, ge=0)
     image_id: str | None = None
-    pool_selector: str | None = None
     runtime: str = OciRuntimeName.Runsc.value
     runtime_class: str | None = None
     docker_enabled: bool = False

@@ -96,6 +96,8 @@ _SPOT_SERVICE_ROLE = (
     "arn:{partition}:iam::{account_id}:role/aws-service-role/"
     "spot.amazonaws.com/AWSServiceRoleForEC2Spot"
 )
+_WORKSPACE_BUCKET = "arn:{partition}:s3:::lazycloud-workspace-*"
+_WORKSPACE_OBJECTS = "arn:{partition}:s3:::lazycloud-workspace-*/*"
 
 
 def connection_role_statements(
@@ -297,6 +299,41 @@ def connection_role_statements(
                 "Action": "iam:PassRole",
                 "Resource": arns.arn(_NODE_ROLE),
                 "Condition": {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}},
+            },
+            # A workspace created in this account keeps its bucket here. The
+            # control plane creates it, vends workloads a session narrowed to it,
+            # and deletes it with the workspace. Only the platform's own name
+            # prefix is reachable, so nothing else in the account is.
+            {
+                "Sid": "ManageWorkspaceBuckets",
+                "Effect": "Allow",
+                "Action": [
+                    "s3:CreateBucket",
+                    "s3:DeleteBucket",
+                    "s3:DeleteBucketPolicy",
+                    "s3:GetBucketCORS",
+                    "s3:GetBucketLocation",
+                    "s3:GetBucketPolicy",
+                    "s3:GetLifecycleConfiguration",
+                    "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads",
+                    "s3:PutBucketCORS",
+                    "s3:PutBucketPolicy",
+                    "s3:PutLifecycleConfiguration",
+                ],
+                "Resource": arns.arn(_WORKSPACE_BUCKET),
+            },
+            {
+                "Sid": "AccessWorkspaceObjects",
+                "Effect": "Allow",
+                "Action": [
+                    "s3:AbortMultipartUpload",
+                    "s3:DeleteObject",
+                    "s3:GetObject",
+                    "s3:ListMultipartUploadParts",
+                    "s3:PutObject",
+                ],
+                "Resource": arns.arn(_WORKSPACE_OBJECTS),
             },
         ]
     )

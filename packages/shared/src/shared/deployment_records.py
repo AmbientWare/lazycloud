@@ -7,14 +7,18 @@ from typing import Annotated
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.autoscaling import QueueDepthAutoscaler
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.contracts import ContractModel
 from shared.custom_domains import normalize_assignable_hostname
 from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
-from shared.placement import AvailabilityZone, ProductRegion, validate_placement_pool
+from shared.placement import (
+    AvailabilityZone,
+    Placement,
+    ProductRegion,
+    validate_placement_machine,
+)
 from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
@@ -351,13 +355,11 @@ class DeploymentSpec(ContractModel):
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> DeploymentSpec:
-        pool = self.metadata.get("pool")
-        if isinstance(pool, dict):
-            pool = pool.get("name")
-        validate_placement_pool(
+        machine = self.metadata.get("machine")
+        validate_placement_machine(
             self.resources.region,
             self.resources.availability_zone,
-            pool if isinstance(pool, str) else None,
+            machine if isinstance(machine, str) else None,
         )
         # A schedule fires an invocation, and a function is the only kind that
         # has one. Refused here rather than at the tick, where the schedule
@@ -410,12 +412,14 @@ class Deployment(ContractModel):
     resources sharing a hostname does not treat every unclaimed resource as sharing
     one.
     """
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
-    """Pool this deployment was pinned to when it was created.
+    placement: Placement = Placement.platform()
+    """Where this deployment was pinned when it was created.
 
-    Resolved once at deploy time: a workspace that later changes its default
-    must not move workloads already running.
+    Derived, never chosen: the workspace's location, or the named machine.
+    Resolved once at deploy time so running workloads never move.
     """
+    machine: str = ""
+    """The joined machine this deployment is pinned to by name, or empty."""
     active: bool = True
     deleted_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)

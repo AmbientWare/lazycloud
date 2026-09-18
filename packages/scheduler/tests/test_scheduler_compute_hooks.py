@@ -14,7 +14,7 @@ from pydantic import JsonValue
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import RedisSchedulerWorkerRepository, SchedulerWorkerRecord
-from shared.compute_policy import MachinePool
+from shared.placement import Placement
 from shared.timestamps import utc_now
 
 
@@ -29,7 +29,7 @@ def test_compute_observation_does_not_treat_missing_intake_or_drain_as_machine_f
         worker_id=agent_machine_worker_id(machine_id),
         capacity_owner_id="11111111-1111-4111-8111-111111111111",
         machine_id=machine_id,
-        pool=MachinePool("default"),
+        placement=Placement.platform(),
         status=SchedulerWorkerStatus.Available,
         request_poll_expires_at=utc_now() - timedelta(seconds=1),
     )
@@ -60,7 +60,7 @@ def test_scheduler_compute_hooks_disable_machine_workers(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id="worker-machine-one",
-            pool=MachinePool("gpu-pool"),
+            placement=Placement.machine("gpu-pool"),
             machine_id="machine-one",
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=4000,
@@ -77,7 +77,7 @@ def test_scheduler_compute_hooks_disable_machine_workers(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=fallback_worker_id,
-            pool=MachinePool("gpu-pool"),
+            placement=Placement.machine("gpu-pool"),
             machine_id="",
             status=SchedulerWorkerStatus.Available,
             total_cpu_millicores=4000,
@@ -116,7 +116,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="agent-token-hash",
             workspace_id="ws-1",
-            pool=MachinePool("aws-pool"),
+            placement=Placement.machine("aws-pool"),
             machine_id=machine_id,
             executor="docker",
             preflight_passed=True,
@@ -131,7 +131,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             token_hash="join-token-hash",
             workspace_id="ws-1",
-            pool=MachinePool("aws-pool"),
+            placement=Placement.machine("aws-pool"),
             expires_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
     )
@@ -139,7 +139,7 @@ def test_scheduler_compute_hooks_retire_provider_machine_hot_state(
         SchedulerWorkerRecord(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             worker_id=worker_id,
-            pool=MachinePool("aws-pool"),
+            placement=Placement.machine("aws-pool"),
             machine_id=machine_id,
             status=SchedulerWorkerStatus.Available,
             created_at=now,

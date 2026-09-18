@@ -22,6 +22,7 @@ export const workspaceSchema = z
     signing_key_prefix: z.string().nullable(),
     primary_token_id: z.string().nullable(),
     concurrency_limit_id: z.string().nullable(),
+    connection_id: z.string().nullable(),
     storage: workspaceStorageSchema,
     labels: z.record(z.string()),
     metadata: z.record(jsonValueSchema),

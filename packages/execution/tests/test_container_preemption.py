@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
@@ -28,7 +29,9 @@ def _running_task(
     leaves empty, and the claim-side lookup that actually runs would go untested.
     """
 
-    control = ControlPlaneService(services.context)
+    control = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    )
     stub = control.create_stub(name, kind=kind)
     task = services.tasks.create(
         name,

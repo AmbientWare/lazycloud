@@ -10,12 +10,15 @@ import pytest
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
 from compute.agent_control import agent_machine_worker_id, hash_compute_token
-from compute.state import RedisComputeStateRepository
+from compute.policy import WorkspaceComputePolicyService
+from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
+from database.repositories.apps import StubRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
 )
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from gateway.http import (
@@ -25,9 +28,14 @@ from gateway.http import (
     LeaveAgentRequest,
     StreamAgentRequest,
 )
-from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
+from gateway.service import GatewayControlService
 from observability.usage import UsageService
 from operations.management import ManagementService
+from scheduler.agent_pool import (
+    AgentPoolConfig,
+    agent_machine_worker_record,
+    agent_pool_config_from_pool,
+)
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.state import (
@@ -40,20 +48,19 @@ from shared.agent_connections import AgentConnectionRecord
 from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
-    ComputeCredentialStatus,
     ComputePreflightCheck,
     MachineReadinessPhase,
     PreflightSeverity,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
-    MachinePool,
     UnitName,
 )
-from shared.errors import ConflictError, InvalidInputError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
 from shared.identity import TokenKind, WorkspaceStatus
+from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
@@ -66,14 +73,14 @@ from worker_repository.source_cache import WorkerSourceCacheService
 
 def _create_join_token(
     gateway: GatewayControlService,
-    pool: MachinePool,
+    unit_name: str,
     workspace_id: str,
 ):
     # The credential names the account the machine will belong to, so the workspace
     # has to have the owner row production writes with it.
     workspace_owner_user_id(gateway.services.context, workspace_id)
     return gateway.unit_state_coordinator.create_unit_join_token(
-        gateway.unit_state_coordinator.unit_by_name(UnitName(pool), workspace_id=workspace_id),
+        gateway.unit_state_coordinator.unit_by_name(UnitName(unit_name), workspace_id=workspace_id),
         workspace_id=workspace_id,
         owner_token_id="local-cli",
     )
@@ -81,10 +88,21 @@ def _create_join_token(
 
 def _pool_machines(
     gateway: GatewayControlService,
-    pool: MachinePool,
+    unit_name: str,
     workspace_id: str,
 ) -> list[UnitMachineResponse]:
-    return [machine for machine in gateway.machine_views(workspace_id) if machine.pool == pool]
+    try:
+        unit = gateway.unit_state_coordinator.unit_by_name(
+            UnitName(unit_name), workspace_id=workspace_id
+        )
+    except NotFoundError:
+        return []
+    owned = {
+        machine.id
+        for machine in gateway.services.compute.list_machines(workspace=workspace_id)
+        if machine.capacity_owner_id == unit.capacity_owner_id
+    }
+    return [machine for machine in gateway.machine_views(workspace_id) if machine.id in owned]
 
 
 def _record_agent_connection(
@@ -150,14 +168,14 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
         workspace=workspace_id,
     )
     gateway = isolated_services.gateway_service
-    bootstrap = _create_join_token(gateway, MachinePool("customer-machines"), workspace_id)
+    bootstrap = _create_join_token(gateway, "customer-machines", workspace_id)
 
     joined = gateway.join_agent(_join_request(bootstrap.token))
     _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
 
     assert UUID(joined.machine_id)
     assert joined.bootstrap is not None
-    view = _pool_machines(gateway, MachinePool("customer-machines"), workspace_id)[0]
+    view = _pool_machines(gateway, "customer-machines", workspace_id)[0]
     assert view.readiness_phase is MachineReadinessPhase.Joining
     assert not view.schedulable
     assert {
@@ -172,7 +190,6 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool=MachinePool("customer-machines"),
         )
         worker = WorkerRepository(session).get_across_workspaces(
             agent_machine_worker_id(joined.machine_id)
@@ -188,11 +205,11 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     assert enrollment.machine_fingerprint_hash != "host-fingerprint"
     assert worker is not None
     assert worker.machine_id == joined.machine_id
-    assert worker.pool == "customer-machines"
+    assert worker.placement == Placement.platform()
 
     heartbeat = gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token))
     assert heartbeat.ok
-    ready = _pool_machines(gateway, MachinePool("customer-machines"), workspace_id)[0]
+    ready = _pool_machines(gateway, "customer-machines", workspace_id)[0]
     assert ready.readiness_phase is MachineReadinessPhase.Ready
     assert ready.schedulable
 
@@ -210,7 +227,6 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
         rotated = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             rejoined.machine_id,
-            pool=MachinePool("customer-machines"),
         )
         credential = ComputeJoinCredentialRepository(session).get_by_hash(
             hash_compute_token(bootstrap.token)
@@ -229,7 +245,7 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
 ) -> None:
     services = isolated_services
     workspace_id = _workspace_id(services)
-    pool = MachinePool("worker-image-update")
+    pool = "worker-image-update"
     unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
     gateway = services.gateway_service
     select_worker_release("registry.test/worker@sha256:old")
@@ -244,7 +260,7 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     scheduler_workers.add_worker(
         SchedulerWorkerRecord(
             worker_id=worker_id,
-            pool=pool,
+            placement=Placement.platform(),
             capacity_owner_id=unit.capacity_owner_id,
             workspace_id=workspace_id,
             machine_id=joined.machine_id,
@@ -324,7 +340,7 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
         workspace=workspace_id,
     )
     gateway = isolated_services.gateway_service
-    bootstrap = _create_join_token(gateway, MachinePool("preemptible-machines"), workspace_id)
+    bootstrap = _create_join_token(gateway, "preemptible-machines", workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
@@ -351,12 +367,11 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool=MachinePool("preemptible-machines"),
         )
     assert enrollment is not None
     assert not enrollment.schedulable
     assert enrollment.capacity_state is AgentCapacityState.Preempting
-    machine = _pool_machines(gateway, MachinePool("preemptible-machines"), workspace_id)[0]
+    machine = _pool_machines(gateway, "preemptible-machines", workspace_id)[0]
     assert not machine.schedulable
     assert machine.capacity_state is AgentCapacityState.Preempting
 
@@ -382,7 +397,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
         workspace=workspace_id,
     )
     gateway = isolated_services.gateway_service
-    first_token = _create_join_token(gateway, MachinePool("cleanup-machines"), workspace_id)
+    first_token = _create_join_token(gateway, "cleanup-machines", workspace_id)
     first = gateway.join_agent(_join_request(first_token.token, fingerprint="first-host"))
     first_enrollment_id = _record_agent_connection(
         gateway,
@@ -393,7 +408,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
 
     left = gateway.leave_agent(LeaveAgentRequest(agent_token=first.agent_token))
     assert left.machine_id == first.machine_id
-    assert _pool_machines(gateway, MachinePool("cleanup-machines"), workspace_id) == []
+    assert _pool_machines(gateway, "cleanup-machines", workspace_id) == []
     assert not gateway.stream_agent(StreamAgentRequest(agent_token=first.agent_token)).ok
     with isolated_services.context.database.session() as session:
         assert gateway.connections.get(workspace_id, first_enrollment_id) is None
@@ -401,7 +416,6 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
             ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id,
                 first.machine_id,
-                pool=MachinePool("cleanup-machines"),
             )
             is None
         )
@@ -413,14 +427,10 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     isolated_services.compute.create_unit(
         UnitName("cleanup-machines"), provider="agent", workspace=workspace_id
     )
-    second_token = _create_join_token(gateway, MachinePool("cleanup-machines"), workspace_id)
+    second_token = _create_join_token(gateway, "cleanup-machines", workspace_id)
     second = gateway.join_agent(_join_request(second_token.token, fingerprint="second-host"))
     with pytest.raises(ConflictError, match="lazycloud-agent leave"):
-        gateway.delete_machine(
-            second.machine_id,
-            workspace_id=workspace_id,
-            pool=MachinePool("cleanup-machines"),
-        )
+        gateway.delete_machine(second.machine_id, workspace_id=workspace_id)
     assert (
         gateway.compute_states.get_agent_token_state(hash_compute_token(second.agent_token))
         is not None
@@ -437,7 +447,6 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
             ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id,
                 second.machine_id,
-                pool=MachinePool("cleanup-machines"),
             )
             is not None
         )
@@ -453,7 +462,7 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
         workspace=workspace_id,
     )
     gateway = isolated_services.gateway_service
-    bootstrap = _create_join_token(gateway, MachinePool("cache-decommission"), workspace_id)
+    bootstrap = _create_join_token(gateway, "cache-decommission", workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     worker_id = agent_machine_worker_id(joined.machine_id)
     generation = WorkerSourceCacheService(isolated_services.context).register(
@@ -499,7 +508,6 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool=MachinePool("cache-decommission"),
         )
     assert retired is not None
     assert retired.storage_destroyed_at is not None
@@ -516,7 +524,7 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
         workspace=workspace_id,
     )
     gateway = isolated_services.gateway_service
-    bootstrap = _create_join_token(gateway, MachinePool("deleted-machine-pool"), workspace_id)
+    bootstrap = _create_join_token(gateway, "deleted-machine-pool", workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     join_token_hash = hash_compute_token(bootstrap.token)
     agent_token_hash = hash_compute_token(joined.agent_token)
@@ -559,7 +567,9 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
 ) -> None:
     redis = real_redis_actors.client()
     services = isolated_services
-    control = ControlPlaneService(services.context)
+    control = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    )
     owned_workspace(control, "default")
     _raw_token, audit_actor = administrator_credential(
         isolated_services.context, "workspace-delete-admin"
@@ -577,7 +587,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         scheduler_containers=RedisSchedulerContainerRepository(redis),
         scheduler_pool_states=RedisWorkerPoolStateRepository(redis),
     )
-    bootstrap = _create_join_token(gateway, MachinePool("workspace-machine-pool"), workspace.id)
+    bootstrap = _create_join_token(gateway, "workspace-machine-pool", workspace.id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     join_token_hash = hash_compute_token(bootstrap.token)
     agent_token_hash = hash_compute_token(joined.agent_token)
@@ -645,7 +655,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
         workspace=workspace_id,
     )
     gateway = isolated_services.gateway_service
-    bootstrap = _create_join_token(gateway, MachinePool("metered-machines"), workspace_id)
+    bootstrap = _create_join_token(gateway, "metered-machines", workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))
     state = gateway.compute_states.get_agent_token_state(hash_compute_token(joined.agent_token))
     assert state is not None
@@ -672,7 +682,6 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
         failed = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool=MachinePool("metered-machines"),
         )
     assert failed is not None
     assert not failed.heartbeat_confirmed
@@ -690,7 +699,6 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
         saved = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool=MachinePool("metered-machines"),
         )
     assert saved is not None
     assert saved.heartbeat_confirmed
@@ -707,82 +715,127 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
         workspace=workspace_id,
     )
     gateway = isolated_services.gateway_service
-    previous = _create_join_token(gateway, MachinePool("rotated-bootstrap"), workspace_id)
-    current = _create_join_token(gateway, MachinePool("rotated-bootstrap"), workspace_id)
+    previous = _create_join_token(gateway, "rotated-bootstrap", workspace_id)
+    current = _create_join_token(gateway, "rotated-bootstrap", workspace_id)
 
     with pytest.raises(InvalidInputError, match="invalid or expired"):
         gateway.join_agent(_join_request(previous.token))
     assert gateway.join_agent(_join_request(current.token)).machine_id
 
 
-def test_machine_join_command_owns_the_account_self_hosted_fleet(
+def test_machine_join_command_mints_one_named_unit_that_only_serves_by_name(
     isolated_services: ApiServices,
 ) -> None:
-    """A joined host belongs to the account, and one account has one fleet.
+    """A joined machine is its own unit, placed on the machine id, serving only by name.
 
-    The credential is minted for a person, not for wherever they happened to be, so
-    a second workspace the same account owns resolves the same fleet and the same
-    machine rather than a second copy of both.
+    The name is claimed when the command is minted and the workspaces it serves
+    are what the account listed. Its worker is placed on the machine, so nothing
+    lands on it without naming the machine; a second command for a joined name
+    is refused; a workspace with a workload still pinned to the machine cannot
+    be dropped from its list.
     """
     workspace_id = _workspace_id(isolated_services)
     user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    isolated_services.control_plane_service.set_workspace(
+    second_workspace = isolated_services.control_plane_service.set_workspace(
         "second-workspace",
         owner_user_id=user_id,
     )
     gateway = isolated_services.gateway_service
+    with isolated_services.context.database.session() as session:
+        default_name = WorkspaceRepository(session).get(workspace_id)
+    assert default_name is not None
+
+    with pytest.raises(InvalidInputError, match="'nobody-owns-this'"):
+        gateway.machine_join_command(
+            MachineJoinCommandRequest(name="rack-1", workspaces=["nobody-owns-this"]),
+            user_id=user_id,
+            owner_token_id="token-zero",
+        )
 
     first = gateway.machine_join_command(
-        MachineJoinCommandRequest(),
+        MachineJoinCommandRequest(
+            name="rack-1", workspaces=[default_name.name, second_workspace.name]
+        ),
         user_id=user_id,
         owner_token_id="token-one",
     )
 
     assert gateway.gateway_endpoint.http_url in first.command
-    fleets = [
+    pending = gateway.machine_responses(workspace_id=workspace_id)
+    assert [(item.name, item.status, sorted(item.workspaces)) for item in pending] == [
+        ("rack-1", ResourceStatus.Created, sorted([default_name.name, second_workspace.name]))
+    ]
+    placement = Placement.machine(pending[0].id)
+    units = [
         unit
         for unit in isolated_services.compute.list_units(workspace=workspace_id)
-        if unit.pool == SELF_HOSTED_FLEET_POOL_NAME
+        if unit.placement == placement
     ]
-    assert len(fleets) == 1
-    assert fleets[0].provider == "agent"
+    assert len(units) == 1 and units[0].provider == "agent"
 
     command_words = shlex.split(first.command)
     join_token = command_words[command_words.index("--join-token") + 1]
     joined = gateway.join_agent(_join_request(join_token))
-    assert [machine.id for machine in gateway.account_machine_views(user_id)] == [joined.machine_id]
+    assert joined.placement == placement
+    assert [machine.id for machine in gateway.account_machine_views(user_id)] == [pending[0].id]
+    assert joined.machine_id == pending[0].id
     with isolated_services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            workspace_id,
-            joined.machine_id,
+            workspace_id, joined.machine_id
         )
-    assert enrollment is not None
-    assert enrollment.user_id == user_id
+        durable = MachineRepository(session).get(joined.machine_id, workspace_id=workspace_id)
+    assert enrollment is not None and enrollment.user_id == user_id
+    assert durable is not None and durable.name == "rack-1"
+    assert set(durable.workspace_ids) == {workspace_id, second_workspace.id}
 
-    second = gateway.machine_join_command(
-        MachineJoinCommandRequest(gpu=["A10G"]),
-        user_id=user_id,
-        owner_token_id="token-two",
-    )
-
-    assert second.command
-    fleets = [
-        unit
-        for unit in isolated_services.compute.list_units(workspace=workspace_id)
-        if unit.pool == SELF_HOSTED_FLEET_POOL_NAME
-    ]
-    assert len(fleets) == 1
-    assert fleets[0].worker_gpu_type == "A10G"
-
+    policies = isolated_services.workspace_compute_policy_service
     with isolated_services.context.database.session() as session:
-        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
-            workspace_id,
-            fleets[0].capacity_owner_id,
+        assert policies.resolve_placement(session, default_name, "rack-1") == placement
+        assert policies.resolve_placement(session, default_name, "") == Placement.platform()
+    _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
+    worker = agent_machine_worker_record(
+        _agent_state(gateway, joined.agent_token),
+        agent_pool_config_from_pool(units[0]) or _fail("agent unit expected"),
+    )
+    assert worker.placement == placement and worker.private_worker
+
+    control_plane = isolated_services.control_plane_service
+    pinned = control_plane.create_stub(
+        "pinned-to-rack-1", workspace=workspace_id, config={"machine": "rack-1"}
+    )
+    assert pinned.placement == placement
+    with pytest.raises(ConflictError, match="still name machine 'rack-1'"):
+        gateway.update_machine_workspaces(
+            "rack-1", user_id=user_id, workspace_names=[second_workspace.name]
         )
-    used, active = sorted(credentials, key=lambda credential: credential.created_at)
-    assert used.status is ComputeCredentialStatus.Revoked
-    assert active.status is ComputeCredentialStatus.Active
-    assert {credential.user_id for credential in credentials} == {user_id}
+    with isolated_services.context.database.session() as session:
+        assert StubRepository(session).delete(pinned.id, workspace_id=workspace_id)
+    updated = gateway.update_machine_workspaces(
+        "rack-1", user_id=user_id, workspace_names=[second_workspace.name]
+    )
+    assert updated.workspaces == [second_workspace.name]
+    with (
+        pytest.raises(InvalidInputError, match="'rack-1'"),
+        isolated_services.context.database.session() as session,
+    ):
+        policies.resolve_placement(session, default_name, "rack-1")
+
+    with pytest.raises(ConflictError, match="already joined"):
+        gateway.machine_join_command(
+            MachineJoinCommandRequest(name="rack-1", workspaces=[default_name.name]),
+            user_id=user_id,
+            owner_token_id="token-two",
+        )
+
+
+def _agent_state(gateway: GatewayControlService, agent_token: str) -> ComputeAgentTokenState:
+    state = gateway.compute_states.get_agent_token_state(hash_compute_token(agent_token))
+    assert state is not None
+    return state
+
+
+def _fail(message: str) -> AgentPoolConfig:
+    raise AssertionError(message)
 
 
 @pytest.mark.anyio
@@ -795,7 +848,7 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
     # keeps saying Ready for a host that is switched off, and the only place the
     # truth appears is a view that recomputes it per request and writes nothing.
     workspace_id = _workspace_id(async_services)
-    pool = MachinePool("silent-machines")
+    pool = "silent-machines"
     async_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
     gateway = async_services.gateway_service
     bootstrap = _create_join_token(gateway, pool, workspace_id)
@@ -829,7 +882,6 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
             workspace_id,
             joined.machine_id,
-            pool=pool,
         )
         machine = MachineRepository(session).get(joined.machine_id, workspace_id=workspace_id)
     assert enrollment is not None

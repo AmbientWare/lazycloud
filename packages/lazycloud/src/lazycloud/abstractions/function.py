@@ -61,7 +61,7 @@ from lazycloud._invocation import encode_arguments, prepare_arguments, serialize
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
-    PoolInput,
+    MachineInput,
     RetryPolicyInput,
     SchemaInput,
     build_resource_metadata,
@@ -158,7 +158,7 @@ class FunctionOptions(TypedDict, total=False):
     preemptible: bool
     region: str | None
     availability_zone: str
-    pool: PoolInput
+    machine: MachineInput
     metadata: dict[str, Any] | None
 
 
@@ -202,7 +202,7 @@ class Function(Generic[P, R]):
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
     region: str | None = None
     availability_zone: str = ""
-    pool: PoolInput = None
+    machine: MachineInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = field(default="", init=False)
     client: _FunctionClient | None = field(default=None, init=False, repr=False)
@@ -273,7 +273,7 @@ class Function(Generic[P, R]):
         secrets: Iterable[str] | None = None,
         region: str | None = None,
         availability_zone: str | None = None,
-        pool: PoolInput = None,
+        machine: MachineInput = None,
         preemptible: bool | None = None,
     ) -> Function[P, R]:
         """Apply explicit authoring overrides before preparation or invocation."""
@@ -291,8 +291,8 @@ class Function(Generic[P, R]):
             self.env.update(env)
         if secrets:
             self.secrets.extend(secret for secret in secrets if secret not in self.secrets)
-        if pool is not None:
-            self.pool = pool
+        if machine is not None:
+            self.machine = machine
         if region is not None:
             self.region = region
         if availability_zone is not None:
@@ -364,7 +364,7 @@ class Function(Generic[P, R]):
                     else schema_from_contract_return(client_contract)
                 ),
                 docker_enabled=self.docker_enabled,
-                pool=self.pool,
+                machine=self.machine,
                 extra=self.metadata,
             ),
             client_contract=client_contract,
@@ -863,7 +863,7 @@ def _function(
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
     availability_zone: str = "",
-    pool: PoolInput = None,
+    machine: MachineInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Function[P, R]: ...
 
@@ -909,7 +909,7 @@ def _function(
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
     availability_zone: str = "",
-    pool: PoolInput = None,
+    machine: MachineInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]]: ...
 
@@ -954,7 +954,7 @@ def _function(
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
     region: str | None = None,
     availability_zone: str = "",
-    pool: PoolInput = None,
+    machine: MachineInput = None,
     metadata: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]] | Function[P, R]:
     def decorate(target: Callable[P, R]) -> Function[P, R]:
@@ -997,7 +997,7 @@ def _function(
             preemptible=preemptible,
             region=region,
             availability_zone=availability_zone,
-            pool=pool,
+            machine=machine,
             metadata=metadata or {},
         )
 

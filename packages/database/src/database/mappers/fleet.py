@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, Worker
+from shared.placement import Placement
 from shared.timestamps import to_utc, to_utc_or_none
 
-from database.tables.orchestration import AgentLeaseTable, AgentTable, MachineTable, WorkerTable
+from database.tables.orchestration import (
+    AgentLeaseTable,
+    AgentTable,
+    MachineTable,
+    MachineWorkspaceTable,
+    WorkerTable,
+)
 
 
 def machine_from_row(row: MachineTable) -> Machine:
     return Machine.model_validate(
         {
             "id": row.id,
-            "pool": row.pool,
+            "name": row.name or "",
+            "workspace_ids": tuple(link.workspace_id for link in row.workspaces),
+            "placement": Placement.parse(row.placement),
             "capacity_owner_id": row.capacity_owner_id,
             "provider": row.provider,
             "status": row.status,
@@ -27,7 +36,13 @@ def machine_from_row(row: MachineTable) -> Machine:
 
 
 def write_machine(row: MachineTable, record: Machine) -> None:
-    row.pool = record.pool
+    row.name = record.name or None
+    current_links = {link.workspace_id: link for link in row.workspaces}
+    row.workspaces = [
+        current_links.get(workspace_id) or MachineWorkspaceTable(workspace_id=workspace_id)
+        for workspace_id in dict.fromkeys(record.workspace_ids)
+    ]
+    row.placement = record.placement.key
     row.capacity_owner_id = record.capacity_owner_id
     row.provider = record.provider
     row.status = record.status.value
@@ -44,7 +59,7 @@ def worker_from_row(row: WorkerTable) -> Worker:
         {
             "id": row.id,
             "machine_id": row.machine_id,
-            "pool": row.pool,
+            "placement": Placement.parse(row.placement),
             "status": row.status,
             "labels": row.labels,
             "last_seen_at": to_utc(row.last_seen_at),
@@ -55,7 +70,7 @@ def worker_from_row(row: WorkerTable) -> Worker:
 
 def write_worker(row: WorkerTable, record: Worker) -> None:
     row.machine_id = record.machine_id
-    row.pool = record.pool
+    row.placement = record.placement.key
     row.status = record.status.value
     row.labels = dict(record.labels)
     row.last_seen_at = record.last_seen_at
@@ -66,7 +81,7 @@ def agent_from_row(row: AgentTable) -> AgentRecord:
         {
             "id": row.id,
             "name": row.name,
-            "pool": row.pool,
+            "placement": Placement.parse(row.placement),
             "status": row.status,
             "version": row.version,
             "capacity": row.capacity,
@@ -81,7 +96,7 @@ def agent_from_row(row: AgentTable) -> AgentRecord:
 
 def write_agent(row: AgentTable, record: AgentRecord) -> None:
     row.name = record.name
-    row.pool = record.pool
+    row.placement = record.placement.key
     row.status = record.status.value
     row.version = record.version
     row.capacity = dict(record.capacity)

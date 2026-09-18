@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.execution import PodUrlRepository
 from database.repositories.orchestration import ContainerRepository
@@ -107,7 +108,10 @@ async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
     selection is decided by tie-break among backends that are not equivalent.
     """
 
-    control = ControlPlaneService(async_services.context)
+    control = ControlPlaneService(
+        async_services.context,
+        placement_resolver=WorkspaceComputePolicyService(async_services.context),
+    )
     stub = control.create_stub(f"pod-readiness-{uuid4().hex[:8]}", kind=StubKind.Pod)
     with async_services.context.database.session() as session:
         workspace_id = async_services.context.default_workspace_id(session)
@@ -149,7 +153,10 @@ async def test_pod_proxy_routes_past_a_container_whose_workload_is_not_serving(
 async def test_pinned_sandbox_route_uses_durable_runtime_assignment(
     async_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(async_services.context)
+    control = ControlPlaneService(
+        async_services.context,
+        placement_resolver=WorkspaceComputePolicyService(async_services.context),
+    )
     stub = control.create_stub(f"sandbox-route-{uuid4().hex[:8]}", kind=StubKind.Sandbox)
     container = ContainerRecord(
         id=str(uuid4()),

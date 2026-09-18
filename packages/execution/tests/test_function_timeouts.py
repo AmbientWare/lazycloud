@@ -2,6 +2,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
+from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.execution import TaskAttemptRepository
 from database.repositories.orchestration import ContainerRepository
@@ -14,7 +15,9 @@ def test_timeout_fences_retried_attempts_and_recovers_the_container_stop(
     isolated_services: ApiServices,
 ) -> None:
     services = isolated_services
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlPlaneService(
+        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
+    ).create_stub(
         "timed-function", kind=StubKind.Function, config={"runtime": {"timeout_seconds": 2}}
     )
     with services.context.database.session() as session:

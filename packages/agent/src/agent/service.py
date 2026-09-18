@@ -9,11 +9,10 @@ from database.repositories.orchestration import AgentLeaseRepository, AgentRepos
 from database.types import DatabaseSession
 from foundation.ids import required_uuid
 from observability.workspace_changes import WorkspaceChangePublisher
-from shared.app_identity import ADMIN_CLI_NAME
 from shared.compute_fleet import AgentLease, AgentRecord, LeaseStatus, ResourceStatus
-from shared.compute_policy import MachinePool
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceRecord
+from shared.placement import Placement
 from shared.timestamps import utc_now
 
 from database import DatabaseClient
@@ -53,7 +52,7 @@ class AgentService:
         self,
         name: str,
         *,
-        pool: MachinePool = MachinePool("default"),
+        placement: Placement = Placement.platform(),
         version: str = "local",
         capacity: dict[str, int | float | str] | None = None,
         labels: dict[str, str] | None = None,
@@ -65,13 +64,12 @@ class AgentService:
                 AgentRecord(
                     id=str(uuid4()),
                     name=name,
-                    pool=pool,
+                    placement=placement,
                     version=version,
                     capacity=capacity or {},
                     labels=labels or {},
                     status=ResourceStatus.Running,
                     last_seen_at=utc_now(),
-                    install_command=f"{ADMIN_CLI_NAME} agent join --name {name} --pool {pool}",
                 ),
                 workspace_id=workspace_id,
             )
