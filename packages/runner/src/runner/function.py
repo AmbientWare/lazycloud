@@ -34,6 +34,7 @@ from shared.env import (
     truthy_env_value,
 )
 from shared.errors import InvalidInputError
+from shared.function_display import build_function_result_display
 from shared.function_payloads import (
     FUNCTION_MARKER_MAX_DEPTH,
     FUNCTION_MARKER_MAX_NODES,
@@ -1062,13 +1063,9 @@ def _serialize_function_result(
         raise ValueError(
             f"return value of type {type(result).__name__} cannot be serialized as a Python result"
         ) from exc
-    try:
-        preview = repr(result)
-    except Exception as exc:
-        preview = f"<result preview unavailable: {type(exc).__name__}>"
-    if len(preview) > 4096:
-        preview = preview[:4093] + "..."
-    return FunctionCloudpickleResult.from_bytes(payload, preview=preview)
+    return FunctionCloudpickleResult.from_bytes(
+        payload, display=build_function_result_display(result)
+    )
 
 
 if __name__ == "__main__":

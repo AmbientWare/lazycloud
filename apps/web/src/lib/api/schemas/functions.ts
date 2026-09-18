@@ -14,6 +14,43 @@ const functionJsonResultSchema = z
   })
   .strict();
 
+const functionResultHtmlDisplaySchema = z
+  .object({
+    kind: z.literal("html"),
+    html: z
+      .string()
+      .min(1)
+      .max(256 * 1024),
+  })
+  .strict();
+
+const functionResultImageDisplaySchema = z
+  .object({
+    kind: z.literal("image"),
+    media_type: z.literal("image/png").default("image/png"),
+    value_base64: z.string().min(1),
+    size_bytes: z
+      .number()
+      .int()
+      .min(1)
+      .max(1024 * 1024),
+  })
+  .strict();
+
+export const functionResultRichDisplaySchema = z.discriminatedUnion("kind", [
+  functionResultHtmlDisplaySchema,
+  functionResultImageDisplaySchema,
+]);
+export type FunctionResultRichDisplay = z.infer<typeof functionResultRichDisplaySchema>;
+
+export const functionResultDisplaySchema = z
+  .object({
+    text: z.string().max(64 * 1024),
+    rich: functionResultRichDisplaySchema.nullable().default(null),
+  })
+  .strict();
+export type FunctionResultDisplay = z.infer<typeof functionResultDisplaySchema>;
+
 const functionCloudpickleResultSchema = z
   .object({
     version: z.literal(1).default(1),
@@ -25,7 +62,7 @@ const functionCloudpickleResultSchema = z
       .min(0)
       .max(16 * 1024 * 1024),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
-    preview: z.string().max(4096).nullable().default(null),
+    display: functionResultDisplaySchema.nullable().default(null),
   })
   .strict();
 
@@ -33,6 +70,8 @@ export const functionResultSchema = z.discriminatedUnion("encoding", [
   functionJsonResultSchema,
   functionCloudpickleResultSchema,
 ]);
+export type FunctionResult = z.infer<typeof functionResultSchema>;
+export type FunctionCloudpickleResult = z.infer<typeof functionCloudpickleResultSchema>;
 
 export const functionInvokeResponseSchema = z
   .object({

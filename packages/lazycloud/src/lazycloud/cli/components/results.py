@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 from pydantic import JsonValue
 from rich.pretty import Pretty
+from rich.text import Text
 
+from lazycloud.cli.components import theme
 from lazycloud.cli.components.cards import CardTone, notice_card, result_card
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import console, emit, json_default, json_output_enabled
+from lazycloud.cli.components.output import (
+    console,
+    emit,
+    error_console,
+    json_default,
+    json_output_enabled,
+)
+from lazycloud.cli.result_output import ResultExport, rich_display_hint
 
 
-def emit_python_result(ctx: typer.Context, value: object) -> None:
+def emit_python_result(ctx: typer.Context, value: object, *, output: Path | None = None) -> None:
+    export = ResultExport.from_value(value)
+    if output is not None:
+        export.write(output)
     if json_output_enabled(ctx):
         try:
             payload = json_default(value)
@@ -29,6 +43,12 @@ def emit_python_result(ctx: typer.Context, value: object) -> None:
         console.print(value, markup=False, highlight=False)
     else:
         console.print(Pretty(value))
+    if output is not None:
+        error_console.print(Text(f"Saved {output}", style=theme.MUTED))
+        return
+    display = export.display()
+    if display is not None and display.rich is not None:
+        error_console.print(rich_display_hint(display.rich))
 
 
 def emit_result(

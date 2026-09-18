@@ -83,27 +83,16 @@ if __name__ == "__main__":
     print(result.shape, result.dtype)
 ```
 
-Install NumPy in the calling environment too. Use `np.ndarray` or
-`numpy.typing.NDArray` as the annotation; `np.array` is a constructor.
-Custom classes defined in importable modules require that code on the caller.
-Use matching Python and dependency versions in the caller and container.
+The caller needs the same packages, and the same code for custom classes, with
+matching Python and dependency versions.
 
-Python calls bind arguments using the function's signature without converting
-them based on annotations. Explicit `inputs` and `outputs` schemas still validate
-values. `.async_remote()`, `.spawn().get()`, and `.map()` use the same result
-serialization. A function can also receive a previous `FunctionCall` as an argument.
-Dependencies can appear inside containers or custom objects. Their results replace
-the call references while preserving collection types, cycles, and shared references.
+A function can take a previous `FunctionCall` as an argument; its result
+replaces the reference. HTTP calls, the playground, and exported client
+packages need JSON-compatible values, so call Python-only functions through the
+SDK. Only load Python objects from code you trust; unpickling can execute code.
 
-HTTP calls, the JSON playground, and exported JSON client packages require
-JSON-compatible contracts. Call Python-only functions through their source SDK
-objects by importing the decorated function and calling `.remote()`. Generic task
-inspection displays a preview without deserializing Python objects. Only retrieve
-Python objects from code you trust. Unpickling can execute code.
-
-Serialized arguments and results are limited to 16 MiB each. Store larger outputs
-as artifacts and return a reference. Live connections, locks, and generators
-are not portable return values.
+Arguments and results are limited to 16 MiB each. Store larger outputs as
+artifacts and return a reference.
 
 ## Preview while you edit
 
@@ -225,10 +214,8 @@ each slot uses its own process. `in_process=True` shares one interpreter,
 which can avoid loading a GPU model once per process. CPU-bound Python code
 in those slots contends for the GIL.
 
-With multiple process slots, cancelling a call replaces only its slot. Other
-slots continue in the same container. Cancelling a single-slot function or an
-`in_process=True` function stops the container. Other calls in a shared
-interpreter restart and may repeat partial side effects.
+Cancelling a call in a shared interpreter stops the container, so other calls
+in it restart and may repeat side effects.
 
 To add containers as calls queue up:
 

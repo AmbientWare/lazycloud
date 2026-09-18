@@ -13,7 +13,7 @@ commands for an earlier run, a scheduled task, or work submitted with `.spawn()`
 ```bash
 uv run lazycloud task list [--limit <n>] [--app <name>]          # recent tasks, default 100
 uv run lazycloud task show TASK_ID                                # status, timing, deployment, container
-uv run lazycloud task result TASK_ID [--no-wait] [--timeout <s>]  # waits for completion by default
+uv run lazycloud task result TASK_ID [--no-wait] [--timeout <s>] [--output FILE]  # waits for completion by default
 uv run lazycloud task logs TASK_ID [--limit <n>]                  # recent log lines, default 250
 uv run lazycloud task stop TASK_IDS...                            # stop running tasks
 uv run lazycloud task cancel TASK_ID                              # cancel a pending task
