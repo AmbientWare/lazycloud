@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal, TypeAlias, TypeGuard
 
 from pydantic import Field, JsonValue, model_validator
 
@@ -182,6 +182,20 @@ class FunctionCloudpickleResult(EncodedBytesBody):
             display=display,
         )
 
+    @model_validator(mode="before")
+    @classmethod
+    def accept_preview(cls, data: object) -> object:
+        # Workers still on a release before 0.1.15 describe the result as
+        # `preview`. A release rolls out one worker at a time, so rejecting it
+        # fails every function result on workers that have not switched yet.
+        if not _is_json_object(data) or "preview" not in data:
+            return data
+        data = dict(data)
+        preview = data.pop("preview")
+        if data.get("display") is None and isinstance(preview, str) and preview:
+            data["display"] = {"text": preview}
+        return data
+
     @model_validator(mode="after")
     def validate_content(self) -> FunctionCloudpickleResult:
         _validate_binary_payload(
@@ -233,6 +247,10 @@ def _validate_json_size(value: JsonValue, *, kind: str) -> None:
 
 def _json_bytes(value: JsonValue) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _is_json_object(value: object) -> TypeGuard[dict[str, object]]:
+    return isinstance(value, dict)
 
 
 def _validate_binary_size(value: bytes, *, kind: str) -> None:
