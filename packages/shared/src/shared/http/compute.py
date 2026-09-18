@@ -16,7 +16,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_fleet import ResourceStatus
-from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, ComputeUnitPhase, MachinePool
+from shared.compute_policy import ComputeUnitPhase, MachinePool
 from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerStatus
 from shared.http.apps import AppResponse
@@ -116,19 +116,11 @@ class UnitScaleResponse(HttpModel):
     degraded_reason: str | None = None
 
 
-class MachineCreateRequest(HttpModel):
-    provider: str = "local"
-    cpu: float | None = None
-    memory: str | None = None
-    gpu: str | None = None
-    gpu_count: int = Field(default=0, ge=0)
-    address: str | None = None
-    labels: dict[str, str] = Field(default_factory=dict)
-
-
 class MachineResponse(HttpModel):
     id: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
+    name: str = ""
+    workspaces: list[str] = Field(default_factory=list)
+    """Names of the workspaces this machine may run workloads for."""
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
     cpu: float | None = None
@@ -146,15 +138,17 @@ class MachineListResponse(HttpModel):
 
 
 class MachineJoinCommandRequest(HttpModel):
-    """Request the join command for a workspace's self-hosted fleet.
+    """Request the join command for one machine the account owns.
 
-    Naming a pool creates it: a caller may join machines into any group they
-    choose, including one an auto-scaling unit already feeds. Left empty, the
-    workspace's implicit self-hosted fleet answers.
+    The name is how workloads pin to it, so it is unique across the account.
+    The workspaces are the only ones whose workloads may land on it.
     """
 
     ttl: str = ""
-    pool: MachinePool = MachinePool(Field(default="", max_length=240))
+    name: str = Field(
+        min_length=1, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$"
+    )
+    workspaces: list[str] = Field(min_length=1)
     gpu: list[str] = Field(default_factory=list)
 
 
@@ -355,7 +349,6 @@ __all__ = [
     "ContainerStopAllResponse",
     "ContainerWithAppPageResponse",
     "ContainerWithAppResponse",
-    "MachineCreateRequest",
     "MachineJoinCommandRequest",
     "MachineJoinCommandResponse",
     "MachineListResponse",

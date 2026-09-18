@@ -89,13 +89,8 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
         WorkspaceStorageConfig(
             backend="s3",
             bucket="workspace-bucket",
-            config={
-                "endpoint_url": "http://object-store:9000",
-                "region": "us-east-1",
-                "access_key": "access",
-                "secret_key": "secret",
-                "force_path_style": True,
-            },
+            endpoint_url="http://object-store:9000",
+            region="us-east-1",
         ),
     )
 

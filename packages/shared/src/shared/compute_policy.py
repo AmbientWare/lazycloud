@@ -79,10 +79,6 @@ class WorkspaceComputePolicy(ContractModel):
     id: str = Field(pattern=_UUID_PATTERN)
     workspace_id: str = Field(pattern=_UUID_PATTERN)
     revision: int = Field(default=1, ge=1)
-    default_pool: MachinePool = Field(
-        default=MachinePool(LAZYCLOUD_MACHINE_POOL), min_length=1, max_length=240
-    )
-    """Pool workloads land in when they name none."""
     created_at: datetime
     updated_at: datetime
 

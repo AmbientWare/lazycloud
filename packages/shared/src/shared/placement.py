@@ -57,10 +57,10 @@ def product_region(provider_region: str) -> ProductRegion | None:
     return _PROVIDER_REGIONS.get(provider_region)
 
 
-def validate_placement_pool(
-    region: ProductRegion | None, availability_zone: str, pool: str | None
+def validate_placement_machine(
+    region: ProductRegion | None, availability_zone: str, machine: str | None
 ) -> None:
-    if (region is not None or availability_zone) and pool:
+    if (region is not None or availability_zone) and machine:
         raise ValueError(
-            "region or availability zone and an explicit pool cannot be selected together"
+            "region or availability zone and a named machine cannot be selected together"
         )

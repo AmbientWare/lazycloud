@@ -26,6 +26,10 @@ class LeaseStatus(StringEnum):
 
 class Machine(ContractModel):
     id: str
+    name: str = ""
+    """Account-unique name a workload pins to; empty for provider-bought machines."""
+    workspace_ids: tuple[str, ...] = ()
+    """Workspaces whose workloads may land here. Empty for platform and provider capacity."""
     pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
     capacity_owner_id: str = ""
     """Unit that bought this machine, from the join credential it enrolled with.
