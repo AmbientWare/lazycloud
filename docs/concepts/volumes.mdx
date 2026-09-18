@@ -99,6 +99,57 @@ For multi-gigabyte uploads, `presigned_url(...)`,
 `create_multipart_upload(...)`, `complete_multipart_upload(...)`, and
 `abort_multipart_upload(...)` let you upload in parts.
 
+## Share files between containers
+
+Every container that mounts a volume sees the same files, so a volume is how
+parallel calls and long-lived services share data. A volume is object storage
+presented as a directory, and that shapes what works well:
+
+- A file becomes visible to other containers when the writer closes it, and it
+  is durable at that point. Write whole files and close them; do not rely on
+  another container seeing a partially written file.
+- Two containers writing the same path do not merge; the last close wins.
+  Give each call its own output path, such as `/reports/{task_id}.json`, and
+  have a final step combine them.
+- There are no file locks. Coordinate through a [queue or map](/concepts/queues-maps)
+  when containers must take turns.
+- Appending to a large file or seeking inside one rewrites the object. Keep
+  logs and append-only data in many small files or send them elsewhere.
+- The first read of a large file downloads it; later reads on the same machine
+  come from a local cache. Large read-mostly data such as model weights is what
+  volumes do best.
+
+Download weights once and let every container reuse them:
+
+```python
+from pathlib import Path
+
+from lazycloud import App, Volume
+
+app = App("inference")
+models = Volume("models", "/models")
+WEIGHTS = Path("/models/encoder.safetensors")
+
+
+def ensure_weights() -> None:
+    if WEIGHTS.exists():
+        return
+    partial = WEIGHTS.with_suffix(".part")
+    download_weights(partial)   # your download code
+    partial.rename(WEIGHTS)
+
+
+@app.function(gpu="l4", volumes=[models], on_start=ensure_weights, concurrency=4, in_process=True)
+def encode(text: str) -> list[float]:
+    ...
+```
+
+The `on_start` hook runs before the container takes calls. Downloading to a
+`.part` path and renaming means a container that starts mid-download sees
+either no file or a complete one. Two containers starting at the same moment
+may both download; the rename makes that a wasted download rather than a
+corrupt file.
+
 ## Ad hoc file operations
 
 Use the CLI to inspect or copy files outside your workflow:

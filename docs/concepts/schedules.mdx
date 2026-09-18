@@ -63,7 +63,11 @@ for the schedule. Review automatic runs in the dashboard or with
 `uv run lazycloud task list --app daily_report`.
 
 Functions keep their normal timeout and retry settings. Scheduled functions
-default to `keep_warm=0`, so a container shuts down when idle.
+default to `keep_warm=0`, so the container stops as soon as a run finishes;
+holding it warm between runs that are minutes or hours apart would cost money
+and save nothing. A run that overlaps the previous one queues behind it unless
+the function has `concurrency` or an [autoscaler](/concepts/scaling) that lets
+them run side by side.
 
 ## Change or stop the schedule
 

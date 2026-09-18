@@ -60,6 +60,9 @@ already be deployed. Deploy the app containing both before running the parent:
 uv run lazycloud deploy reports:app
 ```
 
+[Local, preview, deploy](/getting-started/workflow) compares the four ways to
+run a function and explains how a call picks its target.
+
 ## Return Python objects
 
 Python SDK calls preserve serializable Python values, including NumPy arrays,
@@ -136,6 +139,10 @@ for outcome in outcomes:
 print([outcome.value for outcome in outcomes])
 ```
 
+By default the calls run one at a time in one container. To run them in
+parallel, give the function an autoscaler; see
+[Run calls in parallel](#run-calls-in-parallel).
+
 See [Parallel Parquet processing](/examples/parallel-parquet-s3) for a
 complete batch workflow that writes output only after every task succeeds.
 
@@ -178,11 +185,14 @@ enables their output. Silencing output leaves exceptions and stored logs intact.
 
 Set `cpu`, `memory`, and, for GPU work, `gpu` and `gpu_count` on the
 decorator. Defaults are `cpu=0.125`, `memory="128Mi"`,
-`timeout_seconds=3600`, and `retries=3`.
+`timeout_seconds=3600`, and `retries=3`. `cpu` and `memory` are reservations;
+pass a pair such as `memory=("2Gi", "8Gi")` to set the ceiling as well. See
+[Sizing a container](/concepts/scaling#sizing-a-container).
 
 `timeout_seconds` caps each invocation. `retries` sets the number of
-additional attempts after failure. Make writes safe to repeat before enabling
-retries. Use a retry policy for exponential backoff:
+additional attempts after failure, and the default of 3 means a function that
+writes somewhere can run four times for one call. Make writes safe to repeat,
+or set `retries=0`. Use a retry policy for exponential backoff:
 
 ```python
 import urllib.request
@@ -203,27 +213,21 @@ def fetch_text(url: str) -> str:
         return response.read().decode("utf-8")
 ```
 
-## Warm containers and concurrency
+## Run calls in parallel
 
-`keep_warm` keeps an idle container available between calls, for 10 seconds
-by default. Set it to `0` to release the container when idle. Warm containers
-continue to incur compute charges.
-
-`concurrency` sets how many calls a container handles at once. By default,
-each slot uses its own process. `in_process=True` shares one interpreter,
-which can avoid loading a GPU model once per process. CPU-bound Python code
-in those slots contends for the GIL.
-
-Cancelling a call in a shared interpreter stops the container, so other calls
-in it restart and may repeat side effects.
-
-To add containers as calls queue up:
+A function runs in one container that serves one call at a time unless you
+say otherwise. Two settings change that. `concurrency` is how many calls one
+container serves at once, and `autoscaler` is how many containers the function
+may run:
 
 ```python
 from lazycloud import QueueDepthAutoscaler
 
 
 @app.function(
+    cpu=1,
+    memory="512Mi",
+    concurrency=2,
     autoscaler=QueueDepthAutoscaler(
         min_containers=0,
         max_containers=8,
@@ -234,8 +238,22 @@ def count_words(text: str) -> int:
     return len(text.split())
 ```
 
-`min_containers` keeps that many containers running even without work.
-`max_pending_tasks` limits calls in flight; excess calls receive a capacity error.
+With this, a `.map()` over 100 texts runs on up to 8 containers, 2 calls each.
+The autoscaler starts one container for every `tasks_per_container` queued
+calls, so keep that equal to `concurrency`. Each concurrent call gets its own
+process; `in_process=True` runs them as threads in one interpreter so a model
+loaded in `on_start` is shared, at the cost of the GIL for CPU-bound code.
+Cancelling one call in a shared interpreter stops the container, so the other
+calls in it restart and may repeat side effects.
+
+`keep_warm` is how long an idle container waits for the next call before it
+stops, 10 seconds by default. `min_containers` keeps containers running with
+no work at all. `max_pending_tasks`, 100 by default, caps calls in flight;
+past it a call fails with a capacity error instead of queueing. `.map()`
+submits every input up front, so a batch larger than 100 needs the cap raised.
+
+[Scaling and concurrency](/concepts/scaling) covers these settings for every
+workload kind, with sizing examples.
 
 ## Understand a pending call
 
@@ -267,8 +285,9 @@ the container. Plain configuration belongs in `env`.
 
 ## Initialize a container or handle failures
 
-`on_start` runs when a container boots, before it accepts calls. Use it to
-load a model or initialize a client. Per-task hooks are `on_running`,
+`on_start` runs before a container accepts calls. Use it to load a model or
+initialize a client. With `concurrency` above one it runs in each slot's
+process, or once for the container with `in_process=True`. Per-task hooks are `on_running`,
 `on_success`, `on_error`, `on_retry`, `on_failure`, and `on_finish`.
 Each accepts a callable, a decorated function, a dotted import string, or a list.
 

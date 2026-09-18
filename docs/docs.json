@@ -41,7 +41,8 @@
           "index",
           "getting-started/installation",
           "getting-started/quickstart",
-          "getting-started/first-endpoint"
+          "getting-started/first-endpoint",
+          "getting-started/workflow"
         ]
       },
       {
@@ -61,6 +62,7 @@
           "concepts/apps",
           "concepts/functions",
           "concepts/endpoints",
+          "concepts/scaling",
           "concepts/schedules",
           "concepts/pods",
           "concepts/sandboxes",

@@ -23,10 +23,63 @@ item = q.pop()
 print(item)
 ```
 
-`pop()` removes the item. Your consumer must decide what to do if processing
-fails afterward. For work that needs task results and retries, submit a
+`pop()` removes the item and returns `None` when the queue is empty. Each item
+goes to exactly one caller, however many containers are popping at once. Your
+consumer must decide what to do if processing fails afterward. For work that
+needs task results and retries, submit a
 [function](/concepts/functions#submit-work-in-the-background) instead.
 `QueueDepthAutoscaler` scales a function's pending calls, not this named queue.
+
+## Coordinate containers
+
+Use `.map()` when you know every input up front. Use a queue when work is
+discovered as you go, when producers and consumers run at different times, or
+when a handful of long-lived workers should drain a stream of small items
+without a task per item. A map records progress those workers can share:
+
+```python
+from lazycloud import App, Map, Queue, QueueDepthAutoscaler
+
+app = App("crawler")
+frontier = Queue("crawl-frontier")
+seen = Map("crawl-seen")
+
+
+@app.function(
+    cpu=1,
+    memory="512Mi",
+    timeout_seconds=3600,
+    retries=0,
+    autoscaler=QueueDepthAutoscaler(max_containers=8),
+)
+def crawl_worker() -> int:
+    handled = 0
+    while (url := frontier.pop()) is not None:
+        if url in seen:
+            continue
+        seen.set(url, True, ttl=86400)
+        for link in fetch_links(url):   # your fetch code
+            frontier.put(link)
+        handled += 1
+    return handled
+
+
+if __name__ == "__main__":
+    frontier.put("https://example.com/")
+    calls = crawl_worker.spawn_map([() for _ in range(8)])
+    print(sum(call.get() for call in calls))
+```
+
+Eight workers on eight containers pop from one queue and stop when it is
+empty; without the autoscaler they would run one after another. The map's `in`
+check and `set` are two calls, so two workers can both pass the check for the
+same URL and fetch it twice; that is fine for a crawler and not for a payment.
+When an item must be handled exactly once, make the handler idempotent or put
+the item through a function call, which has a task record and retries.
+
+A worker that pops an item and then crashes loses it; the queue has no
+acknowledgement. Keep the items small and re-creatable, or write the item to a
+map before working on it and have a sweeper requeue stale entries.
 
 ## Map
 

@@ -27,8 +27,9 @@ uv run lazycloud app delete APP
 
 ## lazycloud deployment
 
-A deployment is addressed by name or id. `scale` sets the replica count for a Pod.
-Functions and endpoints scale from their autoscaler configuration.
+A deployment is addressed by name or id. `scale` pins a pod deployment to a
+container count and refuses other kinds. Functions and endpoints scale from the
+`autoscaler` on their decorator; see [Scaling and concurrency](/concepts/scaling).
 
 Use these commands for inspection and operational changes. Keep workload
 resources and autoscaler settings in Python so a later deploy uses your intended
