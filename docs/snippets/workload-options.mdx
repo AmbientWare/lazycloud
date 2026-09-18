@@ -1,14 +1,22 @@
 Use these options to set resources and configuration on function and endpoint
-decorators. See the pod and sandbox guides for their constructor options.
+decorators. See the pod and sandbox guides for their constructor options, and
+[Scaling and concurrency](/concepts/scaling) for the settings that decide how
+many containers run and how much each handles.
 
 | Option | Type | What it does |
 | --- | --- | --- |
 | `image` | `Image` | Container image the workload runs in. Defaults to the managed Python image. |
 | `name` | `str` | Resource name. Defaults to the decorated callable's name. |
-| `cpu` | `float` | CPUs per container. One CPU is one vCPU. |
-| `memory` | `str` | Memory per container, for example `"512Mi"` or `"2Gi"`. |
+| `cpu` | `float` or `(float, float)` | CPUs reserved per container. One CPU is one vCPU. A pair reserves the first and throttles at the second. |
+| `memory` | `str` or `(str, str)` | Memory reserved per container, for example `"512Mi"` or `"2Gi"`. A pair reserves the first and kills the container at the second. |
+| `disk` | `str` | Scratch disk per container, for example `"20Gi"`. Defaults to `"100Gi"`. |
 | `gpu` | `str \| list[str]` | GPU model: `"t4"`, `"l4"`, `"a10g"`, `"l40s"`, `"a100-40"`, `"a100-80"`, `"h100"`, `"h200"`, or `"any"`. A list is a preference, best first: `["h100", "l4"]` takes an H100 where one is free and an L4 otherwise. `"any"` goes last. The two A100 sizes are separate names because they are not interchangeable, and plain `"a100"` is rejected. |
 | `gpu_count` | `int` | GPUs per container. Set it with `gpu`, for example `gpu="l4", gpu_count=1`. Defaults to `0`. |
+| `keep_warm` | `int` | Idle seconds a container stays up for the next call. `keep_warm_seconds` on ASGI and realtime. |
+| `concurrency` | `int` | Calls or requests one process serves at once. `concurrent_requests` on ASGI and realtime. |
+| `workers` | `int` | Server processes per container. Endpoints, ASGI, and realtime only. |
+| `autoscaler` | `QueueDepthAutoscaler` | `min_containers`, `max_containers`, and `tasks_per_container`. Without it a workload runs at most one container. |
+| `max_pending_tasks` | `int` | Calls in flight before new ones are refused. Defaults to `100`. |
 | `env` | `dict[str, str]` | Plain environment variables. |
 | `secrets` | `list[str]` | Workspace secret names, injected as environment variables. |
 | `volumes` | `list` | `Volume` and `CloudBucket` objects to mount. |
@@ -19,6 +27,7 @@ decorators. See the pod and sandbox guides for their constructor options.
 | `docker_enabled` | `bool` | Give the container its own Docker daemon. |
 | `preemptible` | `bool` | Defaults to `True`, allowing capacity that can be reclaimed. Set `False` to require non-preemptible capacity, including for GPU workloads. |
 | `pool` | `str` | Compute pool to run in. See [Compute](/platform/compute). |
+| `region`, `availability_zone` | `str` | Placement inside the pool, where the pool supports it. Regions are `"us-east"`, `"us-west"`, `"eu-central"`, `"eu-north"`, and `"ap-southeast"`. |
 | `metadata` | `dict` | Custom metadata stored with the deployment. |
 
 Preemptible capacity can be interrupted, sometimes without notice. Interrupted
