@@ -19,6 +19,7 @@ from database.repositories.identity import WorkspaceMemberRepository, WorkspaceR
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.aws_connections import (
+    AWS_CONNECTED_MACHINE_POOL,
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPhase,
@@ -186,7 +187,7 @@ class AwsAccountConnectionService:
         user_id: str,
     ) -> AwsAccountConnectionAuthorization:
         """Connect a customer's AWS account."""
-        pool = request.pool
+        pool = MachinePool(AWS_CONNECTED_MACHINE_POOL)
         with self.context.database.session() as session:
             self.admission.assert_may_use_connected_cloud(session, user_id=user_id)
             existing = AwsAccountConnectionRepository(session).get_for_user(user_id)

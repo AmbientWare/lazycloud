@@ -10,12 +10,13 @@ import pytest
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
 from compute.agent_control import agent_machine_worker_id, hash_compute_token
-from compute.state import RedisComputeStateRepository
+from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
 )
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import MachineRepository, WorkerRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from gateway.http import (
@@ -25,9 +26,14 @@ from gateway.http import (
     LeaveAgentRequest,
     StreamAgentRequest,
 )
-from gateway.service import SELF_HOSTED_FLEET_POOL_NAME, GatewayControlService
+from gateway.service import GatewayControlService
 from observability.usage import UsageService
 from operations.management import ManagementService
+from scheduler.agent_pool import (
+    AgentPoolConfig,
+    agent_machine_worker_record,
+    agent_pool_config_from_pool,
+)
 from scheduler.fleet import SchedulerContainerStatus
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.state import (
@@ -40,13 +46,13 @@ from shared.agent_connections import AgentConnectionRecord
 from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
-    ComputeCredentialStatus,
     ComputePreflightCheck,
     MachineReadinessPhase,
     PreflightSeverity,
 )
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
+    LAZYCLOUD_MACHINE_POOL,
     MachinePool,
     UnitName,
 )
@@ -84,7 +90,12 @@ def _pool_machines(
     pool: MachinePool,
     workspace_id: str,
 ) -> list[UnitMachineResponse]:
-    return [machine for machine in gateway.machine_views(workspace_id) if machine.pool == pool]
+    labelled = {
+        machine.id
+        for machine in gateway.services.compute.list_machines(workspace=workspace_id)
+        if machine.pool == pool
+    }
+    return [machine for machine in gateway.machine_views(workspace_id) if machine.id in labelled]
 
 
 def _record_agent_connection(
@@ -416,11 +427,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     second_token = _create_join_token(gateway, MachinePool("cleanup-machines"), workspace_id)
     second = gateway.join_agent(_join_request(second_token.token, fingerprint="second-host"))
     with pytest.raises(ConflictError, match="lazycloud-agent leave"):
-        gateway.delete_machine(
-            second.machine_id,
-            workspace_id=workspace_id,
-            pool=MachinePool("cleanup-machines"),
-        )
+        gateway.delete_machine(second.machine_id, workspace_id=workspace_id)
     assert (
         gateway.compute_states.get_agent_token_state(hash_compute_token(second.agent_token))
         is not None
@@ -715,74 +722,108 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
     assert gateway.join_agent(_join_request(current.token)).machine_id
 
 
-def test_machine_join_command_owns_the_account_self_hosted_fleet(
+def test_machine_join_command_mints_one_named_unit_that_only_serves_by_name(
     isolated_services: ApiServices,
 ) -> None:
-    """A joined host belongs to the account, and one account has one fleet.
+    """A joined machine is its own unit, labelled by its name, serving only by that name.
 
-    The credential is minted for a person, not for wherever they happened to be, so
-    a second workspace the same account owns resolves the same fleet and the same
-    machine rather than a second copy of both.
+    The name is claimed when the command is minted and the workspaces it serves
+    are what the account listed. Its worker requires a selector, so nothing
+    lands on it without naming it; a second command for a joined name is
+    refused; a reserved label is refused before anything is written.
     """
     workspace_id = _workspace_id(isolated_services)
     user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    isolated_services.control_plane_service.set_workspace(
+    second_workspace = isolated_services.control_plane_service.set_workspace(
         "second-workspace",
         owner_user_id=user_id,
     )
     gateway = isolated_services.gateway_service
+    with isolated_services.context.database.session() as session:
+        default_name = WorkspaceRepository(session).get(workspace_id)
+    assert default_name is not None
+
+    with pytest.raises(InvalidInputError, match="reserved"):
+        gateway.machine_join_command(
+            MachineJoinCommandRequest(name="lazycloud", workspaces=[default_name.name]),
+            user_id=user_id,
+            owner_token_id="token-zero",
+        )
+    with pytest.raises(InvalidInputError, match="'nobody-owns-this'"):
+        gateway.machine_join_command(
+            MachineJoinCommandRequest(name="rack-1", workspaces=["nobody-owns-this"]),
+            user_id=user_id,
+            owner_token_id="token-zero",
+        )
 
     first = gateway.machine_join_command(
-        MachineJoinCommandRequest(),
+        MachineJoinCommandRequest(
+            name="rack-1", workspaces=[default_name.name, second_workspace.name]
+        ),
         user_id=user_id,
         owner_token_id="token-one",
     )
 
     assert gateway.gateway_endpoint.http_url in first.command
-    fleets = [
+    units = [
         unit
         for unit in isolated_services.compute.list_units(workspace=workspace_id)
-        if unit.pool == SELF_HOSTED_FLEET_POOL_NAME
+        if unit.pool == "rack-1"
     ]
-    assert len(fleets) == 1
-    assert fleets[0].provider == "agent"
+    assert len(units) == 1 and units[0].provider == "agent"
+    pending = gateway.machine_responses(workspace_id=workspace_id)
+    assert [(item.name, item.status, sorted(item.workspaces)) for item in pending] == [
+        ("rack-1", ResourceStatus.Created, sorted([default_name.name, second_workspace.name]))
+    ]
 
     command_words = shlex.split(first.command)
     join_token = command_words[command_words.index("--join-token") + 1]
     joined = gateway.join_agent(_join_request(join_token))
-    assert [machine.id for machine in gateway.account_machine_views(user_id)] == [joined.machine_id]
+    assert joined.pool == "rack-1"
+    assert [machine.id for machine in gateway.account_machine_views(user_id)] == [pending[0].id]
+    assert joined.machine_id == pending[0].id
     with isolated_services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
-            workspace_id,
-            joined.machine_id,
+            workspace_id, joined.machine_id
         )
-    assert enrollment is not None
-    assert enrollment.user_id == user_id
+        durable = MachineRepository(session).get(joined.machine_id, workspace_id=workspace_id)
+    assert enrollment is not None and enrollment.user_id == user_id
+    assert durable is not None and durable.name == "rack-1"
+    assert set(durable.workspace_ids) == {workspace_id, second_workspace.id}
 
-    second = gateway.machine_join_command(
-        MachineJoinCommandRequest(gpu=["A10G"]),
-        user_id=user_id,
-        owner_token_id="token-two",
+    policies = isolated_services.workspace_compute_policy_service
+    assert policies.resolve_placement(workspace_id=workspace_id, machine="rack-1") == "rack-1"
+    assert policies.resolve_placement(workspace_id=workspace_id) == LAZYCLOUD_MACHINE_POOL
+    _record_agent_connection(gateway, workspace_id, joined.agent_token, joined.machine_id)
+    worker = agent_machine_worker_record(
+        _agent_state(gateway, joined.agent_token),
+        agent_pool_config_from_pool(units[0]) or _fail("agent unit expected"),
     )
+    assert worker.pool == "rack-1" and worker.requires_pool_selector
 
-    assert second.command
-    fleets = [
-        unit
-        for unit in isolated_services.compute.list_units(workspace=workspace_id)
-        if unit.pool == SELF_HOSTED_FLEET_POOL_NAME
-    ]
-    assert len(fleets) == 1
-    assert fleets[0].worker_gpu_type == "A10G"
+    updated = gateway.update_machine_workspaces(
+        "rack-1", user_id=user_id, workspace_names=[second_workspace.name]
+    )
+    assert updated.workspaces == [second_workspace.name]
+    with pytest.raises(InvalidInputError, match="'rack-1'"):
+        policies.resolve_placement(workspace_id=workspace_id, machine="rack-1")
 
-    with isolated_services.context.database.session() as session:
-        credentials = ComputeJoinCredentialRepository(session).list_for_unit(
-            workspace_id,
-            fleets[0].capacity_owner_id,
+    with pytest.raises(ConflictError, match="already joined"):
+        gateway.machine_join_command(
+            MachineJoinCommandRequest(name="rack-1", workspaces=[default_name.name]),
+            user_id=user_id,
+            owner_token_id="token-two",
         )
-    used, active = sorted(credentials, key=lambda credential: credential.created_at)
-    assert used.status is ComputeCredentialStatus.Revoked
-    assert active.status is ComputeCredentialStatus.Active
-    assert {credential.user_id for credential in credentials} == {user_id}
+
+
+def _agent_state(gateway: GatewayControlService, agent_token: str) -> ComputeAgentTokenState:
+    state = gateway.compute_states.get_agent_token_state(hash_compute_token(agent_token))
+    assert state is not None
+    return state
+
+
+def _fail(message: str) -> AgentPoolConfig:
+    raise AssertionError(message)
 
 
 @pytest.mark.anyio

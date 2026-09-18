@@ -37,7 +37,6 @@ def _connection(
         {
             "id": "11111111-1111-4111-8111-111111111111",
             "account_id": "123456789012",
-            "pool": "aws",
             "phase": phase,
             "revision": 2,
             "hosts_workloads": phase == "ready",
@@ -196,11 +195,9 @@ class _ConnectClient:
         self,
         *,
         account_id: str,
-        pool: str = "aws",
         role_arn: str | None = None,
         networks: dict[str, AwsAccountNetwork] | None = None,
     ) -> AwsConnectionAuthorizationResponse:
-        del pool
         self.requests.append((account_id, role_arn))
         self.networks.append(networks)
         return AwsConnectionAuthorizationResponse(

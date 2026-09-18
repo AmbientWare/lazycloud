@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.pod import Pod
@@ -52,7 +51,10 @@ def dev(
     region: Annotated[
         str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
     ] = None,
-    pool: Annotated[str | None, typer.Option("--pool")] = None,
+    machine: Annotated[
+        str | None,
+        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
+    ] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
     if json_output_enabled(ctx):
@@ -69,7 +71,7 @@ def dev(
         secrets=secrets,
         ports=ports,
         region=region,
-        pool=MachinePool(pool) if pool else None,
+        machine=machine,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
     )
@@ -124,7 +126,7 @@ def _default_dev_pod(overrides: DeploymentOverrides) -> Pod:
         gpu_count=overrides.gpu_count or 0,
         secrets=list(overrides.secrets),
         region=overrides.region,
-        pool=overrides.pool,
+        machine=overrides.machine,
     )
 
 

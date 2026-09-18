@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.compute_policy import MachinePool
 
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
@@ -42,7 +41,10 @@ def serve(
     region: Annotated[
         str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
     ] = None,
-    pool: Annotated[str | None, typer.Option("--pool")] = None,
+    machine: Annotated[
+        str | None,
+        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
+    ] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
     sync_dir: Annotated[str | None, typer.Option("--sync-dir", "--sync")] = None,
     container_id: Annotated[str | None, typer.Option("--container-id")] = None,
@@ -76,7 +78,7 @@ def serve(
         keep_warm=keep_warm,
         tcp=tcp,
         region=region,
-        pool=MachinePool(pool) if pool else None,
+        machine=machine,
         entrypoint=entrypoint,
         sync_dir=sync_dir,
         container_id=container_id,
@@ -100,7 +102,7 @@ def serve(
         secrets=overrides.secrets,
         keep_warm=overrides.keep_warm,
         region=overrides.region,
-        pool=overrides.pool,
+        machine=overrides.machine,
         sync_dir=overrides.sync_dir,
     )
     if isinstance(user_object, App):

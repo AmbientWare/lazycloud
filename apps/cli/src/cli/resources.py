@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.cards import empty_state, notice_card
+from lazycloud.cli.components.cards import empty_state
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.formatting import duration, timestamp
+from lazycloud.cli.components.formatting import duration
 from lazycloud.cli.components.output import (
     command_from_args,
     console,
@@ -20,7 +19,6 @@ from lazycloud.cli.components.output import (
 from lazycloud.cli.components.progress import print_stream_message
 from lazycloud.cli.components.results import emit_notice, emit_result
 from lazycloud.cli.control import compute_client, control_config
-from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
 from lazycloud.cli.resources import container_attach, container_checkpoint
 from lazycloud.clients.map.control import MapControlClient
 from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
@@ -32,11 +30,7 @@ from shared.http.collections import MAX_MAP_TTL_SECONDS
 from shared.http.compute import (
     ContainerResponse,
     ContainerRunRequest,
-    MachineCreateRequest,
-    MachineJoinCommandRequest,
     UnitCreateRequest,
-    UnitJoinCommandRequest,
-    UnitJoinTokenRequest,
 )
 from shared.http.observability import EventHistoryRequest, LogQueryRequest
 
@@ -589,122 +583,6 @@ def unit_clear_degraded(
     )
 
 
-def pool_join_token(
-    ctx: typer.Context,
-    pool: Annotated[str, typer.Option("--pool")] = "",
-    ttl: Annotated[str, typer.Option("--ttl")] = "",
-) -> None:
-    """Mint a single-use join credential for a pool, creating its unit if new.
-
-    Names a pool, not a unit: the capacity owner is found or created server-side,
-    so nothing has to exist before the first host joins.
-    """
-    response = admin_api_client().create_pool_join_token(
-        MachineJoinCommandRequest(pool=MachinePool(pool), ttl=ttl)
-    )
-    emit_result(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        title="Pool join token",
-        fields={"token": response.token, "expires": timestamp(response.expires_at)},
-        tone="success",
-        message="Copy this token now. It grants one machine access to the pool.",
-    )
-
-
-def unit_join_token(
-    ctx: typer.Context,
-    unit_id: str,
-    ttl: Annotated[str, typer.Option("--ttl")] = "",
-) -> None:
-    """Mint a single-use join credential for the unit's pool."""
-    response = admin_api_client().create_unit_join_token(unit_id, UnitJoinTokenRequest(ttl=ttl))
-    emit_result(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        title="Unit join token",
-        fields={"token": response.token, "expires": timestamp(response.expires_at)},
-        tone="success",
-        message="Copy this token now. It grants one machine access to the pool.",
-    )
-
-
-def pool_join(
-    ctx: typer.Context,
-    unit_id: str,
-    ttl: Annotated[str, typer.Option("--ttl")] = "",
-    agent_bin: Annotated[str, typer.Option("--agent-bin")] = "",
-    executor: Annotated[str, typer.Option("--executor")] = "",
-    worker_image: Annotated[str, typer.Option("--worker-image")] = "",
-    print_only: Annotated[bool, typer.Option("--print-only")] = False,
-) -> None:
-    response = admin_api_client().unit_join_command(unit_id, UnitJoinCommandRequest(ttl=ttl))
-    command = build_pool_join_command(
-        response.command,
-        agent_bin=agent_bin,
-        executor=executor,
-        worker_image=worker_image,
-    )
-    if json_output_enabled(ctx):
-        payload = response.model_dump(mode="json")
-        payload["command"] = command
-        print_payload(ctx, payload)
-        return
-    if print_only:
-        console.print(
-            notice_card(
-                command,
-                title="Unit join command",
-                hint="This command contains a short-lived credential. Do not share it.",
-                tone="warning",
-            )
-        )
-        return
-    try:
-        exit_code = subprocess.call(command, shell=True)
-    except KeyboardInterrupt:
-        return
-    if agent_join_interrupted(exit_code):
-        return
-    if exit_code:
-        raise typer.Exit(exit_code)
-    emit_notice(
-        ctx,
-        payload={"status": "running"},
-        title="Agent is running",
-        message="The unit joined successfully.",
-    )
-
-
-def machine_create(
-    ctx: typer.Context,
-    provider: Annotated[str, typer.Option("--provider")] = "local",
-    cpu: Annotated[float | None, typer.Option("--cpu")] = None,
-    memory: Annotated[str | None, typer.Option("--memory")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
-) -> None:
-    response = admin_api_client().create_machine(
-        MachineCreateRequest(
-            provider=provider,
-            cpu=cpu,
-            memory=memory,
-            gpu=gpu,
-        )
-    )
-    emit_result(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        title="Machine created",
-        fields={
-            "provider": response.provider,
-            "pool": str(response.pool),
-            "status": response.status.value,
-            "id": response.id,
-        },
-        tone="success",
-    )
-
-
 def machine_delete(ctx: typer.Context, machine_id: str) -> None:
     admin_api_client().delete_machine(machine_id)
     emit_notice(
@@ -864,8 +742,6 @@ unit_app.command("create")(unit_create)
 unit_app.command("ensure")(unit_ensure)
 unit_app.command("list")(unit_list)
 unit_app.command("delete")(unit_delete)
-unit_app.command("join")(pool_join)
-unit_app.command("join-token")(unit_join_token)
 unit_app.command(
     "clear-degraded",
     help="Allow a pool that exhausted its retries to launch machines again.",
@@ -873,8 +749,6 @@ unit_app.command(
 
 
 def register_machine_extensions(group: typer.Typer) -> None:
-    group.command("join-token")(pool_join_token)
-    group.command("create")(machine_create)
     group.command("delete")(machine_delete)
     group.command("cordon")(machine_cordon)
     group.command("uncordon")(machine_uncordon)

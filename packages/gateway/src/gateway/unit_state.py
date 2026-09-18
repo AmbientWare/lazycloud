@@ -227,6 +227,7 @@ class GatewayUnitStateCoordinator:
         workspace_id: str,
         owner_token_id: str,
         ttl: str = "",
+        machine_id: str = "",
     ) -> JoinTokenCreationPlan:
         if unit.visibility is ComputeUnitVisibility.Internal:
             # An internal unit is provisioned into a connected cloud account and
@@ -243,6 +244,7 @@ class GatewayUnitStateCoordinator:
             workspace_id=workspace_id,
             owner_token_id=owner_token_id,
             ttl=ttl,
+            machine_id=machine_id,
         )
         current_time = utc_now()
         with self.context.database.session() as session:
@@ -254,10 +256,14 @@ class GatewayUnitStateCoordinator:
                 unit.capacity_owner_id,
                 for_update=True,
             )
+            # A fresh credential supersedes the pending one for the same
+            # machine, or the unit's unbound one; a credential another
+            # machine already holds is left alone.
+            superseded = {"", machine_id}
             for credential in previous:
                 if (
                     credential.status is ComputeCredentialStatus.Active
-                    and credential.machine_id == ""
+                    and credential.machine_id in superseded
                 ):
                     credentials.save(credential.revoke(now=current_time))
             durable = credentials.create(
@@ -266,12 +272,16 @@ class GatewayUnitStateCoordinator:
                 workspace_id=workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 pool=unit.pool,
+                machine_id=machine_id,
                 created_by_token_id=try_uuid(owner_token_id),
                 max_uses=plan.state.max_uses,
                 expires_at=plan.expires_at,
             )
         for credential in previous:
-            if credential.status is ComputeCredentialStatus.Active and credential.machine_id == "":
+            if (
+                credential.status is ComputeCredentialStatus.Active
+                and credential.machine_id in superseded
+            ):
                 self.compute_states.revoke_join_token_state(credential.token_hash)
         token_state = plan.state.model_copy(
             update={
@@ -312,6 +322,7 @@ class GatewayUnitStateCoordinator:
         workspace_id: str,
         owner_token_id: str,
         ttl: str = "",
+        machine_id: str = "",
     ) -> JoinTokenCreationPlan:
         try:
             pool_state = self.ensure_compute_pool_state(
@@ -328,6 +339,7 @@ class GatewayUnitStateCoordinator:
                 capacity_owner_id=unit.capacity_owner_id,
                 owner_user_id=self.workspace_owner_user_id(workspace_id),
                 ttl=ttl,
+                machine_id=machine_id,
                 max_uses=1,
             )
         except ValueError as exc:

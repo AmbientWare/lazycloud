@@ -188,7 +188,9 @@ function ConnectForm({
           autoFocus
         />
         <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-          Resources stay in your AWS account, and AWS bills you directly.
+          Resources stay in your AWS account, and AWS bills you directly. Workspaces you create in
+          this account keep their compute and volumes there and cannot be moved; disconnecting
+          requires deleting them first.
         </p>
       </div>
 

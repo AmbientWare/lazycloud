@@ -7,7 +7,7 @@ from database.migrations import alembic_config
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.identity import TokenRepository, UserRepository, WorkspaceRepository
 from database.tables.compute import ComputeJoinCredentialTable, ComputeUnitTable
-from database.tables.orchestration import MachineTable, WorkerTable
+from database.tables.orchestration import WorkerTable
 from identity.platform import PlatformNamespaceService
 from provider_aws.platform import AwsPlatformBinding
 from pydantic import SecretStr
@@ -131,16 +131,16 @@ def test_platform_adoption_fences_identity_and_preserves_tenant_and_capacity_his
                     replacement_template_version="",
                 )
             )
-            session.add(
-                MachineTable(
-                    id=machine_id,
-                    capacity_owner_id=unit_id,
-                    workspace_id=workspace_id,
-                    status="stopped",
-                    labels={},
-                )
+            # Written as the 0004 schema knows it: the ORM model carries columns
+            # later revisions add.
+            session.execute(
+                text(
+                    "INSERT INTO machines (id, capacity_owner_id, workspace_id, pool, provider, "
+                    "status, gpu_count, labels) VALUES (:id, :owner, :workspace, 'default', "
+                    "'local', 'stopped', 0, '{}'::jsonb)"
+                ),
+                {"id": machine_id, "owner": unit_id, "workspace": workspace_id},
             )
-            session.flush()
             session.add(
                 WorkerTable(
                     id=worker_id,

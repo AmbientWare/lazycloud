@@ -137,7 +137,7 @@ export function awsRemovalConfirmation(connection: AwsConnection): {
   return {
     title: "Remove AWS connection?",
     description:
-      "AWS placement will stop immediately. Running compute will drain before managed resources and authorization are removed.",
+      "Disconnecting is refused while any workspace lives in this account; delete those workspaces first. Running compute will drain before managed resources and authorization are removed.",
     cancelLabel: "Keep connected",
     confirmLabel: "Remove connection",
   };

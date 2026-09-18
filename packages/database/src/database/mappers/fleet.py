@@ -3,13 +3,21 @@ from __future__ import annotations
 from shared.compute_fleet import AgentLease, AgentRecord, Machine, Worker
 from shared.timestamps import to_utc, to_utc_or_none
 
-from database.tables.orchestration import AgentLeaseTable, AgentTable, MachineTable, WorkerTable
+from database.tables.orchestration import (
+    AgentLeaseTable,
+    AgentTable,
+    MachineTable,
+    MachineWorkspaceTable,
+    WorkerTable,
+)
 
 
 def machine_from_row(row: MachineTable) -> Machine:
     return Machine.model_validate(
         {
             "id": row.id,
+            "name": row.name or "",
+            "workspace_ids": tuple(link.workspace_id for link in row.workspaces),
             "pool": row.pool,
             "capacity_owner_id": row.capacity_owner_id,
             "provider": row.provider,
@@ -27,6 +35,12 @@ def machine_from_row(row: MachineTable) -> Machine:
 
 
 def write_machine(row: MachineTable, record: Machine) -> None:
+    row.name = record.name or None
+    current_links = {link.workspace_id: link for link in row.workspaces}
+    row.workspaces = [
+        current_links.get(workspace_id) or MachineWorkspaceTable(workspace_id=workspace_id)
+        for workspace_id in dict.fromkeys(record.workspace_ids)
+    ]
     row.pool = record.pool
     row.capacity_owner_id = record.capacity_owner_id
     row.provider = record.provider

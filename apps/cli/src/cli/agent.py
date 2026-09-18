@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 from typing import Annotated
 
@@ -8,10 +7,8 @@ import typer
 from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
 from lazycloud.cli.components.results import emit_notice, emit_result
-from lazycloud.json_contracts import validate_json_object
 from shared.app_identity import AGENT_NAME, STATE_DIR
-from shared.compute_policy import MachinePool
-from shared.http.operations import AgentLeaseRequest, AgentRegisterRequest
+from shared.http.operations import AgentLeaseRequest
 
 from cli.api_client import admin_api_client
 from cli.parameters import parse_key_values
@@ -23,7 +20,6 @@ agent_app = typer.Typer(help="Manage agents and leases.")
 def agent_install(
     ctx: typer.Context,
     name: Annotated[str, typer.Option("--name")] = "agent",
-    pool: Annotated[str, typer.Option("--pool")] = "default",
     endpoint: Annotated[str, typer.Option("--endpoint")] = "http://127.0.0.1:9000",
     version: Annotated[str, typer.Option("--version")] = "local",
     join_token: Annotated[str, typer.Option("--join-token")] = "",
@@ -50,7 +46,6 @@ def agent_install(
         result = install_agent_service(
             AgentInstallRequest(
                 name=name,
-                pool=MachinePool(pool),
                 endpoint=endpoint,
                 version=version,
                 join_token=join_token,
@@ -82,60 +77,6 @@ def agent_install(
     )
 
 
-@agent_app.command("join")
-def agent_join(
-    ctx: typer.Context,
-    name: Annotated[str, typer.Option("--name")] = "agent",
-    pool: Annotated[str, typer.Option("--pool")] = "default",
-    endpoint: Annotated[str, typer.Option("--endpoint")] = "http://127.0.0.1:9000",
-    version: Annotated[str, typer.Option("--version")] = "local",
-    token_secret: Annotated[str | None, typer.Option("--token-secret")] = None,
-    labels: Annotated[
-        list[str] | None,
-        typer.Option("--label", help="Agent label as KEY=VALUE."),
-    ] = None,
-) -> None:
-    from agent.operations import AgentJoinRequest, build_join_command
-
-    request = AgentJoinRequest(
-        name=name,
-        pool=MachinePool(pool),
-        endpoint=endpoint,
-        version=version,
-        token_secret=token_secret,
-        labels=parse_key_values(labels or []),
-    )
-    record = admin_api_client().register_agent(
-        AgentRegisterRequest(
-            name=name,
-            pool=MachinePool(pool),
-            version=version,
-            labels=request.labels,
-        )
-    )
-    command = build_join_command(request)
-    payload = validate_json_object(
-        {
-            "agent": record.model_dump(mode="json"),
-            "command": command,
-        }
-    )
-    emit_result(
-        ctx,
-        payload=payload,
-        title="Agent registered",
-        fields={
-            "name": record.name,
-            "pool": str(record.pool),
-            "status": record.status.value,
-            "id": record.id,
-            "command": shlex.join(command),
-        },
-        tone="success",
-        message="Run the command on the agent host.",
-    )
-
-
 @agent_app.command("preflight")
 def agent_preflight(
     ctx: typer.Context,
@@ -154,44 +95,13 @@ def agent_preflight(
 
 @agent_app.command("status")
 def agent_status(ctx: typer.Context) -> None:
-    from agent.operations import summarize_agent_status
-
     client = admin_api_client()
     agents = client.list_agents().agents
     leases = client.list_leases(include_inactive=False).leases
-    summary = summarize_agent_status([item.pool for item in agents], len(leases))
     emit_result(
         ctx,
-        payload=summary.model_dump(mode="json"),
-        fields={
-            "agents": summary.agents,
-            "active leases": summary.active_leases,
-            "pools": ", ".join(f"{name} {count}" for name, count in summary.pools.items()),
-        },
-    )
-
-
-@agent_app.command("register")
-def agent_register(
-    ctx: typer.Context,
-    name: str,
-    pool: Annotated[str, typer.Option("--pool")] = "default",
-    version: Annotated[str, typer.Option("--version")] = "local",
-) -> None:
-    record = admin_api_client().register_agent(
-        AgentRegisterRequest(name=name, pool=MachinePool(pool), version=version)
-    )
-    emit_result(
-        ctx,
-        payload=record.model_dump(mode="json"),
-        title="Agent registered",
-        fields={
-            "name": record.name,
-            "pool": str(record.pool),
-            "status": record.status.value,
-            "id": record.id,
-        },
-        tone="success",
+        payload={"agents": len(agents), "active_leases": len(leases)},
+        fields={"agents": len(agents), "active leases": len(leases)},
     )
 
 

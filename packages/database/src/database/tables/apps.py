@@ -245,7 +245,7 @@ class StubTable(IdTable, DatabaseBase):
     )
     runtime_health_check_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     runtime_health_check_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    runtime_pool_selector: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    pool: Mapped[str] = mapped_column(String(240), nullable=False, default="", server_default="")
     runtime_runtime: Mapped[str | None] = mapped_column(String(80), nullable=True)
     runtime_runtime_class: Mapped[str | None] = mapped_column(String(160), nullable=True)
     runtime_docker_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -336,6 +336,7 @@ class DeploymentTable(IdTable, DatabaseBase):
     __tablename__ = "deployments"
     spec: Mapped[dict[str, JsonValue]] = mapped_column(json_type, nullable=False)
     pool: Mapped[str] = mapped_column(String(240), nullable=False)
+    machine: Mapped[str] = mapped_column(String(63), nullable=False, default="", server_default="")
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint(
             "workspace_id",

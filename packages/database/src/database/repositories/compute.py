@@ -13,7 +13,6 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    WorkspaceComputePolicyTable,
 )
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
 from pydantic import Field
@@ -39,7 +38,6 @@ from shared.compute_policy import (
     ComputeUnitRecord,
     ComputeUnitVisibility,
     MachinePool,
-    WorkspaceComputePolicy,
 )
 from shared.compute_reconciliation import ComputeReconciliationKind
 from shared.contracts import ContractModel
@@ -62,7 +60,6 @@ from sqlalchemy import (
     tuple_,
     update,
 )
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -1019,92 +1016,6 @@ class ComputeUnitRepository:
         row.root_volume_gib = record.root_volume_gib
         row.fallback = record.fallback.value
         self.session.flush()
-
-
-def _workspace_compute_policy_record(row: WorkspaceComputePolicyTable) -> WorkspaceComputePolicy:
-    return WorkspaceComputePolicy.model_validate(
-        {
-            "id": row.id,
-            "workspace_id": row.workspace_id,
-            "revision": row.revision,
-            "default_pool": row.default_pool,
-            "created_at": to_utc(row.created_at),
-            "updated_at": to_utc(row.updated_at),
-        }
-    )
-
-
-@dataclass(slots=True)
-class WorkspaceComputePolicyRepository:
-    session: Session
-
-    def create(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        policy = WorkspaceComputePolicy.model_validate(dict(policy))
-        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
-        row = WorkspaceComputePolicyTable(
-            id=policy.id,
-            workspace_id=policy.workspace_id,
-            revision=policy.revision,
-            default_pool=policy.default_pool,
-            created_at=policy.created_at,
-            updated_at=policy.updated_at,
-        )
-        self.session.add(row)
-        self.session.flush()
-        return _workspace_compute_policy_record(row)
-
-    def ensure_default(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        policy = WorkspaceComputePolicy.model_validate(dict(policy))
-        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
-        self.session.execute(
-            postgresql_insert(WorkspaceComputePolicyTable)
-            .values(
-                id=policy.id,
-                workspace_id=policy.workspace_id,
-                revision=policy.revision,
-                default_pool=policy.default_pool,
-                created_at=policy.created_at,
-                updated_at=policy.updated_at,
-            )
-            .on_conflict_do_nothing(constraint="uq_workspace_compute_policies_workspace")
-        )
-        current = self.get_for_workspace(policy.workspace_id)
-        if current is None:
-            raise RuntimeError("workspace compute policy insert did not persist")
-        return current
-
-    def get_for_workspace(
-        self,
-        workspace_id: str,
-        *,
-        for_update: bool = False,
-    ) -> WorkspaceComputePolicy | None:
-        statement = select(WorkspaceComputePolicyTable).where(
-            WorkspaceComputePolicyTable.workspace_id == workspace_id
-        )
-        if for_update:
-            statement = statement.with_for_update()
-        row = self.session.scalars(statement).first()
-        return _workspace_compute_policy_record(row) if row is not None else None
-
-    def save(self, policy: WorkspaceComputePolicy) -> WorkspaceComputePolicy:
-        policy = WorkspaceComputePolicy.model_validate(dict(policy))
-        WorkspaceRepository(self.session).lock_active_owner(policy.workspace_id)
-        row = self.session.scalar(
-            select(WorkspaceComputePolicyTable)
-            .where(
-                WorkspaceComputePolicyTable.id == policy.id,
-                WorkspaceComputePolicyTable.workspace_id == policy.workspace_id,
-            )
-            .with_for_update()
-        )
-        if row is None:
-            raise LookupError("workspace compute policy does not exist")
-        row.revision = policy.revision
-        row.default_pool = policy.default_pool
-        row.updated_at = policy.updated_at
-        self.session.flush()
-        return _workspace_compute_policy_record(row)
 
 
 def _capacity_operation_record(

@@ -192,7 +192,6 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
                     "block_network": False,
                     "allow_list": ["10.0.0.0/8"],
                     "preemptible": True,
-                    "pool_selector": "gpu-pool",
                 },
                 "env": {"APP_ENV": "test"},
                 "command": ["python", "-m", "http.server"],

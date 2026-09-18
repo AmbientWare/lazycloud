@@ -19,7 +19,6 @@ from tests.workspaces import owned_workspace
             {"name": "forged", "image": "python:3.12", "command": ["true"]},
         ),
         ("POST", "/api/v1/units", {"name": "forged", "provider": "local"}),
-        ("POST", "/api/v1/machines", {"pool": "forged", "provider": "local"}),
         ("GET", "/api/v1/cron-jobs", None),
         ("DELETE", "/api/v1/cron-jobs/forged", None),
         ("GET", "/api/v1/secrets/full", None),

@@ -171,7 +171,9 @@ class AwsConnectedWorkspaceStorage:
         bucket: str,
         scoped: bool,
     ) -> S3ObjectStoreClient:
-        credentials = self._assume(workspace, connection, region=region, bucket=bucket, scoped=scoped)
+        credentials = self._assume(
+            workspace, connection, region=region, bucket=bucket, scoped=scoped
+        )
         return S3ObjectStoreClient.from_settings(
             S3ObjectStoreSettings(
                 bucket=bucket,

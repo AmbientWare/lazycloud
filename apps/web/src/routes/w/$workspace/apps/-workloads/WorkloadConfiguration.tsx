@@ -27,7 +27,9 @@ export function WorkloadConfiguration({
               value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
             />
           ) : null}
-          <ConfigurationFact label="Pool" value={deployment.spec.pool || "Not reported"} />
+          {deployment.spec.machine ? (
+            <ConfigurationFact label="Machine" value={deployment.spec.machine} />
+          ) : null}
           <ConfigurationFact label="Region" value={resources.region || "Automatic"} />
           {resources.availability_zone ? (
             <ConfigurationFact label="Availability zone" value={resources.availability_zone} />

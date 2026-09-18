@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
+from database.repositories.orchestration import MachineRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService, TokenIssuer
+from shared.compute_fleet import Machine
 from shared.compute_policy import MachinePool, UnitName
 from shared.http.compute import UnitMachineListResponse
 from shared.identity import TokenKind, WorkspaceRecord
@@ -47,7 +50,11 @@ def test_self_hosted_collection_is_account_scoped_and_excludes_managed_pools(
             pool=MachinePool("lazycloud"),
             provider="local",
         )
-        isolated_services.compute.create_machine(pool=MachinePool("lazycloud"), provider="local")
+        with isolated_services.context.database.session() as session:
+            MachineRepository(session).upsert(
+                Machine(id=str(uuid4()), pool=MachinePool("lazycloud")),
+                workspace_id=workspace_id,
+            )
         after_managed_machine = client.get("/api/v1/machines/self-hosted", headers=headers)
 
         assert after_managed_machine.status_code == 200

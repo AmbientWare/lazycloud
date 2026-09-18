@@ -507,7 +507,7 @@ def test_sandbox_prepare_emits_canonical_deployment_request() -> None:
         preemptible=True,
         block_network=True,
         ports=[8000, 9000],
-        pool="gpu-pool",
+        machine="gpu-box",
         authorized=True,
         volumes=[ExportableVolume(name="data", mount_path="/data")],
     )
@@ -524,5 +524,5 @@ def test_sandbox_prepare_emits_canonical_deployment_request() -> None:
         request.docker_enabled,
         request.preemptible,
     ) == (True, True, True, True)
-    assert request.pool == "gpu-pool"
+    assert request.machine == "gpu-box"
     assert [(volume.id, volume.mount_path) for volume in request.volumes] == [("data", "/data")]

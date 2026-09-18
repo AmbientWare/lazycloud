@@ -13,7 +13,6 @@ from shared.aws_connections import AwsAccountConnectionPhase
 from shared.compute_enrollment import MachineServiceState
 from shared.http.compute_policy import (
     WorkspaceComputeInstanceResponse,
-    WorkspaceComputePolicyUpdateRequest,
 )
 from tests.e2e.external import _support
 
@@ -93,17 +92,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         raise
 
-    pools = [pool for pool in client.pools().data if f"aws:{connection.id}" in pool.providers]
-    if len(pools) != 1:
-        raise RuntimeError("the connected AWS warm baseline must identify exactly one public pool")
-    policy = client.policy()
-    if policy.default_pool != pools[0].name:
-        client.update_policy(
-            WorkspaceComputePolicyUpdateRequest(
-                expected_revision=policy.revision,
-                default_pool=pools[0].name,
-            )
-        )
     summary = client.summary()
     _support.emit_evidence(
         {

@@ -79,6 +79,7 @@ def machine_view(
     agent_state: ComputeAgentTokenState | None = None,
     *,
     tunnel_connected: bool,
+    workspace_names: list[str] | None = None,
 ) -> UnitMachineResponse:
     memory = _memory_mb(machine.memory)
     gpu = machine.gpu or ""
@@ -120,7 +121,8 @@ def machine_view(
         gpu=gpu,
         gpu_count=gpu_count,
         status=machine.status.value,
-        pool=machine.pool,
+        name=machine.name,
+        workspaces=list(workspace_names or []),
         provider_name=machine.provider,
         readiness_phase=readiness_phase,
         readiness_message=readiness_message,

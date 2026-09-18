@@ -991,6 +991,14 @@ class WorkspaceRepository:
         row = self.session.get(WorkspaceTable, workspace_id)
         return workspace_record_from_table(row) if row is not None else None
 
+    def names_for_ids(self, workspace_ids: Collection[str]) -> dict[str, str]:
+        rows = self.session.execute(
+            select(WorkspaceTable.id, WorkspaceTable.name).where(
+                WorkspaceTable.id.in_(list(workspace_ids))
+            )
+        )
+        return {str(workspace_id): name for workspace_id, name in rows}
+
     def by_name(self, name: str) -> WorkspaceRecord | None:
         """The workspace that currently holds this name, in whatever state.
 

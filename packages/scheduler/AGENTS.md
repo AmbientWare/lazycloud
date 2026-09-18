@@ -193,3 +193,9 @@ starving the cloud pool that account is paying for.
 
 It is a property of capacity rather than of work, so there is no per-request
 priority. Requests are served oldest first.
+
+A joined machine's unit is never default-eligible: its worker requires a pool
+selector, so only a request carrying the machine's own label lands on it. The
+label is never chosen by the caller; placement derives it from the deployment
+the request belongs to, from the stub's pinned label, or from the workspace's
+location, in that order.

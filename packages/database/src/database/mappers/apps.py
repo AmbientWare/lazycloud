@@ -101,6 +101,7 @@ def deployment_from_table(row: DeploymentTable) -> Deployment:
         subdomain=row.subdomain,
         custom_hostname=row.custom_hostname,
         pool=MachinePool(row.pool),
+        machine=row.machine,
         active=row.active,
         deleted_at=to_utc_or_none(row.deleted_at),
         created_at=to_utc(row.created_at),
@@ -118,6 +119,7 @@ def write_deployment_row(row: DeploymentTable, deployment: Deployment) -> None:
     row.subdomain = deployment.subdomain
     row.custom_hostname = deployment.custom_hostname
     row.pool = deployment.pool
+    row.machine = deployment.machine
     row.active = deployment.active
     row.deleted_at = deployment.deleted_at
     row.created_at = deployment.created_at
@@ -215,7 +217,6 @@ def stub_from_table(row: StubTable) -> StubRecord:
         "checkpoint_readiness_interval_seconds": row.runtime_checkpoint_readiness_interval_seconds,
         "health_check_path": row.runtime_health_check_path,
         "health_check_port": row.runtime_health_check_port,
-        "pool_selector": row.runtime_pool_selector,
         "runtime": row.runtime_runtime,
         "runtime_class": row.runtime_runtime_class,
         "docker_enabled": row.runtime_docker_enabled,
@@ -306,6 +307,7 @@ def stub_from_table(row: StubTable) -> StubRecord:
         app_id=row.app_id,
         public=row.public,
         config=StubConfig.model_validate(config),
+        pool=MachinePool(row.pool),
         metadata=metadata,
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
@@ -320,6 +322,7 @@ def write_stub_row(row: StubTable, stub: StubRecord) -> None:
     row.deployment_id = stub.deployment_id
     row.app_id = stub.app_id
     row.public = stub.public
+    row.pool = stub.pool
     row.created_at = stub.created_at
     row.updated_at = stub.updated_at
     row.object_id = stub.config.object_id or None
@@ -439,11 +442,6 @@ def write_stub_row(row: StubTable, stub: StubRecord) -> None:
         if "health_check_port" in stub.config.runtime.model_fields_set
         else None
     )
-    row.runtime_pool_selector = (
-        stub.config.runtime.pool_selector
-        if "pool_selector" in stub.config.runtime.model_fields_set
-        else None
-    )
     row.runtime_runtime = (
         stub.config.runtime.runtime if "runtime" in stub.config.runtime.model_fields_set else None
     )
@@ -499,7 +497,6 @@ def write_stub_row(row: StubTable, stub: StubRecord) -> None:
                 "timeout_seconds",
                 "workers",
                 "cpu_millicores",
-                "pool_selector",
                 "gpu_count",
                 "checkpoint_readiness_interval_seconds",
                 "checkpoint_readiness_path",

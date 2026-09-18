@@ -41,7 +41,7 @@ def _capacity_request(request: SchedulerWorkerRequest) -> ComputeCapacityPlaceme
     return ComputeCapacityPlacementRequest(
         workspace_id=request.workspace_id,
         deployment_id=request.deployment_id,
-        requested_pool=request.pool_selector,
+        pool_selector=request.pool_selector,
         region=request.region,
         requirements=ComputeResourceRequirements(
             cpu_millicores=request.cpu_millicores,

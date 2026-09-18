@@ -32,6 +32,7 @@ from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import DEFAULT_RESOURCE_TYPE
 from shared.autoscaler_state import autoscaler_target_kind
 from shared.aws_connections import AwsAccountConnectionPhase
+from shared.compute_policy import MachinePool
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
@@ -591,6 +592,7 @@ class ControlPlaneService:
         app_id: str | None = None,
         public: bool = False,
         config: StubConfig | Mapping[str, JsonValue] | None = None,
+        pool: MachinePool = MachinePool(""),
         metadata: Mapping[str, JsonValue] | None = None,
         reuse_existing: bool = True,
     ) -> StubRecord:
@@ -611,6 +613,7 @@ class ControlPlaneService:
                 if isinstance(config, StubConfig)
                 else StubConfig.model_validate(dict(config) if config is not None else {})
             ),
+            pool=pool,
             metadata=metadata_payload,
             created_at=now,
             updated_at=now,
@@ -889,6 +892,7 @@ class ControlPlaneService:
                 deployment_id=source.deployment_id,
                 public=source.public,
                 config=config,
+                pool=source.pool,
                 metadata=metadata,
             )
         except Exception as clone_failure:

@@ -89,6 +89,7 @@ from database.tables.orchestration import (
     AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
+    MachineWorkspaceTable,
     WorkerTable,
 )
 from database.tables.provider_launches import ProviderNodeLaunchTable
@@ -153,6 +154,7 @@ __all__ = [
     "ImageTable",
     "LogTable",
     "MachineTable",
+    "MachineWorkspaceTable",
     "ObjectTable",
     "PlatformRateTable",
     "PodUrlTable",

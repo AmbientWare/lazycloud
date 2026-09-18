@@ -6,6 +6,7 @@ import { CliHint } from "@/components/shared/CliHint";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -14,8 +15,27 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { UnitMachine } from "@/lib/api/schemas";
-import { createMachineJoinCommand, machinesQueryOptions } from "@/lib/queries/compute";
+import {
+  createMachineJoinCommand,
+  machinesQueryOptions,
+  type MachineJoinCommandInput,
+} from "@/lib/queries/compute";
 import { cn } from "@/lib/utils";
+import { useWorkspace } from "@/lib/workspace-context";
+
+import { WorkspaceChecklist } from "./MachineWorkspaces";
+
+/** Mirrors the name rule on the join-command contract. */
+const MACHINE_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+function machineNameError(name: string): string | null {
+  if (name.length === 0) return "Enter a name.";
+  if (name.length > 63) return "Use at most 63 characters.";
+  if (!MACHINE_NAME_PATTERN.test(name)) {
+    return "Use lowercase letters, digits, and hyphens, starting and ending with a letter or digit.";
+  }
+  return null;
+}
 
 export function JoinMachineDialog({
   open,
@@ -36,7 +56,7 @@ function JoinMachineFlow() {
   const [generatedAt, setGeneratedAt] = useState<number | null>(null);
   const [baselineMachineIds, setBaselineMachineIds] = useState<ReadonlySet<string>>(new Set());
   const join = useMutation({
-    mutationFn: () => createMachineJoinCommand(),
+    mutationFn: (input: MachineJoinCommandInput) => createMachineJoinCommand(input),
     onMutate: () => {
       setGeneratedAt(Date.now());
       setBaselineMachineIds(new Set((machinesQuery.data?.data ?? []).map((machine) => machine.id)));
@@ -71,7 +91,7 @@ function JoinMachineFlow() {
           </div>
         ) : !join.data ? (
           <GenerateCommandStep
-            onGenerate={() => join.mutate()}
+            onGenerate={(input) => join.mutate(input)}
             pending={join.isPending}
             error={join.error}
           />
@@ -92,18 +112,64 @@ function GenerateCommandStep({
   pending,
   error,
 }: {
-  onGenerate: () => void;
+  onGenerate: (input: MachineJoinCommandInput) => void;
   pending: boolean;
   error: Error | null;
 }) {
+  const { workspace, workspaces } = useWorkspace();
+  const [name, setName] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set([workspace.name]));
+  const nameError = machineNameError(name);
+  const canGenerate = nameError === null && selected.size > 0 && !pending;
+
   return (
-    <section aria-labelledby="generate-command-title">
+    <form
+      aria-labelledby="generate-command-title"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setNameTouched(true);
+        if (!canGenerate) return;
+        onGenerate({ name, workspaces: [...selected] });
+      }}
+    >
       <h3 id="generate-command-title" className="text-sm font-medium">
         Prepare the host
       </h3>
       <p className="mt-1 text-xs text-muted-foreground">
-        Generate a short-lived install command for one Linux machine.
+        Name the machine, choose the workspaces it serves, then generate a short-lived install
+        command for one Linux host.
       </p>
+      <div className="mt-4 space-y-4">
+        <label className="block text-xs font-medium text-muted-foreground">
+          Machine name
+          <Input
+            autoFocus
+            value={name}
+            disabled={pending}
+            onChange={(event) => setName(event.target.value)}
+            onBlur={() => setNameTouched(true)}
+            placeholder="gpu-1"
+            autoComplete="off"
+            className="mono mt-1"
+            aria-invalid={nameTouched && nameError !== null}
+          />
+          <span className="mt-1 block font-normal">
+            {nameTouched && nameError
+              ? nameError
+              : 'Workloads pin to this name with machine="..." or --machine.'}
+          </span>
+        </label>
+        <fieldset disabled={pending}>
+          <legend className="mb-1.5 text-xs font-medium text-muted-foreground">Workspaces</legend>
+          <WorkspaceChecklist workspaces={workspaces} selected={selected} onChange={setSelected} />
+          <p className="mt-1 text-xs text-muted-foreground">
+            {selected.size === 0
+              ? "Select at least one workspace."
+              : "Only workloads from these workspaces run here. You can change this later."}
+          </p>
+        </fieldset>
+      </div>
       <div className="mt-4 border border-border bg-muted/20 p-3 text-xs">
         <p className="font-medium">Host requirements</p>
         <ul className="mt-2 list-disc space-y-1.5 pl-4 text-muted-foreground">
@@ -116,7 +182,7 @@ function GenerateCommandStep({
         </p>
       </div>
       <div className="mt-4">
-        <Button onClick={onGenerate} disabled={pending}>
+        <Button type="submit" disabled={!canGenerate}>
           {pending ? <Loader2 className="animate-spin" /> : null}
           Generate install command
         </Button>
@@ -126,7 +192,7 @@ function GenerateCommandStep({
         this browser.
       </div>
       {error ? <p className="mt-2 text-xs text-destructive">{error.message}</p> : null}
-    </section>
+    </form>
   );
 }
 

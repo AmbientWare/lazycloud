@@ -79,8 +79,8 @@ class DeploymentRegistrar(Protocol):
     ) -> DeploymentRegistration: ...
 
 
-class DeploymentPoolResolver(Protocol):
-    def resolve_deployment_pool(self, spec: DeploymentSpec, *, workspace: str) -> MachinePool: ...
+class DeploymentPlacementResolver(Protocol):
+    def resolve_placement(self, *, workspace_id: str, machine: str = "") -> MachinePool: ...
 
 
 class DeploymentScheduleWriter(Protocol):
@@ -104,11 +104,17 @@ class CustomDomainUseAdmission(Protocol):
     ) -> None: ...
 
 
+def deployment_machine(spec: DeploymentSpec) -> str:
+    """The joined machine a spec pins to, from its metadata, or empty."""
+    machine = spec.metadata.get("machine")
+    return machine.strip() if isinstance(machine, str) else ""
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentService:
     context: ControlContext
     events: ControlEventEmitter
-    pool_resolver: DeploymentPoolResolver
+    placement: DeploymentPlacementResolver
     registrar: DeploymentRegistrar
     schedules: DeploymentScheduleWriter
     custom_domain_admission: CustomDomainUseAdmission
@@ -119,9 +125,10 @@ class DeploymentService:
         normalized_spec = _normalize_runtime_spec(spec)
         with self.context.database.session() as session:
             workspace_record = self.context.workspace(session, workspace)
-        resolved_pool = self.pool_resolver.resolve_deployment_pool(
-            normalized_spec,
-            workspace=workspace_record.id,
+        machine = deployment_machine(normalized_spec)
+        resolved_pool = self.placement.resolve_placement(
+            workspace_id=workspace_record.id,
+            machine=machine,
         )
         app_resolution = self.registrar.resolve_deployment_app(
             normalized_spec,
@@ -183,6 +190,7 @@ class DeploymentService:
                     subdomain=subdomain,
                     custom_hostname=custom_hostname,
                     pool=resolved_pool,
+                    machine=machine,
                     active=deployment_active,
                 ),
                 workspace_id=workspace_record.id,

@@ -334,7 +334,24 @@ class MachineRepository:
         if owner_id is not None:
             WorkspaceRepository(self.session).lock_active_owner(owner_id)
         if row is None:
-            row = MachineTable(id=machine.id, workspace_id=owner_id, created_at=machine.created_at)
+            # The account the name is unique within is the workspace owner's,
+            # fixed here because a machine never changes workspace.
+            owner = (
+                self.session.scalar(
+                    select(WorkspaceMemberTable.user_id).where(
+                        WorkspaceMemberTable.workspace_id == owner_id,
+                        WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                    )
+                )
+                if owner_id is not None
+                else None
+            )
+            row = MachineTable(
+                id=machine.id,
+                workspace_id=owner_id,
+                owner_user_id=owner,
+                created_at=machine.created_at,
+            )
             self.session.add(row)
         elif row.workspace_id != owner_id:
             raise ConflictError("machine workspace cannot change")
@@ -342,6 +359,32 @@ class MachineRepository:
         row.updated_at = utc_now()
         self.session.flush()
         return machine_from_row(row)
+
+    def get_by_owner_name(self, owner_user_id: str, name: str) -> Machine | None:
+        """The account's live machine with this name, if one exists.
+
+        Deleted rows keep their name for history; the partial unique index and
+        this lookup both leave them out so a name can be joined again.
+        """
+        row = self.session.scalar(
+            select(MachineTable).where(
+                MachineTable.owner_user_id == owner_user_id,
+                MachineTable.name == name,
+                MachineTable.status != ResourceStatus.Deleted.value,
+            )
+        )
+        return machine_from_row(row) if row is not None else None
+
+    def list_named_for_owner(self, owner_user_id: str) -> list[Machine]:
+        statement = select(MachineTable).where(
+            MachineTable.owner_user_id == owner_user_id,
+            MachineTable.name.is_not(None),
+            MachineTable.status != ResourceStatus.Deleted.value,
+        )
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(statement.order_by(MachineTable.name))
+        ]
 
     def get(self, machine_id: str, *, workspace_id: str) -> Machine | None:
         if try_uuid(machine_id) is None:

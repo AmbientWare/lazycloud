@@ -13,7 +13,6 @@ from urllib.parse import urlparse
 from pydantic import Field, JsonValue, TypeAdapter, field_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import (
-    ADMIN_CLI_NAME,
     AGENT_CONTAINER_DATA_PATH,
     AGENT_CONTAINER_LOG_PATH,
     AGENT_CONTAINER_TMP_PATH,
@@ -105,21 +104,6 @@ class AgentWorkerNetwork(ContractModel):
     """
 
 
-class AgentJoinRequest(ContractModel):
-    name: str
-    pool: MachinePool = MachinePool(LAZYCLOUD_MACHINE_POOL)
-    endpoint: str = "http://127.0.0.1:9000"
-    token_secret: str | None = None
-    version: str = "local"
-    labels: dict[str, str] = Field(default_factory=dict)
-
-
-class AgentStatusSummary(ContractModel):
-    agents: int
-    active_leases: int
-    pools: dict[str, int] = Field(default_factory=dict)
-
-
 class AgentHostStatus(ContractModel):
     joined: bool = False
     state_path: str
@@ -129,27 +113,6 @@ class AgentHostStatus(ContractModel):
     machine_id: str = ""
     gateway_url: str = ""
     service: AgentServiceRuntimeStatus
-
-
-def build_join_command(request: AgentJoinRequest) -> list[str]:
-    command = [
-        ADMIN_CLI_NAME,
-        "agent",
-        "join",
-        "--name",
-        request.name,
-        "--pool",
-        str(request.pool),
-        "--endpoint",
-        request.endpoint,
-        "--version",
-        request.version,
-    ]
-    if request.token_secret:
-        command.extend(["--token-secret", request.token_secret])
-    for key, value in request.labels.items():
-        command.extend(["--label", f"{key}={value}"])
-    return command
 
 
 def agent_binary_filename(
@@ -751,13 +714,6 @@ main "$@"
         .replace("__AGENT_AMD64_SHA256__", amd64_sha256)
         .replace("__AGENT_ARM64_SHA256__", arm64_sha256)
     )
-
-
-def summarize_agent_status(agent_pools: list[str], active_leases: int) -> AgentStatusSummary:
-    pools: dict[str, int] = {}
-    for pool in agent_pools:
-        pools[pool] = pools.get(pool, 0) + 1
-    return AgentStatusSummary(agents=len(agent_pools), active_leases=active_leases, pools=pools)
 
 
 class AgentCapacityCheckName(StrEnum):

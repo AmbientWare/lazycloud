@@ -3873,43 +3873,6 @@ class ComputeService:
             )
         return AwsAccountPoolDrain(total_pools=len(pools), remaining_pools=remaining)
 
-    def create_machine(
-        self,
-        *,
-        workspace: str = "default",
-        pool: MachinePool,
-        provider: str = "local",
-        cpu: float | None = None,
-        memory: str | None = None,
-        gpu: str | None = None,
-        gpu_count: int = 0,
-        address: str | None = None,
-        labels: dict[str, str] | None = None,
-    ) -> Machine:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            machine = MachineRepository(session).upsert(
-                Machine(
-                    id=str(uuid4()),
-                    pool=pool,
-                    provider=provider,
-                    cpu=cpu,
-                    memory=memory,
-                    gpu=gpu,
-                    gpu_count=gpu_count,
-                    address=address,
-                    labels=labels or {},
-                ),
-                workspace_id=workspace_id,
-            )
-        self._publish_change(
-            workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.ComputeMachines,
-            change=WorkspaceChangeType.Created,
-            resource_id=machine.id,
-        )
-        return machine
-
     def list_machines(self, *, workspace: str = "default") -> list[Machine]:
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id

@@ -157,15 +157,10 @@ class MachineJoinCommandResponse(HttpModel):
     expires_at: datetime
 
 
-class MachineJoinTokenResponse(HttpModel):
-    """The same credential the join command embeds, for a machine-readable caller.
+class MachineUpdateRequest(HttpModel):
+    """Replace the workspaces one joined machine serves."""
 
-    A process that has to write the token to a file should not have to parse it
-    back out of a shell string.
-    """
-
-    token: str
-    expires_at: datetime
+    workspaces: list[str] = Field(min_length=1)
 
 
 class WorkerContainerResponse(HttpModel):
@@ -246,7 +241,9 @@ class UnitMachineResponse(HttpModel):
     gpu: str = ""
     gpu_count: int = 0
     status: str = ""
-    pool: MachinePool
+    name: str = ""
+    workspaces: list[str] = Field(default_factory=list)
+    """Names of the workspaces this machine may run workloads for."""
     provider_name: str = "agent"
     readiness_phase: MachineReadinessPhase = MachineReadinessPhase.Joining
     readiness_message: str = "Waiting for the agent to connect"
@@ -353,6 +350,7 @@ __all__ = [
     "MachineJoinCommandResponse",
     "MachineListResponse",
     "MachineResponse",
+    "MachineUpdateRequest",
     "UnitCreateRequest",
     "UnitJoinCommandRequest",
     "UnitJoinCommandResponse",

@@ -119,11 +119,23 @@ state to the scheduler's worker record, which is what placement compares. The
 fingerprint is unique per account, so one physical host is one machine however many
 workspaces its owner holds.
 
-The machine's workspace is provenance, not tenancy. A unit has to live in a
-workspace and so does the durable machine row, so the account's first workspace
-anchors both; which one it is has no effect on who the machine serves. Transferring
-that workspace to someone else therefore does not transfer the hardware, which is
-the intended answer. The machine stays with the person who connected it.
+A joined machine has a name, unique within its owner's account, and an explicit
+list of the workspaces it serves. Both live on the machine row and its
+`machine_workspaces` links, written when the join command is minted, so the name
+is taken before the host ever connects and the database refuses a second live
+machine with it. Each machine is its own unit, labelled by the name; the label is
+the only thing that selects it. The first listed workspace anchors the unit and
+the machine row, which is provenance, not tenancy: the served list is what says
+who may run there, and changing it moves nothing.
+
+Placement has no policy. `resolve_placement` answers with the workspace's
+location, `lazycloud` or the connected account's `aws` label according to the
+workspace's `connection_id`, unless the workload names a machine, in which case
+it answers with that machine's label or refuses with the name in the error. There
+is no default to change and no fallback in either direction; a workload that
+names a machine runs there or nowhere. A deployment pins the label and the name
+it resolved to, and a stub carries the label as its own column, so a workspace
+whose location later changes moves nothing already running.
 
 Tenancy is stamped once, at the authority that decides it, and reconciled
 afterwards rather than re-derived. `AgentWorkerPoolController` compares each live

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from compute.policy import WorkspaceComputePolicyService
 from fastapi import APIRouter, Depends
-from shared.compute_policy import WorkspaceComputePolicy
 from shared.http.compute_policy import (
     ComputeCapacitySummaryResponse,
     ComputeCatalogInstanceResponse,
@@ -10,58 +9,19 @@ from shared.http.compute_policy import (
     ComputeCatalogResponse,
     ComputeConnectionSummaryResponse,
     ComputeCostSummaryResponse,
-    MachinePoolListResponse,
-    MachinePoolResponse,
     WorkspaceComputeInstanceListResponse,
     WorkspaceComputeInstanceResponse,
-    WorkspaceComputePolicyResponse,
-    WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
     WorkspaceComputeWorkloadListResponse,
     WorkspaceComputeWorkloadResponse,
 )
 
-from api.server.auth import read_user, read_workspace, write_workspace
+from api.server.auth import read_user, read_workspace
 from api.server.dependencies import current_services
 from api.server.service_dependencies import workspace_compute_policy_service
 from api.server.services import ApiServices
 
 router = APIRouter(prefix="/api/v1/compute", tags=["compute"])
-
-
-def _policy_response(service_policy: WorkspaceComputePolicy) -> WorkspaceComputePolicyResponse:
-    return WorkspaceComputePolicyResponse.model_validate(service_policy)
-
-
-@router.get(
-    "/policy",
-    response_model=WorkspaceComputePolicyResponse,
-    operation_id="get_workspace_compute_policy",
-)
-def get_workspace_compute_policy(
-    workspace_id: read_workspace,
-    service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
-) -> WorkspaceComputePolicyResponse:
-    return _policy_response(service.get_policy(workspace=workspace_id))
-
-
-@router.put(
-    "/policy",
-    response_model=WorkspaceComputePolicyResponse,
-    operation_id="update_workspace_compute_policy",
-)
-def update_workspace_compute_policy(
-    request: WorkspaceComputePolicyUpdateRequest,
-    workspace_id: write_workspace,
-    service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
-) -> WorkspaceComputePolicyResponse:
-    return _policy_response(
-        service.update_policy(
-            workspace=workspace_id,
-            expected_revision=request.expected_revision,
-            default_pool=request.default_pool,
-        )
-    )
 
 
 @router.get(
@@ -108,7 +68,6 @@ def get_workspace_compute_summary(
 ) -> WorkspaceComputeSummaryResponse:
     summary = service.summary(workspace=workspace_id)
     return WorkspaceComputeSummaryResponse(
-        policy=_policy_response(summary.policy),
         connection=(
             ComputeConnectionSummaryResponse(
                 account_id=summary.connection.account_id,
@@ -175,31 +134,6 @@ def list_compute_instances(
 
 
 @router.get(
-    "/pools",
-    response_model=MachinePoolListResponse,
-    operation_id="list_workspace_compute_pools",
-)
-def list_workspace_compute_pools(
-    workspace_id: read_workspace,
-    service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
-) -> MachinePoolListResponse:
-    """Pools this workspace can run workloads in."""
-    return MachinePoolListResponse(
-        data=[
-            MachinePoolResponse(
-                name=item.name,
-                is_default=item.is_default,
-                providers=item.providers,
-                unit_count=item.unit_count,
-                gpu_types=item.gpu_types,
-            )
-            for item in service.pools(workspace=workspace_id)
-        ],
-        next="",
-    )
-
-
-@router.get(
     "/workloads",
     response_model=WorkspaceComputeWorkloadListResponse,
     operation_id="list_workspace_compute_workloads",
@@ -215,7 +149,7 @@ def list_workspace_compute_workloads(
                 app_id=item.deployment.app_id,
                 name=item.deployment.name,
                 kind=item.deployment.kind,
-                pool=item.pool,
+                machine=item.machine,
                 cpu_millicores=item.resources.cpu_millicores,
                 memory_mb=item.resources.memory_mb,
                 gpu=item.resources.gpu,

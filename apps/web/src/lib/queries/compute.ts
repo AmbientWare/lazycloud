@@ -5,7 +5,8 @@ import {
   awsConnectionEnvelopeSchema,
   awsConnectionSchema,
   customerComputeInstanceListSchema,
-  poolJoinCommandResponseSchema,
+  machineJoinCommandResponseSchema,
+  machineSchema,
   unitMachineListSchema,
   type AwsConnection,
 } from "@/lib/api/schemas";
@@ -31,7 +32,7 @@ const CAPACITY_POLL_INTERVAL_MS = 5_000;
  */
 const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
 
-/** Machines this account connected. They serve every workspace it owns. */
+/** Machines this account connected, each serving the workspaces it names. */
 export function machinesQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.compute.machines(),
@@ -67,14 +68,12 @@ export async function getAwsConnection(): Promise<AwsConnection | null> {
 }
 
 export type CreateAwsConnectionInput = {
-  pool?: string;
   accountId: string;
 };
 
 export function createAwsConnection(input: CreateAwsConnectionInput) {
   return postJson("/api/v1/aws-connection", awsConnectionAuthorizationSchema, {
     account_id: input.accountId,
-    pool: input.pool,
   });
 }
 
@@ -103,6 +102,23 @@ export function retryAwsConnection() {
   return postJson("/api/v1/aws-connection/retry", awsConnectionSchema);
 }
 
-export function createMachineJoinCommand() {
-  return postJson("/api/v1/machines/join-command", poolJoinCommandResponseSchema);
+export type MachineJoinCommandInput = {
+  name: string;
+  workspaces: string[];
+  gpu?: string[];
+};
+
+export function createMachineJoinCommand(input: MachineJoinCommandInput) {
+  return postJson("/api/v1/machines/join-command", machineJoinCommandResponseSchema, {
+    name: input.name,
+    workspaces: input.workspaces,
+    gpu: input.gpu ?? [],
+  });
+}
+
+export function updateMachineWorkspaces(machineId: string, workspaces: string[]) {
+  return apiRequest(`/api/v1/machines/${encodeURIComponent(machineId)}`, machineSchema, {
+    method: "PATCH",
+    body: JSON.stringify({ workspaces }),
+  });
 }

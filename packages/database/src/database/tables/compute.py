@@ -216,11 +216,6 @@ class WorkspaceComputePolicyTable(IdTable, DatabaseBase):
         nullable=False,
     )
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
-    default_pool: Mapped[str] = mapped_column(
-        String(240),
-        nullable=False,
-        default="lazycloud",
-    )
 
 
 class ComputeCapacityOperationTable(IdTable, DatabaseBase):

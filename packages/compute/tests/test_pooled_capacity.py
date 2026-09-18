@@ -596,7 +596,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
     candidates = placement.purchase_candidates(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
-            requested_pool="lazycloud",
+            pool_selector="lazycloud",
             requirements=requirements,
         )
     )
@@ -699,7 +699,7 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
     candidates = placement.purchase_candidates(
         ComputeCapacityPlacementRequest(
             workspace_id=pool.workspace_id,
-            requested_pool=pool.pool,
+            pool_selector=pool.pool,
             requirements=requirements,
         )
     )

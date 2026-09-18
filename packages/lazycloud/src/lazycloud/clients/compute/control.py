@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from pydantic import JsonValue
-from shared.aws_connections import AWS_CONNECTED_MACHINE_POOL, AwsAccountNetwork
-from shared.capacity import MachinePool
+from shared.aws_connections import AwsAccountNetwork
 from shared.http.aws_connections import (
     AwsConnectionAuthorizationResponse,
     AwsConnectionCreateRequest,
@@ -16,15 +15,13 @@ from shared.http.aws_connections import (
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
+    MachineResponse,
     WorkerDrainResponse,
     WorkerResponse,
 )
 from shared.http.compute_policy import (
     ComputeCatalogResponse,
-    MachinePoolListResponse,
     WorkspaceComputeInstanceListResponse,
-    WorkspaceComputePolicyResponse,
-    WorkspaceComputePolicyUpdateRequest,
     WorkspaceComputeSummaryResponse,
     WorkspaceComputeWorkloadListResponse,
 )
@@ -78,14 +75,12 @@ class ComputeClient:
         self,
         *,
         account_id: str,
-        pool: str = AWS_CONNECTED_MACHINE_POOL,
         role_arn: str | None = None,
         networks: dict[str, AwsAccountNetwork] | None = None,
         external_id: str | None = None,
     ) -> AwsConnectionAuthorizationResponse:
         request = AwsConnectionCreateRequest(
             account_id=account_id,
-            pool=MachinePool(pool),
             role_arn=role_arn,
             networks=networks if networks is not None else {},
             external_id=external_id,
@@ -124,23 +119,6 @@ class ComputeClient:
     def retry_connection(self) -> AwsConnectionResponse:
         return AwsConnectionResponse.model_validate(self.channel.post(self._aws_path("/retry")))
 
-    def policy(self) -> WorkspaceComputePolicyResponse:
-        return WorkspaceComputePolicyResponse.model_validate(
-            self.channel.get(self._compute_path("/policy"))
-        )
-
-    def update_policy(
-        self,
-        request: WorkspaceComputePolicyUpdateRequest,
-    ) -> WorkspaceComputePolicyResponse:
-        return WorkspaceComputePolicyResponse.model_validate(
-            self.channel.request(
-                "PUT",
-                self._compute_path("/policy"),
-                payload=request.model_dump(mode="json"),
-            )
-        )
-
     def catalog(self) -> ComputeCatalogResponse:
         return ComputeCatalogResponse.model_validate(
             self.channel.get(self._compute_path("/catalog"))
@@ -156,11 +134,6 @@ class ComputeClient:
             self.channel.get(self._compute_path("/instances"))
         )
 
-    def pools(self) -> MachinePoolListResponse:
-        return MachinePoolListResponse.model_validate(
-            self.channel.get(self._compute_path("/pools"))
-        )
-
     def workloads(self) -> WorkspaceComputeWorkloadListResponse:
         return WorkspaceComputeWorkloadListResponse.model_validate(
             self.channel.get(self._compute_path("/workloads"))
@@ -168,6 +141,15 @@ class ComputeClient:
 
     def remove_machine(self, machine_id: str) -> None:
         self.channel.request("DELETE", self._machines_path(f"/{machine_id}"))
+
+    def update_machine(self, machine_id: str, *, workspaces: list[str]) -> MachineResponse:
+        return MachineResponse.model_validate(
+            self.channel.request(
+                "PATCH",
+                self._machines_path(f"/{machine_id}"),
+                payload={"workspaces": list(workspaces)},
+            )
+        )
 
     def machine_join_command(
         self,

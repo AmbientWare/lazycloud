@@ -367,7 +367,7 @@ class PodControlService:
                     disk_mib=plan.disk_mib,
                     gpu=list(container.gpu),
                     gpu_count=container.gpu_count,
-                    pool_selector=config.runtime.pool_selector or "",
+                    pool_selector=stub.pool,
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
                     runtime=config.runtime.runtime,

@@ -19,6 +19,7 @@ from database.repositories.aws_connections import (
 )
 from database.types import DatabaseSession
 from shared.aws_connections import (
+    AWS_CONNECTED_MACHINE_POOL,
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
     AwsAccountAuthorizationPlan,
@@ -33,7 +34,6 @@ from shared.aws_connections import (
     AwsStackCreateRequest,
     AwsStackParameter,
 )
-from shared.compute_policy import MachinePool
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.aws_connections import (
     AwsConnectionCreateRequest,
@@ -249,21 +249,21 @@ def _service(
     )
 
 
-def test_customer_pool_survives_retries_and_cannot_change_during_authorization(
+def test_connection_setup_survives_retries_and_stamps_the_connected_label(
     service_context: ServiceContext,
 ) -> None:
     owner = _owner(service_context)
     service = _service(service_context)
-    request = AwsConnectionCreateRequest(account_id=ACCOUNT_ID, pool=MachinePool("training"))
+    request = AwsConnectionCreateRequest(account_id=ACCOUNT_ID)
 
     created = service.connect(request, user_id=owner)
     retried = service.connect(request, user_id=owner)
 
     assert retried.connection.id == created.connection.id
-    assert service.get(user_id=owner).pool == "training"
+    assert service.get(user_id=owner).pool == AWS_CONNECTED_MACHINE_POOL
     with pytest.raises(ConflictError, match="already has"):
         service.connect(
-            AwsConnectionCreateRequest(account_id=ACCOUNT_ID, pool=MachinePool("other")),
+            AwsConnectionCreateRequest(account_id="210987654321"),
             user_id=owner,
         )
 

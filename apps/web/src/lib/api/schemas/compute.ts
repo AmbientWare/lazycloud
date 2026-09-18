@@ -62,12 +62,30 @@ export const containerWithAppPageSchema = z.object({
 });
 export type ContainerWithAppPage = z.infer<typeof containerWithAppPageSchema>;
 
-export const poolJoinCommandResponseSchema = z
+export const machineJoinCommandResponseSchema = z
   .object({
     command: z.string(),
     expires_at: z.string(),
   })
   .strict();
+
+/** Synced to shared.http.compute.MachineResponse, the shape the update route returns. */
+export const machineSchema = z.object({
+  id: z.string(),
+  name: z.string().default(""),
+  workspaces: z.array(z.string()).default([]),
+  provider: z.string().default("local"),
+  status: z.string(),
+  cpu: z.number().nullish(),
+  memory: z.string().nullish(),
+  gpu: z.string().nullish(),
+  gpu_count: z.number().default(0),
+  address: z.string().nullish(),
+  labels: z.record(z.string()).default({}),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type Machine = z.infer<typeof machineSchema>;
 
 const machineReadinessPhaseSchema = z.enum(["joining", "ready", "blocked", "offline", "revoked"]);
 
@@ -92,9 +110,10 @@ const machinePreflightCheckSchema = z
 
 export const unitMachineSchema = z.object({
   id: z.string(),
+  name: z.string().default(""),
+  workspaces: z.array(z.string()).default([]),
   cpu: z.number(),
   memory: z.number(),
-  pool: z.string(),
   provider_name: z.string(),
   readiness_phase: machineReadinessPhaseSchema,
   readiness_message: z.string(),

@@ -15,13 +15,11 @@ from cli.api_client import AdminApiClient
 from coordination.redis_client import RedisClient
 from identity.auth import AuthService, IdentityDatabaseContext
 from identity.token_invalidation import AuthTokenInvalidation
-from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.workspace.control import WorkspaceControlClient
 from pydantic import SecretStr
-from shared.compute_policy import MachinePool
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL, MachinePool
 from shared.containers import ContainerStatus
 from shared.http.compute import ContainerDetailResponse, ContainerRunRequest, UnitCreateRequest
-from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
 from shared.http.system import TokenCreateRequest
 from shared.http_transport import HttpChannel
 from shared.identity import AuthScope, TokenKind
@@ -107,7 +105,9 @@ class ControlPlaneStreamProvisioner:
 
     def prepare(self) -> Path:
         workspace_name = f"stream-bench-{self.run_id}"
-        delivery_pool = MachinePool(f"stream-bench-{self.run_id}-delivery")
+        # Customer workloads land on the label their workspace resolves to, which
+        # is the platform label; the delivery unit must carry it to serve them.
+        delivery_pool = MachinePool(LAZYCLOUD_MACHINE_POOL)
         load_pool = MachinePool(f"stream-bench-{self.run_id}-load")
         workspace = self._workspace_client().create(workspace_name)
         self.record.workspace_id = workspace.id
@@ -149,19 +149,6 @@ class ControlPlaneStreamProvisioner:
             )
         )
         self.record.unit_ids.extend((delivery_unit.id, load_unit.id))
-        compute = ComputeClient.from_endpoint(
-            self.endpoint,
-            token=customer.token,
-            timeout_seconds=self.request_timeout_seconds,
-            workspace=workspace.id,
-        )
-        policy = compute.policy()
-        compute.update_policy(
-            WorkspaceComputePolicyUpdateRequest(
-                expected_revision=policy.revision,
-                default_pool=str(delivery_pool),
-            )
-        )
         emit_progress(
             "provision-pools-created",
             delivery_pool=str(delivery_pool),

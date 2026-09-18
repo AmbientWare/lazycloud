@@ -47,7 +47,8 @@ class PooledCapacityOwner(Protocol):
 class ComputeCapacityPlacementRequest(ContractModel):
     workspace_id: str
     deployment_id: str = ""
-    requested_pool: str = ""
+    pool_selector: str = ""
+    """Label already pinned on the workload's config, or empty to resolve one."""
     region: ProductRegion | None = None
     requirements: ComputeResourceRequirements
 
@@ -70,7 +71,7 @@ class ComputeCapacityPlacementService:
     compute: PooledCapacityOwner
 
     def place(self, request: ComputeCapacityPlacementRequest) -> ComputeCapacityPlacementResult:
-        return ComputeCapacityPlacementResult(pool=MachinePool(self._machine_pool_for(request)))
+        return ComputeCapacityPlacementResult(pool=self._machine_pool_for(request))
 
     def purchase_candidates(
         self, request: ComputeCapacityPlacementRequest
@@ -155,30 +156,28 @@ class ComputeCapacityPlacementService:
     ) -> None:
         self.compute.prepare_pooled_offer(provider=provider, offer=offer, requirements=requirements)
 
-    def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> str:
-        return self.policies.resolve_machine_pool(
-            request.requested_pool or self._deployment_machine_pool(request),
-            workspace=request.workspace_id,
-        )
+    def _machine_pool_for(self, request: ComputeCapacityPlacementRequest) -> MachinePool:
+        """The label this request is served under.
 
-    def _deployment_machine_pool(self, request: ComputeCapacityPlacementRequest) -> str:
-        """The group a deployment was pinned to when it was created.
-
-        A deployment keeps the fleet it was deployed onto: a workspace that
-        later changes its default must not move workloads already running.
+        A deployment keeps the label it was pinned to when it was created, so a
+        workspace whose location later changes never moves running workloads. A
+        label already on the request was derived the same way when its stub was
+        created; nothing user-facing writes one.
         """
-        if not request.deployment_id:
-            return ""
-        with self.context.database.session() as session:
-            deployment = DeploymentRepository(session).get(
-                request.deployment_id,
-                workspace_id=request.workspace_id,
-            )
-        if deployment is None:
-            raise InvalidInputError(
-                f"deployment {request.deployment_id!r} was not found in the workspace"
-            )
-        return deployment.pool
+        if request.pool_selector:
+            return MachinePool(request.pool_selector)
+        if request.deployment_id:
+            with self.context.database.session() as session:
+                deployment = DeploymentRepository(session).get(
+                    request.deployment_id,
+                    workspace_id=request.workspace_id,
+                )
+            if deployment is None:
+                raise InvalidInputError(
+                    f"deployment {request.deployment_id!r} was not found in the workspace"
+                )
+            return deployment.pool
+        return self.policies.resolve_placement(workspace_id=request.workspace_id)
 
 
 __all__ = [

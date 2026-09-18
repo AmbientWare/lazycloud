@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import JsonValue
+from shared.compute_policy import LAZYCLOUD_MACHINE_POOL
 from sqlalchemy import (
     DDL,
     BigInteger,
@@ -19,7 +20,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.schema import SchemaItem
 
 from database.tables.base import (
@@ -111,13 +112,28 @@ class AutoscalingTargetTable(TimestampMixin, DatabaseBase):
 
 
 class MachineTable(IdTable, DatabaseBase):
+    """One machine, bought by a unit or joined by an account.
+
+    A joined machine carries the account-unique `name` workloads pin to and the
+    `owner_user_id` that name is unique within. Both are null for capacity a
+    provider launched, which nothing addresses by name.
+    """
+
     __tablename__ = "machines"
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_machines_workspace_created", "workspace_id", "created_at"),
         Index("ix_machines_pool_status", "pool", "status"),
         Index("ix_machines_workspace_owner", "workspace_id", "capacity_owner_id"),
         Index("ix_machines_provider_status", "provider", "status"),
+        Index(
+            "uq_machines_owner_name",
+            "owner_user_id",
+            "name",
+            unique=True,
+            postgresql_where=text("name IS NOT NULL AND status <> 'deleted'"),
+        ),
         CheckConstraint("gpu_count >= 0", name="ck_machines_gpu_count"),
+        CheckConstraint("name IS NULL OR owner_user_id IS NOT NULL", name="ck_machines_name_owner"),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -125,7 +141,13 @@ class MachineTable(IdTable, DatabaseBase):
         ForeignKey("workspaces.id", ondelete="SET NULL"),
         nullable=True,
     )
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
+    owner_user_id: Mapped[str | None] = mapped_column(
+        uuid_type,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    name: Mapped[str | None] = mapped_column(String(63), nullable=True)
+    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
     capacity_owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -136,6 +158,31 @@ class MachineTable(IdTable, DatabaseBase):
     gpu: Mapped[str | None] = mapped_column(Text, nullable=True)
     gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
+    workspaces: Mapped[list[MachineWorkspaceTable]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="MachineWorkspaceTable.workspace_id",
+    )
+
+
+class MachineWorkspaceTable(DatabaseBase):
+    """A workspace whose workloads may land on one joined machine."""
+
+    __tablename__ = "machine_workspaces"
+    __table_args__: tuple[SchemaItem, ...] = (
+        Index("ix_machine_workspaces_workspace", "workspace_id"),
+    )
+
+    machine_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("machines.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        uuid_type,
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
 
 
 class WorkerTable(IdTable, DatabaseBase):
@@ -158,7 +205,7 @@ class WorkerTable(IdTable, DatabaseBase):
         ForeignKey("machines.id", ondelete="SET NULL"),
         nullable=True,
     )
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
+    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     admitted_release_generation: Mapped[int] = mapped_column(BigInteger, server_default="0")
@@ -416,7 +463,7 @@ class AgentTable(IdTable, DatabaseBase):
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
-    pool: Mapped[str] = mapped_column(String(240), nullable=False, default="default")
+    pool: Mapped[str] = mapped_column(String(240), nullable=False, default=LAZYCLOUD_MACHINE_POOL)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     version: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

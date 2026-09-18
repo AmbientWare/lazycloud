@@ -4,16 +4,19 @@ import hashlib
 import sys
 from contextlib import ExitStack
 from dataclasses import replace
+from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
+from database.repositories.orchestration import MachineRepository
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
+from shared.compute_fleet import Machine
 from shared.compute_policy import (
     MachinePool,
     UnitName,
@@ -138,9 +141,11 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
 
         isolated_services.compute.create_unit(UnitName("default-pool"))
         isolated_services.compute.create_unit(UnitName("team-pool"), workspace=workspace.id)
-        isolated_services.compute.create_machine(
-            pool=MachinePool("team-pool"), workspace=workspace.id
-        )
+        with isolated_services.context.database.session() as session:
+            MachineRepository(session).upsert(
+                Machine(id=str(uuid4()), pool=MachinePool("team-pool")),
+                workspace_id=workspace.id,
+            )
 
         pools = client.get(
             f"/api/v1/units?workspace={workspace.id}",
@@ -157,9 +162,9 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
         ] == ["team-pool"]
         assert machines.status_code == 200
         assert [
-            _required_string(machine, "pool")
+            _required_string(machine, "provider")
             for machine in _response_object_list(machines, "machines")
-        ] == ["team-pool"]
+        ] == ["local"]
 
         workspace_token, _record = AuthService(isolated_services.context).create_token(
             "workspace-user",

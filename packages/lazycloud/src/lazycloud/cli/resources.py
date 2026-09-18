@@ -10,12 +10,10 @@ from typing import Annotated, Any
 import typer
 from pydantic import TypeAdapter
 from shared.aws_connections import (
-    AWS_CONNECTED_MACHINE_POOL,
     AwsAccountConnectionPhase,
     AwsAccountNetwork,
     AwsRegion,
 )
-from shared.compute_policy import MachinePool
 from shared.http.aws_connections import (
     AwsConnectionResponse,
 )
@@ -23,7 +21,6 @@ from shared.http.compute import (
     ContainerResponse,
     MachineJoinCommandRequest,
 )
-from shared.http.compute_policy import WorkspaceComputePolicyUpdateRequest
 from shared.http.gateway import (
     AttachToContainerResponse,
     CheckpointContainerRequest,
@@ -51,7 +48,7 @@ from lazycloud.cli.control import (
     resource_client,
     task_client,
 )
-from lazycloud.cli.pool_join import agent_join_interrupted, build_pool_join_command
+from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
 from lazycloud.cli.result_output import task_result_export, task_result_view
 from lazycloud.clients.aws import create_connection_stack
 
@@ -61,12 +58,10 @@ machine_app = typer.Typer(help="Manage self-hosted machines.")
 cloud_app = typer.Typer(help="Connect and manage this account's cloud connection.")
 cloud_connect_app = typer.Typer(help="Connect a cloud provider account.")
 cloud_app.add_typer(cloud_connect_app, name="connect")
-compute_app = typer.Typer(help="Inspect workspace compute pools and capacity.")
-compute_policy_app = typer.Typer(help="Inspect and update workspace scheduling defaults.")
-compute_app.add_typer(compute_policy_app, name="policy")
+compute_app = typer.Typer(help="Inspect workspace compute capacity.")
 
 
-@compute_app.command("status", help="Show workspace compute capacity and policy.")
+@compute_app.command("status", help="Show workspace compute capacity.")
 def compute_status(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -84,7 +79,6 @@ def compute_status(
     console.print(
         result_card(
             {
-                "default_pool": response.policy.default_pool,
                 "cloud": connection.account_id if connection is not None else "not connected",
                 "instances": ", ".join(instance_states),
                 "workloads": response.workload_count,
@@ -126,30 +120,7 @@ def compute_instances(
     )
 
 
-@compute_app.command("pools")
-def compute_units(
-    ctx: typer.Context,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    """List the machine pools this workspace can run workloads in."""
-    response = compute_client(workspace=workspace).pools()
-    if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
-        return
-    rows = [
-        [
-            item.name,
-            "yes" if item.is_default else "",
-            ", ".join(item.providers),
-            str(item.unit_count),
-            ", ".join(item.gpu_types),
-        ]
-        for item in response.data
-    ]
-    console.print(table("Compute pools", ["name", "default", "providers", "units", "gpus"], rows))
-
-
-@compute_app.command("workloads", help="List workload-to-pool assignments.")
+@compute_app.command("workloads", help="List workloads and the machine each is pinned to.")
 def compute_workloads(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
@@ -158,58 +129,14 @@ def compute_workloads(
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
-    rows = [[item.name, item.kind.value, str(item.pool)] for item in response.data]
-    console.print(table("Compute workloads", ["name", "kind", "pool"], rows))
-
-
-@compute_policy_app.command("show", help="Show the workspace compute policy.")
-def compute_policy_show(
-    ctx: typer.Context,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    response = compute_client(workspace=workspace).policy()
-    emit(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        view=result_card(
-            {"default_pool": response.default_pool},
-        ),
-    )
-
-
-@compute_policy_app.command("update", help="Update the workspace compute policy.")
-def compute_policy_update(
-    ctx: typer.Context,
-    default_pool: Annotated[str, typer.Option("--default-pool")],
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    """Set the pool this workspace's workloads land in when they name none."""
-    client = compute_client(workspace=workspace)
-    current = client.policy()
-    response = client.update_policy(
-        WorkspaceComputePolicyUpdateRequest(
-            expected_revision=current.revision,
-            default_pool=default_pool,
-        )
-    )
-    emit(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        view=notice_card(
-            f"New workloads will use pool {response.default_pool} by default.",
-            tone="success",
-        ),
-    )
+    rows = [[item.name, item.kind.value, item.machine] for item in response.data]
+    console.print(table("Compute workloads", ["name", "kind", "machine"], rows))
 
 
 @cloud_connect_app.command("aws")
 def cloud_connect_aws(
     ctx: typer.Context,
     account_id: Annotated[str, typer.Option("--account-id", help="AWS account ID.")],
-    pool: Annotated[
-        str,
-        typer.Option("--pool", help="Pool workloads select to use this account's capacity."),
-    ] = AWS_CONNECTED_MACHINE_POOL,
     role_arn: Annotated[
         str | None,
         typer.Option("--role-arn", help="Existing cross-account management role."),
@@ -226,7 +153,6 @@ def cloud_connect_aws(
     networks = TypeAdapter(dict[AwsRegion, AwsAccountNetwork]).validate_json(networks_json)
     response = compute_client().connect_account(
         account_id=account_id,
-        pool=pool,
         role_arn=role_arn,
         networks=networks,
     )
@@ -234,7 +160,6 @@ def cloud_connect_aws(
         raise RuntimeError("existing-role authorization did not return its external ID")
     authorization: dict[str, object] = {
         "account_id": account_id,
-        "pool": response.connection.pool,
         "phase": response.connection.phase.value,
     }
     if response.authorization.stack:
@@ -802,19 +727,54 @@ def machine_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in machines])
         return
     rows: list[list[str]] = [
-        [str(item.pool), item.status.value, item.gpu or "", item.id] for item in machines
+        [item.name, ", ".join(item.workspaces), item.status.value, item.gpu or "", item.id]
+        for item in machines
     ]
-    console.print(table("Machines", ["pool", "status", "gpu", "id"], rows))
+    console.print(table("Machines", ["name", "workspaces", "status", "gpu", "id"], rows))
 
 
-@machine_app.command("join", help="Join this machine to a compute pool.")
+@machine_app.command("update", help="Change the workspaces a joined machine serves.")
+def machine_update(
+    ctx: typer.Context,
+    machine: Annotated[str, typer.Argument(help="Machine name or ID.")],
+    workspaces: Annotated[
+        list[str],
+        typer.Option(
+            "--workspaces",
+            help="Workspace names whose workloads may run on this machine, comma-separated.",
+        ),
+    ],
+) -> None:
+    names = _workspace_names(workspaces)
+    if not names:
+        raise typer.BadParameter("--workspaces needs at least one workspace name")
+    machines = resource_client().list_machines().machines
+    matches = [item for item in machines if machine in (item.name, item.id)]
+    if not matches:
+        raise ClientError(f"No joined machine is named {machine}.")
+    response = compute_client().update_machine(matches[0].id, workspaces=names)
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=result_card({"name": response.name, "workspaces": ", ".join(response.workspaces)}),
+    )
+
+
+@machine_app.command("join", help="Join this machine to your account.")
 def machine_join(
     ctx: typer.Context,
-    ttl: Annotated[str, typer.Option("--ttl", help="Join token lifetime.")] = "",
-    pool: Annotated[
+    name: Annotated[
         str,
-        typer.Option("--pool", help="Machine pool to join, created if new."),
-    ] = "",
+        typer.Option("--name", help="Name workloads pin to; unique across the account."),
+    ],
+    workspaces: Annotated[
+        list[str],
+        typer.Option(
+            "--workspaces",
+            help="Workspace names whose workloads may run on this machine, comma-separated.",
+        ),
+    ],
+    ttl: Annotated[str, typer.Option("--ttl", help="Join token lifetime.")] = "",
     gpu: Annotated[
         list[str] | None,
         typer.Option("--gpu", help="GPU type this machine contributes."),
@@ -855,22 +815,26 @@ def machine_join(
         typer.Option("--state-dir", help="Agent state directory."),
     ] = "",
 ) -> None:
-    """Join this machine to your account, in the pool you name.
+    """Join this machine to your account under a name workloads can pin to.
 
-    No workspace: the host belongs to the account that connected it and serves every
-    workspace that account owns.
+    The host belongs to the account and runs workloads only for the workspaces
+    named here.
     """
     if gpu_ids and max_gpus:
         raise typer.BadParameter("--gpu-ids and --max-gpus cannot both be set")
+    workspace_names = _workspace_names(workspaces)
+    if not workspace_names:
+        raise typer.BadParameter("--workspaces needs at least one workspace name")
 
     response = compute_client().machine_join_command(
         MachineJoinCommandRequest(
             ttl=ttl,
-            pool=MachinePool(pool),
+            name=name,
+            workspaces=workspace_names,
             gpu=list(gpu or []),
         )
     )
-    command = build_pool_join_command(
+    command = build_machine_join_command(
         response.command,
         max_cpu=max_cpu,
         max_memory=max_memory,
@@ -911,3 +875,13 @@ def machine_remove(
         payload={"machine_id": machine_id, "removed": True},
         view=notice_card(f"Removed {machine_id}.", tone="success"),
     )
+
+
+def _workspace_names(values: list[str]) -> list[str]:
+    names: list[str] = []
+    for value in values:
+        for name in value.split(","):
+            name = name.strip()
+            if name and name not in names:
+                names.append(name)
+    return names

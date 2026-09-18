@@ -32,9 +32,17 @@ container admission and file writes lock the same volume row as deletion.
 Presigned volume writes use multipart uploads whose completion goes through the
 API. Direct PUT requests can finish after their URL expires, so volumes that may
 have issued those URLs retain an unmetered cleanup record for their exact ID.
-Recreating a name gets a different ID. Managed bucket retirement removes those
-records; customer bucket cleanup retains its canonical workspace storage authority
-and remains workspace-owned after public workspace access ends.
+Recreating a name gets a different ID. Retiring the workspace's bucket removes
+those records, wherever the bucket lives.
+
+A workspace's bucket lives where the workspace does. A workspace with no
+connection has a bucket in the platform's object store, reached through the
+deployment's own credential. A workspace created in a connected AWS account has
+its bucket in that account, and the platform holds no standing credential for
+it: the router asks the connection's role for a session narrowed to that one
+bucket, workloads mount with that session, and the volume store re-resolves a
+store whose session is about to lapse. The bucket is deleted with the
+workspace. Nothing here moves a workspace between the two.
 
 An empty or negative credit balance starts a 30-day managed-storage grace
 period and queues an email in the same transaction. Its timestamp is durable;
@@ -46,4 +54,5 @@ After grace, claim individual objects and volume deletion intents under the
 same account lock that protects credit issuance. Skip busy resource locks while
 holding that lock because metering takes its resource lock before billing.
 Existing cleanup owns retries and late-write cleanup. Never retire a workspace,
-delete a whole bucket, or reclaim customer-owned storage for exhausted credit.
+delete a whole bucket, or touch a workspace that lives in a connected account
+for exhausted credit; the customer pays their own provider for that storage.

@@ -74,10 +74,9 @@ export LAZYCLOUD_PARQUET_ENDPOINT="https://objects.example.com"
 
 The endpoint cannot include credentials or a query string.
 
-If you use a connected AWS account instead, you can omit both secret-name
-variables and use the instance role. Set `pool="aws"` on all four function
-decorators in the source so local remote calls select that capacity. Grant the
-role the same bucket permissions. See [cloud buckets](/concepts/volumes#mount-an-existing-cloud-bucket).
+If the workspace lives in a connected AWS account, you can omit both
+secret-name variables and use the instance role. Grant the role the same bucket
+permissions. See [cloud buckets](/concepts/volumes#mount-an-existing-cloud-bucket).
 
 ## Run with sample data
 

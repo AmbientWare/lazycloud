@@ -55,7 +55,7 @@ def test_placement_names_the_pool_and_leaves_the_unit_to_arbitration(
     result = placement.place(
         ComputeCapacityPlacementRequest(
             workspace_id=workspace_id,
-            requested_pool="shared-pool",
+            pool_selector="shared-pool",
             requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         )
     )
