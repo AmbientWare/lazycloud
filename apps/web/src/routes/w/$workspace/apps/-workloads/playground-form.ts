@@ -6,16 +6,38 @@ export const PLAYGROUND_KINDS = new Set(["function", "endpoint"]);
 const PRIMITIVE_TYPES = ["string", "integer", "number", "boolean"] as const;
 type PrimitiveType = (typeof PRIMITIVE_TYPES)[number];
 
+/** Why an HTTP caller cannot use this function: Python-only arguments or return. */
 export function pythonOnlyReason(manifest: DeploymentManifest): string | null {
   const operation = manifest.client_contract?.operation;
   if (!operation) return null;
+  const reasons = parameterPythonReasons(manifest);
+  if (operation.return_python_type) reasons.push(`return: ${operation.return_python_type}`);
+  return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
+}
+
+/**
+ * Why the playground cannot build a call. Only the arguments matter here: a
+ * Python-only return is requested as a stored Python result and shown from
+ * the task, the same way `lazycloud run` shows it.
+ */
+export function playgroundPythonOnlyReason(manifest: DeploymentManifest): string | null {
+  const reasons = parameterPythonReasons(manifest);
+  return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
+}
+
+export function returnsPythonValue(manifest: DeploymentManifest): boolean {
+  return Boolean(manifest.client_contract?.operation.return_python_type);
+}
+
+function parameterPythonReasons(manifest: DeploymentManifest): string[] {
+  const operation = manifest.client_contract?.operation;
+  if (!operation) return [];
   const reasons: string[] = [];
   for (const parameter of operation.parameters) {
     if (parameter.python_type) reasons.push(`${parameter.name}: ${parameter.python_type}`);
     if (parameter.python_default) reasons.push(`${parameter.name} has a Python default`);
   }
-  if (operation.return_python_type) reasons.push(`return: ${operation.return_python_type}`);
-  return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
+  return reasons;
 }
 
 export type PlaygroundField = {
