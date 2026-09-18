@@ -119,7 +119,8 @@ class _GetParameterResponse(_BakeModel):
 
 
 class _ImageDisk(_BakeModel):
-    snapshot_id: str = Field(alias="SnapshotId")
+    # Absent while a copy is still creating its destination snapshot.
+    snapshot_id: str = Field(default="", alias="SnapshotId")
 
 
 class _ImageDevice(_BakeModel):
@@ -756,7 +757,7 @@ def _wait_for_image(request: _BakeRequest, *, region: str, image_id: str) -> Non
         snapshot_ids = [
             device.disk.snapshot_id
             for device in images.images[0].devices
-            if device.disk is not None
+            if device.disk is not None and device.disk.snapshot_id
         ]
         _log(f"{region}: image {image_id}: {state}")
         if snapshot_ids:
