@@ -1,0 +1,72 @@
+"""Describe a Python result for surfaces that will never load it.
+
+Any object has a `repr`; objects that care how they look also implement
+`_repr_png_` or `_repr_html_`. Both are the object's own decision, so no type
+needs naming here and libraries that were never imported still render.
+"""
+
+from __future__ import annotations
+
+import pprint
+from typing import TypeGuard
+
+from shared.function_payloads import (
+    FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS,
+    FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES,
+    FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS,
+    FunctionResultDisplay,
+    FunctionResultHtmlDisplay,
+    FunctionResultImageDisplay,
+    FunctionResultRichDisplay,
+)
+
+_TEXT_WIDTH = 88
+_TRUNCATION_MARK = "..."
+
+
+def build_function_result_display(value: object) -> FunctionResultDisplay:
+    return FunctionResultDisplay(text=_display_text(value), rich=_rich_display(value))
+
+
+def _display_text(value: object) -> str:
+    try:
+        text = pprint.pformat(value, width=_TEXT_WIDTH, compact=True, sort_dicts=False)
+    except Exception as exc:
+        text = f"<{type(value).__name__} repr failed: {type(exc).__name__}>"
+    if len(text) > FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS:
+        keep = FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS - len(_TRUNCATION_MARK)
+        text = text[:keep] + _TRUNCATION_MARK
+    return text
+
+
+def _rich_display(value: object) -> FunctionResultRichDisplay | None:
+    if isinstance(value, type):
+        return None
+    png = _call_repr_method(value, "_repr_png_")
+    if isinstance(png, bytes) and 0 < len(png) <= FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES:
+        return FunctionResultImageDisplay.from_bytes(png)
+    html = _call_repr_method(value, "_repr_html_")
+    if isinstance(html, str) and 0 < len(html) <= FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS:
+        return FunctionResultHtmlDisplay(html=html)
+    return None
+
+
+def _call_repr_method(value: object, name: str) -> object:
+    method = getattr(value, name, None)
+    if not callable(method):
+        return None
+    try:
+        result: object = method()
+    except Exception:
+        return None
+    # The display protocol allows `(data, metadata)`; only the data matters here.
+    if _is_tuple(result):
+        return result[0] if result else None
+    return result
+
+
+def _is_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
+    return isinstance(value, tuple)
+
+
+__all__ = ["build_function_result_display"]

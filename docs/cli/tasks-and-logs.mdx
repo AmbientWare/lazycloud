@@ -13,7 +13,7 @@ commands for an earlier run, a scheduled task, or work submitted with `.spawn()`
 ```bash
 uv run lazycloud task list [--limit <n>] [--app <name>]          # recent tasks, default 100
 uv run lazycloud task show TASK_ID                                # status, timing, deployment, container
-uv run lazycloud task result TASK_ID [--no-wait] [--timeout <s>]  # waits for completion by default
+uv run lazycloud task result TASK_ID [--no-wait] [--timeout <s>] [--output FILE]  # waits for completion by default
 uv run lazycloud task logs TASK_ID [--limit <n>]                  # recent log lines, default 250
 uv run lazycloud task stop TASK_IDS...                            # stop running tasks
 uv run lazycloud task cancel TASK_ID                              # cancel a pending task
@@ -22,7 +22,13 @@ uv run lazycloud task cancel TASK_ID                              # cancel a pen
 ```bash
 uv run lazycloud task list --limit 20 --app api_demo
 uv run lazycloud task result <task-id> --timeout 60
+uv run lazycloud task result <task-id> --output result.pkl
 ```
+
+`task result` prints a Python result's recorded text without loading the
+object. `--output` saves it: `.pkl` for the pickled object, `.txt` for the text,
+`.json` for a JSON result, and `.png` or `.html` for the rendering the object
+defined through `_repr_png_` or `_repr_html_`.
 
 ## lazycloud logs
 

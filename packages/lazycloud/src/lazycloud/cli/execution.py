@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any, Protocol, runtime_checkable
 
 import typer
@@ -224,6 +225,15 @@ def run(
         typer.Option("--preemptible/--no-preemptible"),
     ] = None,
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            help="Save the result to a .png, .html, .txt, .json, or .pkl file.",
+            dir_okay=False,
+            writable=True,
+        ),
+    ] = None,
 ) -> None:
     args = command or []
     if not args:
@@ -288,7 +298,7 @@ def run(
         else:
             _reject_unapplied_overrides(target, overrides)
             response = call_handler(target, args=payload_args)
-    emit_python_result(ctx, response)
+    emit_python_result(ctx, response, output=output)
 
 
 def shell(

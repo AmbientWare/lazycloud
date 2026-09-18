@@ -18,11 +18,66 @@ FUNCTION_BOUND_RESULTS_MAX_BYTES = 64 * 1024 * 1024
 FUNCTION_MARKER_MAX_DEPTH = 128
 FUNCTION_MARKER_MAX_NODES = 100_000
 FUNCTION_PAYLOAD_BASE64_MAX_CHARS = ((FUNCTION_PAYLOAD_MAX_BYTES + 2) // 3) * 4
+FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS = 64 * 1024
+FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS = 256 * 1024
+FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES = 1024 * 1024
+FUNCTION_RESULT_DISPLAY_IMAGE_BASE64_MAX_CHARS = (
+    (FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES + 2) // 3
+) * 4
 
 
 class FunctionPayloadEncoding(StringEnum):
     Json = "json"
     Cloudpickle = "cloudpickle"
+
+
+class FunctionResultDisplayKind(StringEnum):
+    Html = "html"
+    Image = "image"
+
+
+class FunctionResultHtmlDisplay(ContractModel):
+    kind: Literal[FunctionResultDisplayKind.Html] = FunctionResultDisplayKind.Html
+    html: str = Field(min_length=1, max_length=FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS)
+
+
+class FunctionResultImageDisplay(EncodedBytesBody):
+    kind: Literal[FunctionResultDisplayKind.Image] = FunctionResultDisplayKind.Image
+    media_type: Literal["image/png"] = "image/png"
+    value_base64: str = Field(default="", max_length=FUNCTION_RESULT_DISPLAY_IMAGE_BASE64_MAX_CHARS)
+    size_bytes: int = Field(ge=1, le=FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES)
+
+    @classmethod
+    def from_bytes(cls, value: bytes) -> FunctionResultImageDisplay:
+        if not value or len(value) > FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES:
+            raise ValueError(
+                f"result image must be 1 to {FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES} bytes"
+            )
+        return cls(value_base64=encode_bytes(value), size_bytes=len(value))
+
+    @model_validator(mode="after")
+    def validate_content(self) -> FunctionResultImageDisplay:
+        if len(self.bytes_value()) != self.size_bytes:
+            raise ValueError("result image size does not match its payload")
+        return self
+
+
+FunctionResultRichDisplay: TypeAlias = Annotated[
+    FunctionResultHtmlDisplay | FunctionResultImageDisplay,
+    Field(discriminator="kind"),
+]
+
+
+class FunctionResultDisplay(ContractModel):
+    """How a Python result looks without loading it.
+
+    `text` is always present so a terminal has something to print. `rich` is the
+    object's own HTML or PNG rendering when it offers one, for surfaces that can
+    show it.
+    """
+
+    text: str = Field(max_length=FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS)
+    rich: FunctionResultRichDisplay | None = None
 
 
 class FunctionJsonInvocation(ContractModel):
@@ -120,16 +175,18 @@ class FunctionCloudpickleResult(EncodedBytesBody):
     value_base64: str = Field(default="", max_length=FUNCTION_PAYLOAD_BASE64_MAX_CHARS)
     size_bytes: int = Field(ge=0, le=FUNCTION_PAYLOAD_MAX_BYTES)
     sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    preview: str | None = Field(default=None, max_length=4096)
+    display: FunctionResultDisplay | None = None
 
     @classmethod
-    def from_bytes(cls, value: bytes, *, preview: str | None = None) -> FunctionCloudpickleResult:
+    def from_bytes(
+        cls, value: bytes, *, display: FunctionResultDisplay | None = None
+    ) -> FunctionCloudpickleResult:
         _validate_binary_size(value, kind="result")
         return cls(
             value_base64=encode_bytes(value),
             size_bytes=len(value),
             sha256=hashlib.sha256(value).hexdigest(),
-            preview=preview,
+            display=display,
         )
 
     @model_validator(mode="after")
@@ -212,6 +269,9 @@ __all__ = [
     "FUNCTION_PAYLOAD_MAX_BYTES",
     "FUNCTION_PAYLOAD_VERSION",
     "FUNCTION_PYTHON_INVOCATION_VERSION",
+    "FUNCTION_RESULT_DISPLAY_HTML_MAX_CHARS",
+    "FUNCTION_RESULT_DISPLAY_IMAGE_MAX_BYTES",
+    "FUNCTION_RESULT_DISPLAY_TEXT_MAX_CHARS",
     "FunctionCallPersistentId",
     "FunctionCloudpickleInvocation",
     "FunctionCloudpickleResult",
@@ -221,7 +281,12 @@ __all__ = [
     "FunctionJsonInvocation",
     "FunctionJsonResult",
     "FunctionPayloadEncoding",
+    "FunctionResultDisplay",
+    "FunctionResultDisplayKind",
+    "FunctionResultHtmlDisplay",
+    "FunctionResultImageDisplay",
     "FunctionResultPayload",
+    "FunctionResultRichDisplay",
     "function_result_payload_size",
     "validate_function_dependency_bindings",
 ]
