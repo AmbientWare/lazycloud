@@ -7,6 +7,7 @@ needs naming here and libraries that were never imported still render.
 
 from __future__ import annotations
 
+import logging
 import pprint
 from typing import TypeGuard
 
@@ -20,6 +21,7 @@ from shared.function_payloads import (
     FunctionResultRichDisplay,
 )
 
+LOGGER = logging.getLogger(__name__)
 _TEXT_WIDTH = 88
 _TRUNCATION_MARK = "..."
 
@@ -58,6 +60,8 @@ def _call_repr_method(value: object, name: str) -> object:
     try:
         result: object = method()
     except Exception:
+        # The object's rendering failed; its text still stands, so the result does.
+        LOGGER.debug("%s.%s failed", type(value).__name__, name, exc_info=True)
         return None
     # The display protocol allows `(data, metadata)`; only the data matters here.
     if _is_tuple(result):
