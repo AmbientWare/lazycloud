@@ -429,26 +429,21 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     )
     second_token = _create_join_token(gateway, "cleanup-machines", workspace_id)
     second = gateway.join_agent(_join_request(second_token.token, fingerprint="second-host"))
-    with pytest.raises(ConflictError, match="lazycloud-agent leave"):
-        gateway.delete_machine(second.machine_id, workspace_id=workspace_id)
+    # Removal from the account side revokes the host: a machine that lost its
+    # identity has no other way to give its name back.
+    gateway.delete_machine(second.machine_id, workspace_id=workspace_id)
     assert (
-        gateway.compute_states.get_agent_token_state(hash_compute_token(second.agent_token))
-        is not None
+        gateway.compute_states.get_agent_token_state(hash_compute_token(second.agent_token)) is None
     )
     with isolated_services.context.database.session() as session:
-        assert MachineRepository(session).get_across_workspaces(second.machine_id) is not None
-        assert (
-            WorkerRepository(session).get_across_workspaces(
-                agent_machine_worker_id(second.machine_id)
-            )
-            is not None
-        )
+        removed = MachineRepository(session).get_across_workspaces(second.machine_id)
+        assert removed is not None and removed.status is ResourceStatus.Deleted
         assert (
             ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id,
                 second.machine_id,
             )
-            is not None
+            is None
         )
 
 
