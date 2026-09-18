@@ -199,24 +199,6 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     replacement_template_version: Mapped[str] = mapped_column(String(160), nullable=False)
 
 
-class WorkspaceComputePolicyTable(IdTable, DatabaseBase):
-    __tablename__ = "workspace_compute_policies"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint(
-            "workspace_id",
-            name="uq_workspace_compute_policies_workspace",
-        ),
-        CheckConstraint("revision > 0", name="ck_workspace_compute_policies_revision"),
-    )
-
-    workspace_id: Mapped[str] = mapped_column(
-        uuid_type,
-        ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
-
-
 class ComputeCapacityOperationTable(IdTable, DatabaseBase):
     __tablename__ = "compute_capacity_operations"
     __table_args__: tuple[SchemaItem, ...] = (

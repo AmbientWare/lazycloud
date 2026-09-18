@@ -29,6 +29,7 @@ from database.tables.orchestration import (
     AutoscalingTargetTable,
     ContainerTable,
     MachineTable,
+    MachineWorkspaceTable,
     WorkerTable,
 )
 from foundation.ids import try_uuid
@@ -378,6 +379,23 @@ class MachineRepository:
         row = self.session.scalar(
             select(MachineTable).where(
                 MachineTable.owner_user_id == owner_user_id,
+                MachineTable.name == name,
+                MachineTable.status != ResourceStatus.Deleted.value,
+            )
+        )
+        return machine_from_row(row) if row is not None else None
+
+    def get_serving_by_name(self, workspace_id: str, name: str) -> Machine | None:
+        """The live machine with this name that lists the workspace among those it serves.
+
+        Reached through the served-workspace link rather than an owner account, so a
+        workspace with several owners resolves the same machine whoever created it.
+        """
+        row = self.session.scalar(
+            select(MachineTable)
+            .join(MachineWorkspaceTable, MachineWorkspaceTable.machine_id == MachineTable.id)
+            .where(
+                MachineWorkspaceTable.workspace_id == workspace_id,
                 MachineTable.name == name,
                 MachineTable.status != ResourceStatus.Deleted.value,
             )

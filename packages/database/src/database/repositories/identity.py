@@ -643,6 +643,19 @@ class WorkspaceMemberRepository:
             return existing
         return self.add(workspace_id=workspace_id, user_id=user_id, role=WorkspaceRole.Owner)
 
+    def is_owner(self, *, workspace_id: str, user_id: str) -> bool:
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        WorkspaceMemberTable.workspace_id == workspace_id,
+                        WorkspaceMemberTable.user_id == user_id,
+                        WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                    )
+                )
+            )
+        )
+
     def owner_user_id(self, workspace_id: str) -> str:
         owner = self.owner(workspace_id)
         if owner is None:

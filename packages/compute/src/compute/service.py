@@ -3775,7 +3775,8 @@ class ComputeService:
                 "reclaimed pooled provider machine that did not become ready",
                 extra={
                     "provider": record.provider,
-                    "placement": current.name,
+                    "placement": current.placement.key,
+                    "unit": current.name,
                     "machine_id": record.machine_id,
                     "provider_instance_id": record.instance_id or record.id,
                     "launch_attempt": record.launch_attempt,

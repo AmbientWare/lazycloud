@@ -29,7 +29,6 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     MachineServiceState,
 )
-from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
     ComputeResourceRequirements,
     ComputeUnitRecord,
@@ -233,24 +232,23 @@ class WorkspaceComputePolicyService:
         this workspace. There is no fallback in either direction; a workload that
         names a machine runs there or not at all.
         """
+        members = WorkspaceMemberRepository(session)
         if not machine:
             if workspace.connection_id is None:
                 return Placement.platform()
-            owner_user_id = WorkspaceMemberRepository(session).owner_user_id(workspace.id)
             connection = AwsAccountConnectionRepository(session).get(workspace.connection_id)
-            if connection is None or connection.user_id != owner_user_id:
+            # A workspace may hold several owners; the account that connected the
+            # cloud must be one of them, whichever row the database lists first.
+            if connection is None or not members.is_owner(
+                workspace_id=workspace.id, user_id=connection.user_id
+            ):
                 raise InvalidInputError(
                     f"workspace {workspace.name!r} is pinned to a connected account "
                     "that no longer belongs to its owner"
                 )
             return connection.placement
-        owner_user_id = WorkspaceMemberRepository(session).owner_user_id(workspace.id)
-        record = MachineRepository(session).get_by_owner_name(owner_user_id, machine)
-        if (
-            record is None
-            or record.status is ResourceStatus.Deleted
-            or workspace.id not in record.workspace_ids
-        ):
+        record = MachineRepository(session).get_serving_by_name(workspace.id, machine)
+        if record is None:
             raise InvalidInputError(
                 f"machine {machine!r} is not joined to this account or does not serve "
                 f"workspace {workspace.name!r}"

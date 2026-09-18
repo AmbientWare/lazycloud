@@ -62,7 +62,7 @@ class SchedulerCapacityControllerProvider:
             configs[key]
             for key in sorted(
                 configs,
-                key=lambda item: (configs[item].workspace_id, configs[item].placement, item),
+                key=lambda item: (configs[item].workspace_id, configs[item].placement.key, item),
             )
         ]
 

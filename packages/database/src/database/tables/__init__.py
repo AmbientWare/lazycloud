@@ -43,7 +43,6 @@ from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
-    WorkspaceComputePolicyTable,
 )
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.credit_purchases import CreditPurchaseTable
@@ -176,7 +175,6 @@ __all__ = [
     "WorkerCacheGenerationTable",
     "WorkerEventTable",
     "WorkerTable",
-    "WorkspaceComputePolicyTable",
     "WorkspaceInvitationTable",
     "WorkspaceMemberTable",
     "WorkspaceTable",

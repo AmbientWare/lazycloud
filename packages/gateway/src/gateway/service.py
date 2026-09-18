@@ -1163,7 +1163,8 @@ class GatewayControlService:
         with self.services.context.database.session() as session:
             machines = MachineRepository(session)
             if existing is not None and not reuse:
-                assert existing_workspace_id is not None
+                # A row whose anchor workspace was deleted has no unit left; it only
+                # holds the name, and gives it up here.
                 machines.upsert(
                     existing.model_copy(
                         update={"status": ResourceStatus.Deleted, "updated_at": now}

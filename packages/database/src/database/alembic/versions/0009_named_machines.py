@@ -67,7 +67,7 @@ def upgrade() -> None:
         "deployments",
         sa.Column("machine", sa.String(63), nullable=False, server_default=""),
     )
-    op.drop_column("workspace_compute_policies", "default_pool")
+    op.drop_table("workspace_compute_policies")
 
     # Units first: every other stamped row copies its unit's placement.
     op.add_column("compute_units", sa.Column("placement", sa.String(120), nullable=True))
@@ -245,9 +245,20 @@ def downgrade() -> None:
     op.drop_column("stubs", "placement")
     op.add_column("stubs", sa.Column("runtime_pool_selector", sa.String(240), nullable=True))
 
-    op.add_column(
+    op.create_table(
         "workspace_compute_policies",
+        sa.Column("id", sa.Uuid(as_uuid=False), primary_key=True),
+        sa.Column(
+            "workspace_id",
+            sa.Uuid(as_uuid=False),
+            sa.ForeignKey("workspaces.id", ondelete="CASCADE"),
+            nullable=False,
+            unique=True,
+        ),
+        sa.Column("revision", sa.BigInteger(), nullable=False, server_default="1"),
         sa.Column("default_pool", sa.String(240), nullable=False, server_default="lazycloud"),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.drop_column("deployments", "machine")
     op.drop_index("ix_machine_workspaces_workspace", table_name="machine_workspaces")
