@@ -845,12 +845,17 @@ class ProviderMachineReconciler:
             if record.machine_id is not None
             else None
         )
-        if machine is not None and bootstrap_failure_reason is not None:
+        if (
+            machine is not None
+            and bootstrap_failure_reason is not None
+            and machine_lifecycle_allowed(machine.lifecycle, MachineLifecycle.Failed)
+        ):
             machine = write_machine_lifecycle(
                 session,
                 machine,
                 MachineLifecycle.Failed,
                 workspace_changes=self.workspace_changes,
+                deleting_workspace_id=deleting_workspace_id,
                 message=message,
                 failure=bootstrap_failure_reason,
                 now=observed_at,
@@ -915,6 +920,7 @@ class ProviderMachineReconciler:
                     machine,
                     MachineLifecycle.Terminating,
                     workspace_changes=self.workspace_changes,
+                    deleting_workspace_id=deleting_workspace_id,
                     message=message,
                 )
         return status == ReservationStatus.Deleted.value
@@ -1130,17 +1136,29 @@ class ProviderMachineReconciler:
             else None
         )
         if machine is None:
+            if record.first_served_at is not None:
+                return self._service_loss_to_reclaim(
+                    record,
+                    now=now,
+                    observing_since=observing_since,
+                    live_containers=live_containers,
+                )
+            # No row to date the phase from; the record's own clock stands in.
             # A record that reached `joining` proved a machine was bound to it,
             # and the column is cleared by the foreign key when that machine row
             # is deleted. Reporting a bootstrap timeout for one of those blames
             # the boot for a deletion that happened long after it.
-            if record.first_enrolled_at is not None:
-                return MachineBootstrapFailureReason.MachineRecordDeleted
-            deadline = self.reclaim.phase_deadline_for(record.provider, MachineLifecycle.Requested)
-            if deadline is None or now - max(_utc(record.created_at), observing_since) < deadline:
+            enrolled = record.first_enrolled_at is not None
+            deadline = self.reclaim.phase_deadline_for(
+                record.provider,
+                MachineLifecycle.Joining if enrolled else MachineLifecycle.Requested,
+            )
+            if deadline is None or now - max(_utc(record.updated_at), observing_since) < deadline:
                 return None
             if record.unserved_observations < self.reclaim.bootstrap_failure_observations:
                 return None
+            if enrolled:
+                return MachineBootstrapFailureReason.MachineRecordDeleted
             return MachineBootstrapFailureReason.BootstrapTimedOut
         if machine.lifecycle is MachineLifecycle.Failed:
             # The node named its own failure. Reclaim it under that reason rather

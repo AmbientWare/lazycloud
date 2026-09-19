@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { appSchema, deploymentSchema } from "./apps";
+import { awsConnectionPhaseSchema } from "./aws_connections";
 import { stubSchema } from "./stubs";
 
 // Synced to shared.http.compute, shared.http.gateway, and
@@ -211,3 +212,32 @@ export const connectionMachineListSchema = z
     next: z.string(),
   })
   .strict();
+
+/** Synced to shared.http.compute_policy.WorkspaceComputeSummaryResponse. */
+export const computeSummarySchema = z
+  .object({
+    connection: z
+      .object({ account_id: z.string(), phase: awsConnectionPhaseSchema })
+      .strict()
+      .nullable()
+      .default(null),
+    instances: z
+      .object({
+        total: z.number().int().nonnegative().default(0),
+        ready: z.number().int().nonnegative().default(0),
+        pending: z.number().int().nonnegative().default(0),
+        degraded: z.number().int().nonnegative().default(0),
+      })
+      .strict(),
+    cost: z
+      .object({
+        hourly_micros: z.number().int().nonnegative().nullable().default(null),
+        daily_micros: z.number().int().nonnegative().nullable().default(null),
+        currency: z.literal("USD").default("USD"),
+        estimated: z.boolean().default(true),
+      })
+      .strict(),
+    workload_count: z.number().int().nonnegative().default(0),
+  })
+  .strict();
+export type ComputeSummary = z.infer<typeof computeSummarySchema>;

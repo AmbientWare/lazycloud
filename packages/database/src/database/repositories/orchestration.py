@@ -345,17 +345,26 @@ class MachineRepository:
         *,
         workspace_id: str | None = None,
         owner_user_id: str | None = None,
+        for_workspace_deletion: bool = False,
     ) -> Machine:
         """Write a machine. `owner_user_id` is the account a named machine is unique in.
 
         Given by the caller that minted the join, because a workspace may have
         several owners and the first row is not the one who joined it.
+        `for_workspace_deletion` is the deletion pass writing terminal state on
+        rows of a workspace that is no longer active; it fences on the deletion
+        lock instead of refusing.
         """
         machine = Machine.model_validate(dict(machine))
         row = self.session.get(MachineTable, machine.id)
         owner_id = workspace_id if workspace_id is not None else row.workspace_id if row else None
         if owner_id is not None:
-            WorkspaceRepository(self.session).lock_active_owner(owner_id)
+            workspaces = WorkspaceRepository(self.session)
+            if for_workspace_deletion:
+                if workspaces.lock_for_deletion(owner_id).status is not WorkspaceStatus.Deleting:
+                    raise ConflictError(f"workspace cleanup requires deleting state: {owner_id}")
+            else:
+                workspaces.lock_active_owner(owner_id)
         if row is None:
             owner = owner_user_id or (
                 self.session.scalar(

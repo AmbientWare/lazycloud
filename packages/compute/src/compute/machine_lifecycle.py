@@ -53,7 +53,9 @@ MACHINE_LIFECYCLE_TRANSITIONS: dict[MachineLifecycle, frozenset[MachineLifecycle
             MachineLifecycle.Terminating,
         }
     ),
-    # A restarted agent joins again; the heartbeat that follows makes it ready.
+    # A restarted agent joins again from any phase it can still be running in;
+    # the heartbeat that follows makes it ready. Refusing the join would leave a
+    # draining host with no way back once its drain is over.
     MachineLifecycle.Ready: frozenset(
         {
             MachineLifecycle.Joining,
@@ -61,8 +63,8 @@ MACHINE_LIFECYCLE_TRANSITIONS: dict[MachineLifecycle, frozenset[MachineLifecycle
             MachineLifecycle.Terminating,
         }
     ),
-    MachineLifecycle.Draining: frozenset({MachineLifecycle.Terminating}),
-    MachineLifecycle.Terminating: frozenset(),
+    MachineLifecycle.Draining: frozenset({MachineLifecycle.Joining, MachineLifecycle.Terminating}),
+    MachineLifecycle.Terminating: frozenset({MachineLifecycle.Joining}),
     # A host that failed its preflight is fixed by its operator and joins again.
     MachineLifecycle.Failed: frozenset({MachineLifecycle.Joining, MachineLifecycle.Terminating}),
     MachineLifecycle.Deleted: frozenset(),
@@ -161,35 +163,60 @@ def write_machine_lifecycle(
     *,
     workspace_changes: WorkspaceChangePublisher | None,
     workspace_id: str | None = None,
+    deleting_workspace_id: str | None = None,
     message: str = "",
     failure: MachineBootstrapFailureReason | None = None,
     now: datetime | None = None,
 ) -> Machine:
-    """Advance and persist in the caller's transaction, telling the workspace on commit.
+    """Advance and persist in the caller's transaction, telling its workspaces on commit.
 
-    The change stream is not part of the database transaction, so the event is
-    queued on the session and sent only once the row it describes has
-    committed; a rolled-back write publishes nothing.
+    Nothing is published when the phase, message and failure all stay as they
+    were: a heartbeat re-stating `ready` is not a change. `deleting_workspace_id`
+    names the workspace a deletion pass is tearing down, whose rows can no
+    longer be written through the active-owner fence.
     """
+    advanced = advance_machine_lifecycle(
+        machine, lifecycle, message=message, failure=failure, now=now
+    )
     repository = MachineRepository(session)
     updated = repository.upsert(
-        advance_machine_lifecycle(machine, lifecycle, message=message, failure=failure, now=now),
-        workspace_id=workspace_id,
+        advanced,
+        workspace_id=deleting_workspace_id or workspace_id,
+        for_workspace_deletion=deleting_workspace_id is not None,
     )
-    owner_workspace_id = workspace_id or repository.workspace_id(updated.id)
-    if workspace_changes is not None and owner_workspace_id is not None:
+    unchanged = (
+        advanced.lifecycle is machine.lifecycle
+        and advanced.lifecycle_message == machine.lifecycle_message
+        and advanced.lifecycle_failure is machine.lifecycle_failure
+    )
+    if workspace_changes is None or unchanged:
+        return updated
+    anchor_workspace_id = (
+        deleting_workspace_id or workspace_id or repository.workspace_id(updated.id)
+    )
+    # Every workspace the machine serves reads it, and each subscribes only to
+    # its own stream; a platform or connection node serves no named workspace
+    # and reaches the rest of the account through the panels' slow refetch.
+    served: dict[str, None] = dict.fromkeys(
+        [*([anchor_workspace_id] if anchor_workspace_id else []), *updated.workspace_ids]
+    )
+    change = (
+        WorkspaceChangeType.Deleted
+        if lifecycle is MachineLifecycle.Deleted
+        else WorkspaceChangeType.Updated
+    )
+    for served_workspace_id in served:
         publish_machine_change_on_commit(
             session,
             workspace_changes,
-            workspace_id=owner_workspace_id,
+            workspace_id=served_workspace_id,
             machine_id=updated.id,
-            change=(
-                WorkspaceChangeType.Deleted
-                if lifecycle is MachineLifecycle.Deleted
-                else WorkspaceChangeType.Updated
-            ),
+            change=change,
         )
     return updated
+
+
+_PENDING_MACHINE_CHANGES = "pending_machine_changes"
 
 
 def publish_machine_change_on_commit(
@@ -200,15 +227,37 @@ def publish_machine_change_on_commit(
     machine_id: str,
     change: WorkspaceChangeType,
 ) -> None:
-    def publish(_session: DatabaseSession) -> None:
-        workspace_changes.emit_change(
-            workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.ComputeMachines,
-            change=change,
-            resource_id=machine_id,
-        )
+    """Queue one change on the session; it is sent after commit and dropped on rollback.
 
-    event.listen(session, "after_commit", publish, once=True)
+    The queue lives on the session rather than on a one-shot listener because a
+    listener outlives the transaction that registered it: registered, rolled
+    back, and left in place, it would fire on the session's next commit for a
+    row that never landed.
+    """
+    pending: list[tuple[str, str, WorkspaceChangeType]] | None = session.info.get(
+        _PENDING_MACHINE_CHANGES
+    )
+    if pending is None:
+        pending = []
+        session.info[_PENDING_MACHINE_CHANGES] = pending
+
+        def publish(_session: DatabaseSession) -> None:
+            queued = list(pending)
+            pending.clear()
+            for queued_workspace_id, queued_machine_id, queued_change in queued:
+                workspace_changes.emit_change(
+                    workspace_id=queued_workspace_id,
+                    topic=WorkspaceChangeTopic.ComputeMachines,
+                    change=queued_change,
+                    resource_id=queued_machine_id,
+                )
+
+        def discard(_session: DatabaseSession) -> None:
+            pending.clear()
+
+        event.listen(session, "after_commit", publish)
+        event.listen(session, "after_rollback", discard)
+    pending.append((workspace_id, machine_id, change))
 
 
 __all__ = [

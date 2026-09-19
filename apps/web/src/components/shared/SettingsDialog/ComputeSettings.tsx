@@ -23,35 +23,39 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type {
   AwsConnection,
+  ComputeSummary,
   ConnectionMachine,
-  MachineLifecycle,
   UnitMachine,
 } from "@/lib/api/schemas";
 import {
   awsConnectionQueryOptions,
+  computeSummaryQueryOptions,
   connectionMachinesQueryOptions,
   machinesQueryOptions,
 } from "@/lib/queries/compute";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { humanize } from "@/lib/machine-lifecycle";
 import { cn } from "@/lib/utils";
+import { useWorkspace } from "@/lib/workspace-context";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
 import { EditMachineWorkspacesDialog } from "./MachineWorkspaces";
 
 export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
+  const { workspace } = useWorkspace();
   const connection = useQuery(awsConnectionQueryOptions());
   const billing = useQuery(billingSummaryQueryOptions());
   const instances = useQuery(connectionMachinesQueryOptions());
+  const summary = useQuery(computeSummaryQueryOptions(workspace.id));
   const machines = useQuery(machinesQueryOptions());
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [editingMachine, setEditingMachine] = useState<UnitMachine | null>(null);
-  const loadError = connection.error ?? instances.error;
+  const loadError = connection.error ?? instances.error ?? summary.error;
 
-  if (connection.isPending || instances.isPending || billing.isPending) {
+  if (connection.isPending || instances.isPending || summary.isPending || billing.isPending) {
     return <SettingsSkeleton />;
   }
 
@@ -66,6 +70,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   // The server classifies by placement: the connection's list holds machines
   // placed on the connection, the self-hosted list those placed on themselves.
   const awsInstances = instances.data?.data ?? [];
+  const counts = summary.data?.instances ?? { total: 0, ready: 0, pending: 0, degraded: 0 };
   const selfHostedMachines = machines.data?.data ?? [];
 
   return (
@@ -73,6 +78,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
       <ConnectedCloudsPanel
         connection={connection.data ?? null}
         instances={awsInstances}
+        counts={counts}
         expanded={expandedProvider === "aws"}
         onToggle={() => setExpandedProvider((current) => (current === "aws" ? null : "aws"))}
         onManageAws={() => setAwsDialogOpen(true)}
@@ -106,6 +112,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
 function ConnectedCloudsPanel({
   connection,
   instances,
+  counts,
   expanded,
   onToggle,
   onManageAws,
@@ -115,6 +122,7 @@ function ConnectedCloudsPanel({
 }: {
   connection: AwsConnection | null;
   instances: ConnectionMachine[];
+  counts: ComputeSummary["instances"];
   expanded: boolean;
   onToggle: () => void;
   onManageAws: () => void;
@@ -156,6 +164,7 @@ function ConnectedCloudsPanel({
           <CloudProviderRow
             connection={connection}
             instances={instances}
+            counts={counts}
             expanded={expanded && usable}
             onToggle={onToggle}
             onManage={onManageAws}
@@ -226,18 +235,20 @@ function AddCloudMenu({
 function CloudProviderRow({
   connection,
   instances,
+  counts,
   expanded,
   onToggle,
   onManage,
 }: {
   connection: AwsConnection;
   instances: ConnectionMachine[];
+  counts: ComputeSummary["instances"];
   expanded: boolean;
   onToggle: () => void;
   onManage: () => void;
 }) {
-  const ready = instances.filter((instance) => instance.lifecycle === "ready").length;
-  const pending = instances.filter((instance) => lifecyclePending(instance.lifecycle)).length;
+  // Counted by the server from the same list the rows come from.
+  const { ready, pending } = counts;
   const presentation = awsConnectionPresentation(connection);
   const usable = awsConnectionIsUsable(connection);
   const removing = awsConnectionIsRemoving(connection);
@@ -488,15 +499,6 @@ function connectionActionLabel(connection: AwsConnection): string | null {
     return "Review";
   }
   return "Manage";
-}
-
-function lifecyclePending(lifecycle: MachineLifecycle): boolean {
-  return (
-    lifecycle === "requested" ||
-    lifecycle === "provisioning" ||
-    lifecycle === "booting" ||
-    lifecycle === "joining"
-  );
 }
 
 function formatCpu(millicores: number): string {

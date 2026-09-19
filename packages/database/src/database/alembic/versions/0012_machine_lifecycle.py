@@ -6,8 +6,10 @@ derived per request. The machine row now carries the phase itself, with the
 message and failure reason beside it and the time it entered the phase, and
 the provider row's bootstrap columns go away.
 
-Existing rows are backfilled from the status the machine had and whether its
-enrollment had confirmed a heartbeat.
+Existing rows are backfilled from the status the machine had and its
+enrollment: a running machine with a ready enrollment is `ready`; a stopped
+one whose authority was revoked is `terminating`, and any other stopped one
+(offline, or waiting to be joined again) is `joining` so it can rejoin.
 """
 
 import sqlalchemy as sa
@@ -41,7 +43,12 @@ def upgrade() -> None:
         SET lifecycle = CASE
                 WHEN m.status = 'deleted' THEN 'deleted'
                 WHEN m.status = 'failed' THEN 'failed'
-                WHEN m.status = 'stopped' THEN 'draining'
+                WHEN m.status = 'stopped' AND EXISTS (
+                    SELECT 1 FROM compute_machine_enrollments AS e
+                    WHERE e.machine_id = m.id
+                      AND e.status IN ('revoked', 'deleted')
+                ) THEN 'terminating'
+                WHEN m.status = 'stopped' THEN 'joining'
                 WHEN m.status = 'running' AND EXISTS (
                     SELECT 1 FROM compute_machine_enrollments AS e
                     WHERE e.machine_id = m.id

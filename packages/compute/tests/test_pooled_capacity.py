@@ -112,6 +112,7 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.identity import WorkspaceStatus
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
 from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
@@ -3386,6 +3387,55 @@ def test_repeated_bootstrap_failures_do_not_extend_the_reclaim_deadline(
     replacement_machine = _machine_of(service_context, replacement)
     assert replacement_machine.lifecycle is MachineLifecycle.Provisioning
     assert replacement_machine.lifecycle_at == started_at + timedelta(seconds=311)
+
+
+def test_workspace_deletion_terminates_a_live_node_while_the_workspace_is_deleting(
+    service_context: ServiceContext,
+) -> None:
+    """The deletion pass writes terminal state on rows the active-owner fence refuses.
+
+    A workspace being deleted is no longer active, so the ordinary machine write
+    raises; the termination would fail on its first pass for every workspace
+    holding a live node and the node would keep billing.
+    """
+    _seed_connection(service_context)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    record = _open_record(service_context, pool.id)
+    assert record is not None and record.machine_id is not None
+    with service_context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        workspace = workspaces.get(pool.workspace_id)
+        assert workspace is not None
+        workspaces.upsert(workspace.model_copy(update={"status": WorkspaceStatus.Deleting}))
+
+    with service_context.database.session() as session:
+        compute.provider_machines._terminate_provider_record(
+            session,
+            record,
+            clients={},
+            reason="workspace_deleted",
+            message="workspace deletion terminated managed compute pool",
+            deleting_workspace_id=pool.workspace_id,
+        )
+    with service_context.database.session() as session:
+        machine = MachineRepository(session).get_across_workspaces(record.machine_id)
+        terminated = ComputeProviderInstanceRepository(session).get_by_machine(record.machine_id)
+    assert machine is not None and machine.lifecycle is MachineLifecycle.Terminating
+    assert terminated is not None and terminated.status == "terminating"
 
 
 def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutation(

@@ -3314,8 +3314,8 @@ class GatewayControlService:
                 update={"capacity_owner_id": state.capacity_owner_id, "updated_at": current_time}
             )
             # The first heartbeat that confirms readiness is what makes a machine
-            # ready; later ones re-state it, which clears a disconnect message.
-            # A machine that is draining or leaving keeps its phase.
+            # ready; later ones re-state it and change nothing. A machine that is
+            # draining or leaving keeps its phase.
             if readiness_phase is MachineReadinessPhase.Ready and machine_lifecycle_allowed(
                 machine.lifecycle, MachineLifecycle.Ready
             ):
@@ -3325,11 +3325,6 @@ class GatewayControlService:
                     MachineLifecycle.Ready,
                     workspace_changes=self.services.compute.workspace_changes,
                     workspace_id=state.workspace_id,
-                    message=(
-                        ""
-                        if machine.lifecycle is not MachineLifecycle.Ready
-                        else "Ready for workloads"
-                    ),
                     now=current_time,
                 )
             else:
