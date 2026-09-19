@@ -73,7 +73,7 @@ from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
 from coordination.wake_signal import WakeSignalPublisher
 from database.context import ServiceContext
-from database.repositories.apps import DeploymentRepository, StubRepository
+from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
@@ -93,7 +93,6 @@ from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
-from execution.placement import workload_placement
 from execution.tasks import TaskService
 from identity.auth import AuthorizationDeniedError, AuthService
 from identity.authz import AuthzRequirement
@@ -1040,49 +1039,27 @@ class GatewayControlService:
         placement: Placement,
         capacity_owner_id: str,
     ) -> bool:
+        """Whether work is still on this unit's workers, in any workspace it serves."""
         owner_worker_ids = {
             worker.worker_id
             for worker in self.scheduler_worker_lookup.list_workers()
             if worker.capacity_owner_id == capacity_owner_id
         }
         if any(
-            state.status
-            in {
-                SchedulerContainerStatus.Pending,
-                SchedulerContainerStatus.Running,
-            }
-            and state.workspace_id == workspace_id
+            state.status in {SchedulerContainerStatus.Pending, SchedulerContainerStatus.Running}
             for worker_id in owner_worker_ids
             for state in self.scheduler_container_lookup.list_by_worker(worker_id)
         ):
             return True
-        for container in self.services.containers.list(
-            workspace_id=workspace_id,
-            statuses=(ContainerStatus.Pending, ContainerStatus.Running),
-        ):
-            worker_id = container.runtime_worker_id or container.worker_id or ""
-            if worker_id in owner_worker_ids:
-                return True
-            if not worker_id:
-                return True
-            if container.stub_id is None:
-                continue
-            with (
-                suppress(NotFoundError, InvalidInputError),
-                self.services.context.database.session() as session,
-            ):
-                stub = StubRepository(session).get(container.stub_id, workspace_id=workspace_id)
-                if stub is None:
-                    continue
-                current = workload_placement(
-                    session,
-                    resolver=self.services.placement_resolver,
-                    stub=stub,
-                    workspace=self.services.context.workspace(session, workspace_id),
-                )
-                if current == placement:
-                    return True
-        return False
+        with self.services.context.database.session() as session:
+            served = {workspace_id}
+            if placement.kind is PlacementKind.Machine:
+                machine = MachineRepository(session).get_across_workspaces(placement.id)
+                if machine is not None:
+                    served.update(machine.workspace_ids)
+            return ContainerRepository(session).has_live_for_placement(
+                placement.key, worker_ids=owner_worker_ids, workspace_ids=served
+            )
 
     def delete_pool_for_workspace_deletion(self, name: str, *, workspace_id: str) -> None:
         pools = self.services.compute.list_pools_for_workspace_deletion(workspace_id)
@@ -1164,6 +1141,16 @@ class GatewayControlService:
             existing_workspace_id = (
                 machines.workspace_id(existing.id) if existing is not None else None
             )
+            # A workspace can hold several owners. The name must resolve to one
+            # machine inside every workspace it serves, whoever joined it.
+            for workspace_id in workspace_ids:
+                serving = machines.get_serving_by_name(workspace_id, name)
+                if serving is not None and (existing is None or serving.id != existing.id):
+                    raise ConflictError(
+                        f"machine {name!r} already serves workspace "
+                        f"{request.workspaces[workspace_ids.index(workspace_id)]!r} "
+                        "under another owner"
+                    )
             if existing is not None and existing_workspace_id is not None:
                 enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                     existing_workspace_id, existing.id
@@ -1304,9 +1291,8 @@ class GatewayControlService:
         workspace_ids = self._owned_workspace_ids(user_id, workspace_names)
         with self.services.context.database.session() as session:
             machines = MachineRepository(session)
-            current = machines.get_by_owner_name(user_id, machine) or next(
-                (item for item in machines.list_named_for_owner(user_id) if item.id == machine),
-                None,
+            current = machines.get_by_owner_name(user_id, machine) or machines.get_owned(
+                machine, owner_user_id=user_id
             )
             if current is None:
                 raise NotFoundError(f"machine not found: {machine}")

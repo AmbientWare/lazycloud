@@ -31,7 +31,7 @@ from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import DEFAULT_RESOURCE_TYPE
 from shared.autoscaler_state import autoscaler_target_kind
-from shared.aws_connections import AwsAccountConnectionPhase
+from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
@@ -390,7 +390,16 @@ class ControlPlaneService:
                     owner_user_id=owner_user_id,
                 )
             if connection_id is not None:
-                _require_ready_connection(session, connection_id, owner_user_id=owner_user_id)
+                connection = _require_ready_connection(
+                    session, connection_id, owner_user_id=owner_user_id
+                )
+                # Refused before any row exists: a bucket the account cannot yet
+                # hold would otherwise leave a workspace behind with no storage.
+                if self.connected_workspace_storage is not None:
+                    try:
+                        self.connected_workspace_storage.assert_provisionable(connection)
+                    except ValueError as exc:
+                        raise ConflictError(str(exc)) from exc
         workspace = self.set_workspace(
             workspace_name,
             owner_user_id=owner_user_id,
@@ -1508,7 +1517,9 @@ def _workspace_storage_available(storage: WorkspaceStorageConfig) -> bool:
     return bool(storage.bucket and storage.backend != "local")
 
 
-def _require_ready_connection(session: Session, connection_id: str, *, owner_user_id: str) -> None:
+def _require_ready_connection(
+    session: Session, connection_id: str, *, owner_user_id: str
+) -> AwsAccountConnection:
     connection = AwsAccountConnectionRepository(session).get(connection_id)
     if connection is None or connection.user_id != owner_user_id:
         raise NotFoundError(f"connected cloud account not found: {connection_id}")
@@ -1517,6 +1528,7 @@ def _require_ready_connection(session: Session, connection_id: str, *, owner_use
             f"connected AWS account {connection.account_id} is {connection.phase.value}; "
             "a workspace can only be created there once it is ready"
         )
+    return connection
 
 
 def _limit_by_id_or_name(
