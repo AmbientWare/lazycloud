@@ -38,10 +38,14 @@ from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
     MachineReadinessPhase,
 )
-from shared.compute_fleet import ResourceStatus
+from shared.compute_fleet import (
+    PENDING_MACHINE_LIFECYCLES,
+    Machine,
+    MachineLifecycle,
+    ResourceStatus,
+)
 from shared.compute_policy import (
     ENDED_UNIT_PHASES,
     ComputeCapacityMode,
@@ -62,6 +66,10 @@ from compute.agent_control import (
     agent_machine_worker_id,
 )
 from compute.context import ComputeContext
+from compute.machine_lifecycle import (
+    machine_lifecycle_allowed,
+    write_machine_lifecycle,
+)
 from compute.offers import (
     ComputeOffer,
     ReservationStatus,
@@ -290,37 +298,21 @@ class ProviderMachineReconciler:
                 and settled_existing.status == ReservationStatus.Terminating.value
             ):
                 provider_status = ReservationStatus.Terminating.value
-            bootstrap_phase = (
-                settled_existing.bootstrap_phase
-                if settled_existing is not None
-                else MachineBootstrapPhase.Provisioning
-            )
-            bootstrap_failure_reason = (
-                settled_existing.bootstrap_failure_reason if settled_existing is not None else None
-            )
-            if bootstrap_phase is MachineBootstrapPhase.Requested:
-                bootstrap_phase = MachineBootstrapPhase.Provisioning
-            if instance.status == ProviderMachineStatus.Unhealthy:
-                bootstrap_phase = MachineBootstrapPhase.Failed
-                bootstrap_failure_reason = MachineBootstrapFailureReason.ProviderStopped
             if settled_existing is not None:
                 launch_attempt = settled_existing.launch_attempt
             else:
                 if next_launch_attempt is None:
                     next_launch_attempt = repository.highest_launch_attempt(pool.id) + 1
                 launch_attempt = next_launch_attempt
-            bootstrap_observed_at = (
-                settled_existing.bootstrap_observed_at
-                if settled_existing is not None
-                and bootstrap_phase is settled_existing.bootstrap_phase
-                else now
-            )
-            bootstrap_phase_started_at = (
-                settled_existing.bootstrap_phase_started_at
-                or settled_existing.bootstrap_observed_at
-                if settled_existing is not None
-                and bootstrap_phase is settled_existing.bootstrap_phase
-                else now
+            machine_id = self._machine_for_provider_instance(
+                session,
+                pool=pool,
+                offer=offer,
+                instance=instance,
+                existing_machine_id=(
+                    settled_existing.machine_id if settled_existing is not None else None
+                ),
+                now=now,
             )
             if settled_existing is not None:
                 cost_terms = settled_existing.cost_terms
@@ -351,7 +343,7 @@ class ProviderMachineReconciler:
                 "pool_id": pool.id,
                 "instance_type": offer.instance_type,
                 "instance_id": instance_id,
-                "machine_id": settled_existing.machine_id if settled_existing is not None else None,
+                "machine_id": machine_id,
                 "gpu": settled_existing.gpu if settled_existing is not None else offer.gpu,
                 "gpu_count": (
                     settled_existing.gpu_count if settled_existing is not None else offer.gpu_count
@@ -387,10 +379,6 @@ class ProviderMachineReconciler:
                 "billing_renewal_at": provider_billing_renewal(
                     instance, settled_existing, offer, now
                 ),
-                "bootstrap_phase": bootstrap_phase,
-                "bootstrap_failure_reason": bootstrap_failure_reason,
-                "bootstrap_observed_at": bootstrap_observed_at,
-                "bootstrap_phase_started_at": bootstrap_phase_started_at,
                 # Named rather than omitted, because an omitted key on the
                 # relaunch path keeps the reclaimed launch's value: a new
                 # machine would inherit a proof that some earlier machine once
@@ -492,6 +480,143 @@ class ProviderMachineReconciler:
             if existing.machine_id:
                 missing_machine_ids.add(existing.machine_id)
         return missing_machine_ids
+
+    def _machine_for_provider_instance(
+        self,
+        session: DatabaseSession,
+        *,
+        pool: ComputeUnitRecord,
+        offer: ComputeOffer,
+        instance: ProviderUnitInstance,
+        existing_machine_id: str | None,
+        now: datetime,
+    ) -> str | None:
+        """The machine row this provider instance is, created the first time it is seen.
+
+        The row exists from the moment the provider reports the instance, so its
+        lifecycle starts here rather than at enrollment. What the provider says
+        only moves a machine that has not yet reported for itself: a node that
+        is booting or joining is further along than "the instance is running",
+        and a provider health verdict of unhealthy fails it from any phase short
+        of shutting down.
+        """
+        machines = MachineRepository(session)
+        machine = (
+            machines.get_across_workspaces(existing_machine_id)
+            if existing_machine_id is not None
+            else None
+        )
+        if machine is None:
+            if existing_machine_id is not None or pool.phase in {
+                ComputeUnitPhase.Deleting,
+                ComputeUnitPhase.Deleted,
+            }:
+                return existing_machine_id
+            machine = self._new_provider_machine(
+                session,
+                pool=pool,
+                cpu_millicores=offer.cpu_millicores,
+                memory_mb=offer.memory_mb,
+                gpu=offer.gpu,
+                gpu_count=offer.gpu_count,
+                now=now,
+            )
+        if machine.lifecycle is MachineLifecycle.Terminating:
+            return machine.id
+        if instance.status == ProviderMachineStatus.Unhealthy:
+            target = MachineLifecycle.Failed
+            failure: MachineBootstrapFailureReason | None = (
+                MachineBootstrapFailureReason.ProviderStopped
+            )
+            message = "Provider reports the instance as unhealthy"
+        elif (
+            instance.status == ProviderMachineStatus.Active
+            and machine.lifecycle is MachineLifecycle.Requested
+        ):
+            target = MachineLifecycle.Provisioning
+            failure = None
+            message = ""
+        else:
+            return machine.id
+        if machine.lifecycle is not target and machine_lifecycle_allowed(machine.lifecycle, target):
+            write_machine_lifecycle(
+                session,
+                machine,
+                target,
+                workspace_changes=self.workspace_changes,
+                workspace_id=pool.workspace_id,
+                message=message,
+                failure=failure,
+                now=now,
+            )
+        return machine.id
+
+    def _new_provider_machine(
+        self,
+        session: DatabaseSession,
+        *,
+        pool: ComputeUnitRecord,
+        cpu_millicores: int,
+        memory_mb: int,
+        gpu: str | None,
+        gpu_count: int,
+        now: datetime,
+    ) -> Machine:
+        return MachineRepository(session).upsert(
+            Machine(
+                id=str(uuid4()),
+                placement=pool.placement,
+                capacity_owner_id=pool.capacity_owner_id,
+                provider=pool.provider_ref,
+                lifecycle=MachineLifecycle.Requested,
+                lifecycle_message="Provider is launching the instance",
+                lifecycle_at=now,
+                cpu=cpu_millicores / 1000,
+                memory=f"{memory_mb}Mi",
+                gpu=gpu,
+                gpu_count=gpu_count,
+                labels={"source": "provider"},
+                created_at=now,
+                updated_at=now,
+            ),
+            workspace_id=pool.workspace_id,
+        )
+
+    def machine_for_record(
+        self,
+        session: DatabaseSession,
+        *,
+        pool: ComputeUnitRecord,
+        record: ComputeProviderInstanceRecord,
+        now: datetime,
+    ) -> tuple[ComputeProviderInstanceRecord, Machine]:
+        """The machine behind a durable provider row, bound now if the reconcile has not yet.
+
+        A node can report for itself before the reconcile has mirrored the
+        provider's view of it. The machine's life starts at the first time the
+        platform hears of the instance, whichever side says so first.
+        """
+        machines = MachineRepository(session)
+        machine = (
+            machines.get_across_workspaces(record.machine_id)
+            if record.machine_id is not None
+            else None
+        )
+        if machine is not None:
+            return record, machine
+        machine = self._new_provider_machine(
+            session,
+            pool=pool,
+            cpu_millicores=record.cpu_millicores,
+            memory_mb=record.memory_mb,
+            gpu=record.gpu,
+            gpu_count=record.gpu_count,
+            now=now,
+        )
+        bound = ComputeProviderInstanceRepository(session).upsert(
+            record.model_copy(update={"machine_id": machine.id, "updated_at": now})
+        )
+        return bound, machine
 
     def _apply_pooled_snapshot(
         self,
@@ -703,23 +828,23 @@ class ProviderMachineReconciler:
     ) -> bool:
         if not _reservation_open(record.status):
             return False
-        if bootstrap_failure_reason is not None:
-            observed_at = _utc(bootstrap_observed_at)
-            record = record.model_copy(
-                update={
-                    "bootstrap_phase": MachineBootstrapPhase.Failed,
-                    "bootstrap_failure_reason": bootstrap_failure_reason,
-                    "bootstrap_failure_detail": message,
-                    "bootstrap_observed_at": observed_at,
-                    "bootstrap_phase_started_at": (
-                        record.bootstrap_phase_started_at or record.bootstrap_observed_at
-                        if record.bootstrap_phase is MachineBootstrapPhase.Failed
-                        else observed_at
-                    ),
-                    "updated_at": observed_at,
-                }
+        observed_at = _utc(bootstrap_observed_at)
+        machines = MachineRepository(session)
+        machine = (
+            machines.get_across_workspaces(record.machine_id)
+            if record.machine_id is not None
+            else None
+        )
+        if machine is not None and bootstrap_failure_reason is not None:
+            machine = write_machine_lifecycle(
+                session,
+                machine,
+                MachineLifecycle.Failed,
+                workspace_changes=self.workspace_changes,
+                message=message,
+                failure=bootstrap_failure_reason,
+                now=observed_at,
             )
-            ComputeProviderInstanceRepository(session).upsert(record)
         client = clients.get(record.provider)
         status = ReservationStatus.Terminating.value
         last_error = ""
@@ -759,18 +884,29 @@ class ProviderMachineReconciler:
         ComputeProviderInstanceRepository(session).upsert(updated)
         if record.machine_id and self.scheduler_hooks is not None:
             self.scheduler_hooks.disable_machine(record.machine_id, reason)
-        if record.machine_id:
-            machine = MachineRepository(session).get_across_workspaces(record.machine_id)
-            if machine is not None and status == ReservationStatus.Deleted.value:
+        if machine is not None:
+            if status == ReservationStatus.Deleted.value:
                 if deleting_workspace_id is not None:
-                    MachineRepository(session).mark_deleted_for_workspace_deletion(
+                    machines.mark_deleted_for_workspace_deletion(
                         machine.id,
                         workspace_id=deleting_workspace_id,
                     )
-                else:
-                    MachineRepository(session).upsert(
-                        machine.model_copy(update={"status": ResourceStatus.Deleted})
+                elif machine.lifecycle is not MachineLifecycle.Deleted:
+                    write_machine_lifecycle(
+                        session,
+                        machine,
+                        MachineLifecycle.Deleted,
+                        workspace_changes=self.workspace_changes,
+                        message=message,
                     )
+            elif machine_lifecycle_allowed(machine.lifecycle, MachineLifecycle.Terminating):
+                write_machine_lifecycle(
+                    session,
+                    machine,
+                    MachineLifecycle.Terminating,
+                    workspace_changes=self.workspace_changes,
+                    message=message,
+                )
         return status == ReservationStatus.Deleted.value
 
     def _retire_provider_pool_machines(
@@ -810,12 +946,15 @@ class ProviderMachineReconciler:
                     )
                     changed_machine_ids.append(enrollment.machine_id)
                 machine = machines.get(enrollment.machine_id, workspace_id=workspace_id)
-                if machine is not None and machine.status is not ResourceStatus.Deleted:
-                    machines.upsert(
-                        machine.model_copy(
-                            update={"status": ResourceStatus.Deleted, "updated_at": now}
-                        ),
+                if machine is not None and machine.lifecycle is not MachineLifecycle.Deleted:
+                    write_machine_lifecycle(
+                        session,
+                        machine,
+                        MachineLifecycle.Deleted,
+                        workspace_changes=self.workspace_changes,
                         workspace_id=workspace_id,
+                        message=reason,
+                        now=now,
                     )
                 worker = workers.get(
                     agent_machine_worker_id(enrollment.machine_id),
@@ -844,14 +983,6 @@ class ProviderMachineReconciler:
                 )
             for token_hash in join_token_hashes:
                 self.scheduler_hooks.revoke_unit_join_token(token_hash)
-        for machine_id in changed_machine_ids:
-            publish_workspace_change(
-                self.workspace_changes,
-                workspace_id=workspace_id,
-                topic=WorkspaceChangeTopic.ComputeMachines,
-                change=WorkspaceChangeType.Deleted,
-                resource_id=machine_id,
-            )
         return tuple(changed_machine_ids)
 
     def retire_provider_pool_machine(
@@ -978,22 +1109,38 @@ class ProviderMachineReconciler:
         """Whether to take this machine away, over an already-recorded history.
 
         Two regimes, split by whether the platform ever saw the machine serve.
-        Before that, a machine is judged on how long it has been stuck in one
-        bootstrap phase. After it, the bootstrap deadlines no longer say anything
-        true — `joining` is the last phase the model has, so a working machine
-        sits past its deadline for as long as it lives — and what matters instead
-        is how long it has been since it last worked.
+        Before that, a machine is judged on how long it has sat in one lifecycle
+        phase, measured from `lifecycle_at`. After it, what matters is how long
+        it has been since it last worked.
         """
 
-        if record.bootstrap_phase is MachineBootstrapPhase.Failed:
+        machine = (
+            MachineRepository(session).get_across_workspaces(record.machine_id)
+            if record.machine_id is not None
+            else None
+        )
+        if machine is None:
+            # A record that reached `joining` proved a machine was bound to it,
+            # and the column is cleared by the foreign key when that machine row
+            # is deleted. Reporting a bootstrap timeout for one of those blames
+            # the boot for a deletion that happened long after it.
+            if record.first_enrolled_at is not None:
+                return MachineBootstrapFailureReason.MachineRecordDeleted
+            deadline = self.reclaim.phase_deadline_for(record.provider, MachineLifecycle.Requested)
+            if deadline is None or now - max(_utc(record.created_at), observing_since) < deadline:
+                return None
+            if record.unserved_observations < self.reclaim.bootstrap_failure_observations:
+                return None
+            return MachineBootstrapFailureReason.BootstrapTimedOut
+        if machine.lifecycle is MachineLifecycle.Failed:
             # The node named its own failure. Reclaim it under that reason rather
             # than re-diagnosing it as a timeout it did not have.
-            deadline = self.reclaim.phase_deadline_for(record.provider, record.bootstrap_phase)
+            deadline = self.reclaim.phase_deadline_for(record.provider, machine.lifecycle)
             if deadline is None or not self._deadline_elapsed(
-                record, now, observing_since, deadline
+                machine, now, observing_since, deadline
             ):
                 return None
-            return record.bootstrap_failure_reason or MachineBootstrapFailureReason.Unknown
+            return machine.lifecycle_failure or MachineBootstrapFailureReason.Unknown
         if record.first_served_at is not None:
             return self._service_loss_to_reclaim(
                 record,
@@ -1001,26 +1148,24 @@ class ProviderMachineReconciler:
                 observing_since=observing_since,
                 live_containers=live_containers,
             )
-        deadline = self.reclaim.phase_deadline_for(record.provider, record.bootstrap_phase)
+        if machine.lifecycle not in PENDING_MACHINE_LIFECYCLES:
+            # Ready but never observed serving, or draining: judged on service
+            # loss once it has served, and until then on the last pending phase
+            # it left.
+            deadline = self.reclaim.phase_deadline_for(record.provider, MachineLifecycle.Joining)
+        else:
+            deadline = self.reclaim.phase_deadline_for(record.provider, machine.lifecycle)
         if deadline is None:
             return None
-        if not self._deadline_elapsed(record, now, observing_since, deadline):
+        if not self._deadline_elapsed(machine, now, observing_since, deadline):
             return None
         if record.unserved_observations < self.reclaim.bootstrap_failure_observations:
             return None
-        if record.bootstrap_phase in {
-            MachineBootstrapPhase.Requested,
-            MachineBootstrapPhase.Provisioning,
-            MachineBootstrapPhase.Booting,
+        if machine.lifecycle in {
+            MachineLifecycle.Requested,
+            MachineLifecycle.Provisioning,
+            MachineLifecycle.Booting,
         }:
-            return MachineBootstrapFailureReason.BootstrapTimedOut
-        if record.machine_id is None:
-            # A record that reached `joining` proved a machine was bound to it,
-            # and the column is cleared by the foreign key when that machine row
-            # is deleted. Reporting a bootstrap timeout for one of those blames
-            # the boot for a deletion that happened long after it.
-            if record.first_enrolled_at is not None:
-                return MachineBootstrapFailureReason.MachineRecordDeleted
             return MachineBootstrapFailureReason.BootstrapTimedOut
         return MachineBootstrapFailureReason.WorkerReadinessFailed
 
@@ -1048,7 +1193,7 @@ class ProviderMachineReconciler:
 
     def _deadline_elapsed(
         self,
-        record: ComputeProviderInstanceRecord,
+        machine: Machine,
         now: datetime,
         observing_since: datetime,
         deadline: timedelta,
@@ -1061,10 +1206,7 @@ class ProviderMachineReconciler:
         deadline afresh rather than costing the fleet its life.
         """
 
-        phase_started_at = _utc(
-            record.bootstrap_phase_started_at or record.bootstrap_observed_at or record.created_at
-        )
-        return now - max(phase_started_at, observing_since) >= deadline
+        return now - max(_utc(machine.lifecycle_at), observing_since) >= deadline
 
     def _persist_zero_capacity_repair(
         self,

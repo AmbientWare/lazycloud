@@ -100,21 +100,17 @@ def compute_instances(
         [
             item.provider,
             item.region,
-            item.instance_type or "",
-            item.service_state.value,
-            item.bootstrap_failure_detail
-            or (
-                item.bootstrap_failure_reason.value
-                if item.bootstrap_failure_reason is not None
-                else ""
-            ),
+            item.instance_type,
+            item.lifecycle.value,
+            item.lifecycle_failure.value if item.lifecycle_failure is not None else "",
+            item.lifecycle_message,
         ]
         for item in response.data
     ]
     console.print(
         table(
             "Compute instances",
-            ["provider", "region", "type", "state", "issue"],
+            ["provider", "region", "type", "lifecycle", "failure", "detail"],
             rows,
         )
     )
@@ -727,10 +723,10 @@ def machine_list(
         print_payload(ctx, [item.model_dump(mode="json") for item in machines])
         return
     rows: list[list[str]] = [
-        [item.name, ", ".join(item.workspaces), item.status.value, item.gpu or "", item.id]
+        [item.name, ", ".join(item.workspaces), item.lifecycle.value, item.gpu or "", item.id]
         for item in machines
     ]
-    console.print(table("Machines", ["name", "workspaces", "status", "gpu", "id"], rows))
+    console.print(table("Machines", ["name", "workspaces", "lifecycle", "gpu", "id"], rows))
 
 
 @machine_app.command("update", help="Change the workspaces a joined machine serves.")

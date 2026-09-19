@@ -341,7 +341,6 @@ class SchedulerAppServices:
             worker_repository,
             agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
         )
-        compute_policies.worker_state = scheduler_hooks
         compute = ComputeService(
             context,
             provider_resolver=provider_resolver,

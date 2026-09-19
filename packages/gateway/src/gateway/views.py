@@ -7,10 +7,8 @@ from compute.state import (
     ComputeUnitState,
 )
 from compute.telemetry import (
-    AgentTelemetryState,
     agent_machine_connected,
     agent_machine_last_seen,
-    agent_silence_description,
     agent_telemetry_state,
 )
 from control.service import ControlPlaneService, StubRecord
@@ -18,9 +16,8 @@ from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
-    MachineReadinessPhase,
 )
-from shared.compute_fleet import Machine, ResourceStatus
+from shared.compute_fleet import Machine, MachineLifecycle
 from shared.compute_policy import ComputeUnitRecord
 from shared.errors import NotFoundError
 from shared.http.compute import UnitMachineMetricsResponse, UnitMachineResponse
@@ -81,13 +78,23 @@ def machine_view(
     tunnel_connected: bool,
     workspace_names: list[str] | None = None,
 ) -> UnitMachineResponse:
+    """Project one machine row and its live agent state onto the wire.
+
+    The lifecycle comes from the row; the view adds what only the running
+    control plane knows, which is whether the agent's tunnel is open and what
+    its host checks said.
+    """
     memory = _memory_mb(machine.memory)
     gpu = machine.gpu or ""
     gpu_count = (machine.gpu_count or 1) if gpu else 0
     telemetry = agent_telemetry_state(agent_state) if agent_state is not None else None
-    readiness_phase = _machine_readiness_phase(machine, agent_state, telemetry)
-    if readiness_phase is MachineReadinessPhase.Ready and not tunnel_connected:
-        readiness_phase = MachineReadinessPhase.Joining
+    connected = (
+        telemetry is not None
+        and agent_state is not None
+        and agent_state.heartbeat_confirmed
+        and agent_machine_connected(telemetry.model_copy(update={"schedulable": True}))
+        and tunnel_connected
+    )
     preflight_checks = [
         ComputePreflightCheck(
             name=check.name,
@@ -101,33 +108,31 @@ def machine_view(
         for check in (agent_state.preflight if agent_state is not None else [])
     ]
     remediation = [check.remediation for check in preflight_checks if check.remediation]
-    readiness_message = (
-        "Waiting for the agent tunnel to connect"
-        if not tunnel_connected and readiness_phase is MachineReadinessPhase.Joining
-        else ""
-    )
-    if not readiness_message and agent_state is not None and agent_state.capacity_reason:
-        readiness_message = agent_state.capacity_reason
-    if not readiness_message:
-        readiness_message = _machine_readiness_message(
-            readiness_phase,
-            preflight_checks,
-            telemetry,
-        )
+    lifecycle_message = machine.lifecycle_message
+    if (
+        machine.lifecycle is MachineLifecycle.Joining
+        and agent_state is not None
+        and agent_state.heartbeat_confirmed
+        and not tunnel_connected
+    ):
+        lifecycle_message = "Waiting for the agent tunnel to connect"
     return UnitMachineResponse(
         id=machine.id,
         cpu=int((machine.cpu or 0) * 1000),
         memory=memory,
         gpu=gpu,
         gpu_count=gpu_count,
-        status=machine.status.value,
         name=machine.name,
         workspaces=list(workspace_names or []),
-        provider_name=machine.provider,
-        readiness_phase=readiness_phase,
-        readiness_message=readiness_message,
+        placement=machine.placement,
+        lifecycle=machine.lifecycle,
+        lifecycle_message=lifecycle_message,
+        lifecycle_failure=machine.lifecycle_failure,
+        lifecycle_at=machine.lifecycle_at,
+        connected=connected,
         schedulable=(
-            readiness_phase is MachineReadinessPhase.Ready
+            machine.lifecycle is MachineLifecycle.Ready
+            and connected
             and (agent_state is None or agent_state.schedulable)
         ),
         capacity_state=(
@@ -152,62 +157,6 @@ def machine_view(
             memory_total_mb=memory,
         ),
     )
-
-
-def _machine_readiness_phase(
-    machine: Machine,
-    agent_state: ComputeAgentTokenState | None,
-    telemetry: AgentTelemetryState | None,
-) -> MachineReadinessPhase:
-    if agent_state is not None and telemetry is not None:
-        if not agent_state.preflight_passed:
-            return MachineReadinessPhase.Blocked
-        if not agent_state.heartbeat_confirmed:
-            return MachineReadinessPhase.Joining
-        if agent_machine_connected(telemetry):
-            return MachineReadinessPhase.Ready
-        if agent_state.last_heartbeat_at is None:
-            return MachineReadinessPhase.Joining
-        return MachineReadinessPhase.Offline
-    return {
-        ResourceStatus.Running: MachineReadinessPhase.Ready,
-        ResourceStatus.Failed: MachineReadinessPhase.Blocked,
-        ResourceStatus.Stopped: MachineReadinessPhase.Offline,
-        ResourceStatus.Deleted: MachineReadinessPhase.Revoked,
-        ResourceStatus.Created: MachineReadinessPhase.Joining,
-    }[machine.status]
-
-
-def _machine_readiness_message(
-    phase: MachineReadinessPhase,
-    preflight: list[ComputePreflightCheck],
-    telemetry: AgentTelemetryState | None,
-) -> str:
-    """Why the machine is in this phase, in terms its owner can act on.
-
-    The fleet is hardware this platform does not own and cannot reach, so this
-    message is the whole of the support channel. How long a machine has been
-    quiet is what separates a host that rebooted from one that has been off for
-    a week, and it is the last thing the platform actually observed.
-    """
-
-    if phase is MachineReadinessPhase.Ready:
-        return "Ready for workloads"
-    if phase is MachineReadinessPhase.Blocked:
-        failed = [check.message for check in preflight if check.required and not check.ok]
-        named = "; ".join(item for item in failed if item)
-        if named:
-            return named
-        return (
-            "Host preflight failed without naming a check; restart the agent to run preflight again"
-        )
-    if phase is MachineReadinessPhase.Offline:
-        silence = agent_silence_description(telemetry) if telemetry is not None else ""
-        quiet = f"No heartbeat for {silence}" if silence else "No heartbeat from the agent"
-        return f"{quiet}; check the host is powered on and the agent service is running"
-    if phase is MachineReadinessPhase.Revoked:
-        return "Machine access was revoked; join the machine again to use it"
-    return "Waiting for the agent to connect"
 
 
 def agent_route_view(

@@ -23,6 +23,10 @@ def machine_from_row(row: MachineTable) -> Machine:
             "capacity_owner_id": row.capacity_owner_id,
             "provider": row.provider,
             "status": row.status,
+            "lifecycle": row.lifecycle,
+            "lifecycle_message": row.lifecycle_message,
+            "lifecycle_failure": row.lifecycle_failure,
+            "lifecycle_at": to_utc(row.lifecycle_at),
             "cpu": row.cpu,
             "memory": row.memory,
             "gpu": row.gpu,
@@ -46,6 +50,12 @@ def write_machine(row: MachineTable, record: Machine) -> None:
     row.capacity_owner_id = record.capacity_owner_id
     row.provider = record.provider
     row.status = record.status.value
+    row.lifecycle = record.lifecycle.value
+    row.lifecycle_message = record.lifecycle_message
+    row.lifecycle_failure = (
+        record.lifecycle_failure.value if record.lifecycle_failure is not None else None
+    )
+    row.lifecycle_at = record.lifecycle_at
     row.cpu = record.cpu
     row.memory = record.memory
     row.gpu = record.gpu

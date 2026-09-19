@@ -46,12 +46,13 @@ def list_self_hosted_machines(
     cursor: str = "",
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> UnitMachineListResponse:
-    """The account's joined machines.
+    """The account's joined machines: those whose placement is the machine itself.
 
     Account-scoped rather than workspace-scoped: a joined host belongs to the person
     who connected it, and which workspaces it serves is a property of the machine.
+    Nodes a connected cloud launched are listed under the connection instead.
     """
-    machines = [item for item in gateway.account_machine_views(user_id) if item.id > cursor]
+    machines = [item for item in gateway.self_hosted_machine_views(user_id) if item.id > cursor]
     selected = machines[:limit]
     return UnitMachineListResponse(
         data=selected,

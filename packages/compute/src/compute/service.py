@@ -29,7 +29,6 @@ from database.repositories.orchestration import (
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
-from pydantic import JsonValue
 from shared.capacity import (
     CapacityAcquisitionRequest,
     CapacityAcquisitionResult,
@@ -50,9 +49,8 @@ from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
 )
-from shared.compute_fleet import Machine, ResourceStatus, Worker
+from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (
     ENDED_UNIT_PHASES,
     ComputeCapacityMode,
@@ -95,6 +93,7 @@ from compute.capacity_errors import (
 )
 from compute.context import ComputeContext
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
+from compute.machine_lifecycle import machine_lifecycle_allowed, write_machine_lifecycle
 from compute.offers import (
     CapacityMarket,
     ComputeOffer,
@@ -163,41 +162,6 @@ class _PooledCapacityBaseline:
     min_free_memory_mib: int
     warm_eligible_owners: frozenset[str] = frozenset()
     warm_targets: tuple[tuple[str, int], ...] = ()
-
-
-_BOOTSTRAP_PHASE_TRANSITIONS: dict[MachineBootstrapPhase, frozenset[MachineBootstrapPhase]] = {
-    MachineBootstrapPhase.Requested: frozenset(
-        {
-            MachineBootstrapPhase.Provisioning,
-            MachineBootstrapPhase.Booting,
-            MachineBootstrapPhase.Failed,
-            MachineBootstrapPhase.Deleting,
-        }
-    ),
-    MachineBootstrapPhase.Provisioning: frozenset(
-        {
-            MachineBootstrapPhase.Booting,
-            MachineBootstrapPhase.Joining,
-            MachineBootstrapPhase.Failed,
-            MachineBootstrapPhase.Deleting,
-        }
-    ),
-    MachineBootstrapPhase.Booting: frozenset(
-        {
-            MachineBootstrapPhase.Joining,
-            MachineBootstrapPhase.Failed,
-            MachineBootstrapPhase.Deleting,
-        }
-    ),
-    MachineBootstrapPhase.Joining: frozenset(
-        {
-            MachineBootstrapPhase.Failed,
-            MachineBootstrapPhase.Deleting,
-        }
-    ),
-    MachineBootstrapPhase.Failed: frozenset({MachineBootstrapPhase.Deleting}),
-    MachineBootstrapPhase.Deleting: frozenset(),
-}
 
 
 @dataclass(slots=True)
@@ -271,41 +235,42 @@ class ComputeService:
             source_cache_lifecycle=self.source_cache_lifecycle,
         )
 
-    def record_provider_bootstrap_status(
+    def record_provider_node_lifecycle(
         self,
         *,
         pool_id: str,
         provider_instance_id: str,
-        phase: MachineBootstrapPhase,
+        lifecycle: MachineLifecycle,
         failure_reason: MachineBootstrapFailureReason | None,
         failure_detail: str = "",
         now: datetime | None = None,
-    ) -> ComputeProviderInstanceRecord:
+    ) -> Machine:
         with self.context.database.session() as session:
-            return self.record_provider_bootstrap_status_in_transaction(
+            return self.record_provider_node_lifecycle_in_transaction(
                 session,
                 pool_id=pool_id,
                 provider_instance_id=provider_instance_id,
-                phase=phase,
+                lifecycle=lifecycle,
                 failure_reason=failure_reason,
                 failure_detail=failure_detail,
                 now=now,
             )
 
-    def record_provider_bootstrap_status_in_transaction(
+    def record_provider_node_lifecycle_in_transaction(
         self,
         session: DatabaseSession,
         *,
         pool_id: str,
         provider_instance_id: str,
-        phase: MachineBootstrapPhase,
+        lifecycle: MachineLifecycle,
         failure_reason: MachineBootstrapFailureReason | None,
         failure_detail: str = "",
         now: datetime | None = None,
-    ) -> ComputeProviderInstanceRecord:
-        if phase is MachineBootstrapPhase.Failed and failure_reason is None:
+    ) -> Machine:
+        """Move a provider node's machine along its lifecycle from what the node reports."""
+        if lifecycle is MachineLifecycle.Failed and failure_reason is None:
             raise InvalidInputError("failed provider bootstrap requires a failure reason")
-        if phase is not MachineBootstrapPhase.Failed and failure_reason is not None:
+        if lifecycle is not MachineLifecycle.Failed and failure_reason is not None:
             raise InvalidInputError("provider bootstrap failure reason requires failed phase")
         current_time = _utc(now)
         repository = ComputeProviderInstanceRepository(session)
@@ -316,29 +281,29 @@ class ComputeService:
         )
         if record is None:
             raise NotFoundError("provider node is no longer active")
-        if phase is not record.bootstrap_phase:
-            allowed = _BOOTSTRAP_PHASE_TRANSITIONS[record.bootstrap_phase]
-            if phase not in allowed:
-                raise ConflictError(
-                    "provider bootstrap phase cannot move from "
-                    f"{record.bootstrap_phase.value} to {phase.value}"
-                )
-        update: dict[str, JsonValue | datetime] = {
-            "bootstrap_phase": phase,
-            "bootstrap_failure_reason": failure_reason,
-            "bootstrap_failure_detail": failure_detail,
-            "bootstrap_observed_at": current_time,
-            "bootstrap_phase_started_at": (
-                current_time
-                if phase is not record.bootstrap_phase
-                else record.bootstrap_phase_started_at or record.bootstrap_observed_at
-            ),
-            "updated_at": current_time,
-        }
-        if phase is MachineBootstrapPhase.Joining and record.first_enrolled_at is None:
+        pool = ComputeUnitRepository(session).get(pool_id)
+        if pool is None:
+            raise NotFoundError("provider node unit is gone")
+        record, machine = self.provider_machines.machine_for_record(
+            session, pool=pool, record=record, now=current_time
+        )
+        updated = write_machine_lifecycle(
+            session,
+            machine,
+            lifecycle,
+            workspace_changes=self.workspace_changes,
+            message=failure_detail,
+            failure=failure_reason,
+            now=current_time,
+        )
+        if lifecycle is MachineLifecycle.Joining and record.first_enrolled_at is None:
             # This survives deletion of the machine row and its foreign-key binding.
-            update["first_enrolled_at"] = current_time
-        return repository.upsert(record.model_copy(update=update))
+            repository.upsert(
+                record.model_copy(
+                    update={"first_enrolled_at": current_time, "updated_at": current_time}
+                )
+            )
+        return updated
 
     def ensure_capacity(
         self,
@@ -1269,7 +1234,6 @@ class ComputeService:
 
     def delete_unit(self, capacity_owner_id: str, *, workspace: str = "default") -> None:
         termination_errors: list[str] = []
-        deleted_machine_ids: list[str] = []
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
         clients = self._provider_client_snapshot(workspace_id)
@@ -1311,14 +1275,17 @@ class ComputeService:
                 for machine in machine_repository.list(workspace_id=workspace_id):
                     if (
                         machine.capacity_owner_id != owner
-                        or machine.status is ResourceStatus.Deleted
+                        or machine.lifecycle is MachineLifecycle.Deleted
                     ):
                         continue
-                    machine_repository.upsert(
-                        machine.model_copy(update={"status": ResourceStatus.Deleted}),
+                    write_machine_lifecycle(
+                        session,
+                        machine,
+                        MachineLifecycle.Deleted,
+                        workspace_changes=self.workspace_changes,
                         workspace_id=workspace_id,
+                        message="Unit deleted",
                     )
-                    deleted_machine_ids.append(machine.id)
                 unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
                 # Pooled units retain terminal ownership and recovery history.
                 if unit is not None and not _owns_provider_pool_capacity(unit):
@@ -1337,13 +1304,6 @@ class ComputeService:
             change=WorkspaceChangeType.Deleted,
             resource_id=capacity_owner_id,
         )
-        for machine_id in deleted_machine_ids:
-            self._publish_change(
-                workspace_id=workspace_id,
-                topic=WorkspaceChangeTopic.ComputeMachines,
-                change=WorkspaceChangeType.Deleted,
-                resource_id=machine_id,
-            )
 
     def _release_provider_pool_capacity(self, pool: ComputeUnitRecord) -> str:
         """Delete this pool's provider-side capacity, answering why it is still held.
@@ -1462,7 +1422,10 @@ class ComputeService:
             machine_repository = MachineRepository(session)
             owner = compute_pool.capacity_owner_id if compute_pool is not None else ""
             for machine in machine_repository.list(workspace_id=workspace_id):
-                if machine.capacity_owner_id != owner or machine.status is ResourceStatus.Deleted:
+                if (
+                    machine.capacity_owner_id != owner
+                    or machine.lifecycle is MachineLifecycle.Deleted
+                ):
                     continue
                 machine_repository.mark_deleted_for_workspace_deletion(
                     machine.id,
@@ -2728,6 +2691,19 @@ class ComputeService:
                 )
             )
             WorkerReleaseRepository(session).cancel_machine_update(machine_id)
+            machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
+            if machine is not None and machine_lifecycle_allowed(
+                machine.lifecycle, MachineLifecycle.Draining
+            ):
+                write_machine_lifecycle(
+                    session,
+                    machine,
+                    MachineLifecycle.Draining,
+                    workspace_changes=self.workspace_changes,
+                    workspace_id=workspace_id,
+                    message=reason,
+                    now=current_time,
+                )
         return True
 
     def release_internal_unit_machine(
@@ -2879,7 +2855,7 @@ class ComputeService:
                 current.workspace_id, current.capacity_owner_id
             )
             if any(
-                machine.status is not ResourceStatus.Deleted
+                machine.lifecycle is not MachineLifecycle.Deleted
                 or containers.count_live_for_machine(machine.id)
                 for machine in machines
             ):
@@ -3599,6 +3575,15 @@ class ComputeService:
                     }
                 )
             )
+            # The placement is stamped on every row the unit produced, and each
+            # lookup compares it, so the rows move with the unit or the unit's
+            # machines stop being found under it.
+            ComputeMachineEnrollmentRepository(session).move_placement_for_unit(
+                unit.workspace_id, unit.capacity_owner_id, policy.placement
+            )
+            MachineRepository(session).move_placement_for_capacity_owner(
+                unit.workspace_id, unit.capacity_owner_id, policy.placement
+            )
         LOGGER.info(
             "compute unit %s follows its provider: placement %s -> %s, platform fleet %s -> %s",
             unit.name,
@@ -3876,7 +3861,7 @@ class ComputeService:
             records = [
                 machine
                 for machine in MachineRepository(session).list(workspace_id=workspace_id)
-                if machine.status is not ResourceStatus.Deleted
+                if machine.lifecycle is not MachineLifecycle.Deleted
             ]
         records.sort(key=lambda item: item.created_at, reverse=True)
         return records
@@ -3889,20 +3874,16 @@ class ComputeService:
             if machine is None:
                 msg = f"machine not found in workspace: {machine_id}"
                 raise KeyError(msg)
-            if machine.status is ResourceStatus.Deleted:
+            if machine.lifecycle is MachineLifecycle.Deleted:
                 return
-            machines.upsert(
-                machine.model_copy(
-                    update={"status": ResourceStatus.Deleted, "updated_at": utc_now()}
-                ),
+            write_machine_lifecycle(
+                session,
+                machine,
+                MachineLifecycle.Deleted,
+                workspace_changes=self.workspace_changes,
                 workspace_id=workspace_id,
+                message="Removed",
             )
-        self._publish_change(
-            workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.ComputeMachines,
-            change=WorkspaceChangeType.Deleted,
-            resource_id=machine_id,
-        )
 
     def list_workers(self) -> list[Worker]:
         with self.context.database.session() as session:

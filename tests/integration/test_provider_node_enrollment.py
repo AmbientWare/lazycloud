@@ -47,6 +47,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.orchestration import MachineRepository
 from database.tables.compute import ComputeJoinCredentialTable, ComputeMachineEnrollmentTable
 from database.tables.orchestration import MachineTable, WorkerTable
 from database.tables.provider_launches import ProviderNodeLaunchTable
@@ -71,8 +72,8 @@ from shared.aws_connections import (
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_enrollment import (
     MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
 )
+from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitPhase,
@@ -310,10 +311,10 @@ def test_provider_enrollment_resume_preserves_existing_agent_authority(
     pool = _seed_connection_and_pool(isolated_services)
     service = _service(isolated_services, _PooledProvider())
     request = _request(pool.id)
-    service.compute.record_provider_bootstrap_status(
+    service.compute.record_provider_node_lifecycle(
         pool_id=pool.id,
         provider_instance_id=_INSTANCE_ID,
-        phase=MachineBootstrapPhase.Booting,
+        lifecycle=MachineLifecycle.Booting,
         failure_reason=None,
     )
     joined = service.enroll(request)
@@ -366,7 +367,7 @@ def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(
         )
     )
 
-    assert observed.phase is MachineBootstrapPhase.Failed
+    assert observed.phase is MachineLifecycle.Failed
     assert observed.failure_reason is MachineBootstrapFailureReason.AgentEnrollmentFailed
 
 
@@ -401,8 +402,12 @@ def test_bootstrap_failure_excerpt_is_sanitized_persisted_and_leaves_an_event(
             pool.id,
             _INSTANCE_ID,
         )
-    assert record is not None
-    assert record.bootstrap_failure_detail == "curl: (22) 404[31m for artifact url"
+        assert record is not None and record.machine_id is not None
+        machine = MachineRepository(session).get_across_workspaces(record.machine_id)
+    assert machine is not None
+    assert machine.lifecycle is MachineLifecycle.Failed
+    assert machine.lifecycle_failure is MachineBootstrapFailureReason.AgentDownloadFailed
+    assert machine.lifecycle_message == "curl: (22) 404[31m for artifact url"
     events = [
         event
         for event in isolated_services.events.list()
@@ -426,11 +431,11 @@ def test_provider_node_bootstrap_phase_is_durable_after_identity_verification(
             region=_REGION,
             provider_instance_id=_INSTANCE_ID,
             identity_proof_url=_presigned_url(),
-            phase=MachineBootstrapPhase.Booting,
+            phase=MachineLifecycle.Booting,
         )
     )
 
-    assert observed.phase is MachineBootstrapPhase.Booting
+    assert observed.phase is MachineLifecycle.Booting
     assert observed.failure_reason is None
 
 
@@ -497,7 +502,6 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                         pool_id=pool.id,
                         instance_type="ccx13",
                         instance_id="123",
-                        bootstrap_phase=MachineBootstrapPhase.Booting,
                     ),
                 )
             offer = ComputeOffer(
@@ -669,7 +673,6 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                     pool.id, "123"
                 )
                 assert instance is not None and instance.machine_id is None
-                assert instance.bootstrap_phase is MachineBootstrapPhase.Booting
                 session.execute(
                     text("DROP TRIGGER reject_machine_binding ON compute_provider_instances")
                 )
@@ -741,7 +744,8 @@ def test_provider_enrollment_is_atomic_across_single_connection_replicas(
                     pool.id, "123"
                 )
                 assert instance is not None and instance.machine_id == first.machine_id
-                assert instance.bootstrap_phase is MachineBootstrapPhase.Joining
+                machine = MachineRepository(session).get_across_workspaces(first.machine_id)
+                assert machine is not None and machine.lifecycle is MachineLifecycle.Joining
             state = enrollment.gateway.compute_states.get_agent_token_state(
                 hash_compute_token(request.node_agent_token)
             )
@@ -1027,4 +1031,4 @@ def test_degraded_pool_still_accepts_provider_node_enrollment(
         )
     )
 
-    assert observed.phase is MachineBootstrapPhase.Failed
+    assert observed.phase is MachineLifecycle.Failed

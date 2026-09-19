@@ -21,7 +21,7 @@ from shared.http.compute import (
 )
 from shared.http.compute_policy import (
     ComputeCatalogResponse,
-    WorkspaceComputeInstanceListResponse,
+    ConnectionMachineListResponse,
     WorkspaceComputeSummaryResponse,
     WorkspaceComputeWorkloadListResponse,
 )
@@ -129,8 +129,8 @@ class ComputeClient:
             self.channel.get(self._compute_path("/summary"))
         )
 
-    def instances(self) -> WorkspaceComputeInstanceListResponse:
-        return WorkspaceComputeInstanceListResponse.model_validate(
+    def instances(self) -> ConnectionMachineListResponse:
+        return ConnectionMachineListResponse.model_validate(
             self.channel.get(self._compute_path("/instances"))
         )
 

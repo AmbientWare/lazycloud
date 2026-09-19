@@ -13,9 +13,9 @@ from shared.capacity import (
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
-    MachineReadinessPhase,
+    MachineBootstrapFailureReason,
 )
-from shared.compute_fleet import ResourceStatus
+from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import OciRuntimeName, StopContainerReason
 from shared.containers import ContainerStatus
@@ -120,8 +120,12 @@ class MachineResponse(HttpModel):
     name: str = ""
     workspaces: list[str] = Field(default_factory=list)
     """Names of the workspaces this machine may run workloads for."""
+    placement: Placement
     provider: str = "local"
-    status: ResourceStatus = ResourceStatus.Created
+    lifecycle: MachineLifecycle
+    lifecycle_message: str = ""
+    lifecycle_failure: MachineBootstrapFailureReason | None = None
+    lifecycle_at: datetime
     cpu: float | None = None
     memory: str | None = None
     gpu: str | None = None
@@ -245,13 +249,16 @@ class UnitMachineResponse(HttpModel):
     memory: int = 0
     gpu: str = ""
     gpu_count: int = 0
-    status: str = ""
     name: str = ""
     workspaces: list[str] = Field(default_factory=list)
     """Names of the workspaces this machine may run workloads for."""
-    provider_name: str = "agent"
-    readiness_phase: MachineReadinessPhase = MachineReadinessPhase.Joining
-    readiness_message: str = "Waiting for the agent to connect"
+    placement: Placement
+    lifecycle: MachineLifecycle
+    lifecycle_message: str = ""
+    lifecycle_failure: MachineBootstrapFailureReason | None = None
+    lifecycle_at: datetime
+    connected: bool = False
+    """Whether the agent's authenticated tunnel is open right now."""
     schedulable: bool = False
     capacity_state: AgentCapacityState = AgentCapacityState.Available
     capacity_reason: str = ""
