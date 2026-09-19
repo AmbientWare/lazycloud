@@ -13,7 +13,6 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from api.server.worker_repository_service import WorkerRepositoryService
 from apps.api.tests.runtime import services_with_object_storage
-from compute.policy import WorkspaceComputePolicyService
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.aws_connections import AwsAccountConnectionRepository
@@ -50,7 +49,6 @@ def test_workspace_deletion_api_requires_admin_and_returns_no_content(
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         owned_workspace(control, "default")
         workspace = owned_workspace(control, "tenant")
@@ -122,7 +120,6 @@ def test_deleting_one_workspace_leaves_the_accounts_aws_connection_intact(
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         default = control.get_workspace("default")
         # One account holding two workspaces is the case that matters: the connection is
@@ -164,7 +161,6 @@ def test_workspace_deletion_aborts_when_object_removal_is_not_confirmed(
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         owned_workspace(control, "default")
         workspace = owned_workspace(control, "tenant")
@@ -232,7 +228,6 @@ def test_workspace_deletion_keeps_durable_source_cleanup_when_wake_delivery_fail
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         owned_workspace(control, "default")
         workspace = owned_workspace(control, "tenant")
@@ -290,9 +285,7 @@ def test_concurrent_upload_and_workspace_deletion_converges_without_orphan(
             ),
             request,
         )
-        control = ControlPlaneService(
-            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-        )
+        control = ControlPlaneService(services.context)
         owned_workspace(control, "default")
         workspace = owned_workspace(control, "tenant")
         admin_token, _actor = administrator_credential(isolated_services.context, "admin")

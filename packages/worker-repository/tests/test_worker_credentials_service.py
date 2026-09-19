@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from identity.auth import AuthorizationDeniedError, AuthService
 from shared.container_requests import RequestMount, RequestMountPointConfig, RequestMountType
@@ -49,7 +48,6 @@ def _credential_service(services: ApiServices) -> WorkerCredentialService:
 def test_worker_credential_service_vends_requested_bundle(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = control.set_workspace_storage(
         owned_workspace(control, "default").id,
@@ -138,7 +136,6 @@ def test_worker_credential_service_reuses_gateway_token_across_containers(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = owned_workspace(control, "default")
     stub = control.create_stub("worker", workspace=workspace.id)
@@ -183,7 +180,6 @@ def test_worker_credential_service_replaces_revoked_or_aging_gateway_tokens(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = owned_workspace(control, "default")
     stub = control.create_stub("worker", workspace=workspace.id)
@@ -237,7 +233,6 @@ def test_worker_credential_service_resolves_volume_secret_names(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = owned_workspace(control, "default")
     isolated_services.secrets.set("MOUNT_ACCESS_KEY", "mount-ak")
@@ -312,7 +307,6 @@ def test_worker_credential_service_rejects_invalid_principal_and_assignment(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = owned_workspace(control, "workspace-a")
     stub = control.create_stub("worker", workspace=workspace.id)
@@ -373,7 +367,6 @@ def test_worker_credential_service_rejects_unavailable_secret_storage_and_mount(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = owned_workspace(control, "workspace-a")
     stub = control.create_stub("worker", workspace=workspace.id)
@@ -434,7 +427,6 @@ def test_worker_credential_hydrator_applies_credentials_to_execution_context(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = control.set_workspace_storage(
         owned_workspace(control, "default").id,

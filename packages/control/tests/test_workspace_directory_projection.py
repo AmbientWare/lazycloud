@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
@@ -11,9 +10,7 @@ from tests.workspaces import owned_workspace
 def test_workspace_directory_projects_active_deleting_and_deleted_lifecycles(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     active = owned_workspace(control, "projection-active")
     deleting = owned_workspace(control, "projection-deleting")
     deleted = owned_workspace(control, "projection-deleted")

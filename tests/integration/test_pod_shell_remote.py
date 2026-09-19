@@ -13,7 +13,6 @@ import pytest
 from anyio.from_thread import start_blocking_portal
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.service import ContainerService
@@ -93,9 +92,7 @@ def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
             real_services,
             containers=replace(real_services.containers, scheduler=scheduler),
         )
-        control = ControlPlaneService(
-            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-        )
+        control = ControlPlaneService(services.context)
         stub = control.create_stub(
             "ephemeral-web",
             kind=StubKind.Pod,
@@ -178,7 +175,6 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
         isolated_services.containers.scheduler = scheduler
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         stub = control.create_stub(
             "remote-sandbox",
@@ -339,7 +335,6 @@ def test_existing_container_shell_reuses_credentials_through_worker_client(
     with ExitStack() as resources:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         stub = control.create_stub("shell-target", kind=StubKind.Pod)
         container_id = str(uuid4())
@@ -416,7 +411,6 @@ def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port
     with ExitStack() as resources:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         stub = control.create_stub("shell-target", kind=StubKind.Pod)
         container_id = str(uuid4())
@@ -488,7 +482,6 @@ def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("shell-cleanup", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
@@ -543,7 +536,6 @@ def test_standalone_ticket_failure_stops_once_and_terminal_retry_is_idempotent(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("standalone-cleanup", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
@@ -570,7 +562,6 @@ def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_even
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("standalone-cleanup-failure", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
@@ -604,7 +595,6 @@ def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_even
 def test_sandbox_exec_waits_for_worker_address_before_dial(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("delayed-sandbox", kind=StubKind.Sandbox)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
@@ -662,7 +652,6 @@ def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("stopped-sandbox", kind=StubKind.Sandbox)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
@@ -694,7 +683,6 @@ def test_shell_websocket_proxies_bidirectional_terminal_bytes(
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         stub = control.create_stub("interactive-shell", kind=StubKind.Pod)
         container_id = str(uuid4())

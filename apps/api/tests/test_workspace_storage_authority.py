@@ -1,5 +1,4 @@
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -20,9 +19,7 @@ def test_workspace_storage_creation_preserves_credential_authority(
     created = client.post("/api/v1/workspaces/create-storage", headers=headers)
 
     assert created.status_code == 201
-    workspace = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    ).get_workspace(api_workspace.id)
+    workspace = ControlPlaneService(services.context).get_workspace(api_workspace.id)
     assert workspace.storage.bucket
     assert created.json()["storage"]["bucket"] == workspace.storage.bucket
     assert client.get("/api/v1/workspaces", headers=headers).status_code == 200

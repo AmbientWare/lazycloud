@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
@@ -35,9 +34,9 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
 ) -> None:
     services = isolated_services
     now = utc_now()
-    stub = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    ).create_stub("capacity-progress", kind=StubKind.Function, handler="main:hello")
+    stub = ControlPlaneService(services.context).create_stub(
+        "capacity-progress", kind=StubKind.Function, handler="main:hello"
+    )
     container = ContainerRecord(
         id=str(uuid4()),
         name="pending",

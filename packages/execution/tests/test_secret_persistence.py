@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.records.identity import SecretStorageRecord
@@ -158,7 +157,7 @@ def _stored_secret(context: ServiceContext, name: str) -> SecretStorageRecord:
 
 def _workspace(context: ServiceContext, name: str) -> WorkspaceRecord:
     return owned_workspace(
-        ControlPlaneService(context, placement_resolver=WorkspaceComputePolicyService(context)),
+        ControlPlaneService(context),
         name,
     )
 

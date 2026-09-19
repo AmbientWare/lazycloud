@@ -5,7 +5,6 @@ from hashlib import sha256
 from uuid import uuid4
 
 import pytest
-from compute.policy import WorkspaceComputePolicyService
 from compute.state import RedisComputeStateRepository
 from compute.tunnel_authority import AgentTunnelAuthority
 from control.service import ControlPlaneService
@@ -132,9 +131,7 @@ def test_tunnel_routes_require_live_destination_assignment_within_enrollment_sco
     )
     worker_id, foreign_worker_id, foreign_machine_id = (str(uuid4()) for _ in range(3))
     workload_workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "tunnel-workload",
     )
     with service_context.database.session() as session:

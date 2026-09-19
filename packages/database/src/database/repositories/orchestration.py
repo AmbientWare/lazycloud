@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
@@ -52,6 +52,7 @@ from sqlalchemy import (
     case,
     delete,
     exists,
+    false,
     func,
     or_,
     select,
@@ -423,6 +424,19 @@ class MachineRepository:
         )
         return machine_from_row(row) if row is not None else None
 
+    def get_owned(self, machine_id: str, *, owner_user_id: str) -> Machine | None:
+        """One of the account's live machines by id, a primary-key read."""
+        if try_uuid(machine_id) is None:
+            return None
+        row = self.session.get(MachineTable, machine_id)
+        if (
+            row is None
+            or row.owner_user_id != owner_user_id
+            or row.status == ResourceStatus.Deleted.value
+        ):
+            return None
+        return machine_from_row(row)
+
     def get_across_workspaces(self, machine_id: str) -> Machine | None:
         if try_uuid(machine_id) is None:
             return None
@@ -566,6 +580,54 @@ class ContainerPage:
 @dataclass(slots=True)
 class ContainerRepository:
     session: Session
+
+    def has_live_for_placement(
+        self,
+        placement: str,
+        *,
+        worker_ids: Collection[str],
+        workspace_ids: Collection[str],
+    ) -> bool:
+        """Whether live work was placed here, sits on these workers, or may still land here.
+
+        Across every workspace a unit serves, because a container's own scheduling
+        request is the record of where it was sent. A container in one of those
+        workspaces that has no request and no worker yet may still be sent here,
+        so it counts too.
+        """
+        ids = list(worker_ids)
+        # `worker_id` is a UUID column; a scheduler worker id may be any string.
+        physical_ids = [item for item in ids if try_uuid(item) is not None]
+        unassigned = and_(
+            ContainerTable.workspace_id.in_(list(workspace_ids)),
+            ContainerTable.scheduling_placement.is_(None),
+            ContainerTable.runtime_worker_id == "",
+            ContainerTable.worker_id.is_(None),
+        )
+        on_worker = (
+            or_(
+                ContainerTable.runtime_worker_id.in_(ids),
+                ContainerTable.worker_id.in_(physical_ids) if physical_ids else false(),
+            )
+            if ids
+            else false()
+        )
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        ContainerTable.status.in_(
+                            (ContainerStatus.Pending.value, ContainerStatus.Running.value)
+                        ),
+                        or_(
+                            ContainerTable.scheduling_placement == placement,
+                            on_worker,
+                            unassigned,
+                        ),
+                    )
+                )
+            )
+        )
 
     def list_pending_storage_cleanup(self, worker_id: str) -> list[str]:
         runtime_worker_id = ContainerTable.runtime_worker_id

@@ -27,6 +27,7 @@ machine id, so two accounts joining the same name never share capacity.
 Reissuing for a pending name revokes the earlier credential; reissuing for a
 name that is already joined is a conflict until the host leaves, and two joins
 racing under one name settle on the unique index. A workspace cannot be dropped
-from a machine's list while a stub in it is still pinned to that machine.
+from a machine's list while a deployment in it is still pinned to that machine;
+runs and sandboxes hold no pin and fail on their next start instead.
 Leaving marks the machine deleted, which frees the name, and removes the unit
 once nothing else holds it.

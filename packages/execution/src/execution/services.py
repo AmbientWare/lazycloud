@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from control.apps import AppReader
+from control.placement import PlacementResolver
 from database.types import DatabaseSession
 from observability.events import EventService
 from observability.metrics import MetricsService
@@ -139,3 +140,6 @@ class ExecutionServices(Protocol):
 
     @property
     def object_storage(self) -> ObjectStorage: ...
+
+    @property
+    def placement_resolver(self) -> PlacementResolver: ...

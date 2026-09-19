@@ -4,7 +4,6 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
@@ -237,9 +236,7 @@ def _create_endpoint_stub(
     }
     if runtime_config is not None:
         stub_runtime_config.update(runtime_config)
-    control = ControlPlaneService(
-        runtime.context, placement_resolver=WorkspaceComputePolicyService(runtime.context)
-    )
+    control = ControlPlaneService(runtime.context)
     stub = next(
         item
         for item in control.list_stubs()

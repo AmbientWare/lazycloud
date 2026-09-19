@@ -9,7 +9,6 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
 from foundation.process import run_process
@@ -52,9 +51,7 @@ def _services(root: Path) -> ApiServices:
         owns_redis_client=True,
         owns_binary_redis_client=True,
     )
-    control = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    )
+    control = ControlPlaneService(services.context)
     owner = UserService(services.context).create(display_name="benchmark-owner")
     control.set_workspace("default", owner_user_id=owner.id)
     return services

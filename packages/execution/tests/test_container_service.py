@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from coordination.event_bus import (
     EventBusEvent,
@@ -498,7 +497,6 @@ def test_stopping_a_container_gives_up_the_redis_state_it_held(
     app = isolated_services.apps.create("released_on_stop_app")
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         "released_on_stop_pod",
         kind=StubKind.Pod,

@@ -68,7 +68,7 @@ from shared.http.functions import (
 )
 from shared.http.task_progress import TaskPendingProgress
 from shared.http.workspace_changes import WorkspaceChangeType
-from shared.placement import ProductRegion
+from shared.placement import Placement, ProductRegion
 from shared.tasks import (
     Task,
     TaskDependency,
@@ -99,6 +99,7 @@ from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
 )
+from execution.placement import workload_placement
 from execution.services import ExecutionServices, SchedulerSubmissionResult
 from execution.task_claims import TaskClaimReleaseService
 
@@ -144,6 +145,14 @@ class FunctionControlService:
                     gpu_count=config.runtime.gpu_count,
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
+                )
+                # Same reason: a stub naming a machine that has left must refuse
+                # here, not leave a task waiting for capacity that never comes.
+                placement = workload_placement(
+                    session,
+                    resolver=self.services.placement_resolver,
+                    stub=stub,
+                    workspace=self.services.context.workspace(session, stub.workspace_id),
                 )
             self._assert_within_pending_limit(stub.id, config)
             retry_policy = config.effective_retry_policy
@@ -203,7 +212,7 @@ class FunctionControlService:
                 deployment_id=task.deployment_id or "",
             )
             dependencies = self._create_task_dependencies(task, request)
-            scheduled = self._try_schedule_waiting_task(task.id)
+            scheduled = self._try_schedule_waiting_task(task.id, placement=placement)
             if scheduled is not None and not scheduled.accepted:
                 return FunctionInvokeResponse.from_result(
                     task_id=task.id,
@@ -304,6 +313,7 @@ class FunctionControlService:
         task_id: str,
         *,
         seen: set[str] | None = None,
+        placement: Placement | None = None,
     ) -> SchedulerSubmissionResult | None:
         visited = seen or set()
         if task_id in visited:
@@ -384,7 +394,7 @@ class FunctionControlService:
             marked = TaskRepository(session).mark_claimable(task.id, at=utc_now())
         if marked is not None:
             task = marked
-        return self._schedule_function_task(task)
+        return self._schedule_function_task(task, placement=placement)
 
     def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
         with self.services.context.database.session() as session:
@@ -465,6 +475,7 @@ class FunctionControlService:
         *,
         eligible_at: datetime | None = None,
         authority: FunctionContainerStartAuthority = (FunctionContainerStartAuthority.ColdStart),
+        placement: Placement | None = None,
     ) -> SchedulerSubmissionResult | None:
         if not task.stub_id:
             self.services.tasks.transition(
@@ -482,6 +493,7 @@ class FunctionControlService:
             task=task,
             eligible_at=eligible_at,
             authority=authority,
+            placement=placement,
         )
 
     def _launch_function_container(
@@ -492,6 +504,7 @@ class FunctionControlService:
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
         preview_timeout: int | None = None,
+        placement: Placement | None = None,
     ) -> SchedulerSubmissionResult | None:
         """Plan, reserve and submit one container for this stub.
 
@@ -512,6 +525,23 @@ class FunctionControlService:
                 error="function task is missing its invocation payload",
                 exit_code=1,
             )
+            return None
+
+        # An invoke resolved this before it wrote its task; every other start
+        # (a schedule, a retry, a warm floor) resolves here.
+        try:
+            if placement is None:
+                with self.services.context.database.session() as session:
+                    placement = workload_placement(
+                        session,
+                        resolver=self.services.placement_resolver,
+                        stub=stub,
+                        workspace=workspace,
+                    )
+        except (InvalidInputError, NotFoundError) as error:
+            if task is None:
+                raise
+            self.services.tasks.transition(task, TaskStatus.Failed, error=str(error), exit_code=1)
             return None
 
         container_id = str(uuid4())
@@ -616,7 +646,7 @@ class FunctionControlService:
                 disk_mib=container_plan.disk_mib,
                 gpu=list(container.gpu),
                 gpu_count=container.gpu_count,
-                placement=stub.placement,
+                placement=placement,
                 region=config.runtime.region,
                 availability_zone=config.runtime.availability_zone,
                 runtime=config.runtime.runtime,

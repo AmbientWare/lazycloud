@@ -127,8 +127,8 @@ machine with it. Each machine is its own unit, placed on the machine's id; the
 placement is the only thing that selects it, and the name is a lookup key. The
 first listed workspace anchors the unit and the machine row, which is provenance,
 not tenancy: the served list is what says who may run there, and changing it
-moves nothing. A workspace with a stub still pinned to the machine cannot be
-dropped from that list.
+moves nothing. A workspace with a deployment still pinned to the machine cannot
+be dropped from that list.
 
 Placement is an identity, `shared.placement.Placement`: the platform, one
 connected account by connection id, or one joined machine by machine id. It has
@@ -138,8 +138,11 @@ unless the workload names a machine, in which case it answers with that
 machine's placement or refuses with the name in the error. There is no default
 to change and no fallback in either direction; a workload that names a machine
 runs there or nowhere. A deployment pins the placement and the name it resolved
-to, and a stub carries the placement as its own column, so a workspace whose
-location later changes moves nothing already running.
+to at deploy time, so a workspace whose location later changes moves nothing
+already running. A stub carries no placement. Runs, sandboxes and shells reuse
+a stub across many starts, and `execution.placement.workload_placement` resolves
+the workspace and the named machine again for every container request; a
+machine that has left fails the request at once with its name in the error.
 
 Tenancy is stamped once, at the authority that decides it, and reconciled
 afterwards rather than re-derived. `AgentWorkerPoolController` compares each live

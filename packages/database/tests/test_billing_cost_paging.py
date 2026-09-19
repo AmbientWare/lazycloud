@@ -22,7 +22,6 @@ from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
 from shared.billing_credits import CreditGrant, CreditKind
 from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
 from shared.http.usage import UsageCostCategory, UsageCostGroupKey
-from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.usage import (
     IMAGE_BUILD_WORKLOAD_ID,
@@ -49,7 +48,6 @@ def test_cost_breakdown_resolves_workloads_without_looking_up_billing_categories
         workspace_id = service_context.default_workspace_id(session)
         workload = StubRepository(session).upsert(
             StubRecord(
-                placement=Placement.platform(),
                 id=str(uuid4()),
                 workspace_id=workspace_id,
                 name="training",

@@ -67,6 +67,10 @@ class ConnectedWorkspaceStorageIssuer(Protocol):
     for it.
     """
 
+    def assert_provisionable(self, connection: AwsAccountConnection) -> None:
+        """Raise ValueError when this connection cannot hold a workspace bucket yet."""
+        ...
+
     def provision(
         self, workspace: WorkspaceRecord, connection: AwsAccountConnection
     ) -> WorkspaceStorageConfig: ...
