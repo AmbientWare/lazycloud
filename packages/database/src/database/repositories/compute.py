@@ -28,8 +28,6 @@ from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     ComputePreflightCheck,
-    MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
     MachineReadinessPhase,
 )
 from shared.compute_policy import (
@@ -137,17 +135,11 @@ class ComputeProviderInstanceRecord(ContractModel):
     expires_at: datetime | None = None
     billing_renewal_at: datetime | None = None
     billing_started_at: datetime | None = None
-    bootstrap_phase: MachineBootstrapPhase = MachineBootstrapPhase.Requested
-    bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
-    bootstrap_failure_detail: str = ""
-    bootstrap_observed_at: datetime = Field(default_factory=utc_now)
-    bootstrap_phase_started_at: datetime | None = None
-    """Phase-entry time, unaffected by repeated node observations."""
-    # What the platform concluded, beside what the node reported above. A node
-    # cannot observe that it serves workloads, so these are stamped by the
-    # reconcile that watches it rather than by anything the machine says. They
-    # are what lets the reclaim tell a machine that never worked from one that
-    # worked and stopped, which the bootstrap phase alone cannot express.
+    # What the platform concluded about the node. A node cannot observe that it
+    # serves workloads, so these are stamped by the reconcile that watches it
+    # rather than by anything the machine says. They are what lets the reclaim
+    # tell a machine that never worked from one that worked and stopped, which
+    # the machine's lifecycle phase alone cannot express.
     first_enrolled_at: datetime | None = None
     first_served_at: datetime | None = None
     last_served_at: datetime | None = None
@@ -1307,11 +1299,6 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
             "expires_at": to_utc_or_none(row.expires_at),
             "billing_renewal_at": to_utc_or_none(row.billing_renewal_at),
             "billing_started_at": to_utc_or_none(row.billing_started_at),
-            "bootstrap_phase": row.bootstrap_phase,
-            "bootstrap_failure_reason": row.bootstrap_failure_reason,
-            "bootstrap_failure_detail": row.bootstrap_failure_detail,
-            "bootstrap_observed_at": to_utc(row.bootstrap_observed_at),
-            "bootstrap_phase_started_at": to_utc_or_none(row.bootstrap_phase_started_at),
             "first_enrolled_at": to_utc_or_none(row.first_enrolled_at),
             "first_served_at": to_utc_or_none(row.first_served_at),
             "last_served_at": to_utc_or_none(row.last_served_at),
@@ -1371,15 +1358,6 @@ class ComputeProviderInstanceRepository:
         row.expires_at = record.expires_at
         row.billing_renewal_at = record.billing_renewal_at
         row.billing_started_at = record.billing_started_at
-        row.bootstrap_phase = record.bootstrap_phase.value
-        row.bootstrap_failure_reason = (
-            record.bootstrap_failure_reason.value
-            if record.bootstrap_failure_reason is not None
-            else None
-        )
-        row.bootstrap_failure_detail = record.bootstrap_failure_detail
-        row.bootstrap_observed_at = record.bootstrap_observed_at
-        row.bootstrap_phase_started_at = record.bootstrap_phase_started_at
         row.first_enrolled_at = record.first_enrolled_at
         row.first_served_at = record.first_served_at
         row.last_served_at = record.last_served_at
@@ -1535,6 +1513,23 @@ class ComputeProviderInstanceRepository:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).one_or_none()
         return _provider_instance_record(row) if row is not None else None
+
+    def list_by_machine_ids(
+        self, machine_ids: Collection[str]
+    ) -> dict[str, ComputeProviderInstanceRecord]:
+        """The provider row bound to each of these machines, keyed by machine id."""
+        if not machine_ids:
+            return {}
+        rows = self.session.scalars(
+            select(ComputeProviderInstanceTable).where(
+                ComputeProviderInstanceTable.machine_id.in_(list(machine_ids))
+            )
+        )
+        return {
+            row.machine_id: _provider_instance_record(row)
+            for row in rows
+            if row.machine_id is not None
+        }
 
     def get_by_machine(self, machine_id: str) -> ComputeProviderInstanceRecord | None:
         row = self.session.scalars(
@@ -2039,6 +2034,37 @@ class ComputeMachineEnrollmentRepository:
             ),
             for_update=for_update,
         )
+
+    def move_placement_for_unit(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+        placement: Placement,
+    ) -> int:
+        """Restamp every enrollment of one unit with the placement the unit moved to."""
+        result = self.session.execute(
+            update(ComputeMachineEnrollmentTable)
+            .where(
+                ComputeMachineEnrollmentTable.workspace_id == workspace_id,
+                ComputeMachineEnrollmentTable.capacity_owner_id == capacity_owner_id,
+                ComputeMachineEnrollmentTable.placement != placement.key,
+            )
+            .values(placement=placement.key, updated_at=utc_now())
+        )
+        return int(result.rowcount) if isinstance(result, CursorResult) else 0
+
+    def list_by_machine_ids(
+        self, machine_ids: Collection[str]
+    ) -> dict[str, ComputeMachineEnrollmentRecord]:
+        """The enrollment of each of these machines, keyed by machine id."""
+        if not machine_ids:
+            return {}
+        rows = self.session.scalars(
+            select(ComputeMachineEnrollmentTable).where(
+                ComputeMachineEnrollmentTable.machine_id.in_(list(machine_ids))
+            )
+        )
+        return {row.machine_id: _machine_enrollment_record(row) for row in rows}
 
     def list_for_user(self, user_id: str) -> list[ComputeMachineEnrollmentRecord]:
         """Every machine this account owns, across the workspaces it holds."""

@@ -50,7 +50,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
     PreflightSeverity,
 )
-from shared.compute_fleet import ResourceStatus
+from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import (
     UnitName,
 )
@@ -175,7 +175,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     assert UUID(joined.machine_id)
     assert joined.bootstrap is not None
     view = _pool_machines(gateway, "customer-machines", workspace_id)[0]
-    assert view.readiness_phase is MachineReadinessPhase.Joining
+    assert view.lifecycle is MachineLifecycle.Joining
     assert not view.schedulable
     assert {
         "registration_token",
@@ -209,7 +209,8 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     heartbeat = gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token))
     assert heartbeat.ok
     ready = _pool_machines(gateway, "customer-machines", workspace_id)[0]
-    assert ready.readiness_phase is MachineReadinessPhase.Ready
+    assert ready.lifecycle is MachineLifecycle.Ready
+    assert ready.connected
     assert ready.schedulable
 
     gateway.compute_states.delete_agent_token_state(hash_compute_token(joined.agent_token))
@@ -436,7 +437,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     )
     with isolated_services.context.database.session() as session:
         removed = MachineRepository(session).get_across_workspaces(second.machine_id)
-        assert removed is not None and removed.status is ResourceStatus.Deleted
+        assert removed is not None and removed.lifecycle is MachineLifecycle.Deleted
         assert (
             ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id,
@@ -754,8 +755,8 @@ def test_machine_join_command_mints_one_named_unit_that_only_serves_by_name(
 
     assert gateway.gateway_endpoint.http_url in first.command
     pending = gateway.machine_responses(workspace_id=workspace_id)
-    assert [(item.name, item.status, sorted(item.workspaces)) for item in pending] == [
-        ("rack-1", ResourceStatus.Created, sorted([default_name.name, second_workspace.name]))
+    assert [(item.name, item.lifecycle, sorted(item.workspaces)) for item in pending] == [
+        ("rack-1", MachineLifecycle.Requested, sorted([default_name.name, second_workspace.name]))
     ]
     placement = Placement.machine(pending[0].id)
     units = [
@@ -769,7 +770,7 @@ def test_machine_join_command_mints_one_named_unit_that_only_serves_by_name(
     join_token = command_words[command_words.index("--join-token") + 1]
     joined = gateway.join_agent(_join_request(join_token))
     assert joined.placement == placement
-    assert [machine.id for machine in gateway.account_machine_views(user_id)] == [pending[0].id]
+    assert [machine.id for machine in gateway.self_hosted_machine_views(user_id)] == [pending[0].id]
     assert joined.machine_id == pending[0].id
     with isolated_services.context.database.session() as session:
         enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
@@ -880,8 +881,10 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
     assert enrollment is not None
     assert enrollment.readiness_phase is MachineReadinessPhase.Offline
     assert enrollment.last_disconnect_at is not None
+    # Silence is not a phase: the machine stays ready and says how long it has been quiet.
     assert machine is not None
-    assert machine.status is ResourceStatus.Stopped
+    assert machine.lifecycle is MachineLifecycle.Ready
+    assert machine.lifecycle_message.startswith("No heartbeat")
 
     # Read the way every customer event route reads, rather than through the
     # repository default: the leak this closes was a keyword the routes passed.
@@ -894,4 +897,5 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
     # rather than staying written off until someone notices.
     assert gateway.stream_agent(StreamAgentRequest(agent_token=joined.agent_token)).ok
     recovered = _pool_machines(gateway, pool, workspace_id)[0]
-    assert recovered.readiness_phase is MachineReadinessPhase.Ready
+    assert recovered.lifecycle is MachineLifecycle.Ready
+    assert recovered.connected

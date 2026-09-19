@@ -52,6 +52,11 @@ broad barrel, and delete the old re-export path.
   switching workspace does not invalidate them.
 - Validate every JSON response against the hand-maintained Zod schemas that
   mirror the server contracts. A contract change updates both halves together.
+- Compute panels render from the server's classification: the cloud card from
+  the connection's machine list, the self-hosted panel from the self-hosted
+  list, both through one `LifecycleChip` and the capacity badge. The client
+  keeps no status vocabularies and does not poll machines; every lifecycle
+  write publishes `compute.machines`, which invalidates both queries.
 - Pricing and plan entitlements come from `/api/v1/pricing`, validated by one
   hand-written Zod boundary schema. Marketing and account surfaces read that
   query and keep no local catalog, plan interface, or duplicated figures.

@@ -6,13 +6,11 @@ from typing import Literal
 from pydantic import Field
 
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_enrollment import (
-    MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
-    MachineServiceState,
-)
+from shared.compute_enrollment import AgentCapacityState, MachineBootstrapFailureReason
+from shared.compute_fleet import MachineLifecycle
 from shared.deployments import DeploymentKind
 from shared.http.base import HttpModel
+from shared.placement import Placement
 
 
 class ComputeCatalogInstanceResponse(HttpModel):
@@ -63,22 +61,28 @@ class WorkspaceComputeSummaryResponse(HttpModel):
     workload_count: int = Field(default=0, ge=0)
 
 
-class WorkspaceComputeInstanceResponse(HttpModel):
+class ConnectionMachineResponse(HttpModel):
+    """One machine a connected cloud account launched, with its provider facts."""
+
     id: str
-    machine_id: str | None = None
+    """The machine id; the same id the self-hosted and unit machine lists use."""
+    placement: Placement
     provider: str
-    region: str
-    instance_type: str | None = None
-    status: str
+    region: str = ""
+    availability_zone: str = ""
+    instance_id: str = ""
+    instance_type: str = ""
+    lifecycle: MachineLifecycle
+    lifecycle_message: str = ""
+    lifecycle_failure: MachineBootstrapFailureReason | None = None
+    lifecycle_at: datetime
+    connected: bool = False
+    capacity_state: AgentCapacityState = AgentCapacityState.Available
+    capacity_reason: str = ""
     gpu: str | None = None
     gpu_count: int = Field(default=0, ge=0)
     cpu_millicores: int = Field(default=0, ge=0)
     memory_mb: int = Field(default=0, ge=0)
-    bootstrap_phase: MachineBootstrapPhase
-    service_state: MachineServiceState
-    bootstrap_failure_reason: MachineBootstrapFailureReason | None = None
-    bootstrap_failure_detail: str = ""
-    bootstrap_observed_at: datetime
     launch_attempt: int = Field(default=1, ge=1)
     booted_template_version: str = ""
     """Provider launch-configuration version the node booted with.
@@ -88,11 +92,13 @@ class WorkspaceComputeInstanceResponse(HttpModel):
     legitimately differ here, and this is what says which release each one
     is on.
     """
+    launched_at: datetime | None = None
+    """When the provider first reported the instance."""
     created_at: datetime
 
 
-class WorkspaceComputeInstanceListResponse(HttpModel):
-    data: list[WorkspaceComputeInstanceResponse] = Field(default_factory=list)
+class ConnectionMachineListResponse(HttpModel):
+    data: list[ConnectionMachineResponse] = Field(default_factory=list)
     next: str = ""
 
 
@@ -120,8 +126,8 @@ __all__ = [
     "ComputeCatalogResponse",
     "ComputeConnectionSummaryResponse",
     "ComputeCostSummaryResponse",
-    "WorkspaceComputeInstanceListResponse",
-    "WorkspaceComputeInstanceResponse",
+    "ConnectionMachineListResponse",
+    "ConnectionMachineResponse",
     "WorkspaceComputeSummaryResponse",
     "WorkspaceComputeWorkloadListResponse",
     "WorkspaceComputeWorkloadResponse",

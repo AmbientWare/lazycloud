@@ -43,33 +43,6 @@ class MachineReadinessPhase(StringEnum):
     Revoked = "revoked"
 
 
-class MachineBootstrapPhase(StringEnum):
-    """How far the node itself reports having got.
-
-    Progress a node can observe about itself. Whether it serves workloads is
-    not one of those things — that is `MachineServiceState`, derived from the
-    scheduler record.
-    """
-
-    Requested = "requested"
-    Provisioning = "provisioning"
-    Booting = "booting"
-    Joining = "joining"
-    Failed = "failed"
-    Deleting = "deleting"
-
-
-class MachineServiceState(StringEnum):
-    """What the platform concludes about a machine, never what it claims."""
-
-    Provisioning = "provisioning"
-    Joining = "joining"
-    Serving = "serving"
-    Degraded = "degraded"
-    Failed = "failed"
-    Deleting = "deleting"
-
-
 class MachineBootstrapFailureReason(StringEnum):
     AgentDownloadFailed = "agent_download_failed"
     RuntimeInstallFailed = "runtime_install_failed"
@@ -80,6 +53,8 @@ class MachineBootstrapFailureReason(StringEnum):
     WorkerStartFailed = "worker_start_failed"
     WorkerReadinessFailed = "worker_readiness_failed"
     BootstrapTimedOut = "bootstrap_timed_out"
+    HostPreflightFailed = "host_preflight_failed"
+    """The host failed a required preflight check when its agent joined."""
     ServiceLost = "service_lost"
     """Served once, then stopped, and stayed stopped long enough to be believed.
 
@@ -124,7 +99,6 @@ __all__ = [
     "ComputeMachineEnrollmentStatus",
     "ComputePreflightCheck",
     "MachineBootstrapFailureReason",
-    "MachineBootstrapPhase",
     "MachineReadinessPhase",
     "PreflightSeverity",
 ]

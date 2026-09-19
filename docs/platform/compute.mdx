@@ -149,6 +149,41 @@ def gpu_name() -> str:
     ).strip()
 ```
 
+## What the compute panels show
+
+Settings, then Compute has two panels. The connected cloud card lists the
+machines LazyCloud launched in your AWS account, with the instance type,
+availability zone and launch time from the provider. The self-hosted panel
+lists the machines you joined, by name, with the workspaces each one serves.
+A machine appears in exactly one of them: the placement recorded on the
+machine decides, so a node launched in your account never shows up as a
+self-hosted machine, and a joined host never counts as cloud capacity. The
+card's counts come from the same list as its rows.
+
+Every machine carries one lifecycle phase, and both panels show the same chip:
+
+- `requested`: a join command was issued, or the provider was asked for an
+  instance, and nothing has reported yet.
+- `provisioning`: the provider reports the instance running; the node has
+  not reported for itself.
+- `booting`: the node is installing the agent.
+- `joining`: the agent has enrolled and is waiting for its first heartbeat.
+- `ready`: the machine takes workloads.
+- `draining`: no new work is placed here; running work finishes.
+- `terminating`: the shutdown was requested at the provider or the host.
+- `deleted`: the provider or the host confirmed it is gone. Deleted machines
+  leave the list.
+- `failed`: the machine did not become ready, or stopped serving long enough
+  to be believed. The chip names the reason.
+
+A machine that stops sending heartbeats stays `ready`; the row says how long
+it has been quiet and a second badge shows it offline, or draining, cordoned
+or at risk when the host's capacity is limited. The panels update from the
+workspace change stream as phases move, without polling.
+
+`uv run lazycloud compute instances` prints the connected cloud's machines
+with the same phases; `uv run lazycloud machine list` prints the joined ones.
+
 Going offline does not remove a machine, but leaving does. A deployment keeps
 the machine it was deployed to and waits for capacity until you redeploy it after
 a machine joins under that name again. A run or sandbox resolves the name each

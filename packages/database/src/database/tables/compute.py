@@ -356,13 +356,6 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     billing_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    bootstrap_phase: Mapped[str] = mapped_column(Text, nullable=False)
-    bootstrap_failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    bootstrap_failure_detail: Mapped[str] = mapped_column(Text, nullable=False)
-    bootstrap_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    bootstrap_phase_started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     first_enrolled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -147,6 +147,10 @@ export const workspaceQueryKeys = {
     urls: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "sandboxes", "urls", containerId] as const,
   },
+  compute: {
+    summary: (workspaceId: string) =>
+      [...workspaceRoot(workspaceId), "compute", "summary"] as const,
+  },
   storage: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage"] as const,
     artifacts: (workspaceId: string) =>

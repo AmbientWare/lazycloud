@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.agent_control import agent_machine_worker_id
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.compute import (
@@ -18,11 +17,9 @@ from database.repositories.compute import (
     ComputeUnitRepository,
 )
 from database.repositories.identity import WorkspaceRepository
-from database.repositories.orchestration import MachineRepository, WorkerRepository
+from database.repositories.orchestration import MachineRepository
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
-from scheduler.compute_hooks import SchedulerComputeHooks
-from scheduler.state import RedisSchedulerWorkerRepository
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -33,13 +30,8 @@ from shared.aws_connections import (
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
-from shared.compute_enrollment import (
-    MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
-    MachineReadinessPhase,
-    MachineServiceState,
-)
-from shared.compute_fleet import Machine, ResourceStatus, Worker
+from shared.compute_enrollment import MachineReadinessPhase
+from shared.compute_fleet import Machine, MachineLifecycle
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitRecord,
@@ -48,13 +40,13 @@ from shared.compute_policy import (
 )
 from shared.deployment_records import DeploymentSpec
 from shared.errors import InvalidInputError
+from shared.http.compute import UnitMachineListResponse
 from shared.http.compute_policy import (
-    WorkspaceComputeInstanceListResponse,
+    ConnectionMachineListResponse,
     WorkspaceComputeSummaryResponse,
 )
 from shared.identity import WorkspaceStatus
 from shared.placement import Placement
-from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import workspace_owner_user_id
 
@@ -88,10 +80,16 @@ def _account_client(
     )
 
 
-def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacity(
+def test_connection_machines_list_by_placement_and_summary_counts_by_lifecycle(
     isolated_services: ApiServices,
     request: pytest.FixtureRequest,
 ) -> None:
+    """The cloud card and the self-hosted panel split on placement kind, not provider name.
+
+    A node the connected cloud launched enrolls through the same agent as a
+    joined host, so the provider column says "agent" for both. The row's
+    placement is what says whose it is.
+    """
     workspace_id = _workspace_id(isolated_services)
     owner_id = _workspace_owner_id(isolated_services)
     client = _account_client(isolated_services, request, user_id=owner_id)
@@ -100,8 +98,12 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
         connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(workspace_id)
     assert connection is not None
     pool_id = str(uuid4())
-    ready_machine_id = str(uuid4())
     now = datetime.now(UTC)
+    ready_machine_id = str(uuid4())
+    pending_machine_id = str(uuid4())
+    leaving_machine_id = str(uuid4())
+    gone_machine_id = str(uuid4())
+    joined_machine_id = str(uuid4())
     with isolated_services.context.database.session() as session:
         ComputeUnitRepository(session).upsert(
             ComputeUnitRecord(
@@ -111,7 +113,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 capacity_owner_source=CapacityOwnerSource.Provider,
                 workspace_id=workspace_id,
                 name=UnitName("current-aws-inventory"),
-                placement=Placement.machine("aws"),
+                placement=connection.placement,
                 provider_ref=f"aws:{connection.id}",
                 provider_connection_id=connection.id,
                 capacity_mode=ComputeCapacityMode.Pooled,
@@ -122,23 +124,50 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 max_machines=3,
             )
         )
-        MachineRepository(session).upsert(
+        machines = MachineRepository(session)
+        for machine_id, lifecycle in (
+            (ready_machine_id, MachineLifecycle.Ready),
+            (pending_machine_id, MachineLifecycle.Provisioning),
+            (leaving_machine_id, MachineLifecycle.Terminating),
+            (gone_machine_id, MachineLifecycle.Deleted),
+        ):
+            machines.upsert(
+                Machine(
+                    id=machine_id,
+                    placement=connection.placement,
+                    capacity_owner_id=pool_id,
+                    provider="agent",
+                    lifecycle=lifecycle,
+                    lifecycle_at=now,
+                    cpu=4.0,
+                    memory="32768Mi",
+                    created_at=now,
+                    updated_at=now,
+                ),
+                workspace_id=workspace_id,
+            )
+        machines.upsert(
             Machine(
-                id=ready_machine_id,
-                placement=Placement.machine("aws"),
-                provider="aws",
-                status=ResourceStatus.Running,
+                id=joined_machine_id,
+                name="rack-1",
+                workspace_ids=(workspace_id,),
+                placement=Placement.machine(joined_machine_id),
+                capacity_owner_id=str(uuid4()),
+                provider="agent",
+                lifecycle=MachineLifecycle.Joining,
+                lifecycle_at=now,
                 created_at=now,
                 updated_at=now,
             ),
             workspace_id=workspace_id,
+            owner_user_id=owner_id,
         )
         ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 user_id=owner_id,
                 workspace_id=workspace_id,
                 capacity_owner_id=pool_id,
-                placement=Placement.machine("aws"),
+                placement=connection.placement,
                 machine_id=ready_machine_id,
                 machine_fingerprint_hash="f" * 64,
                 credential_hash="c" * 64,
@@ -150,36 +179,26 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 last_heartbeat_at=now,
             )
         )
-        WorkerRepository(session).upsert(
-            Worker(
-                id=agent_machine_worker_id(ready_machine_id),
-                machine_id=ready_machine_id,
-                placement=Placement.machine("aws"),
-                status=ResourceStatus.Running,
-                last_seen_at=now,
-                created_at=now,
-            ),
-            workspace_id=workspace_id,
-        )
         instances = ComputeProviderInstanceRepository(session)
-        for status, hourly_cost_micros in (
-            ("active", 100_000),
-            ("pending", 200_000),
-            ("terminating", 300_000),
-            ("deleted", 400_000),
-            ("failed", 500_000),
+        for machine_id, status, hourly_cost_micros in (
+            (ready_machine_id, "active", 100_000),
+            (pending_machine_id, "pending", 200_000),
+            (leaving_machine_id, "terminating", 300_000),
+            (gone_machine_id, "deleted", 400_000),
         ):
             instances.upsert(
                 ComputeProviderInstanceRecord(
                     id=str(uuid4()),
-                    provider="aws",
+                    provider=f"aws:{connection.id}",
                     offer_id="us-east-1:m7i.xlarge",
                     status=status,
                     source="pooled",
                     pool_id=pool_id,
                     instance_type="m7i.xlarge",
                     instance_id=f"i-{uuid4().hex[:17]}",
-                    machine_id=ready_machine_id if status == "active" else None,
+                    machine_id=machine_id,
+                    region="us-east-1",
+                    availability_zone="us-east-1a",
                     cost_terms=SupplierCostTerms(
                         compute_hourly_micros=hourly_cost_micros,
                         root_disk_hourly_micros=0,
@@ -188,23 +207,7 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
                 )
             )
 
-    hooks = isolated_services.compute.scheduler_hooks
-    assert isinstance(hooks, SchedulerComputeHooks)
-    workers = hooks.workers
-    assert isinstance(workers, RedisSchedulerWorkerRepository)
-    workers.add_worker(
-        SchedulerWorkerRecord(
-            worker_id=agent_machine_worker_id(ready_machine_id),
-            placement=Placement.machine("aws"),
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            machine_id=ready_machine_id,
-            status=SchedulerWorkerStatus.Available,
-            request_poll_expires_at=now + timedelta(seconds=60),
-        )
-    )
     summary_response = client.get("/api/v1/compute/summary")
-    instances_response = client.get("/api/v1/compute/instances")
-
     assert summary_response.status_code == 200
     summary = WorkspaceComputeSummaryResponse.model_validate_json(summary_response.content)
     assert summary.instances.total == 3
@@ -212,19 +215,31 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
     assert summary.instances.pending == 1
     assert summary.instances.degraded == 1
     assert summary.cost.hourly_micros == 600_000
-    assert instances_response.status_code == 200
-    current = WorkspaceComputeInstanceListResponse.model_validate_json(instances_response.content)
-    # `status` reports the platform's verdict, not what the node claimed:
-    # a machine serves because its worker takes work.
-    assert {item.status for item in current.data} == {
-        "serving",
-        "provisioning",
-        "deleting",
-    }
-    serving = next(item for item in current.data if item.status == "serving")
-    assert serving.service_state is MachineServiceState.Serving
-    assert serving.bootstrap_phase is not MachineBootstrapPhase.Failed
 
+    instances_response = client.get("/api/v1/compute/instances")
+    assert instances_response.status_code == 200
+    cloud = ConnectionMachineListResponse.model_validate_json(instances_response.content)
+    assert {(item.id, item.lifecycle) for item in cloud.data} == {
+        (ready_machine_id, MachineLifecycle.Ready),
+        (pending_machine_id, MachineLifecycle.Provisioning),
+        (leaving_machine_id, MachineLifecycle.Terminating),
+    }
+    ready = next(item for item in cloud.data if item.id == ready_machine_id)
+    assert ready.connected
+    assert ready.placement == connection.placement
+    assert ready.instance_type == "m7i.xlarge"
+    assert ready.availability_zone == "us-east-1a"
+    assert ready.cpu_millicores == 4_000
+    assert ready.memory_mb == 32_768
+
+    self_hosted_response = client.get("/api/v1/machines/self-hosted")
+    assert self_hosted_response.status_code == 200
+    self_hosted = UnitMachineListResponse.model_validate_json(self_hosted_response.content)
+    assert [(item.id, item.name, item.lifecycle) for item in self_hosted.data] == [
+        (joined_machine_id, "rack-1", MachineLifecycle.Joining)
+    ]
+
+    # A machine that stops reporting keeps its phase; the view says it is not connected.
     with isolated_services.context.database.session() as session:
         enrollments = ComputeMachineEnrollmentRepository(session)
         enrollment = enrollments.by_machine(workspace_id, ready_machine_id, for_update=True)
@@ -233,52 +248,28 @@ def test_compute_inventory_excludes_terminal_history_and_classifies_open_capacit
             enrollment.model_copy(
                 update={
                     "readiness_phase": MachineReadinessPhase.Offline,
-                    "schedulable": False,
+                    "last_disconnect_at": datetime.now(UTC),
                     "updated_at": datetime.now(UTC),
                 }
             )
         )
-
-    failed_inventory = WorkspaceComputeInstanceListResponse.model_validate_json(
-        client.get("/api/v1/compute/instances").content
+    offline = next(
+        item
+        for item in ConnectionMachineListResponse.model_validate_json(
+            client.get("/api/v1/compute/instances").content
+        ).data
+        if item.id == ready_machine_id
     )
-    failed = next(item for item in failed_inventory.data if item.machine_id == ready_machine_id)
-    assert failed.service_state is MachineServiceState.Failed
-    assert failed.bootstrap_failure_reason is MachineBootstrapFailureReason.WorkerReadinessFailed
-
-    with isolated_services.context.database.session() as session:
-        instances = ComputeProviderInstanceRepository(session)
-        for record in instances.list_for_pool(pool_id):
-            instances.upsert(record.model_copy(update={"status": "deleted"}))
-        assert len(instances.list_for_pool(pool_id)) == 5
-
-    zero_summary = WorkspaceComputeSummaryResponse.model_validate_json(
-        client.get("/api/v1/compute/summary").content
-    )
-    zero_inventory = WorkspaceComputeInstanceListResponse.model_validate_json(
-        client.get("/api/v1/compute/instances").content
-    )
-    assert zero_summary.instances.total == 0
-    assert zero_summary.cost.hourly_micros == 0
-    assert zero_inventory.data == []
+    assert offline.lifecycle is MachineLifecycle.Ready
+    assert not offline.connected
 
     with isolated_services.context.database.session() as session:
         workspaces = WorkspaceRepository(session)
         workspace = workspaces.get(workspace_id)
         assert workspace is not None
         workspaces.upsert(workspace.model_copy(update={"status": WorkspaceStatus.Deleting}))
-        instances = ComputeProviderInstanceRepository(session)
-        draining = instances.list_for_pool(pool_id)[0]
-        instances.upsert(draining.model_copy(update={"status": "terminating"}))
-
-    draining_response = client.get("/api/v1/compute/instances")
-    assert draining_response.status_code == 200
-    draining_inventory = WorkspaceComputeInstanceListResponse.model_validate_json(
-        draining_response.content
-    )
-    assert [(item.id, item.status) for item in draining_inventory.data] == [
-        (draining.instance_id, "deleting")
-    ]
+    # The account still sees its cloud while a workspace drains; the workspace summary does not.
+    assert client.get("/api/v1/compute/instances").status_code == 200
     assert (
         client.get("/api/v1/compute/summary", params={"workspace": workspace_id}).status_code == 404
     )
@@ -307,7 +298,7 @@ def test_deployment_refuses_a_machine_that_is_unknown_or_serves_another_workspac
                 workspace_ids=(elsewhere.id,),
                 placement=Placement.machine(machine_id),
                 provider="agent",
-                status=ResourceStatus.Running,
+                lifecycle=MachineLifecycle.Ready,
             ),
             workspace_id=elsewhere.id,
         )

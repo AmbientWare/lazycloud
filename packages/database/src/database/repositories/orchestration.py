@@ -37,7 +37,14 @@ from shared.autoscaler_state import (
     AutoscalerStateRecord,
     AutoscalerTargetKind,
 )
-from shared.compute_fleet import AgentLease, AgentRecord, Machine, ResourceStatus, Worker
+from shared.compute_fleet import (
+    AgentLease,
+    AgentRecord,
+    Machine,
+    MachineLifecycle,
+    ResourceStatus,
+    Worker,
+)
 from shared.container_requests import (
     ContainerShutdownTarget,
     StopContainerReason,
@@ -45,6 +52,7 @@ from shared.container_requests import (
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
+from shared.placement import Placement, PlacementKind
 from shared.timestamps import utc_now
 from sqlalchemy import (
     Select,
@@ -59,8 +67,10 @@ from sqlalchemy import (
     text,
     tuple_,
     union_all,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -335,17 +345,26 @@ class MachineRepository:
         *,
         workspace_id: str | None = None,
         owner_user_id: str | None = None,
+        for_workspace_deletion: bool = False,
     ) -> Machine:
         """Write a machine. `owner_user_id` is the account a named machine is unique in.
 
         Given by the caller that minted the join, because a workspace may have
         several owners and the first row is not the one who joined it.
+        `for_workspace_deletion` is the deletion pass writing terminal state on
+        rows of a workspace that is no longer active; it fences on the deletion
+        lock instead of refusing.
         """
         machine = Machine.model_validate(dict(machine))
         row = self.session.get(MachineTable, machine.id)
         owner_id = workspace_id if workspace_id is not None else row.workspace_id if row else None
         if owner_id is not None:
-            WorkspaceRepository(self.session).lock_active_owner(owner_id)
+            workspaces = WorkspaceRepository(self.session)
+            if for_workspace_deletion:
+                if workspaces.lock_for_deletion(owner_id).status is not WorkspaceStatus.Deleting:
+                    raise ConflictError(f"workspace cleanup requires deleting state: {owner_id}")
+            else:
+                workspaces.lock_active_owner(owner_id)
         if row is None:
             owner = owner_user_id or (
                 self.session.scalar(
@@ -413,6 +432,58 @@ class MachineRepository:
             machine_from_row(row)
             for row in self.session.scalars(statement.order_by(MachineTable.name))
         ]
+
+    def list_joined_for_owner(self, owner_user_id: str) -> list[Machine]:
+        """The account's machines placed on themselves: the hosts it joined.
+
+        Classified by placement kind, not by provider name: a node a connected
+        cloud launched enrolls through the same agent and would otherwise be
+        listed as hardware the customer connected.
+        """
+        statement = select(MachineTable).where(
+            MachineTable.owner_user_id == owner_user_id,
+            MachineTable.placement.like(f"{PlacementKind.Machine.value}:%"),
+            MachineTable.lifecycle != MachineLifecycle.Deleted.value,
+        )
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(statement.order_by(MachineTable.id))
+        ]
+
+    def list_for_placement(self, placement: Placement) -> list[Machine]:
+        """Every machine still shown under one placement, across its workspaces.
+
+        Deleted rows are history; draining and terminating ones are still the
+        placement's until the provider proves them gone.
+        """
+        statement = select(MachineTable).where(
+            MachineTable.placement == placement.key,
+            MachineTable.lifecycle != MachineLifecycle.Deleted.value,
+        )
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(MachineTable.created_at.desc(), MachineTable.id)
+            )
+        ]
+
+    def move_placement_for_capacity_owner(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+        placement: Placement,
+    ) -> int:
+        """Restamp one unit's machines with the placement the unit moved to."""
+        result = self.session.execute(
+            update(MachineTable)
+            .where(
+                MachineTable.workspace_id == workspace_id,
+                MachineTable.capacity_owner_id == capacity_owner_id,
+                MachineTable.placement != placement.key,
+            )
+            .values(placement=placement.key, updated_at=utc_now())
+        )
+        return int(result.rowcount) if isinstance(result, CursorResult) else 0
 
     def get(self, machine_id: str, *, workspace_id: str) -> Machine | None:
         if try_uuid(machine_id) is None:
@@ -484,8 +555,13 @@ class MachineRepository:
             return None
         if str(row.workspace_id) != workspace_id:
             raise ConflictError(f"machine is not owned by deleting workspace: {machine_id}")
+        now = utc_now()
         row.status = ResourceStatus.Deleted.value
-        row.updated_at = utc_now()
+        if row.lifecycle != MachineLifecycle.Deleted.value:
+            row.lifecycle = MachineLifecycle.Deleted.value
+            row.lifecycle_message = "Removed with its workspace"
+            row.lifecycle_at = now
+        row.updated_at = now
         self.session.flush()
         return machine_from_row(row)
 

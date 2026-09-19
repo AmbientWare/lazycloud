@@ -123,6 +123,12 @@ class MachineTable(IdTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_machines_workspace_created", "workspace_id", "created_at"),
         Index("ix_machines_placement_status", "placement", "status"),
+        Index("ix_machines_placement_lifecycle", "placement", "lifecycle"),
+        CheckConstraint(
+            "lifecycle IN ('requested', 'provisioning', 'booting', 'joining', 'ready', "
+            "'draining', 'terminating', 'deleted', 'failed')",
+            name="ck_machines_lifecycle",
+        ),
         Index("ix_machines_workspace_owner", "workspace_id", "capacity_owner_id"),
         Index("ix_machines_provider_status", "provider", "status"),
         Index(
@@ -153,6 +159,10 @@ class MachineTable(IdTable, DatabaseBase):
     capacity_owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     provider: Mapped[str] = mapped_column(String(120), nullable=False, default="local")
     status: Mapped[str] = mapped_column(String(80), nullable=False)
+    lifecycle: Mapped[str] = mapped_column(String(32), nullable=False)
+    lifecycle_message: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    lifecycle_failure: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lifecycle_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     address: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     cpu: Mapped[float | None] = mapped_column(Float, nullable=True)

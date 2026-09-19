@@ -1,8 +1,8 @@
 """Typed reclaim windows for managed provider machine reconciliation.
 
-Bootstrap-phase reclaim: a launched machine must progress through its
-bootstrap phases. Each pre-ready phase carries its own deadline measured from
-the last observed phase transition; a machine stuck past its phase deadline is
+Lifecycle reclaim: a launched machine must progress through its lifecycle
+phases. Each pre-ready phase carries its own deadline measured from when the
+machine entered it (`lifecycle_at`); a machine stuck past its phase deadline is
 terminated at its owning provider instead of leaking and accruing hourly
 renewals until credits are exhausted.
 
@@ -22,15 +22,15 @@ from datetime import timedelta
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
-from shared.compute_enrollment import MachineBootstrapPhase
+from shared.compute_fleet import MachineLifecycle
 from shared.contracts import ContractModel
 
 DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS: dict[str, int] = {
-    MachineBootstrapPhase.Requested.value: 300,
-    MachineBootstrapPhase.Provisioning.value: 300,
-    MachineBootstrapPhase.Booting.value: 300,
-    MachineBootstrapPhase.Joining.value: 300,
-    MachineBootstrapPhase.Failed.value: 300,
+    MachineLifecycle.Requested.value: 300,
+    MachineLifecycle.Provisioning.value: 300,
+    MachineLifecycle.Booting.value: 300,
+    MachineLifecycle.Joining.value: 300,
+    MachineLifecycle.Failed.value: 300,
 }
 """Machines stuck in one bootstrap phase are reclaimed after 5 minutes.
 
@@ -118,9 +118,9 @@ class ComputeReclaimPolicy(ContractModel):
     def phase_deadline_for(
         self,
         provider: str,
-        phase: MachineBootstrapPhase,
+        phase: MachineLifecycle,
     ) -> timedelta | None:
-        """Return the reclaim deadline for one bootstrap phase, or None for no bound."""
+        """Return the reclaim deadline for one lifecycle phase, or None for no bound."""
 
         overrides = self.provider_bootstrap_phase_deadline_seconds.get(provider, {})
         seconds = overrides.get(phase.value, self.bootstrap_phase_deadline_seconds.get(phase.value))

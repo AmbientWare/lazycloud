@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol
 
 from database.repositories.apps import DeploymentRepository
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
+    ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
-    ComputeUnitRepository,
 )
 from database.repositories.identity import (
     WorkspaceMemberRepository,
@@ -23,12 +21,7 @@ from database.repositories.identity import (
 from database.repositories.orchestration import MachineRepository
 from database.types import DatabaseSession
 from shared.aws_connections import AwsAccountConnection
-from shared.compute_enrollment import (
-    MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
-    MachineReadinessPhase,
-    MachineServiceState,
-)
+from shared.compute_fleet import PENDING_MACHINE_LIFECYCLES, Machine, MachineLifecycle
 from shared.compute_policy import (
     ComputeResourceRequirements,
     ComputeUnitRecord,
@@ -39,29 +32,24 @@ from shared.identity import WorkspaceStatus
 from shared.placement import Placement
 from shared.resources import parse_memory_mib
 
-from compute.agent_control import (
-    MachineWorkerState,
-    machine_serves_workloads,
-)
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION, AwsComputeConfiguration
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
 from compute.context import ComputeContext
 from compute.offers import ReservationStatus
+from compute.telemetry import enrollment_connected
 from database import AsyncDatabaseClient
 
 LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class ComputeInstanceView:
-    record: ComputeProviderInstanceRecord
-    region: str
-    bootstrap_phase: MachineBootstrapPhase
-    service_state: MachineServiceState
-    bootstrap_failure_reason: MachineBootstrapFailureReason | None
-    bootstrap_failure_detail: str
-    bootstrap_observed_at: datetime
-    booted_template_version: str
+class ConnectionMachineView:
+    """One machine a connected cloud launched, beside the provider row it mirrors."""
+
+    machine: Machine
+    instance: ComputeProviderInstanceRecord | None
+    enrollment: ComputeMachineEnrollmentRecord | None
+    connected: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,10 +62,10 @@ class ComputeWorkloadView:
 @dataclass(frozen=True, slots=True)
 class ComputeSummary:
     connection: AwsAccountConnection | None
-    instances: tuple[ComputeInstanceView, ...]
-    ready_instance_count: int
-    pending_instance_count: int
-    degraded_instance_count: int
+    machines: tuple[ConnectionMachineView, ...]
+    ready_machine_count: int
+    pending_machine_count: int
+    degraded_machine_count: int
     workload_count: int
     hourly_cost_micros: int | None
 
@@ -148,7 +136,6 @@ class WorkspaceComputePolicyService:
     context: ComputeContext
     available_catalog: tuple[ComputeCatalogRegion, ...] = ()
     aws_default_capacity: AwsDefaultCapacityBaseline | None = None
-    worker_state: MachineWorkerState | None = None
 
     def reconcile_workspace_baseline(self, workspace_id: str) -> None:
         """Apply the connected account's warm baseline in one workspace it backs.
@@ -259,60 +246,38 @@ class WorkspaceComputePolicyService:
         """Provider inventory: what may be launched, independent of who is asking."""
         return tuple((item.region, item.instances) for item in self.available_catalog)
 
-    def instances_for_account(
-        self,
-        *,
-        workspace_ids: Sequence[str],
-    ) -> tuple[ComputeInstanceView, ...]:
-        """Provider capacity running in one account's connected cloud.
+    def connection_machines(self, *, user_id: str) -> tuple[ConnectionMachineView, ...]:
+        """Every machine the account's connected cloud has launched and not yet removed.
 
-        Gathered across every workspace the account owns, because the connection is
-        the account's and a customer looking at their own cloud spend should see all
-        of it rather than the slice one workspace happens to have provisioned.
+        Classified by placement: a machine is the connection's because its row
+        says `connection:<id>`, whichever workspace of the owner's holds it.
+        Draining and terminating nodes stay listed until the provider proves
+        them gone, so a customer watching capacity leave sees it go.
         """
         with self.context.database.session() as session:
-            views = [
-                view
-                for workspace_id in workspace_ids
-                for view in self._instances_in_session(session, workspace_id)
-            ]
-        views.sort(key=lambda item: (item.record.status, item.record.id))
-        return tuple(views)
+            connection = AwsAccountConnectionRepository(session).get_for_user(user_id)
+            if connection is None:
+                return ()
+            return self._connection_machines_in_session(session, connection)
 
-    def instances(self, *, workspace: str) -> tuple[ComputeInstanceView, ...]:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            views = self._instances_in_session(session, workspace_id)
-        views.sort(key=lambda item: (item.record.status, item.record.id))
-        return tuple(views)
-
-    def _instances_in_session(
-        self, session: DatabaseSession, workspace_id: str
-    ) -> list[ComputeInstanceView]:
-        # Account inventory includes capacity still draining after workspace deletion.
-        pools = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-        instances = ComputeProviderInstanceRepository(session)
-        enrollments = ComputeMachineEnrollmentRepository(session)
-        if self.worker_state is None:
-            msg = "workspace compute policy service requires scheduler worker state"
-            raise RuntimeError(msg)
-        return [
-            _compute_instance_view(
-                record,
-                region=pool.region,
-                workspace_id=workspace_id,
-                placement=pool.placement,
-                enrollments=enrollments,
-                worker_state=self.worker_state,
+    def _connection_machines_in_session(
+        self, session: DatabaseSession, connection: AwsAccountConnection
+    ) -> tuple[ConnectionMachineView, ...]:
+        machines = MachineRepository(session).list_for_placement(connection.placement)
+        machine_ids = [machine.id for machine in machines]
+        instances = ComputeProviderInstanceRepository(session).list_by_machine_ids(machine_ids)
+        enrollments = ComputeMachineEnrollmentRepository(session).list_by_machine_ids(machine_ids)
+        views = [
+            ConnectionMachineView(
+                machine=machine,
+                instance=instances.get(machine.id),
+                enrollment=(enrollment := enrollments.get(machine.id)),
+                connected=enrollment_connected(enrollment),
             )
-            for pool in pools
-            for record in instances.list_for_pool(pool.id)
-            if record.status
-            not in {
-                ReservationStatus.Deleted.value,
-                ReservationStatus.Failed.value,
-            }
+            for machine in machines
         ]
+        views.sort(key=lambda item: (item.machine.lifecycle.value, item.machine.id))
+        return tuple(views)
 
     def workloads(self, *, workspace: str) -> tuple[ComputeWorkloadView, ...]:
         with self.context.database.session() as session:
@@ -335,43 +300,49 @@ class WorkspaceComputePolicyService:
         return tuple(views)
 
     def summary(self, *, workspace: str) -> ComputeSummary:
-        instances = self.instances(workspace=workspace)
+        """The connected cloud's capacity as the account sees it, from one of its workspaces.
+
+        Counts and cost come from the same machine list the connection card
+        shows, so the two never disagree about what is running.
+        """
         workloads = self.workloads(workspace=workspace)
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             connection = AwsAccountConnectionRepository(session).get_for_workspace_owner(
                 workspace_id
             )
-        ready_instance_count = sum(
-            item.service_state is MachineServiceState.Serving for item in instances
+            machines = (
+                self._connection_machines_in_session(session, connection)
+                if connection is not None
+                else ()
+            )
+        ready_machine_count = sum(
+            item.machine.lifecycle is MachineLifecycle.Ready for item in machines
         )
-        pending_instance_count = sum(
-            item.service_state
-            in {
-                MachineServiceState.Provisioning,
-                MachineServiceState.Joining,
-            }
-            for item in instances
+        pending_machine_count = sum(
+            item.machine.lifecycle in PENDING_MACHINE_LIFECYCLES for item in machines
         )
+        billed = [
+            item.instance
+            for item in machines
+            if item.instance is not None
+            and item.instance.status
+            not in {ReservationStatus.Deleted.value, ReservationStatus.Failed.value}
+        ]
         return ComputeSummary(
             connection=connection,
-            instances=instances,
-            ready_instance_count=ready_instance_count,
-            pending_instance_count=pending_instance_count,
-            degraded_instance_count=(
-                len(instances) - ready_instance_count - pending_instance_count
-            ),
+            machines=machines,
+            ready_machine_count=ready_machine_count,
+            pending_machine_count=pending_machine_count,
+            degraded_machine_count=len(machines) - ready_machine_count - pending_machine_count,
             workload_count=len(workloads),
             hourly_cost_micros=(
                 sum(
                     cost
-                    for item in instances
-                    if (cost := item.record.cost_terms.complete_hourly_cost_micros) is not None
+                    for item in billed
+                    if (cost := item.cost_terms.complete_hourly_cost_micros) is not None
                 )
-                if all(
-                    item.record.cost_terms.complete_hourly_cost_micros is not None
-                    for item in instances
-                )
+                if all(item.cost_terms.complete_hourly_cost_micros is not None for item in billed)
                 else None
             ),
         )
@@ -399,110 +370,10 @@ def _memory_mb(value: str | int | float | None) -> int:
     return parse_memory_mib(value) or 0
 
 
-_SERVICE_STATE_BY_PHASE: dict[MachineBootstrapPhase, MachineServiceState] = {
-    MachineBootstrapPhase.Requested: MachineServiceState.Provisioning,
-    MachineBootstrapPhase.Provisioning: MachineServiceState.Provisioning,
-    MachineBootstrapPhase.Booting: MachineServiceState.Joining,
-    MachineBootstrapPhase.Joining: MachineServiceState.Joining,
-    MachineBootstrapPhase.Failed: MachineServiceState.Failed,
-    MachineBootstrapPhase.Deleting: MachineServiceState.Deleting,
-}
-
-
-def _service_state(
-    phase: MachineBootstrapPhase,
-    *,
-    serving: bool,
-    served_before: bool = False,
-) -> MachineServiceState:
-    """What the platform concludes, from what the node reported plus who takes work.
-
-    A machine that served once and does not now is `Degraded`, not `Joining`.
-    Reporting it as still joining describes a machine that never worked, which
-    is the opposite of what happened and hides the only case where an operator
-    has something to look at.
-    """
-    if serving:
-        return MachineServiceState.Serving
-    if served_before and phase not in {
-        MachineBootstrapPhase.Failed,
-        MachineBootstrapPhase.Deleting,
-    }:
-        return MachineServiceState.Degraded
-    return _SERVICE_STATE_BY_PHASE[phase]
-
-
-def _compute_instance_view(
-    record: ComputeProviderInstanceRecord,
-    *,
-    region: str,
-    workspace_id: str,
-    placement: Placement,
-    enrollments: ComputeMachineEnrollmentRepository,
-    worker_state: MachineWorkerState,
-) -> ComputeInstanceView:
-    phase = record.bootstrap_phase
-    failure_reason = record.bootstrap_failure_reason
-    failure_detail = record.bootstrap_failure_detail
-    observed_at = record.bootstrap_observed_at
-    serving = False
-    if record.status == ReservationStatus.Terminating.value:
-        phase = MachineBootstrapPhase.Deleting
-    elif record.status == ReservationStatus.Failed.value:
-        phase = MachineBootstrapPhase.Failed
-        failure_reason = failure_reason or MachineBootstrapFailureReason.Unknown
-    elif phase in {MachineBootstrapPhase.Failed, MachineBootstrapPhase.Deleting}:
-        if phase is MachineBootstrapPhase.Failed:
-            failure_reason = failure_reason or MachineBootstrapFailureReason.Unknown
-    elif record.machine_id is not None:
-        enrollment = enrollments.by_machine(
-            workspace_id,
-            record.machine_id,
-            placement=placement,
-        )
-        if machine_serves_workloads(
-            enrollment,
-            machine_id=record.machine_id,
-            worker_state=worker_state,
-        ):
-            assert enrollment is not None
-            serving = True
-            failure_reason = None
-            observed_at = max(observed_at, enrollment.updated_at)
-        elif enrollment is not None and enrollment.readiness_phase in {
-            MachineReadinessPhase.Blocked,
-            MachineReadinessPhase.Offline,
-            MachineReadinessPhase.Revoked,
-        }:
-            phase = MachineBootstrapPhase.Failed
-            failure_reason = failure_reason or MachineBootstrapFailureReason.WorkerReadinessFailed
-            observed_at = max(observed_at, enrollment.updated_at)
-        elif phase not in {MachineBootstrapPhase.Failed, MachineBootstrapPhase.Deleting}:
-            phase = MachineBootstrapPhase.Joining
-            if enrollment is not None:
-                observed_at = max(observed_at, enrollment.updated_at)
-    elif phase not in {MachineBootstrapPhase.Failed, MachineBootstrapPhase.Deleting}:
-        phase = MachineBootstrapPhase.Provisioning
-    return ComputeInstanceView(
-        record=record,
-        region=region,
-        bootstrap_phase=phase,
-        service_state=_service_state(
-            phase,
-            serving=serving,
-            served_before=record.first_served_at is not None,
-        ),
-        bootstrap_failure_reason=failure_reason,
-        bootstrap_failure_detail=failure_detail,
-        bootstrap_observed_at=observed_at,
-        booted_template_version=record.booted_template_version,
-    )
-
-
 __all__ = [
     "AwsDefaultCapacityBaseline",
-    "ComputeInstanceView",
     "ComputeSummary",
     "ComputeWorkloadView",
+    "ConnectionMachineView",
     "WorkspaceComputePolicyService",
 ]

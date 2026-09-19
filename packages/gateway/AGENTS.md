@@ -31,3 +31,14 @@ from a machine's list while a deployment in it is still pinned to that machine;
 runs and sandboxes hold no pin and fail on their next start instead.
 Leaving marks the machine deleted, which frees the name, and removes the unit
 once nothing else holds it.
+
+The gateway writes three lifecycle transitions through
+`compute.machine_lifecycle`: a join writes `joining`, or `failed` with
+`host_preflight_failed` when the host's required checks did not pass; the first
+heartbeat that confirms readiness writes `ready`; removal and leave write
+`deleted`. The disconnect sweep writes only the message on the phase the machine
+reached. Machine views classify by placement kind: the self-hosted list is the
+account's machines placed on their own id, and a node a connected cloud launched
+is the connection's however it enrolled. The view adds what only the running
+control plane knows, `connected`, which is the heartbeat window and the agent
+tunnel together.

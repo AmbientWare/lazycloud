@@ -73,6 +73,25 @@ historical aggregates remain unallocated because today's catalog cannot establis
 what a previous purchase included. CPU, RAM and GPU share one supplier compute
 charge; the customer usage ledger is a separate billing boundary.
 
+A machine has one lifecycle, `shared.compute_fleet.MachineLifecycle`, stored on
+its row with the message, the failure reason and the time it entered the phase.
+`compute.machine_lifecycle.advance_machine_lifecycle` is the only place a phase
+moves, and it refuses a move backwards: `failed` and `deleted` are reachable
+from anywhere, a fresh join is the one way back into `joining`, and re-stating
+the current phase keeps `lifecycle_at` so a reclaim clock is not restarted by a
+heartbeat. `write_machine_lifecycle` persists the move and publishes
+`compute.machines` after the session commits; nothing writes the phase around
+it. The row exists from the first time the platform hears of a machine: the
+join command mints a joined host at `requested`, and the provider reconcile
+creates a launched node's row the first time the provider reports the instance,
+binding the provider row to it, so a provider row with a `machine_id` does not
+mean the node enrolled; `first_enrolled_at` on the provider row says that.
+Reclaim deadlines run from `lifecycle_at`; silence is not a phase, so a machine
+that stops reporting stays `ready` with a message, and the enrollment's
+readiness plus the worker record decide whether it serves. The machine's
+`ResourceStatus` is kept in step by the writer for the repository queries that
+filter on it and is not exposed.
+
 An authenticated machine enrollment owns its worker runtime. The worker's
 identity and resource allocation derive from that enrollment, not from a
 scheduler registration that can expire or stop accepting placement. Planned

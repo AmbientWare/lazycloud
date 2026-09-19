@@ -7,6 +7,7 @@ import {
   awsConnectionIsUsable,
   awsConnectionPresentation,
 } from "./AwsConnectionDialog/lifecycle";
+import { CapacityBadge, LifecycleChip } from "@/components/shared/LifecycleChip";
 import { Panel } from "@/components/shared/Panel";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
@@ -20,31 +21,41 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { AwsConnection, CustomerComputeInstance, UnitMachine } from "@/lib/api/schemas";
+import type {
+  AwsConnection,
+  ComputeSummary,
+  ConnectionMachine,
+  UnitMachine,
+} from "@/lib/api/schemas";
 import {
   awsConnectionQueryOptions,
-  computeInstancesQueryOptions,
+  computeSummaryQueryOptions,
+  connectionMachinesQueryOptions,
   machinesQueryOptions,
 } from "@/lib/queries/compute";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
+import { humanize } from "@/lib/machine-lifecycle";
 import { cn } from "@/lib/utils";
+import { useWorkspace } from "@/lib/workspace-context";
 
 import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
 import { EditMachineWorkspacesDialog } from "./MachineWorkspaces";
 
 export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
+  const { workspace } = useWorkspace();
   const connection = useQuery(awsConnectionQueryOptions());
   const billing = useQuery(billingSummaryQueryOptions());
-  const instances = useQuery(computeInstancesQueryOptions());
+  const instances = useQuery(connectionMachinesQueryOptions());
+  const summary = useQuery(computeSummaryQueryOptions(workspace.id));
   const machines = useQuery(machinesQueryOptions());
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [editingMachine, setEditingMachine] = useState<UnitMachine | null>(null);
-  const loadError = connection.error ?? instances.error;
+  const loadError = connection.error ?? instances.error ?? summary.error;
 
-  if (connection.isPending || instances.isPending || billing.isPending) {
+  if (connection.isPending || instances.isPending || summary.isPending || billing.isPending) {
     return <SettingsSkeleton />;
   }
 
@@ -56,9 +67,10 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
     );
   }
 
-  const awsInstances = (instances.data?.data ?? []).filter(
-    (instance) => instance.provider === "aws",
-  );
+  // The server classifies by placement: the connection's list holds machines
+  // placed on the connection, the self-hosted list those placed on themselves.
+  const awsInstances = instances.data?.data ?? [];
+  const counts = summary.data?.instances ?? { total: 0, ready: 0, pending: 0, degraded: 0 };
   const selfHostedMachines = machines.data?.data ?? [];
 
   return (
@@ -66,6 +78,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
       <ConnectedCloudsPanel
         connection={connection.data ?? null}
         instances={awsInstances}
+        counts={counts}
         expanded={expandedProvider === "aws"}
         onToggle={() => setExpandedProvider((current) => (current === "aws" ? null : "aws"))}
         onManageAws={() => setAwsDialogOpen(true)}
@@ -99,6 +112,7 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
 function ConnectedCloudsPanel({
   connection,
   instances,
+  counts,
   expanded,
   onToggle,
   onManageAws,
@@ -107,7 +121,8 @@ function ConnectedCloudsPanel({
   onUpgrade,
 }: {
   connection: AwsConnection | null;
-  instances: CustomerComputeInstance[];
+  instances: ConnectionMachine[];
+  counts: ComputeSummary["instances"];
   expanded: boolean;
   onToggle: () => void;
   onManageAws: () => void;
@@ -149,6 +164,7 @@ function ConnectedCloudsPanel({
           <CloudProviderRow
             connection={connection}
             instances={instances}
+            counts={counts}
             expanded={expanded && usable}
             onToggle={onToggle}
             onManage={onManageAws}
@@ -219,18 +235,20 @@ function AddCloudMenu({
 function CloudProviderRow({
   connection,
   instances,
+  counts,
   expanded,
   onToggle,
   onManage,
 }: {
   connection: AwsConnection;
-  instances: CustomerComputeInstance[];
+  instances: ConnectionMachine[];
+  counts: ComputeSummary["instances"];
   expanded: boolean;
   onToggle: () => void;
   onManage: () => void;
 }) {
-  const ready = instances.filter((instance) => instanceStatusReady(instance.status)).length;
-  const pending = instances.filter((instance) => instanceStatusPending(instance.status)).length;
+  // Counted by the server from the same list the rows come from.
+  const { ready, pending } = counts;
   const presentation = awsConnectionPresentation(connection);
   const usable = awsConnectionIsUsable(connection);
   const removing = awsConnectionIsRemoving(connection);
@@ -296,7 +314,7 @@ function CloudProviderRow({
   );
 }
 
-function CloudInstances({ instances }: { instances: CustomerComputeInstance[] }) {
+function CloudInstances({ instances }: { instances: ConnectionMachine[] }) {
   return (
     <section className="min-w-0 p-4">
       <div className="mb-3 flex items-end justify-between gap-3">
@@ -321,26 +339,40 @@ function CloudInstances({ instances }: { instances: CustomerComputeInstance[] })
             >
               <div className="min-w-0">
                 <code className="mono block truncate text-xs">
-                  {instance.machine_id || instance.id}
+                  {instance.instance_id || instance.id}
                 </code>
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {instance.instance_type ?? "AWS instance"} · {instance.region}
+                  {[
+                    instance.instance_type || "AWS instance",
+                    instance.availability_zone || instance.region,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  {instance.lifecycle_message}
                 </p>
               </div>
-              <StatusChip status={instance.status} live={instanceStatusReady(instance.status)} />
+              <span className="flex flex-wrap items-center gap-1.5">
+                <LifecycleChip
+                  lifecycle={instance.lifecycle}
+                  message={instance.lifecycle_message}
+                  failure={instance.lifecycle_failure}
+                />
+                <CapacityBadge
+                  lifecycle={instance.lifecycle}
+                  connected={instance.connected}
+                  capacityState={instance.capacity_state}
+                />
+              </span>
               <div className="text-left text-[11px] text-muted-foreground sm:text-right">
                 <p className="mono text-foreground">
                   {formatCpu(instance.cpu_millicores)} · {formatMemory(instance.memory_mb)}
                 </p>
-                {instance.bootstrap_failure_reason ? (
-                  <p>{instance.bootstrap_failure_reason.replaceAll("_", " ")}</p>
+                {instance.lifecycle === "failed" && instance.lifecycle_failure ? (
+                  <p>{humanize(instance.lifecycle_failure)}</p>
                 ) : null}
-                {instance.bootstrap_failure_detail ? (
-                  <p className="max-w-80 text-balance" title={instance.bootstrap_failure_detail}>
-                    {instance.bootstrap_failure_detail}
-                  </p>
-                ) : null}
-                <LiveRelativeTime value={instance.created_at} />
+                <LiveRelativeTime value={instance.launched_at ?? instance.created_at} />
               </div>
             </li>
           ))}
@@ -392,7 +424,9 @@ function SelfHostedPanel({
               <div className="min-w-0">
                 <code className="mono block truncate text-xs">{machine.name || machine.id}</code>
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {machine.readiness_message}
+                  {machine.lifecycle === "failed" && machine.lifecycle_failure
+                    ? `${humanize(machine.lifecycle_failure)}: ${machine.lifecycle_message}`
+                    : machine.lifecycle_message}
                 </p>
                 <p
                   className="mono mt-0.5 truncate text-[11px] text-muted-foreground"
@@ -403,10 +437,18 @@ function SelfHostedPanel({
                     : `Serves ${machine.workspaces.join(", ")}`}
                 </p>
               </div>
-              <StatusChip
-                status={machine.readiness_phase}
-                live={machine.readiness_phase === "ready"}
-              />
+              <span className="flex flex-wrap items-center gap-1.5">
+                <LifecycleChip
+                  lifecycle={machine.lifecycle}
+                  message={machine.lifecycle_message}
+                  failure={machine.lifecycle_failure}
+                />
+                <CapacityBadge
+                  lifecycle={machine.lifecycle}
+                  connected={machine.connected}
+                  capacityState={machine.capacity_state}
+                />
+              </span>
               <p className="mono text-[11px] text-muted-foreground sm:text-right">
                 {formatCpu(machine.cpu)} · {formatMemory(machine.memory)}
               </p>
@@ -457,14 +499,6 @@ function connectionActionLabel(connection: AwsConnection): string | null {
     return "Review";
   }
   return "Manage";
-}
-
-function instanceStatusReady(status: string): boolean {
-  return ["ready", "available", "busy", "running"].includes(status);
-}
-
-function instanceStatusPending(status: string): boolean {
-  return ["creating", "joining", "pending", "provisioning", "starting"].includes(status);
 }
 
 function formatCpu(millicores: number): string {
