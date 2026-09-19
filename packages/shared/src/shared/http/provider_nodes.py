@@ -8,8 +8,8 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
 )
+from shared.compute_fleet import MachineLifecycle
 from shared.http.base import HttpModel
 from shared.provider_config import ProviderKind
 
@@ -83,22 +83,23 @@ class ProviderNodeBootstrapFailureRequest(ProviderNodeIdentityRequest):
     diagnostic_excerpt: str = Field(default="", max_length=8192, repr=False)
 
 
-_REPORTABLE_BOOTSTRAP_PHASES = frozenset(
+REPORTABLE_BOOTSTRAP_PHASES = frozenset(
     {
-        MachineBootstrapPhase.Provisioning,
-        MachineBootstrapPhase.Booting,
-        MachineBootstrapPhase.Joining,
+        MachineLifecycle.Provisioning,
+        MachineLifecycle.Booting,
+        MachineLifecycle.Joining,
     }
 )
+"""The phases a node may report about itself; the rest are the platform's to write."""
 
 
 class ProviderNodeBootstrapPhaseRequest(ProviderNodeIdentityRequest):
-    phase: MachineBootstrapPhase
+    phase: MachineLifecycle
 
     @field_validator("phase")
     @classmethod
-    def _reportable_phase(cls, value: MachineBootstrapPhase) -> MachineBootstrapPhase:
-        if value not in _REPORTABLE_BOOTSTRAP_PHASES:
+    def _reportable_phase(cls, value: MachineLifecycle) -> MachineLifecycle:
+        if value not in REPORTABLE_BOOTSTRAP_PHASES:
             raise ValueError(
                 "bootstrap phase reports accept only in-progress phases; "
                 "failures use the bootstrap failure report"
@@ -108,12 +109,13 @@ class ProviderNodeBootstrapPhaseRequest(ProviderNodeIdentityRequest):
 
 class ProviderNodeBootstrapFailureResponse(HttpModel):
     provider_instance_id: str
-    phase: MachineBootstrapPhase
+    phase: MachineLifecycle
     failure_reason: MachineBootstrapFailureReason | None = None
     observed_at: datetime
 
 
 __all__ = [
+    "REPORTABLE_BOOTSTRAP_PHASES",
     "ProviderNodeBootstrapFailureRequest",
     "ProviderNodeBootstrapFailureResponse",
     "ProviderNodeBootstrapPhaseRequest",

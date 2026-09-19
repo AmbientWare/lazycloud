@@ -10,9 +10,9 @@ from collections.abc import Sequence
 
 from lazycloud.cli.control import compute_client
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_enrollment import MachineServiceState
+from shared.compute_fleet import MachineLifecycle
 from shared.http.compute_policy import (
-    WorkspaceComputeInstanceResponse,
+    ConnectionMachineResponse,
 )
 from tests.e2e.external import _support
 
@@ -31,16 +31,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if connection is None or connection.phase is not AwsAccountConnectionPhase.Ready:
         raise RuntimeError("the public AWS connection is not ready")
 
-    last_observed: list[WorkspaceComputeInstanceResponse] = []
+    last_observed: list[ConnectionMachineResponse] = []
 
-    def check() -> WorkspaceComputeInstanceResponse | None:
+    def check() -> ConnectionMachineResponse | None:
         summary = client.summary()
         connected = [
             item for item in client.instances().data if item.provider == f"aws:{connection.id}"
         ]
         last_observed[:] = connected
         instance_signals: list[dict[str, str]] = [
-            {"id": item.id, "status": item.status, "bootstrap_phase": item.bootstrap_phase}
+            {"id": item.id, "lifecycle": item.lifecycle.value, "message": item.lifecycle_message}
             for item in connected
         ]
         _support.emit_evidence(
@@ -55,7 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ready = [
             item
             for item in connected
-            if item.service_state is MachineServiceState.Serving and item.machine_id is not None
+            if item.lifecycle is MachineLifecycle.Ready and item.connected
         ]
         if (
             summary.instances.total == 1
@@ -73,11 +73,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except RuntimeError:
         observed: list[dict[str, object]] = [
             {
-                "bootstrap_phase": item.bootstrap_phase,
-                "instance_id": item.id,
-                "machine_id": item.machine_id,
+                "lifecycle": item.lifecycle.value,
+                "instance_id": item.instance_id,
+                "machine_id": item.id,
                 "region": item.region,
-                "status": item.status,
+                "connected": item.connected,
             }
             for item in last_observed
         ]
@@ -98,9 +98,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "capability": "compute.aws.warm_baseline",
             "connection_id": connection.id,
             "hourly_micros": summary.cost.hourly_micros,
-            "instance_id": machine.id,
+            "instance_id": machine.instance_id,
             "instance_type": machine.instance_type,
-            "machine_id": machine.machine_id,
+            "machine_id": machine.id,
             "ready": 1,
             "region": machine.region,
         }

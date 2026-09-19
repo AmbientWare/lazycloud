@@ -4,25 +4,13 @@ import {
   awsConnectionAuthorizationSchema,
   awsConnectionEnvelopeSchema,
   awsConnectionSchema,
-  customerComputeInstanceListSchema,
+  connectionMachineListSchema,
   machineJoinCommandResponseSchema,
   machineSchema,
   unitMachineListSchema,
   type AwsConnection,
 } from "@/lib/api/schemas";
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
-
-/**
- * How often capacity is re-read while its panel is open.
- *
- * Readiness here is not a stored column the change stream can announce: the
- * server derives a machine's phase and an instance's service state from how
- * recently its agent was heard from. A host that dies stops sending, and
- * silence publishes nothing, so the only way the panel can show it leaving is
- * to ask again. These panels live inside the settings dialog, so the interval
- * runs while somebody is watching and stops with the tab.
- */
-const CAPACITY_POLL_INTERVAL_MS = 5_000;
 
 /**
  * The connected cloud announces every transition it makes, but only to the
@@ -32,22 +20,26 @@ const CAPACITY_POLL_INTERVAL_MS = 5_000;
  */
 const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
 
-/** Machines this account connected, each serving the workspaces it names. */
+/**
+ * Machines this account joined itself, each serving the workspaces it names.
+ *
+ * Every lifecycle write publishes `compute.machines` on the change stream, so
+ * the list is invalidated by the event rather than polled.
+ */
 export function machinesQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.compute.machines(),
     queryFn: () => apiRequest("/api/v1/machines/self-hosted?limit=250", unitMachineListSchema),
-    refetchInterval: CAPACITY_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function computeInstancesQueryOptions(enabled = true) {
+/** Machines the account's connected cloud launched, with their provider facts. */
+export function connectionMachinesQueryOptions(enabled = true) {
   return queryOptions({
     queryKey: accountQueryKeys.compute.instances(),
     enabled,
-    queryFn: () => apiRequest("/api/v1/compute/instances", customerComputeInstanceListSchema),
-    refetchInterval: CAPACITY_POLL_INTERVAL_MS,
+    queryFn: () => apiRequest("/api/v1/compute/instances", connectionMachineListSchema),
     meta: workspaceLiveQueryMeta(true),
   });
 }

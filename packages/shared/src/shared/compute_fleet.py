@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 
+from shared.compute_enrollment import MachineBootstrapFailureReason
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 from shared.placement import Placement
@@ -16,6 +17,52 @@ class ResourceStatus(StringEnum):
     Stopped = "stopped"
     Failed = "failed"
     Deleted = "deleted"
+
+
+class MachineLifecycle(StringEnum):
+    """Where a machine is in its life, from the request that made it to its removal.
+
+    One phase for every machine, however it arrived: a host an account joined
+    passes through `requested`, `joining` and `ready`; a node a connected cloud
+    launched adds `provisioning` and `booting` in between. The phase never
+    describes whether the agent is reachable right now; that is `connected` on
+    the view, and a machine that stops reporting stays `ready` with a message
+    saying so.
+    """
+
+    Requested = "requested"
+    Provisioning = "provisioning"
+    Booting = "booting"
+    Joining = "joining"
+    Ready = "ready"
+    Draining = "draining"
+    Terminating = "terminating"
+    Deleted = "deleted"
+    Failed = "failed"
+
+
+LIVE_MACHINE_LIFECYCLES = frozenset(
+    {
+        MachineLifecycle.Requested,
+        MachineLifecycle.Provisioning,
+        MachineLifecycle.Booting,
+        MachineLifecycle.Joining,
+        MachineLifecycle.Ready,
+        MachineLifecycle.Draining,
+        MachineLifecycle.Terminating,
+    }
+)
+"""Phases a machine is still shown in. `Failed` and `Deleted` are the two ends."""
+
+PENDING_MACHINE_LIFECYCLES = frozenset(
+    {
+        MachineLifecycle.Requested,
+        MachineLifecycle.Provisioning,
+        MachineLifecycle.Booting,
+        MachineLifecycle.Joining,
+    }
+)
+"""Phases before a machine has taken work."""
 
 
 class LeaseStatus(StringEnum):
@@ -35,6 +82,12 @@ class Machine(ContractModel):
     """Unit that bought this machine, from the join credential it enrolled with."""
     provider: str = "local"
     status: ResourceStatus = ResourceStatus.Created
+    """Kept in step with `lifecycle` by the lifecycle writer; never exposed."""
+    lifecycle: MachineLifecycle = MachineLifecycle.Requested
+    lifecycle_message: str = ""
+    lifecycle_failure: MachineBootstrapFailureReason | None = None
+    lifecycle_at: datetime = Field(default_factory=utc_now)
+    """When the machine entered its current phase."""
     cpu: float | None = None
     memory: str | None = None
     gpu: str | None = None
@@ -81,10 +134,13 @@ class AgentLease(ContractModel):
 
 
 __all__ = [
+    "LIVE_MACHINE_LIFECYCLES",
+    "PENDING_MACHINE_LIFECYCLES",
     "AgentLease",
     "AgentRecord",
     "LeaseStatus",
     "Machine",
+    "MachineLifecycle",
     "ResourceStatus",
     "Worker",
 ]

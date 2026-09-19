@@ -37,7 +37,14 @@ from shared.autoscaler_state import (
     AutoscalerStateRecord,
     AutoscalerTargetKind,
 )
-from shared.compute_fleet import AgentLease, AgentRecord, Machine, ResourceStatus, Worker
+from shared.compute_fleet import (
+    AgentLease,
+    AgentRecord,
+    Machine,
+    MachineLifecycle,
+    ResourceStatus,
+    Worker,
+)
 from shared.container_requests import (
     ContainerShutdownTarget,
     StopContainerReason,
@@ -45,6 +52,7 @@ from shared.container_requests import (
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
+from shared.placement import Placement, PlacementKind
 from shared.timestamps import utc_now
 from sqlalchemy import (
     Select,
@@ -59,8 +67,10 @@ from sqlalchemy import (
     text,
     tuple_,
     union_all,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -414,6 +424,58 @@ class MachineRepository:
             for row in self.session.scalars(statement.order_by(MachineTable.name))
         ]
 
+    def list_joined_for_owner(self, owner_user_id: str) -> list[Machine]:
+        """The account's machines placed on themselves: the hosts it joined.
+
+        Classified by placement kind, not by provider name: a node a connected
+        cloud launched enrolls through the same agent and would otherwise be
+        listed as hardware the customer connected.
+        """
+        statement = select(MachineTable).where(
+            MachineTable.owner_user_id == owner_user_id,
+            MachineTable.placement.like(f"{PlacementKind.Machine.value}:%"),
+            MachineTable.lifecycle != MachineLifecycle.Deleted.value,
+        )
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(statement.order_by(MachineTable.id))
+        ]
+
+    def list_for_placement(self, placement: Placement) -> list[Machine]:
+        """Every machine still shown under one placement, across its workspaces.
+
+        Deleted rows are history; draining and terminating ones are still the
+        placement's until the provider proves them gone.
+        """
+        statement = select(MachineTable).where(
+            MachineTable.placement == placement.key,
+            MachineTable.lifecycle != MachineLifecycle.Deleted.value,
+        )
+        return [
+            machine_from_row(row)
+            for row in self.session.scalars(
+                statement.order_by(MachineTable.created_at.desc(), MachineTable.id)
+            )
+        ]
+
+    def move_placement_for_capacity_owner(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+        placement: Placement,
+    ) -> int:
+        """Restamp one unit's machines with the placement the unit moved to."""
+        result = self.session.execute(
+            update(MachineTable)
+            .where(
+                MachineTable.workspace_id == workspace_id,
+                MachineTable.capacity_owner_id == capacity_owner_id,
+                MachineTable.placement != placement.key,
+            )
+            .values(placement=placement.key, updated_at=utc_now())
+        )
+        return int(result.rowcount) if isinstance(result, CursorResult) else 0
+
     def get(self, machine_id: str, *, workspace_id: str) -> Machine | None:
         if try_uuid(machine_id) is None:
             return None
@@ -484,8 +546,13 @@ class MachineRepository:
             return None
         if str(row.workspace_id) != workspace_id:
             raise ConflictError(f"machine is not owned by deleting workspace: {machine_id}")
+        now = utc_now()
         row.status = ResourceStatus.Deleted.value
-        row.updated_at = utc_now()
+        if row.lifecycle != MachineLifecycle.Deleted.value:
+            row.lifecycle = MachineLifecycle.Deleted.value
+            row.lifecycle_message = "Removed with its workspace"
+            row.lifecycle_at = now
+        row.updated_at = now
         self.session.flush()
         return machine_from_row(row)
 

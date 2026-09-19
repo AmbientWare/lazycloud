@@ -38,10 +38,10 @@ from lazycloud.values import decode_value
 from pydantic import RootModel, ValidationError
 from shared.app_slug import validate_app_slug
 from shared.aws_connections import AwsAccountConnectionPhase
-from shared.compute_enrollment import MachineServiceState
+from shared.compute_fleet import MachineLifecycle
 from shared.http.apps import AppResponse
 from shared.http.aws_connections import AwsConnectionResponse
-from shared.http.compute_policy import WorkspaceComputeInstanceResponse
+from shared.http.compute_policy import ConnectionMachineResponse
 from shared.http.tasks import TaskResponse
 from shared.tasks import is_terminal_task_status
 from tests.e2e.external import _support
@@ -66,7 +66,7 @@ class WarmBaseline:
 
 def _connected_instances(
     client: ComputeClient, connection: AwsConnectionResponse
-) -> list[WorkspaceComputeInstanceResponse]:
+) -> list[ConnectionMachineResponse]:
     return [item for item in client.instances().data if item.provider == f"aws:{connection.id}"]
 
 
@@ -93,9 +93,7 @@ def _warm_baseline(client: ComputeClient, connection: AwsConnectionResponse) -> 
     summary = client.summary()
     connected = _connected_instances(client, connection)
     ready = [
-        item
-        for item in connected
-        if item.service_state is MachineServiceState.Serving and item.machine_id is not None
+        item for item in connected if item.lifecycle is MachineLifecycle.Ready and item.connected
     ]
     if (
         summary.instances.total != 1
@@ -107,7 +105,7 @@ def _warm_baseline(client: ComputeClient, connection: AwsConnectionResponse) -> 
     ):
         return None
     machine = ready[0]
-    if machine.machine_id is None or machine.instance_type is None:
+    if not machine.instance_id or not machine.instance_type:
         return None
     return WarmBaseline(
         total=summary.instances.total,
@@ -115,8 +113,8 @@ def _warm_baseline(client: ComputeClient, connection: AwsConnectionResponse) -> 
         pending=summary.instances.pending,
         degraded=summary.instances.degraded,
         hourly_micros=summary.cost.hourly_micros,
-        instance_id=machine.id,
-        machine_id=machine.machine_id,
+        instance_id=machine.instance_id,
+        machine_id=machine.id,
         region=machine.region,
         instance_type=machine.instance_type,
     )

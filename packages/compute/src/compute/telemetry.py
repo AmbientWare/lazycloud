@@ -5,7 +5,9 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
+from database.repositories.compute import ComputeMachineEnrollmentRecord
 from pydantic import Field, JsonValue
+from shared.compute_enrollment import ComputeMachineEnrollmentStatus
 from shared.contracts import ContractModel
 from shared.placement import Placement
 from shared.timestamps import utc_now
@@ -427,6 +429,34 @@ def agent_machine_connected(
         return False
     if state.last_disconnect_at is not None and state.last_disconnect_at >= last_seen:
         return False
+    if last_seen > current:
+        return (last_seen - current).total_seconds() <= AGENT_HEARTBEAT_FUTURE_TOLERANCE_SECONDS
+    return (current - last_seen).total_seconds() <= AGENT_HEARTBEAT_TIMEOUT_SECONDS
+
+
+def enrollment_connected(
+    enrollment: ComputeMachineEnrollmentRecord | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Whether the agent behind this enrollment reported within the heartbeat window.
+
+    Liveness only. A cordoned or draining host is still connected; that is the
+    capacity state's to say.
+    """
+    if enrollment is None or enrollment.status is not ComputeMachineEnrollmentStatus.Active:
+        return False
+    if not enrollment.heartbeat_confirmed:
+        return False
+    last_seen = (
+        enrollment.last_heartbeat_at
+        if enrollment.last_heartbeat_at is not None
+        and enrollment.last_heartbeat_at > enrollment.last_join_at
+        else enrollment.last_join_at
+    )
+    if enrollment.last_disconnect_at is not None and enrollment.last_disconnect_at >= last_seen:
+        return False
+    current = now or utc_now()
     if last_seen > current:
         return (last_seen - current).total_seconds() <= AGENT_HEARTBEAT_FUTURE_TOLERANCE_SECONDS
     return (current - last_seen).total_seconds() <= AGENT_HEARTBEAT_TIMEOUT_SECONDS

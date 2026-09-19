@@ -146,14 +146,15 @@ In this order. Stop at the first step that answers the question.
 
 ```bash
 docker compose exec -T postgres psql -U lazycloud -d lazycloud -x -c "
-select instance_id, status,
-       payload->>'bootstrap_phase'          as phase,
-       payload->>'bootstrap_failure_reason' as reason
-from compute_provider_instances
-order by created_at desc limit 5;"
+select i.instance_id, i.status,
+       m.lifecycle, m.lifecycle_failure, m.lifecycle_message, m.lifecycle_at
+from compute_provider_instances i
+left join machines m on m.id = i.machine_id
+order by i.created_at desc limit 5;"
 ```
 
-The reason identifies the failure category. Read detailed bootstrap logs only
+The machine row carries the phase, the failure reason and the node's own
+message. The reason identifies the failure category. Read detailed bootstrap logs only
 in a private operator session; they may include sensitive data.
 
 ### Read recent events
