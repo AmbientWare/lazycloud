@@ -10,7 +10,7 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
-from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
+from compute.policy import AwsDefaultCapacityBaseline
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -249,7 +249,6 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         owned_workspace(
             ControlPlaneService(
                 isolated_services.context,
-                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
             ),
             "other",
         )

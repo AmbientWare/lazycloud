@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from shared.deployment_records import (
     DEFAULT_HTTP_CPU,
@@ -26,7 +25,6 @@ def test_raw_deployment_persists_canonical_runtime_defaults(
     )
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.get_stub(deployment.stub_id or "")
     runtime = stub.config.runtime

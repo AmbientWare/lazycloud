@@ -5,7 +5,6 @@ from uuid import uuid4
 
 from api.server.services import ApiServices
 from compute.agent_control import agent_machine_worker_id
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
@@ -37,9 +36,7 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
 ) -> None:
     services = isolated_services
     workspace = owned_workspace(
-        ControlPlaneService(
-            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-        ),
+        ControlPlaneService(services.context),
         "machine-retirement",
     )
     unit = services.compute.create_unit(
@@ -130,9 +127,7 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
 ) -> None:
     services = isolated_services
     workspace = owned_workspace(
-        ControlPlaneService(
-            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-        ),
+        ControlPlaneService(services.context),
         "pending-machine-join",
     )
     gateway = services.gateway_service

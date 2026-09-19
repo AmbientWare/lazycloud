@@ -17,6 +17,7 @@ from control.deployment_resources import (
     client_manifest_resource,
 )
 from control.deployments import CronJobService, DeploymentService
+from control.placement import PlacementResolver
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.context import ServiceContext
 from database.records.apps import AppRecord
@@ -131,6 +132,9 @@ class ManagementServices(Protocol):
 
     @property
     def usage(self) -> UsageService: ...
+
+    @property
+    def placement_resolver(self) -> PlacementResolver: ...
 
 
 class CursorPage[T: ContractModel](ContractModel):

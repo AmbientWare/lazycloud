@@ -4,7 +4,6 @@ from dataclasses import replace
 from datetime import datetime
 
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import RedisClient
 from database.repositories.images import CheckpointRepository
@@ -45,7 +44,6 @@ def test_checkpoint_enabled_pod_uses_latest_available_checkpoint(
     )
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         "checkpoint-pod",
         kind=StubKind.Pod,

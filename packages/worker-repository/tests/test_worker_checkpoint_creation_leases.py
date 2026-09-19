@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from tests.real_redis import RealRedisActors
@@ -23,9 +22,7 @@ def test_automatic_checkpoint_creation_lease_serializes_first_creator(
 ) -> None:
     redis = real_redis_actors.client()
     service = AutomaticCheckpointCreationLeaseService(service_context, redis)
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "checkpoint-owner")
     stub = control.create_stub("checkpoint-lease", workspace=workspace.id)
 
@@ -64,9 +61,7 @@ def test_automatic_checkpoint_creation_lease_rechecks_available_artifact_after_l
     real_redis_actors: RealRedisActors,
 ) -> None:
     redis = real_redis_actors.client()
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "default")
     stub = control.create_stub("checkpoint-lease", workspace=workspace.id)
     CheckpointService(service_context).save_state(

@@ -7,7 +7,6 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import (
@@ -57,7 +56,6 @@ def test_workspace_deletion_tombstones_identity_and_invalidates_tokens(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     owned_workspace(control, "default")
     workspace = owned_workspace(
@@ -150,7 +148,6 @@ def test_workspace_deleting_transition_atomically_revokes_workspace_credentials(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     owned_workspace(control, "default")
     workspace = owned_workspace(control, "tenant")
@@ -234,7 +231,6 @@ def test_workspace_deletion_rolls_back_when_audit_append_fails(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     owned_workspace(control, "default")
     workspace = owned_workspace(control, "tenant")
@@ -313,7 +309,6 @@ def test_workspace_deletion_purges_owned_resources_and_protects_identity_scopes(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     default = owned_workspace(control, "default")
     workspace = owned_workspace(control, "tenant")
@@ -378,7 +373,6 @@ def test_workspace_deletion_keeps_the_priced_ledger_and_the_unsent_meter_events(
     """
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     owned_workspace(control, "default")
     workspace = owned_workspace(control, "tenant")
@@ -488,7 +482,6 @@ def test_workspace_deletion_purges_autoscaler_state_and_fences_stale_reconciliat
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     owned_workspace(control, "default")
     workspace = owned_workspace(control, "tenant")
@@ -532,9 +525,7 @@ def test_workspace_deletion_purges_autoscaler_state_and_fences_stale_reconciliat
 def test_autoscaler_state_write_requires_active_workspace(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "disabled-tenant")
     workspace.status = WorkspaceStatus.Disabled
     with service_context.database.session() as session:
@@ -554,7 +545,6 @@ def test_workspace_deletion_preserves_historical_events_after_resource_cleanup(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     owned_workspace(control, "default")
     workspace = owned_workspace(control, "tenant")

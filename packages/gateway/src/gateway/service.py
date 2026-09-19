@@ -66,13 +66,14 @@ from compute.tunnel_authority import AgentTunnelAuthority
 from control.apps import AppService
 from control.deployment_resources import DeploymentResourceService, client_manifest_resource
 from control.deployments import DeploymentService
+from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
 from control.service import ControlPlaneService, StubKind
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
 from coordination.wake_signal import WakeSignalPublisher
 from database.context import ServiceContext
-from database.repositories.apps import StubRepository
+from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
@@ -92,6 +93,7 @@ from database.repositories.worker_releases import WorkerReleaseRepository
 from database.types import DatabaseSession
 from execution.containers.service import ContainerService
 from execution.functions.service import FunctionControlService
+from execution.placement import workload_placement
 from execution.tasks import TaskService
 from identity.auth import AuthorizationDeniedError, AuthService
 from identity.authz import AuthzRequirement
@@ -286,6 +288,9 @@ class GatewayServices(Protocol):
 
     @property
     def workspace_compute_policy_service(self) -> WorkspaceComputePolicyService: ...
+
+    @property
+    def placement_resolver(self) -> PlacementResolver: ...
 
     @property
     def containers(self) -> ContainerService: ...
@@ -1062,12 +1067,20 @@ class GatewayControlService:
                 return True
             if container.stub_id is None:
                 continue
-            with suppress(NotFoundError):
-                stub = self.control_plane.get_stub(
-                    container.stub_id,
-                    workspace=workspace_id,
+            with (
+                suppress(NotFoundError, InvalidInputError),
+                self.services.context.database.session() as session,
+            ):
+                stub = StubRepository(session).get(container.stub_id, workspace_id=workspace_id)
+                if stub is None:
+                    continue
+                current = workload_placement(
+                    session,
+                    resolver=self.services.placement_resolver,
+                    stub=stub,
+                    workspace=self.services.context.workspace(session, workspace_id),
                 )
-                if stub.placement == placement:
+                if current == placement:
                     return True
         return False
 
@@ -1300,15 +1313,17 @@ class GatewayControlService:
             anchor_workspace_id = machines.workspace_id(current.id)
             if anchor_workspace_id is None:
                 raise NotFoundError(f"machine not found: {machine}")
-            # A workload already pinned to this machine keeps scheduling onto it, so
-            # a workspace cannot be dropped from the list while one of its workloads
-            # still names the machine; the owner removes those first.
+            # A deployment pinned to this machine keeps scheduling onto it, so a
+            # workspace cannot be dropped from the list while one of its
+            # deployments still names the machine; the owner removes those first.
+            # Runs and sandboxes resolve the name each time and simply fail once
+            # the workspace is gone from the list.
             removed = set(current.workspace_ids) - set(workspace_ids)
-            pinned = StubRepository(session).workspaces_pinned_to(current.placement, removed)
+            pinned = DeploymentRepository(session).workspaces_pinned_to(current.placement, removed)
             if pinned:
                 names = WorkspaceRepository(session).names_for_ids(pinned)
                 raise ConflictError(
-                    f"workloads in {', '.join(sorted(names.values()))} still name machine "
+                    f"deployments in {', '.join(sorted(names.values()))} still name machine "
                     f"{current.name!r}; remove them before dropping those workspaces"
                 )
             updated = machines.upsert(

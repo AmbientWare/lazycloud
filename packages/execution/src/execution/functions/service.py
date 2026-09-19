@@ -99,6 +99,7 @@ from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
 )
+from execution.placement import workload_placement
 from execution.services import ExecutionServices, SchedulerSubmissionResult
 from execution.task_claims import TaskClaimReleaseService
 
@@ -144,6 +145,14 @@ class FunctionControlService:
                     gpu_count=config.runtime.gpu_count,
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
+                )
+                # Same reason: a stub naming a machine that has left must refuse
+                # here, not leave a task waiting for capacity that never comes.
+                workload_placement(
+                    session,
+                    resolver=self.services.placement_resolver,
+                    stub=stub,
+                    workspace=self.services.context.workspace(session, stub.workspace_id),
                 )
             self._assert_within_pending_limit(stub.id, config)
             retry_policy = config.effective_retry_policy
@@ -514,6 +523,20 @@ class FunctionControlService:
             )
             return None
 
+        try:
+            with self.services.context.database.session() as session:
+                placement = workload_placement(
+                    session,
+                    resolver=self.services.placement_resolver,
+                    stub=stub,
+                    workspace=workspace,
+                )
+        except InvalidInputError as error:
+            if task is None:
+                raise
+            self.services.tasks.transition(task, TaskStatus.Failed, error=str(error), exit_code=1)
+            return None
+
         container_id = str(uuid4())
         container_plan = plan_function_container_start(
             FunctionContainerStartRequest(
@@ -616,7 +639,7 @@ class FunctionControlService:
                 disk_mib=container_plan.disk_mib,
                 gpu=list(container.gpu),
                 gpu_count=container.gpu_count,
-                placement=stub.placement,
+                placement=placement,
                 region=config.runtime.region,
                 availability_zone=config.runtime.availability_zone,
                 runtime=config.runtime.runtime,

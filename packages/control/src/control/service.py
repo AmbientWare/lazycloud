@@ -53,7 +53,6 @@ from shared.identity import (
     WorkspaceStorageConfig,
 )
 from shared.objects import ObjectRecord
-from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.urls import (
     StubUrlTarget,
@@ -80,7 +79,6 @@ from control.models import (
     WorkspaceConfigExport,
     WorkspaceCreateResult,
 )
-from control.placement import PlacementResolver
 from control.tcp_ingress import tcp_pod_url
 
 
@@ -189,9 +187,7 @@ def _stub_config_payload(config: StubConfig) -> dict[str, JsonValue]:
 
 
 def _stub_preparation_fingerprint(stub: StubRecord) -> str:
-    # Placement is derived from the workspace and `config.machine`, both in the
-    # payload, so leaving it out lets a caller resolve it only on creation.
-    payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at", "placement"})
+    payload = stub.model_dump(mode="json", exclude={"id", "created_at", "updated_at"})
     config = _stub_config_payload(stub.config)
     if not config.get("object_id"):
         config.pop("object_id", None)
@@ -325,7 +321,6 @@ class ControlPlaneService:
     public_http_origin: str = ""
     connected_workspace_storage: ConnectedWorkspaceStorageIssuer | None = None
     workspace_changes: WorkspaceChangePublisher | None = None
-    placement_resolver: PlacementResolver | None = None
     workspace_admission: WorkspaceCreationAdmission = field(
         default_factory=DatabaseBillingAdmission
     )
@@ -603,9 +598,6 @@ class ControlPlaneService:
         reuse_existing: bool = True,
     ) -> StubRecord:
         workspace_record = self.get_workspace(workspace)
-        resolver = self.placement_resolver
-        if resolver is None:
-            raise RuntimeError("control plane placement resolver was not injected")
         metadata_payload = dict(metadata) if metadata is not None else {}
         now = utc_now()
         requested = StubRecord(
@@ -622,9 +614,6 @@ class ControlPlaneService:
                 if isinstance(config, StubConfig)
                 else StubConfig.model_validate(dict(config) if config is not None else {})
             ),
-            # Resolved only when the stub is created below; the fingerprint leaves
-            # placement out, so reusing an existing stub never pays for it.
-            placement=Placement.platform(),
             metadata=metadata_payload,
             created_at=now,
             updated_at=now,
@@ -652,10 +641,7 @@ class ControlPlaneService:
                 metadata=requested.metadata,
             )
             if existing is None:
-                placement = resolver.resolve_placement(
-                    session, workspace_record, requested.config.machine
-                )
-                record = repository.upsert(requested.model_copy(update={"placement": placement}))
+                record = repository.upsert(requested)
                 if reuse_existing:
                     repository.set_preparation_fingerprint(
                         record.id, workspace_id=workspace_record.id, fingerprint=fingerprint

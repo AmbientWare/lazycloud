@@ -82,6 +82,7 @@ from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
 )
+from execution.placement import workload_placement
 from execution.services import ExecutionServices
 
 ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS = 0.05
@@ -181,6 +182,12 @@ class EndpointControlService:
             HOT_RELOAD_DIR_ENV: WORKER_USER_CODE_VOLUME,
         }
         with self.services.context.database.session() as session:
+            placement = workload_placement(
+                session,
+                resolver=self.services.placement_resolver,
+                stub=stub,
+                workspace=workspace,
+            )
             containers = ContainerRepository(session)
             containers.lock_stub_capacity(stub.id)
             live = containers.count_live_for_stub(stub.id)
@@ -261,7 +268,7 @@ class EndpointControlService:
                 disk_mib=config.runtime.requested_disk_mib,
                 gpu=list(container.gpu),
                 gpu_count=container.gpu_count,
-                placement=stub.placement,
+                placement=placement,
                 region=config.runtime.region,
                 availability_zone=config.runtime.availability_zone,
                 runtime=config.runtime.runtime,

@@ -23,6 +23,7 @@ from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
+from control.placement import PlacementResolver
 from control.service import ControlPlaneService
 from coordination.event_bus import RedisEventBus
 from coordination.process_presence import RedisProcessPresence
@@ -172,6 +173,10 @@ class SchedulerAppServices:
     retention: SchedulerRetention | None
     redis_client: RedisClient
 
+    @property
+    def placement_resolver(self) -> PlacementResolver:
+        return self.compute_policies
+
     @classmethod
     def create(
         cls,
@@ -201,7 +206,6 @@ class SchedulerAppServices:
             workspace_storage_client=object_client,
             public_http_origin=gateway_origin,
             workspace_changes=workspace_changes,
-            placement_resolver=compute_policies,
         )
         scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
         container_repository = RedisSchedulerContainerRepository(redis)
@@ -385,6 +389,7 @@ class SchedulerAppServices:
             runtime_state=container_runtime_state,
             container_shutdowns=container_shutdowns,
             workers=worker_repository,
+            placement_resolver=compute_policies,
         )
         container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
             worker_repository, container_repository, containers

@@ -4,7 +4,6 @@ from contextlib import ExitStack
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.identity import WorkspaceRepository
 from fastapi.testclient import TestClient
@@ -58,7 +57,6 @@ def test_admin_can_include_deleting_workspaces_but_not_deleted_tombstones(
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         control.get_workspace("default")
         active = owned_workspace(control, "projection-active")
@@ -91,9 +89,7 @@ def test_workspace_token_cannot_expand_its_workspace_directory(
     api_workspace: WorkspaceRecord,
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    )
+    control = ControlPlaneService(services.context)
     active = api_workspace
     deleting = owned_workspace(control, f"projection-deleting-{active.id}")
     deleted = owned_workspace(control, f"projection-deleted-{active.id}")

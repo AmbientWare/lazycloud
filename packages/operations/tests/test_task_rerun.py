@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.records.apps import StubRecord
 from database.repositories.execution import TaskDependencyRepository
@@ -42,7 +41,6 @@ def test_rerun_preserves_original_opaque_function_invocation(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("rerun-fn", kind=StubKind.Function)
     original_body = b"opaque-python-invocation"
@@ -70,7 +68,6 @@ def test_rerun_preserves_original_opaque_function_invocation(
 def test_rerun_copies_declared_dependency_edges(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("rerun-dependency", kind=StubKind.Function)
     upstream = _finished_function_task(
@@ -110,7 +107,6 @@ def test_rerun_copies_declared_dependency_edges(isolated_services: ApiServices) 
 def test_rerun_rejects_live_tasks(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("rerun-live", kind=StubKind.Function)
     task = isolated_services.tasks.create(
@@ -129,7 +125,6 @@ def test_rerun_rejects_live_tasks(isolated_services: ApiServices) -> None:
 def test_rerun_scopes_to_workspace(isolated_services: ApiServices) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = control.create_stub("rerun-scope", kind=StubKind.Function)
     source = _finished_function_task(isolated_services, stub, args=[], kwargs={})
