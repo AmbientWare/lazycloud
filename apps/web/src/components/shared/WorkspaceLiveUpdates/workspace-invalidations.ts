@@ -79,12 +79,16 @@ export function workspaceInvalidationTargets(
     // Capacity belongs to the account, so the change one workspace's stream
     // reports is a change to what every workspace of that account reads.
     case "compute.units":
-      return [{ queryKey: accountQueryKeys.compute.instances() }];
+      return [
+        { queryKey: accountQueryKeys.compute.instances() },
+        { queryKey: workspaceQueryKeys.compute.summary(workspaceId) },
+      ];
     case "compute.machines":
     case "compute.workers":
       return [
         { queryKey: accountQueryKeys.compute.machines() },
         { queryKey: accountQueryKeys.compute.instances() },
+        { queryKey: workspaceQueryKeys.compute.summary(workspaceId) },
       ];
     case "compute.agents":
     case "compute.providers":
@@ -93,6 +97,7 @@ export function workspaceInvalidationTargets(
       return [
         { queryKey: accountQueryKeys.compute.awsConnection() },
         { queryKey: accountQueryKeys.compute.instances() },
+        { queryKey: workspaceQueryKeys.compute.summary(workspaceId) },
       ];
     case "storage.secrets":
       return [{ queryKey: workspaceQueryKeys.storage.secrets(workspaceId) }];

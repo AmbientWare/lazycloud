@@ -93,7 +93,7 @@ def _wait_disconnected(
         nonlocal removal_requested, stacks_removed
         connection = client.current_connection()
         instances = [
-            {"id": item.id, "status": item.status, "region": item.region}
+            {"id": item.id, "lifecycle": item.lifecycle.value, "region": item.region}
             for item in client.instances().data
             if item.provider == f"aws:{connection_id}"
         ]

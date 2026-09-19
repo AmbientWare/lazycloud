@@ -7,13 +7,7 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { UnitMachine } from "@/lib/api/schemas";
 import {
   createMachineJoinCommand,
@@ -70,13 +64,15 @@ function JoinMachineFlow() {
   const queryError = machinesQuery.error;
 
   return (
-    <DialogContent className="flex max-h-[min(46rem,calc(100svh-2rem))] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+    <DialogContent
+      aria-describedby={undefined}
+      className="flex max-h-[min(46rem,calc(100svh-2rem))] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
+    >
       <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
         <DialogTitle className="flex items-center gap-2 text-base">
           <Server className="size-4 text-brand" />
           Join a machine
         </DialogTitle>
-        <DialogDescription>Connect a Linux amd64 or arm64 host to your account.</DialogDescription>
       </DialogHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
@@ -136,11 +132,7 @@ function GenerateCommandStep({
       <h3 id="generate-command-title" className="text-sm font-medium">
         Prepare the host
       </h3>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Name the machine, choose the workspaces it serves, then generate a short-lived install
-        command for one Linux host.
-      </p>
-      <div className="mt-4 space-y-4">
+      <div className="space-y-4">
         <label className="block text-xs font-medium text-muted-foreground">
           Machine name
           <Input
@@ -155,9 +147,7 @@ function GenerateCommandStep({
             aria-invalid={nameTouched && nameError !== null}
           />
           <span className="mt-1 block font-normal">
-            {nameTouched && nameError
-              ? nameError
-              : 'Workloads pin to this name with machine="..." or --machine.'}
+            {nameTouched && nameError ? nameError : 'Workloads select it with machine="gpu-1".'}
           </span>
         </label>
         <fieldset disabled={pending}>
@@ -166,7 +156,7 @@ function GenerateCommandStep({
           <p className="mt-1 text-xs text-muted-foreground">
             {selected.size === 0
               ? "Select at least one workspace."
-              : "Only workloads from these workspaces run here. You can change this later."}
+              : "Only workloads from these workspaces run here."}
           </p>
         </fieldset>
       </div>
@@ -205,8 +195,9 @@ function JoinProgress({
   expiresAt: string;
   machine: UnitMachine | undefined;
 }) {
-  const ready = machine?.readiness_phase === "ready";
-  const blocked = machine?.readiness_phase === "blocked";
+  const joined = machine !== undefined && machine.lifecycle !== "requested";
+  const ready = machine?.lifecycle === "ready";
+  const blocked = machine?.lifecycle === "failed";
   const failedChecks = machine?.preflight_checks.filter((check) => !check.ok) ?? [];
   const checkRemediations = new Set(failedChecks.map((check) => check.remediation).filter(Boolean));
   const remediation = new Set(
@@ -240,17 +231,17 @@ function JoinProgress({
         <div className="mt-3 grid gap-0 border border-border">
           <ProgressRow state="complete" label="Install command generated" />
           <ProgressRow
-            state={machine ? "complete" : "active"}
-            label={machine ? "Agent connected" : "Waiting for the agent to connect"}
+            state={joined ? "complete" : "active"}
+            label={joined ? "Agent connected" : "Waiting for the agent to connect"}
           />
           <ProgressRow
-            state={ready ? "complete" : blocked ? "blocked" : machine ? "active" : "pending"}
+            state={ready ? "complete" : blocked ? "blocked" : joined ? "active" : "pending"}
             label={
               ready
                 ? "Machine is ready to run workloads"
                 : blocked
                   ? "Host checks failed"
-                  : machine?.readiness_message || "Waiting for host checks"
+                  : (joined && machine?.lifecycle_message) || "Waiting for host checks"
             }
             last
           />

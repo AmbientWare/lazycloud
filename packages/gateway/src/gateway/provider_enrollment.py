@@ -29,7 +29,7 @@ from database.types import DatabaseSession
 from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr
 from shared.aws_connections import AwsAccountAuthorizationPhase
-from shared.compute_enrollment import MachineBootstrapPhase
+from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitPhase,
@@ -47,6 +47,7 @@ from shared.http.provider_nodes import (
 from shared.identity import WorkspaceKind
 from shared.placement import Placement
 from shared.provider_config import ProviderKind
+from shared.timestamps import utc_now
 
 from gateway.agent_enrollment import AgentJoinResult
 from gateway.events import GatewayEventSink
@@ -146,6 +147,12 @@ class ProviderNodeEnrollmentService:
         request: ProviderNodeEnrollmentRequest,
         pool: ComputeUnitRecord,
     ) -> AgentJoinResult:
+        # The reconcile made a machine row the moment the provider reported the
+        # instance; the credential names it so the join continues that row's
+        # lifecycle rather than starting a second machine for the same node.
+        instance = ComputeProviderInstanceRepository(session).get_for_pool_instance(
+            pool.id, request.provider_instance_id
+        )
         join_token = self._issue_join_token(
             session,
             pool.id,
@@ -153,6 +160,7 @@ class ProviderNodeEnrollmentService:
             pool.placement,
             pool.capacity_owner_id,
             owner_user_id=self._pool_owner(session, pool),
+            machine_id=instance.machine_id if instance is not None else None,
         )
         join_request = JoinAgentRequest(
             join_token=join_token.get_secret_value(),
@@ -201,13 +209,10 @@ class ProviderNodeEnrollmentService:
         bound = instances.bind_machine(pool.id, request.provider_instance_id, joined.machine_id)
         if bound is None:
             raise ConflictError("provider node is no longer available for enrollment")
-        self.compute.record_provider_bootstrap_status_in_transaction(
-            session,
-            pool_id=pool.id,
-            provider_instance_id=request.provider_instance_id,
-            phase=MachineBootstrapPhase.Joining,
-            failure_reason=None,
-        )
+        if bound.first_enrolled_at is None:
+            # This survives deletion of the machine row and its foreign-key binding.
+            now = utc_now()
+            instances.upsert(bound.model_copy(update={"first_enrolled_at": now, "updated_at": now}))
 
     def report_failure(
         self,
@@ -237,10 +242,10 @@ class ProviderNodeEnrollmentService:
                 "[redacted]",
                 excerpt,
             )
-        observed = self.compute.record_provider_bootstrap_status(
+        observed = self.compute.record_provider_node_lifecycle(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
-            phase=MachineBootstrapPhase.Failed,
+            lifecycle=MachineLifecycle.Failed,
             failure_reason=request.failure_reason,
             failure_detail=excerpt,
         )
@@ -263,9 +268,9 @@ class ProviderNodeEnrollmentService:
                 )
         return ProviderNodeBootstrapFailureResponse(
             provider_instance_id=request.provider_instance_id,
-            phase=observed.bootstrap_phase,
-            failure_reason=observed.bootstrap_failure_reason,
-            observed_at=observed.bootstrap_observed_at,
+            phase=observed.lifecycle,
+            failure_reason=observed.lifecycle_failure,
+            observed_at=observed.lifecycle_at,
         )
 
     def record_phase(
@@ -286,17 +291,17 @@ class ProviderNodeEnrollmentService:
             peer_address=peer_address,
             launch_id=request.launch_id,
         )
-        observed = self.compute.record_provider_bootstrap_status(
+        observed = self.compute.record_provider_node_lifecycle(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
-            phase=request.phase,
+            lifecycle=request.phase,
             failure_reason=None,
         )
         return ProviderNodeBootstrapFailureResponse(
             provider_instance_id=request.provider_instance_id,
-            phase=observed.bootstrap_phase,
-            failure_reason=observed.bootstrap_failure_reason,
-            observed_at=observed.bootstrap_observed_at,
+            phase=observed.lifecycle,
+            failure_reason=observed.lifecycle_failure,
+            observed_at=observed.lifecycle_at,
         )
 
     def _verify_active_node(
@@ -500,6 +505,7 @@ class ProviderNodeEnrollmentService:
         capacity_owner_id: str,
         *,
         owner_user_id: str | None,
+        machine_id: str | None = None,
     ) -> SecretStr:
         plan = plan_join_token_creation(
             ComputePrincipal(
@@ -522,6 +528,7 @@ class ProviderNodeEnrollmentService:
             created_by_token_id=None,
             max_uses=1,
             expires_at=plan.expires_at,
+            machine_id=machine_id or "",
         )
         return SecretStr(plan.token)
 

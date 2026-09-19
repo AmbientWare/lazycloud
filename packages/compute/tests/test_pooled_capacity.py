@@ -60,6 +60,8 @@ from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.worker_releases import WorkerReleaseRepository
 from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import ComputeCapacityOperationTable
+from database.tables.orchestration import MachineTable
+from database.types import DatabaseSession
 from identity.platform import PlatformNamespaceService
 from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
@@ -97,10 +99,9 @@ from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
     MachineReadinessPhase,
 )
-from shared.compute_fleet import Machine, ResourceStatus, Worker
+from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeResourceRequirements,
@@ -111,6 +112,7 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.identity import WorkspaceStatus
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
 from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
@@ -3048,14 +3050,11 @@ def test_pooled_scale_down_waits_for_exact_volume_absence(
                 placement=pool.placement,
                 provider="agent",
                 status=ResourceStatus.Running,
+                lifecycle=MachineLifecycle.Joining,
             ),
             workspace_id=pool.workspace_id,
         )
-        bound = ComputeProviderInstanceRepository(session).bind_machine(
-            pool.id,
-            instance_id,
-            machine_id,
-        )
+        bound = _bind_test_machine(session, pool.id, instance_id, machine_id)
         assert bound is not None
         SourceCacheCleanupRepository(session).register_generation(
             generation_id,
@@ -3213,6 +3212,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
                 placement=pool.placement,
                 provider="agent",
                 status=ResourceStatus.Running,
+                lifecycle=MachineLifecycle.Joining,
             ),
             workspace_id=pool.workspace_id,
         )
@@ -3254,11 +3254,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
                 last_heartbeat_at=now,
             )
         )
-        bound = ComputeProviderInstanceRepository(session).bind_machine(
-            pool.id,
-            "i-00000000000000000",
-            machine_id,
-        )
+        bound = _bind_test_machine(session, pool.id, "i-00000000000000000", machine_id)
         assert bound is not None
 
     repeated = compute.request_connection_drain(
@@ -3284,7 +3280,7 @@ def test_connection_drain_terminalizes_provider_nodes_and_preserves_history(
     assert enrollment.schedulable is False
     assert enrollment.heartbeat_confirmed is False
     assert enrollment.readiness_phase is MachineReadinessPhase.Revoked
-    assert machine is not None and machine.status is ResourceStatus.Deleted
+    assert machine is not None and machine.lifecycle is MachineLifecycle.Deleted
     assert worker is not None and worker.status is ResourceStatus.Deleted
     assert durable_credential is not None
     assert durable_credential.status is ComputeCredentialStatus.Revoked
@@ -3315,15 +3311,16 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
     started_at = datetime.now(UTC)
     compute.reconcile_pooled_capacity(now=started_at)
     booting = _mark_open_record_booting(service_context, pool.id, at=started_at)
-    assert booting.machine_id is None
+    assert booting.machine_id is not None
 
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=200))
     with service_context.database.session() as session:
         [waiting] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert provider.release_calls == []
     assert waiting.status not in {"terminating", "deleted", "failed"}
-    assert waiting.bootstrap_phase is MachineBootstrapPhase.Booting
-    assert waiting.bootstrap_observed_at == started_at
+    waiting_machine = _machine_of(service_context, waiting)
+    assert waiting_machine.lifecycle is MachineLifecycle.Booting
+    assert waiting_machine.lifecycle_at == started_at
 
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=301))
     with service_context.database.session() as session:
@@ -3331,9 +3328,10 @@ def test_internal_pool_bootstrap_phase_deadline_reclaims_only_after_it_elapses(
         current = ComputeUnitRepository(session).get(pool.id)
     assert provider.release_calls == [booting.instance_id]
     assert replacement.launch_attempt == 2
-    assert replacement.bootstrap_phase is MachineBootstrapPhase.Provisioning
-    assert replacement.bootstrap_failure_reason is None
-    assert replacement.machine_id is None
+    replacement_machine = _machine_of(service_context, replacement)
+    assert replacement_machine.lifecycle is MachineLifecycle.Provisioning
+    assert replacement_machine.lifecycle_failure is None
+    assert replacement.machine_id != booting.machine_id
     assert replacement.terminating_reason == ""
     assert current is not None
     assert current.provider_state.degraded_reason is None
@@ -3362,36 +3360,82 @@ def test_repeated_bootstrap_failures_do_not_extend_the_reclaim_deadline(
         root_volume_gib=200,
     )
     compute.reconcile_pooled_capacity(now=started_at)
-    first_failure = compute.record_provider_bootstrap_status(
+    first_failure = compute.record_provider_node_lifecycle(
         pool_id=pool.id,
         provider_instance_id="i-00000000000000000",
-        phase=MachineBootstrapPhase.Failed,
+        lifecycle=MachineLifecycle.Failed,
         failure_reason=MachineBootstrapFailureReason.WorkerReadinessFailed,
         now=started_at + timedelta(seconds=10),
     )
-    with service_context.database.session() as session:
-        ComputeProviderInstanceRepository(session).upsert(
-            first_failure.model_copy(update={"bootstrap_phase_started_at": None})
-        )
+    assert first_failure.lifecycle_at == started_at + timedelta(seconds=10)
     for elapsed in (299, 310):
-        observed = compute.record_provider_bootstrap_status(
+        observed = compute.record_provider_node_lifecycle(
             pool_id=pool.id,
             provider_instance_id="i-00000000000000000",
-            phase=MachineBootstrapPhase.Failed,
+            lifecycle=MachineLifecycle.Failed,
             failure_reason=MachineBootstrapFailureReason.WorkerReadinessFailed,
             now=started_at + timedelta(seconds=elapsed),
         )
-        assert observed.bootstrap_observed_at == started_at + timedelta(seconds=elapsed)
-        assert observed.bootstrap_phase_started_at == started_at + timedelta(seconds=10)
+        assert observed.lifecycle_at == started_at + timedelta(seconds=10)
 
     compute.reconcile_pooled_capacity(now=started_at + timedelta(seconds=311))
 
-    assert first_failure.instance_id in provider.release_calls
+    assert provider.release_calls == ["i-00000000000000000"]
     with service_context.database.session() as session:
         [replacement] = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     assert replacement.launch_attempt == 2
-    assert replacement.bootstrap_phase is MachineBootstrapPhase.Provisioning
-    assert replacement.bootstrap_phase_started_at == started_at + timedelta(seconds=311)
+    replacement_machine = _machine_of(service_context, replacement)
+    assert replacement_machine.lifecycle is MachineLifecycle.Provisioning
+    assert replacement_machine.lifecycle_at == started_at + timedelta(seconds=311)
+
+
+def test_workspace_deletion_terminates_a_live_node_while_the_workspace_is_deleting(
+    service_context: ServiceContext,
+) -> None:
+    """The deletion pass writes terminal state on rows the active-owner fence refuses.
+
+    A workspace being deleted is no longer active, so the ordinary machine write
+    raises; the termination would fail on its first pass for every workspace
+    holding a live node and the node would keep billing.
+    """
+    _seed_connection(service_context)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    compute.reconcile_pooled_capacity()
+    record = _open_record(service_context, pool.id)
+    assert record is not None and record.machine_id is not None
+    with service_context.database.session() as session:
+        workspaces = WorkspaceRepository(session)
+        workspace = workspaces.get(pool.workspace_id)
+        assert workspace is not None
+        workspaces.upsert(workspace.model_copy(update={"status": WorkspaceStatus.Deleting}))
+
+    with service_context.database.session() as session:
+        compute.provider_machines._terminate_provider_record(
+            session,
+            record,
+            clients={},
+            reason="workspace_deleted",
+            message="workspace deletion terminated managed compute pool",
+            deleting_workspace_id=pool.workspace_id,
+        )
+    with service_context.database.session() as session:
+        machine = MachineRepository(session).get_across_workspaces(record.machine_id)
+        terminated = ComputeProviderInstanceRepository(session).get_by_machine(record.machine_id)
+    assert machine is not None and machine.lifecycle is MachineLifecycle.Terminating
+    assert terminated is not None and terminated.status == "terminating"
 
 
 def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutation(
@@ -3440,8 +3484,9 @@ def test_relaunch_exhaustion_durably_degrades_pool_until_explicit_capacity_mutat
     assert degraded.phase is ComputeUnitPhase.Degraded
     assert degraded.provider_state.degraded_reason == "bootstrap_launch_attempts_exhausted"
     assert reclaimed.status == "deleted"
-    assert reclaimed.bootstrap_phase is MachineBootstrapPhase.Failed
-    assert reclaimed.bootstrap_failure_reason is MachineBootstrapFailureReason.BootstrapTimedOut
+    reclaimed_machine = _machine_of(service_context, reclaimed)
+    assert reclaimed_machine.lifecycle is MachineLifecycle.Deleted
+    assert reclaimed_machine.lifecycle_failure is MachineBootstrapFailureReason.BootstrapTimedOut
     assert reclaimed.terminating_reason == "bootstrap_deadline_exceeded"
     assert reclaimed.provider_storage_destroyed_at is not None
     assert provider.desired == 0
@@ -3585,14 +3630,11 @@ def test_clearing_warm_capacity_preserves_work_from_another_workspace(
                 placement=pool.placement,
                 provider=pool.provider_ref,
                 status=ResourceStatus.Running,
+                lifecycle=MachineLifecycle.Ready,
             ),
             workspace_id=pool.workspace_id,
         )
-        bound = ComputeProviderInstanceRepository(session).bind_machine(
-            pool.id,
-            "i-00000000000000000",
-            machine_id,
-        )
+        bound = _bind_test_machine(session, pool.id, "i-00000000000000000", machine_id)
         assert bound is not None
         ContainerRepository(session).upsert(
             ContainerRecord(
@@ -3629,12 +3671,43 @@ def test_clearing_warm_capacity_preserves_work_from_another_workspace(
     assert provider.desired == 1
 
 
+def _bind_test_machine(
+    session: DatabaseSession,
+    pool_id: str,
+    instance_id: str,
+    machine_id: str,
+) -> ComputeProviderInstanceRecord | None:
+    """Bind the test's own machine row where the reconcile already made one.
+
+    The reconcile creates a machine the first time the provider reports an
+    instance; a test that wants a machine of its choosing takes that row's place.
+    """
+    repository = ComputeProviderInstanceRepository(session)
+    record = repository.get_for_pool_instance(pool_id, instance_id, for_update=True)
+    if record is not None and record.machine_id not in {None, machine_id}:
+        auto_machine = session.get(MachineTable, record.machine_id)
+        repository.upsert(record.model_copy(update={"machine_id": None}))
+        if auto_machine is not None:
+            session.delete(auto_machine)
+        session.flush()
+    return repository.bind_machine(pool_id, instance_id, machine_id)
+
+
+def _machine_of(service_context: ServiceContext, record: ComputeProviderInstanceRecord) -> Machine:
+    assert record.machine_id is not None
+    with service_context.database.session() as session:
+        machine = MachineRepository(session).get_across_workspaces(record.machine_id)
+    assert machine is not None
+    return machine
+
+
 def _mark_open_record_booting(
     service_context: ServiceContext,
     pool_id: str,
     *,
     at: datetime,
 ) -> ComputeProviderInstanceRecord:
+    """The node reports it is booting, entering the phase at `at`."""
     with service_context.database.session() as session:
         repository = ComputeProviderInstanceRepository(session)
         record = next(
@@ -3642,15 +3715,21 @@ def _mark_open_record_booting(
             for item in repository.list_for_pool(pool_id)
             if item.status not in {"deleted", "failed"}
         )
-        return repository.upsert(
-            record.model_copy(
+        assert record.machine_id is not None
+        machines = MachineRepository(session)
+        machine = machines.get_across_workspaces(record.machine_id)
+        assert machine is not None
+        machines.upsert(
+            machine.model_copy(
                 update={
-                    "bootstrap_phase": MachineBootstrapPhase.Booting,
-                    "bootstrap_observed_at": at,
-                    "bootstrap_phase_started_at": at,
+                    "lifecycle": MachineLifecycle.Booting,
+                    "lifecycle_message": "",
+                    "lifecycle_at": at,
+                    "updated_at": at,
                 }
             )
         )
+        return record
 
 
 def _offer() -> ComputeOffer:
@@ -4249,6 +4328,7 @@ def _seed_serving_machine(
                 placement=pool.placement,
                 provider="agent",
                 status=ResourceStatus.Running,
+                lifecycle=MachineLifecycle.Joining,
             ),
             workspace_id=pool.workspace_id,
         )
@@ -4290,19 +4370,18 @@ def _seed_serving_machine(
                 last_heartbeat_at=now,
             )
         )
-        ComputeProviderInstanceRepository(session).bind_machine(pool.id, instance_id, machine_id)
-    # The bootstrap status opens its own session, so the seed above must have
+        _bind_test_machine(session, pool.id, instance_id, machine_id)
+    # The lifecycle write opens its own session, so the seed above must have
     # committed first: a second writer inside an uncommitted one deadlocks.
-    ComputeService(
-        service_context,
-        capacity_owner_mutations=_MutationLeases(),
-    ).record_provider_bootstrap_status(
-        pool_id=pool.id,
-        provider_instance_id=instance_id,
-        phase=MachineBootstrapPhase.Joining,
-        failure_reason=None,
-        now=now,
-    )
+    compute = ComputeService(service_context, capacity_owner_mutations=_MutationLeases())
+    for lifecycle in (MachineLifecycle.Joining, MachineLifecycle.Ready):
+        compute.record_provider_node_lifecycle(
+            pool_id=pool.id,
+            provider_instance_id=instance_id,
+            lifecycle=lifecycle,
+            failure_reason=None,
+            now=now,
+        )
     hooks.available_machines.add(machine_id)
 
 
@@ -4542,8 +4621,9 @@ def test_a_machine_that_served_and_stopped_is_reclaimed_once_its_window_passes(
     with service_context.database.session() as session:
         records = ComputeProviderInstanceRepository(session).list_for_pool(pool.id)
     reclaimed = next(item for item in records if item.id == served.id)
-    assert reclaimed.bootstrap_failure_reason is MachineBootstrapFailureReason.ServiceLost
-    assert reclaimed.bootstrap_phase is MachineBootstrapPhase.Failed
+    reclaimed_machine = _machine_of(service_context, reclaimed)
+    assert reclaimed_machine.lifecycle_failure is MachineBootstrapFailureReason.ServiceLost
+    assert reclaimed_machine.lifecycle in {MachineLifecycle.Terminating, MachineLifecycle.Deleted}
     assert provider.release_calls == [served.instance_id]
 
 

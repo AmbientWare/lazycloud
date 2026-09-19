@@ -1,53 +1,59 @@
 import { queryOptions } from "@tanstack/react-query";
-import { apiRequest, postJson } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import {
   awsConnectionAuthorizationSchema,
   awsConnectionEnvelopeSchema,
   awsConnectionSchema,
-  customerComputeInstanceListSchema,
+  computeSummarySchema,
+  connectionMachineListSchema,
   machineJoinCommandResponseSchema,
   machineSchema,
   unitMachineListSchema,
   type AwsConnection,
 } from "@/lib/api/schemas";
-import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
+import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 /**
- * How often capacity is re-read while its panel is open.
+ * The account's capacity announces every transition it makes, but only to the
+ * workspaces a machine serves or is anchored in; somebody looking from another
+ * workspace of the account would watch a node come up and never be told. Slow
+ * because it is a backstop for that case rather than the mechanism.
+ */
+const ACCOUNT_CAPACITY_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * Machines this account joined itself, each serving the workspaces it names.
  *
- * Readiness here is not a stored column the change stream can announce: the
- * server derives a machine's phase and an instance's service state from how
- * recently its agent was heard from. A host that dies stops sending, and
- * silence publishes nothing, so the only way the panel can show it leaving is
- * to ask again. These panels live inside the settings dialog, so the interval
- * runs while somebody is watching and stops with the tab.
+ * Every lifecycle write publishes `compute.machines` on the change stream of
+ * each workspace the machine serves, which invalidates this list.
  */
-const CAPACITY_POLL_INTERVAL_MS = 5_000;
-
-/**
- * The connected cloud announces every transition it makes, but only to the
- * workspaces the account owns; somebody working inside a workspace they were
- * invited to would watch a stack finish and never be told. Slow because it is
- * a backstop for that case rather than the mechanism.
- */
-const AWS_CONNECTION_POLL_INTERVAL_MS = 30_000;
-
-/** Machines this account connected, each serving the workspaces it names. */
 export function machinesQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.compute.machines(),
     queryFn: () => apiRequest("/api/v1/machines/self-hosted?limit=250", unitMachineListSchema),
-    refetchInterval: CAPACITY_POLL_INTERVAL_MS,
+    refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function computeInstancesQueryOptions(enabled = true) {
+/** Machines the account's connected cloud launched, with their provider facts. */
+export function connectionMachinesQueryOptions(enabled = true) {
   return queryOptions({
     queryKey: accountQueryKeys.compute.instances(),
     enabled,
-    queryFn: () => apiRequest("/api/v1/compute/instances", customerComputeInstanceListSchema),
-    refetchInterval: CAPACITY_POLL_INTERVAL_MS,
+    queryFn: () => apiRequest("/api/v1/compute/instances", connectionMachineListSchema),
+    refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
+    meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+/** The connected cloud's counts and cost, as the server classifies them. */
+export function computeSummaryQueryOptions(workspaceId: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.compute.summary(workspaceId),
+    queryFn: () =>
+      apiRequest(withWorkspace("/api/v1/compute/summary", workspaceId), computeSummarySchema),
+    refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -57,7 +63,7 @@ export function awsConnectionQueryOptions(enabled = true) {
     queryKey: accountQueryKeys.compute.awsConnection(),
     enabled,
     queryFn: getAwsConnection,
-    refetchInterval: AWS_CONNECTION_POLL_INTERVAL_MS,
+    refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
     meta: workspaceLiveQueryMeta(true),
   });
 }

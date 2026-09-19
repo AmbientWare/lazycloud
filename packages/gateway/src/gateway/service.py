@@ -36,6 +36,7 @@ from compute.capacity_errors import (
     CapacityReservationLockContendedError,
 )
 from compute.capacity_recovery import record_capacity_risk
+from compute.machine_lifecycle import machine_lifecycle_allowed, write_machine_lifecycle
 from compute.policy import WorkspaceComputePolicyService
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
@@ -126,9 +127,10 @@ from shared.compute_enrollment import (
     AgentWorkerSlotStatus,
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
+    MachineBootstrapFailureReason,
     MachineReadinessPhase,
 )
-from shared.compute_fleet import Machine, ResourceStatus, Worker
+from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (
     ComputeUnitRecord,
 )
@@ -350,15 +352,6 @@ def _request_with_workload_defaults(
         updates["retries"] = resolve_retries(kind.value, None)
     return request.model_copy(update=updates) if updates else request
 
-
-MACHINE_STATUS_FOR_READINESS = {
-    MachineReadinessPhase.Ready: ResourceStatus.Running,
-    MachineReadinessPhase.Blocked: ResourceStatus.Failed,
-    MachineReadinessPhase.Offline: ResourceStatus.Stopped,
-    MachineReadinessPhase.Joining: ResourceStatus.Created,
-    MachineReadinessPhase.Revoked: ResourceStatus.Deleted,
-}
-"""What a readiness phase means for the machine row both writers keep in step."""
 
 DISCONNECT_SWEEP_LIMIT = 200
 """Machines one disconnect sweep will mark.
@@ -1177,12 +1170,16 @@ class GatewayControlService:
             if existing is not None and not reuse:
                 # A row whose anchor workspace was deleted has no unit left; it only
                 # holds the name, and gives it up here.
-                machines.upsert(
-                    existing.model_copy(
-                        update={"status": ResourceStatus.Deleted, "updated_at": now}
-                    ),
+                write_machine_lifecycle(
+                    session,
+                    existing,
+                    MachineLifecycle.Deleted,
+                    workspace_changes=self.services.compute.workspace_changes,
                     workspace_id=existing_workspace_id,
+                    message="Name reissued to a new join command",
+                    now=now,
                 )
+            kept = existing if existing is not None and reuse else None
             try:
                 machine = machines.upsert(
                     Machine(
@@ -1192,9 +1189,19 @@ class GatewayControlService:
                         placement=placement,
                         capacity_owner_id=unit_id,
                         provider="agent",
-                        status=ResourceStatus.Created,
+                        status=kept.status if kept is not None else ResourceStatus.Created,
+                        lifecycle=(
+                            kept.lifecycle if kept is not None else MachineLifecycle.Requested
+                        ),
+                        lifecycle_message=(
+                            kept.lifecycle_message
+                            if kept is not None
+                            else "Waiting for the join command to run on the host"
+                        ),
+                        lifecycle_failure=kept.lifecycle_failure if kept is not None else None,
+                        lifecycle_at=kept.lifecycle_at if kept is not None else now,
                         labels={"source": "attached"},
-                        created_at=existing.created_at if existing is not None and reuse else now,
+                        created_at=kept.created_at if kept is not None else now,
                         updated_at=now,
                     ),
                     workspace_id=anchor_workspace_id,
@@ -1402,46 +1409,41 @@ class GatewayControlService:
             next=selected[-1].id if len(machines) > limit else "",
         )
 
-    def account_machine_views(self, user_id: str) -> list[UnitMachineResponse]:
-        """Every joined machine this account owns, across the workspaces it holds.
+    def self_hosted_machine_views(self, user_id: str) -> list[UnitMachineResponse]:
+        """The machines this account joined itself, across the workspaces it holds.
 
-        Read from the enrollments rather than from any one workspace's machines:
-        the enrollment is what names the account, and a caller asking for their own
-        hardware should not have to know which of their workspaces anchors it.
+        Classified by placement kind: a joined host is placed on its own machine
+        id. Nodes a connected cloud launched enroll through the same agent, hold
+        enrollments under the same account, and are the connection's to list.
         """
         with self.services.context.database.session() as session:
-            enrollments = [
-                enrollment
-                for enrollment in ComputeMachineEnrollmentRepository(session).list_for_user(user_id)
-                if enrollment.status is ComputeMachineEnrollmentStatus.Active
-            ]
-        owned_machine_ids = {enrollment.machine_id for enrollment in enrollments}
-        views = [
-            view
-            for workspace_id in sorted({enrollment.workspace_id for enrollment in enrollments})
-            for view in self.machine_views(workspace_id)
-            # Provider-launched nodes enroll through the same path, so they hold
-            # enrollments too. They are the connected account's capacity and are
-            # reported there; this answer is hardware the customer connected.
-            if view.id in owned_machine_ids and view.provider_name == "agent"
-        ]
-        views.sort(key=lambda item: item.id)
-        return views
+            machines = MachineRepository(session).list_joined_for_owner(user_id)
+            enrollments = ComputeMachineEnrollmentRepository(session).list_by_machine_ids(
+                [machine.id for machine in machines]
+            )
+        return self._machine_views(machines, enrollments)
 
     def machine_views(self, workspace_id: str) -> list[UnitMachineResponse]:
         machines = self.services.compute.list_machines(workspace=workspace_id)
-        workspace_names = self._workspace_names(machines)
         with self.services.context.database.session() as session:
-            enrollments = ComputeMachineEnrollmentRepository(session)
-            enrollment_by_machine = {
-                enrollment.machine_id: enrollment
-                for machine in machines
-                if (enrollment := enrollments.by_machine(workspace_id, machine.id)) is not None
-                and enrollment.status is ComputeMachineEnrollmentStatus.Active
-            }
+            enrollments = ComputeMachineEnrollmentRepository(session).list_by_machine_ids(
+                [machine.id for machine in machines]
+            )
+        return self._machine_views(machines, enrollments)
+
+    def _machine_views(
+        self,
+        machines: Sequence[Machine],
+        enrollments: Mapping[str, ComputeMachineEnrollmentRecord],
+    ) -> list[UnitMachineResponse]:
+        workspace_names = self._workspace_names(machines)
         views: list[UnitMachineResponse] = []
         for machine in machines:
-            enrollment = enrollment_by_machine.get(machine.id)
+            enrollment = enrollments.get(machine.id)
+            if enrollment is not None and enrollment.status is not (
+                ComputeMachineEnrollmentStatus.Active
+            ):
+                enrollment = None
             views.append(
                 machine_view(
                     machine,
@@ -1464,6 +1466,7 @@ class GatewayControlService:
                     ),
                 )
             )
+        views.sort(key=lambda item: item.id)
         return views
 
     def require_workspace_self_hosted_decommissioned(self, workspace_id: str) -> None:
@@ -1538,15 +1541,18 @@ class GatewayControlService:
                     durable_worker.model_copy(update={"status": ResourceStatus.Deleted}),
                     workspace_id=enrollment.workspace_id,
                 )
-            machines = MachineRepository(session)
-            machine = machines.get(current.machine_id, workspace_id=enrollment.workspace_id)
+            machine = MachineRepository(session).get(
+                current.machine_id, workspace_id=enrollment.workspace_id
+            )
             if machine is None:
                 raise KeyError(f"machine not found: {current.machine_id}")
-            machines.upsert(
-                machine.model_copy(
-                    update={"status": ResourceStatus.Deleted, "updated_at": utc_now()}
-                ),
+            write_machine_lifecycle(
+                session,
+                machine,
+                MachineLifecycle.Deleted,
+                workspace_changes=self.services.compute.workspace_changes,
                 workspace_id=enrollment.workspace_id,
+                message="Removed; the host's credential was revoked",
             )
             enrollments.delete(current.id, workspace_id=enrollment.workspace_id)
         self.compute_states.delete_agent_machine_state_for_machine(
@@ -1676,22 +1682,6 @@ class GatewayControlService:
                             credentials.save_for_workspace_deletion(revoked_credential)
                         else:
                             credentials.save(revoked_credential)
-            machines = MachineRepository(session)
-            machine = machines.get(current.machine_id, workspace_id=enrollment.workspace_id)
-            if (
-                not deleting_workspace
-                and machine is not None
-                and machine.status is not ResourceStatus.Stopped
-            ):
-                machines.upsert(
-                    machine.model_copy(
-                        update={
-                            "status": ResourceStatus.Stopped,
-                            "updated_at": current_time,
-                        }
-                    ),
-                    workspace_id=current.workspace_id,
-                )
         self.compute_states.delete_agent_token_state(current.credential_hash)
         if join_token_hash:
             self.compute_states.revoke_join_token_state(join_token_hash)
@@ -1916,45 +1906,83 @@ class GatewayControlService:
                 if agent_state.preflight_passed
                 else MachineReadinessPhase.Blocked
             )
-            machine_repository = MachineRepository(session)
-            durable_machine = machine_repository.get(
+            durable_machine = MachineRepository(session).get(
                 agent_state.machine_id,
                 workspace_id=agent_state.workspace_id,
             )
-            # The row a join command created already carries the name and the
-            # workspaces it serves; the join fills in the hardware.
-            machine_repository.upsert(
-                Machine(
-                    id=agent_state.machine_id,
-                    name=durable_machine.name if durable_machine is not None else "",
-                    workspace_ids=(
-                        durable_machine.workspace_ids if durable_machine is not None else ()
-                    ),
-                    placement=agent_state.placement,
-                    capacity_owner_id=agent_state.capacity_owner_id,
-                    provider="agent",
-                    status=(
-                        ResourceStatus.Created
-                        if readiness_phase is MachineReadinessPhase.Joining
-                        else ResourceStatus.Failed
-                    ),
-                    cpu=agent_state.cpu_millicores / 1000,
-                    memory=f"{agent_state.memory_mb}Mi",
-                    gpu=agent_state.gpus[0] if agent_state.gpus else None,
-                    gpu_count=agent_state.gpu_count,
-                    labels={
-                        "hostname": agent_state.hostname,
-                        "os": agent_state.os,
-                        "arch": agent_state.arch,
-                        "source": "attached",
-                    },
-                    created_at=(
-                        durable_machine.created_at if durable_machine is not None else current_time
-                    ),
-                    updated_at=current_time,
+            # The row a join command created, or the provider reconcile made for
+            # a launched node, already carries the name, the workspaces it
+            # serves and its lifecycle so far; the join fills in the hardware.
+            joined_machine = Machine(
+                id=agent_state.machine_id,
+                name=durable_machine.name if durable_machine is not None else "",
+                workspace_ids=(
+                    durable_machine.workspace_ids if durable_machine is not None else ()
                 ),
-                workspace_id=agent_state.workspace_id,
+                placement=agent_state.placement,
+                capacity_owner_id=agent_state.capacity_owner_id,
+                provider=durable_machine.provider if durable_machine is not None else "agent",
+                status=durable_machine.status
+                if durable_machine is not None
+                else (ResourceStatus.Created),
+                lifecycle=(
+                    durable_machine.lifecycle
+                    if durable_machine is not None
+                    else MachineLifecycle.Requested
+                ),
+                lifecycle_message=(
+                    durable_machine.lifecycle_message if durable_machine is not None else ""
+                ),
+                lifecycle_failure=(
+                    durable_machine.lifecycle_failure if durable_machine is not None else None
+                ),
+                lifecycle_at=(
+                    durable_machine.lifecycle_at if durable_machine is not None else current_time
+                ),
+                cpu=agent_state.cpu_millicores / 1000,
+                memory=f"{agent_state.memory_mb}Mi",
+                gpu=agent_state.gpus[0] if agent_state.gpus else None,
+                gpu_count=agent_state.gpu_count,
+                labels={
+                    **(durable_machine.labels if durable_machine is not None else {}),
+                    "hostname": agent_state.hostname,
+                    "os": agent_state.os,
+                    "arch": agent_state.arch,
+                },
+                created_at=(
+                    durable_machine.created_at if durable_machine is not None else current_time
+                ),
+                updated_at=current_time,
             )
+            if readiness_phase is MachineReadinessPhase.Joining:
+                write_machine_lifecycle(
+                    session,
+                    joined_machine,
+                    MachineLifecycle.Joining,
+                    workspace_changes=self.services.compute.workspace_changes,
+                    workspace_id=agent_state.workspace_id,
+                    now=current_time,
+                )
+            else:
+                failed_checks = "; ".join(
+                    check.message
+                    for check in agent_state.preflight
+                    if check.required and not check.ok
+                )
+                if not agent_state.preflight:
+                    failed_checks = "Host reported no preflight checks"
+                elif not failed_checks:
+                    failed_checks = "Host preflight failed or the host reported no capacity"
+                write_machine_lifecycle(
+                    session,
+                    joined_machine,
+                    MachineLifecycle.Failed,
+                    workspace_changes=self.services.compute.workspace_changes,
+                    workspace_id=agent_state.workspace_id,
+                    message=failed_checks,
+                    failure=MachineBootstrapFailureReason.HostPreflightFailed,
+                    now=current_time,
+                )
             worker_id = agent_machine_worker_id(agent_state.machine_id)
             worker_repository = WorkerRepository(session)
             durable_worker = worker_repository.get(
@@ -3148,17 +3176,20 @@ class GatewayControlService:
                 }
             )
         )
-        machines = MachineRepository(session)
-        machine = machines.get(state.machine_id, workspace_id=state.workspace_id)
+        machine = MachineRepository(session).get(state.machine_id, workspace_id=state.workspace_id)
         if machine is not None:
-            machines.upsert(
-                machine.model_copy(
-                    update={
-                        "status": MACHINE_STATUS_FOR_READINESS[readiness_phase],
-                        "updated_at": now,
-                    }
-                ),
+            # Silence is not a phase. The machine keeps the phase it reached and
+            # says how long it has been quiet; the capacity badge shows it offline.
+            silence = agent_silence_description(agent_telemetry_state(state), now=now)
+            quiet = f"No heartbeat for {silence}" if silence else "No heartbeat from the agent"
+            write_machine_lifecycle(
+                session,
+                machine,
+                machine.lifecycle,
+                workspace_changes=self.services.compute.workspace_changes,
                 workspace_id=state.workspace_id,
+                message=f"{quiet}; check the host is powered on and the agent service is running",
+                now=now,
             )
         self._write_agent_disconnected_event(session, state, plan.reason, now=now)
         return state
@@ -3274,32 +3305,30 @@ class GatewayControlService:
                 readiness_phase=readiness_phase,
             )
             enrollments.save(snapshot.update_record(enrollment, updated_at=current_time))
-            machines = MachineRepository(session)
-            machine = machines.get(state.machine_id, workspace_id=state.workspace_id)
+            machine = MachineRepository(session).get(
+                state.machine_id, workspace_id=state.workspace_id
+            )
             if machine is None:
                 raise ValueError("agent machine no longer exists")
-            machine_status = MACHINE_STATUS_FOR_READINESS[readiness_phase]
-            machines.upsert(
-                Machine(
-                    id=machine.id,
-                    name=machine.name,
-                    workspace_ids=machine.workspace_ids,
-                    placement=machine.placement,
-                    # Rebuilt field by field, so anything omitted here is reset
-                    # on every heartbeat.
-                    capacity_owner_id=state.capacity_owner_id,
-                    provider=machine.provider,
-                    status=machine_status,
-                    cpu=machine.cpu,
-                    memory=machine.memory,
-                    gpu=machine.gpu,
-                    address=machine.address,
-                    labels=machine.labels,
-                    created_at=machine.created_at,
-                    updated_at=current_time,
-                ),
-                workspace_id=state.workspace_id,
+            machine = machine.model_copy(
+                update={"capacity_owner_id": state.capacity_owner_id, "updated_at": current_time}
             )
+            # The first heartbeat that confirms readiness is what makes a machine
+            # ready; later ones re-state it and change nothing. A machine that is
+            # draining or leaving keeps its phase.
+            if readiness_phase is MachineReadinessPhase.Ready and machine_lifecycle_allowed(
+                machine.lifecycle, MachineLifecycle.Ready
+            ):
+                write_machine_lifecycle(
+                    session,
+                    machine,
+                    MachineLifecycle.Ready,
+                    workspace_changes=self.services.compute.workspace_changes,
+                    workspace_id=state.workspace_id,
+                    now=current_time,
+                )
+            else:
+                MachineRepository(session).upsert(machine, workspace_id=state.workspace_id)
         self.compute_states.save_agent_token_state(state)
         return state
 
@@ -3478,8 +3507,12 @@ def _machine_response(machine: Machine, workspace_names: Mapping[str, str]) -> M
             for workspace_id in machine.workspace_ids
             if workspace_id in workspace_names
         ],
+        placement=machine.placement,
         provider=machine.provider,
-        status=machine.status,
+        lifecycle=machine.lifecycle,
+        lifecycle_message=machine.lifecycle_message,
+        lifecycle_failure=machine.lifecycle_failure,
+        lifecycle_at=machine.lifecycle_at,
         cpu=machine.cpu,
         memory=machine.memory,
         gpu=machine.gpu,

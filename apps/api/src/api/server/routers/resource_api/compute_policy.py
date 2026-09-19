@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from compute.policy import WorkspaceComputePolicyService
 from fastapi import APIRouter, Depends
+from shared.compute_enrollment import AgentCapacityState
 from shared.http.compute_policy import (
     ComputeCapacitySummaryResponse,
     ComputeCatalogInstanceResponse,
@@ -9,17 +10,16 @@ from shared.http.compute_policy import (
     ComputeCatalogResponse,
     ComputeConnectionSummaryResponse,
     ComputeCostSummaryResponse,
-    WorkspaceComputeInstanceListResponse,
-    WorkspaceComputeInstanceResponse,
+    ConnectionMachineListResponse,
+    ConnectionMachineResponse,
     WorkspaceComputeSummaryResponse,
     WorkspaceComputeWorkloadListResponse,
     WorkspaceComputeWorkloadResponse,
 )
+from shared.resources import parse_memory_mib
 
 from api.server.auth import read_user, read_workspace
-from api.server.dependencies import current_services
 from api.server.service_dependencies import workspace_compute_policy_service
-from api.server.services import ApiServices
 
 router = APIRouter(prefix="/api/v1/compute", tags=["compute"])
 
@@ -77,10 +77,10 @@ def get_workspace_compute_summary(
             else None
         ),
         instances=ComputeCapacitySummaryResponse(
-            total=len(summary.instances),
-            ready=summary.ready_instance_count,
-            pending=summary.pending_instance_count,
-            degraded=summary.degraded_instance_count,
+            total=len(summary.machines),
+            ready=summary.ready_machine_count,
+            pending=summary.pending_machine_count,
+            degraded=summary.degraded_machine_count,
         ),
         cost=ComputeCostSummaryResponse(
             hourly_micros=summary.hourly_cost_micros,
@@ -94,40 +94,53 @@ def get_workspace_compute_summary(
 
 @router.get(
     "/instances",
-    response_model=WorkspaceComputeInstanceListResponse,
+    response_model=ConnectionMachineListResponse,
     operation_id="list_compute_instances",
 )
 def list_compute_instances(
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
     service: WorkspaceComputePolicyService = Depends(workspace_compute_policy_service),
-) -> WorkspaceComputeInstanceListResponse:
-    """Capacity running in this account's connected cloud, across its workspaces."""
-    return WorkspaceComputeInstanceListResponse(
+) -> ConnectionMachineListResponse:
+    """Machines running in this account's connected cloud, across its workspaces."""
+    return ConnectionMachineListResponse(
         data=[
-            WorkspaceComputeInstanceResponse(
-                id=item.record.instance_id or item.record.id,
-                machine_id=item.record.machine_id,
-                provider=item.record.provider,
-                region=item.region,
-                instance_type=item.record.instance_type,
-                status=item.service_state.value,
-                gpu=item.record.gpu,
-                gpu_count=item.record.gpu_count,
-                cpu_millicores=item.record.cpu_millicores,
-                memory_mb=item.record.memory_mb,
-                bootstrap_phase=item.bootstrap_phase,
-                service_state=item.service_state,
-                bootstrap_failure_reason=item.bootstrap_failure_reason,
-                bootstrap_failure_detail=item.bootstrap_failure_detail,
-                bootstrap_observed_at=item.bootstrap_observed_at,
-                launch_attempt=item.record.launch_attempt,
-                booted_template_version=item.booted_template_version,
-                created_at=item.record.created_at,
+            ConnectionMachineResponse(
+                id=item.machine.id,
+                placement=item.machine.placement,
+                provider=item.machine.provider,
+                region=item.instance.region if item.instance is not None else "",
+                availability_zone=(
+                    item.instance.availability_zone if item.instance is not None else ""
+                ),
+                instance_id=(item.instance.instance_id or "" if item.instance is not None else ""),
+                instance_type=(
+                    item.instance.instance_type or "" if item.instance is not None else ""
+                ),
+                lifecycle=item.machine.lifecycle,
+                lifecycle_message=item.machine.lifecycle_message,
+                lifecycle_failure=item.machine.lifecycle_failure,
+                lifecycle_at=item.machine.lifecycle_at,
+                connected=item.connected,
+                capacity_state=(
+                    item.enrollment.capacity_state
+                    if item.enrollment is not None
+                    else AgentCapacityState.Available
+                ),
+                capacity_reason=(
+                    item.enrollment.capacity_reason if item.enrollment is not None else ""
+                ),
+                gpu=item.machine.gpu,
+                gpu_count=item.machine.gpu_count,
+                cpu_millicores=int((item.machine.cpu or 0) * 1000),
+                memory_mb=parse_memory_mib(item.machine.memory) or 0,
+                launch_attempt=item.instance.launch_attempt if item.instance is not None else 1,
+                booted_template_version=(
+                    item.instance.booted_template_version if item.instance is not None else ""
+                ),
+                launched_at=item.instance.created_at if item.instance is not None else None,
+                created_at=item.machine.created_at,
             )
-            for item in service.instances_for_account(
-                workspace_ids=services.users.owned_workspace_ids(user_id)
-            )
+            for item in service.connection_machines(user_id=user_id)
         ],
         next="",
     )

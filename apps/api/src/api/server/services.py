@@ -819,7 +819,6 @@ class ApiServices(ApiServiceCore):
             capacity_owner_mutations=capacity_reservation_repository,
         )
         compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute)
-        compute_policies.worker_state = scheduler_hooks
         aws_composition = aws_account_connection_composition_from_settings(
             context=context,
             pool_drainer=compute,

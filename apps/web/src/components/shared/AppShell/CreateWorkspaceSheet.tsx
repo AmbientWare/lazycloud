@@ -76,13 +76,13 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
                 selected={location === "lazycloud"}
                 onSelect={() => setLocation("lazycloud")}
                 title="LazyCloud"
-                detail="Compute and volumes on LazyCloud."
+                detail=""
               />
               <LocationOption
                 selected={location === "aws"}
                 onSelect={() => setLocation("aws")}
                 title={`AWS account ${readyConnection.account_id}`}
-                detail="Compute and volumes in your connected account. This cannot be changed later."
+                detail="Compute and volumes stay in your account. This cannot be changed later."
               />
             </fieldset>
           ) : null}
@@ -135,7 +135,7 @@ function LocationOption({
       )}
     >
       <span className="block font-medium">{title}</span>
-      <span className="block text-muted-foreground">{detail}</span>
+      {detail ? <span className="block text-muted-foreground">{detail}</span> : null}
     </button>
   );
 }

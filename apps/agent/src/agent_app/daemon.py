@@ -100,8 +100,8 @@ from shared.compute_enrollment import (
     CapacitySignalKind,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
-    MachineBootstrapPhase,
 )
+from shared.compute_fleet import MachineLifecycle
 from shared.contracts import ContractModel
 from shared.http.agent_identity import (
     AgentCertificateRequest,
@@ -951,7 +951,7 @@ class AgentDaemonService:
             self.options.provider, state_dir=self.state_store.state_dir
         )
 
-    def _report_bootstrap_phase(self, phase: MachineBootstrapPhase) -> None:
+    def _report_bootstrap_phase(self, phase: MachineLifecycle) -> None:
         """Best effort: a phase report must not prevent enrollment retries."""
         if not self.options.provider_enrollment_request:
             return
@@ -1005,7 +1005,7 @@ class AgentDaemonService:
         if saved_state is not None and saved_state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(saved_state.capacity_notice_at)
         try:
-            self._report_bootstrap_phase(MachineBootstrapPhase.Booting)
+            self._report_bootstrap_phase(MachineLifecycle.Booting)
             state = self._join_step("identity.resolve", self.resolve_identity)
         except Exception:
             try:
@@ -1017,7 +1017,7 @@ class AgentDaemonService:
             raise
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
-        self._report_bootstrap_phase(MachineBootstrapPhase.Joining)
+        self._report_bootstrap_phase(MachineLifecycle.Joining)
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,

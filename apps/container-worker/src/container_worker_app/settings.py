@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     YamlConfigSettingsSource,
@@ -78,7 +80,9 @@ class WorkerSettings(BaseSettings):
         default=30.0,
         validation_alias="WORKER_REPOSITORY_TIMEOUT_SECONDS",
     )
-    placement: Placement = Field(
+    # The agent hands the placement key over as plain text. Without `NoDecode`
+    # the settings loader would try to read it as JSON and refuse every value.
+    placement: Annotated[Placement, NoDecode] = Field(
         default=Placement.platform(),
         validation_alias="WORKER_PLACEMENT",
     )
