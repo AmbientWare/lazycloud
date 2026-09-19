@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.repositories.billing import BillingAccountRepository
 from database.tables.execution import TaskTable
@@ -36,7 +35,6 @@ def test_invoking_a_function_past_due_refuses_and_queues_nothing(
 
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         "past-due-function",
         kind=StubKind.Function,
@@ -63,7 +61,6 @@ def test_free_function_pinned_placement_refuses_before_creating_work(
 ) -> None:
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         "regional-function",
         kind=StubKind.Function,

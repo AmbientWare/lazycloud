@@ -109,6 +109,7 @@ from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
 )
+from execution.placement import workload_placement
 from execution.pods.config import PodStubConfig
 from execution.pods.planning import (
     DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS,
@@ -275,6 +276,12 @@ class PodControlService:
         if request.checkpoint_id:
             env["CHECKPOINT_ID"] = request.checkpoint_id
         with self.services.context.database.session() as session:
+            placement = workload_placement(
+                session,
+                resolver=self.services.placement_resolver,
+                stub=stub,
+                workspace=workspace,
+            )
             container = self.services.containers.reserve_pending(
                 session,
                 PendingContainerReservation(
@@ -367,7 +374,7 @@ class PodControlService:
                     disk_mib=plan.disk_mib,
                     gpu=list(container.gpu),
                     gpu_count=container.gpu_count,
-                    placement=stub.placement,
+                    placement=placement,
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
                     runtime=config.runtime.runtime,

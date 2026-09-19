@@ -10,10 +10,8 @@ import pytest
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
 from compute.agent_control import agent_machine_worker_id, hash_compute_token
-from compute.policy import WorkspaceComputePolicyService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
-from database.repositories.apps import StubRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
@@ -56,6 +54,7 @@ from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import (
     UnitName,
 )
+from shared.deployment_records import DeploymentSpec
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
 from shared.http.gateway import AgentCapacityInterruptionRequest
@@ -562,9 +561,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
 ) -> None:
     redis = real_redis_actors.client()
     services = isolated_services
-    control = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    )
+    control = ControlPlaneService(services.context)
     owned_workspace(control, "default")
     _raw_token, audit_actor = administrator_credential(
         isolated_services.context, "workspace-delete-admin"
@@ -794,17 +791,18 @@ def test_machine_join_command_mints_one_named_unit_that_only_serves_by_name(
     )
     assert worker.placement == placement and worker.private_worker
 
-    control_plane = isolated_services.control_plane_service
-    pinned = control_plane.create_stub(
-        "pinned-to-rack-1", workspace=workspace_id, config={"machine": "rack-1"}
+    # A deployment keeps the pin it was deployed with; a run resolves the name
+    # each time, so only the deployment holds the workspace on the list.
+    pinned = isolated_services.deployments.deploy(
+        DeploymentSpec(name="pinned-to-rack-1", metadata={"machine": "rack-1"}),
+        workspace=workspace_id,
     )
-    assert pinned.placement == placement
+    assert (pinned.placement, pinned.machine) == (placement, "rack-1")
     with pytest.raises(ConflictError, match="still name machine 'rack-1'"):
         gateway.update_machine_workspaces(
             "rack-1", user_id=user_id, workspace_names=[second_workspace.name]
         )
-    with isolated_services.context.database.session() as session:
-        assert StubRepository(session).delete(pinned.id, workspace_id=workspace_id)
+    isolated_services.deployments.delete(pinned.id)
     updated = gateway.update_machine_workspaces(
         "rack-1", user_id=user_id, workspace_names=[second_workspace.name]
     )

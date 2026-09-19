@@ -118,6 +118,9 @@ class AwsConnectedWorkspaceStorage:
     def from_default_chain(cls, *, public_origin: str) -> Self:
         return cls(_default_session, public_origin=public_origin)
 
+    def assert_provisionable(self, connection: AwsAccountConnection) -> None:
+        _require_current_template(connection)
+
     def provision(
         self, workspace: WorkspaceRecord, connection: AwsAccountConnection
     ) -> WorkspaceStorageConfig:

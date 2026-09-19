@@ -7,7 +7,6 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.execution import LogRepository, TaskRepository
 from database.repositories.identity import WorkspaceRepository
@@ -195,7 +194,6 @@ def test_container_log_runtime_attribution_uses_durable_ownership(
         item
         for item in ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ).list_stubs()
         if item.deployment_id == deployment.id
     )

@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.records.endpoint_dispatch import (
     EndpointDispatchObservationRecord,
@@ -25,7 +24,6 @@ def test_endpoint_dispatch_queries_bound_active_state_and_task_owns_cleanup(
 ) -> None:
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         "dispatch-state",
         kind=StubKind.Endpoint,

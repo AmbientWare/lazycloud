@@ -222,7 +222,6 @@ def test_worker_update_preempts_only_eligible_inflight_work_after_grace(
             for preemptible in (False, True):
                 stub = StubRepository(session).upsert(
                     StubRecord(
-                        placement=Placement.platform(),
                         id=str(uuid4()),
                         workspace_id=workspace.id,
                         name=f"function-{preemptible}",
@@ -308,7 +307,6 @@ def test_interruption_drains_workload_admission_until_provider_deadline(
             for kind in (StubKind.Function, StubKind.Endpoint):
                 stub = StubRepository(session).upsert(
                     StubRecord(
-                        placement=Placement.platform(),
                         id=str(uuid4()),
                         workspace_id=workspace.id,
                         name=kind.value,

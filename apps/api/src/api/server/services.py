@@ -30,6 +30,7 @@ from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
+from control.placement import PlacementResolver
 from control.service import ControlPlaneService, WorkspaceBucketClient
 from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
@@ -498,6 +499,10 @@ class ApiServiceCore:
     def root(self) -> Path:
         return self.context.paths.root
 
+    @property
+    def placement_resolver(self) -> PlacementResolver:
+        return self.workspace_compute_policy_service
+
     def redis(self) -> RedisClient:
         return self.redis_client
 
@@ -689,7 +694,6 @@ class ApiServices(ApiServiceCore):
         control_plane = ControlPlaneService(
             context,
             public_http_origin=gateway_config.public_http_url,
-            placement_resolver=compute_policies,
             workspace_storage_client=(
                 workspace_storage_client
                 or _workspace_bucket_client(object_storage_service.object_client)
@@ -868,6 +872,7 @@ class ApiServices(ApiServiceCore):
             runtime_state=container_runtime_state,
             container_shutdowns=container_shutdowns,
             workers=worker_repository,
+            placement_resolver=compute_policies,
         )
         container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
             worker_repository, container_repository, containers

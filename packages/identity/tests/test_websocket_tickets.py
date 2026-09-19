@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient, RedisWireScalar, redis_text
 from database.tables.identity import TokenTable
@@ -235,7 +234,6 @@ def test_ticket_mint_rejects_wrong_workspace_and_insufficient_scope(
     other_workspace = owned_workspace(
         ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ),
         "other",
     )

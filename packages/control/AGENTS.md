@@ -15,6 +15,12 @@ remembered to pass it.
 Public payloads live in `shared.http`. Control and database records do not leak
 into shared models.
 
+A stub records what a workload is, not where it runs. `create_stub` resolves no
+placement and stores none, because a fingerprinted stub outlives the machine it
+was first run on. A deployment pins its placement on its own record at deploy
+time; every other container request resolves placement when it is made, in
+`execution.placement`.
+
 An app is created without asking anybody. How many an account may have is not a
 term of any plan, so there is nothing for a gate to read and a check there would
 be one more transaction on the path that deploys.

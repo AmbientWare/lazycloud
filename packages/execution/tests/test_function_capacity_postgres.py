@@ -22,7 +22,6 @@ import pytest
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from apps.api.tests.runtime import service_graph
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from coordination.redis_client import RedisSettings
 from database.tables.orchestration import ContainerTable
@@ -80,9 +79,7 @@ def _prove_a_simultaneous_burst_starts_one_container(services: ApiServices) -> N
     """
 
     functions = FunctionControlService(services)
-    stub = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    ).create_stub(
+    stub = ControlPlaneService(services.context).create_stub(
         "capacity-burst",
         kind=StubKind.Function,
         handler="module:handler",
@@ -119,9 +116,7 @@ def _prove_the_autoscaler_stops_at_the_ceiling(services: ApiServices) -> None:
     """
 
     functions = FunctionControlService(services)
-    stub = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    ).create_stub(
+    stub = ControlPlaneService(services.context).create_stub(
         "capacity-autoscaled",
         kind=StubKind.Function,
         handler="module:handler",

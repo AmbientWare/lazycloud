@@ -307,7 +307,6 @@ def stub_from_table(row: StubTable) -> StubRecord:
         app_id=row.app_id,
         public=row.public,
         config=StubConfig.model_validate(config),
-        placement=Placement.parse(row.placement),
         metadata=metadata,
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
@@ -322,7 +321,6 @@ def write_stub_row(row: StubTable, stub: StubRecord) -> None:
     row.deployment_id = stub.deployment_id
     row.app_id = stub.app_id
     row.public = stub.public
-    row.placement = stub.placement.key
     row.created_at = stub.created_at
     row.updated_at = stub.updated_at
     row.object_id = stub.config.object_id or None

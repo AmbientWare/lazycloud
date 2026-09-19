@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
 
+from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
 from database.repositories.apps import StubRepository
@@ -170,6 +171,7 @@ class ContainerService:
     workspace_changes: WorkspaceChangePublisher
     container_shutdowns: ContainerStorageShutdown
     workers: RuntimeWorkerLookup
+    placement_resolver: PlacementResolver
     runtime_state: ContainerRuntimeStateRepository | None = None
 
     def admit_container_start(
@@ -321,7 +323,7 @@ class ContainerService:
         disk_mib: int = DEFAULT_CONTAINER_DISK_MIB,
         gpu: Sequence[str] = (),
         gpu_count: int = 0,
-        placement: Placement = Placement.platform(),
+        placement: Placement | None = None,
         region: ProductRegion | None = None,
         availability_zone: str = "",
         runtime: OciRuntimeName | str = OciRuntimeName.Runsc,
@@ -341,6 +343,10 @@ class ContainerService:
                 if workspace_id is not None
                 else self.context.workspace(session)
             )
+            # A caller that names no placement gets the workspace's location,
+            # decided here rather than assumed to be the platform fleet.
+            if placement is None:
+                placement = self.placement_resolver.resolve_placement(session, workspace, "")
             resolved_app_id = optional_uuid(app_id, field="app_id")
             task = self.tasks.create_in_transaction(
                 session,

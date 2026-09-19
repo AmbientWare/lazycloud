@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, WorkspaceStorageError
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
@@ -126,7 +125,6 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     bucket_client = BucketClient()
     service = ControlPlaneService(
         service_context,
-        placement_resolver=WorkspaceComputePolicyService(service_context),
         workspace_storage_client=bucket_client,
     )
 
@@ -154,7 +152,6 @@ def test_workspace_storage_creation_validates_before_persisting(
     bucket_client = BucketClient(fail_validate=True)
     service = ControlPlaneService(
         service_context,
-        placement_resolver=WorkspaceComputePolicyService(service_context),
         workspace_storage_client=bucket_client,
     )
     workspace = owned_workspace(service, "broken")
@@ -177,9 +174,7 @@ def test_workspace_objects_with_same_logical_location_are_physically_isolated(
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     first = owned_workspace(control, "first-object-owner")
     second = owned_workspace(control, "second-object-owner")
 
@@ -232,9 +227,7 @@ def test_logical_object_purposes_share_one_physical_bucket_with_distinct_prefixe
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "logical-object-purpose-owner",
     )
 
@@ -277,9 +270,7 @@ def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "immutable-object-owner",
     )
     source = tmp_path / "artifact.bin"
@@ -340,9 +331,7 @@ def test_object_completeness_requires_exact_metadata_and_maps_store_outages(
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "object-completeness-owner",
     )
     record = storage.put_bytes_for_workspace(
@@ -381,9 +370,7 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     leaving = owned_workspace(control, "archive-leaving-owner")
     staying = owned_workspace(control, "archive-staying-owner")
     image_id = "shared-image"

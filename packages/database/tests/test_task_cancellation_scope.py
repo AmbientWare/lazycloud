@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.records.apps import AppRecord
@@ -24,9 +23,7 @@ def test_deleting_an_app_retires_its_queued_work_and_nothing_else(
     task a container is already running, and a task that finished long ago.
     """
 
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "task-cancellation")
     doomed_app = str(uuid4())
     other_app = str(uuid4())

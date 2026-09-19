@@ -149,9 +149,10 @@ def gpu_name() -> str:
     ).strip()
 ```
 
-Going offline does not remove a machine, but leaving does, and a workload
-pinned to a removed machine fails until a machine joins under that name
-again. When retiring a machine, finish its active workloads and remove it
+Going offline does not remove a machine, but leaving does. A deployment keeps
+the machine it was deployed to and waits for capacity until you redeploy it after
+a machine joins under that name again. A run or sandbox resolves the name each
+time it starts and fails at once while the machine is gone. When retiring a machine, finish its active workloads and remove it
 with `uv run lazycloud machine remove <machine-id>`, using the ID from `machine list`.
 Removing from the account side revokes the host: an agent still running there
 stops, and a host that lost its local identity gets its name back this way.

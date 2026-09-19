@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from database.context import ServiceContext
 from database.repositories.images import CheckpointRepository
@@ -16,9 +15,7 @@ from tests.workspaces import owned_workspace
 
 
 def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceContext) -> None:
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "workspace-1")
     other_workspace = owned_workspace(control, "workspace-2")
     stub = control.create_stub("stub-1", workspace=workspace.id, kind=StubKind.Function)
@@ -93,9 +90,7 @@ def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceC
 def test_checkpoint_repository_requires_durable_expiration_before_pruning(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "workspace-1")
     other_workspace = owned_workspace(control, "workspace-2")
     active_stub = control.create_stub(
@@ -190,9 +185,7 @@ def test_checkpoint_retention_selects_only_published_or_terminal_records(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "checkpoint-retention-states",
     )
     now = datetime(2026, 2, 1, tzinfo=UTC)

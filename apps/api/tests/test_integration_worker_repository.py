@@ -16,7 +16,6 @@ from api.server.worker_repository_service import (
     WorkerRepositoryService,
 )
 from compute.agent_control import agent_machine_worker_id, hash_compute_token
-from compute.policy import WorkspaceComputePolicyService
 from compute.state import (
     RedisComputeStateRepository,
 )
@@ -382,7 +381,6 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
     workspace_id = (
         ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         .get_workspace()
         .id
@@ -451,7 +449,6 @@ def test_automatic_checkpoint_lease_is_bound_to_assigned_container_and_worker(
     service = isolated_services.worker_repository_service
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = owned_workspace(control, "default")
     workspace_owner_user_id(isolated_services.context, workspace.id)
@@ -879,7 +876,6 @@ def test_cache_origin_broker_returns_urls_without_storage_credentials(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = control.set_workspace_storage(
         owned_workspace(control, "brokered-worker").id,
@@ -945,7 +941,6 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
         workspace = owned_workspace(
             ControlPlaneService(
                 isolated_services.context,
-                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
             ),
             "origin-authorization-owner",
         )
@@ -1129,7 +1124,6 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
         token = _worker_token(isolated_services, "workspace-a")
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         workspace = owned_workspace(control, "workspace-a")
         workspace_owner_user_id(isolated_services.context, workspace.id)
@@ -1553,7 +1547,6 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
         redis = real_redis_actors.client()
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         workspace = owned_workspace(control, "workspace-a")
         workspace_owner_user_id(isolated_services.context, workspace.id)
@@ -1799,7 +1792,6 @@ def test_container_shutdown_requires_assigned_worker_storage_release(
     workspace = owned_workspace(
         ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ),
         "shutdown-storage-release",
     )
@@ -3011,7 +3003,6 @@ def _worker_token(
     workspace = owned_workspace(
         ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ),
         workspace_id,
     )
@@ -3358,7 +3349,6 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         workspace = owned_workspace(control, "usage-owner")
         workspace_owner_user_id(isolated_services.context, workspace.id)
@@ -3486,7 +3476,6 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         workspace = owned_workspace(control, "window-owner")
         workspace_owner_user_id(isolated_services.context, workspace.id)
@@ -3613,7 +3602,6 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
     service = isolated_services.worker_repository_service
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         "pooled-exit",
         kind=StubKind.Function,

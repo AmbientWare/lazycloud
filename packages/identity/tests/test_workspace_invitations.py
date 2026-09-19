@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
@@ -103,9 +102,7 @@ def test_the_link_is_what_joins_and_it_works_once(service_context: ServiceContex
     second redemption finds no row, because accepting deleted it.
     """
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "team",
     )
     _owner_id, owner = _owner(service_context, workspace.id, "owner@example.test")
@@ -144,9 +141,7 @@ def test_a_resent_offer_replaces_the_link_the_first_message_carried(
     in, so the old one stops opening anything.
     """
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "team",
     )
     _owner_id, owner = _owner(service_context, workspace.id, "owner@example.test")
@@ -172,9 +167,7 @@ def test_a_resent_offer_replaces_the_link_the_first_message_carried(
 
 def test_revoking_takes_the_offer_off_the_table(service_context: ServiceContext) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "team",
     )
     _owner_id, owner = _owner(service_context, workspace.id, "owner@example.test")
@@ -200,9 +193,7 @@ def test_expiry_is_the_servers_answer_and_an_expired_link_joins_nobody(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "team",
     )
     _owner_id, owner = _owner(service_context, workspace.id, "owner@example.test")
@@ -227,9 +218,7 @@ def test_expiry_is_the_servers_answer_and_an_expired_link_joins_nobody(
 def test_accepting_grants_the_role_the_offer_named(service_context: ServiceContext) -> None:
     """An offer outstanding when somebody is added directly is still an admin's decision."""
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "team",
     )
     _owner_id, owner = _owner(service_context, workspace.id, "owner@example.test")
@@ -257,9 +246,7 @@ def test_accepting_grants_the_role_the_offer_named(service_context: ServiceConte
 
 def test_a_member_may_leave_but_the_owner_may_not(service_context: ServiceContext) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "team",
     )
     owner_id, owner = _owner(service_context, workspace.id, "owner@example.test")

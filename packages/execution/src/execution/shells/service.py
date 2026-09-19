@@ -50,6 +50,7 @@ from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
 )
+from execution.placement import workload_placement
 from execution.pods.config import PodStubConfig
 from execution.services import ExecutionServices
 from execution.shells.planning import (
@@ -147,6 +148,13 @@ class ShellControlService:
         env = parse_environment(config.env_list) | parse_environment(plan.env)
         env["SHELL_CONTAINER_ID"] = plan.container_id
         workspace = self.control_plane.get_workspace(stub.workspace_id)
+        with self.services.context.database.session() as session:
+            placement = workload_placement(
+                session,
+                resolver=self.services.placement_resolver,
+                stub=stub,
+                workspace=workspace,
+            )
         mounts = container_resource_mounts(
             context=self.services.context,
             object_storage=self.services.object_storage,
@@ -178,7 +186,7 @@ class ShellControlService:
             disk_mib=plan.disk_mib,
             gpu=list(plan.gpu),
             gpu_count=plan.gpu_count,
-            placement=stub.placement,
+            placement=placement,
             runtime=runtime.runtime,
             runtime_class=runtime.runtime_class or "",
             docker_enabled=runtime.docker_enabled,

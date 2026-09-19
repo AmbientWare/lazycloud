@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind, StubRecord
 from execution.functions.service import FunctionControlService
 from gateway.service import GatewayControlService
@@ -210,9 +209,7 @@ async def _invoke_and_run(
 
 
 def _create_function_stub(services: ApiServices, handler_ref: str) -> StubRecord:
-    return ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    ).create_stub(
+    return ControlPlaneService(services.context).create_stub(
         "streaming-function",
         kind=StubKind.Function,
         handler=handler_ref,

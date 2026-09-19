@@ -4,7 +4,6 @@ from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import ContainerRepository
@@ -101,9 +100,7 @@ def _deployed_task(services: ApiServices, workspace_id: str) -> Task:
     )
     stub = next(
         item
-        for item in ControlPlaneService(
-            services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-        ).list_stubs(workspace=workspace_id)
+        for item in ControlPlaneService(services.context).list_stubs(workspace=workspace_id)
         if item.deployment_id == deployment.id
     )
     container = ContainerRecord(

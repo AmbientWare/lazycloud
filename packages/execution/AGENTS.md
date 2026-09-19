@@ -8,6 +8,14 @@ Planners stay pure: same inputs, same plan, no I/O. What they decide can then be
 reasoned about without running it. Services take explicit protocols and explicit
 arguments and raise typed domain errors.
 
+`placement.workload_placement` is the one place a container request decides
+where it runs. A stub with a deployment takes the deployment's pin and never
+re-resolves it. Everything else resolves the workspace and `config.machine`
+through the injected `PlacementResolver` at request time, before any container
+row exists, so a run against a machine that has left fails the request with the
+machine's name instead of reserving a container that waits for nothing. A direct
+container run with no placement resolves the workspace's location the same way.
+
 Concrete scheduler, worker, gateway, provider, app, and SDK implementations stay
 outside. Persistence, authorization, retries, and cleanup are invariants of this
 package: a task that fails still has to leave the workspace consistent and its

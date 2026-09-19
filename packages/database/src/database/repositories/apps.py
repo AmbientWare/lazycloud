@@ -938,27 +938,32 @@ class StubRepository:
             is not None
         )
 
-    def workspaces_pinned_to(
-        self, placement: Placement, workspace_ids: Collection[str]
-    ) -> list[str]:
-        """Workspaces among `workspace_ids` with a stub still pinned to `placement`."""
-        if not workspace_ids:
-            return []
-        return list(
-            self.session.scalars(
-                select(StubTable.workspace_id)
-                .where(
-                    StubTable.placement == placement.key,
-                    StubTable.workspace_id.in_(list(workspace_ids)),
-                )
-                .distinct()
-            )
-        )
-
 
 @dataclass(slots=True)
 class DeploymentRepository:
     session: Session
+
+    def workspaces_pinned_to(
+        self, placement: Placement, workspace_ids: Collection[str]
+    ) -> list[str]:
+        """Workspaces among `workspace_ids` with a live deployment pinned to `placement`.
+
+        Only deployments count: they keep the placement they were deployed with,
+        while a run or sandbox resolves its placement each time it starts.
+        """
+        if not workspace_ids:
+            return []
+        return list(
+            self.session.scalars(
+                select(DeploymentTable.workspace_id)
+                .where(
+                    DeploymentTable.placement == placement.key,
+                    DeploymentTable.workspace_id.in_(list(workspace_ids)),
+                    DeploymentTable.deleted_at.is_(None),
+                )
+                .distinct()
+            )
+        )
 
     def get_for_update(self, deployment_id: str, *, workspace_id: str) -> Deployment | None:
         row = self.session.scalars(

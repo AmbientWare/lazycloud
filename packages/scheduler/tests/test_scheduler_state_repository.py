@@ -11,7 +11,6 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
-from compute.policy import WorkspaceComputePolicyService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.event_bus import EventBusEvent, EventBusEventType, event_id_for_event, event_key
@@ -414,7 +413,6 @@ def _create_cron_function(
         item
         for item in ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ).list_stubs()
         if item.deployment_id == deployment.id
     )
@@ -718,7 +716,6 @@ def test_new_cron_version_takes_over_the_prior_schedule(
         item
         for item in ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ).list_stubs()
         if item.deployment_id == second.id
     )
@@ -740,7 +737,6 @@ def test_inactive_cron_deployment_never_enqueues(
     workspace_id = (
         ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         .get_workspace("default")
         .id
@@ -2675,7 +2671,6 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
     )
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     stub = next(item for item in control.list_stubs() if item.deployment_id == deployment.id)
     stub = control.update_stub_config(
@@ -3529,7 +3524,6 @@ def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
     )
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         "orphan-claim",
         kind=StubKind.Function,

@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.apps import StubRepository
 from database.repositories.orchestration import ContainerRepository
@@ -21,7 +20,6 @@ def test_preparing_function_keeps_same_named_endpoint_container_on_its_revision(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     endpoint = control.create_stub(
         "print_hello",
@@ -70,7 +68,6 @@ def test_source_and_runtime_changes_prepare_distinct_reusable_revisions(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     workspace = control.get_workspace()
     sources = [
@@ -120,7 +117,6 @@ def test_concurrent_prepares_reuse_one_revision_but_keep_app_scope(
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     start = Barrier(4)
 
@@ -141,7 +137,6 @@ def test_preparation_does_not_reuse_unverified_or_explicitly_patched_definitions
 ) -> None:
     control = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     )
     unverified = control.create_stub("hello", handler="main:hello", reuse_existing=False)
     prepared = control.create_stub("hello", handler="main:hello")

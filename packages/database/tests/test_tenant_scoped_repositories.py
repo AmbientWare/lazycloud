@@ -3,7 +3,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.records.apps import AppRecord
@@ -24,9 +23,7 @@ from tests.workspaces import owned_workspace
 def test_cross_workspace_reads_and_deletes_are_denied_by_construction(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     owner = owned_workspace(control, "tenant-owner")
     intruder = owned_workspace(control, "tenant-intruder")
 
@@ -109,9 +106,7 @@ def test_one_global_archive_serves_every_authorized_workspace(
     `images` row, and deleting that row must free nothing the sibling still needs.
     """
 
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     owner = owned_workspace(control, "image-archive-owner")
     sibling = owned_workspace(control, "image-archive-sibling")
     stranger = owned_workspace(control, "image-archive-stranger")
@@ -173,9 +168,7 @@ def test_one_global_archive_serves_every_authorized_workspace(
 def test_container_shutdown_targets_include_only_active_workspace_rows(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     workspace = owned_workspace(control, "shutdown-target-owner")
     sibling = owned_workspace(control, "shutdown-target-sibling")
     compute_worker_id = str(uuid4())

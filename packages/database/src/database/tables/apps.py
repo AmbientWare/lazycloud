@@ -245,7 +245,6 @@ class StubTable(IdTable, DatabaseBase):
     )
     runtime_health_check_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     runtime_health_check_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    placement: Mapped[str] = mapped_column(String(120), nullable=False)
     runtime_runtime: Mapped[str | None] = mapped_column(String(80), nullable=True)
     runtime_runtime_class: Mapped[str | None] = mapped_column(String(160), nullable=True)
     runtime_docker_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

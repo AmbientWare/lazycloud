@@ -25,7 +25,6 @@ from botocore.credentials import Credentials
 from compute.agent_control import hash_compute_token
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.offers import ComputeOffer
-from compute.policy import WorkspaceComputePolicyService
 from compute.provider_nodes import ProviderNodeAdmission
 from compute.providers import (
     ComputeProviderResolver,
@@ -271,7 +270,6 @@ def test_provider_node_enrollment_rejects_cross_workspace_connection(
     other_workspace = owned_workspace(
         ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ),
         "other",
     )

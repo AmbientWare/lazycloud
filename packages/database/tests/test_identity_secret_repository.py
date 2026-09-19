@@ -5,7 +5,6 @@ from datetime import datetime
 from threading import Barrier
 
 import pytest
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.context import ServiceContext
 from database.repositories.identity import SecretRepository, WorkspaceRepository
@@ -26,9 +25,7 @@ def test_secret_repository_mutations_have_exact_outcomes_and_stable_identity(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
-            service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-        ),
+        ControlPlaneService(service_context),
         "secret-mutation-owner",
     )
     with service_context.database.session() as session:
@@ -71,9 +68,7 @@ def test_secret_repository_mutations_have_exact_outcomes_and_stable_identity(
 def test_secret_repository_isolates_same_name_and_cascades_workspace_delete(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(
-        service_context, placement_resolver=WorkspaceComputePolicyService(service_context)
-    )
+    control = ControlPlaneService(service_context)
     first = owned_workspace(control, "secret-isolation-a")
     second = owned_workspace(control, "secret-isolation-b")
     with service_context.database.session() as session:

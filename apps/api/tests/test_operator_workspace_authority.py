@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -34,9 +33,7 @@ def test_workspace_token_cannot_forge_operator_workspace_override(
     payload: dict[str, JsonValue] | None,
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    )
+    control = ControlPlaneService(services.context)
     workspace_a = api_workspace
     workspace_b = owned_workspace(control, f"forged-target-{api_workspace.id}")
     workspace_token, _record = AuthService(services.context).create_token(

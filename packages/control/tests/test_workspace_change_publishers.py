@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from coordination.redis_client import redis_text
 from scheduler.service import Scheduler
@@ -22,7 +21,6 @@ def test_hot_updates_do_not_publish_workspace_change_noise(
 ) -> None:
     workspace = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).get_workspace("default")
 
     task = isolated_services.tasks.create("noisy-save", workspace_id=workspace.id)
@@ -62,7 +60,6 @@ def test_cron_execution_publishes_after_last_and_next_run_persist(
 ) -> None:
     workspace = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).get_workspace("default")
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(name="live-cron", handler="package:function", cron="every 1m"),
@@ -100,11 +97,9 @@ def test_concurrency_counter_publishes_only_committed_changes(
 ) -> None:
     workspace = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).get_workspace("default")
     service = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         workspace_changes=isolated_services.workspace_changes,
     )
     limit = service.upsert_concurrency_limit(

@@ -94,6 +94,13 @@ def upgrade() -> None:
           ) = 1
         """
     )
+    # A joined unit that held several machines cannot name one of them. It gets
+    # a machine placement no machine row carries, so nothing lands on customer
+    # hardware as platform capacity; those hosts rejoin under a name.
+    op.execute(
+        "UPDATE compute_units SET placement = 'machine:' || capacity_owner_id::text "
+        "WHERE placement IS NULL AND capacity_owner_kind = 'workspace_agent'"
+    )
     op.execute(f"UPDATE compute_units SET placement = '{_PLATFORM}' WHERE placement IS NULL")
     op.alter_column("compute_units", "placement", nullable=False)
     op.drop_index("ix_compute_units_workspace_pool", table_name="compute_units")

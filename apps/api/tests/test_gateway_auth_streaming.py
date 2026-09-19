@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.redis_client import RedisClient
@@ -141,7 +140,6 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
         workspace = owned_workspace(
             ControlPlaneService(
                 isolated_services.context,
-                placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
             ),
             "compute-team",
         )
@@ -200,7 +198,6 @@ def test_object_upload_authorizes_before_creating_or_completing_a_claim(
     other = owned_workspace(
         ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         ),
         "other-upload-owner",
     )
@@ -282,9 +279,7 @@ def test_gateway_task_routes_do_not_cross_workspace_boundaries(
     api_runtime: tuple[ApiServices, TestClient],
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(
-        services.context, placement_resolver=WorkspaceComputePolicyService(services.context)
-    )
+    control = ControlPlaneService(services.context)
     workspace_a = owned_workspace(control, "workspace-a")
     workspace_b = owned_workspace(control, "workspace-b")
     token_a, _ = AuthService(services.context).create_token(

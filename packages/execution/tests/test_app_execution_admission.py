@@ -4,7 +4,6 @@ from typing import Literal
 
 import pytest
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService, StubKind
 from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
@@ -23,7 +22,6 @@ def test_paused_app_rejects_every_execution_producer_without_container_orphans(
     kind = StubKind.Function if producer == "function" else StubKind.Endpoint
     stub = ControlPlaneService(
         isolated_services.context,
-        placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
     ).create_stub(
         producer,
         kind=kind,

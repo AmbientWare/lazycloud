@@ -4,7 +4,6 @@ from contextlib import ExitStack
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from fastapi.testclient import TestClient
@@ -30,7 +29,6 @@ def test_image_build_http_records_events_and_context_are_workspace_owned(
     with ExitStack() as client_stack:
         control = ControlPlaneService(
             isolated_services.context,
-            placement_resolver=WorkspaceComputePolicyService(isolated_services.context),
         )
         first_workspace = owned_workspace(control, "image-build-first")
         second_workspace = owned_workspace(control, "image-build-second")
