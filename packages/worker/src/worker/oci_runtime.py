@@ -23,7 +23,7 @@ from foundation.process import (
 )
 from pydantic import JsonValue
 from shared.app_identity import CONTAINER_HELPER_PATH, WORKER_BUNDLE_ROOT
-from shared.container_requests import StopContainerReason
+from shared.container_requests import WORKER_USER_CODE_VOLUME, StopContainerReason
 from shared.env import parse_environment
 from shared.image_building.authoring import LinuxArchitecture
 
@@ -106,6 +106,7 @@ OCI_NETWORK_FILES_DIR_NAME = "network"
 OCI_HOSTS_FILE_NAME = "hosts"
 OCI_RESOLV_CONF_FILE_NAME = "resolv.conf"
 DEFAULT_RUNTIME_RESTORE_START_TIMEOUT_SECONDS = 30.0
+USER_CODE_SRC_PATH = f"{WORKER_USER_CODE_VOLUME}/src"
 DEFAULT_RUNTIME_RESTORE_START_POLL_SECONDS = 0.05
 DEFAULT_RUNTIME_CALLBACK_EXIT_GRACE_SECONDS = 0.25
 DEFAULT_RUNTIME_CALLBACK_EXIT_POLL_SECONDS = 0.01
@@ -320,6 +321,9 @@ class OciRuntimeSpecBuilder:
         )
         if gpu_result is not None and gpu_result.env:
             env.update(parse_environment(gpu_result.env))
+        # A project image never installs the root project, so a package kept
+        # under src/ is only importable through the synced code volume.
+        env["PYTHONPATH"] = _prepend_python_path(USER_CODE_SRC_PATH, env.get("PYTHONPATH", ""))
         if managed_runtime.enabled:
             env["PYTHONPATH"] = managed_runtime.python_path(env.get("PYTHONPATH", ""))
             env["PYTHONSAFEPATH"] = "1"
@@ -707,6 +711,10 @@ def _readonly_file_mount(source: Path, destination: str) -> OciMount:
         destination=destination,
         options=["ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"],
     )
+
+
+def _prepend_python_path(path: str, existing: str) -> str:
+    return ":".join(dict.fromkeys([path, *(item for item in existing.split(":") if item)]))
 
 
 def _container_tmpfs_size_mib(memory_mib: int) -> int:

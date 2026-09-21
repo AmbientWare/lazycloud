@@ -5,6 +5,15 @@ execution and publication control, and cleanup, all behind scheduler, container,
 storage, and secret protocols.
 
 Apps, SDK, provider adapters, and scheduler and worker loops stay outside.
+
+A project image (uv, Poetry, pyproject) installs dependencies only. The root
+project is skipped (`--no-install-project`, `--no-root`) because its code arrives
+through source sync and must not be baked into the image, where every edit would
+change the image identity. Local dependencies named by the manifests are still
+installed from the uploaded context. `IMAGE_BUILD_IDENTITY_CONTRACT_VERSION`
+changes whenever what an image is built from changes, so archives built under
+the old identity are never mistaken for the new one.
+
 Managed-runtime catalogs hold one content-addressed artifact per supported Python
 minor version and keep managed code separate from the dependencies it falls back
 on.

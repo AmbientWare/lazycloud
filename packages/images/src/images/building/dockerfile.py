@@ -19,7 +19,7 @@ from images.building.models import ImageInstallCommandMode, PythonRuntimeSetupAc
 from images.building.projects import PROJECT_ENVIRONMENT
 from images.building.python_runtime import plan_python_runtime_setup
 
-IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 2
+IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 3
 
 
 def build_image_plan(image: ImageSpec) -> ImageBuildPlan:
