@@ -649,11 +649,7 @@ def test_rejected_acquisition_reassigns_requests_and_retries_owned_cleanup(
 
     moved = service.acquire(
         request,
-        purchases=lambda: tuple(
-            candidate
-            for candidate in _purchases(service)
-            if candidate.capacity_owner_id == OTHER_OWNER_ID
-        ),
+        purchases=lambda: _purchases(service),
         now=now + timedelta(seconds=2),
     )
     assert moved.capacity_owner_id == OTHER_OWNER_ID
@@ -692,6 +688,35 @@ def test_rejected_first_response_retains_provider_reported_ownership_until_clean
     assert reservation.status is CapacityReservationStatus.Released
     assert reservation.terminal_reason is CapacityTerminalReason.AcquisitionRejected
     assert not reservation.acquisition_created
+
+
+def test_uncertain_purchase_retains_demand_without_buying_from_another_owner(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    repository = _repository(real_redis_actors)
+    primary = _Controller(
+        priority=20,
+        ensure_status=CapacityAcquisitionStatus.TemporarilyUnavailable,
+        owns_capacity=True,
+    )
+    fallback = _Controller(capacity_owner_id=OTHER_OWNER_ID)
+    service = CapacityReservationService(repository, lambda: [primary, fallback])
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    request = _request("uncertain-purchase")
+
+    acquired = service.acquire(request, purchases=lambda: _purchases(service), now=now)
+    retried = service.acquire(
+        request, purchases=lambda: _purchases(service), now=now + timedelta(seconds=1)
+    )
+
+    assert acquired.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+    assert retried.reservation_id == acquired.reservation_id
+    reservation = repository.get(acquired.reservation_id)
+    assert reservation is not None and reservation.open and reservation.acquisition_created
+    allocation = repository.allocation_for_request(request.container_id)
+    assert allocation is not None and allocation.reservation_id == reservation.id
+    assert fallback.ensure_calls == []
+    assert primary.release_calls == []
 
 
 def test_capacity_reservation_reuses_machine_during_prepared_worker_update(

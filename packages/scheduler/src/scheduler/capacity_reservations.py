@@ -1339,8 +1339,14 @@ class CapacityReservationService:
             if result.status in {
                 CapacityAcquisitionStatus.ExistingPending,
                 CapacityAcquisitionStatus.Requested,
-                CapacityAcquisitionStatus.TemporarilyUnavailable,
             }:
+                return result
+            if (
+                result.status is CapacityAcquisitionStatus.TemporarilyUnavailable
+                and self.reservations.allocation_for_request(request.container_id) is not None
+            ):
+                # A live allocation can back an uncertain purchase. Cleanup from
+                # a detached attempt must not prevent trying another owner.
                 return result
             if remaining:
                 # Only what we are abandoning. With no candidate left the claim
