@@ -25,6 +25,7 @@ from shared.http.images import (
 from shared.image_building import (
     DEFAULT_IMAGE_BASE,
     fingerprint_build_context,
+    fingerprint_files,
     load_requirements_file,
     sanitize_python_packages,
 )
@@ -49,8 +50,8 @@ from lazycloud.abstractions.image_project import (
     ImageProject,
     load_conda_environment,
     load_python_project,
+    project_context_files,
 )
-from lazycloud.source_sync import collect_source_files
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 
 _DOCKER_APT_DISTRIBUTION = (
@@ -324,8 +325,10 @@ class Image:
             architecture=architecture,
         )
         image.context_path = str(project.root)
-        image.context_digest = fingerprint_build_context(project.root)
-        image.include_files_patterns = project.files
+        image.context_digest = fingerprint_files(
+            project.root, project_context_files(project.root, project.context_entries)
+        )
+        image.include_files_patterns = project.context_entries
         image.build_steps = (project.step,)
         return image
 
@@ -538,11 +541,10 @@ class Image:
 
     def _context_archive(self) -> ImageBuildContext:
         context = Path(self.context_path or ".").expanduser().resolve()
-        files = _context_files(context, self.include_files_patterns)
         if any(step.kind in PROJECT_BUILD_STEP_KINDS for step in self.build_steps):
-            files = sorted(
-                {*files, *(path.relative_to(context) for path in collect_source_files(context))}
-            )
+            files = project_context_files(context, self.include_files_patterns)
+        else:
+            files = _context_files(context, self.include_files_patterns)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for relative_path in files:

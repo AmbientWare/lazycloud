@@ -167,6 +167,72 @@ def test_sdk_image_uv_project_requires_lockfile(tmp_path: Path) -> None:
         Image.from_uv(tmp_path)
 
 
+def _write_uv_project(root: Path, *, members: tuple[str, ...] = ()) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0'\nrequires-python='>=3.12'\n",
+        encoding="utf-8",
+    )
+    packages = ["[[package]]\nname = 'demo'\nsource = { virtual = '.' }\n"]
+    for member in members:
+        name = Path(member).name
+        packages.append(f"[[package]]\nname = '{name}'\nsource = {{ editable = '{member}' }}\n")
+    (root / "uv.lock").write_text("version = 1\n" + "\n".join(packages), encoding="utf-8")
+    (root / "src").mkdir(exist_ok=True)
+    (root / "src" / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+
+def test_sdk_image_uv_project_identity_covers_only_what_the_build_reads(tmp_path: Path) -> None:
+    _write_uv_project(tmp_path)
+    before = Image.from_uv(tmp_path)
+    before_files = before._context_archive().files
+
+    (tmp_path / "src" / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("scratch\n", encoding="utf-8")
+    after_source_edit = Image.from_uv(tmp_path)
+
+    assert after_source_edit.spec().context_digest == before.spec().context_digest
+    assert after_source_edit._context_archive().files == before_files
+    assert before_files == ("pyproject.toml", "uv.lock")
+
+    (tmp_path / "uv.lock").write_text(
+        (tmp_path / "uv.lock").read_text(encoding="utf-8") + "\n[[package]]\nname = 'httpx'\n",
+        encoding="utf-8",
+    )
+
+    assert Image.from_uv(tmp_path).spec().context_digest != before.spec().context_digest
+
+
+def test_sdk_image_uv_project_includes_workspace_members_inside_the_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    _write_uv_project(root, members=("packages/member",))
+    member = root / "packages" / "member"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text("[project]\nname='member'\n", encoding="utf-8")
+    (member / "member.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (member / ".lazycloudignore").write_text("scratch/\n", encoding="utf-8")
+    (member / "scratch").mkdir()
+    (member / "scratch" / "big.bin").write_bytes(b"\0" * 16)
+
+    files = Image.from_uv(root)._context_archive().files
+
+    assert files == (
+        "packages/member/.lazycloudignore",
+        "packages/member/member.py",
+        "packages/member/pyproject.toml",
+        "pyproject.toml",
+        "uv.lock",
+    )
+
+    outside = tmp_path / "outside"
+    _write_uv_project(outside, members=("../root/packages/member",))
+
+    with pytest.raises(ValueError, match="outside the project root"):
+        Image.from_uv(outside)
+
+
 def test_sdk_image_build_revalidates_durable_identity_before_each_build() -> None:
     reusable = VerifyImageBuildResponse(
         image_id="img_cached",
