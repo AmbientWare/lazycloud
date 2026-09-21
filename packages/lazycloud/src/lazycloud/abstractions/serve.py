@@ -49,7 +49,12 @@ from watchdog.observers import Observer
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import MachineInput
 from lazycloud.json_contracts import parse_json_object
-from lazycloud.source_sync import SOURCE_IGNORE_FILE, SourceFileFilter
+from lazycloud.source_sync import (
+    SOURCE_IGNORE_FILE,
+    SOURCE_IGNORE_FILE_WRITTEN_NOTICE,
+    SourceFileFilter,
+    ensure_source_ignore_file,
+)
 from lazycloud.terminal import Terminal
 
 LOGGER = logging.getLogger(__name__)
@@ -358,6 +363,7 @@ class ContainerWorkspaceSyncer:
         observer = Observer()
         root = Path(self.local_dir).expanduser().resolve()
         try:
+            self._ensure_ignore_file(root)
             self._changes.root = root
             self._changes.selection = SourceFileFilter.for_root(root)
             observer.schedule(self._changes, str(root), recursive=True)
@@ -431,12 +437,14 @@ class ContainerWorkspaceSyncer:
                     return
 
     def sync_once(self) -> None:
+        self._ensure_ignore_file(Path(self.local_dir).expanduser().resolve())
         self._snapshot = _snapshot(self.local_dir)
         self._sync_initial(self._snapshot)
         self._initialized = True
         self._detail(f"Synced {len(self._snapshot)} files")
 
     def record_seed_snapshot(self) -> None:
+        self._ensure_ignore_file(Path(self.local_dir).expanduser().resolve())
         self._snapshot = _snapshot(self.local_dir)
         self._initialized = True
         self._detail(f"Watching {len(self._snapshot)} files")
@@ -596,6 +604,10 @@ class ContainerWorkspaceSyncer:
     def _detail(self, message: str) -> None:
         if self.terminal is not None:
             self.terminal.detail(message)
+
+    def _ensure_ignore_file(self, root: Path) -> None:
+        if ensure_source_ignore_file(root):
+            self._detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
 
 
 class _WorkspaceEvents(FileSystemEventHandler):
