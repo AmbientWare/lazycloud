@@ -3,10 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 
-import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { awsConnectionQueryOptions } from "@/lib/queries/compute";
 import { createWorkspace } from "@/lib/queries/workspace";
@@ -16,7 +15,7 @@ const CREATE_WORKSPACE_MUTATION_KEY = ["workspaces", "create"];
 
 type Location = "lazycloud" | "aws";
 
-export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
+export function CreateWorkspaceDialog({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
@@ -41,13 +40,13 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <Sheet open onOpenChange={(next) => (next || create.isPending ? undefined : onClose())}>
-      <SheetContent aria-describedby={undefined} className="gap-0 sm:max-w-md">
-        <DrawerHeader>
-          <SheetTitle>Create workspace</SheetTitle>
-        </DrawerHeader>
+    <Dialog open onOpenChange={(next) => (next || create.isPending ? undefined : onClose())}>
+      <DialogContent aria-describedby={undefined} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create workspace</DialogTitle>
+        </DialogHeader>
         <form
-          className="flex flex-col gap-3 p-4"
+          className="flex flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault();
             if (
@@ -107,8 +106,8 @@ export function CreateWorkspaceSheet({ onClose }: { onClose: () => void }) {
             </p>
           ) : null}
         </form>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 

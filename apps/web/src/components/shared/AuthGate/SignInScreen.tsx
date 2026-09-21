@@ -24,7 +24,6 @@ export function SignInScreen({ error }: { error?: string }) {
           <span className="text-xl font-bold text-brand">LazyCloud</span>
         </div>
         <h1 className="mt-3 text-xl font-semibold">Sign in</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Use your GitHub account to continue.</p>
       </div>
 
       {approvingDevice ? (

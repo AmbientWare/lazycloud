@@ -3,7 +3,7 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 import { Check, ChevronDown, MoreHorizontal, Pencil, Plus, Trash2, Users } from "lucide-react";
 
 import { workspaceLandingPath } from "@/components/shared/AppShell/navigation";
-import { CreateWorkspaceSheet } from "@/components/shared/AppShell/CreateWorkspaceSheet";
+import { CreateWorkspaceDialog } from "@/components/shared/AppShell/CreateWorkspaceDialog";
 import { useSession } from "@/components/shared/AuthGate/session";
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
 import { Button } from "@/components/ui/button";
@@ -151,7 +151,7 @@ export function WorkspaceSwitcher({
       {renaming ? (
         <WorkspaceRenameDialog workspace={renaming} onClose={() => setRenaming(null)} />
       ) : null}
-      {creating ? <CreateWorkspaceSheet onClose={() => setCreating(false)} /> : null}
+      {creating ? <CreateWorkspaceDialog onClose={() => setCreating(false)} /> : null}
       {viewingMembers ? (
         <WorkspaceMembersDialog
           workspace={viewingMembers}

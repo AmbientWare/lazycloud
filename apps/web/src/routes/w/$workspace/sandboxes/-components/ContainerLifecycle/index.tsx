@@ -70,7 +70,7 @@ export function ContainerLifecycle({
                 className="mono mt-0.5 max-w-[6.5rem] truncate text-[11px] tabular-nums text-muted-foreground sm:max-w-none"
                 title={stage.timestamp ? stageTime(stage.timestamp) : undefined}
               >
-                {stage.timestamp ? stageTime(stage.timestamp) : running ? "Live" : "Not reached"}
+                {stage.timestamp ? stageTime(stage.timestamp) : running ? "Now" : "Not reached"}
               </span>
               {stage.elapsedMs !== null ? (
                 <span className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">

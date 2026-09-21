@@ -317,12 +317,6 @@ function CloudProviderRow({
 function CloudInstances({ instances }: { instances: ConnectionMachine[] }) {
   return (
     <section className="min-w-0 p-4">
-      <div className="mb-3 flex items-end justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium">AWS instances</h3>
-        </div>
-        <span className="mono text-xs text-muted-foreground">{instances.length}</span>
-      </div>
       {instances.length === 0 ? (
         <div className="border-y border-border p-4 text-center">
           <p className="text-sm font-medium">No AWS instances running</p>
@@ -349,16 +343,17 @@ function CloudInstances({ instances }: { instances: ConnectionMachine[] }) {
                     .filter(Boolean)
                     .join(" · ")}
                 </p>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {instance.lifecycle_message}
+                <p
+                  className="mt-0.5 truncate text-[11px] text-muted-foreground"
+                  title={instance.lifecycle_message}
+                >
+                  {instance.lifecycle === "failed" && instance.lifecycle_failure
+                    ? `${humanize(instance.lifecycle_failure)}: ${instance.lifecycle_message}`
+                    : instance.lifecycle_message}
                 </p>
               </div>
               <span className="flex flex-wrap items-center gap-1.5">
-                <LifecycleChip
-                  lifecycle={instance.lifecycle}
-                  message={instance.lifecycle_message}
-                  failure={instance.lifecycle_failure}
-                />
+                <LifecycleChip lifecycle={instance.lifecycle} />
                 <CapacityBadge
                   lifecycle={instance.lifecycle}
                   connected={instance.connected}
@@ -369,9 +364,6 @@ function CloudInstances({ instances }: { instances: ConnectionMachine[] }) {
                 <p className="mono text-foreground">
                   {formatCpu(instance.cpu_millicores)} · {formatMemory(instance.memory_mb)}
                 </p>
-                {instance.lifecycle === "failed" && instance.lifecycle_failure ? (
-                  <p>{humanize(instance.lifecycle_failure)}</p>
-                ) : null}
                 <LiveRelativeTime value={instance.launched_at ?? instance.created_at} />
               </div>
             </li>
@@ -423,7 +415,10 @@ function SelfHostedPanel({
             >
               <div className="min-w-0">
                 <code className="mono block truncate text-xs">{machine.name || machine.id}</code>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                <p
+                  className="mt-0.5 truncate text-[11px] text-muted-foreground"
+                  title={machine.lifecycle_message}
+                >
                   {machine.lifecycle === "failed" && machine.lifecycle_failure
                     ? `${humanize(machine.lifecycle_failure)}: ${machine.lifecycle_message}`
                     : machine.lifecycle_message}
@@ -438,11 +433,7 @@ function SelfHostedPanel({
                 </p>
               </div>
               <span className="flex flex-wrap items-center gap-1.5">
-                <LifecycleChip
-                  lifecycle={machine.lifecycle}
-                  message={machine.lifecycle_message}
-                  failure={machine.lifecycle_failure}
-                />
+                <LifecycleChip lifecycle={machine.lifecycle} />
                 <CapacityBadge
                   lifecycle={machine.lifecycle}
                   connected={machine.connected}

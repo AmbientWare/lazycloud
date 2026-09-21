@@ -177,10 +177,6 @@ function GenerateCommandStep({
           Generate install command
         </Button>
       </div>
-      <div className="mt-5 border-l-2 border-warning bg-warning/5 px-3 py-2 text-xs text-muted-foreground">
-        Run this command only on the machine you want to connect. Closing the dialog clears it from
-        this browser.
-      </div>
       {error ? <p className="mt-2 text-xs text-destructive">{error.message}</p> : null}
     </form>
   );
@@ -220,7 +216,8 @@ function JoinProgress({
         </div>
         <CliHint command={command} className="mt-3 bg-muted/30" />
         <p className="mt-2 text-[11px] text-muted-foreground">
-          This command includes a temporary credential and appears only in this dialog.
+          Run it only on the machine you want to connect. It carries a temporary credential and is
+          cleared from this browser when you close the dialog.
         </p>
       </section>
 

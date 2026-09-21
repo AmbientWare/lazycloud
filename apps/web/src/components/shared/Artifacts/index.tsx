@@ -406,9 +406,7 @@ function ArtifactDeleteDialog({
           <DialogTitle>
             {artifacts.length === 1 ? "Delete file?" : `Delete ${artifacts.length} files?`}
           </DialogTitle>
-          <DialogDescription>
-            This permanently removes the selected files. This cannot be undone.
-          </DialogDescription>
+          <DialogDescription>This permanently deletes the selected files.</DialogDescription>
         </DialogHeader>
         <div className="max-h-60 divide-y overflow-auto rounded-md border text-sm">
           {artifacts.map((item) => (
