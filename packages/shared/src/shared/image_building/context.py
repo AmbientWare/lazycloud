@@ -30,21 +30,37 @@ def fingerprint_build_context(
         relative = path.relative_to(root)
         if any(part in ignored for part in relative.parts):
             continue
-        metadata = path.lstat()
-        _update_digest(digest, relative.as_posix())
-        _update_digest(digest, f"{stat.S_IMODE(metadata.st_mode):04o}")
-        if stat.S_ISLNK(metadata.st_mode):
-            _update_digest(digest, "symlink")
-            _update_digest(digest, os.readlink(path))
-        elif stat.S_ISDIR(metadata.st_mode):
-            _update_digest(digest, "directory")
-        elif stat.S_ISREG(metadata.st_mode):
-            _update_digest(digest, "file")
-            digest.update(path.read_bytes())
-            digest.update(b"\0")
-        else:
-            raise ValueError(f"unsupported build context entry: {relative.as_posix()}")
+        _update_entry_digest(digest, root, relative)
     return digest.hexdigest()
+
+
+def fingerprint_files(root: str | Path, files: Iterable[str | Path]) -> str:
+    """Digest the named entries below ``root`` with the same per-entry encoding as
+    ``fingerprint_build_context``, so a project image's identity covers only what
+    its build reads."""
+    base = Path(root)
+    digest = hashlib.sha256()
+    for relative in sorted({Path(file).as_posix() for file in files}):
+        _update_entry_digest(digest, base, Path(relative))
+    return digest.hexdigest()
+
+
+def _update_entry_digest(digest: DigestWriter, root: Path, relative: Path) -> None:
+    path = root / relative
+    metadata = path.lstat()
+    _update_digest(digest, relative.as_posix())
+    _update_digest(digest, f"{stat.S_IMODE(metadata.st_mode):04o}")
+    if stat.S_ISLNK(metadata.st_mode):
+        _update_digest(digest, "symlink")
+        _update_digest(digest, os.readlink(path))
+    elif stat.S_ISDIR(metadata.st_mode):
+        _update_digest(digest, "directory")
+    elif stat.S_ISREG(metadata.st_mode):
+        _update_digest(digest, "file")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    else:
+        raise ValueError(f"unsupported build context entry: {relative.as_posix()}")
 
 
 def _update_digest(digest: DigestWriter, value: str) -> None:
