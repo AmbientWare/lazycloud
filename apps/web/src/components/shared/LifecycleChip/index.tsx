@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import type { MachineLifecycle } from "@/lib/api/schemas";
-import { capacityBadge, humanize } from "@/lib/machine-lifecycle";
+import { capacityBadge } from "@/lib/machine-lifecycle";
 
 type Tone = "success" | "warning" | "danger" | "muted";
 
@@ -28,19 +28,10 @@ const labels: Record<MachineLifecycle, string> = {
   failed: "Failed",
 };
 
-/** The one chip for where a machine is in its life; the message explains the phase. */
-export function LifecycleChip({
-  lifecycle,
-  message,
-  failure,
-}: {
-  lifecycle: MachineLifecycle;
-  message: string;
-  failure: string | null;
-}) {
-  const title = lifecycle === "failed" && failure ? `${humanize(failure)}: ${message}` : message;
+/** The one chip for where a machine is in its life; the row beside it carries the message. */
+export function LifecycleChip({ lifecycle }: { lifecycle: MachineLifecycle }) {
   return (
-    <Badge tone={tones[lifecycle]} className="gap-1.5" title={title}>
+    <Badge tone={tones[lifecycle]} className="gap-1.5">
       {lifecycle === "ready" ? (
         <span className="pulse-live size-1.5 rounded-full bg-current" aria-hidden="true" />
       ) : null}

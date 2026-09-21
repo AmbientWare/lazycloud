@@ -43,29 +43,6 @@ export function awsConnectionPresentation(connection: AwsConnection): AwsConnect
   }
 }
 
-export function awsConnectionDialogDescription(connection: AwsConnection): string {
-  switch (connection.phase) {
-    case "awaiting_authorization":
-      return "Authorize access in AWS to finish connecting your account.";
-    case "validating":
-      return "Checking AWS authorization.";
-    case "ready":
-      return "Workloads can run in your AWS account.";
-    case "degraded":
-      return "Check authorization or reconnect your AWS account.";
-    case "reconnect_pending":
-      return "Existing instances keep running while you authorize access again.";
-    case "retiring_authorization":
-      return "New access is ready. Removing the previous authorization.";
-    case "disconnect_draining":
-    case "revoking":
-    case "verifying_revocation":
-      return "Removing AWS resources and authorization.";
-    case "action_required":
-      return "AWS cleanup failed. Review the error and retry.";
-  }
-}
-
 export function awsConnectionDialogActionPlan(
   connection: AwsConnection,
 ): AwsConnectionDialogActionPlan {

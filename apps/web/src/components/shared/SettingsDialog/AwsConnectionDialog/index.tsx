@@ -25,7 +25,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -37,7 +36,6 @@ import { useAwsConnectionController } from "./controller";
 import {
   type AwsConnectionDialogRecoveryAction,
   awsConnectionDialogActionPlan,
-  awsConnectionDialogDescription,
   awsConnectionPresentation,
   awsRemovalConfirmation,
 } from "./lifecycle";
@@ -80,17 +78,15 @@ function AwsConnectionFlow({
 
   return (
     <>
-      <DialogContent className="flex max-h-[min(42rem,calc(100svh-2rem))] max-w-xl flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+      <DialogContent
+        aria-describedby={undefined}
+        className="flex max-h-[min(42rem,calc(100svh-2rem))] max-w-xl flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
+      >
         <DialogHeader className="shrink-0 border-b border-border bg-muted/20 px-5 py-4 pr-12 text-left">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Cloud className="size-4 text-brand" aria-hidden="true" />
             {connection ? "AWS connection" : "Connect AWS"}
           </DialogTitle>
-          <DialogDescription>
-            {connection
-              ? awsConnectionDialogDescription(connection)
-              : "Authorize LazyCloud to provision compute in your AWS account."}
-          </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
@@ -193,16 +189,9 @@ function ConnectForm({
         </p>
       </div>
 
-      <div className="flex items-start gap-3 rounded-md border border-border bg-card p-3">
-        <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
-        <div>
-          <h3 className="text-sm font-medium">One-time AWS authorization</h3>
-          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-            You&apos;ll review the requested access in AWS. LazyCloud never asks for access or
-            secret keys.
-          </p>
-        </div>
-      </div>
+      <p className="text-xs leading-5 text-muted-foreground">
+        You review the requested access in AWS once. LazyCloud never asks for access or secret keys.
+      </p>
 
       {error ? <ErrorNotice error={error} /> : null}
     </form>
