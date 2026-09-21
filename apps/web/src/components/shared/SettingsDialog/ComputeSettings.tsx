@@ -343,7 +343,10 @@ function CloudInstances({ instances }: { instances: ConnectionMachine[] }) {
                     .filter(Boolean)
                     .join(" · ")}
                 </p>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                <p
+                  className="mt-0.5 truncate text-[11px] text-muted-foreground"
+                  title={instance.lifecycle_message}
+                >
                   {instance.lifecycle === "failed" && instance.lifecycle_failure
                     ? `${humanize(instance.lifecycle_failure)}: ${instance.lifecycle_message}`
                     : instance.lifecycle_message}
@@ -412,7 +415,10 @@ function SelfHostedPanel({
             >
               <div className="min-w-0">
                 <code className="mono block truncate text-xs">{machine.name || machine.id}</code>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                <p
+                  className="mt-0.5 truncate text-[11px] text-muted-foreground"
+                  title={machine.lifecycle_message}
+                >
                   {machine.lifecycle === "failed" && machine.lifecycle_failure
                     ? `${humanize(machine.lifecycle_failure)}: ${machine.lifecycle_message}`
                     : machine.lifecycle_message}
