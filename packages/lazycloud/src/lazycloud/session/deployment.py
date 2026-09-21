@@ -683,9 +683,15 @@ class DeploymentClient(ControlClientConfigMixin):
         if self.client is not None and self.object_client is None and selected_root is None:
             return metadata_object_id
 
-        from lazycloud.source_sync import SourcePackageSyncer
+        from lazycloud.source_sync import (
+            SOURCE_IGNORE_FILE_WRITTEN_NOTICE,
+            SourcePackageSyncer,
+            ensure_source_ignore_file,
+        )
 
         root = Path(selected_root or ".").expanduser().resolve()
+        if ensure_source_ignore_file(root) and self.terminal is not None:
+            self.terminal.detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
         syncer = SourcePackageSyncer(
             self._object_client(),
             root_dir=root,

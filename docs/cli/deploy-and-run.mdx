@@ -89,7 +89,11 @@ overrides apply to the selected preview. Endpoint and ASGI previews manage their
 HTTP listener; custom container ports, TCP mode, entrypoints and attaching an
 existing container are unsupported.
 
-Use `.lazycloudignore` in the sync directory to exclude files. Live edits transfer
+The first deploy, run or preview writes `.lazycloudignore` into the sync directory
+with the default exclusions. Edit it and commit it; patterns use gitignore syntax,
+so `build/`, `**/*.log` and `!keep.log` mean what they do in `.gitignore`. A short
+baseline (`.git`, `.venv`, `__pycache__`, `*.pyc`, `.env`, `.lazycloud/`) applies
+on every sync and cannot be removed by editing the file. Live edits transfer
 only changed files, and each replacement becomes visible after its full contents
 pass checksum verification. Large files transfer in chunks and need temporary disk
 space locally and on the worker. Keep datasets and model weights in

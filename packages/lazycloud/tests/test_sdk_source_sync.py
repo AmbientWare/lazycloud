@@ -10,11 +10,13 @@ import pytest
 from lazycloud.references import source_root_handler_reference
 from lazycloud.session.deployment import DeploymentClient
 from lazycloud.source_sync import (
+    SOURCE_IGNORE_FILE,
     SOURCE_PACKAGE_BUCKET,
     SOURCE_PACKAGE_CONTENT_TYPE,
     SourcePackageSyncer,
     SourcePackageSyncError,
     build_source_package_archive,
+    collect_source_files,
 )
 from lazycloud.values import cloudpickle_bytes
 from shared.deployment_records import DeploymentSpec
@@ -60,6 +62,67 @@ def test_source_package_sync_excludes_ignored_files(tmp_path: Path) -> None:
     with zipfile.ZipFile(zip_path) as archive:
         assert archive.namelist() == ["app.py", "pkg/__init__.py"]
         assert archive.read("app.py") == b"print('hello')\n"
+
+
+def test_ignore_file_never_removes_the_baseline(tmp_path: Path) -> None:
+    (tmp_path / SOURCE_IGNORE_FILE).write_text("data/\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("", encoding="utf-8")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "rows.csv").write_text("1\n", encoding="utf-8")
+    (tmp_path / ".venv" / "lib").mkdir(parents=True)
+    (tmp_path / ".venv" / "lib" / "site.py").write_text("", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    (tmp_path / ".idea").mkdir()
+    (tmp_path / ".idea" / "workspace.xml").write_text("", encoding="utf-8")
+
+    files = [path.relative_to(tmp_path).as_posix() for path in collect_source_files(tmp_path)]
+
+    assert sorted(files) == [".idea/workspace.xml", "app.py"]
+
+
+def test_ignore_file_uses_gitignore_semantics(tmp_path: Path) -> None:
+    (tmp_path / SOURCE_IGNORE_FILE).write_text(
+        "build/\n**/generated/*.json\n*.log\n!keep.log\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "out.txt").write_text("", encoding="utf-8")
+    (tmp_path / "build.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "generated").mkdir(parents=True)
+    (tmp_path / "pkg" / "generated" / "schema.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "pkg" / "generated" / "schema.py").write_text("", encoding="utf-8")
+    (tmp_path / "debug.log").write_text("", encoding="utf-8")
+    (tmp_path / "keep.log").write_text("", encoding="utf-8")
+
+    files = [path.relative_to(tmp_path).as_posix() for path in collect_source_files(tmp_path)]
+
+    assert sorted(files) == ["build.py", "keep.log", "pkg/generated/schema.py"]
+
+
+def test_deployment_prepare_writes_ignore_file_once(tmp_path: Path) -> None:
+    (tmp_path / "handler.py").write_text("def handle(): return 'ok'\n", encoding="utf-8")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "pyvenv.cfg").write_text("", encoding="utf-8")
+    client = DeploymentClient(
+        client=FakeDeploymentClient(),
+        object_client=FakeUploadClient(object_id="obj"),
+        sync_source=True,
+        source_root=tmp_path,
+    )
+    spec = DeploymentSpec(name="demo", handler="handler:handle")
+
+    client.prepare(spec, workspace="team")
+    ignore_file = tmp_path / SOURCE_IGNORE_FILE
+    written = ignore_file.read_text(encoding="utf-8")
+    assert written.startswith("# Written by the LazyCloud SDK.")
+    assert ".venv\n" in written
+
+    ignore_file.write_text("custom/\n", encoding="utf-8")
+    client.prepare(spec, workspace="team")
+
+    assert ignore_file.read_text(encoding="utf-8") == "custom/\n"
 
 
 def test_source_package_sync_preserves_canonical_module_prefix(tmp_path: Path) -> None:

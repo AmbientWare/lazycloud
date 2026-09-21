@@ -21,6 +21,15 @@ sources never enter the context. Hashing the whole tree would rebuild the image
 on every code edit; the code reaches the container through source sync instead.
 A dependency path outside the project root is refused rather than uploaded.
 
+Source sync reads `.lazycloudignore` with gitignore syntax and writes one with
+the defaults when the sync root has none. Only the user-facing sync entry points
+(`DeploymentClient` source upload and `ContainerWorkspaceSyncer`) write it;
+`collect_source_files` and image project contexts never do, so building an
+image does not drop files into a dependency directory. `BASELINE_IGNORE_PATTERNS`
+applies on every sync on top of whatever the file says. A user who trims the file
+to `data/` must not start shipping their virtualenv, `.git` or `.env` to the
+container, and the baseline is the only place that promise is kept.
+
 Use explicit client injection rather than ambient construction, and delete old
 import paths instead of aliasing them. A public API is only cheap to keep honest
 while it is still small.

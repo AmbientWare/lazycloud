@@ -219,7 +219,6 @@ def test_sdk_image_uv_project_includes_workspace_members_inside_the_root(
     files = Image.from_uv(root)._context_archive().files
 
     assert files == (
-        "packages/member/.lazycloudignore",
         "packages/member/member.py",
         "packages/member/pyproject.toml",
         "pyproject.toml",

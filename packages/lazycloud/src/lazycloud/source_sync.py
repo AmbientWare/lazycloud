@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import os
-import posixpath
 import time
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from types import TracebackType
 from typing import Protocol
 
+from pathspec import PathSpec
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.http.objects import PutObjectResponse
 from typing_extensions import Self
@@ -26,16 +25,28 @@ SOURCE_IGNORE_FILE = ".lazycloudignore"
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 ARCHIVE_CHUNK_SIZE = 1024 * 1024
 
-DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
-    SOURCE_IGNORE_FILE,
+# Applied on every sync, whether or not a `.lazycloudignore` exists and whatever it
+# says. A trimmed file must not start shipping the virtualenv or a `.env`.
+BASELINE_IGNORE_PATTERNS: tuple[str, ...] = (
     ".git",
+    SOURCE_IGNORE_FILE,
+    ".venv",
+    "venv",
+    "**/.venv/",
+    "__pycache__",
+    "**/__pycache__/",
+    "*.pyc",
+    ".env",
+    ".env.local",
+    ".envrc",
+    ".lazycloud/",
+)
+
+DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
+    *BASELINE_IGNORE_PATTERNS,
     ".idea",
     ".python-version",
     ".vscode",
-    ".venv",
-    "venv",
-    ".lazycloud/",
-    "__pycache__",
     ".DS_Store",
     ".config",
     ".coverage",
@@ -43,18 +54,20 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     ".ruff_cache",
     ".dockerignore",
     ".ipynb_checkpoints",
-    ".env",
-    ".env.local",
-    ".envrc",
-    "**/__pycache__/",
     "**/.pytest_cache/",
     "**/node_modules/",
-    "**/.venv/",
     "**/playwright-report/",
     "**/test-results/",
-    "*.pyc",
     ".next/",
     ".circleci",
+)
+
+SOURCE_IGNORE_FILE_HEADER = (
+    "# Written by the LazyCloud SDK. Edit and commit it; patterns use gitignore syntax.",
+    "# A short baseline (.git, .venv, __pycache__, .env, .lazycloud/) always applies.",
+)
+SOURCE_IGNORE_FILE_WRITTEN_NOTICE = (
+    f"Wrote {SOURCE_IGNORE_FILE} with the default ignore patterns. Edit and commit it."
 )
 
 
@@ -195,7 +208,7 @@ def build_source_package_archive(
     reporter = _ArchiveProgress(progress)
     reporter.update("collecting files", force=True)
     selected_archive_prefix = _validate_archive_prefix(archive_prefix)
-    selected_ignore_patterns = tuple(ignore_patterns or _ignore_patterns_from_file(root))
+    selected_ignore_patterns = effective_ignore_patterns(root, ignore_patterns)
     selected_include_patterns = tuple(include_patterns or ())
     files: list[Path] = []
     total_bytes = 0
@@ -275,7 +288,7 @@ def collect_source_files(
     include_patterns: Sequence[str] | None = None,
 ) -> tuple[Path, ...]:
     root = root.expanduser().resolve()
-    selected_ignore_patterns = tuple(ignore_patterns or _ignore_patterns_from_file(root))
+    selected_ignore_patterns = effective_ignore_patterns(root, ignore_patterns)
     selected_include_patterns = tuple(include_patterns or ())
     return tuple(
         _collect_source_files(
@@ -286,28 +299,51 @@ def collect_source_files(
     )
 
 
-def _ignore_patterns_from_file(root: Path) -> tuple[str, ...]:
+def ensure_source_ignore_file(root: Path) -> bool:
+    """Write the default `.lazycloudignore` when the root has none. Returns whether
+    a file was written. Only user-facing sync entry points call this; collection
+    itself never writes into a source tree."""
+    ignore_file = root / SOURCE_IGNORE_FILE
+    if ignore_file.exists():
+        return False
+    ignore_file.write_text(
+        "\n".join((*SOURCE_IGNORE_FILE_HEADER, *DEFAULT_IGNORE_PATTERNS)) + "\n",
+        encoding="utf-8",
+    )
+    return True
+
+
+def effective_ignore_patterns(
+    root: Path, ignore_patterns: Sequence[str] | None = None
+) -> tuple[str, ...]:
+    if ignore_patterns:
+        return (*BASELINE_IGNORE_PATTERNS, *ignore_patterns)
     ignore_file = root / SOURCE_IGNORE_FILE
     if not ignore_file.is_file():
         return DEFAULT_IGNORE_PATTERNS
-    return tuple(
+    lines = tuple(
         line
         for line in (raw.strip() for raw in ignore_file.read_text(encoding="utf-8").splitlines())
         if line and not line.startswith("#")
     )
+    return (*BASELINE_IGNORE_PATTERNS, *lines)
 
 
 @dataclass(frozen=True, slots=True)
 class SourceFileFilter:
     root: Path
     ignore_patterns: tuple[str, ...]
+    _spec: PathSpec = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_spec", _compile_patterns(self.ignore_patterns))
 
     @classmethod
     def for_root(cls, root: Path) -> SourceFileFilter:
-        return cls(root, _ignore_patterns_from_file(root))
+        return cls(root, effective_ignore_patterns(root))
 
     def includes(self, relative: str, *, directory: bool = False) -> bool:
-        return not _matches_patterns(relative, self.ignore_patterns, directory=directory)
+        return not _matches(self._spec, relative, directory=directory)
 
 
 def _collect_source_files(
@@ -319,8 +355,8 @@ def _collect_source_files(
 ) -> Iterable[Path]:
     file_count = 0
     directory_count = 0
-    if _matches_all(ignore_patterns):
-        return
+    ignored = _compile_patterns(ignore_patterns)
+    included = _compile_patterns(include_patterns) if include_patterns else None
     for current_root, dirs, files in os.walk(root):
         directory_count += 1
         if progress is not None:
@@ -329,22 +365,14 @@ def _collect_source_files(
         dirs[:] = [
             dirname
             for dirname in sorted(dirs)
-            if not _matches_patterns(
-                _relative_posix(root, current / dirname),
-                ignore_patterns,
-                directory=True,
-            )
+            if not _matches(ignored, _relative_posix(root, current / dirname), directory=True)
         ]
         for filename in sorted(files):
             path = current / filename
             relative = _relative_posix(root, path)
-            if _matches_patterns(relative, ignore_patterns, directory=False):
+            if _matches(ignored, relative, directory=False):
                 continue
-            if include_patterns and not _matches_patterns(
-                relative,
-                include_patterns,
-                directory=False,
-            ):
+            if included is not None and not _matches(included, relative, directory=False):
                 continue
             file_count += 1
             if progress is not None:
@@ -392,45 +420,17 @@ def _archive_path(prefix: tuple[str, ...], relative_path: str) -> str:
     return path.as_posix()
 
 
-def _matches_all(patterns: Sequence[str]) -> bool:
-    return any(pattern.strip() in {"*", "**", "**/*"} for pattern in patterns)
+def _compile_patterns(patterns: Sequence[str]) -> PathSpec:
+    return PathSpec.from_lines("gitwildmatch", patterns)
 
 
-def _matches_patterns(relative_path: str, patterns: Sequence[str], *, directory: bool) -> bool:
+def _matches(spec: PathSpec, relative_path: str, *, directory: bool) -> bool:
     normalized = _normalize_relative_path(relative_path)
-    parts = PurePosixPath(normalized).parts
-    for raw_pattern in patterns:
-        pattern = _normalize_pattern(raw_pattern)
-        if not pattern:
-            continue
-        directory_pattern = pattern.endswith("/")
-        candidate = pattern.rstrip("/")
-        if not candidate:
-            continue
-        if "/" not in candidate:
-            if any(fnmatch.fnmatchcase(part, candidate) for part in parts):
-                return True
-            if directory and fnmatch.fnmatchcase(posixpath.basename(normalized), candidate):
-                return True
-            continue
-        if fnmatch.fnmatchcase(normalized, candidate):
-            return True
-        if directory_pattern and (
-            normalized == candidate or normalized.startswith(candidate + "/")
-        ):
-            return True
-        if not any(character in candidate for character in "*?[") and (
-            normalized == candidate or normalized.startswith(candidate + "/")
-        ):
-            return True
-    return False
-
-
-def _normalize_pattern(pattern: str) -> str:
-    value = pattern.strip().replace("\\", "/")
-    while value.startswith("./"):
-        value = value[2:]
-    return value.lstrip("/")
+    if not normalized:
+        return False
+    # A trailing slash is how gitwildmatch tells `build/` (directory only) from a
+    # file of the same name, and lets a pruned directory take its contents with it.
+    return spec.match_file(f"{normalized}/" if directory else normalized)
 
 
 def _normalize_relative_path(path: str) -> str:
@@ -445,10 +445,14 @@ def _relative_posix(root: Path, path: Path) -> str:
 
 
 __all__ = [
+    "BASELINE_IGNORE_PATTERNS",
+    "DEFAULT_IGNORE_PATTERNS",
     "SOURCE_IGNORE_FILE",
+    "SOURCE_IGNORE_FILE_WRITTEN_NOTICE",
     "SOURCE_PACKAGE_BUCKET",
     "SOURCE_PACKAGE_CONTENT_TYPE",
     "SOURCE_PACKAGE_PREFIX",
+    "SourceFileFilter",
     "SourcePackageArchive",
     "SourcePackageSyncError",
     "SourcePackageSyncResult",
@@ -456,4 +460,6 @@ __all__ = [
     "SourcePackageUploadClient",
     "build_source_package_archive",
     "collect_source_files",
+    "effective_ignore_patterns",
+    "ensure_source_ignore_file",
 ]
