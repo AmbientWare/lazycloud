@@ -57,6 +57,12 @@ class TaskFinishOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskCancellationOutcome:
+    task: Task
+    state_changed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _TaskStartPersistence:
     task: Task
     attempt_started: bool
@@ -878,11 +884,42 @@ class TaskService:
             lambda session: self.get_in_session(session, task_id)
         )
 
-    def cancel(self, task_id: str) -> Task:
-        task = self.get(task_id)
-        if is_terminal_task_status(task.status):
-            return task
-        return self.transition(task, TaskStatus.Cancelled, error="task cancelled")
+    def cancel(
+        self,
+        task_id: str,
+        *,
+        status: TaskStatus = TaskStatus.Cancelled,
+        error: str = "task cancelled",
+        exit_code: int | None = None,
+    ) -> TaskCancellationOutcome:
+        if status not in {TaskStatus.Cancelled, TaskStatus.Expired, TaskStatus.Failed}:
+            raise ValueError("task cancellation requires a cancellation, expiry, or failure status")
+        with self.context.database.session() as session:
+            current = TaskRepository(session).get_for_update_across_workspaces(task_id)
+            if current is None:
+                raise NotFoundError(f"task not found: {task_id}")
+            if is_terminal_task_status(current.status):
+                return TaskCancellationOutcome(current, state_changed=False)
+            updated = self._transition_in_session(
+                session,
+                current,
+                status,
+                result=None,
+                function_result=None,
+                error=error,
+                exit_code=exit_code,
+            )
+        self.events.emit(
+            f"task.{status.value}",
+            resource_type="task",
+            resource_id=task_id,
+            message=f"task {updated.name} {status.value}",
+            level=_task_event_level(status),
+            workspace_id=updated.workspace_id,
+        )
+        self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
+        self._deliver_callback(updated)
+        return TaskCancellationOutcome(updated, state_changed=True)
 
     def logs(self, task_id: str, *, limit: int = 100) -> list[LogEntry]:
         return [record.entry for record in self.log_page(task_id, limit=limit).data]

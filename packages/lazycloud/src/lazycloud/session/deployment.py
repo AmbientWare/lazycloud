@@ -72,8 +72,6 @@ from lazycloud.source_sync import (
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 from lazycloud.values import cloudpickle_bytes
 
-DEFAULT_IMAGE_BUILD_TIMEOUT_SECONDS = 600.0
-
 
 class DeploymentControlClient(Protocol):
     def get_or_create_stub(
@@ -660,7 +658,7 @@ class DeploymentClient(ControlClientConfigMixin):
             self.image_client = ImageControlClient(
                 channel=self._http_channel(),
                 workspace=config.workspace,
-                timeout_seconds=max(config.timeout_seconds, DEFAULT_IMAGE_BUILD_TIMEOUT_SECONDS),
+                timeout_seconds=config.timeout_seconds,
             )
         return self.image_client
 
