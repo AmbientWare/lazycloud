@@ -8,6 +8,7 @@ from billing.payment_maintenance import BillingPaymentMaintenance
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_launches import ProviderNodeLaunchService
+from compute.provider_state import ProviderUnitStateService
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -307,6 +308,7 @@ class SchedulerAppServices:
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity,
                     launch_credentials=provider_node_launches,
+                    provider_state=ProviderUnitStateService(context.database),
                     capacity_workspace=platform_capacity_workspace,
                     redis=redis,
                     binaries_by_region=(

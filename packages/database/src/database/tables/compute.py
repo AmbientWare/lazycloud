@@ -98,6 +98,13 @@ class ComputeUnitTable(IdTable, DatabaseBase):
             name="ck_compute_units_machine_capacity",
         ),
         CheckConstraint("generation > 0", name="ck_compute_units_generation"),
+        CheckConstraint("provider_state_revision >= 0", name="ck_compute_units_provider_revision"),
+        CheckConstraint(
+            "stopped_machines >= 0 AND retiring_stopped_machines >= 0 "
+            "AND desired_machines + stopped_machines <= max_machines AND (stopped_machines = 0 OR "
+            "(platform_fleet AND worker_gpu_count = 0))",
+            name="ck_compute_units_stopped_capacity",
+        ),
         CheckConstraint(
             "visibility <> 'internal' OR (provider_ref <> '' AND region <> '' "
             "AND offer_id <> '' AND capability_key <> '' AND capacity_mode = 'pooled' "
@@ -153,12 +160,21 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     offer_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     capability_key: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     desired_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    stopped_machines: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    retiring_stopped_machines: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
     initial_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     min_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     max_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     observed_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    provider_state_revision: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
     provider_attributes: Mapped[dict[str, JsonValue]] = mapped_column(
         json_type,
         nullable=False,
@@ -306,6 +322,11 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
         ),
         Index("ix_compute_provider_instances_pool", "pool_id"),
         Index("ix_compute_provider_instances_pool_status", "pool_id", "status"),
+        Index(
+            "ix_compute_provider_instances_stopped",
+            "pool_id",
+            postgresql_where=text("status = 'stopped' AND missing_since IS NULL"),
+        ),
         Index("ix_compute_provider_instances_renewal", "billing_renewal_at"),
         Index(
             "uq_compute_provider_instances_pool_instance",

@@ -41,7 +41,7 @@ def _target(**updates: str) -> AwsProviderNodeIdentityTarget:
         "region": _REGION,
         "node_role_arn": _NODE_ROLE_ARN,
         "node_instance_profile_arn": _PROFILE_ARN,
-        "autoscaling_group_name": _ASG_NAME,
+        "capacity_resource_id": _ASG_NAME,
         **updates,
     }
     return AwsProviderNodeIdentityTarget.model_validate(values)
@@ -270,7 +270,7 @@ def test_identity_verifier_accepts_connection_and_managed_inventory() -> None:
     assert verified.caller_arn == _CALLER_ARN
     assert verified.node_role_arn == _NODE_ROLE_ARN
     assert verified.node_instance_profile_arn == _PROFILE_ARN
-    assert verified.autoscaling_group_name == _ASG_NAME
+    assert verified.capacity_resource_id == _ASG_NAME
     assert verified.proof_sha256 == hashlib.sha256(url.encode()).hexdigest()
     assert url not in repr(proof)
     assert url not in proof.model_dump_json()

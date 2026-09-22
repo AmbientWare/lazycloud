@@ -49,6 +49,7 @@ from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
+    MachineStopPreparationReceipt,
 )
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -83,7 +84,7 @@ from shared.routing import PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
-from compute.agent_control import machine_serves_workloads
+from compute.agent_control import agent_machine_worker_id, machine_serves_workloads
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.capacity_errors import (
     CapacityReservationConflictError,
@@ -165,6 +166,13 @@ class _PooledCapacityBaseline:
 
 
 @dataclass(slots=True)
+class ReserveAgentPreparation:
+    preparing: bool = False
+    stop_request_id: str = ""
+    resuming: bool = False
+
+
+@dataclass(slots=True)
 class ComputeService:
     context: ComputeContext
     provider_registry: DirectMachineProviderRegistry | None = None
@@ -217,7 +225,9 @@ class ComputeService:
             return None
         usage = repository.platform_capacity_usage(gpu=gpu)
         headroom = max(self.fleet_policy.machine_limit(gpu=gpu) - usage, 0)
-        return (current.desired_machines if current is not None else 0) + headroom
+        return (
+            current.desired_machines + current.stopped_machines if current is not None else 0
+        ) + headroom
 
     @property
     def provider_machines(self) -> ProviderMachineReconciler:
@@ -718,6 +728,14 @@ class ComputeService:
                     and desired_unit > available
                     and desired_unit > current_units
                 ):
+                    if locked_pool.platform_fleet and not request.shape.gpu_count:
+                        self._retire_incompatible_reserves(
+                            session,
+                            cpu_millicores=request.shape.cpu_millicores,
+                            memory_mib=request.shape.memory_mib,
+                            runtime=request.shape.runtime,
+                            preemptible=request.shape.preemptible,
+                        )
                     return _capacity_result(
                         request,
                         CapacityAcquisitionStatus.AtLimit,
@@ -1318,6 +1336,8 @@ class ComputeService:
 
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
+            if pool.platform_fleet:
+                repository.lock_platform_capacity()
             current = repository.get(pool.id, for_update=True)
             if current is None:
                 return ""
@@ -1325,11 +1345,15 @@ class ComputeService:
                 current.phase not in {ComputeUnitPhase.Deleting, ComputeUnitPhase.Deleted}
                 or current.desired_machines
                 or current.min_machines
+                or current.stopped_machines
             ):
                 current = repository.upsert(
                     current.model_copy(
                         update={
                             "desired_machines": 0,
+                            "stopped_machines": 0,
+                            "retiring_stopped_machines": current.retiring_stopped_machines
+                            + current.stopped_machines,
                             "min_machines": 0,
                             "replacement_machine_id": "",
                             "replacement_template_version": "",
@@ -1455,6 +1479,20 @@ class ComputeService:
             )
         return connection is not None and connection.hosts_workloads
 
+    def prepared_capacity_owner_ids(self) -> frozenset[str]:
+        with self.context.database.session() as session:
+            return ComputeUnitRepository(session).prepared_capacity_owner_ids()
+
+    def observe_pool_pressure(
+        self, capacity_owner_id: str, *, free_capacity_percent: int, now: datetime
+    ) -> bool:
+        return self._required_capacity_owner_mutations().pressure_ready(
+            capacity_owner_id,
+            under_pressure=free_capacity_percent <= self.fleet_policy.cpu_headroom_percent,
+            now=now,
+            sustained_seconds=self.fleet_policy.cpu_pressure_seconds,
+        )
+
     def pooled_offer_owner_id(self, provider: ResolvedComputeProvider, offer: ComputeOffer) -> str:
         policy = provider.policy
         if policy is None or provider.pooled is None or offer.provider != provider.ref:
@@ -1492,6 +1530,18 @@ class ComputeService:
             provider, offer, preemptible=requirements.preemptible
         ):
             raise InvalidInputError(rejection)
+        if policy.platform_fleet and not requirements.gpu_count:
+            with self.context.database.session() as session:
+                units = ComputeUnitRepository(session)
+                units.lock_platform_capacity()
+                if units.platform_capacity_usage(gpu=False) >= self.fleet_policy.max_cpu_instances:
+                    self._retire_incompatible_reserves(
+                        session,
+                        cpu_millicores=requirements.cpu_millicores,
+                        memory_mib=requirements.memory_mb,
+                        runtime=requirements.runtime,
+                        preemptible=requirements.preemptible,
+                    )
         return self._prepare_pooled_offer(
             provider=provider,
             offer=offer,
@@ -1501,6 +1551,37 @@ class ComputeService:
             idle_timeout_seconds=policy.idle_timeout_seconds,
             baseline=None,
         )
+
+    @staticmethod
+    def _retire_incompatible_reserves(
+        session: DatabaseSession,
+        *,
+        cpu_millicores: int,
+        memory_mib: int,
+        runtime: str,
+        preemptible: bool,
+    ) -> None:
+        if not ContainerRepository(session).has_unplaced_platform_cpu_work():
+            return
+        units = ComputeUnitRepository(session)
+        for unit in units.list_platform_internal(gpu=False):
+            if not unit.stopped_machines or (
+                unit.worker_cpu_millicores >= cpu_millicores
+                and unit.worker_memory_mib >= memory_mib
+                and runtime in unit.worker_runtimes
+                and (preemptible or not unit.worker_preemptible)
+            ):
+                continue
+            units.upsert(
+                unit.model_copy(
+                    update={
+                        "stopped_machines": 0,
+                        "retiring_stopped_machines": unit.retiring_stopped_machines
+                        + unit.stopped_machines,
+                        "generation": unit.generation + 1,
+                    }
+                )
+            )
 
     def reconcile_aws_default_capacity(
         self,
@@ -1875,7 +1956,12 @@ class ComputeService:
                 current=current,
             )
             if remaining == 0 and (
-                current is None or not (current.desired_machines or current.observed_machines)
+                current is None
+                or not (
+                    current.desired_machines
+                    or current.stopped_machines
+                    or current.observed_machines
+                )
             ):
                 raise CapacityLimitReachedError(
                     "fleet capacity limit leaves no headroom for this capacity market"
@@ -1992,6 +2078,10 @@ class ComputeService:
                 offer_id=offer.id,
                 capability_key=offer.capability_key,
                 desired_machines=desired,
+                stopped_machines=(
+                    min(current.stopped_machines, max(maximum - desired, 0)) if current else 0
+                ),
+                retiring_stopped_machines=current.retiring_stopped_machines if current else 0,
                 offer_cost_terms=cost_terms,
                 offer_storage_mib=offer.storage_mb,
                 offer_availability_zone=offer.availability_zone,
@@ -2460,6 +2550,13 @@ class ComputeService:
                 unit.model_copy(
                     update={
                         "replacement_machine_id": machine_id,
+                        "stopped_machines": (
+                            min(
+                                unit.stopped_machines, max(available - unit.desired_machines - 1, 0)
+                            )
+                            if available is not None
+                            else unit.stopped_machines
+                        ),
                         "replacement_template_version": template_version,
                         "generation": unit.generation + 1,
                         "phase": ComputeUnitPhase.Updating,
@@ -2710,6 +2807,140 @@ class ComputeService:
                 )
         return True
 
+    def prepare_reserved_machine(
+        self,
+        *,
+        workspace_id: str,
+        machine_id: str,
+        credential_id: str,
+        credential_generation: int,
+        worker_prepared: bool,
+        agent_current: bool,
+        has_active_workers: bool,
+        prepared_stop: MachineStopPreparationReceipt | None,
+    ) -> ReserveAgentPreparation:
+        """Authenticate preparation evidence and keep retained hosts out of intake."""
+        with self.context.database.session() as session:
+            record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+            if record is None or record.pool_id is None or record.instance_id is None:
+                return ReserveAgentPreparation()
+            preparing = record.status in {
+                ReservationStatus.Preparing.value,
+                ReservationStatus.Stopping.value,
+                ReservationStatus.Stopped.value,
+            }
+            resuming = record.status == ReservationStatus.Resuming.value
+            if not preparing and not resuming:
+                return ReserveAgentPreparation()
+            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                workspace_id, machine_id, for_update=True
+            )
+            if (
+                enrollment is None
+                or enrollment.id != credential_id
+                or enrollment.credential_generation != credential_generation
+                or enrollment.status is not ComputeMachineEnrollmentStatus.Active
+            ):
+                raise ConflictError("reserve preparation requires the current agent credential")
+            unit = ComputeUnitRepository(session).get(record.pool_id)
+            machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
+            if unit is None or machine is None:
+                raise ConflictError("reserve preparation lost its capacity owner")
+            stop_request_id = (
+                machine.lifecycle_at.isoformat()
+                if machine.lifecycle is MachineLifecycle.Stopping
+                and record.first_served_at is not None
+                else ""
+            )
+            instruction = ReserveAgentPreparation(
+                preparing=preparing, stop_request_id=stop_request_id, resuming=resuming
+            )
+            stopping_used_machine = bool(stop_request_id)
+            if stopping_used_machine:
+                if prepared_stop is None:
+                    return instruction
+                if prepared_stop.request_id != stop_request_id or has_active_workers:
+                    raise ConflictError("stop preparation acknowledgment is stale")
+                if ContainerRepository(session).count_live_for_machine(machine_id):
+                    raise ConflictError("machine still owns live workloads")
+            elif (
+                not worker_prepared
+                or not agent_current
+                or (preparing and has_active_workers)
+                or record.status
+                in {
+                    ReservationStatus.Stopped.value,
+                    ReservationStatus.Stopping.value,
+                }
+            ):
+                return instruction
+            target = MachineLifecycle.Stopping if preparing else MachineLifecycle.Joining
+            if machine_lifecycle_allowed(machine.lifecycle, target):
+                write_machine_lifecycle(
+                    session,
+                    machine,
+                    target,
+                    workspace_changes=self.workspace_changes,
+                    workspace_id=workspace_id,
+                )
+            if resuming and enrollment.capacity_notice_at is None:
+                ComputeMachineEnrollmentRepository(session).save(
+                    enrollment.model_copy(
+                        update={
+                            "capacity_state": AgentCapacityState.Available,
+                            "capacity_reason": "",
+                            "capacity_observed_at": utc_now(),
+                        }
+                    )
+                )
+        with self._required_capacity_owner_mutations().mutation_lock(unit.capacity_owner_id):
+            current, provider, offer = self._internal_unit_provider(
+                workspace_id, unit.capacity_owner_id
+            )
+            if provider.pooled is None or current.phase in ENDED_UNIT_PHASES:
+                raise ConflictError("reserve preparation owner is no longer active")
+            if stopping_used_machine:
+                assert prepared_stop is not None
+                if self.scheduler_hooks is None:
+                    raise UpstreamUnavailableError(
+                        "stopping retained capacity requires scheduler worker state"
+                    )
+                with self._required_capacity_owner_mutations().dispatch_lock(
+                    unit.capacity_owner_id
+                ):
+                    with self.context.database.session() as session:
+                        latest = MachineRepository(session).get(
+                            machine_id, workspace_id=workspace_id
+                        )
+                        if (
+                            latest is None
+                            or latest.lifecycle is not MachineLifecycle.Stopping
+                            or latest.lifecycle_at.isoformat() != prepared_stop.request_id
+                            or ContainerRepository(session).count_live_for_machine(machine_id)
+                        ):
+                            raise ConflictError("stop preparation was superseded")
+                    self.source_cache_lifecycle.acknowledge_machine_cleanup(
+                        machine_id=machine_id,
+                        worker_id=agent_machine_worker_id(machine_id),
+                        generation_id=prepared_stop.cache_generation_id,
+                        session_fence=prepared_stop.cache_session_fence,
+                        observed_at=utc_now(),
+                    )
+                    self.scheduler_hooks.disable_machine(
+                        machine_id, "machine returning to stopped reserve"
+                    )
+                    snapshot = provider.pooled.stop_machine(
+                        self._provider_unit_request(current, offer), record.instance_id
+                    )
+                    self.provider_machines._apply_pooled_snapshot(
+                        current, offer, snapshot, provider=provider.pooled
+                    )
+            else:
+                provider.pooled.complete_machine_preparation(
+                    self._provider_unit_request(current, offer), record.instance_id
+                )
+        return instruction
+
     def release_internal_unit_machine(
         self,
         workspace_id: str,
@@ -2719,8 +2950,22 @@ class ComputeService:
         unit, provider, offer = self._internal_unit_provider(workspace_id, capacity_owner_id)
         if provider.pooled is None:
             raise RuntimeError("internal compute pool does not use pooled capacity")
+        can_retain = (
+            unit.platform_fleet
+            and not unit.worker_gpu_count
+            and provider.policy is not None
+            and provider.policy.can_purchase
+            and any(
+                candidate.id == offer.id and candidate.capability_key == offer.capability_key
+                for candidate in provider.pooled.list_reserve_offers(
+                    root_volume_gib=unit.root_volume_gib
+                )
+            )
+        )
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
+            if unit.platform_fleet:
+                units.lock_platform_capacity()
             current = units.get(unit.id, for_update=True)
             if current is None:
                 raise NotFoundError("compute pool disappeared during machine retirement")
@@ -2738,11 +2983,106 @@ class ComputeService:
                 raise KeyError(f"provider instance for machine not found: {machine_id}")
             if not _reservation_open(record.status):
                 return current
+            if record.status in {
+                ReservationStatus.Preparing.value,
+                ReservationStatus.Stopping.value,
+                ReservationStatus.Stopped.value,
+                ReservationStatus.Resuming.value,
+            }:
+                return current
+            enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+                workspace_id, machine_id, for_update=True
+            )
+            machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
+            running = sum(
+                item.status
+                in {
+                    ReservationStatus.Active.value,
+                    ReservationStatus.Pending.value,
+                    ReservationStatus.Resuming.value,
+                }
+                for item in records
+            )
+            desired = (
+                current.desired_machines
+                if running > current.desired_machines
+                else max(current.min_machines, current.desired_machines - 1)
+            )
+            retained = max(
+                current.stopped_machines,
+                1
+                + sum(
+                    item.status
+                    in {
+                        ReservationStatus.Preparing.value,
+                        ReservationStatus.Stopping.value,
+                        ReservationStatus.Stopped.value,
+                    }
+                    for item in records
+                ),
+            )
+            if can_retain:
+                market_running, market_stopped = units.platform_cpu_market_targets(
+                    preemptible=current.worker_preemptible
+                )
+                market_target = self.fleet_policy.stopped_cpu_target(
+                    preemptible=current.worker_preemptible,
+                    running_machines=market_running,
+                )
+                can_retain = (
+                    desired
+                    + retained
+                    + current.retiring_stopped_machines
+                    + units.platform_capacity_usage(gpu=False, excluding_unit_id=current.id)
+                    <= self.fleet_policy.max_cpu_instances
+                    and market_stopped - current.stopped_machines + retained <= market_target
+                )
+            if (
+                can_retain
+                and record.first_served_at is not None
+                and not record.terminating_reason
+                and current.replacement_machine_id != machine_id
+                and enrollment is not None
+                and enrollment.capacity_notice_at is None
+                and enrollment.capacity_state is AgentCapacityState.Draining
+                and machine is not None
+                and machine.lifecycle is MachineLifecycle.Draining
+            ):
+                if ContainerRepository(session).count_live_for_machine(machine_id):
+                    raise ConflictError("machine must finish its workloads before stopping")
+                if running <= desired:
+                    raise ConflictError("machine is still required by the running capacity target")
+                current = units.upsert(
+                    current.model_copy(
+                        update={
+                            "desired_machines": desired,
+                            "stopped_machines": retained,
+                            "max_machines": max(current.max_machines, desired + retained),
+                            "generation": current.generation + 1,
+                        }
+                    )
+                )
+                instances.upsert(
+                    record.model_copy(update={"status": ReservationStatus.Stopping.value})
+                )
+                write_machine_lifecycle(
+                    session,
+                    machine,
+                    MachineLifecycle.Stopping,
+                    workspace_changes=self.workspace_changes,
+                    workspace_id=workspace_id,
+                    message="Waiting for tenant storage cleanup before stopping",
+                )
+                return current
             if record.terminating_reason != "idle_pool_scale_down":
                 replacement = current.replacement_machine_id == machine_id
                 live = sum(
-                    _reservation_open(item.status)
-                    and item.status != ReservationStatus.Terminating.value
+                    item.status
+                    in {
+                        ReservationStatus.Active.value,
+                        ReservationStatus.Pending.value,
+                        ReservationStatus.Resuming.value,
+                    }
                     and item.missing_since is None
                     for item in records
                 )
@@ -2997,6 +3337,170 @@ class ComputeService:
                 LOGGER.exception(
                     "platform warm reconciliation failed for preemptible=%s", preemptible
                 )
+        for preemptible in (True, False):
+            try:
+                self._reconcile_stopped_capacity(providers, preemptible=preemptible, now=now)
+            except CapacityReservationLockContendedError:
+                LOGGER.debug("stopped capacity reconciliation deferred: capacity lease is held")
+            except CapacityReservationLeaseLostError:
+                raise
+            except Exception:
+                LOGGER.exception(
+                    "stopped CPU reserve reconciliation failed: preemptible=%s", preemptible
+                )
+
+    def _reconcile_stopped_capacity(
+        self, providers: Sequence[ResolvedComputeProvider], *, preemptible: bool, now: datetime
+    ) -> None:
+        enabled = {
+            provider.ref
+            for provider in providers
+            if provider.pooled is not None
+            and provider.policy is not None
+            and provider.policy.can_purchase
+        }
+        with self.context.database.session() as session:
+            units = ComputeUnitRepository(session)
+            units.lock_platform_capacity()
+            existing = units.list_platform_internal(preemptible=preemptible, gpu=False)
+            remaining_target = self.fleet_policy.stopped_cpu_target(
+                preemptible=preemptible,
+                running_machines=sum(unit.desired_machines for unit in existing),
+            )
+            for index, unit in enumerate(existing):
+                target = (
+                    0
+                    if unit.provider_state.degraded_reason or unit.provider_ref not in enabled
+                    else min(unit.stopped_machines, remaining_target)
+                )
+                remaining_target -= target
+                if target != unit.stopped_machines:
+                    existing[index] = units.upsert(
+                        unit.model_copy(
+                            update={
+                                "stopped_machines": target,
+                                "retiring_stopped_machines": unit.retiring_stopped_machines
+                                + unit.stopped_machines
+                                - target,
+                                "generation": unit.generation + 1,
+                            }
+                        )
+                    )
+            if remaining_target == 0:
+                return
+            if ContainerRepository(session).has_unplaced_platform_cpu_work():
+                return
+            if units.platform_capacity_usage(gpu=False) >= self.fleet_policy.max_cpu_instances:
+                return
+        retained = {unit.id for unit in existing if unit.stopped_machines}
+        candidates: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
+        for provider in providers:
+            policy = provider.policy
+            if provider.pooled is None or policy is None or not policy.can_purchase:
+                continue
+            candidates.extend(
+                (provider, offer)
+                for offer in provider.pooled.list_reserve_offers(
+                    root_volume_gib=policy.root_volume_gib
+                )
+                if offer.preemptible is preemptible
+                and not offer.gpu_count
+                and self.pooled_offer_rejection(provider, offer, preemptible=preemptible, now=now)
+                is None
+            )
+        owner_ids: dict[tuple[str, str], str] = {}
+        if not candidates:
+            LOGGER.warning("stopped CPU reserve has no eligible provider offers")
+            return
+        existing_ids = {
+            (unit.provider_ref, unit.region, unit.capability_key, unit.root_volume_gib): unit.id
+            for unit in existing
+        }
+        cooling = {
+            unit.id
+            for unit in existing
+            if unit.phase is ComputeUnitPhase.Deleting
+            or (
+                unit.provider_state.degraded_reason is not None
+                and not self._failed_market_retry_ready(unit, now=now)
+            )
+        }
+        for provider, offer in candidates:
+            assert provider.policy is not None
+            identity = (
+                provider.ref,
+                offer.region,
+                offer.capability_key,
+                provider.policy.root_volume_gib,
+            )
+            owner_ids[(provider.ref, offer.id)] = (
+                existing_ids.get(identity)
+                or internal_unit_identity(
+                    workspace_id=provider.policy.workspace_id,
+                    provider_ref=provider.ref,
+                    region=offer.region,
+                    capability_key=offer.capability_key,
+                    root_volume_gib=provider.policy.root_volume_gib,
+                )[0]
+            )
+        candidates.sort(
+            key=lambda item: (
+                owner_ids[(item[0].ref, item[1].id)] not in retained,
+                offer_selection_key(item[1], OfferRequest(nodes=1, preemptible=preemptible)),
+            )
+        )
+        for provider, offer in candidates:
+            owner_id = owner_ids[(provider.ref, offer.id)]
+            if owner_id in cooling:
+                continue
+            if retained and owner_id not in retained:
+                continue
+            policy = provider.policy
+            assert policy is not None
+            with self._required_capacity_owner_mutations().mutation_lock(owner_id):
+                try:
+                    unit = self._prepare_pooled_offer(
+                        provider=provider,
+                        offer=offer,
+                        requirements=ComputeResourceRequirements(preemptible=preemptible),
+                        desired_machines=0,
+                        root_volume_gib=policy.root_volume_gib,
+                        idle_timeout_seconds=policy.idle_timeout_seconds,
+                        baseline=None,
+                        now=now,
+                    )
+                except CapacityLimitReachedError:
+                    return
+                with self.context.database.session() as session:
+                    units = ComputeUnitRepository(session)
+                    units.lock_platform_capacity()
+                    current = units.get(unit.id, for_update=True)
+                    if current is None or current.phase in ENDED_UNIT_PHASES:
+                        continue
+                    if current.retiring_stopped_machines:
+                        return
+                    headroom = max(
+                        self.fleet_policy.max_cpu_instances
+                        - units.platform_capacity_usage(gpu=False),
+                        0,
+                    )
+                    target = min(
+                        current.stopped_machines + remaining_target,
+                        current.stopped_machines + headroom,
+                    )
+                    if target != current.stopped_machines:
+                        units.upsert(
+                            current.model_copy(
+                                update={
+                                    "stopped_machines": target,
+                                    "max_machines": max(
+                                        current.max_machines, current.desired_machines + target
+                                    ),
+                                    "generation": current.generation + 1,
+                                }
+                            )
+                        )
+            return
 
     def _reconcile_warm_market(
         self,
@@ -3388,7 +3892,7 @@ class ComputeService:
                         self._provider_unit_request(current, offer), record.instance_id
                     )
             request = self._provider_unit_request(current, offer)
-            if request.desired_machines == 0:
+            if request.desired_machines == 0 and request.stopped_machines == 0:
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
                     snapshot = pooled.describe_unit(request)
                     if (
@@ -3618,7 +4122,17 @@ class ComputeService:
         and its own silence would excuse it forever.
         """
 
-        machine_ids = [record.machine_id for record in records if record.machine_id is not None]
+        machine_ids = [
+            record.machine_id
+            for record in records
+            if record.machine_id is not None
+            and record.status
+            not in {
+                ReservationStatus.Stopped.value,
+                ReservationStatus.Stopping.value,
+                ReservationStatus.Preparing.value,
+            }
+        ]
         if len(machine_ids) < 2:
             return True
         enrollments = ComputeMachineEnrollmentRepository(session)
@@ -3820,6 +4334,11 @@ class ComputeService:
                                 _without_warm_floor(current).model_copy(
                                     update={
                                         "desired_machines": 0,
+                                        "stopped_machines": 0,
+                                        "retiring_stopped_machines": (
+                                            current.retiring_stopped_machines
+                                            + current.stopped_machines
+                                        ),
                                         "generation": current.generation + 1,
                                         "phase": ComputeUnitPhase.Deleting,
                                         "status": ComputeUnitPhase.Deleting.value,
@@ -3998,7 +4517,7 @@ class ComputeService:
             raise UpstreamUnavailableError(
                 f"compute pool {pool.name!r} offer is no longer available"
             )
-        return offer
+        return offer.model_copy(update={"capability_key": pool.capability_key})
 
     def clear_capacity_degradation(
         self,
@@ -4058,15 +4577,19 @@ class ComputeService:
         preserve_deleting: bool = False,
         now: datetime | None = None,
     ) -> ComputeUnitRecord | None:
-        provider_state = (
-            pool.provider_state.model_copy(
-                update={"degraded_reason": reason, "degraded_at": to_utc(now or utc_now())}
-            )
-            if reason is not None
-            else pool.provider_state
-        )
         with self.context.database.session() as session:
-            degraded = ComputeUnitRepository(session).apply_provider_state(
+            repository = ComputeUnitRepository(session)
+            current = repository.get(pool.id, for_update=True)
+            if current is None or current.generation != pool.generation:
+                return current
+            provider_state = (
+                current.provider_state.model_copy(
+                    update={"degraded_reason": reason, "degraded_at": to_utc(now or utc_now())}
+                )
+                if reason is not None
+                else current.provider_state
+            )
+            degraded = repository.apply_provider_state(
                 pool.id,
                 generation=pool.generation,
                 observed_machines=pool.observed_machines,
@@ -4155,6 +4678,7 @@ def _retirable_platform_pool(
     policy = provider.policy
     return (
         pool.visibility is ComputeUnitVisibility.Internal
+        and not pool.stopped_machines
         and pool.platform_fleet
         and policy is not None
         and policy.platform_fleet

@@ -267,8 +267,16 @@ API is an explicit exception for production-data review; it does not authorize
 loading production operator credentials into local backend services.
 
 For owner-authorized deployments of our platform, use the AWS `default` profile.
-`default-test` is for customer BYO-cloud acceptance deployments, not a prerequisite
-for deploying our platform. GitHub deployments use their configured OIDC role.
+For disposable AWS provider acceptance, including platform capacity lifecycle
+and customer BYO-cloud tests, check the existing `default-test` profile first.
+List configured profiles and verify the selected identity with STS before creating
+resources or reporting missing credentials. The test account is available through
+`default-test`; it is not a prerequisite for deploying our platform. If `default`
+uses root credentials, it cannot perform the provider's AssumeRole workflow.
+Use the test account for acceptance instead of asking for new credentials. Keep
+test resources scoped to the run and prove their cleanup. Never switch the target
+account of a platform deployment to work around a credential failure.
+GitHub deployments use their configured OIDC role.
 Never copy local AWS credentials into workloads, images, or GitHub secrets.
 
 `0001_relational_baseline` is deployed and frozen. Schema changes add an Alembic

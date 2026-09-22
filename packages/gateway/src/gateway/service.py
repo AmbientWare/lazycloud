@@ -213,11 +213,6 @@ from shared.scheduling import (
     SchedulerWorkerStatus,
     WorkerUnavailableReason,
 )
-from shared.source_cache_cleanup import (
-    WorkerCacheStorageDestructionEvidence,
-    WorkerCacheStorageOwnerKind,
-    WorkerCacheStorageOwnerRecord,
-)
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit, usage_record_id
@@ -2127,42 +2122,13 @@ class GatewayControlService:
         state: ComputeAgentTokenState,
         request: LeaveAgentRequest,
     ) -> None:
-        owner = WorkerCacheStorageOwnerRecord(
-            kind=WorkerCacheStorageOwnerKind.Machine,
-            owner_id=state.machine_id,
+        self.services.compute.source_cache_lifecycle.acknowledge_machine_cleanup(
+            machine_id=state.machine_id,
+            worker_id=agent_machine_worker_id(state.machine_id),
+            generation_id=request.cache_generation_id,
+            session_fence=request.cache_session_fence,
+            observed_at=utc_now(),
         )
-        try:
-            current = self.services.compute.source_cache_lifecycle.get(owner)
-        except NotFoundError:
-            if request.cache_generation_id or request.cache_session_fence is not None:
-                raise ConflictError(
-                    "agent cache destruction acknowledgment has no current server generation"
-                ) from None
-            return
-        if current.complete:
-            return
-        if not request.cache_generation_id or request.cache_session_fence is None:
-            raise ConflictError(
-                "current machine-owned source cache must be destroyed by "
-                "'lazycloud-agent leave' before authority can be removed"
-            )
-        if (
-            current.generation_id != request.cache_generation_id
-            or current.session_fence != request.cache_session_fence
-            or current.worker_id != agent_machine_worker_id(state.machine_id)
-        ):
-            raise ConflictError(
-                "agent cache destruction acknowledgment is not the current machine session"
-            )
-        destroyed = self.services.compute.source_cache_lifecycle.record_destroyed(
-            WorkerCacheStorageDestructionEvidence(
-                owner=owner,
-                generation_id=request.cache_generation_id,
-                observed_at=utc_now(),
-            )
-        )
-        if not destroyed.complete:
-            raise ConflictError("machine-owned source cache destruction is incomplete")
 
     def list_agent_routes(
         self,
@@ -2339,14 +2305,44 @@ class GatewayControlService:
                 bootstrap_unit,
                 workspace_id=response_state.workspace_id,
             )
-            agent_slots = self._agent_slots_for_machine(
-                response_state,
-                release=release,
-                billing_owner=billing_owner_for_unit(bootstrap_unit),
-                active_worker_images=request.active_worker_images,
-                prepared_worker_images=request.prepared_worker_images,
-                agent_binary_sha256=request.binary_sha256,
+            reserve_preparation = (
+                self.services.compute.prepare_reserved_machine(
+                    workspace_id=response_state.workspace_id,
+                    machine_id=response_state.machine_id,
+                    credential_id=response_state.credential_id,
+                    credential_generation=response_state.credential_generation,
+                    worker_prepared=release.target.worker_image in request.prepared_worker_images,
+                    agent_current=(
+                        release.target.agent is None
+                        or request.binary_sha256 == release.target.agent.sha256
+                    ),
+                    has_active_workers=bool(request.active_worker_images),
+                    prepared_stop=request.prepared_stop,
+                )
+                if bootstrap_unit.platform_fleet and not bootstrap_unit.worker_gpu_count
+                else None
             )
+            if reserve_preparation and reserve_preparation.preparing and request.prepared_stop:
+                self._prune_agent_worker_slots(
+                    response_state,
+                    keep_worker_id="",
+                    slots=self.compute_states.list_agent_worker_slot_states(
+                        response_state.workspace_id,
+                        response_state.capacity_owner_id,
+                        response_state.machine_id,
+                    ),
+                )
+                agent_slots = []
+            else:
+                agent_slots = self._agent_slots_for_machine(
+                    response_state,
+                    release=release,
+                    billing_owner=billing_owner_for_unit(bootstrap_unit),
+                    active_worker_images=request.active_worker_images,
+                    prepared_worker_images=request.prepared_worker_images,
+                    agent_binary_sha256=request.binary_sha256,
+                    preparing_reserve=bool(reserve_preparation and reserve_preparation.preparing),
+                )
             bootstrap = build_agent_bootstrap_config(
                 response_state.workspace_id,
                 bootstrap_pool,
@@ -2365,6 +2361,8 @@ class GatewayControlService:
             bootstrap=bootstrap,
             routes=[self._agent_route_view(route) for route in snapshot.routes],
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
+            stop_preparation_id=reserve_preparation.stop_request_id if reserve_preparation else "",
+            resume_from_stop=bool(reserve_preparation and reserve_preparation.resuming),
         )
 
     def record_agent_capacity_interruption(
@@ -2474,6 +2472,7 @@ class GatewayControlService:
         active_worker_images: Mapping[str, str],
         prepared_worker_images: Sequence[str],
         agent_binary_sha256: str,
+        preparing_reserve: bool = False,
     ) -> list[ComputeAgentWorkerSlotState]:
         slots = self.compute_states.list_agent_worker_slot_states(
             agent_state.workspace_id,
@@ -2569,6 +2568,9 @@ class GatewayControlService:
                 else AgentWorkerSlotStatus.Pending
             )
         if not agent_current and (claimed or continuing_rollout or not active_image):
+            slot_status = AgentWorkerSlotStatus.Draining
+
+        if preparing_reserve:
             slot_status = AgentWorkerSlotStatus.Draining
 
         token_plan = self._agent_worker_token(
@@ -3177,6 +3179,11 @@ class GatewayControlService:
             )
         )
         machine = MachineRepository(session).get(state.machine_id, workspace_id=state.workspace_id)
+        if machine is not None and machine.lifecycle in {
+            MachineLifecycle.Stopping,
+            MachineLifecycle.Stopped,
+        }:
+            return state
         if machine is not None:
             # Silence is not a phase. The machine keeps the phase it reached and
             # says how long it has been quiet; the capacity badge shows it offline.

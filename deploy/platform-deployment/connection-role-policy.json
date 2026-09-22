@@ -6,6 +6,7 @@
         "autoscaling:DescribeScalingActivities",
         "ec2:DescribeAvailabilityZones",
         "ec2:DescribeInstances",
+        "ec2:DescribeImages",
         "ec2:DescribeInternetGateways",
         "ec2:DescribeLaunchTemplates",
         "ec2:DescribeLaunchTemplateVersions",
@@ -16,6 +17,7 @@
         "ec2:GetManagedPrefixListEntries",
         "ec2:DescribeSecurityGroups",
         "ec2:DescribeSpotPriceHistory",
+        "ec2:DescribeSpotInstanceRequests",
         "ec2:DescribeSubnets",
         "ec2:DescribeVolumes",
         "ec2:DescribeVpcs",
@@ -94,6 +96,32 @@
       "Sid": "ManageTaggedAutoScalingGroups"
     },
     {
+      "Action": [
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/cloud-pool:managed-by": "control-plane"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Sid": "ManageTaggedRetainedInstances"
+    },
+    {
+      "Action": "ec2:CancelSpotInstanceRequests",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/cloud-pool:managed-by": "control-plane"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:spot-instances-request/*",
+      "Sid": "CancelTaggedSpotRequests"
+    },
+    {
       "Action": "ec2:RunInstances",
       "Condition": {
         "StringEquals": {
@@ -103,7 +131,8 @@
       "Effect": "Allow",
       "Resource": [
         "arn:aws:ec2:*:*:instance/*",
-        "arn:aws:ec2:*:*:volume/*"
+        "arn:aws:ec2:*:*:volume/*",
+        "arn:aws:ec2:*:*:spot-instances-request/*"
       ],
       "Sid": "RunTaggedInstanceResources"
     },
@@ -145,7 +174,8 @@
       "Effect": "Allow",
       "Resource": [
         "arn:aws:ec2:*:*:instance/*",
-        "arn:aws:ec2:*:*:volume/*"
+        "arn:aws:ec2:*:*:volume/*",
+        "arn:aws:ec2:*:*:spot-instances-request/*"
       ],
       "Sid": "TagManagedInstancesOnLaunch"
     },

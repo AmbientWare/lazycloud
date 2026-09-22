@@ -23,6 +23,7 @@ from agent.service_manager import (
     ServiceCommandResult,
     ServicePlatform,
 )
+from agent.storage_cleanup import SOURCE_CACHE_DESTRUCTION_RECEIPT_FILE
 from agent_app import main as agent_main
 from gateway.http import LeaveAgentRequest, LeaveAgentResponse
 from shared.app_identity import AGENT_NAME
@@ -250,7 +251,7 @@ def test_leave_retries_remote_decommission_before_removing_local_authority(
     assert installation.state_path.exists()
     assert installation.unit_path.exists()
     assert not cache_root.exists()
-    receipt_path = installation.state_dir / agent_main.SOURCE_CACHE_DESTRUCTION_RECEIPT_FILE
+    receipt_path = installation.state_dir / SOURCE_CACHE_DESTRUCTION_RECEIPT_FILE
     receipt = WorkerSourceCacheDestructionReceipt.model_validate_json(receipt_path.read_text())
     assert receipt.session_fence == 9
     assert receipt_path.stat().st_mode & 0o777 == 0o600

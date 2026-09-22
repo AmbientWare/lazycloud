@@ -3,6 +3,7 @@ from contextlib import contextmanager
 
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.provider_launches import ProviderNodeLaunchService
+from compute.provider_state import ProviderUnitStateService
 from compute.service import ComputeService
 from coordination.redis_client import RedisClient, RedisSettings
 from database.context import ServiceContext
@@ -51,6 +52,7 @@ def platform_compute() -> Iterator[ComputeService]:
             platform_providers=configured_platform_compute_providers(
                 PlatformCapacitySettings(),
                 launch_credentials=launches,
+                provider_state=ProviderUnitStateService(database),
                 capacity_workspace=namespace_id,
                 redis=redis,
                 binaries_by_region=(

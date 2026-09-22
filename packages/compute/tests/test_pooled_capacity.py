@@ -18,6 +18,7 @@ from compute.capacity_errors import (
 from compute.capacity_recovery import record_capacity_risk
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
 from compute.offers import ComputeOffer, ReservationStatus
+from compute.provider_state import ProviderUnitStateService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -50,6 +51,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.container_scheduling import ContainerSchedulingRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -111,7 +113,12 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.errors import (
+    CapacityLimitReachedError,
+    ConflictError,
+    NotFoundError,
+    UpstreamUnavailableError,
+)
 from shared.identity import WorkspaceStatus
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
@@ -128,6 +135,21 @@ _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 
 @dataclass(slots=True)
 class _PooledProvider:
+    reserve_offers: tuple[ComputeOffer, ...] = ()
+
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        return self.reserve_offers
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        raise AssertionError("test provider has no stopped capacity")
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise AssertionError("test provider has no stopped capacity")
+
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
@@ -296,6 +318,11 @@ class _AsyncScaleDownProvider(_PooledProvider):
 
 @dataclass(slots=True)
 class _MutationLeases:
+    def pressure_ready(
+        self, capacity_owner_id: str, *, under_pressure: bool, now: datetime, sustained_seconds: int
+    ) -> bool:
+        raise AssertionError("capacity mutation test must not observe activity pressure")
+
     on_acquire: Callable[[str], None] | None = None
     acquired: list[str] = field(default_factory=list)
     held: set[str] = field(default_factory=set)
@@ -422,6 +449,159 @@ class _SchedulerHooks:
 
     def revoke_unit_join_token(self, token_hash: str) -> None:
         self.revoked_join_tokens.append(token_hash)
+
+
+@pytest.mark.parametrize("preemptible", [True, False])
+def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
+    service_context: ServiceContext,
+    preemptible: bool,
+) -> None:
+    provider = _PooledProvider()
+    provider.offer = provider.offer.model_copy(
+        update={
+            "preemptible": preemptible,
+            "cost_terms": provider.offer.cost_terms.model_copy(
+                update={"compute_hourly_micros": 100_000}
+            ),
+        }
+    )
+    provider.reserve_offers = (provider.offer,)
+    resolved = _Resolver(
+        provider,
+        service_context,
+        allowed_offers=(
+            ProviderOfferEligibility(
+                region=provider.offer.region,
+                instance_type=provider.offer.instance_type,
+                preemptible=preemptible,
+            ),
+        ),
+    )._resolved()
+    assert resolved.policy is not None and resolved.policy.platform_fleet
+    workspace_id = resolved.policy.workspace_id
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: (resolved,),
+    )
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=_SchedulerHooks(),
+        fleet_policy=FleetCapacityPolicy(
+            max_cpu_instances=2,
+            warm_cpu_preemptible_min=0,
+            stopped_cpu_preemptible_target=2 if preemptible else 0,
+            stopped_cpu_non_preemptible_target=0 if preemptible else 2,
+        ),
+    )
+    now = datetime.now(UTC)
+    compute.reconcile_platform_warm_capacity(now=now)
+    with service_context.database.session() as session:
+        [first] = ComputeUnitRepository(session).list_platform_internal()
+        assert first.stopped_machines == 2
+        assert first.desired_machines == 0
+        assert first.worker_preemptible is preemptible
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=60))
+    with service_context.database.session() as session:
+        [repeated] = ComputeUnitRepository(session).list_platform_internal()
+        assert repeated.generation == first.generation
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
+    compute.fleet_policy = compute.fleet_policy.model_copy(
+        update={
+            "stopped_cpu_preemptible_target"
+            if preemptible
+            else "stopped_cpu_non_preemptible_target": 1
+        }
+    )
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=120))
+    with service_context.database.session() as session:
+        [retiring] = ComputeUnitRepository(session).list_platform_internal()
+        assert retiring.stopped_machines == 1
+        assert retiring.retiring_stopped_machines == 1
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
+
+    request = SchedulerWorkerRequest(
+        container_id=str(uuid4()),
+        stub_id="reserve-demand",
+        workspace_id=workspace_id,
+        cpu_millicores=provider.offer.cpu_millicores * 2,
+        memory_mib=1024,
+        placement=Placement.platform(),
+        preemptible=preemptible,
+    )
+    with service_context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=request.container_id,
+                name="waiting-for-larger-node",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+            )
+        )
+        ContainerSchedulingRepository(session).submit(request, now=now)
+    with pytest.raises(CapacityLimitReachedError):
+        compute.prepare_pooled_offer(
+            provider=resolved,
+            offer=provider.offer.model_copy(update={"cpu_millicores": request.cpu_millicores}),
+            requirements=ComputeResourceRequirements(
+                cpu_millicores=request.cpu_millicores,
+                memory_mb=request.memory_mib,
+                preemptible=preemptible,
+            ),
+        )
+    with service_context.database.session() as session:
+        [retiring] = ComputeUnitRepository(session).list_platform_internal()
+        assert retiring.stopped_machines == 0
+        assert retiring.retiring_stopped_machines == 2
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
+
+
+def test_provider_launch_checkpoint_survives_stale_snapshot_and_rejects_stale_writer(
+    service_context: ServiceContext,
+) -> None:
+    _seed_connection(service_context)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    request = compute._provider_unit_request(pool, provider.offer)
+    checkpoints = ProviderUnitStateService(service_context.database)
+    initial = checkpoints.load(request)
+    intent = initial.model_copy(
+        update={"revision": initial.revision + 1, "attributes": {"launch_token": "durable-intent"}}
+    )
+    checkpoints.save(request, expected=initial, state=intent)
+    with pytest.raises(ConflictError):
+        checkpoints.save(request, expected=initial, state=intent)
+    with service_context.database.session() as session:
+        assert (
+            ComputeUnitRepository(session).apply_provider_state(
+                pool.id,
+                generation=pool.generation,
+                observed_machines=0,
+                phase=ComputeUnitPhase.Ready,
+                provider_state=initial,
+            )
+            is None
+        )
+    compute._mark_pooled_capacity_degraded(pool)
+    assert checkpoints.load(request) == intent
 
 
 @pytest.mark.parametrize(

@@ -3,18 +3,23 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TypedDict
+from uuid import uuid4
 
 import pytest
 from botocore.exceptions import ClientError
 from compute.offers import ComputeOffer, OfferRequest, choose_offer
+from compute.provider_state import ProviderUnitStateService
 from compute.providers import (
     ProviderCapacityPhase,
     ProviderMachineStatus,
     ProviderUnitBootstrap,
     ProviderUnitRequest,
 )
+from database.context import ServiceContext
+from database.repositories.compute import ComputeUnitRepository
+from identity.platform import PlatformNamespaceService
 from provider_aws import (
     AwsAccountConnectionTarget,
     AwsManagedPoolBinaries,
@@ -32,15 +37,20 @@ from provider_aws import (
 )
 from provider_aws.managed_pool import _ScalingActivity
 from provider_aws.network_egress import NetworkFilter
+from provider_aws.retained_pool import AwsRetainedPool, RetainedPoolState, RetainedSlot, SlotPhase
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
-from shared.capacity import CapacityFailureCode
+from shared.capacity import CapacityFailureCode, CapacityOwnerKind, CapacityOwnerSource
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
     UnitName,
 )
+from shared.placement import Placement
 from shared.supplier_costs import SupplierCostTerms
+from shared.timestamps import utc_now
 
 _VPC_ID = "vpc-00000000000000001"
 _SUBNET_IDS = ("subnet-00000000000000001", "subnet-00000000000000002")
@@ -90,6 +100,28 @@ def test_scaling_failure_distinguishes_quota_from_capacity(
 
 
 class _Ec2:
+    def run_instances(self, **kwargs: object) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not directly launch instances")
+
+    def start_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not directly start instances")
+
+    def stop_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not directly stop instances")
+
+    def cancel_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not cancel persistent requests")
+
+    def describe_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not describe persistent requests")
+
+    def terminate_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("this scenario must not terminate retained instances")
+
     def describe_route_tables(
         self, *, Filters: list[NetworkFilter], NextToken: str = ""
     ) -> Mapping[str, object]:
@@ -136,7 +168,14 @@ class _Ec2:
     def describe_spot_price_history(self, **kwargs: object) -> Mapping[str, object]:
         return {"SpotPriceHistory": []}
 
-    def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+    def describe_instances(
+        self,
+        *,
+        InstanceIds: list[str] | None = None,
+        Filters: list[_Filter] | None = None,
+        NextToken: str = "",
+    ) -> Mapping[str, object]:
+        assert InstanceIds is not None
         instances: list[Mapping[str, object]] = [
             {
                 "InstanceId": instance_id,
@@ -397,6 +436,186 @@ def _spec(*, desired_nodes: int = 1, max_nodes: int = 2) -> AwsManagedPoolSpec:
             ),
         ),
     )
+
+
+class _RetainedEc2(_Ec2):
+    retry_attempts: int = 0
+    spot_request_state: str = "active"
+
+    def run_instances(self, **kwargs: object) -> Mapping[str, object]:
+        raise ClientError(
+            {
+                "Error": {
+                    "Code": "InsufficientInstanceCapacity",
+                    "Message": "capacity unavailable",
+                },
+                "ResponseMetadata": {
+                    "RetryAttempts": self.retry_attempts,
+                    "RequestId": "test-request",
+                    "HostId": "",
+                    "HTTPStatusCode": 500,
+                    "HTTPHeaders": {},
+                },
+            },
+            "RunInstances",
+        )
+
+    def describe_instances(
+        self,
+        *,
+        InstanceIds: list[str] | None = None,
+        Filters: list[_Filter] | None = None,
+        NextToken: str = "",
+    ) -> Mapping[str, object]:
+        if InstanceIds:
+            raise ClientError(
+                {"Error": {"Code": "InvalidInstanceID.NotFound", "Message": "missing"}},
+                "DescribeInstances",
+            )
+        return {"Reservations": []}
+
+    def describe_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]:
+        return {
+            "SpotInstanceRequests": [
+                {
+                    "SpotInstanceRequestId": SpotInstanceRequestIds[0],
+                    "State": self.spot_request_state,
+                }
+            ]
+        }
+
+    def cancel_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]:
+        self.spot_request_state = "cancelled"
+        return {}
+
+
+@pytest.fixture
+def retained_pool(service_context: ServiceContext) -> tuple[AwsRetainedPool, _RetainedEc2]:
+    workspace = PlatformNamespaceService(service_context.database).initialize()
+    request = _pool_request("aws:retained-test").model_copy(
+        update={"workspace_id": workspace.id, "provider_connection_id": None, "stopped_machines": 1}
+    )
+    with service_context.database.session() as session:
+        ComputeUnitRepository(session).upsert(
+            ComputeUnitRecord(
+                id=request.unit_id,
+                name=request.unit_name,
+                workspace_id=workspace.id,
+                capacity_owner_id=request.unit_id,
+                capacity_owner_kind=CapacityOwnerKind.PooledProvider,
+                capacity_owner_source=CapacityOwnerSource.Provider,
+                placement=Placement.platform(),
+                platform_fleet=True,
+                provider="aws",
+                provider_ref=request.provider_ref,
+                region=request.offer.region,
+                offer_id=request.offer.id,
+                capability_key=request.offer.capability_key,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                visibility=ComputeUnitVisibility.Internal,
+                stopped_machines=1,
+                max_machines=3,
+            )
+        )
+    ec2 = _RetainedEc2()
+    return (
+        AwsRetainedPool(
+            request,
+            _spec().model_copy(update={"workspace_id": workspace.id}),
+            AwsManagedPoolClients(ec2=ec2, autoscaling=_AutoScaling()),
+            ProviderUnitStateService(service_context.database),
+        ),
+        ec2,
+    )
+
+
+@pytest.mark.parametrize("sdk_retries", [0, 1])
+def test_rejected_launch_releases_only_proven_unused_capacity(
+    retained_pool: tuple[AwsRetainedPool, _RetainedEc2], sdk_retries: int
+) -> None:
+    pool, ec2 = retained_pool
+    ec2.retry_attempts = sdk_retries
+    with pytest.raises(AwsProviderControlError):
+        pool.ensure()
+    state = pool.checkpoints.load(pool.request)
+    [slot] = RetainedPoolState.model_validate(state.attributes).slots
+    if sdk_retries:
+        assert slot.launch_started_at is not None
+        ambiguous = slot.model_copy(update={"launch_started_at": utc_now() - timedelta(minutes=20)})
+        pool.checkpoints.save(
+            pool.request,
+            expected=state,
+            state=state.model_copy(
+                update={
+                    "revision": state.revision + 1,
+                    "attributes": pool.state.model_copy(update={"slots": (ambiguous,)}).model_dump(
+                        mode="json"
+                    ),
+                }
+            ),
+        )
+    restarted = AwsRetainedPool(pool.request, pool.spec, pool.clients, pool.checkpoints)
+    if sdk_retries:
+        with pytest.raises(RuntimeError, match="no instance evidence"):
+            restarted.delete()
+        assert RetainedPoolState.model_validate(
+            pool.checkpoints.load(pool.request).attributes
+        ).slots
+    else:
+        assert slot.launch_started_at is None
+        assert restarted.delete().phase is ProviderCapacityPhase.Deleted
+        assert not RetainedPoolState.model_validate(
+            pool.checkpoints.load(pool.request).attributes
+        ).slots
+
+
+def test_missing_stopped_instance_releases_slot_after_storage_and_request_cleanup(
+    retained_pool: tuple[AwsRetainedPool, _RetainedEc2],
+) -> None:
+    pool, ec2 = retained_pool
+    now = utc_now()
+    slot = RetainedSlot(
+        token=uuid4().hex,
+        created_at=now - timedelta(hours=2),
+        launch_started_at=now - timedelta(hours=2),
+        launch_template_id="lt-retained",
+        launch_template_version=1,
+        host_revision="host",
+        subnet_id=_SUBNET_IDS[0],
+        serving=False,
+        phase=SlotPhase.Stopped,
+        instance_id="i-00000000000000001",
+        spot_request_id="sir-retained",
+        storage_volume_ids=("vol-00000000000000001",),
+    )
+    state = pool.checkpoints.load(pool.request)
+    pool.checkpoints.save(
+        pool.request,
+        expected=state,
+        state=state.model_copy(
+            update={
+                "revision": state.revision + 1,
+                "attributes": RetainedPoolState(
+                    namespace_id=pool.spec.workspace_id, slots=(slot,)
+                ).model_dump(mode="json"),
+            }
+        ),
+    )
+    request = pool.request.model_copy(update={"purchases_enabled": False})
+    held = AwsRetainedPool(request, pool.spec, pool.clients, pool.checkpoints)
+    held.ensure()
+    assert held.state.slots[0].phase is SlotPhase.Stopped
+    ec2.volume_missing = True
+    held.ensure()
+    assert held.state.slots[0].phase is SlotPhase.Retiring
+    assert ec2.spot_request_state == "cancelled"
+    held.ensure()
+    assert not held.state.slots
+    assert not RetainedPoolState.model_validate(pool.checkpoints.load(request).attributes).slots
 
 
 def test_managed_pool_rejects_desired_capacity_above_its_allocation() -> None:

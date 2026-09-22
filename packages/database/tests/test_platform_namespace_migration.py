@@ -1,6 +1,3 @@
-from collections.abc import Callable
-from datetime import timedelta
-from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -8,21 +5,14 @@ from alembic import command
 from database.migrations import alembic_config
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.identity import TokenRepository, UserRepository, WorkspaceRepository
-from database.tables import DatabaseBase
-from database.tables.compute import ComputeJoinCredentialTable, ComputeUnitTable
-from database.tables.orchestration import WorkerTable
 from identity.platform import PlatformNamespaceService
 from provider_aws.platform import AwsPlatformBinding
 from pydantic import SecretStr
 from shared.aws_connections import AwsAccountNetwork
 from shared.identity import TokenKind, TokenStatus, WorkspaceKind
 from shared.placement import Placement
-from shared.timestamps import utc_now
-from sqlalchemy import Table, column, insert, table, text
+from sqlalchemy import text
 from sqlalchemy.engine import URL
-from sqlalchemy.orm import Session
-from sqlalchemy.sql.schema import CallableColumnDefault, ScalarElementColumnDefault
-from sqlalchemy.types import TypeEngine
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings, bootstrap_database
 
@@ -106,42 +96,37 @@ def test_platform_adoption_fences_identity_and_preserves_tenant_and_capacity_his
                     "sg": network.security_group_id,
                 },
             )
-            # Written as the 0004 schema knows it: the ORM models carry columns
-            # later revisions rename or drop.
-            _insert_at_0004(
-                session,
-                ComputeUnitTable(
-                    id=unit_id,
-                    workspace_id=workspace_id,
-                    name="existing-fleet",
-                    placement="lazycloud",
-                    capacity_owner_id=unit_id,
-                    capacity_owner_kind="pooled_provider",
-                    capacity_owner_source="provider",
-                    provider="aws",
-                    provider_ref=binding.provider_ref,
-                    provider_connection_id=connection_id,
-                    platform_fleet=True,
-                    capacity_mode="pooled",
-                    visibility="internal",
-                    region="us-east-1",
-                    offer_id="kept-offer",
-                    capability_key="kept-capability",
-                    generation=9,
-                    desired_machines=1,
-                    max_machines=3,
-                    worker_runtimes=["runsc"],
-                    provider_resource_id="existing-autoscaling-group",
-                    launch_attempt_baseline=0,
-                    offer_storage_mib=0,
-                    offer_availability_zone="",
-                    supplier_cpu_unit="vcpu",
-                    supplier_cpu_count=0,
-                    replacement_machine_id="",
-                    replacement_template_version="",
-                ),
-                renames={"placement": "pool"},
-                extra={"default_eligible": False},
+            session.execute(
+                text("""
+                INSERT INTO compute_units (
+                    id, workspace_id, capacity_owner_id, capacity_owner_kind,
+                    capacity_owner_source, name, pool, provider, selector, status, source,
+                    provider_ref, provider_connection_id, capacity_mode, visibility,
+                    region, offer_id, capability_key, generation, desired_machines,
+                    initial_machines, min_machines, max_machines, observed_machines,
+                    phase, provider_attributes, scaling_enabled, default_eligible, priority,
+                    min_free_cpu_millicores, min_free_memory_mib, min_free_gpu_count,
+                    worker_cpu_millicores, worker_memory_mib, worker_gpu_type, worker_gpu_count,
+                    worker_runtimes, worker_preemptible, idle_drain_timeout_seconds,
+                    scale_up_cooldown_seconds, scale_down_cooldown_seconds,
+                    registration_timeout_seconds, root_volume_gib, fallback,
+                    provider_resource_id, launch_attempt_baseline, platform_fleet,
+                    offer_storage_mib, offer_availability_zone, supplier_cpu_unit,
+                    supplier_cpu_count, replacement_machine_id, replacement_template_version)
+                VALUES (
+                    :id, :workspace, :id, 'pooled_provider', 'provider', 'existing-fleet',
+                    'lazycloud', 'aws', '', 'ready', 'workspace_policy', :provider, :connection,
+                    'pooled', 'internal', 'us-east-1', 'kept-offer', 'kept-capability',
+                    9, 1, 0, 0, 3, 0, 'ready', '{}', false, false, 0,
+                    0, 0, 0, 0, 0, '', 0, ARRAY['runsc'], false, 300, 0, 0, 300, 200,
+                    'internal', 'existing-autoscaling-group', 0, true, 0, '', 'vcpu', 0, '', '')
+                """),
+                {
+                    "id": unit_id,
+                    "workspace": workspace_id,
+                    "provider": binding.provider_ref,
+                    "connection": connection_id,
+                },
             )
             session.execute(
                 text(
@@ -151,18 +136,13 @@ def test_platform_adoption_fences_identity_and_preserves_tenant_and_capacity_his
                 ),
                 {"id": machine_id, "owner": unit_id, "workspace": workspace_id},
             )
-            _insert_at_0004(
-                session,
-                WorkerTable(
-                    id=worker_id,
-                    machine_id=machine_id,
-                    workspace_id=workspace_id,
-                    placement="default",
-                    status="stopped",
-                    labels={},
-                    last_seen_at=utc_now(),
-                ),
-                renames={"placement": "pool"},
+            session.execute(
+                text("""
+                INSERT INTO workers (
+                    id, machine_id, workspace_id, pool, status, labels, last_seen_at)
+                VALUES (:id, :machine, :workspace, 'default', 'stopped', '{}', now())
+                """),
+                {"id": worker_id, "machine": machine_id, "workspace": workspace_id},
             )
             token = TokenRepository(session).create(
                 name="old-worker",
@@ -180,20 +160,21 @@ def test_platform_adoption_fences_identity_and_preserves_tenant_and_capacity_his
                 user_id=user.id,
             )
             credential_id = str(uuid4())
-            _insert_at_0004(
-                session,
-                ComputeJoinCredentialTable(
-                    id=credential_id,
-                    token_hash="0" * 64,
-                    user_id=user.id,
-                    workspace_id=workspace_id,
-                    capacity_owner_id=unit_id,
-                    placement="lazycloud",
-                    created_by_token_id=None,
-                    max_uses=1,
-                    expires_at=utc_now() + timedelta(minutes=30),
-                ),
-                renames={"placement": "pool"},
+            session.execute(
+                text("""
+                INSERT INTO compute_join_credentials (
+                    id, token_hash, user_id, workspace_id, capacity_owner_id,
+                    pool, machine_id, status, max_uses, use_count, expires_at)
+                VALUES (:id, :hash, :user, :workspace, :owner,
+                    'lazycloud', '', 'active', 1, 0, now() + interval '30 minutes')
+                """),
+                {
+                    "id": credential_id,
+                    "hash": "0" * 64,
+                    "user": user.id,
+                    "workspace": workspace_id,
+                    "owner": unit_id,
+                },
             )
         with pytest.raises(RuntimeError, match="does not match"):
             bootstrap_database(dsn, platform_bindings={binding.provider_ref: "wrong-binding"})
@@ -234,33 +215,3 @@ def test_platform_adoption_fences_identity_and_preserves_tenant_and_capacity_his
             assert session.scalar(text("SELECT count(*) FROM aws_account_connections")) == 0
     finally:
         database.dispose()
-
-
-def _insert_at_0004(
-    session: Session,
-    row: DatabaseBase,
-    *,
-    renames: dict[str, str],
-    extra: dict[str, object] | None = None,
-) -> None:
-    """Insert an ORM row through the column names an older schema used."""
-    mapped_table = cast(Table, row.__table__)
-    values: dict[str, object] = {}
-    types: dict[str, TypeEngine[object]] = {}
-    for mapped in mapped_table.columns:
-        value = getattr(row, mapped.name)
-        if value is None and isinstance(mapped.default, ScalarElementColumnDefault):
-            value = mapped.default.arg
-        if value is None and isinstance(mapped.default, CallableColumnDefault):
-            value = cast(Callable[[object], object], mapped.default.arg)(None)
-        if value is None:
-            # Nullable, server-defaulted, or generated at flush time; the old
-            # schema fills it the same way the ORM would have.
-            continue
-        name = renames.get(mapped.name, mapped.name)
-        values[name] = value
-        types[name] = mapped.type
-    columns = [column(name, types[name]) for name in values]
-    columns.extend(column(name) for name in (extra or {}))
-    target = table(mapped_table.name, *columns)
-    session.execute(insert(target).values(**values, **(extra or {})))

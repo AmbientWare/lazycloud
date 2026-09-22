@@ -24,6 +24,7 @@ class WorkerCacheGenerationTable(IdTable, DatabaseBase):
         Index("ix_worker_cache_generations_worker_state", "worker_id", "state"),
         Index("ix_worker_cache_generations_workspace_state", "workspace_id", "state"),
         Index("ix_worker_cache_generations_last_seen", "last_seen_at", "id"),
+        Index("ix_worker_cache_generations_storage_latest", "storage_id", "updated_at", "id"),
         Index(
             "uq_worker_cache_generations_active_storage",
             "storage_id",

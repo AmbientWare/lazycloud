@@ -43,6 +43,16 @@ class SupplierNodeCostInspection(ContractModel):
     status: str
     costs: SupplierCostSnapshot
 
+    @computed_field
+    @property
+    def current_hourly_micros(self) -> int | None:
+        if self.status == "stopped":
+            # Stopped reserves retain their disk; their automatic public IP is released.
+            return self.costs.terms.root_disk_hourly_micros
+        if self.status in {"deleted", "failed"}:
+            return None
+        return self.costs.complete_hourly_micros
+
 
 class SupplierUnitCostInspection(ContractModel):
     """Prepared offer and frozen first-observation node estimates, not supplier invoices."""

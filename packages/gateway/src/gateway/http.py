@@ -9,6 +9,7 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
     ComputePreflightCheck,
+    MachineStopPreparationReceipt,
 )
 from shared.http.base import HttpModel
 from shared.identity import AuthScope
@@ -165,6 +166,7 @@ class StreamAgentRequest(HttpModel):
     binary_sha256: str = Field(default="", pattern=r"^([0-9a-f]{64})?$")
     active_worker_images: dict[str, str] = Field(default_factory=dict)
     prepared_worker_images: list[str] = Field(default_factory=list)
+    prepared_stop: MachineStopPreparationReceipt | None = None
 
 
 class StreamAgentResponse(HttpModel):
@@ -178,6 +180,8 @@ class StreamAgentResponse(HttpModel):
     bootstrap: AgentBootstrapConfig | None = None
     routes: list[AgentRoute] = Field(default_factory=list)
     slots: list[AgentWorkerSlot] = Field(default_factory=list)
+    stop_preparation_id: str = ""
+    resume_from_stop: bool = False
 
 
 class AgentLogRecord(HttpModel):

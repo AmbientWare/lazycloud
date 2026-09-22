@@ -13,6 +13,10 @@ from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 
 class ReservationStatus(StrEnum):
     Pending = "pending"
+    Preparing = "preparing"
+    Stopping = "stopping"
+    Stopped = "stopped"
+    Resuming = "resuming"
     Active = "active"
     Terminating = "terminating"
     Failed = "failed"
