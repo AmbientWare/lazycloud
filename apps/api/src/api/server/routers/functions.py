@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterator
 from typing import Annotated
 
+from anyio import CancelScope, to_thread
 from control.service import ControlPlaneService, StubKind, StubRecord
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -21,6 +22,7 @@ from shared.http.functions import (
     FunctionSetResultResponse,
 )
 from shared.http.task_payload import serialize_http_task_payload
+from starlette.types import Receive, Scope, Send
 
 from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import current_services
@@ -35,6 +37,42 @@ from api.server.service_dependencies import control_plane_service, function_serv
 from api.server.services import ApiServices, FunctionApiService
 
 router = APIRouter(prefix="/api/v1/functions", tags=["function"])
+
+
+class _FunctionInvokeStreamResponse(StreamingResponse):
+    def __init__(
+        self,
+        service: FunctionApiService,
+        initial: FunctionInvokeResponse,
+        *,
+        headless: bool,
+    ) -> None:
+        self._service = service
+        self._task_id = (
+            initial.task_id if not headless and not initial.done and initial.exit_code == 0 else ""
+        )
+        self._items = service.function_invoke_stream(initial, headless=headless)
+        super().__init__(self._stream(), media_type="application/x-ndjson")
+
+    async def _stream(self) -> AsyncIterator[bytes]:
+        async for item in self._items:
+            if item.done or item.exit_code != 0:
+                self._task_id = ""
+            yield (json.dumps(item.model_dump(mode="json"), separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Disconnect cancels the response's scope before cleanup runs.
+            with CancelScope(shield=True):
+                try:
+                    await self._items.aclose()
+                finally:
+                    if self._task_id:
+                        await to_thread.run_sync(self._service.cancel_task, self._task_id)
 
 
 @router.post("/serve", response_model=FunctionServeResponse)
@@ -98,15 +136,7 @@ def function_invoke_stream(
         resource_id=request.stub_id,
         stub_id=request.stub_id,
     )
-    return StreamingResponse(
-        _function_ndjson(
-            service.function_invoke_stream(
-                initial,
-                headless=request.headless,
-            )
-        ),
-        media_type="application/x-ndjson",
-    )
+    return _FunctionInvokeStreamResponse(service, initial, headless=request.headless)
 
 
 @router.post("/claim", response_model=FunctionClaimResponse)
@@ -256,12 +286,3 @@ def _invoke_deployed_function(
         stub_id=stub.id,
     )
     return result
-
-
-async def _function_ndjson(
-    items: AsyncIterable[FunctionInvokeResponse],
-) -> AsyncIterator[bytes]:
-    async for item in items:
-        yield (json.dumps(item.model_dump(mode="json"), separators=(",", ":")) + "\n").encode(
-            "utf-8"
-        )

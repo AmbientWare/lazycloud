@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import socket
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -209,6 +209,7 @@ from shared.http.functions import (
 )
 from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
+from shared.tasks import Task
 from shared.workspace_storage import WorkspaceStorageIssuer
 from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
@@ -308,6 +309,8 @@ class ApiOwnedResource(Protocol):
 
 
 class FunctionApiService(Protocol):
+    def cancel_task(self, task_id: str) -> Task: ...
+
     def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse: ...
 
     def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
@@ -318,7 +321,7 @@ class FunctionApiService(Protocol):
         *,
         headless: bool = False,
         keepalive_interval_seconds: float = 5.0,
-    ) -> AsyncIterator[FunctionInvokeResponse]: ...
+    ) -> AsyncGenerator[FunctionInvokeResponse]: ...
 
     def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 

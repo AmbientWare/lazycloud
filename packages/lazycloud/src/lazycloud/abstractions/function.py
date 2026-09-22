@@ -709,6 +709,7 @@ class Function(Generic[P, R]):
                 root_task_id=root_task_id,
                 dependencies=serialized.dependencies,
             ):
+                last_response = response
                 if response.task_id and response.task_id != reported_task_id:
                     reported_task_id = response.task_id
                     if step is not None:
@@ -724,11 +725,25 @@ class Function(Generic[P, R]):
                         response.output,
                         stream="stderr" if response.exit_code else response.stream,
                     )
-                last_response = response
                 if response.done or response.exit_code != 0:
                     break
         except RuntimeError as exc:
             raise FunctionOperationError(str(exc)) from exc
+        finally:
+            if (
+                not detached
+                and last_response is not None
+                and last_response.task_id
+                and not last_response.done
+                and last_response.exit_code == 0
+            ):
+                try:
+                    self._call_from_response(last_response).cancel()
+                except RuntimeError as exc:
+                    raise FunctionOperationError(
+                        f"Connection ended; cancellation of task {last_response.task_id} "
+                        f"could not be confirmed: {exc}"
+                    ) from exc
         if last_response is None:
             msg = "function invocation returned no responses"
             raise FunctionOperationError(msg)

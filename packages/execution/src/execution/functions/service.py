@@ -89,8 +89,8 @@ from execution.functions.planning import (
     FunctionContainerStartAuthority,
     FunctionContainerStartRequest,
     FunctionTaskCancellationReason,
-    function_cancellation_decision,
     function_container_start_allowed,
+    function_status_for_cancellation,
     plan_function_container_start,
     plan_function_invoke,
     plan_function_monitor,
@@ -788,27 +788,22 @@ class FunctionControlService:
         *,
         reason: FunctionTaskCancellationReason = (FunctionTaskCancellationReason.RequestCancelled),
     ) -> Task:
-        current = self.services.tasks.get(task_id)
-        decision = function_cancellation_decision(
-            current.status,
-            reason,
-            container_id=current.container_id or "",
-        )
-        if not decision.should_update:
-            return current
-        updated = self.services.tasks.transition(
-            current,
-            decision.next_status,
+        outcome = self.services.tasks.cancel(
+            task_id,
+            status=function_status_for_cancellation(reason),
             error=reason.value,
             exit_code=1,
         )
-        if decision.should_stop_container and current.container_id:
-            if not current.stub_id:
+        updated = outcome.task
+        if not outcome.state_changed:
+            return updated
+        if updated.container_id:
+            if not updated.stub_id:
                 raise InvalidInputError("running function task has no stub")
-            runtime = self.control_plane.get_stub(current.stub_id).config.runtime
+            runtime = self.control_plane.get_stub(updated.stub_id).config.runtime
             if runtime.in_process or runtime.concurrency <= 1:
                 self.services.containers.stop(
-                    current.container_id,
+                    updated.container_id,
                     reason=StopContainerReason.Scheduler,
                 )
         self.release_dependents(updated)
