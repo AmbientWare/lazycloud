@@ -383,6 +383,7 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "provider_state": ComputeUnitProviderState(
                 resource_id=row.provider_resource_id,
                 revision=row.provider_state_revision,
+                committed_machines=row.provider_committed_machines,
                 attributes=row.provider_attributes,
                 degraded_reason=row.degraded_reason,
                 degraded_at=to_utc_or_none(row.degraded_at),
@@ -762,6 +763,7 @@ class ComputeUnitRepository:
             ComputeUnitTable.stopped_machines > 0,
             ComputeUnitTable.retiring_stopped_machines > 0,
             ComputeUnitTable.observed_machines > 0,
+            ComputeUnitTable.provider_committed_machines > 0,
             ComputeUnitTable.phase == ComputeUnitPhase.Deleting.value,
             exists().where(
                 ComputeProviderInstanceTable.pool_id == ComputeUnitTable.id,
@@ -907,6 +909,7 @@ class ComputeUnitRepository:
                     + func.coalesce(live_instances.c.retiring_count, 0),
                     ComputeUnitTable.observed_machines,
                     func.coalesce(live_instances.c.count, 0),
+                    ComputeUnitTable.provider_committed_machines,
                 ).label("committed"),
             )
             .outerjoin(live_instances, live_instances.c.pool_id == ComputeUnitTable.id)
@@ -918,6 +921,7 @@ class ComputeUnitRepository:
                     ComputeUnitTable.stopped_machines > 0,
                     ComputeUnitTable.retiring_stopped_machines > 0,
                     ComputeUnitTable.observed_machines > 0,
+                    ComputeUnitTable.provider_committed_machines > 0,
                     live_instances.c.count > 0,
                     surge > 0,
                 ),
@@ -979,6 +983,7 @@ class ComputeUnitRepository:
                 ComputeUnitTable.provider_resource_id,
                 ComputeUnitTable.provider_attributes,
                 ComputeUnitTable.provider_state_revision,
+                ComputeUnitTable.provider_committed_machines,
             ).where(
                 ComputeUnitTable.id == pool_id,
                 ComputeUnitTable.workspace_id == workspace_id,
@@ -988,7 +993,9 @@ class ComputeUnitRepository:
         ).one_or_none()
         if row is None:
             return None
-        return ComputeUnitProviderState(resource_id=row[0], attributes=row[1], revision=row[2])
+        return ComputeUnitProviderState(
+            resource_id=row[0], attributes=row[1], revision=row[2], committed_machines=row[3]
+        )
 
     def checkpoint_provider_state(
         self,
@@ -1010,11 +1017,13 @@ class ComputeUnitRepository:
                 ComputeUnitTable.provider_resource_id == expected.resource_id,
                 ComputeUnitTable.provider_attributes == dict(expected.attributes),
                 ComputeUnitTable.provider_state_revision == expected.revision,
+                ComputeUnitTable.provider_committed_machines == expected.committed_machines,
             )
             .values(
                 provider_resource_id=state.resource_id,
                 provider_attributes=dict(state.attributes),
                 provider_state_revision=state.revision,
+                provider_committed_machines=state.committed_machines,
             )
             .returning(ComputeUnitTable.id)
         )
@@ -1075,6 +1084,7 @@ class ComputeUnitRepository:
         row.phase = record.phase.value
         row.provider_resource_id = record.provider_state.resource_id
         row.provider_state_revision = record.provider_state.revision
+        row.provider_committed_machines = record.provider_state.committed_machines
         row.provider_attributes = dict(record.provider_state.attributes)
         row.degraded_reason = record.provider_state.degraded_reason
         row.degraded_at = record.provider_state.degraded_at
