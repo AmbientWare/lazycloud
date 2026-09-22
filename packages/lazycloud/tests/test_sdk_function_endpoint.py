@@ -19,6 +19,7 @@ from lazycloud.abstractions.serve import write_serve_preview
 from lazycloud.client_contracts import ClientContractError
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.schema import Integer, Schema
+from lazycloud.session.task import TaskClient
 from lazycloud.values import cloudpickle_bytes
 from pydantic import JsonValue
 from shared.containers import ContainerStatus
@@ -593,7 +594,9 @@ def test_function_output_scope_is_nested_exception_safe_and_async_local(
     assert captured.err.count("=> Task") == 1
 
 
-def test_function_remote_distinguishes_none_result_from_incomplete_responses() -> None:
+def test_function_remote_distinguishes_none_result_from_incomplete_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class ResponseFunctionClient(FakeFunctionClient):
         def __init__(self, responses: list[FunctionInvokeResponse]) -> None:
             super().__init__()
@@ -635,7 +638,12 @@ def test_function_remote_distinguishes_none_result_from_incomplete_responses() -
     optional_result.client = ResponseFunctionClient(
         [FunctionInvokeResponse.from_result(task_id="task-incomplete")]
     )
-    with pytest.raises(FunctionOperationError, match="ended before task task-incomplete completed"):
+
+    def unavailable_cancellation(self: TaskClient, task_id: str) -> None:
+        raise RuntimeError("control plane is unreachable")
+
+    monkeypatch.setattr(TaskClient, "cancel", unavailable_cancellation)
+    with pytest.raises(FunctionOperationError, match="task task-incomplete could not be confirmed"):
         optional_result.remote()
 
     optional_result.client = ResponseFunctionClient([])

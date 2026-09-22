@@ -21,7 +21,6 @@ from shared.function_payloads import FunctionInvocationPayload
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import (
     TaskStatus,
-    is_inflight_task_status,
     is_terminal_task_status,
 )
 
@@ -185,15 +184,6 @@ class FunctionTaskCancellationReason(StrEnum):
     InvalidRequestPayload = "invalid_request_payload"
 
 
-class FunctionTaskCancellationDecision(ContractModel):
-    current_status: TaskStatus
-    reason: FunctionTaskCancellationReason
-    next_status: TaskStatus
-    should_update: bool
-    should_stop_container: bool = False
-    terminal_before_cancel: bool = False
-
-
 def function_heartbeat_key(workspace_id: str, task_id: str) -> str:
     return f"function:{workspace_id}:{task_id}:heartbeat"
 
@@ -296,20 +286,3 @@ def function_status_for_cancellation(reason: FunctionTaskCancellationReason) -> 
     if reason is FunctionTaskCancellationReason.RequestCancelled:
         return TaskStatus.Cancelled
     return TaskStatus.Failed
-
-
-def function_cancellation_decision(
-    current_status: TaskStatus,
-    reason: FunctionTaskCancellationReason,
-    *,
-    container_id: str = "",
-) -> FunctionTaskCancellationDecision:
-    inflight = is_inflight_task_status(current_status)
-    return FunctionTaskCancellationDecision(
-        current_status=current_status,
-        reason=reason,
-        next_status=(function_status_for_cancellation(reason) if inflight else current_status),
-        should_update=inflight,
-        should_stop_container=inflight and bool(container_id),
-        terminal_before_cancel=is_terminal_task_status(current_status),
-    )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import ExitStack
 from urllib.parse import urlsplit
 
@@ -39,6 +39,7 @@ from shared.http.functions import (
     FunctionSetResultBody,
     FunctionSetResultResponse,
 )
+from shared.tasks import Task
 from tests.url_constants import TEST_URL
 from tests.workspaces import owned_workspace
 
@@ -50,6 +51,9 @@ class RecordingFunctionService:
     def __init__(self) -> None:
         self.requests: list[FunctionInvokeBody] = []
 
+    def cancel_task(self, task_id: str) -> Task:
+        raise AssertionError(f"unexpected cancel_task call: {task_id}")
+
     def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse:
         self.requests.append(request)
         return FunctionInvokeResponse.from_result(task_id=f"fn-{len(self.requests)}")
@@ -60,7 +64,7 @@ class RecordingFunctionService:
         *,
         headless: bool = False,
         keepalive_interval_seconds: float = 5.0,
-    ) -> AsyncIterator[FunctionInvokeResponse]:
+    ) -> AsyncGenerator[FunctionInvokeResponse]:
         _ = headless, keepalive_interval_seconds
         yield initial
 
