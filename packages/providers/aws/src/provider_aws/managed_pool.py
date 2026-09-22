@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Literal, NotRequired, Protocol, Self, TypedDict, TypeGuard, overload
 
 from boto3.session import Session
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from compute.node_bootstrap import (
     NodeBootstrapProfile,
@@ -450,7 +451,9 @@ class _Boto3ManagedPoolSession:
                 raise RuntimeError("boto3 STS client lacks required operations")
             return candidate
         if service_name == "ec2":
-            candidate = source.client("ec2")
+            # Reconciliation owns retries. SDK retries can hide an uncertain launch
+            # behind a later rejection, preventing safe release of its capacity slot.
+            candidate = source.client("ec2", config=Config(retries={"total_max_attempts": 1}))
             if not _is_ec2_client(candidate):
                 raise RuntimeError("boto3 EC2 client lacks required operations")
             return candidate

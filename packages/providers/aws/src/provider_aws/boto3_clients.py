@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Protocol, TypeGuard
 
+from botocore.config import Config
+
 
 class Boto3ClientFactory(Protocol):
-    def client(self, service_name: str) -> object: ...
+    def client(self, service_name: str, *, config: Config | None = None) -> object: ...
 
 
 def is_boto3_client_factory(value: object) -> TypeGuard[Boto3ClientFactory]:

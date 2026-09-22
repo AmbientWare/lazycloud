@@ -203,6 +203,8 @@ class ProviderNodeEnrollmentService:
         )
         if instance is None or instance.status not in {
             ReservationStatus.Pending,
+            ReservationStatus.Preparing,
+            ReservationStatus.Resuming,
             ReservationStatus.Active,
         }:
             raise ConflictError("provider node is no longer available for enrollment")

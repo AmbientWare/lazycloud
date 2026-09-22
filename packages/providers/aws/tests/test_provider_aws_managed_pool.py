@@ -539,8 +539,13 @@ def test_rejected_launch_releases_only_proven_unused_capacity(
 ) -> None:
     pool, ec2 = retained_pool
     ec2.retry_attempts = sdk_retries
-    with pytest.raises(AwsProviderControlError):
-        pool.ensure()
+    if sdk_retries:
+        with pytest.raises(AwsProviderControlError):
+            pool.ensure()
+    else:
+        snapshot = pool.ensure()
+        assert snapshot.last_capacity_failure_at is not None
+        assert snapshot.last_capacity_failure_code is CapacityFailureCode.CapacityUnavailable
     state = pool.checkpoints.load(pool.request)
     [slot] = RetainedPoolState.model_validate(state.attributes).slots
     if sdk_retries:
