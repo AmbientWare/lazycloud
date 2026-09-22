@@ -24,7 +24,7 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 from compute.agent_control import hash_compute_token
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
-from compute.offers import ComputeOffer
+from compute.offers import ComputeOffer, ReservationStatus
 from compute.provider_nodes import ProviderNodeAdmission
 from compute.providers import (
     ComputeProviderResolver,
@@ -160,6 +160,19 @@ class _ReplayGuard:
 
 @dataclass(frozen=True, slots=True)
 class _PooledProvider:
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        return ()
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        raise AssertionError("enrollment must not complete reserve preparation")
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise AssertionError("enrollment must not stop provider nodes")
+
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
@@ -307,10 +320,19 @@ def test_provider_node_enrollment_rejects_an_instance_the_pool_does_not_own(
         enrollment.enroll(_request(pool.id, provider_instance_id="i-0fedcba987654321f"))
 
 
+@pytest.mark.parametrize(
+    "status", [ReservationStatus.Active, ReservationStatus.Preparing, ReservationStatus.Resuming]
+)
 def test_provider_enrollment_resume_preserves_existing_agent_authority(
     isolated_services: ApiServices,
+    status: ReservationStatus,
 ) -> None:
     pool = _seed_connection_and_pool(isolated_services)
+    with isolated_services.context.database.session() as session:
+        instances = ComputeProviderInstanceRepository(session)
+        instance = instances.get_for_pool_instance(pool.id, _INSTANCE_ID)
+        assert instance is not None
+        instances.upsert(instance.model_copy(update={"status": status.value}))
     service = _service(isolated_services, _PooledProvider())
     request = _request(pool.id)
     service.compute.record_provider_node_lifecycle(
