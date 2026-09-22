@@ -18,6 +18,7 @@ from compute.capacity_errors import (
 from compute.capacity_recovery import record_capacity_risk
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
 from compute.offers import ComputeOffer, ReservationStatus
+from compute.provider_state import ProviderUnitStateService
 from compute.providers import (
     ComputeProviderResolver,
     ProviderCapacityPhase,
@@ -444,19 +445,32 @@ class _SchedulerHooks:
         self.revoked_join_tokens.append(token_hash)
 
 
+@pytest.mark.parametrize("preemptible", [True, False])
 def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
     service_context: ServiceContext,
+    preemptible: bool,
 ) -> None:
     provider = _PooledProvider()
     provider.offer = provider.offer.model_copy(
         update={
+            "preemptible": preemptible,
             "cost_terms": provider.offer.cost_terms.model_copy(
                 update={"compute_hourly_micros": 100_000}
             ),
         }
     )
     provider.reserve_offers = (provider.offer,)
-    resolved = _Resolver(provider, service_context)._resolved()
+    resolved = _Resolver(
+        provider,
+        service_context,
+        allowed_offers=(
+            ProviderOfferEligibility(
+                region=provider.offer.region,
+                instance_type=provider.offer.instance_type,
+                preemptible=preemptible,
+            ),
+        ),
+    )._resolved()
     assert resolved.policy is not None and resolved.policy.platform_fleet
     workspace_id = resolved.policy.workspace_id
     resolver = WorkspaceComputeProviderResolver(
@@ -472,7 +486,12 @@ def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(max_cpu_instances=2, warm_cpu_preemptible_min=0),
+        fleet_policy=FleetCapacityPolicy(
+            max_cpu_instances=2,
+            warm_cpu_preemptible_min=0,
+            stopped_cpu_preemptible_target=2 if preemptible else 0,
+            stopped_cpu_non_preemptible_target=0 if preemptible else 2,
+        ),
     )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)
@@ -480,18 +499,67 @@ def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
         [first] = ComputeUnitRepository(session).list_platform_internal()
         assert first.stopped_machines == 2
         assert first.desired_machines == 0
+        assert first.worker_preemptible is preemptible
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=60))
     with service_context.database.session() as session:
         [repeated] = ComputeUnitRepository(session).list_platform_internal()
         assert repeated.generation == first.generation
         assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
-    compute.fleet_policy = compute.fleet_policy.model_copy(update={"stopped_cpu_target": 1})
+    compute.fleet_policy = compute.fleet_policy.model_copy(
+        update={
+            "stopped_cpu_preemptible_target"
+            if preemptible
+            else "stopped_cpu_non_preemptible_target": 1
+        }
+    )
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=120))
     with service_context.database.session() as session:
         [retiring] = ComputeUnitRepository(session).list_platform_internal()
         assert retiring.stopped_machines == 1
         assert retiring.retiring_stopped_machines == 1
         assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
+
+
+def test_provider_launch_checkpoint_survives_stale_snapshot_and_rejects_stale_writer(
+    service_context: ServiceContext,
+) -> None:
+    _seed_connection(service_context)
+    provider = _PooledProvider()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    request = compute._provider_unit_request(pool, provider.offer)
+    checkpoints = ProviderUnitStateService(service_context.database)
+    initial = checkpoints.load(request)
+    intent = initial.model_copy(
+        update={"revision": initial.revision + 1, "attributes": {"launch_token": "durable-intent"}}
+    )
+    checkpoints.save(request, expected=initial, state=intent)
+    with pytest.raises(ConflictError):
+        checkpoints.save(request, expected=initial, state=intent)
+    with service_context.database.session() as session:
+        assert (
+            ComputeUnitRepository(session).apply_provider_state(
+                pool.id,
+                generation=pool.generation,
+                observed_machines=0,
+                phase=ComputeUnitPhase.Ready,
+                provider_state=initial,
+            )
+            is None
+        )
+    compute._mark_pooled_capacity_degraded(pool)
+    assert checkpoints.load(request) == intent
 
 
 @pytest.mark.parametrize(

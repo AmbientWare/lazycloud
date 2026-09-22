@@ -81,6 +81,7 @@ class WorkspaceComputePolicy(ContractModel):
 
 
 class ComputeUnitProviderState(ContractModel):
+    revision: int = Field(default=0, ge=0)
     resource_id: str = Field(default="", max_length=2048)
     attributes: dict[str, JsonValue] = Field(default_factory=dict)
     degraded_reason: str | None = Field(default=None, min_length=1, max_length=512)
@@ -201,10 +202,8 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
 
     @model_validator(mode="after")
     def validate_capacity(self) -> ComputeUnitRecord:
-        if self.stopped_machines and (
-            not self.platform_fleet or self.worker_preemptible or self.worker_gpu_count
-        ):
-            raise ValueError("stopped reserves require platform non-preemptible CPU capacity")
+        if self.stopped_machines and (not self.platform_fleet or self.worker_gpu_count):
+            raise ValueError("stopped reserves require platform CPU capacity")
         if not self.min_machines <= self.desired_machines <= self.max_machines:
             raise ValueError("compute pool capacity must satisfy min <= desired <= max")
         if self.desired_machines + self.stopped_machines > self.max_machines:

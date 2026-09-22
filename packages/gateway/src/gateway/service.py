@@ -2319,9 +2319,7 @@ class GatewayControlService:
                     has_active_workers=bool(request.active_worker_images),
                     prepared_stop=request.prepared_stop,
                 )
-                if bootstrap_unit.platform_fleet
-                and not bootstrap_unit.worker_preemptible
-                and not bootstrap_unit.worker_gpu_count
+                if bootstrap_unit.platform_fleet and not bootstrap_unit.worker_gpu_count
                 else None
             )
             if reserve_preparation and reserve_preparation.preparing and request.prepared_stop:

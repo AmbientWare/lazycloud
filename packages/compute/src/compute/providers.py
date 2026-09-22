@@ -102,13 +102,25 @@ class ProviderUnitRequest(ContractModel):
             raise ValueError("desired machines cannot be negative")
         if self.max_machines <= 0 or self.desired_machines > self.max_machines:
             raise ValueError("invalid pooled capacity bounds")
-        if self.stopped_machines and (self.offer.preemptible or self.offer.gpu_count):
-            raise ValueError("stopped reserves require non-preemptible CPU capacity")
+        if self.stopped_machines and self.offer.gpu_count:
+            raise ValueError("stopped reserves require CPU capacity")
         if self.desired_machines + self.stopped_machines > self.max_machines:
             raise ValueError("running and stopped commitments exceed the pool limit")
         if self.generation <= 0:
             raise ValueError("provider pool generation must be positive")
         return self
+
+
+class ProviderUnitStateCheckpoints(Protocol):
+    def load(self, request: ProviderUnitRequest) -> ComputeUnitProviderState: ...
+
+    def save(
+        self,
+        request: ProviderUnitRequest,
+        *,
+        expected: ComputeUnitProviderState,
+        state: ComputeUnitProviderState,
+    ) -> None: ...
 
 
 class ProviderUnitInstance(ContractModel):

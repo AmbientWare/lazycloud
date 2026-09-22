@@ -111,6 +111,7 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     instance_type: str = Field(pattern=r"^[a-z0-9-]+\.[a-z0-9]+$")
     preemptible: bool = False
+    spot_request_type: Literal["one-time", "persistent"] = "one-time"
     purchases_enabled: bool = True
     availability_zone: str = ""
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
@@ -130,8 +131,8 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
             raise ValueError("desired_nodes cannot exceed max_nodes")
         if self.desired_nodes + self.stopped_nodes > self.max_nodes:
             raise ValueError("running and stopped nodes exceed max_nodes")
-        if self.stopped_nodes and (self.preemptible or self.bootstrap.gpu_count):
-            raise ValueError("stopped reserves require On-Demand CPU instances")
+        if self.stopped_nodes and self.bootstrap.gpu_count:
+            raise ValueError("stopped reserves require CPU instances")
         if ":instance-profile/" not in self.node_instance_profile_arn:
             raise ValueError("node instance profile ARN is invalid")
         return self
@@ -263,8 +264,8 @@ class _TagSpecification(TypedDict):
 
 
 class _SpotOptions(TypedDict):
-    SpotInstanceType: Literal["one-time"]
-    InstanceInterruptionBehavior: Literal["terminate"]
+    SpotInstanceType: Literal["one-time", "persistent"]
+    InstanceInterruptionBehavior: Literal["terminate", "stop"]
 
 
 class _InstanceMarketOptions(TypedDict):
@@ -285,8 +286,31 @@ class _LaunchTemplateData(TypedDict):
 
 
 class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Protocol):
+    def run_instances(
+        self,
+        *,
+        LaunchTemplate: _LaunchTemplateRef,
+        SubnetId: str,
+        ClientToken: str,
+        MinCount: int,
+        MaxCount: int,
+    ) -> Mapping[str, object]: ...
+    def start_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
+    def stop_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
+    def cancel_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]: ...
+    def describe_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]: ...
     def terminate_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
-    def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
+    def describe_instances(
+        self,
+        *,
+        InstanceIds: list[str] | None = None,
+        Filters: list[_Filter] | None = None,
+        NextToken: str = "",
+    ) -> Mapping[str, object]: ...
     def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]: ...
     def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]: ...
     def describe_volumes(
@@ -497,6 +521,11 @@ def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
             "describe_launch_template_versions",
             "describe_volumes",
             "terminate_instances",
+            "run_instances",
+            "start_instances",
+            "stop_instances",
+            "cancel_spot_instance_requests",
+            "describe_spot_instance_requests",
             "modify_launch_template",
         ),
     )
@@ -1589,10 +1618,16 @@ def _launch_template_data(
         data["InstanceMarketOptions"] = {
             "MarketType": "spot",
             "SpotOptions": {
-                "SpotInstanceType": "one-time",
-                "InstanceInterruptionBehavior": "terminate",
+                "SpotInstanceType": spec.spot_request_type,
+                "InstanceInterruptionBehavior": (
+                    "stop" if spec.spot_request_type == "persistent" else "terminate"
+                ),
             },
         }
+        if spec.spot_request_type == "persistent":
+            data["TagSpecifications"].append(
+                _tag_spec("spot-instances-request", spec, "spot-request")
+            )
     return data
 
 

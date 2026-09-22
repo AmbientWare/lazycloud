@@ -2944,12 +2944,11 @@ class ComputeService:
             raise RuntimeError("internal compute pool does not use pooled capacity")
         can_retain = (
             unit.platform_fleet
-            and not unit.worker_preemptible
             and not unit.worker_gpu_count
             and provider.policy is not None
             and provider.policy.can_purchase
             and any(
-                candidate.id == offer.id
+                candidate.id == offer.id and candidate.capability_key == offer.capability_key
                 for candidate in provider.pooled.list_reserve_offers(
                     root_volume_gib=unit.root_volume_gib
                 )
@@ -3015,16 +3014,23 @@ class ComputeService:
                 ),
             )
             if can_retain:
+                market_running, market_stopped = units.platform_cpu_market_targets(
+                    preemptible=current.worker_preemptible
+                )
+                market_target = self.fleet_policy.stopped_cpu_target(
+                    preemptible=current.worker_preemptible,
+                    running_machines=market_running,
+                )
                 can_retain = (
                     desired
                     + retained
                     + current.retiring_stopped_machines
                     + units.platform_capacity_usage(gpu=False, excluding_unit_id=current.id)
                     <= self.fleet_policy.max_cpu_instances
+                    and market_stopped - current.stopped_machines + retained <= market_target
                 )
             if (
                 can_retain
-                and retained <= self.fleet_policy.stopped_cpu_target
                 and record.first_served_at is not None
                 and not record.terminating_reason
                 and current.replacement_machine_id != machine_id
@@ -3323,17 +3329,20 @@ class ComputeService:
                 LOGGER.exception(
                     "platform warm reconciliation failed for preemptible=%s", preemptible
                 )
-        try:
-            self._reconcile_stopped_capacity(providers, now=now)
-        except CapacityReservationLockContendedError:
-            LOGGER.debug("stopped capacity reconciliation deferred: capacity lease is held")
-        except CapacityReservationLeaseLostError:
-            raise
-        except Exception:
-            LOGGER.exception("stopped CPU reserve reconciliation failed")
+        for preemptible in (True, False):
+            try:
+                self._reconcile_stopped_capacity(providers, preemptible=preemptible, now=now)
+            except CapacityReservationLockContendedError:
+                LOGGER.debug("stopped capacity reconciliation deferred: capacity lease is held")
+            except CapacityReservationLeaseLostError:
+                raise
+            except Exception:
+                LOGGER.exception(
+                    "stopped CPU reserve reconciliation failed: preemptible=%s", preemptible
+                )
 
     def _reconcile_stopped_capacity(
-        self, providers: Sequence[ResolvedComputeProvider], *, now: datetime
+        self, providers: Sequence[ResolvedComputeProvider], *, preemptible: bool, now: datetime
     ) -> None:
         enabled = {
             provider.ref
@@ -3345,8 +3354,11 @@ class ComputeService:
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
             units.lock_platform_capacity()
-            existing = units.list_platform_internal(preemptible=False, gpu=False)
-            remaining_target = self.fleet_policy.stopped_cpu_target
+            existing = units.list_platform_internal(preemptible=preemptible, gpu=False)
+            remaining_target = self.fleet_policy.stopped_cpu_target(
+                preemptible=preemptible,
+                running_machines=sum(unit.desired_machines for unit in existing),
+            )
             for index, unit in enumerate(existing):
                 target = (
                     0
@@ -3383,9 +3395,10 @@ class ComputeService:
                 for offer in provider.pooled.list_reserve_offers(
                     root_volume_gib=policy.root_volume_gib
                 )
-                if not offer.preemptible
+                if offer.preemptible is preemptible
                 and not offer.gpu_count
-                and self.pooled_offer_rejection(provider, offer, preemptible=True, now=now) is None
+                and self.pooled_offer_rejection(provider, offer, preemptible=preemptible, now=now)
+                is None
             )
         owner_ids: dict[tuple[str, str], str] = {}
         if not candidates:
@@ -3425,7 +3438,7 @@ class ComputeService:
         candidates.sort(
             key=lambda item: (
                 owner_ids[(item[0].ref, item[1].id)] not in retained,
-                offer_selection_key(item[1], OfferRequest(nodes=1, preemptible=True)),
+                offer_selection_key(item[1], OfferRequest(nodes=1, preemptible=preemptible)),
             )
         )
         for provider, offer in candidates:
@@ -3441,7 +3454,7 @@ class ComputeService:
                     unit = self._prepare_pooled_offer(
                         provider=provider,
                         offer=offer,
-                        requirements=ComputeResourceRequirements(preemptible=True),
+                        requirements=ComputeResourceRequirements(preemptible=preemptible),
                         desired_machines=0,
                         root_volume_gib=policy.root_volume_gib,
                         idle_timeout_seconds=policy.idle_timeout_seconds,
@@ -3464,7 +3477,8 @@ class ComputeService:
                         0,
                     )
                     target = min(
-                        self.fleet_policy.stopped_cpu_target, current.stopped_machines + headroom
+                        current.stopped_machines + remaining_target,
+                        current.stopped_machines + headroom,
                     )
                     if target != current.stopped_machines:
                         units.upsert(
@@ -4495,7 +4509,7 @@ class ComputeService:
             raise UpstreamUnavailableError(
                 f"compute pool {pool.name!r} offer is no longer available"
             )
-        return offer
+        return offer.model_copy(update={"capability_key": pool.capability_key})
 
     def clear_capacity_degradation(
         self,
@@ -4555,15 +4569,19 @@ class ComputeService:
         preserve_deleting: bool = False,
         now: datetime | None = None,
     ) -> ComputeUnitRecord | None:
-        provider_state = (
-            pool.provider_state.model_copy(
-                update={"degraded_reason": reason, "degraded_at": to_utc(now or utc_now())}
-            )
-            if reason is not None
-            else pool.provider_state
-        )
         with self.context.database.session() as session:
-            degraded = ComputeUnitRepository(session).apply_provider_state(
+            repository = ComputeUnitRepository(session)
+            current = repository.get(pool.id, for_update=True)
+            if current is None or current.generation != pool.generation:
+                return current
+            provider_state = (
+                current.provider_state.model_copy(
+                    update={"degraded_reason": reason, "degraded_at": to_utc(now or utc_now())}
+                )
+                if reason is not None
+                else current.provider_state
+            )
+            degraded = repository.apply_provider_state(
                 pool.id,
                 generation=pool.generation,
                 observed_machines=pool.observed_machines,

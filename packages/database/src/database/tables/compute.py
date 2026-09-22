@@ -98,10 +98,11 @@ class ComputeUnitTable(IdTable, DatabaseBase):
             name="ck_compute_units_machine_capacity",
         ),
         CheckConstraint("generation > 0", name="ck_compute_units_generation"),
+        CheckConstraint("provider_state_revision >= 0", name="ck_compute_units_provider_revision"),
         CheckConstraint(
             "stopped_machines >= 0 AND retiring_stopped_machines >= 0 "
             "AND desired_machines + stopped_machines <= max_machines AND (stopped_machines = 0 OR "
-            "(platform_fleet AND NOT worker_preemptible AND worker_gpu_count = 0))",
+            "(platform_fleet AND worker_gpu_count = 0))",
             name="ck_compute_units_stopped_capacity",
         ),
         CheckConstraint(
@@ -171,6 +172,9 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     observed_machines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    provider_state_revision: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
     provider_attributes: Mapped[dict[str, JsonValue]] = mapped_column(
         json_type,
         nullable=False,

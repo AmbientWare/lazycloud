@@ -122,6 +122,7 @@ def connection_role_statements(
                 "autoscaling:DescribeWarmPool",
                 "ec2:DescribeAvailabilityZones",
                 "ec2:DescribeInstances",
+                "ec2:DescribeImages",
                 "ec2:DescribeInternetGateways",
                 "ec2:DescribeLaunchTemplates",
                 "ec2:DescribeLaunchTemplateVersions",
@@ -132,6 +133,7 @@ def connection_role_statements(
                 "ec2:GetManagedPrefixListEntries",
                 "ec2:DescribeSecurityGroups",
                 "ec2:DescribeSpotPriceHistory",
+                "ec2:DescribeSpotInstanceRequests",
                 "ec2:DescribeSubnets",
                 "ec2:DescribeVolumes",
                 "ec2:DescribeVpcs",
@@ -216,17 +218,30 @@ def connection_role_statements(
                 },
             },
             {
-                "Sid": "TerminateTaggedRetainedInstances",
+                "Sid": "ManageTaggedRetainedInstances",
                 "Effect": "Allow",
-                "Action": "ec2:TerminateInstances",
+                "Action": ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"],
                 "Resource": arns.arn(_INSTANCE),
+                "Condition": _MANAGED_RESOURCE_TAG,
+            },
+            {
+                "Sid": "CancelTaggedSpotRequests",
+                "Effect": "Allow",
+                "Action": "ec2:CancelSpotInstanceRequests",
+                "Resource": arns.arn(
+                    "arn:{partition}:ec2:{region}:{account_id}:spot-instances-request/*"
+                ),
                 "Condition": _MANAGED_RESOURCE_TAG,
             },
             {
                 "Sid": "RunTaggedInstanceResources",
                 "Effect": "Allow",
                 "Action": "ec2:RunInstances",
-                "Resource": [arns.arn(_INSTANCE), arns.arn(_VOLUME)],
+                "Resource": [
+                    arns.arn(_INSTANCE),
+                    arns.arn(_VOLUME),
+                    arns.arn("arn:{partition}:ec2:{region}:{account_id}:spot-instances-request/*"),
+                ],
                 "Condition": _MANAGED_REQUEST_TAG,
             },
             {
@@ -256,7 +271,11 @@ def connection_role_statements(
                 "Sid": "TagManagedInstancesOnLaunch",
                 "Effect": "Allow",
                 "Action": "ec2:CreateTags",
-                "Resource": [arns.arn(_INSTANCE), arns.arn(_VOLUME)],
+                "Resource": [
+                    arns.arn(_INSTANCE),
+                    arns.arn(_VOLUME),
+                    arns.arn("arn:{partition}:ec2:{region}:{account_id}:spot-instances-request/*"),
+                ],
                 "Condition": {
                     "StringEquals": {
                         f"aws:RequestTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,

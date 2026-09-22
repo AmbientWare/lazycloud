@@ -90,6 +90,25 @@ def test_scaling_failure_distinguishes_quota_from_capacity(
 
 
 class _Ec2:
+    def run_instances(self, **kwargs: object) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not directly launch instances")
+
+    def start_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not directly start instances")
+
+    def stop_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not directly stop instances")
+
+    def cancel_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not cancel persistent requests")
+
+    def describe_spot_instance_requests(
+        self, *, SpotInstanceRequestIds: list[str]
+    ) -> Mapping[str, object]:
+        raise AssertionError("ASG lifecycle must not describe persistent requests")
+
     def terminate_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
         raise AssertionError("this scenario must not terminate retained instances")
 
@@ -139,7 +158,14 @@ class _Ec2:
     def describe_spot_price_history(self, **kwargs: object) -> Mapping[str, object]:
         return {"SpotPriceHistory": []}
 
-    def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+    def describe_instances(
+        self,
+        *,
+        InstanceIds: list[str] | None = None,
+        Filters: list[_Filter] | None = None,
+        NextToken: str = "",
+    ) -> Mapping[str, object]:
+        assert InstanceIds is not None
         instances: list[Mapping[str, object]] = [
             {
                 "InstanceId": instance_id,

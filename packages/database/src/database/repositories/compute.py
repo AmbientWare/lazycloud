@@ -382,6 +382,7 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "phase": row.phase,
             "provider_state": ComputeUnitProviderState(
                 resource_id=row.provider_resource_id,
+                revision=row.provider_state_revision,
                 attributes=row.provider_attributes,
                 degraded_reason=row.degraded_reason,
                 degraded_at=to_utc_or_none(row.degraded_at),
@@ -413,6 +414,20 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
 @dataclass(slots=True)
 class ComputeUnitRepository:
     session: Session
+
+    def platform_cpu_market_targets(self, *, preemptible: bool) -> tuple[int, int]:
+        row = self.session.execute(
+            select(
+                func.coalesce(func.sum(ComputeUnitTable.desired_machines), 0),
+                func.coalesce(func.sum(ComputeUnitTable.stopped_machines), 0),
+            ).where(
+                ComputeUnitTable.platform_fleet.is_(True),
+                ComputeUnitTable.worker_preemptible.is_(preemptible),
+                ComputeUnitTable.worker_gpu_count == 0,
+                or_(ComputeUnitTable.desired_machines > 0, ComputeUnitTable.stopped_machines > 0),
+            )
+        ).one()
+        return int(row[0]), int(row[1])
 
     def prepared_capacity_owner_ids(self) -> frozenset[str]:
         return frozenset(
@@ -956,6 +971,55 @@ class ComputeUnitRepository:
         )
         return self.upsert(updated)
 
+    def provider_checkpoint(
+        self, pool_id: str, *, workspace_id: str, provider_ref: str, generation: int
+    ) -> ComputeUnitProviderState | None:
+        row = self.session.execute(
+            select(
+                ComputeUnitTable.provider_resource_id,
+                ComputeUnitTable.provider_attributes,
+                ComputeUnitTable.provider_state_revision,
+            ).where(
+                ComputeUnitTable.id == pool_id,
+                ComputeUnitTable.workspace_id == workspace_id,
+                ComputeUnitTable.provider_ref == provider_ref,
+                ComputeUnitTable.generation == generation,
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return ComputeUnitProviderState(resource_id=row[0], attributes=row[1], revision=row[2])
+
+    def checkpoint_provider_state(
+        self,
+        pool_id: str,
+        *,
+        workspace_id: str,
+        provider_ref: str,
+        generation: int,
+        expected: ComputeUnitProviderState,
+        state: ComputeUnitProviderState,
+    ) -> bool:
+        statement = (
+            update(ComputeUnitTable)
+            .where(
+                ComputeUnitTable.id == pool_id,
+                ComputeUnitTable.workspace_id == workspace_id,
+                ComputeUnitTable.provider_ref == provider_ref,
+                ComputeUnitTable.generation == generation,
+                ComputeUnitTable.provider_resource_id == expected.resource_id,
+                ComputeUnitTable.provider_attributes == dict(expected.attributes),
+                ComputeUnitTable.provider_state_revision == expected.revision,
+            )
+            .values(
+                provider_resource_id=state.resource_id,
+                provider_attributes=dict(state.attributes),
+                provider_state_revision=state.revision,
+            )
+            .returning(ComputeUnitTable.id)
+        )
+        return self.session.scalar(statement) is not None
+
     def apply_provider_state(
         self,
         pool_id: str,
@@ -966,7 +1030,11 @@ class ComputeUnitRepository:
         provider_state: ComputeUnitProviderState,
     ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
-        if current is None or current.generation != generation:
+        if (
+            current is None
+            or current.generation != generation
+            or provider_state.revision != current.provider_state.revision
+        ):
             return None
         updated = current.model_copy(
             update={
@@ -979,6 +1047,11 @@ class ComputeUnitRepository:
         return self.upsert(updated)
 
     def _write_columns(self, row: ComputeUnitTable, record: ComputeUnitRecord) -> None:
+        if (
+            row.provider_state_revision is not None
+            and row.provider_state_revision > record.provider_state.revision
+        ):
+            raise ConflictError("provider operation state changed during capacity mutation")
         row.provider_ref = record.provider_ref
         row.capacity_owner_id = record.capacity_owner_id
         row.capacity_owner_kind = record.capacity_owner_kind.value
@@ -1001,6 +1074,7 @@ class ComputeUnitRepository:
         row.generation = record.generation
         row.phase = record.phase.value
         row.provider_resource_id = record.provider_state.resource_id
+        row.provider_state_revision = record.provider_state.revision
         row.provider_attributes = dict(record.provider_state.attributes)
         row.degraded_reason = record.provider_state.degraded_reason
         row.degraded_at = record.provider_state.degraded_at

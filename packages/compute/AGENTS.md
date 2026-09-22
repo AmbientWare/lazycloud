@@ -50,12 +50,20 @@ and worker updates share the platform maintenance lock. A zero minimum disables
 that market's baseline. Floor changes preserve active work until it drains.
 Customer capacity cannot satisfy the platform baseline.
 
-CPU reserves use a separate stopped On-Demand target. Running targets, stopped
-targets, preparation, and retiring assets share the CPU fleet budget. Placement
+CPU reserves have separate stopped targets for Spot and On-Demand, independent
+of their running warm minimums. Running targets, stopped targets, preparation,
+and retiring assets share the CPU fleet budget. Placement
 prefers compatible stopped capacity before buying another node. Queued CPU work
 takes priority over reserve replenishment. A stopped target being removed keeps
 its commitment until provider observation confirms its removal; disk destruction
 still requires the existing provider evidence.
+
+New platform AWS CPU pools own EC2 instances directly. Spot launches use
+persistent requests with stop interruption behavior. Cleanup cancels each request
+before terminating its instance and holds capacity until its disks are gone.
+PostgreSQL checkpoints record launch intent before provider mutations. Their
+revision fences concurrent writers and stale inventory responses. Existing
+Auto Scaling groups retain their recorded resource owner through cleanup.
 
 The agent proves its current binary and worker image before initial preparation
 completes. Returning a used host requires a durable drain, no live workloads,
@@ -66,7 +74,10 @@ identity and requires a new worker registration and request-poll lease.
 
 CPU headroom grows after reserved CPU or RAM leaves at most 20 percent free for
 60 seconds. Redis owns that observation window across scheduler replicas; pending
-capacity prevents duplicate growth. The stopped target remains two. Keep the
+capacity prevents duplicate growth. Each enabled stopped market retains its
+configured minimum or 20 percent of its running target, whichever is larger.
+A zero stopped minimum disables that market's reserve. The default stopped
+minimums are two Spot and zero On-Demand. Keep the
 running Spot floor at two until live preparation, restart, refill, interruption,
 and cleanup acceptance passes; then lower it to one within the same four-node cap.
 

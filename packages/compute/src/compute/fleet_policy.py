@@ -13,7 +13,8 @@ class FleetCapacityPolicy(ContractModel):
     max_gpu_instances: int = Field(default=100, ge=0)
     warm_cpu_preemptible_min: int = Field(default=2, ge=0)
     warm_cpu_non_preemptible_min: int = Field(default=0, ge=0)
-    stopped_cpu_target: int = Field(default=2, ge=0)
+    stopped_cpu_preemptible_target: int = Field(default=2, ge=0)
+    stopped_cpu_non_preemptible_target: int = Field(default=0, ge=0)
     cpu_headroom_percent: int = Field(default=20, ge=0, lt=100)
     cpu_pressure_seconds: int = Field(default=60, ge=1)
 
@@ -31,6 +32,16 @@ class FleetCapacityPolicy(ContractModel):
 
     def warm_cpu_min(self, *, preemptible: bool) -> int:
         return self.warm_cpu_preemptible_min if preemptible else self.warm_cpu_non_preemptible_min
+
+    def stopped_cpu_target(self, *, preemptible: bool, running_machines: int = 0) -> int:
+        baseline = (
+            self.stopped_cpu_preemptible_target
+            if preemptible
+            else self.stopped_cpu_non_preemptible_target
+        )
+        if baseline == 0:
+            return 0
+        return max(baseline, (running_machines * self.cpu_headroom_percent + 99) // 100)
 
 
 @dataclass(frozen=True, slots=True)
