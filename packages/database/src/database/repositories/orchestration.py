@@ -657,6 +657,20 @@ class ContainerPage:
 class ContainerRepository:
     session: Session
 
+    def has_unplaced_platform_cpu_work(self) -> bool:
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        ContainerTable.status == ContainerStatus.Pending.value,
+                        ContainerTable.worker_id.is_(None),
+                        ContainerTable.scheduling_placement == Placement.platform().key,
+                        ContainerTable.scheduling_gpu_count == 0,
+                    )
+                )
+            )
+        )
+
     def has_live_for_placement(
         self,
         placement: str,

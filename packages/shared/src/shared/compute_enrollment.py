@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+from pydantic import Field
+
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+
+
+class MachineStopPreparationReceipt(ContractModel):
+    request_id: str = Field(min_length=1)
+    cache_generation_id: str = ""
+    cache_session_fence: int | None = Field(default=None, ge=1)
 
 
 class ComputeCredentialStatus(StringEnum):

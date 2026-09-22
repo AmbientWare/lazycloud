@@ -233,7 +233,7 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
                     region=pool.region,
                     node_role_arn=admission.machine_role_id,
                     node_instance_profile_arn=admission.machine_profile_id,
-                    autoscaling_group_name=pool.provider_state.resource_id,
+                    capacity_resource_id=pool.provider_state.resource_id,
                 ),
                 provider_machine_ids=provider_instance_ids,
             )
@@ -256,7 +256,7 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
             provider_instance_id=verified.instance_id,
             role_arn=verified.node_role_arn,
             instance_profile_arn=verified.node_instance_profile_arn,
-            provider_resource_id=verified.autoscaling_group_name,
+            provider_resource_id=verified.capacity_resource_id,
             verified_at=utc_now(),
         )
 

@@ -27,6 +27,7 @@ from shared.capacity import (
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeCapacityMode,
+    ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
     UnitName,
@@ -280,6 +281,67 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
         assert [
             unit.id for unit in repository.list_platform_internal(preemptible=True, gpu=False)
         ] == [reserved.id]
+
+
+def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
+    database: DatabaseClient,
+) -> None:
+    workspace = PlatformNamespaceService(database).initialize()
+    with database.session() as session:
+        units = ComputeUnitRepository(session)
+        unit = units.upsert(
+            _platform_unit(workspace.id, "aws").model_copy(
+                update={
+                    "desired_machines": 0,
+                    "stopped_machines": 2,
+                    "max_machines": 2,
+                }
+            )
+        )
+        instances = ComputeProviderInstanceRepository(session)
+        for status in ("stopped", "preparing"):
+            instances.upsert(
+                ComputeProviderInstanceRecord(
+                    id=str(uuid4()),
+                    pool_id=unit.id,
+                    provider=unit.provider,
+                    offer_id=unit.offer_id,
+                    instance_id=str(uuid4()),
+                    status=status,
+                    source="pooled",
+                )
+            )
+        assert units.platform_capacity_usage(gpu=False) == 2
+        sizing = units.sizing_for_owner(unit.id)
+        assert sizing is not None and sizing.desired_machines == 0
+        assert units.prepared_capacity_owner_ids() == {unit.id}
+        resumed = units.update_capacity(
+            unit.id,
+            expected_generation=unit.generation,
+            desired_machines=1,
+            max_machines=2,
+            observed_machines=0,
+            phase=ComputeUnitPhase.Updating,
+            provider_state=unit.provider_state,
+        )
+        assert resumed is not None
+        assert resumed.stopped_machines == 1
+        assert units.platform_capacity_usage(gpu=False) == 2
+        units.upsert(
+            resumed.model_copy(
+                update={
+                    "stopped_machines": 0,
+                    "retiring_stopped_machines": 1,
+                }
+            )
+        )
+        assert units.platform_capacity_usage(gpu=False) == 2
+        for instance in instances.list_for_pool(unit.id):
+            instances.upsert(instance.model_copy(update={"status": "deleted"}))
+        assert not units.prepared_capacity_owner_ids()
+        assert units.platform_capacity_usage(gpu=False) == 2
+        units.upsert(resumed.model_copy(update={"stopped_machines": 0}))
+        assert units.platform_capacity_usage(gpu=False) == 1
 
 
 def test_fleet_capacity_lock_serializes_purchases_across_providers(

@@ -15,6 +15,7 @@ from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountCon
 from compute.capacity_recovery import CAPACITY_RECOVERY_WAKE_SCOPE
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.provider_launches import ProviderNodeLaunchService
+from compute.provider_state import ProviderUnitStateService
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -783,6 +784,7 @@ class ApiServices(ApiServiceCore):
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity_config,
                     launch_credentials=provider_node_launches,
+                    provider_state=ProviderUnitStateService(context.database),
                     capacity_workspace=platform_capacity_workspace,
                     redis=redis,
                     binaries_by_region=(

@@ -183,6 +183,19 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
                 )
         return offers
 
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        return ()
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        raise ValueError("Auto Scaling groups do not own stopped reserves")
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise ValueError("Auto Scaling groups do not own stopped reserves")
+
     def _offer(
         self,
         instance: AwsInstanceCatalogEntry,
@@ -235,6 +248,8 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
         )
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        if request.stopped_machines:
+            raise ValueError("Auto Scaling groups do not own stopped reserves")
         if request.purchases_enabled:
             aws_instance_catalog_entry(request.offer.instance_type)
         provisioner = self._provisioner(request.offer.region)
@@ -266,6 +281,8 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
                 "max_machines": max_machines,
             }
         )
+        if capacity_request.stopped_machines:
+            raise ValueError("Auto Scaling groups do not own stopped reserves")
         spec = self._spec(capacity_request)
         resource_ids = self._resource_ids(request)
         snapshot = provisioner.ensure(spec, resource_ids)
@@ -438,7 +455,7 @@ def _snapshot(
         resource_id=snapshot.resource_ids.autoscaling_group_name or "",
         desired_machines=snapshot.desired_nodes,
         max_machines=snapshot.max_nodes,
-        observed_machines=len(instances),
+        observed_machines=len(snapshot.instances),
         last_capacity_failure_at=snapshot.last_capacity_failure_at,
         last_capacity_failure_code=snapshot.last_capacity_failure_code,
         instances=instances,

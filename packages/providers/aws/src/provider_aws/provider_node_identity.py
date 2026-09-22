@@ -123,7 +123,7 @@ class AwsProviderNodeIdentityTarget(AwsProviderNodeIdentityModel):
     region: str = Field(pattern=_REGION_PATTERN.pattern)
     node_role_arn: str
     node_instance_profile_arn: str
-    autoscaling_group_name: str = Field(
+    capacity_resource_id: str = Field(
         min_length=1,
         max_length=255,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$",
@@ -161,7 +161,7 @@ class AwsVerifiedProviderNodeIdentity(AwsProviderNodeIdentityModel):
     caller_user_id: str
     node_role_arn: str
     node_instance_profile_arn: str
-    autoscaling_group_name: str
+    capacity_resource_id: str
     proof_sha256: str
     proof_expires_at: datetime
 
@@ -275,7 +275,7 @@ class AwsProviderNodeIdentityVerifier:
         if proof.instance_id not in provider_machine_ids:
             raise _identity_error(
                 AwsProviderNodeIdentityErrorCode.IdentityMismatch,
-                "claimed EC2 instance is not a member of the managed Auto Scaling Group",
+                "claimed EC2 instance is not a member of the managed capacity pool",
             )
 
         try:
@@ -303,7 +303,7 @@ class AwsProviderNodeIdentityVerifier:
             caller_user_id=caller.user_id,
             node_role_arn=target.node_role_arn,
             node_instance_profile_arn=target.node_instance_profile_arn,
-            autoscaling_group_name=target.autoscaling_group_name,
+            capacity_resource_id=target.capacity_resource_id,
             proof_sha256=request.proof_sha256,
             proof_expires_at=request.expires_at,
         )

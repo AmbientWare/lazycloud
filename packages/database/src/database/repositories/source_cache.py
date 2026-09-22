@@ -105,6 +105,48 @@ class SourceCacheCleanupRepository:
         row = self.session.get(WorkerCacheGenerationTable, generation_id)
         return worker_cache_generation_record_from_table(row) if row is not None else None
 
+    def generation_for_storage(
+        self, storage_id: str, *, generation_id: str | None = None
+    ) -> WorkerCacheGenerationRecord | None:
+        statement = select(WorkerCacheGenerationTable).where(
+            WorkerCacheGenerationTable.storage_id == storage_id
+        )
+        if generation_id is not None:
+            row = self.session.scalar(
+                statement.where(WorkerCacheGenerationTable.id == generation_id)
+            )
+            return worker_cache_generation_record_from_table(row) if row is not None else None
+        row = self.session.scalar(
+            statement.where(
+                WorkerCacheGenerationTable.state != WorkerCacheGenerationState.Retired.value
+            )
+        )
+        if row is None:
+            row = self.session.scalar(
+                statement.order_by(
+                    WorkerCacheGenerationTable.updated_at.desc(),
+                    WorkerCacheGenerationTable.id.desc(),
+                ).limit(1)
+            )
+        return worker_cache_generation_record_from_table(row) if row is not None else None
+
+    def generation_cleanup_counts(self, generation_id: str) -> dict[SourceCacheCleanupStatus, int]:
+        return {
+            SourceCacheCleanupStatus(status): count
+            for status, count in self.session.execute(
+                select(SourceCacheCleanupTargetTable.status, func.count())
+                .where(SourceCacheCleanupTargetTable.cache_generation_id == generation_id)
+                .group_by(SourceCacheCleanupTargetTable.status)
+            ).tuples()
+        }
+
+    def latest_cleanup_target_at(self, generation_id: str) -> datetime | None:
+        return self.session.scalar(
+            select(func.max(SourceCacheCleanupTargetTable.created_at)).where(
+                SourceCacheCleanupTargetTable.cache_generation_id == generation_id
+            )
+        )
+
     def list_generations(
         self, *, include_retired: bool = False
     ) -> list[WorkerCacheGenerationRecord]:

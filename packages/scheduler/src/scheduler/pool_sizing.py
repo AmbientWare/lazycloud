@@ -173,6 +173,7 @@ def plan_worker_pool_sizing(
     authoritative_units: int,
     state: CapacityPoolSizingSnapshot,
     now: datetime | None = None,
+    pressure_ready: bool = False,
 ) -> WorkerPoolSizingPlan:
     current_time = now or utc_now()
     sizing_state = state
@@ -212,7 +213,7 @@ def plan_worker_pool_sizing(
             reason="authoritative capacity is awaiting worker registration",
         )
     needs_baseline = registered_units < baseline
-    needs_headroom = _below_minimum_headroom(pool, headroom)
+    needs_headroom = _below_minimum_headroom(pool, headroom) or pressure_ready
     if not needs_baseline and not needs_headroom:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,

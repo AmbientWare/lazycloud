@@ -19,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class PooledCapacityOwner(Protocol):
+    def prepared_capacity_owner_ids(self) -> frozenset[str]: ...
     def pooled_providers(self, workspace_id: str) -> tuple[ResolvedComputeProvider, ...]: ...
 
     def pooled_offer_rejection(
@@ -134,7 +135,10 @@ class ComputeCapacityPlacementService:
                 f"no provider capacity meets the workload requirements and purchase policy{detail}",
                 code="offer_unavailable",
             )
-        return tuple(purchases.values())
+        prepared = self.compute.prepared_capacity_owner_ids()
+        return tuple(
+            sorted(purchases.values(), key=lambda item: item.capacity_owner_id not in prepared)
+        )
 
     def _prepare_offer(
         self,

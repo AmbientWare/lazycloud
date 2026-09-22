@@ -2,9 +2,8 @@
 
 Every writer, whether the provider reconcile, the gateway's join and heartbeat
 paths, a drain, or a removal, goes through `advance_machine_lifecycle`, so the
-order phases may be visited in is decided once. A phase may only move forward;
-`failed` and `deleted` are reachable from anywhere, and a fresh join is the one
-way back from `failed` or `ready` into `joining`.
+order phases may be visited in is decided once. Prepared machines can stop and
+resume; a resumed machine must join before becoming ready again.
 """
 
 from __future__ import annotations
@@ -49,6 +48,8 @@ MACHINE_LIFECYCLE_TRANSITIONS: dict[MachineLifecycle, frozenset[MachineLifecycle
     MachineLifecycle.Joining: frozenset(
         {
             MachineLifecycle.Ready,
+            MachineLifecycle.Stopping,
+            MachineLifecycle.Stopped,
             MachineLifecycle.Draining,
             MachineLifecycle.Terminating,
         }
@@ -59,11 +60,21 @@ MACHINE_LIFECYCLE_TRANSITIONS: dict[MachineLifecycle, frozenset[MachineLifecycle
     MachineLifecycle.Ready: frozenset(
         {
             MachineLifecycle.Joining,
+            MachineLifecycle.Stopping,
             MachineLifecycle.Draining,
             MachineLifecycle.Terminating,
         }
     ),
-    MachineLifecycle.Draining: frozenset({MachineLifecycle.Joining, MachineLifecycle.Terminating}),
+    MachineLifecycle.Draining: frozenset(
+        {MachineLifecycle.Joining, MachineLifecycle.Stopping, MachineLifecycle.Terminating}
+    ),
+    MachineLifecycle.Stopping: frozenset({MachineLifecycle.Stopped, MachineLifecycle.Terminating}),
+    MachineLifecycle.Stopped: frozenset(
+        {MachineLifecycle.Resuming, MachineLifecycle.Joining, MachineLifecycle.Terminating}
+    ),
+    MachineLifecycle.Resuming: frozenset(
+        {MachineLifecycle.Joining, MachineLifecycle.Stopping, MachineLifecycle.Terminating}
+    ),
     MachineLifecycle.Terminating: frozenset({MachineLifecycle.Joining}),
     # A host that failed its preflight is fixed by its operator and joins again.
     MachineLifecycle.Failed: frozenset({MachineLifecycle.Joining, MachineLifecycle.Terminating}),
@@ -79,6 +90,9 @@ _DEFAULT_MESSAGES: dict[MachineLifecycle, str] = {
     MachineLifecycle.Joining: "Agent joined; waiting for its first heartbeat",
     MachineLifecycle.Ready: "Ready for workloads",
     MachineLifecycle.Draining: "Draining; no new work is placed here",
+    MachineLifecycle.Stopping: "Stopping prepared capacity",
+    MachineLifecycle.Stopped: "Prepared capacity is stopped",
+    MachineLifecycle.Resuming: "Resuming prepared capacity",
     MachineLifecycle.Terminating: "Shutting down",
     MachineLifecycle.Deleted: "Removed",
     MachineLifecycle.Failed: "Failed",
@@ -91,6 +105,9 @@ _RESOURCE_STATUS: dict[MachineLifecycle, ResourceStatus] = {
     MachineLifecycle.Joining: ResourceStatus.Created,
     MachineLifecycle.Ready: ResourceStatus.Running,
     MachineLifecycle.Draining: ResourceStatus.Stopped,
+    MachineLifecycle.Stopping: ResourceStatus.Stopped,
+    MachineLifecycle.Stopped: ResourceStatus.Stopped,
+    MachineLifecycle.Resuming: ResourceStatus.Created,
     MachineLifecycle.Terminating: ResourceStatus.Stopped,
     MachineLifecycle.Deleted: ResourceStatus.Deleted,
     MachineLifecycle.Failed: ResourceStatus.Failed,

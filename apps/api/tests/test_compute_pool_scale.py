@@ -59,6 +59,11 @@ class _CapacityOwnerMutations:
     active_dispatch_owner_id: str = ""
     open_reservations: bool = False
 
+    def pressure_ready(
+        self, capacity_owner_id: str, *, under_pressure: bool, now: datetime, sustained_seconds: int
+    ) -> bool:
+        raise AssertionError("explicit pool scaling must not observe activity pressure")
+
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
         assert not self.active_owner_id
@@ -84,6 +89,19 @@ class _CapacityOwnerMutations:
 
 @dataclass(slots=True)
 class _PooledProvider:
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        return ()
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        raise AssertionError("explicit pool scaling must not prepare stopped capacity")
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise AssertionError("explicit pool scaling must not stop an individual machine")
+
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:

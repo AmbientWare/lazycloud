@@ -126,7 +126,7 @@ class MachineTable(IdTable, DatabaseBase):
         Index("ix_machines_placement_lifecycle", "placement", "lifecycle"),
         CheckConstraint(
             "lifecycle IN ('requested', 'provisioning', 'booting', 'joining', 'ready', "
-            "'draining', 'terminating', 'deleted', 'failed')",
+            "'draining', 'stopping', 'stopped', 'resuming', 'terminating', 'deleted', 'failed')",
             name="ck_machines_lifecycle",
         ),
         Index("ix_machines_workspace_owner", "workspace_id", "capacity_owner_id"),

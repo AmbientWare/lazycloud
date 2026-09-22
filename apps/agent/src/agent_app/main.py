@@ -14,7 +14,6 @@ from threading import current_thread, main_thread
 from types import FrameType
 
 from agent.operations import (
-    AGENT_SOURCE_CACHE_RELATIVE_PATH,
     AgentCapacityOptions,
     AgentHostStatus,
     AgentResourceDetection,
@@ -39,6 +38,7 @@ from agent.service_manager import (
     build_agent_service_lifecycle_plan,
     resolve_service_platform,
 )
+from agent.storage_cleanup import prepare_source_cache_destruction
 from agent.updates import SUPERVISOR, SUPERVISOR_SCRIPT
 from gateway.http import LeaveAgentRequest
 from provider_clients import ProviderNodeIdentityEvidenceProvider
@@ -53,8 +53,6 @@ from worker.execution import (
 )
 from worker.source_cache_cleanup import (
     WorkerSourceCacheDestructionReceipt,
-    destroy_source_cache_storage,
-    source_cache_destruction_receipt,
 )
 
 from agent_app.daemon import (
@@ -100,9 +98,6 @@ class AgentCommandArgs(argparse.Namespace):
     service_name: str
     dry_run: bool
     keep_binary: bool
-
-
-SOURCE_CACHE_DESTRUCTION_RECEIPT_FILE = "source-cache-destruction.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -616,7 +611,7 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
             raise RuntimeError(msg)
         if saved_state is not None:
             DockerAgentWorkerController(state_dir=state_dir).stop_all()
-            cache_destruction = _prepare_source_cache_destruction(state_dir, saved_state)
+            cache_destruction = prepare_source_cache_destruction(state_dir, saved_state.machine_id)
             remote_leave = _leave_remote_agent(
                 saved_state,
                 cache_destruction=cache_destruction,
@@ -702,51 +697,6 @@ def _leave_remote_agent(
         msg = "gateway leave response did not match the saved machine identity"
         raise RuntimeError(msg)
     return AgentRemoteLeaveResult(machine_id=response.machine_id)
-
-
-def _prepare_source_cache_destruction(
-    state_dir: Path,
-    state: AgentState,
-) -> WorkerSourceCacheDestructionReceipt | None:
-    receipt_path = state_dir / SOURCE_CACHE_DESTRUCTION_RECEIPT_FILE
-    storage_id = f"machine:{state.machine_id}"
-    if receipt_path.exists():
-        try:
-            receipt = WorkerSourceCacheDestructionReceipt.model_validate_json(
-                receipt_path.read_text(encoding="utf-8")
-            )
-        except (OSError, ValidationError) as exc:
-            raise RuntimeError(
-                f"source cache destruction receipt is invalid: {receipt_path}"
-            ) from exc
-        if receipt.storage_id != storage_id:
-            raise RuntimeError("source cache destruction receipt does not match saved machine")
-        destroy_source_cache_storage(
-            state_dir / AGENT_SOURCE_CACHE_RELATIVE_PATH,
-            receipt,
-        )
-        return receipt
-    cache_root = state_dir / AGENT_SOURCE_CACHE_RELATIVE_PATH
-    receipt = source_cache_destruction_receipt(cache_root, storage_id=storage_id)
-    if receipt is None:
-        return None
-    temporary = receipt_path.with_name(f".{receipt_path.name}.tmp-{os.getpid()}")
-    try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            stream.write(receipt.model_dump_json())
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.chmod(0o600)
-        os.replace(temporary, receipt_path)
-        directory_descriptor = os.open(state_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-    finally:
-        temporary.unlink(missing_ok=True)
-    destroy_source_cache_storage(cache_root, receipt)
-    return receipt
 
 
 def _remote_agent_already_absent(exc: HttpApiError) -> bool:

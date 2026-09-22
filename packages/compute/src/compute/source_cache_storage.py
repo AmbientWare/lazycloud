@@ -38,12 +38,48 @@ class SourceCacheStorageCleanupStatusSnapshot:
 class SourceCacheStorageLifecycleService:
     """Physical cache lifecycle owned by machine/node provisioning.
 
-    Worker exit, worker-record removal, lease expiry, and elapsed time never call
-    ``record_destroyed``. The owning provider lifecycle constructs evidence only
-    after its authoritative lookup proves the node or machine storage is gone.
+    Retirement requires provider proof that storage is gone, or a fenced agent
+    receipt after deleting the machine-owned cache before a retained stop.
+    Worker exit and lease expiry do not prove that cached files are gone.
     """
 
     context: ComputeContext
+
+    def acknowledge_machine_cleanup(
+        self,
+        *,
+        machine_id: str,
+        worker_id: str,
+        generation_id: str,
+        session_fence: int | None,
+        observed_at: datetime,
+    ) -> None:
+        owner = WorkerCacheStorageOwnerRecord(
+            kind=WorkerCacheStorageOwnerKind.Machine, owner_id=machine_id
+        )
+        try:
+            current = self.get(owner)
+        except NotFoundError:
+            if generation_id or session_fence is not None:
+                raise ConflictError("cache cleanup has no current server generation") from None
+            return
+        if current.complete:
+            return
+        if not generation_id or session_fence is None:
+            raise ConflictError("machine-owned source cache must be cleaned before stopping")
+        if (
+            current.generation_id != generation_id
+            or current.session_fence != session_fence
+            or current.worker_id != worker_id
+        ):
+            raise ConflictError("cache cleanup acknowledgment is not the current machine session")
+        destroyed = self.record_destroyed(
+            WorkerCacheStorageDestructionEvidence(
+                owner=owner, generation_id=generation_id, observed_at=observed_at
+            )
+        )
+        if not destroyed.complete:
+            raise ConflictError("machine-owned source cache cleanup is incomplete")
 
     def get(
         self,
@@ -110,9 +146,9 @@ class SourceCacheStorageLifecycleService:
             owner=evidence.owner,
             generation_id=evidence.generation_id,
         )
-        targets = repository.list_targets(generation_ids=[generation.id])
         latest_owned_record_at = max(
-            [generation.created_at, *(target.created_at for target in targets)]
+            generation.created_at,
+            repository.latest_cleanup_target_at(generation.id) or generation.created_at,
         )
         if evidence.observed_at < latest_owned_record_at:
             raise ConflictError(
@@ -136,26 +172,12 @@ class SourceCacheStorageLifecycleService:
         owner: WorkerCacheStorageOwnerRecord,
         generation_id: str | None,
     ) -> WorkerCacheGenerationRecord:
-        generations = [
-            generation
-            for generation in repository.list_generations(include_retired=True)
-            if generation.storage_id == owner.storage_id
-            and (generation_id is None or generation.id == generation_id)
-        ]
-        if not generations:
+        generation = repository.generation_for_storage(
+            owner.storage_id, generation_id=generation_id
+        )
+        if generation is None:
             raise NotFoundError(f"worker cache storage not found: {owner.storage_id}")
-        active = [
-            generation
-            for generation in generations
-            if generation.state is not WorkerCacheGenerationState.Retired
-        ]
-        if len(active) > 1:
-            raise ConflictError(
-                f"worker cache storage has multiple active generations: {owner.storage_id}"
-            )
-        if active:
-            return active[0]
-        return max(generations, key=lambda generation: (generation.updated_at, generation.id))
+        return generation
 
     @staticmethod
     def _snapshot(
@@ -164,12 +186,7 @@ class SourceCacheStorageLifecycleService:
         owner: WorkerCacheStorageOwnerRecord,
         generation: WorkerCacheGenerationRecord,
     ) -> SourceCacheStorageCleanupStatusSnapshot:
-        targets = repository.list_targets(generation_ids=[generation.id])
-        pending_count = sum(target.status is SourceCacheCleanupStatus.Pending for target in targets)
-        claimed_count = sum(target.status is SourceCacheCleanupStatus.Claimed for target in targets)
-        completed_count = sum(
-            target.status is SourceCacheCleanupStatus.Completed for target in targets
-        )
+        counts = repository.generation_cleanup_counts(generation.id)
         complete = (
             generation.state is WorkerCacheGenerationState.Retired
             and generation.storage_destroyed_at is not None
@@ -180,9 +197,9 @@ class SourceCacheStorageLifecycleService:
             worker_id=generation.worker_id,
             session_fence=generation.session_fence,
             state=generation.state,
-            pending_count=pending_count,
-            claimed_count=claimed_count,
-            completed_count=completed_count,
+            pending_count=counts.get(SourceCacheCleanupStatus.Pending, 0),
+            claimed_count=counts.get(SourceCacheCleanupStatus.Claimed, 0),
+            completed_count=counts.get(SourceCacheCleanupStatus.Completed, 0),
             storage_destroyed_at=generation.storage_destroyed_at,
             complete=complete,
         )

@@ -54,6 +54,19 @@ class HetznerPooledProvider:
     primary_ipv4_hourly_micros: int
     launch_credentials: ProviderNodeLaunchCredentials
 
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        return ()
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        raise ValueError("Hetzner has no stopped reserve lifecycle")
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise ValueError("Hetzner has no stopped reserve lifecycle")
+
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
@@ -146,6 +159,8 @@ class HetznerPooledProvider:
                 )
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
+        if request.stopped_machines:
+            raise ValueError("Hetzner does not offer stopped reserve capacity")
         if not request.purchases_enabled:
             return self.describe_unit(request)
         return self.set_unit_capacity(
@@ -164,6 +179,8 @@ class HetznerPooledProvider:
         desired_machines: int,
         max_machines: int,
     ) -> ProviderUnitSnapshot:
+        if request.stopped_machines:
+            raise ValueError("Hetzner does not support stopped reserve capacity")
         if not 0 <= desired_machines <= max_machines:
             raise ValueError("invalid Hetzner capacity bounds")
         request = request.model_copy(

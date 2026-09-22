@@ -11,6 +11,7 @@ from compute.provider_launches import ProviderNodeLaunchCredentials
 from compute.provider_nodes import ProviderNodeAdmission
 from compute.providers import (
     ComputeProviderResolver,
+    ProviderUnitStateCheckpoints,
     ResolvedComputeProvider,
     ResolvedProviderPolicy,
 )
@@ -28,6 +29,7 @@ from provider_aws import (
     AwsRegionalPrices,
     Boto3AwsManagedPoolClientProvider,
 )
+from provider_aws.platform_pool import AwsPlatformCapacityProvider
 from provider_aws.supplier_prices import AWS_REGIONAL_PRICES
 from provider_hetzner.client import HetznerClient
 from provider_hetzner.pooled_provider import HetznerPooledProvider
@@ -52,6 +54,7 @@ def configured_platform_compute_providers(
     settings: PlatformCapacitySettings,
     *,
     launch_credentials: ProviderNodeLaunchCredentials,
+    provider_state: ProviderUnitStateCheckpoints,
     capacity_workspace: Callable[[], str],
     redis: RedisClient,
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries],
@@ -87,13 +90,14 @@ def configured_platform_compute_providers(
     if aws_binding is not None:
         if not binaries_by_region:
             raise ValueError("platform AWS requires published capacity artifacts")
-        aws_adapter = AwsPooledCapacityProvider(
+        aws_adapter = AwsPlatformCapacityProvider(
             provider_ref=aws_binding.provider_ref,
             connection=aws_binding,
             networks=aws_binding.networks,
             binaries_by_region=binaries_by_region,
             client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
             regional_prices=AWS_REGIONAL_PRICES,
+            checkpoints=provider_state,
         )
 
     def providers() -> tuple[ResolvedComputeProvider, ...]:

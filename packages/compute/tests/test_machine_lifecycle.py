@@ -9,6 +9,19 @@ from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus
 from shared.errors import ConflictError
 
 
+def test_stopped_machine_requires_fresh_join_and_readiness() -> None:
+    machine = Machine(id="reserve", lifecycle=MachineLifecycle.Ready)
+    stopping = advance_machine_lifecycle(machine, MachineLifecycle.Stopping)
+    stopped = advance_machine_lifecycle(stopping, MachineLifecycle.Stopped)
+    resumed = advance_machine_lifecycle(stopped, MachineLifecycle.Resuming)
+    with pytest.raises(ConflictError):
+        advance_machine_lifecycle(resumed, MachineLifecycle.Ready)
+    joined = advance_machine_lifecycle(resumed, MachineLifecycle.Joining)
+    ready = advance_machine_lifecycle(joined, MachineLifecycle.Ready)
+    assert ready.status is ResourceStatus.Running
+    assert ready.id == stopped.id
+
+
 def test_lifecycle_moves_forward_to_ready_and_refuses_a_backwards_move() -> None:
     started = datetime(2026, 1, 1, tzinfo=UTC)
     machine = Machine(id="m", lifecycle=MachineLifecycle.Joining, lifecycle_at=started)

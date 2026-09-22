@@ -36,6 +36,9 @@ class MachineLifecycle(StringEnum):
     Joining = "joining"
     Ready = "ready"
     Draining = "draining"
+    Stopping = "stopping"
+    Stopped = "stopped"
+    Resuming = "resuming"
     Terminating = "terminating"
     Deleted = "deleted"
     Failed = "failed"
@@ -49,6 +52,9 @@ LIVE_MACHINE_LIFECYCLES = frozenset(
         MachineLifecycle.Joining,
         MachineLifecycle.Ready,
         MachineLifecycle.Draining,
+        MachineLifecycle.Stopping,
+        MachineLifecycle.Stopped,
+        MachineLifecycle.Resuming,
         MachineLifecycle.Terminating,
     }
 )
@@ -60,9 +66,10 @@ PENDING_MACHINE_LIFECYCLES = frozenset(
         MachineLifecycle.Provisioning,
         MachineLifecycle.Booting,
         MachineLifecycle.Joining,
+        MachineLifecycle.Resuming,
     }
 )
-"""Phases before a machine has taken work."""
+"""Phases awaiting readiness for the current machine start."""
 
 
 class LeaseStatus(StringEnum):
