@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import uuid4
 
+from botocore.exceptions import BotoCoreError, ClientError
 from compute.providers import (
     ProviderCapacityPhase,
     ProviderMachineStatus,
@@ -23,10 +24,12 @@ from .managed_pool import (
     AwsManagedPoolModel,
     AwsManagedPoolProvisioner,
     AwsManagedPoolSpec,
-    _aws_call,
+    _client_error,
+    _client_error_code,
     _host_configuration_revision,
     _LaunchTemplateVersions,
 )
+from .provider_control import upstream_error
 
 
 class SlotPhase(StrEnum):
@@ -36,6 +39,21 @@ class SlotPhase(StrEnum):
     Resuming = "resuming"
     Active = "active"
     Retiring = "retiring"
+
+
+_REJECTED_LAUNCH_CODES = frozenset(
+    {
+        "InsufficientInstanceCapacity",
+        "InstanceLimitExceeded",
+        "VcpuLimitExceeded",
+        "MaxSpotInstanceCountExceeded",
+        "SpotMaxPriceTooLow",
+        "Unsupported",
+        "InvalidParameterValue",
+        "InvalidParameterCombination",
+        "UnauthorizedOperation",
+    }
+)
 
 
 class RetainedSlot(AwsManagedPoolModel):
@@ -64,6 +82,14 @@ class RetainedPoolState(AwsManagedPoolModel):
 
 class _Response(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
+
+
+class _ResponseMetadata(_Response):
+    retry_attempts: int | None = Field(default=None, alias="RetryAttempts")
+
+
+class _ErrorResponse(_Response):
+    metadata: _ResponseMetadata = Field(default_factory=_ResponseMetadata, alias="ResponseMetadata")
 
 
 class _State(_Response):
@@ -241,6 +267,16 @@ class AwsRetainedPool:
                         ),
                     }
                 )
+            elif (
+                slot.instance_id
+                and slot.phase is not SlotPhase.Retiring
+                and slot.launch_started_at is not None
+                and utc_now() - slot.launch_started_at > timedelta(minutes=10)
+                and self.provisioner.machine_storage_destroyed(
+                    self.spec, slot.instance_id, slot.storage_volume_ids
+                )
+            ):
+                slot = slot.model_copy(update={"phase": SlotPhase.Retiring})
             slots.append(slot)
         if tuple(slots) != self.state.slots:
             self._save(self.state.model_copy(update={"slots": tuple(slots)}))
@@ -248,7 +284,8 @@ class AwsRetainedPool:
     def _launch(self, slot: RetainedSlot) -> None:
         # EC2's idempotency window is finite. An unresolved launch keeps its budget
         # instead of issuing a new request after the token might have expired.
-        if slot.launch_started_at is None:
+        first_attempt = slot.launch_started_at is None
+        if first_attempt:
             slot = slot.model_copy(update={"launch_started_at": utc_now()})
             self._update(slot)
         assert slot.launch_started_at is not None
@@ -256,22 +293,32 @@ class AwsRetainedPool:
             raise RuntimeError(
                 f"EC2 launch {slot.token} has no instance evidence after ten minutes"
             )
-        response = _Launched.model_validate(
-            _aws_call(
-                "launch retained CPU instance",
-                self.clients.ec2.run_instances,
-                {
-                    "LaunchTemplate": {
-                        "LaunchTemplateId": slot.launch_template_id,
-                        "Version": str(slot.launch_template_version),
-                    },
-                    "SubnetId": slot.subnet_id,
-                    "ClientToken": slot.token,
-                    "MinCount": 1,
-                    "MaxCount": 1,
+        operation = "launch retained CPU instance"
+        try:
+            launched = self.clients.ec2.run_instances(
+                LaunchTemplate={
+                    "LaunchTemplateId": slot.launch_template_id,
+                    "Version": str(slot.launch_template_version),
                 },
+                SubnetId=slot.subnet_id,
+                ClientToken=slot.token,
+                MinCount=1,
+                MaxCount=1,
             )
-        )
+        except ClientError as exc:
+            if (
+                first_attempt
+                and _client_error_code(exc) in _REJECTED_LAUNCH_CODES
+                and _ErrorResponse.model_validate(exc.response).metadata.retry_attempts == 0
+            ):
+                # A rejection cannot resolve a previous call with an unknown outcome.
+                self._update(
+                    slot.model_copy(update={"phase": SlotPhase.Retiring, "launch_started_at": None})
+                )
+            raise _client_error(exc, operation=operation) from exc
+        except BotoCoreError as exc:
+            raise upstream_error(exc, operation=operation) from exc
+        response = _Launched.model_validate(launched)
         if len(response.instances) != 1:
             raise ValueError("EC2 did not return exactly one instance for the launch slot")
         instance = response.instances[0]
@@ -289,11 +336,17 @@ class AwsRetainedPool:
             self._launch(slot)
             return False
         if slot.spot_request_id:
-            requests = _SpotRequests.model_validate(
-                self.clients.ec2.describe_spot_instance_requests(
+            try:
+                response = self.clients.ec2.describe_spot_instance_requests(
                     SpotInstanceRequestIds=[slot.spot_request_id]
                 )
-            ).requests
+            except ClientError as exc:
+                if _client_error_code(exc) != "InvalidSpotInstanceRequestID.NotFound":
+                    raise
+                return self.provisioner.machine_storage_destroyed(
+                    self.spec, slot.instance_id, slot.storage_volume_ids
+                )
+            requests = _SpotRequests.model_validate(response).requests
             if len(requests) != 1 or requests[0].id != slot.spot_request_id:
                 raise ValueError("Spot request ownership evidence is incomplete")
             spot = requests[0]
