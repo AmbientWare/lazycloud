@@ -14,6 +14,7 @@ from compute.providers import (
     ProviderUnitStateCheckpoints,
 )
 from pydantic import BaseModel, ConfigDict, Field
+from shared.capacity import CapacityFailureCode
 from shared.compute_policy import ComputeUnitProviderState
 from shared.timestamps import utc_now
 
@@ -78,6 +79,8 @@ class RetainedPoolState(AwsManagedPoolModel):
     launch_template_version: int = 0
     host_revision: str = ""
     slots: tuple[RetainedSlot, ...] = ()
+    last_capacity_failure_at: datetime | None = None
+    last_capacity_failure_code: CapacityFailureCode = CapacityFailureCode.ProviderLaunchFailed
 
 
 class _Response(BaseModel):
@@ -281,7 +284,7 @@ class AwsRetainedPool:
         if tuple(slots) != self.state.slots:
             self._save(self.state.model_copy(update={"slots": tuple(slots)}))
 
-    def _launch(self, slot: RetainedSlot) -> None:
+    def _launch(self, slot: RetainedSlot) -> bool:
         # EC2's idempotency window is finite. An unresolved launch keeps its budget
         # instead of issuing a new request after the token might have expired.
         first_attempt = slot.launch_started_at is None
@@ -312,9 +315,35 @@ class AwsRetainedPool:
                 and _ErrorResponse.model_validate(exc.response).metadata.retry_attempts == 0
             ):
                 # A rejection cannot resolve a previous call with an unknown outcome.
-                self._update(
-                    slot.model_copy(update={"phase": SlotPhase.Retiring, "launch_started_at": None})
+                rejected = slot.model_copy(
+                    update={"phase": SlotPhase.Retiring, "launch_started_at": None}
                 )
+                code = _client_error_code(exc)
+                failure = (
+                    CapacityFailureCode.CapacityUnavailable
+                    if code == "InsufficientInstanceCapacity"
+                    else CapacityFailureCode.ProviderQuotaExceeded
+                    if code
+                    in {
+                        "InstanceLimitExceeded",
+                        "VcpuLimitExceeded",
+                        "MaxSpotInstanceCountExceeded",
+                    }
+                    else CapacityFailureCode.ProviderLaunchFailed
+                )
+                self._save(
+                    self.state.model_copy(
+                        update={
+                            "slots": tuple(
+                                rejected if item.token == slot.token else item
+                                for item in self.state.slots
+                            ),
+                            "last_capacity_failure_at": utc_now(),
+                            "last_capacity_failure_code": failure,
+                        }
+                    )
+                )
+                return False
             raise _client_error(exc, operation=operation) from exc
         except BotoCoreError as exc:
             raise upstream_error(exc, operation=operation) from exc
@@ -328,6 +357,7 @@ class AwsRetainedPool:
                 update={"instance_id": instance.id, "spot_request_id": instance.spot_request_id}
             )
         )
+        return True
 
     def _retire(self, slot: RetainedSlot, instance: _Instance | None) -> bool:
         if not slot.instance_id:
@@ -373,7 +403,8 @@ class AwsRetainedPool:
                 if self._retire(slot, instance):
                     retired.add(slot.token)
             elif not slot.instance_id and self.request.purchases_enabled:
-                self._launch(slot)
+                if not self._launch(slot):
+                    break
             elif instance is not None:
                 if slot.phase is SlotPhase.Stopping and instance.state.name == "running":
                     self.clients.ec2.stop_instances(InstanceIds=[instance.id])
@@ -520,6 +551,8 @@ class AwsRetainedPool:
                 for slot in self.state.slots
             ),
             instances=instances,
+            last_capacity_failure_at=self.state.last_capacity_failure_at,
+            last_capacity_failure_code=self.state.last_capacity_failure_code,
             provider_state=self.recorded,
             current_template_version=self.state.host_revision,
         )

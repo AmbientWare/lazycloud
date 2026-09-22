@@ -260,6 +260,7 @@ class _PooledProvider:
             phase=phase,
             resource_id="asg-hidden",
             desired_machines=self.desired,
+            stopped_machines=request.stopped_machines,
             max_machines=request.max_machines,
             observed_machines=len(instances),
             instances=instances,
@@ -559,6 +560,95 @@ def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
         [retiring] = ComputeUnitRepository(session).list_platform_internal()
         assert retiring.stopped_machines == 0
         assert retiring.retiring_stopped_machines == 2
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
+
+
+def test_stopped_reserves_leave_room_for_missing_warm_capacity() -> None:
+    plan = plan_warm_capacity(
+        (WarmCapacityUnit("warm", desired=1, committed=1, ready=1, floor=1, eligible=True),),
+        target_unit_id="replacement",
+        minimum=2,
+        fleet_baseline=2,
+        fleet_limit=4,
+        fleet_committed=3,
+        fleet_stopped_machines=2,
+        maintenance_busy=False,
+        targets={"warm": 1, "replacement": 1},
+    )
+    assert plan.target_machines == 1
+    assert plan.floors == {"warm": 1, "replacement": 1}
+
+
+def test_rejected_reserve_moves_to_another_offer_after_cleanup(
+    service_context: ServiceContext,
+) -> None:
+    provider = _PooledProvider()
+    provider.offer = provider.offer.model_copy(
+        update={
+            "preemptible": True,
+            "cost_terms": provider.offer.cost_terms.model_copy(
+                update={"compute_hourly_micros": 100_000}
+            ),
+        }
+    )
+    alternative = provider.offer.model_copy(
+        update={
+            "id": "another-zone",
+            "capability_key": provider.offer.capability_key + ":another-zone",
+            "cost_terms": provider.offer.cost_terms.model_copy(
+                update={"compute_hourly_micros": 120_000}
+            ),
+        }
+    )
+    provider.reserve_offers = (provider.offer, alternative)
+    resolved = _Resolver(
+        provider,
+        service_context,
+        allowed_offers=(
+            ProviderOfferEligibility(
+                region=provider.offer.region,
+                instance_type=provider.offer.instance_type,
+                preemptible=True,
+            ),
+        ),
+    )._resolved()
+    assert resolved.policy is not None
+    workspace_id = resolved.policy.workspace_id
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: (resolved,),
+    )
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=_SchedulerHooks(),
+        fleet_policy=FleetCapacityPolicy(max_cpu_instances=2, warm_cpu_preemptible_min=0),
+    )
+    now = datetime.now(UTC)
+    compute.reconcile_platform_warm_capacity(now=now)
+    with service_context.database.session() as session:
+        [first] = ComputeUnitRepository(session).list_platform_internal()
+    provider.last_capacity_failure_at = now
+    provider.last_capacity_failure_code = CapacityFailureCode.CapacityUnavailable
+    compute.reconcile_unit_capacity(first.id, now=now)
+    with service_context.database.session() as session:
+        failed = ComputeUnitRepository(session).get(first.id)
+        assert failed is not None
+        assert failed.provider_state.degraded_reason == "provider_acquisition_rejected"
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
+    compute.reconcile_unit_capacity(first.id, now=now + timedelta(seconds=301))
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=302))
+    with service_context.database.session() as session:
+        retired = ComputeUnitRepository(session).get(first.id)
+        assert retired is not None and retired.phase is ComputeUnitPhase.Deleted
+        [replacement] = ComputeUnitRepository(session).list_platform_internal()
+        assert replacement.capability_key == alternative.capability_key
+        assert replacement.stopped_machines == 2
         assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
 
 

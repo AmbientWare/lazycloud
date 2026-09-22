@@ -705,7 +705,19 @@ class ProviderMachineReconciler:
                 update={"last_capacity_failure_at": to_utc(failure_at)}
             )
             if (
-                snapshot.observed_machines < snapshot.desired_machines
+                (
+                    snapshot.observed_machines < snapshot.desired_machines
+                    or sum(
+                        instance.status
+                        in {
+                            ProviderMachineStatus.Preparing,
+                            ProviderMachineStatus.Stopping,
+                            ProviderMachineStatus.Stopped,
+                        }
+                        for instance in snapshot.instances
+                    )
+                    < snapshot.stopped_machines
+                )
                 and pool.phase not in ENDED_UNIT_PHASES
                 and provider_state.degraded_reason is None
             ):

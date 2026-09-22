@@ -1923,6 +1923,10 @@ class ComputeService:
                     ),
                     fleet_limit=self.fleet_policy.max_cpu_instances,
                     fleet_committed=committed,
+                    fleet_stopped_machines=sum(
+                        item.stopped_machines + item.retiring_stopped_machines
+                        for item in fleet_units
+                    ),
                     maintenance_busy=any(
                         item.replacement_machine_id
                         or (item.id != unit_id and item.warm_handoff_from)
@@ -3416,9 +3420,23 @@ class ComputeService:
             (unit.provider_ref, unit.region, unit.capability_key, unit.root_volume_gib): unit.id
             for unit in existing
         }
+        with self.context.database.session() as session:
+            states = ComputeUnitRepository(session).offer_states(
+                tuple(
+                    (
+                        provider.policy.workspace_id,
+                        provider.ref,
+                        offer.region,
+                        offer.capability_key,
+                        provider.policy.root_volume_gib,
+                    )
+                    for provider, offer in candidates
+                    if provider.policy is not None
+                )
+            )
         cooling = {
             unit.id
-            for unit in existing
+            for unit in states.values()
             if unit.phase is ComputeUnitPhase.Deleting
             or (
                 unit.provider_state.degraded_reason is not None

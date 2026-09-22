@@ -71,6 +71,7 @@ def plan_warm_capacity(
     fleet_limit: int,
     fleet_committed: int,
     maintenance_busy: bool,
+    fleet_stopped_machines: int = 0,
     targets: Mapping[str, int] | None = None,
 ) -> WarmCapacityPlan:
     goals = dict(targets) if targets is not None else {target_unit_id: minimum}
@@ -78,7 +79,7 @@ def plan_warm_capacity(
     required = goals.get(target_unit_id, 0)
     current_desired = target.desired if target is not None else 0
     current_committed = target.committed if target is not None else 0
-    ceiling = min(fleet_limit, fleet_baseline + int(not maintenance_busy))
+    ceiling = min(fleet_limit, fleet_baseline + fleet_stopped_machines + int(not maintenance_busy))
     desired = max(
         current_desired,
         min(required, max(ceiling - fleet_committed + current_committed, 0)),
