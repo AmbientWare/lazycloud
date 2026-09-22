@@ -734,6 +734,7 @@ class ComputeService:
                             cpu_millicores=request.shape.cpu_millicores,
                             memory_mib=request.shape.memory_mib,
                             runtime=request.shape.runtime,
+                            preemptible=request.shape.preemptible,
                         )
                     return _capacity_result(
                         request,
@@ -1539,6 +1540,7 @@ class ComputeService:
                         cpu_millicores=requirements.cpu_millicores,
                         memory_mib=requirements.memory_mb,
                         runtime=requirements.runtime,
+                        preemptible=requirements.preemptible,
                     )
         return self._prepare_pooled_offer(
             provider=provider,
@@ -1552,16 +1554,22 @@ class ComputeService:
 
     @staticmethod
     def _retire_incompatible_reserves(
-        session: DatabaseSession, *, cpu_millicores: int, memory_mib: int, runtime: str
+        session: DatabaseSession,
+        *,
+        cpu_millicores: int,
+        memory_mib: int,
+        runtime: str,
+        preemptible: bool,
     ) -> None:
         if not ContainerRepository(session).has_unplaced_platform_cpu_work():
             return
         units = ComputeUnitRepository(session)
-        for unit in units.list_platform_internal(preemptible=False, gpu=False):
+        for unit in units.list_platform_internal(gpu=False):
             if not unit.stopped_machines or (
                 unit.worker_cpu_millicores >= cpu_millicores
                 and unit.worker_memory_mib >= memory_mib
                 and runtime in unit.worker_runtimes
+                and (preemptible or not unit.worker_preemptible)
             ):
                 continue
             units.upsert(

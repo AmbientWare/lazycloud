@@ -119,7 +119,6 @@ def connection_role_statements(
             "Action": [
                 "autoscaling:DescribeAutoScalingGroups",
                 "autoscaling:DescribeScalingActivities",
-                "autoscaling:DescribeWarmPool",
                 "ec2:DescribeAvailabilityZones",
                 "ec2:DescribeInstances",
                 "ec2:DescribeImages",
@@ -199,10 +198,6 @@ def connection_role_statements(
                 "Effect": "Allow",
                 "Action": [
                     "autoscaling:DeleteAutoScalingGroup",
-                    "autoscaling:PutWarmPool",
-                    "autoscaling:DeleteWarmPool",
-                    "autoscaling:PutLifecycleHook",
-                    "autoscaling:CompleteLifecycleAction",
                     "autoscaling:SetDesiredCapacity",
                     "autoscaling:SetInstanceProtection",
                     "autoscaling:SuspendProcesses",

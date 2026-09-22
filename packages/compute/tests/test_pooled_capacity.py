@@ -51,6 +51,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
+from database.repositories.container_scheduling import ContainerSchedulingRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -112,7 +113,12 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
+from shared.errors import (
+    CapacityLimitReachedError,
+    ConflictError,
+    NotFoundError,
+    UpstreamUnavailableError,
+)
 from shared.identity import WorkspaceStatus
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
@@ -517,6 +523,42 @@ def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
         [retiring] = ComputeUnitRepository(session).list_platform_internal()
         assert retiring.stopped_machines == 1
         assert retiring.retiring_stopped_machines == 1
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
+
+    request = SchedulerWorkerRequest(
+        container_id=str(uuid4()),
+        stub_id="reserve-demand",
+        workspace_id=workspace_id,
+        cpu_millicores=provider.offer.cpu_millicores * 2,
+        memory_mib=1024,
+        placement=Placement.platform(),
+        preemptible=preemptible,
+    )
+    with service_context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=request.container_id,
+                name="waiting-for-larger-node",
+                image="",
+                command=[],
+                workspace_id=workspace_id,
+            )
+        )
+        ContainerSchedulingRepository(session).submit(request, now=now)
+    with pytest.raises(CapacityLimitReachedError):
+        compute.prepare_pooled_offer(
+            provider=resolved,
+            offer=provider.offer.model_copy(update={"cpu_millicores": request.cpu_millicores}),
+            requirements=ComputeResourceRequirements(
+                cpu_millicores=request.cpu_millicores,
+                memory_mb=request.memory_mib,
+                preemptible=preemptible,
+            ),
+        )
+    with service_context.database.session() as session:
+        [retiring] = ComputeUnitRepository(session).list_platform_internal()
+        assert retiring.stopped_machines == 0
+        assert retiring.retiring_stopped_machines == 2
         assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
 
 

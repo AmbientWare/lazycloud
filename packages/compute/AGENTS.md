@@ -52,8 +52,8 @@ Customer capacity cannot satisfy the platform baseline.
 
 CPU reserves have separate stopped targets for Spot and On-Demand, independent
 of their running warm minimums. Running targets, stopped targets, preparation,
-and retiring assets share the CPU fleet budget. Placement
-prefers compatible stopped capacity before buying another node. Queued CPU work
+and retiring assets share the CPU fleet budget. Placement prefers compatible
+stopped capacity before buying another node. Queued CPU work
 takes priority over reserve replenishment. A stopped target being removed keeps
 its commitment until provider observation confirms its removal; disk destruction
 still requires the existing provider evidence.
@@ -77,8 +77,8 @@ CPU headroom grows after reserved CPU or RAM leaves at most 20 percent free for
 capacity prevents duplicate growth. Each enabled stopped market retains its
 configured minimum or 20 percent of its running target, whichever is larger.
 A zero stopped minimum disables that market's reserve. The default stopped
-minimums are two Spot and zero On-Demand. Keep the
-running Spot floor at two until live preparation, restart, refill, interruption,
+minimums are two Spot and zero On-Demand. Keep the running Spot floor at two
+until live preparation, restart, refill, interruption,
 and cleanup acceptance passes; then lower it to one within the same four-node cap.
 
 Within each purchase market, warm workers prefer distinct provider, region,
