@@ -535,7 +535,9 @@ def retained_pool(service_context: ServiceContext) -> tuple[AwsRetainedPool, _Re
 
 @pytest.mark.parametrize("sdk_retries", [0, 1])
 def test_rejected_launch_releases_only_proven_unused_capacity(
-    retained_pool: tuple[AwsRetainedPool, _RetainedEc2], sdk_retries: int
+    retained_pool: tuple[AwsRetainedPool, _RetainedEc2],
+    sdk_retries: int,
+    service_context: ServiceContext,
 ) -> None:
     pool, ec2 = retained_pool
     ec2.retry_attempts = sdk_retries
@@ -547,6 +549,13 @@ def test_rejected_launch_releases_only_proven_unused_capacity(
         assert snapshot.last_capacity_failure_at is not None
         assert snapshot.last_capacity_failure_code is CapacityFailureCode.CapacityUnavailable
     state = pool.checkpoints.load(pool.request)
+    assert state.committed_machines == int(bool(sdk_retries))
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session)
+        unit = units.get(pool.request.unit_id)
+        assert unit is not None
+        units.upsert(unit.model_copy(update={"desired_machines": 0, "stopped_machines": 0}))
+        assert units.platform_capacity_usage(gpu=False) == int(bool(sdk_retries))
     [slot] = RetainedPoolState.model_validate(state.attributes).slots
     if sdk_retries:
         assert slot.launch_started_at is not None
@@ -570,6 +579,8 @@ def test_rejected_launch_releases_only_proven_unused_capacity(
         assert RetainedPoolState.model_validate(
             pool.checkpoints.load(pool.request).attributes
         ).slots
+        with service_context.database.session() as session:
+            assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 1
     else:
         assert slot.launch_started_at is None
         assert restarted.delete().phase is ProviderCapacityPhase.Deleted

@@ -82,6 +82,7 @@ class WorkspaceComputePolicy(ContractModel):
 
 class ComputeUnitProviderState(ContractModel):
     revision: int = Field(default=0, ge=0)
+    committed_machines: int = Field(default=0, ge=0)
     resource_id: str = Field(default="", max_length=2048)
     attributes: dict[str, JsonValue] = Field(default_factory=dict)
     degraded_reason: str | None = Field(default=None, min_length=1, max_length=512)

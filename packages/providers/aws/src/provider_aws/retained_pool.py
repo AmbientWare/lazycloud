@@ -179,6 +179,12 @@ class AwsRetainedPool:
     def _save(self, state: RetainedPoolState, *, deleted: bool = False) -> None:
         updated = ComputeUnitProviderState(
             revision=self.recorded.revision,
+            committed_machines=sum(
+                slot.phase is not SlotPhase.Retiring
+                or bool(slot.instance_id or slot.spot_request_id or slot.storage_volume_ids)
+                or slot.launch_started_at is not None
+                for slot in state.slots
+            ),
             resource_id="" if deleted else f"ec2-pool-{self.spec.resource_key}",
             attributes=state.model_dump(mode="json"),
         )

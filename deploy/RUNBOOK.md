@@ -452,6 +452,18 @@ A rollback to an image older than the schema is refused rather than migrated
 from, because there is no path to compute from a revision that build does not
 carry. Roll forward, or restore the database.
 
+### Provider commitment accounting upgrade
+
+Revision `0015_provider_commitments` counts unresolved provider launches against
+the fleet limit and backfills existing retained instance checkpoints. Stop all
+old API and scheduler replicas before migration so they cannot create launches
+without recording their commitments. Pause Argo automatic sync, preserve its
+current settings, and confirm no active workloads before stopping those replicas.
+Publish and select the release, run a full sync, verify the migration and new
+replicas, then restore Argo's previous automatic sync settings. Keep PostgreSQL,
+Redis, and worker instances intact. Verify fleet commitments alongside AWS
+inventory before calling the warm and stopped targets healthy.
+
 ### Python invocation format upgrade
 
 Python invocation format 2 preserves Python object graphs and resolves function
