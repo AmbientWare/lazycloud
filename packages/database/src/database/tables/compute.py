@@ -100,6 +100,9 @@ class ComputeUnitTable(IdTable, DatabaseBase):
         CheckConstraint("generation > 0", name="ck_compute_units_generation"),
         CheckConstraint("provider_state_revision >= 0", name="ck_compute_units_provider_revision"),
         CheckConstraint(
+            "provider_committed_machines >= 0", name="ck_compute_units_provider_commitment"
+        ),
+        CheckConstraint(
             "stopped_machines >= 0 AND retiring_stopped_machines >= 0 "
             "AND desired_machines + stopped_machines <= max_machines AND (stopped_machines = 0 OR "
             "(platform_fleet AND worker_gpu_count = 0))",
@@ -173,6 +176,9 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
     provider_state_revision: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    provider_committed_machines: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default="0"
     )
     provider_attributes: Mapped[dict[str, JsonValue]] = mapped_column(
