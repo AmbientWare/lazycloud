@@ -369,6 +369,8 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "supplier_cpu_unit": row.supplier_cpu_unit,
             "supplier_cpu_count": row.supplier_cpu_count,
             "desired_machines": row.desired_machines,
+            "stopped_machines": row.stopped_machines,
+            "retiring_stopped_machines": row.retiring_stopped_machines,
             "initial_machines": row.initial_machines,
             "min_machines": row.min_machines,
             "max_machines": row.max_machines,
@@ -411,6 +413,24 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
 @dataclass(slots=True)
 class ComputeUnitRepository:
     session: Session
+
+    def prepared_capacity_owner_ids(self) -> frozenset[str]:
+        return frozenset(
+            str(value)
+            for value in self.session.scalars(
+                select(ComputeUnitTable.id).where(
+                    ComputeUnitTable.platform_fleet.is_(True),
+                    ComputeUnitTable.phase.not_in(
+                        (ComputeUnitPhase.Deleting.value, ComputeUnitPhase.Deleted.value)
+                    ),
+                    exists().where(
+                        ComputeProviderInstanceTable.pool_id == ComputeUnitTable.id,
+                        ComputeProviderInstanceTable.status == "stopped",
+                        ComputeProviderInstanceTable.missing_since.is_(None),
+                    ),
+                )
+            )
+        )
 
     def offer_states(
         self,
@@ -724,6 +744,8 @@ class ComputeUnitRepository:
         )
         active = or_(
             ComputeUnitTable.desired_machines > 0,
+            ComputeUnitTable.stopped_machines > 0,
+            ComputeUnitTable.retiring_stopped_machines > 0,
             ComputeUnitTable.observed_machines > 0,
             ComputeUnitTable.phase == ComputeUnitPhase.Deleting.value,
             exists().where(
@@ -864,6 +886,8 @@ class ComputeUnitRepository:
                 ComputeUnitTable.id,
                 func.greatest(
                     ComputeUnitTable.desired_machines
+                    + ComputeUnitTable.stopped_machines
+                    + ComputeUnitTable.retiring_stopped_machines
                     + surge
                     + func.coalesce(live_instances.c.retiring_count, 0),
                     ComputeUnitTable.observed_machines,
@@ -876,6 +900,8 @@ class ComputeUnitRepository:
                 ComputeUnitTable.platform_fleet.is_(True),
                 or_(
                     ComputeUnitTable.desired_machines > 0,
+                    ComputeUnitTable.stopped_machines > 0,
+                    ComputeUnitTable.retiring_stopped_machines > 0,
                     ComputeUnitTable.observed_machines > 0,
                     live_instances.c.count > 0,
                     surge > 0,
@@ -907,6 +933,9 @@ class ComputeUnitRepository:
         updated = current.model_copy(
             update={
                 "desired_machines": desired_machines,
+                "stopped_machines": min(
+                    current.stopped_machines, max(max_machines - desired_machines, 0)
+                ),
                 "max_machines": max_machines,
                 "observed_machines": observed_machines,
                 "generation": current.generation + 1,
@@ -963,6 +992,8 @@ class ComputeUnitRepository:
         row.placement = record.placement.key
         row.provider = record.provider
         row.desired_machines = record.desired_machines
+        row.stopped_machines = record.stopped_machines
+        row.retiring_stopped_machines = record.retiring_stopped_machines
         row.initial_machines = record.initial_machines
         row.min_machines = record.min_machines
         row.max_machines = record.max_machines

@@ -128,6 +128,21 @@ _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
 
 @dataclass(slots=True)
 class _PooledProvider:
+    reserve_offers: tuple[ComputeOffer, ...] = ()
+
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        return self.reserve_offers
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        raise AssertionError("test provider has no stopped capacity")
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise AssertionError("test provider has no stopped capacity")
+
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
@@ -296,6 +311,11 @@ class _AsyncScaleDownProvider(_PooledProvider):
 
 @dataclass(slots=True)
 class _MutationLeases:
+    def pressure_ready(
+        self, capacity_owner_id: str, *, under_pressure: bool, now: datetime, sustained_seconds: int
+    ) -> bool:
+        raise AssertionError("capacity mutation test must not observe activity pressure")
+
     on_acquire: Callable[[str], None] | None = None
     acquired: list[str] = field(default_factory=list)
     held: set[str] = field(default_factory=set)
@@ -422,6 +442,56 @@ class _SchedulerHooks:
 
     def revoke_unit_join_token(self, token_hash: str) -> None:
         self.revoked_join_tokens.append(token_hash)
+
+
+def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
+    service_context: ServiceContext,
+) -> None:
+    provider = _PooledProvider()
+    provider.offer = provider.offer.model_copy(
+        update={
+            "cost_terms": provider.offer.cost_terms.model_copy(
+                update={"compute_hourly_micros": 100_000}
+            ),
+        }
+    )
+    provider.reserve_offers = (provider.offer,)
+    resolved = _Resolver(provider, service_context)._resolved()
+    assert resolved.policy is not None and resolved.policy.platform_fleet
+    workspace_id = resolved.policy.workspace_id
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: (resolved,),
+    )
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=_SchedulerHooks(),
+        fleet_policy=FleetCapacityPolicy(max_cpu_instances=2, warm_cpu_preemptible_min=0),
+    )
+    now = datetime.now(UTC)
+    compute.reconcile_platform_warm_capacity(now=now)
+    with service_context.database.session() as session:
+        [first] = ComputeUnitRepository(session).list_platform_internal()
+        assert first.stopped_machines == 2
+        assert first.desired_machines == 0
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=60))
+    with service_context.database.session() as session:
+        [repeated] = ComputeUnitRepository(session).list_platform_internal()
+        assert repeated.generation == first.generation
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
+    compute.fleet_policy = compute.fleet_policy.model_copy(update={"stopped_cpu_target": 1})
+    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=120))
+    with service_context.database.session() as session:
+        [retiring] = ComputeUnitRepository(session).list_platform_internal()
+        assert retiring.stopped_machines == 1
+        assert retiring.retiring_stopped_machines == 1
+        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
 
 
 @pytest.mark.parametrize(

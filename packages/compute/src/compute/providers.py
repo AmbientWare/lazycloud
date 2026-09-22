@@ -29,6 +29,10 @@ from compute.provider_nodes import ProviderNodeAdmission
 
 class ProviderMachineStatus:
     Pending = "pending"
+    Preparing = "preparing"
+    Stopping = "stopping"
+    Stopped = "stopped"
+    Resuming = "resuming"
     Active = "active"
     Terminated = "terminated"
     Unhealthy = "unhealthy"
@@ -83,6 +87,7 @@ class ProviderUnitRequest(ContractModel):
     generation: int
     offer: ComputeOffer
     desired_machines: int
+    stopped_machines: int = Field(default=0, ge=0)
     max_machines: int
     purchases_enabled: bool = True
     root_volume_gib: int = 200
@@ -97,6 +102,10 @@ class ProviderUnitRequest(ContractModel):
             raise ValueError("desired machines cannot be negative")
         if self.max_machines <= 0 or self.desired_machines > self.max_machines:
             raise ValueError("invalid pooled capacity bounds")
+        if self.stopped_machines and (self.offer.preemptible or self.offer.gpu_count):
+            raise ValueError("stopped reserves require non-preemptible CPU capacity")
+        if self.desired_machines + self.stopped_machines > self.max_machines:
+            raise ValueError("running and stopped commitments exceed the pool limit")
         if self.generation <= 0:
             raise ValueError("provider pool generation must be positive")
         return self
@@ -177,6 +186,7 @@ class ProviderUnitSnapshot(ContractModel):
     phase: ProviderCapacityPhase
     resource_id: str = ""
     desired_machines: int = 0
+    stopped_machines: int = 0
     max_machines: int = 0
     observed_machines: int = 0
     last_capacity_failure_at: datetime | None = None
@@ -217,6 +227,20 @@ class PooledCapacityProvider(Protocol):
     ) -> NetworkEgressRouteEvidence: ...
 
     def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]: ...
+
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        """Offers whose instances can be prepared, stopped and resumed."""
+        ...
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None: ...
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        """Return one drained, cleaned instance to the stopped reserve."""
+        ...
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         """Resolve owned capacity even when its shape is no longer sold."""
@@ -260,6 +284,15 @@ class CapacityOwnerMutationLease(Protocol):
     """Serialize provider mutations and fence destructive changes from dispatch."""
 
     def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
+
+    def pressure_ready(
+        self,
+        capacity_owner_id: str,
+        *,
+        under_pressure: bool,
+        now: datetime,
+        sustained_seconds: int,
+    ) -> bool: ...
 
     def dispatch_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 

@@ -355,6 +355,9 @@ class CapacityWorkerRepository(Protocol):
 
 
 class ComputeCapacityService(Protocol):
+    def observe_pool_pressure(
+        self, capacity_owner_id: str, *, free_capacity_percent: int, now: datetime
+    ) -> bool: ...
     def fulfill_acquired_capacity(
         self, request: CapacityFulfillmentRequest
     ) -> CapacityOperationStatus: ...
@@ -482,6 +485,22 @@ class ComputeUnitCapacityController:
             registered_units=registered_units,
             authoritative_units=authoritative_units,
             state=state,
+            pressure_ready=(
+                self.compute.observe_pool_pressure(
+                    self.capacity_owner_id,
+                    free_capacity_percent=(
+                        min(
+                            headroom.cpu_millicores * 100 // headroom.total_cpu_millicores,
+                            headroom.memory_mib * 100 // headroom.total_memory_mib,
+                        )
+                        if headroom.total_cpu_millicores and headroom.total_memory_mib
+                        else 100
+                    ),
+                    now=now,
+                )
+                if self.unit.platform_fleet and not self.unit.worker_gpu_count
+                else False
+            ),
             now=now,
         )
         retry_at = scale_up_retry_at(self.unit, state)
@@ -734,6 +753,25 @@ class RedisCapacityReservationRepository:
 
     def has_open_reservations(self, capacity_owner_id: str) -> bool:
         return any(reservation.open for reservation in self.list_for_owner(capacity_owner_id))
+
+    def pressure_ready(
+        self,
+        capacity_owner_id: str,
+        *,
+        under_pressure: bool,
+        now: datetime,
+        sustained_seconds: int,
+    ) -> bool:
+        key = self.redis.key(
+            self.keys.namespace, "capacity-pressure", _owner_key(capacity_owner_id)
+        )
+        if not under_pressure:
+            self.redis.delete(key)
+            return False
+        self.redis.set(key, str(now.timestamp()), nx=True, ex=sustained_seconds * 2)
+        value = self.redis.get(key)
+        self.redis.expire(key, sustained_seconds * 2)
+        return value is not None and now.timestamp() - float(redis_text(value)) >= sustained_seconds
 
     @contextmanager
     def mutation_lock(
@@ -1179,6 +1217,21 @@ class CapacityReservationService:
     reservations: RedisCapacityReservationRepository
     controllers: Callable[[], Iterable[CapacityAcquisitionController]]
     allocation_owners: CapacityAllocationOwnerDirectory | None = None
+
+    def pressure_ready(
+        self,
+        capacity_owner_id: str,
+        *,
+        under_pressure: bool,
+        now: datetime,
+        sustained_seconds: int,
+    ) -> bool:
+        return self.reservations.pressure_ready(
+            capacity_owner_id,
+            under_pressure=under_pressure,
+            now=now,
+            sustained_seconds=sustained_seconds,
+        )
 
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:

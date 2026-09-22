@@ -66,8 +66,14 @@ from agent.service_manager import (
     machine_fingerprint,
     plan_agent_preflight,
 )
+from agent.storage_cleanup import (
+    finish_stop_preparation,
+    prepare_machine_storage_for_stop,
+    read_stop_preparation,
+)
 from agent.tunnel import AgentTunnelRoute, AgentTunnelService
 from agent.updates import AgentUpdater
+from compute.agent_control import agent_machine_worker_id
 from gateway.http import (
     AgentBootstrapConfig,
     AgentTelemetryRequest,
@@ -94,7 +100,7 @@ from provider_clients import (
 )
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
-from shared.app_identity import AGENT_NAME
+from shared.app_identity import AGENT_NAME, NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
     CapacitySignalKind,
@@ -716,6 +722,21 @@ class DockerAgentWorkerController:
             self._stop(slot)
         self._save_active_slots([])
 
+    def stop_for_reserve(self, machine_id: str) -> None:
+        self.stop_all()
+        remaining = self.runner.run(
+            [
+                self.docker_binary,
+                "ps",
+                "--all",
+                "--quiet",
+                "--filter",
+                f"label={NAME}.agent.machine_id={machine_id}",
+            ]
+        )
+        if remaining.returncode or remaining.stdout.strip():
+            raise RuntimeError("machine worker containers have not finished stopping")
+
     def gracefully_stop_all(self, *, grace_seconds: float) -> None:
         if grace_seconds <= 0:
             raise ValueError("worker shutdown grace must be positive")
@@ -1198,6 +1219,7 @@ class AgentDaemonService:
                     slot.worker_id: slot.worker_image for slot in active_slots if slot.worker_image
                 },
                 prepared_worker_images=self.worker_controller.prepared_worker_images(),
+                prepared_stop=read_stop_preparation(self.state_store.state_dir),
             )
         )
         if not stream.ok:
@@ -1206,7 +1228,27 @@ class AgentDaemonService:
                 raise AgentStreamRetryableError(msg)
             raise RuntimeError(msg)
         state = _agent_state_from_stream_response(state, stream)
+        if stream.resume_from_stop and state.capacity_notice_at is None:
+            finish_stop_preparation(self.state_store.state_dir)
+            state = state.model_copy(update={"capacity_state": AgentCapacityState.Available})
         self.state_store.save(state)
+        if stream.stop_preparation_id:
+            self.worker_controller.stop_for_reserve(state.machine_id)
+            prepare_machine_storage_for_stop(
+                self.state_store.state_dir,
+                machine_id=state.machine_id,
+                worker_id=agent_machine_worker_id(state.machine_id),
+                request_id=stream.stop_preparation_id,
+            )
+            return AgentDaemonRunResult(
+                workspace_id=state.workspace_id,
+                placement=state.placement.key,
+                machine_id=state.machine_id,
+                stream_iterations=current_iterations,
+                tunnel_connected=tunnel_connected,
+                runtime_http_url=runtime_http_url,
+                capacity_state=state.capacity_state,
+            )
         if state.capacity_state is not AgentCapacityState.Available:
             return self._resume_capacity_interruption(
                 state,

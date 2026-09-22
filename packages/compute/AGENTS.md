@@ -50,6 +50,26 @@ and worker updates share the platform maintenance lock. A zero minimum disables
 that market's baseline. Floor changes preserve active work until it drains.
 Customer capacity cannot satisfy the platform baseline.
 
+CPU reserves use a separate stopped On-Demand target. Running targets, stopped
+targets, preparation, and retiring assets share the CPU fleet budget. Placement
+prefers compatible stopped capacity before buying another node. Queued CPU work
+takes priority over reserve replenishment. A stopped target being removed keeps
+its commitment until provider observation confirms its removal; disk destruction
+still requires the existing provider evidence.
+
+The agent proves its current binary and worker image before initial preparation
+completes. Returning a used host requires a durable drain, no live workloads,
+stopped worker processes, and a receipt fenced to the stop request and cache
+generation. Cleanup removes tenant files and retires the worker credential while
+preserving the agent identity and platform image cache. Resuming keeps the machine
+identity and requires a new worker registration and request-poll lease.
+
+CPU headroom grows after reserved CPU or RAM leaves at most 20 percent free for
+60 seconds. Redis owns that observation window across scheduler replicas; pending
+capacity prevents duplicate growth. The stopped target remains two. Keep the
+running Spot floor at two until live preparation, restart, refill, interruption,
+and cleanup acceptance passes; then lower it to one within the same four-node cap.
+
 Within each purchase market, warm workers prefer distinct provider, region,
 availability-zone and instance-type combinations. A provider risk report closes
 new admission on its machine and records one durable recovery obligation.

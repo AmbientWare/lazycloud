@@ -119,6 +119,7 @@ def connection_role_statements(
             "Action": [
                 "autoscaling:DescribeAutoScalingGroups",
                 "autoscaling:DescribeScalingActivities",
+                "autoscaling:DescribeWarmPool",
                 "ec2:DescribeAvailabilityZones",
                 "ec2:DescribeInstances",
                 "ec2:DescribeInternetGateways",
@@ -196,6 +197,10 @@ def connection_role_statements(
                 "Effect": "Allow",
                 "Action": [
                     "autoscaling:DeleteAutoScalingGroup",
+                    "autoscaling:PutWarmPool",
+                    "autoscaling:DeleteWarmPool",
+                    "autoscaling:PutLifecycleHook",
+                    "autoscaling:CompleteLifecycleAction",
                     "autoscaling:SetDesiredCapacity",
                     "autoscaling:SetInstanceProtection",
                     "autoscaling:SuspendProcesses",
@@ -209,6 +214,13 @@ def connection_role_statements(
                         f"autoscaling:ResourceTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE
                     }
                 },
+            },
+            {
+                "Sid": "TerminateTaggedRetainedInstances",
+                "Effect": "Allow",
+                "Action": "ec2:TerminateInstances",
+                "Resource": arns.arn(_INSTANCE),
+                "Condition": _MANAGED_RESOURCE_TAG,
             },
             {
                 "Sid": "RunTaggedInstanceResources",

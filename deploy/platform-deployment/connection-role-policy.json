@@ -4,6 +4,7 @@
       "Action": [
         "autoscaling:DescribeAutoScalingGroups",
         "autoscaling:DescribeScalingActivities",
+        "autoscaling:DescribeWarmPool",
         "ec2:DescribeAvailabilityZones",
         "ec2:DescribeInstances",
         "ec2:DescribeInternetGateways",
@@ -77,6 +78,10 @@
     {
       "Action": [
         "autoscaling:DeleteAutoScalingGroup",
+        "autoscaling:PutWarmPool",
+        "autoscaling:DeleteWarmPool",
+        "autoscaling:PutLifecycleHook",
+        "autoscaling:CompleteLifecycleAction",
         "autoscaling:SetDesiredCapacity",
         "autoscaling:SetInstanceProtection",
         "autoscaling:SuspendProcesses",
@@ -92,6 +97,17 @@
       "Effect": "Allow",
       "Resource": "*",
       "Sid": "ManageTaggedAutoScalingGroups"
+    },
+    {
+      "Action": "ec2:TerminateInstances",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/cloud-pool:managed-by": "control-plane"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Sid": "TerminateTaggedRetainedInstances"
     },
     {
       "Action": "ec2:RunInstances",

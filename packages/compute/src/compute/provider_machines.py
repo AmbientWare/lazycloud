@@ -116,6 +116,14 @@ def provider_billing_renewal(
 
 
 def _reservation_status_from_provider(status: str) -> ReservationStatus:
+    reserve_states = {
+        ProviderMachineStatus.Preparing: ReservationStatus.Preparing,
+        ProviderMachineStatus.Stopping: ReservationStatus.Stopping,
+        ProviderMachineStatus.Stopped: ReservationStatus.Stopped,
+        ProviderMachineStatus.Resuming: ReservationStatus.Resuming,
+    }
+    if status in reserve_states:
+        return reserve_states[status]
     if status == ProviderMachineStatus.Active:
         return ReservationStatus.Active
     if status == ProviderMachineStatus.Unhealthy:
@@ -200,6 +208,7 @@ def provider_unit_request(
         generation=pool.generation,
         offer=offer,
         desired_machines=desired_machines,
+        stopped_machines=pool.stopped_machines,
         max_machines=max_machines,
         root_volume_gib=pool.root_volume_gib,
         bootstrap=pool_bootstrap_factory.bootstrap(pool, offer),
@@ -298,6 +307,13 @@ class ProviderMachineReconciler:
                 and settled_existing.status == ReservationStatus.Terminating.value
             ):
                 provider_status = ReservationStatus.Terminating.value
+            if (
+                settled_existing is not None
+                and settled_existing.status == ReservationStatus.Stopping.value
+                and instance.status
+                in {ProviderMachineStatus.Active, ProviderMachineStatus.Preparing}
+            ):
+                provider_status = ReservationStatus.Stopping.value
             if settled_existing is not None:
                 launch_attempt = settled_existing.launch_attempt
             else:
@@ -533,6 +549,23 @@ class ProviderMachineReconciler:
             )
         if machine.lifecycle is MachineLifecycle.Terminating:
             return machine.id
+        reserve_target = {
+            ProviderMachineStatus.Stopping: MachineLifecycle.Stopping,
+            ProviderMachineStatus.Stopped: MachineLifecycle.Stopped,
+            ProviderMachineStatus.Resuming: MachineLifecycle.Resuming,
+        }.get(instance.status)
+        if reserve_target is not None and machine_lifecycle_allowed(
+            machine.lifecycle, reserve_target
+        ):
+            write_machine_lifecycle(
+                session,
+                machine,
+                reserve_target,
+                workspace_changes=self.workspace_changes,
+                workspace_id=pool.workspace_id,
+                now=now,
+            )
+            return machine.id
         if instance.status == ProviderMachineStatus.Unhealthy:
             target = MachineLifecycle.Failed
             failure: MachineBootstrapFailureReason | None = (
@@ -763,6 +796,23 @@ class ProviderMachineReconciler:
                 if current is None:
                     raise RuntimeError(f"compute pool disappeared during reconciliation: {pool.id}")
                 return current
+            reserve_count = sum(
+                instance.status
+                in {
+                    ProviderMachineStatus.Preparing,
+                    ProviderMachineStatus.Stopping,
+                    ProviderMachineStatus.Stopped,
+                }
+                for instance in snapshot.instances
+            )
+            if (
+                updated.retiring_stopped_machines
+                and snapshot.stopped_machines == updated.stopped_machines
+                and reserve_count <= updated.stopped_machines
+            ):
+                updated = repository.upsert(
+                    updated.model_copy(update={"retiring_stopped_machines": 0})
+                )
             if failure_at is not None and snapshot.observed_machines < snapshot.desired_machines:
                 operations = ComputeCapacityOperationRepository(session)
                 for candidate in operations.list_open_for_owner(pool.capacity_owner_id):
@@ -1169,11 +1219,24 @@ class ProviderMachineReconciler:
             ):
                 return None
             return machine.lifecycle_failure or MachineBootstrapFailureReason.Unknown
+        if (
+            machine.lifecycle is MachineLifecycle.Stopped
+            or record.status == ReservationStatus.Stopped.value
+        ):
+            return None
+        if record.status in {
+            ReservationStatus.Preparing.value,
+            ReservationStatus.Stopping.value,
+            ReservationStatus.Resuming.value,
+        }:
+            if not self._deadline_elapsed(machine, now, observing_since, timedelta(seconds=600)):
+                return None
+            return MachineBootstrapFailureReason.BootstrapTimedOut
         if record.first_served_at is not None:
             return self._service_loss_to_reclaim(
                 record,
                 now=now,
-                observing_since=observing_since,
+                observing_since=max(observing_since, _utc(machine.lifecycle_at)),
                 live_containers=live_containers,
             )
         if machine.lifecycle not in PENDING_MACHINE_LIFECYCLES:

@@ -183,6 +183,27 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
                 )
         return offers
 
+    def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        return (
+            offer
+            for offer in self.list_offers(root_volume_gib=root_volume_gib)
+            if not offer.preemptible and not offer.gpu_count
+        )
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        self._provisioner(request.offer.region).complete_preparation(
+            self._spec(request), provider_instance_id
+        )
+
+    def stop_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        provisioner = self._provisioner(request.offer.region)
+        provisioner.stop_instance(self._spec(request), provider_instance_id)
+        return self.describe_unit(request)
+
     def _offer(
         self,
         instance: AwsInstanceCatalogEntry,
@@ -384,6 +405,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
             availability_zone=request.offer.availability_zone,
             ami_id=ami_id,
             desired_nodes=request.desired_machines,
+            stopped_nodes=request.stopped_machines,
             max_nodes=request.max_machines,
             root_volume_gib=request.root_volume_gib,
             node_instance_profile_arn=self.connection.node_instance_profile_arn,
@@ -423,7 +445,15 @@ def _snapshot(
         ProviderUnitInstance(
             provider_instance_id=instance.instance_id,
             status=(
-                ProviderMachineStatus.Active
+                ProviderMachineStatus.Stopped
+                if instance.lifecycle_state == "Warmed:Stopped"
+                else ProviderMachineStatus.Preparing
+                if instance.lifecycle_state == "Warmed:Pending:Wait"
+                else ProviderMachineStatus.Stopping
+                if instance.lifecycle_state.startswith("Warmed:")
+                else ProviderMachineStatus.Resuming
+                if instance.lifecycle_state == "Pending:Wait"
+                else ProviderMachineStatus.Active
                 if instance.lifecycle_state == "InService" and instance.health_status == "Healthy"
                 else ProviderMachineStatus.Pending
             ),
@@ -437,8 +467,11 @@ def _snapshot(
         phase=_PHASES[snapshot.phase],
         resource_id=snapshot.resource_ids.autoscaling_group_name or "",
         desired_machines=snapshot.desired_nodes,
+        stopped_machines=snapshot.stopped_nodes,
         max_machines=snapshot.max_nodes,
-        observed_machines=len(instances),
+        observed_machines=sum(
+            not item.lifecycle_state.startswith("Warmed:") for item in snapshot.instances
+        ),
         last_capacity_failure_at=snapshot.last_capacity_failure_at,
         last_capacity_failure_code=snapshot.last_capacity_failure_code,
         instances=instances,

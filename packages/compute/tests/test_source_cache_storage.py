@@ -79,6 +79,42 @@ def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
     assert target.completed_at == destroyed_at
 
 
+def test_retained_stop_cleanup_requires_the_current_worker_session(
+    service_context: ServiceContext,
+) -> None:
+    generation_id = str(uuid4())
+    now = datetime.now(UTC)
+    with service_context.database.session() as session:
+        generation = SourceCacheCleanupRepository(session).register_generation(
+            generation_id,
+            worker_id="worker-reserve",
+            storage_id="machine:reserve",
+            workspace_id=None,
+            now=now,
+        )
+    lifecycle = SourceCacheStorageLifecycleService(service_context)
+    with pytest.raises(ConflictError, match="current machine session"):
+        lifecycle.acknowledge_machine_cleanup(
+            machine_id="reserve",
+            worker_id="worker-reserve",
+            generation_id=generation_id,
+            session_fence=generation.session_fence + 1,
+            observed_at=now,
+        )
+    owner = WorkerCacheStorageOwnerRecord(
+        kind=WorkerCacheStorageOwnerKind.Machine, owner_id="reserve"
+    )
+    assert not lifecycle.get(owner).complete
+    lifecycle.acknowledge_machine_cleanup(
+        machine_id="reserve",
+        worker_id="worker-reserve",
+        generation_id=generation_id,
+        session_fence=generation.session_fence,
+        observed_at=now,
+    )
+    assert lifecycle.get(owner).complete
+
+
 def test_storage_destruction_evidence_is_fenced_to_exact_owner_generation_and_time(
     service_context: ServiceContext,
 ) -> None:

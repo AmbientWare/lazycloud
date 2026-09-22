@@ -115,6 +115,7 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     availability_zone: str = ""
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
     desired_nodes: int = Field(ge=0)
+    stopped_nodes: int = Field(default=0, ge=0)
     max_nodes: int = Field(ge=1)
     root_volume_gib: int = Field(ge=50, le=2048)
     node_instance_profile_arn: str
@@ -127,6 +128,10 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     def validate_capacity_and_profile(self) -> AwsManagedPoolSpec:
         if self.desired_nodes > self.max_nodes:
             raise ValueError("desired_nodes cannot exceed max_nodes")
+        if self.desired_nodes + self.stopped_nodes > self.max_nodes:
+            raise ValueError("running and stopped nodes exceed max_nodes")
+        if self.stopped_nodes and (self.preemptible or self.bootstrap.gpu_count):
+            raise ValueError("stopped reserves require On-Demand CPU instances")
         if ":instance-profile/" not in self.node_instance_profile_arn:
             raise ValueError("node instance profile ARN is invalid")
         return self
@@ -189,6 +194,7 @@ class AwsManagedPoolInstanceDetails(AwsManagedPoolModel):
 
 
 class AwsManagedPoolSnapshot(AwsManagedPoolModel):
+    stopped_nodes: int = 0
     phase: AwsManagedPoolPhase
     resource_ids: AwsManagedPoolResourceIds
     desired_nodes: int = Field(ge=0)
@@ -279,6 +285,7 @@ class _LaunchTemplateData(TypedDict):
 
 
 class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Protocol):
+    def terminate_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
     def describe_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
     def describe_images(self, *, ImageIds: list[str]) -> Mapping[str, object]: ...
     def describe_subnets(self, *, SubnetIds: list[str]) -> Mapping[str, object]: ...
@@ -316,6 +323,38 @@ class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Prot
 
 
 class AwsManagedPoolAutoScalingClient(Protocol):
+    def describe_warm_pool(
+        self, *, AutoScalingGroupName: str, MaxRecords: int, NextToken: str = ""
+    ) -> Mapping[str, object]: ...
+    def put_warm_pool(
+        self,
+        *,
+        AutoScalingGroupName: str,
+        MinSize: int,
+        MaxGroupPreparedCapacity: int,
+        PoolState: str,
+        InstanceReusePolicy: Mapping[str, bool],
+    ) -> Mapping[str, object]: ...
+    def delete_warm_pool(
+        self, *, AutoScalingGroupName: str, ForceDelete: bool
+    ) -> Mapping[str, object]: ...
+    def put_lifecycle_hook(
+        self,
+        *,
+        AutoScalingGroupName: str,
+        LifecycleHookName: str,
+        LifecycleTransition: str,
+        HeartbeatTimeout: int,
+        DefaultResult: str,
+    ) -> Mapping[str, object]: ...
+    def complete_lifecycle_action(
+        self,
+        *,
+        AutoScalingGroupName: str,
+        LifecycleHookName: str,
+        InstanceId: str,
+        LifecycleActionResult: str,
+    ) -> Mapping[str, object]: ...
     def suspend_processes(
         self, *, AutoScalingGroupName: str, ScalingProcesses: list[str]
     ) -> Mapping[str, object]: ...
@@ -457,6 +496,7 @@ def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
             "describe_launch_templates",
             "describe_launch_template_versions",
             "describe_volumes",
+            "terminate_instances",
             "modify_launch_template",
         ),
     )
@@ -470,6 +510,11 @@ def _is_autoscaling_client(value: object) -> TypeGuard[AwsManagedPoolAutoScaling
             "delete_auto_scaling_group",
             "describe_auto_scaling_groups",
             "describe_scaling_activities",
+            "describe_warm_pool",
+            "put_warm_pool",
+            "delete_warm_pool",
+            "put_lifecycle_hook",
+            "complete_lifecycle_action",
             "suspend_processes",
             "resume_processes",
             "terminate_instance_in_auto_scaling_group",
@@ -622,6 +667,12 @@ class _SuspendedProcess(_Response):
     name: str = Field(alias="ProcessName")
 
 
+class _WarmPoolConfiguration(_Response):
+    maximum: int = Field(default=-1, alias="MaxGroupPreparedCapacity")
+    minimum: int = Field(default=0, alias="MinSize")
+    state: str = Field(default="", alias="PoolState")
+
+
 class _Group(_Response):
     name: str = Field(alias="AutoScalingGroupName")
     desired: int = Field(alias="DesiredCapacity")
@@ -635,6 +686,12 @@ class _Group(_Response):
     suspended_processes: tuple[_SuspendedProcess, ...] = Field(
         default=(), alias="SuspendedProcesses"
     )
+    warm_pool: _WarmPoolConfiguration | None = Field(default=None, alias="WarmPoolConfiguration")
+
+
+class _WarmPool(_Response):
+    instances: tuple[_GroupInstance, ...] = Field(default=(), alias="Instances")
+    next_token: str = Field(default="", alias="NextToken")
 
 
 class _Groups(_Response):
@@ -687,6 +744,8 @@ class AwsManagedPoolProvisioner:
             if group is not None:
                 _validate_group_tags(group, spec)
                 self._suspend_launches(group)
+                if group.warm_pool is not None:
+                    self._ensure_reserve(spec, group)
             return self.describe(spec, prior)
         state = prior or AwsManagedPoolResourceIds()
 
@@ -715,7 +774,10 @@ class AwsManagedPoolProvisioner:
                 launch_template_version=launch_template_version,
             )
             state = checkpoint(state.model_copy(update={"autoscaling_group_name": group.name}))
-            if any(process.name == "Launch" for process in group.suspended_processes):
+            self._ensure_reserve(spec, group)
+            if (group.warm_pool is None or len(group.instances) <= spec.desired_nodes) and any(
+                process.name == "Launch" for process in group.suspended_processes
+            ):
                 self._asg(
                     "resume managed pool launches",
                     self._clients.autoscaling.resume_processes,
@@ -751,6 +813,10 @@ class AwsManagedPoolProvisioner:
         return self._snapshot(group, state)
 
     def _snapshot(self, group: _Group, state: AwsManagedPoolResourceIds) -> AwsManagedPoolSnapshot:
+        if group.warm_pool is not None:
+            group = group.model_copy(
+                update={"instances": (*group.instances, *self._reserve_instances(group.name))}
+            )
         snapshot = _snapshot(group, state)
         operation = "observe managed pool host configuration"
         if state.launch_template_id is None or state.launch_template_latest_version is None:
@@ -880,6 +946,8 @@ class AwsManagedPoolProvisioner:
                 )
                 launch_template_version = str(version)
         self._protect_instances(group, desired_nodes=desired_nodes)
+        if group.warm_pool is not None and len(group.instances) > desired_nodes:
+            self._suspend_launches(group)
         self._asg(
             "scale Auto Scaling Group",
             self._clients.autoscaling.update_auto_scaling_group,
@@ -903,6 +971,15 @@ class AwsManagedPoolProvisioner:
         if not spec.purchases_enabled:
             self._suspend_launches(group)
         instance = next((item for item in group.instances if item.instance_id == normalized), None)
+        if instance is None and group.warm_pool is not None:
+            retained = self._reserve_instances(group.name)
+            if any(item.instance_id == normalized for item in retained):
+                self._ec2(
+                    "terminate retained instance",
+                    self._clients.ec2.terminate_instances,
+                    InstanceIds=[normalized],
+                )
+                return True
         if instance is None or instance.lifecycle_state.startswith("Terminating"):
             return False
         self._asg(
@@ -912,6 +989,90 @@ class AwsManagedPoolProvisioner:
             ShouldDecrementDesiredCapacity=False,
         )
         return True
+
+    def _reserve_instances(self, group_name: str) -> tuple[_GroupInstance, ...]:
+        instances: list[_GroupInstance] = []
+        token = ""
+        while True:
+            page = _validate(
+                _WarmPool,
+                self._asg(
+                    "describe stopped reserve",
+                    self._clients.autoscaling.describe_warm_pool,
+                    AutoScalingGroupName=group_name,
+                    MaxRecords=100,
+                    **({"NextToken": token} if token else {}),
+                ),
+                operation="describe stopped reserve",
+            )
+            instances.extend(page.instances)
+            if not page.next_token:
+                return tuple(instances)
+            if page.next_token == token:
+                raise invalid_response_error("describe stopped reserve", "repeated page token")
+            token = page.next_token
+
+    def _ensure_reserve(self, spec: AwsManagedPoolSpec, group: _Group) -> None:
+        if not spec.stopped_nodes and group.warm_pool is None:
+            return
+        self._asg(
+            "install reserve preparation hook",
+            self._clients.autoscaling.put_lifecycle_hook,
+            AutoScalingGroupName=group.name,
+            LifecycleHookName="lazycloud-preparation",
+            LifecycleTransition="autoscaling:EC2_INSTANCE_LAUNCHING",
+            HeartbeatTimeout=600,
+            DefaultResult="ABANDON",
+        )
+        self._asg(
+            "set stopped reserve capacity",
+            self._clients.autoscaling.put_warm_pool,
+            AutoScalingGroupName=group.name,
+            MinSize=0,
+            MaxGroupPreparedCapacity=spec.desired_nodes + spec.stopped_nodes,
+            PoolState="Stopped",
+            InstanceReusePolicy={"ReuseOnScaleIn": True},
+        )
+
+    def complete_preparation(self, spec: AwsManagedPoolSpec, instance_id: str) -> None:
+        group = self._require_group(spec)
+        instances = (*group.instances, *self._reserve_instances(group.name))
+        instance = next((item for item in instances if item.instance_id == instance_id), None)
+        if instance is None:
+            raise ValueError("preparation instance does not belong to this pool")
+        if instance.lifecycle_state not in {"Pending:Wait", "Warmed:Pending:Wait"}:
+            return
+        self._asg(
+            "complete reserve preparation",
+            self._clients.autoscaling.complete_lifecycle_action,
+            AutoScalingGroupName=group.name,
+            LifecycleHookName="lazycloud-preparation",
+            InstanceId=instance_id,
+            LifecycleActionResult="CONTINUE",
+        )
+
+    def stop_instance(self, spec: AwsManagedPoolSpec, instance_id: str) -> None:
+        group = self._require_group(spec)
+        if spec.preemptible or not spec.stopped_nodes:
+            raise ValueError("instance has no admitted stopped reserve capacity")
+        instance = next((item for item in group.instances if item.instance_id == instance_id), None)
+        if instance is None:
+            if any(item.instance_id == instance_id for item in self._reserve_instances(group.name)):
+                return
+            raise ValueError("stopping instance does not belong to this pool")
+        if instance.lifecycle_state != "InService":
+            raise ValueError("only an in-service drained instance can return to the reserve")
+        # Keep every other instance protected while ASG selects this exact drained host.
+        self._protect_instances(group, desired_nodes=spec.desired_nodes)
+        self._ensure_reserve(spec, group)
+        self.scale(spec, desired_nodes=spec.desired_nodes, max_nodes=spec.max_nodes)
+        self._asg(
+            "return drained instance to reserve",
+            self._clients.autoscaling.set_instance_protection,
+            AutoScalingGroupName=group.name,
+            InstanceIds=[instance_id],
+            ProtectedFromScaleIn=False,
+        )
 
     def _suspend_launches(self, group: _Group) -> None:
         if any(process.name == "Launch" for process in group.suspended_processes):
@@ -931,6 +1092,24 @@ class AwsManagedPoolProvisioner:
         state = self.discover(spec, resource_ids)
         group = self._describe_group(spec.autoscaling_group_name)
         if group is not None:
+            _validate_group_tags(group, spec)
+            if group.warm_pool is not None:
+                retained = self._reserve_instances(group.name)
+                self._ignore_missing(
+                    "delete stopped reserve",
+                    self._clients.autoscaling.delete_warm_pool,
+                    AutoScalingGroupName=group.name,
+                    ForceDelete=True,
+                )
+                return AwsManagedPoolSnapshot(
+                    phase=AwsManagedPoolPhase.Deleting,
+                    resource_ids=state,
+                    desired_nodes=0,
+                    max_nodes=group.maximum,
+                    instances=_instances(
+                        group.model_copy(update={"instances": (*group.instances, *retained)})
+                    ),
+                )
             self._ignore_missing(
                 "delete Auto Scaling Group",
                 self._clients.autoscaling.delete_auto_scaling_group,
@@ -1109,7 +1288,14 @@ class AwsManagedPoolProvisioner:
             )
         else:
             _validate_group_tags(found, spec)
-            self._protect_instances(found, desired_nodes=spec.desired_nodes)
+            # A named, cleaned host is unprotected by stop_instance. Preserve
+            # that decision while AWS completes its return to the warm pool.
+            if found.warm_pool is None or found.desired != spec.desired_nodes:
+                self._protect_instances(found, desired_nodes=spec.desired_nodes)
+            if (found.warm_pool is not None or spec.stopped_nodes) and len(
+                found.instances
+            ) > spec.desired_nodes:
+                self._suspend_launches(found)
             expected_subnets = frozenset(subnets)
             actual_subnets = frozenset(
                 subnet for subnet in found.vpc_zone_identifier.split(",") if subnet
@@ -1653,6 +1839,15 @@ def _snapshot(
         resource_ids=state,
         desired_nodes=group.desired,
         max_nodes=group.maximum,
+        stopped_nodes=(
+            max(
+                group.warm_pool.minimum,
+                (group.warm_pool.maximum if group.warm_pool.maximum >= 0 else group.maximum)
+                - group.desired,
+            )
+            if group.warm_pool is not None
+            else 0
+        ),
         instances=instances,
     )
 

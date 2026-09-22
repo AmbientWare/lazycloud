@@ -90,6 +90,9 @@ def test_scaling_failure_distinguishes_quota_from_capacity(
 
 
 class _Ec2:
+    def terminate_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+        raise AssertionError("this scenario must not terminate retained instances")
+
     def describe_route_tables(
         self, *, Filters: list[NetworkFilter], NextToken: str = ""
     ) -> Mapping[str, object]:
@@ -258,6 +261,48 @@ class _Ec2:
 
 
 class _AutoScaling:
+    def describe_warm_pool(
+        self, *, AutoScalingGroupName: str, MaxRecords: int, NextToken: str = ""
+    ) -> Mapping[str, object]:
+        raise AssertionError("this scenario has no stopped reserve")
+
+    def put_warm_pool(
+        self,
+        *,
+        AutoScalingGroupName: str,
+        MinSize: int,
+        MaxGroupPreparedCapacity: int,
+        PoolState: str,
+        InstanceReusePolicy: Mapping[str, bool],
+    ) -> Mapping[str, object]:
+        raise AssertionError("this scenario has no stopped reserve")
+
+    def delete_warm_pool(
+        self, *, AutoScalingGroupName: str, ForceDelete: bool
+    ) -> Mapping[str, object]:
+        raise AssertionError("this scenario has no stopped reserve")
+
+    def put_lifecycle_hook(
+        self,
+        *,
+        AutoScalingGroupName: str,
+        LifecycleHookName: str,
+        LifecycleTransition: str,
+        HeartbeatTimeout: int,
+        DefaultResult: str,
+    ) -> Mapping[str, object]:
+        raise AssertionError("this scenario has no preparation hook")
+
+    def complete_lifecycle_action(
+        self,
+        *,
+        AutoScalingGroupName: str,
+        LifecycleHookName: str,
+        InstanceId: str,
+        LifecycleActionResult: str,
+    ) -> Mapping[str, object]:
+        raise AssertionError("this scenario has no preparation hook")
+
     def describe_scaling_activities(self, **kwargs: object) -> Mapping[str, object]:
         return {"Activities": []}
 

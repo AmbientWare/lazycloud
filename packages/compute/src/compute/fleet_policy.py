@@ -13,6 +13,9 @@ class FleetCapacityPolicy(ContractModel):
     max_gpu_instances: int = Field(default=100, ge=0)
     warm_cpu_preemptible_min: int = Field(default=2, ge=0)
     warm_cpu_non_preemptible_min: int = Field(default=0, ge=0)
+    stopped_cpu_target: int = Field(default=2, ge=0)
+    cpu_headroom_percent: int = Field(default=20, ge=0, lt=100)
+    cpu_pressure_seconds: int = Field(default=60, ge=1)
 
     @model_validator(mode="after")
     def validate_warm_capacity(self) -> FleetCapacityPolicy:
