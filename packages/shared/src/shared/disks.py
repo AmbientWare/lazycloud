@@ -32,7 +32,16 @@ packages it installs, dotfiles, and its working trees.
 
 DISK_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 MIN_DISK_SIZE_BYTES = 1024**3
-MAX_DISK_SIZE_BYTES = 2 * 1024**4
+DISK_NODE_VOLUME_GIB = 500
+"""Size of the gp3 volume a disk-capable node mounts at its disk root.
+
+Disks live on their own volume so they neither share space with images and
+container layers nor compete with them for throughput.
+"""
+
+DISK_NODE_VOLUME_THROUGHPUT_MIBPS = 250
+MAX_DISK_SIZE_BYTES = 450 * 1024**3
+"""The largest disk one disk-capable node can hold after its reserve and filesystem overhead."""
 DEFAULT_DISK_FILESYSTEM = "ext4"
 
 DISK_OBJECT_PREFIX = "disks"
@@ -100,7 +109,7 @@ def parse_disk_size_bytes(value: str | int) -> int:
         msg = "disk size must be at least 1Gi"
         raise ValueError(msg)
     if size > MAX_DISK_SIZE_BYTES:
-        msg = "disk size must be at most 2Ti"
+        msg = "disk size must be at most 450Gi, the most one machine holds"
         raise ValueError(msg)
     return size
 
@@ -225,6 +234,8 @@ __all__ = [
     "DISK_OBJECT_PREFIX",
     "DISK_PUBLISH_INTERVAL_SECONDS",
     "DISK_ROOT_MOUNT_PATH",
+    "DISK_NODE_VOLUME_GIB",
+    "DISK_NODE_VOLUME_THROUGHPUT_MIBPS",
     "MAX_DISK_SIZE_BYTES",
     "MIN_DISK_SIZE_BYTES",
     "DiskLayerChunk",
