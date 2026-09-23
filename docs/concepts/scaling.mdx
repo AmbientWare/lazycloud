@@ -4,28 +4,10 @@ description: "How many containers a workload runs, how much each one handles at 
 ---
 
 Capacity is containers multiplied by what one container does at once. Both
-numbers are settings on the decorator, and both default to one. A function
-with no scaling settings serves one call at a time in one container, and a
-`.map()` over 500 inputs runs them one after another. This page covers the
-settings that change that, what they default to for each workload kind, and
-how they interact.
-
-## Defaults
-
-| | Function | Endpoint | ASGI and realtime | Pod | Sandbox |
-| --- | --- | --- | --- | --- | --- |
-| `cpu` | `0.125` | `1.0` | `1.0` | `1.0` | `1.0` |
-| `memory` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `128` MiB |
-| `timeout_seconds` | `3600` per call | `180` per request | `180` per request | | |
-| `retries` | `3` | `0` | | | |
-| Idle window | `keep_warm=10` | `keep_warm=180` | `keep_warm_seconds=180` | `keep_warm=600` | `keep_warm_seconds=600` |
-| Per container | `concurrency=1` | `workers=1`, `concurrency=1` | `workers=1`, `concurrent_requests=1` | one process | |
-| Containers | at most 1 | at most 1 | at most 1 | 1 | 1 per `create()` |
-| Queue limit | `max_pending_tasks=100` | `max_pending_tasks=100` | `max_pending_tasks=100` | | |
-
-Every container gets 100 GiB of scratch disk; set `disk="20Gi"` to reserve a
-different amount. Scheduled functions default to `keep_warm=0` because the next
-run is minutes or hours away.
+default to one: a workload with no scaling settings serves one call at a time
+in one container, so a `.map()` over 500 inputs runs them one after another.
+This page covers the settings that change that. The per-kind defaults are in
+[Resources and options](/concepts/resources#defaults).
 
 ## Concurrency inside one container
 
@@ -153,10 +135,6 @@ only the autoscaler removes containers below the floor. An endpoint container
 stops after `keep_warm` seconds with no requests, but never below
 `min_containers`.
 
-`checkpoint_enabled=True` on an endpoint snapshots a worker after it has warmed
-up, and replacement containers restore from the snapshot instead of running
-startup again.
-
 ## When the queue is full
 
 `max_pending_tasks` caps calls in flight, queued and running, per workload.
@@ -171,38 +149,8 @@ A queued function call stays pending until a container claims it, and
 endpoint request that finds no free slot waits up to `timeout_seconds` (180 by
 default) for one, then fails.
 
-A call pending for more than five seconds shows why in the live progress of
-`lazycloud run` and in the dashboard: compute starting, the container
-starting, every container busy, or the workspace at its compute limit.
-`lazycloud.progress()` delivers the same reason to your own code; see
-[Understand a pending call](/concepts/functions#understand-a-pending-call).
-
-## Sizing a container
-
-`cpu` and `memory` are reservations. The scheduler places a container on a
-machine with that much free, and under pressure the container keeps what it
-reserved. When the machine has more to spare the container may use it, up to a
-ceiling above the reservation. Pass a pair to set that ceiling yourself:
-
-```python
-@app.function(cpu=(1, 4), memory=("2Gi", "8Gi"))
-def render(scene: dict[str, float]) -> bytes:
-    ...
-```
-
-This reserves 1 CPU and 2 GiB, throttles the container at 4 CPUs, and kills it
-above 8 GiB. Reservations decide how many containers fit on a machine, so a
-smaller reservation places faster and packs tighter; the ceiling protects the
-machine from a runaway container.
-
-`gpu` takes a model or an ordered preference. `gpu=["h100", "a100-80", "l4"]`
-takes the first model with free capacity. `gpu_count` adds GPUs to one
-container. GPU models and prices are on the [Compute](/platform/compute) page.
-
-Workloads run on preemptible capacity by default. A preempted function call
-retries under its retry policy, and a preempted endpoint container is replaced.
-Set `preemptible=False` for work that cannot tolerate that; it adds the
-premium shown on the [pricing page](https://lazycloud.dev/pricing).
+A call pending for more than five seconds shows why in the CLI and dashboard;
+see [pending tasks](/concepts/tasks-and-logs#why-a-task-is-pending).
 
 ## Patterns
 
@@ -211,7 +159,7 @@ premium shown on the [pricing page](https://lazycloud.dev/pricing).
 Size the container for one input, then set the autoscaler for the batch.
 Failed inputs return `None` from `.map()`; use `spawn_map()` when every input
 must succeed before you use the results. See
-[Process several inputs](/concepts/functions#process-several-inputs).
+[Process a batch](/concepts/functions#process-a-batch).
 
 ```python
 @app.function(

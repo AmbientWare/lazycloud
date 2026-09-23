@@ -3,8 +3,9 @@ title: "Installation"
 description: "Use uv to install the CLI and manage each project's Python environment."
 ---
 
-Use uv for the CLI, project dependencies, and Python commands. Install
-[uv](https://docs.astral.sh/uv/getting-started/installation/) first.
+The [quickstart](/getting-started/quickstart) installs the CLI and runs a
+downloaded project. This page covers adding LazyCloud to a project of your own
+and upgrading. Everything uses [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ## Get the CLI
 
@@ -16,9 +17,6 @@ lazycloud --help
 This installs the `lazycloud` command in an isolated environment. Use it to
 download an example or manage your account from any directory. It does not
 install the SDK into another project's Python environment.
-
-For a complete download-and-run example, follow the
-[quickstart](/getting-started/quickstart).
 
 ## Add LazyCloud to an existing project
 
@@ -70,4 +68,4 @@ without replacing your edits. Downloading never upgrades an existing project.
 The CLI keeps sign-in state under `~/.lazycloud`; global and project commands
 share it. Set `LAZYCLOUD_HOME` to use another location.
 
-Next, [run your first function](/getting-started/quickstart).
+Next, lay out your project with [Apps and workloads](/concepts/apps).

@@ -1,40 +1,89 @@
 ---
-title: "Run Python on LazyCloud"
-description: "Run Python functions, serve APIs, and execute code in remote containers."
+title: "Introduction"
+description: "LazyCloud runs your Python on remote CPUs and GPUs. You describe the container in code; LazyCloud builds it, runs it, scales it, and stops it."
 ---
 
-import QuickstartRun from '/snippets/quickstart-run.mdx';
+LazyCloud runs Python on remote CPUs and GPUs. You write an ordinary Python
+function, add a decorator that says what it needs (packages, CPU, memory, GPU,
+storage, credentials), and LazyCloud builds the container, uploads your code,
+starts it on a machine, and stops it when the work is done. You pay per second
+while a container runs.
 
-LazyCloud runs your code on remote CPUs and GPUs. Download the quickstart
-project to run your first function. The client shows progress, logs, and the result.
+You don't write Dockerfiles, cluster configuration, or YAML. The Python file is
+the deployment definition, so the code and the infrastructure it runs on change
+in the same commit.
 
-<QuickstartRun />
+## What it looks like
 
-The project includes the source and its Python environment definition. The
-[quickstart walkthrough](/getting-started/quickstart) explains the function and
-how to call it from Python. See [Installation](/getting-started/installation)
-for adding LazyCloud to an existing project or upgrading the client.
+```python
+from pathlib import Path
 
-## What do you want to build?
+from lazycloud import App, Image, Volume
 
-| Goal | Start here |
+app = App("thumbnails")
+image = Image(python_version="3.12").add_python_packages(["pillow>=11"])
+photos = Volume("photos", "/photos")
+
+
+@app.function(image=image, cpu=1, memory="1Gi", volumes=[photos])
+def make_thumbnail(name: str) -> str:
+    from PIL import Image as Picture
+
+    Path("/photos/thumbs").mkdir(exist_ok=True)
+    with Picture.open(f"/photos/{name}") as picture:
+        picture.thumbnail((256, 256))
+        picture.save(f"/photos/thumbs/{name}")
+    return f"thumbs/{name}"
+```
+
+`App` names the project. `Image` is the remote Python environment, so Pillow
+installs in the container, not on your laptop. `cpu` and `memory` size each
+container, and `photos` is storage that outlives it. From that one file:
+
+```bash
+uv run lazycloud run thumbnails:make_thumbnail cat.jpg   # run once, remotely
+uv run lazycloud serve thumbnails:make_thumbnail         # live preview while you edit
+uv run lazycloud deploy thumbnails                       # keep it available to other code
+```
+
+Python code calls it the same way: `make_thumbnail.remote("cat.jpg")` runs it
+once, and `make_thumbnail.map(...)` fans a batch out across containers.
+
+## How it fits together
+
+An **app** groups workloads you deploy and manage together. Each **workload** is
+one decorated function or container definition, and each kind fits a different
+job:
+
+| Workload | Use it to |
 | --- | --- |
-| Run a batch job or call Python remotely | [Functions](/concepts/functions) |
-| Serve an HTTP API or a FastAPI app | [Endpoints](/concepts/endpoints) |
-| Run a job on a schedule | [Schedules](/concepts/schedules) |
-| Host a container command or model server | [Pods](/concepts/pods) |
-| Execute generated code in a disposable container | [Sandboxes](/concepts/sandboxes) |
-| Run 500 inputs at once, or keep a GPU warm | [Scaling and concurrency](/concepts/scaling) |
-| Keep datasets and model weights between runs | [Volumes](/concepts/volumes) |
-| Pass work items or share temporary state | [Queues and maps](/concepts/queues-maps) |
-| Go from a local call to a preview to a deployment | [Local, preview, deploy](/getting-started/workflow) |
+| [Function](/concepts/functions) | Run Python that returns a result: a batch job, inference, a report. Add `cron` for a [schedule](/concepts/schedules). |
+| [Endpoint, ASGI app, realtime handler](/concepts/endpoints) | Serve HTTP or WebSocket traffic from a function or a FastAPI app. |
+| [Pod](/concepts/pods) | Run an existing command or image, such as a model server. |
+| [Sandbox](/concepts/sandboxes) | Execute untrusted or generated code in a disposable container you control. |
 
-The [examples](/examples/index) walk through GPU inference, training,
-document processing, a coding agent, and parallel data processing.
+Every workload runs in containers built from an [image](/concepts/images) and
+sized by its [resources](/concepts/resources). LazyCloud adds containers as calls
+queue up and removes them when they go idle, within limits you set on the
+decorator; see [Scaling and concurrency](/concepts/scaling). Every remote call
+becomes a [task](/concepts/tasks-and-logs) with a status, a result, and logs you
+can look up later.
 
-## Choose where it runs
+State lives outside the container: [volumes](/concepts/volumes) for files,
+[secrets](/concepts/secrets) for credentials, [queues and maps](/concepts/queues-maps)
+for coordination, and [artifacts](/concepts/artifacts) for output you want to share.
 
-LazyCloud supplies compute by default and charges per second while your
-containers run. You can also [join your own machines](/platform/compute#your-own-machines)
-or, on the Business plan, connect your AWS account. See
-[Plans and limits](/platform/plans) for billing and account limits.
+## Where it runs
+
+A **workspace** holds your apps, tasks, and stored data, and decides where they
+run. By default that is LazyCloud's compute. You can also
+[join your own machines](/platform/compute#your-own-machines), or on the Business
+plan run workspaces inside your AWS account. See [Plans and limits](/platform/plans)
+for pricing.
+
+## Next steps
+
+- [Quickstart](/getting-started/quickstart): run a function, then deploy and call an HTTP endpoint.
+- [Apps and workloads](/concepts/apps): how to lay out a project.
+- [Run, preview, deploy](/concepts/workflow): the development loop and where each call goes.
+- [Examples](/examples/index): GPU inference, training, document processing, a coding agent, and parallel data processing.

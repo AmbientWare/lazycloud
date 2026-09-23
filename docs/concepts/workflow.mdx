@@ -1,0 +1,122 @@
+---
+title: "Run, preview, deploy"
+description: "The four ways to run a workload, what each is for, and how a call decides where to go."
+---
+
+The same decorated function runs four ways. Pick by what you need from the run:
+
+| You want to | Use |
+| --- | --- |
+| Check logic or run unit tests | `.local()` |
+| Run once with the real image, GPU, and secrets | `lazycloud run` or `.remote()` |
+| Iterate on remote code, or test an endpoint from a browser | `lazycloud serve` |
+| Keep a URL, schedule, or callable function available | `lazycloud deploy` |
+
+The examples use `text_tools.py` from [Apps and workloads](/concepts/apps).
+
+## Local
+
+```python
+from text_tools import count_words
+
+count_words.local("one two three")
+count_words("one two three")
+```
+
+Both run in your Python process. Nothing is uploaded and no task is recorded.
+The image, volumes, secrets, GPU, retries, and lifecycle hooks on the decorator
+do not apply, so this suits logic with no remote dependencies and unit tests.
+
+## One remote run
+
+```bash
+uv run lazycloud run text_tools:count_words "one two three"
+```
+
+```python
+count_words.remote("one two three")
+```
+
+This builds the image if it changed, uploads your working tree, starts a
+container with the decorator's resources, and streams progress, logs, and the
+result. Nothing is deployed. The container stays up for the function's
+`keep_warm` window and then stops. The run is recorded as a
+[task](/concepts/tasks-and-logs).
+
+Use it for a job you run by hand, for GPU work you don't want to keep warm, and
+to check the image and secrets before deploying. The code that runs is your
+working tree at the moment of the call, so two runs a minute apart can run
+different code.
+
+## Live preview
+
+```bash
+uv run lazycloud serve text_tools:count
+```
+
+A preview runs the workload on LazyCloud and keeps it up until you press Ctrl+C.
+It syncs your working directory into the container each time you save, so an
+edit costs a file sync instead of a build and a container start.
+
+- A function reloads its source after in-flight calls finish. Import errors
+  show in the serve logs and clear on the next good edit.
+- An endpoint or ASGI app restarts its server on each change, and the preview
+  URL stays the same.
+
+While a preview runs, `lazycloud run` and `.remote()` calls for that function
+from the same machine and workspace go to the preview instead of starting a new
+container.
+
+## Deploy
+
+```bash
+uv run lazycloud deploy text_tools
+```
+
+A deployment keeps running after you close the terminal. Its containers start
+on demand and [scale](/concepts/scaling) with load. Endpoints get a stable URL,
+schedules start firing, and functions become callable from other deployed code
+and from [exported client packages](/concepts/apps#call-deployed-workloads-from-other-projects).
+Each deploy records a new version.
+
+Deploy when something other than you calls the code: another service, a
+schedule, a teammate, or a function running inside LazyCloud.
+
+## Where a call goes
+
+`.remote()` and `lazycloud run` pick a target in this order:
+
+1. A preview of this function, app, and workspace started from this machine.
+2. From your machine, a fresh run of the working tree.
+3. Inside a LazyCloud container, the deployed function.
+
+Endpoint clients let you choose. `count.request(...)` uses `target="auto"`: the
+preview if one is running, otherwise the deployment.
+`count.target("deployed")` skips the preview, and `count.target("served")` fails
+rather than fall through to the deployment. `deployment_name` and
+`deployment_version` pin one deployment.
+
+## What gets uploaded
+
+`run`, `serve`, and `deploy` upload your project source. Run them from the
+project root; a handler file outside the current directory is rejected.
+`--source-root` on `deploy` and `--sync-dir` on `serve` choose another directory.
+
+The first upload writes a `.lazycloudignore` into the uploaded directory with
+default exclusions.
+Edit it and commit it; it uses gitignore syntax, so `build/`, `**/*.log`, and
+`!keep.log` mean what they do in `.gitignore`. `.git`, `.venv`, `__pycache__`,
+`*.pyc`, `.env`, and `.lazycloud/` are always excluded. Keep datasets and model
+weights in [volumes](/concepts/volumes) rather than the source tree.
+
+Your code is not part of the image. Editing it never rebuilds the image;
+changing a dependency does. See [Images](/concepts/images).
+
+## Debug the remote environment
+
+```bash
+uv run lazycloud shell text_tools:count_words   # shell in the function's image
+uv run lazycloud dev                             # shell with your working tree synced in
+```
+
+See the [CLI reference](/cli/deploy-and-run) for each command's flags.

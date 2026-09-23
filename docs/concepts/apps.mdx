@@ -1,19 +1,14 @@
 ---
-title: "Apps"
-description: "Group related functions, APIs, and containers so you can deploy and manage them together."
+title: "Apps and workloads"
+description: "Lay out a project as an app of workloads, keep its configuration in code, and deploy, export, or remove it as a unit."
 ---
 
-An `App` groups workloads under a name in your workspace. Use one app for
-resources you want to deploy, pause, or inspect together.
-
-Keep resource configuration in Python with the app: images, CPU and GPU
-requests, volume mounts, secret names, schedules, and scaling settings.
-Run or deploy those definitions from the CLI or Python. Use CLI overrides for
-one-off experiments; put lasting changes back in the source.
+An `App` is a named group of workloads in a workspace. Everything in one app is
+deployed, paused, and deleted together, so draw the boundary around code that
+ships together: an API and the batch functions it calls, a model server and its
+warm-up job.
 
 ## Define an app
-
-Save this as `text_tools.py`:
 
 ```python
 from lazycloud import App
@@ -31,86 +26,112 @@ def count(text: str) -> dict[str, int]:
     return {"words": count_words.local(text)}
 ```
 
-App names start with a lowercase letter and contain lowercase letters,
-digits, or underscores, up to 63 characters. Workload names must be unique
-within each kind in the app.
+Each decorator registers a workload with the app. `@app.function`,
+`@app.endpoint`, `@app.asgi`, `@app.realtime`, and `app.pod(...)` are deployed
+with the app. `app.sandbox(...)` defines containers your code creates on
+demand; a deploy never starts them.
 
-## Deploy together
+App names start with a lowercase letter and contain lowercase letters, digits,
+or underscores, up to 63 characters. Workload names default to the Python name
+and must be unique per kind within the app.
 
-```bash
-uv run lazycloud deploy text_tools
-```
+## Keep configuration in code
 
-This deploys both workloads. A module name selects its only app.
-Use `text_tools:app` to select the app explicitly when a module has several.
+The decorator is the whole definition: image, CPU, memory, GPU, volumes, secret
+names, schedule, and scaling. Change it in the file and deploy again. CLI flags
+such as `--gpu` or `--memory` override a value for one command, which suits an
+experiment; the next deploy without the flag goes back to the file.
 
-`@app.function`, `@app.endpoint`, `@app.asgi`, `@app.realtime`, and
-`app.pod(...)` register deployable workloads. Sandboxes created with
-`app.sandbox(...)` run on demand and are not started by a deploy.
+Values that differ between workspaces or change without a code change belong
+elsewhere: credentials in [secrets](/concepts/secrets), files in
+[volumes](/concepts/volumes). A volume or secret is shared by name across the
+workspace, so two apps that name the same volume read the same files.
 
-Mounted [volumes](/concepts/volumes) are created on first use and reused by
-name in the workspace. [Secret values](/concepts/secrets) need explicit
-provisioning. Removing a resource from the code does not delete its stored data;
-review and remove unused resources separately.
-
-## Deploy or preview one workload
-
-```bash
-uv run lazycloud deploy text_tools:count
-```
-
-`text_tools:count` selects the Python object `count` in `text_tools.py`.
-The `.py` form, `text_tools.py:count`, also works. Use the same reference to preview it:
+## Deploy the app or one workload
 
 ```bash
-uv run lazycloud serve text_tools:count
+uv run lazycloud deploy text_tools          # every workload in the app
+uv run lazycloud deploy text_tools:count    # just the endpoint
 ```
 
-The preview prints a temporary URL and logs. Ctrl+C ends it.
+A module reference deploys its only app. `module:object` selects one workload
+or, when a module has several apps, one app. See
+[handler references](/cli/overview#handler-references) for the full syntax. From
+Python, `app.deploy()` deploys the whole app and `count.deploy()` one workload.
 
-From Python, use `app.deploy()` for the whole app or `count.deploy()` for that endpoint.
+`--diff` shows what a deploy would add, redeploy, or remove without changing
+anything. `--prune` removes deployed workloads you deleted from the code;
+stored volumes and secrets stay. See [`lazycloud deploy`](/cli/deploy-and-run#lazycloud-deploy).
 
-## Export a typed Python package
+## Split an app across files
+
+Workloads belong to the `App` object they are registered on, not to the file
+that defines them. Import the app into each module and register workloads there:
+
+```python
+# text_tools/app.py
+from lazycloud import App
+
+app = App("text_tools")
+```
+
+```python
+# text_tools/api.py
+from text_tools.app import app
+
+
+@app.endpoint(name="count", methods=["POST"])
+def count(text: str) -> dict[str, int]:
+    return {"words": len(text.split())}
+```
+
+If `text_tools/workers.py` registers the batch functions the same way, deploy
+both files so the CLI imports every registration:
+
+```bash
+uv run lazycloud deploy text_tools/api.py text_tools/workers.py
+```
+
+## Call one workload from another
+
+Inside a container, `count_words.remote(...)` calls the deployed `count_words`,
+because a container has no working tree to upload. Deploy the whole app before
+running a parent that calls its siblings remotely. `.local(...)` runs the
+callee in the caller's own process instead, with the caller's image and
+resources.
+
+## Call deployed workloads from other projects
 
 ```bash
 uv run lazycloud app export text_tools
 ```
 
-This writes `lazycloud_clients/text_tools`. Import a deployed function or endpoint
-by its resource name and call its typed methods. Function methods include
-`remote()` and `async_remote()`; endpoint methods include `request()` and
-`async_request()`. Sign in with `lazycloud login` before calling them. Generated
-files contain deployment references and schemas, never credentials.
+This writes a typed Python package to `lazycloud_clients/text_tools`, so
+another project can call the deployed functions and endpoints without importing
+your source. Functions get `remote()` and `async_remote()`; endpoints get
+`request()` and `async_request()`. Callers sign in with `lazycloud login`; the
+package holds deployment references and schemas, never credentials.
 
-Function and endpoint types come from their deployed callable contracts. ASGI
-route methods come from OpenAPI 3, discovered at `/openapi.json`. Choose another
-path or supply a JSON file when needed. For example, for the `service` ASGI
-app from the [ASGI guide](/concepts/endpoints#asgi-applications):
+ASGI routes are typed from the app's OpenAPI schema at `/openapi.json`, with
+methods named after operation IDs. Point elsewhere when needed:
 
 ```bash
 uv run lazycloud app export web_app --openapi-path service=/schema/openapi.json
 uv run lazycloud app export web_app --openapi service=./openapi.json
 ```
 
-ASGI methods are named after the schema's operation IDs. Routes the generator
-cannot type fail with an explanation; an ASGI app without a schema keeps
-`request()` and `async_request()` for raw HTTP calls.
+Routes the generator cannot type fail with an explanation, and an ASGI app with
+no schema keeps raw `request()`. Pods and sandboxes are not exported. Export
+again after deploying a contract change.
 
-Export again after deploying contract changes. Packages include functions,
-endpoints, and ASGI apps. Pods and sandboxes are excluded.
-
-## Manage the app
+## Manage a deployed app
 
 ```bash
 uv run lazycloud app show text_tools
+uv run lazycloud app pause text_tools     # stop every workload, keep definitions
+uv run lazycloud app resume text_tools
+uv run lazycloud app delete text_tools
 ```
 
-To stop its workloads while keeping their definitions:
-
-```bash
-uv run lazycloud app pause text_tools
-```
-
-Use `uv run lazycloud app resume text_tools` to resume. When you no longer need
-the app, `uv run lazycloud app delete text_tools` removes it. Check separately for
-[stored files](/concepts/volumes) you want to retain or delete.
+Deleting an app or a workload never deletes the volumes, secrets, or other
+stored data it used. Remove those separately once you no longer need them.

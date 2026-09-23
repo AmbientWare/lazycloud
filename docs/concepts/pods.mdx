@@ -3,8 +3,10 @@ title: "Pods"
 description: "Run a long-lived container command under your app."
 ---
 
-A pod runs a container command, such as a web server or a model server.
-Use one when you already have a command or image to run.
+A pod runs a container command, such as a web server or a model server. Use
+one when you already have a command or image to run. For Python you want to call
+as a function or serve over HTTP, an [endpoint](/concepts/endpoints) needs less
+setup.
 
 ## Define a web server
 
@@ -26,9 +28,10 @@ web = app.pod(
 )
 ```
 
-Pods default to `cpu=1.0`, `memory="128Mi"`, `keep_warm=600`, and
-`authorized=False`. `keep_warm` is how long a container stays up with no
-connections; `keep_warm=-1` keeps it up regardless.
+Pods are public unless you set `authorized=True`, which this example does.
+`keep_warm`, 600 seconds by default, is how long a container stays up with no
+connections; `keep_warm=-1` keeps it up regardless. Other defaults are in
+[Resources and options](/concepts/resources#defaults).
 
 ## Deploy it
 
@@ -63,8 +66,9 @@ uv run lazycloud deployment stop web
 
 ## Or create an instance on demand
 
-A pod can also run once without a deployment. Set `LAZYCLOUD_TOKEN` to a
-workspace access token, then fetch the directory listing and stop the instance:
+A pod can also run once without a deployment. With an
+[access token](/platform/auth#ci-and-scripts) in `LAZYCLOUD_TOKEN`, this starts
+an instance, fetches the directory listing, and stops it:
 
 ```python
 import os

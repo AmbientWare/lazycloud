@@ -35,9 +35,9 @@ The output includes exit code `0` and the remote Python version. The `finally`
 block terminates the container even if a command fails. Compute charges continue
 while a sandbox runs, so use this pattern when adapting the examples below.
 
-Sandboxes default to `cpu=1.0`, `memory=128` (MiB), `keep_warm_seconds=600`,
-and `authorized=False`. They are created on demand; `app.deploy()` does not
-deploy them.
+A plain number for `memory` means MiB, so `memory=1024` is 1 GiB. Sandboxes
+are created on demand, and a deploy never starts them. Other defaults are in
+[Resources and options](/concepts/resources#defaults).
 
 ## Reconnect to a running sandbox
 

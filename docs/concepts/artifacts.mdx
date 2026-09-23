@@ -85,13 +85,5 @@ the artifact. Delete earlier with `artifact.delete()`.
 
 For durable files, use a Volume or download a copy before expiration.
 
-## CLI
-
-```bash
-uv run lazycloud artifact list --search report
-uv run lazycloud artifact usage
-uv run lazycloud artifact delete ARTIFACT_ID
-```
-
-Lists return a `next` cursor; pass it with `--cursor` to continue. Use `--workspace`
-to select a workspace and the global `--json` option for machine-readable output.
+`uv run lazycloud artifact list`, `usage`, and `delete` manage artifacts from a
+terminal; see [storage commands](/cli/storage#lazycloud-artifact).

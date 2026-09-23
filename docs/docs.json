@@ -39,10 +39,51 @@
         "group": "Getting started",
         "pages": [
           "index",
-          "getting-started/installation",
           "getting-started/quickstart",
-          "getting-started/first-endpoint",
-          "getting-started/workflow"
+          "getting-started/installation"
+        ]
+      },
+      {
+        "group": "Concepts",
+        "pages": [
+          "concepts/apps",
+          "concepts/workflow",
+          "concepts/resources",
+          "concepts/scaling",
+          "concepts/images",
+          "concepts/tasks-and-logs"
+        ]
+      },
+      {
+        "group": "Workloads",
+        "pages": [
+          "concepts/functions",
+          "concepts/schedules",
+          "concepts/endpoints",
+          "concepts/pods",
+          "concepts/sandboxes"
+        ]
+      },
+      {
+        "group": "Data and state",
+        "pages": [
+          "concepts/volumes",
+          "concepts/secrets",
+          "concepts/queues-maps",
+          "concepts/artifacts"
+        ]
+      },
+      {
+        "group": "CLI reference",
+        "pages": [
+          "cli/overview",
+          "cli/deploy-and-run",
+          "cli/tasks-and-logs",
+          "cli/deployments-and-containers",
+          "cli/storage",
+          "cli/compute",
+          "cli/auth",
+          "cli/scaffolding"
         ]
       },
       {
@@ -57,29 +98,6 @@
         ]
       },
       {
-        "group": "Workloads",
-        "pages": [
-          "concepts/apps",
-          "concepts/functions",
-          "concepts/endpoints",
-          "concepts/scaling",
-          "concepts/schedules",
-          "concepts/pods",
-          "concepts/sandboxes",
-          "concepts/images"
-        ]
-      },
-      {
-        "group": "Data and state",
-        "pages": [
-          "concepts/volumes",
-          "concepts/secrets",
-          "concepts/queues-maps",
-          "concepts/artifacts",
-          "concepts/tasks-and-logs"
-        ]
-      },
-      {
         "group": "Account",
         "pages": [
           "platform/auth",
@@ -87,19 +105,6 @@
           "platform/compute",
           "platform/domains",
           "platform/dashboard"
-        ]
-      },
-      {
-        "group": "CLI reference",
-        "pages": [
-          "cli/overview",
-          "cli/deploy-and-run",
-          "cli/tasks-and-logs",
-          "cli/deployments-and-containers",
-          "cli/storage",
-          "cli/compute",
-          "cli/auth",
-          "cli/scaffolding"
         ]
       }
     ]

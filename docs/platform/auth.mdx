@@ -94,17 +94,6 @@ curl "<endpoint-url>" -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
 
 ### Profiles
 
-Use profiles for separate accounts or automation credentials. Changing
-workspaces within one account only needs `workspace use`. Each is a profile, and one profile is active at a
-time:
-
-```bash
-uv run lazycloud login --profile ci --token "$LAZYCLOUD_TOKEN" --workspace staging --no-activate
-uv run lazycloud profile list
-uv run lazycloud profile activate ci
-uv run lazycloud profile current
-uv run lazycloud profile delete ci
-```
-
-`LAZYCLOUD_PROFILE=<name>` selects a profile for one command without changing
-the active one.
+A profile is a separate stored sign-in, for another account or an automation
+token. Switching workspaces within one account only needs `workspace use`.
+See [`lazycloud profile`](/cli/auth#lazycloud-profile).
