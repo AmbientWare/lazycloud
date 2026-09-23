@@ -33,7 +33,7 @@ if __name__ == "__main__":
     reports.get("latest.json", "latest.json")
 ```
 
-Run it with the SDK installed and signed in:
+Run it:
 
 ```bash
 uv run python reports.py
@@ -69,8 +69,8 @@ models.create()
 models.put("weights.pt", "weights.pt")
 ```
 
-This needs a local `weights.pt`. Attach the same `models` object to your
-function with `volumes=[models]` to read `/models/weights.pt` remotely.
+With a local `weights.pt`, this uploads it once. A function declared with
+`volumes=[models]` then reads `/models/weights.pt` in the cloud.
 `create()` returns the existing volume when its name already exists.
 `get_or_create()` performs the same operation and returns a boolean.
 
@@ -180,9 +180,8 @@ def read_text_file(key: str) -> str:
 
 `access_key` and `secret_key` name [workspace secrets](/concepts/secrets),
 whose values must exist before the workload runs. The config takes both names
-or neither.
-With neither, the mount uses the compute's credentials, such as the instance role
-on your [connected AWS account](/platform/compute).
+or neither. With neither, the mount uses the compute's credentials, such as the
+instance role on your [connected AWS account](/platform/compute).
 
 `CloudBucketConfig` also accepts `bucket` when the bucket name differs from the
 mount name, `prefix` to mount part of the bucket, `endpoint` for another
@@ -196,5 +195,6 @@ workflow.
 
 `reports.remove("latest.json")` deletes one file, and `reports.delete()` deletes
 the volume and every file in it. A workload that still mounts it creates an
-empty volume with the same name on its next run, so those workloads stop first.
+empty volume with the same name on its next run, so stopping those workloads
+first avoids a surprise empty volume.
 The [file commands](/cli/storage#files) inspect and copy files from a terminal.

@@ -15,3 +15,25 @@ secret names and how they are injected, never their values.
 
 When behavior goes away, delete the page that described it rather than building a
 parallel registry of what is still true.
+
+## Shape and voice
+
+The introduction pitches LazyCloud as infrastructure for agentic engineering:
+a workload's Python decorator is its whole definition, and there are no CLI or
+dashboard overrides. Readers go from the introduction, quickstart, and
+installation into Core concepts, where each page explains how a part works and
+how to use it in the same place, then to the CLI reference, examples, and
+account pages. Agent-friendliness comes from one-command steps, `--json`, and
+exit codes throughout, not from a separate section.
+
+Each page does one job, and each fact has one home that other pages link to.
+Pages describe what a thing is for and when it fits; imperatives belong only
+to literal steps in the quickstart and example guides and to CLI syntax. A
+page's frontmatter description renders above the body, so the first paragraph
+never repeats it. No sentence describes the page itself.
+
+Examples run as downloaded. They show `.local()` beside `.remote()`, a plain
+`python file.py` beside `lazycloud run file.py:function`, and say plainly when
+code runs or deploys in the cloud rather than on the reader's machine. GPU
+examples use `GpuType`. Internal runtime details, such as environment
+variables the platform sets or wire identifiers, stay out of the docs.

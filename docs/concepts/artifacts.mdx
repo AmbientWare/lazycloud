@@ -57,8 +57,8 @@ artifact.
 authentication until it expires, so a browser or a webhook can use it.
 `artifact.exists()` and `artifact.stat()` check and describe the saved file.
 
-Deleting the task that produced an artifact leaves the artifact in place. To
-save from outside the producing container, pass `task_id=...` explicitly. The
+Deleting the task that produced an artifact leaves the artifact in place.
+Saving from outside the producing container needs an explicit `task_id=...`. The
 [dashboard](/platform/dashboard#retrieve-files) lists, previews, and downloads
 them.
 
@@ -70,11 +70,8 @@ get the Business window.
 
 The plan at upload time sets the window, and it counts from the upload.
 `saved.expires_at` and the dashboard show the expiry date. Public URLs do not
-outlive the artifact. To delete one sooner, call `artifact.delete()`.
-
-Files that must last belong in a volume, or in a copy downloaded before the
-artifact expires. Artifacts bill as volume storage. See
-[Plans and limits](/platform/plans).
+outlive the artifact, and `artifact.delete()` removes one sooner. Artifacts bill
+as volume storage. See [Plans and limits](/platform/plans).
 
 `uv run lazycloud artifact list`, `usage`, and `delete` manage artifacts from a
 terminal. See [storage commands](/cli/storage#lazycloud-artifact).

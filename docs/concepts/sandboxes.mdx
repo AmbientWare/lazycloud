@@ -4,12 +4,12 @@ description: "Remote containers your code creates on demand, with process contro
 ---
 
 A sandbox fits running generated code, testing a patch, or giving an agent a
-development environment.
+development environment. Each one is a container in the cloud that your code
+starts, drives, and terminates.
 
 ## Create a sandbox
 
-Save this as `sandbox_demo.py`, then run `uv run python sandbox_demo.py` after
-installing the SDK and signing in:
+Save this as `sandbox_demo.py` and run it with `uv run python sandbox_demo.py`:
 
 ```python
 from lazycloud import App, Image
@@ -31,7 +31,7 @@ finally:
     instance.terminate()
 ```
 
-The output includes exit code `0` and the remote Python version. The `finally`
+The output includes exit code `0` and the Python version inside the sandbox. The `finally`
 block terminates the container even if a command fails. A sandbox bills compute
 until it stops, which is why every example keeps this `try`/`finally` shape.
 

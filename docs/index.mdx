@@ -26,7 +26,7 @@ def summarize(amounts: list[float]) -> dict[str, float]:
 The same file runs at every stage, without code changes:
 
 ```bash
-uv run pytest                                           # develop locally with summarize.local(...)
+uv run pytest                                           # tests call summarize.local(...)
 uv run lazycloud run reports:summarize '[12.5, 30, 8]'   # run once in the cloud
 uv run lazycloud deploy reports                         # keep it running in the cloud
 ```

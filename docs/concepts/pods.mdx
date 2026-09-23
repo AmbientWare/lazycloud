@@ -115,8 +115,8 @@ A TCP pod sets `tcp=True`, declares the server's port, and deploys with
 `pod.deploy()`. TCP pods are public, with `authorized=False`, so your server
 must authenticate its own clients.
 
-The deployment returns a `tls://hostname:port` address. Connect with TLS and send
-that hostname as SNI.
+The deployment returns a `tls://hostname:port` address. Clients connect with
+TLS and send that hostname as SNI.
 
 ```python
 import socket

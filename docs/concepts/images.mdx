@@ -3,8 +3,9 @@ title: "Images"
 description: "Build a workload's container from Python: packages, system tools, a project's lockfile, or an existing registry image."
 ---
 
-Anything your function needs beyond the standard library goes in its `Image`,
-along with the Python version it runs.
+Anything a workload needs beyond the standard library goes in its `Image`,
+along with the Python version it runs. LazyCloud builds the image in the cloud,
+so nothing installs on your machine.
 
 ## Install remote dependencies
 
@@ -27,7 +28,8 @@ def ffmpeg_version() -> str:
 ```
 
 Save this as `audio.py` and run `uv run lazycloud run audio:ffmpeg_version`.
-The result is the remote ffmpeg version, and your machine does not need ffmpeg.
+The result is the ffmpeg version inside the cloud container, and your machine
+does not need ffmpeg.
 `.add_python_packages(["httpx"])` installs a Python dependency.
 
 LazyCloud caches images by content. Pinned dependency versions make builds
@@ -47,9 +49,8 @@ image = Image.from_uv(".")
 ```
 
 The path is the project directory. The build reads its `pyproject.toml`,
-lockfile, and `.python-version`, plus any local dependencies they name. It
-honors a dependency's `.lazycloudignore` when it has one and never writes that
-file into a dependency. Your own code is not part of the image. It reaches the
+lockfile, and `.python-version`, plus any local dependencies they name,
+honoring each dependency's `.lazycloudignore`. Your own code is not part of the image. It reaches the
 container through source sync, so editing it never rebuilds the image.
 Changing a dependency does. The build uploads nothing outside this directory,
 so workspace members and relative path dependencies belong inside it. Build

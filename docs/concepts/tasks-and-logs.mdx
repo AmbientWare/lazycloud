@@ -11,12 +11,13 @@ background work later. `.local()` calls do not create tasks.
 ## Live progress
 
 `lazycloud run` and `.remote()` called from your machine show the same live
-display: image build, source upload, task status, and the remote stdout and
-stderr, followed by a summary. A failed step keeps its recent logs on screen.
+display: image build, source upload, task status, and the cloud container's
+stdout and stderr, followed by a summary. A failed step keeps its recent logs on screen.
 When output is redirected, build logs print without live redraws.
 
 Progress and logs go to stderr. The CLI prints the result to stdout, and Python
-returns it to the caller. To silence the display in Python:
+returns it to the caller. `output(enabled=False)` silences the display in
+Python:
 
 ```python
 from lazycloud import output

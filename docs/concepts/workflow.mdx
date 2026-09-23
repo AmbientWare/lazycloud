@@ -12,11 +12,11 @@ Each stage suits a different point in the work:
    that calls it.
 
 `lazycloud serve` sits between 2 and 3, for editing remote code and seeing each
-change without redeploying. Every step is one command with
-[machine-readable output](/cli/overview), so an agent or a script can run the
-loop.
+change without redeploying. `run` and `deploy` take
+[`--json`](/cli/overview) and exit nonzero on failure, so an agent or a script
+can drive the loop.
 
-The examples below use this file, saved as `text_tools.py`:
+`text_tools.py`:
 
 ```python
 from lazycloud import App
@@ -60,8 +60,9 @@ count_words.remote("one two three")
 This builds the image if it changed, uploads your working tree, and starts a
 container with the decorator's resources on your workspace's
 [cloud compute](/platform/compute), not on your machine. Progress, logs, and
-the result stream back to your terminal. It deploys nothing. The container stays up for the function's
-[`keep_warm`](/concepts/scaling#warm-containers) window and then stops.
+the result stream back to your terminal. It deploys nothing. The container
+stays up for the function's [`keep_warm`](/concepts/scaling#warm-containers)
+window and then stops.
 LazyCloud records the run as a [task](/concepts/tasks-and-logs).
 
 It suits a job you run by hand, GPU work you don't want to keep warm, and a
@@ -77,8 +78,7 @@ uv run lazycloud serve text_tools:count
 
 A preview runs the workload in a cloud container and keeps it up until you
 press Ctrl+C. It syncs your working directory into that container each time you
-save, so an
-edit costs a file sync instead of a build and a container start.
+save, so an edit costs a file sync instead of a build and a container start.
 
 - A function reloads its source after in-flight calls finish. Import errors
   show in the serve logs and clear on the next good edit.
@@ -96,8 +96,8 @@ uv run lazycloud deploy text_tools
 ```
 
 A deployment runs in the cloud and keeps running after you close the terminal
-or shut down your machine. Its containers start
-on demand and [scale](/concepts/scaling) with load. Endpoints get a stable URL,
+or shut down your machine. Its containers start on demand and
+[scale](/concepts/scaling) with load. Endpoints get a stable URL,
 schedules start firing, and functions become callable from other deployed code
 and from [exported client packages](/concepts/apps#call-deployed-workloads-from-other-projects).
 Each deploy records a new version.

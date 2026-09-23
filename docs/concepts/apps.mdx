@@ -3,13 +3,11 @@ title: "Apps and workloads"
 description: "The kinds of workload you can run, and how an app deploys, prunes, and exports them as one unit."
 ---
 
-A workspace holds apps, and an app holds workloads. A workload's decorator or
-constructor in Python is its whole definition, covering image, CPU, memory,
-GPU, volumes, secret names, schedule, and scaling, so a deploy makes the
-workspace match the code. No dashboard setting or CLI flag overrides it. This
-suits agent-driven development, because the code and the infrastructure it
-needs change in one reviewable diff, and the same command on the same files
-gives the same result.
+A workspace holds apps, and an app holds workloads. Each workload's decorator
+is its whole definition, covering image, resources, volumes, secret names,
+schedule, and scaling. A deploy makes the workspace match the code, and no
+dashboard setting or CLI flag overrides it. Code and infrastructure change in
+the same diff, which you or an agent can review and deploy with one command.
 
 ## Workload kinds
 
@@ -96,8 +94,8 @@ def count(text: str) -> dict[str, int]:
     return {"words": len(text.split())}
 ```
 
-If `text_tools/workers.py` registers the batch functions the same way, the
-deploy names both files so the CLI imports every registration:
+When `text_tools/workers.py` registers the batch functions the same way,
+deploying both files imports every registration:
 
 ```bash
 uv run lazycloud deploy text_tools/api.py text_tools/workers.py
@@ -115,21 +113,15 @@ uv run lazycloud deploy text_tools --diff --prune   # list what would be removed
 uv run lazycloud deploy text_tools --prune
 ```
 
-Pruning removes every deployed workload the supplied app definitions omit,
-including stopped ones and every surviving version. It stops their containers
-and removes their schedules and routes. Workloads still in the code keep their
-earlier versions. Volumes, secrets, and stored data stay, and deleting an app
-never removes them either.
+Pruning removes every deployed workload the app definition omits, stopping its
+containers and removing its schedules and routes. Volumes, secrets, and stored
+data stay, and deleting an app never removes them either.
 
-Pruning reads each supplied app as its complete definition, so it needs whole
+Each supplied app counts as its complete definition, so pruning needs whole
 apps. A single-workload reference such as `text_tools:count` cannot prune, and
-an explicitly empty `App` removes all its deployed workloads and keeps the app.
-
-Pruning starts only after every requested deployment registers, which does not
-mean each one is healthy. If another operation changes the app during the
-deploy, pruning deletes nothing. Once pruning starts, the server retries
-interrupted cleanup for the same deployment versions. From Python,
-`app.plan(prune=True)` and `app.deploy(prune=True)` do the same.
+an empty `App` removes all its deployed workloads while keeping the app.
+Pruning runs only after every deployment in the command registers. From
+Python, `app.plan(prune=True)` and `app.deploy(prune=True)` do the same.
 
 ## Call one workload from another
 
@@ -144,9 +136,9 @@ caller's own process instead. See
 uv run lazycloud app export text_tools
 ```
 
-This writes a typed Python package to `lazycloud_clients/text_tools`, so
-another project can call the deployed functions and endpoints without importing
-your source. Functions get `remote()` and `async_remote()`. Endpoints get
+This writes a typed Python package to `lazycloud_clients/text_tools`. Another
+project calls the deployed functions and endpoints through it without your
+source. Functions get `remote()` and `async_remote()`. Endpoints get
 `request()` and `async_request()`. Callers sign in with `lazycloud login`, and
 the package holds deployment references and schemas, never credentials.
 

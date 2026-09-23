@@ -3,9 +3,6 @@ title: "Resources and options"
 description: "Size a container with CPU, memory, disk, and GPUs, choose capacity and placement, and look up every decorator option and default."
 ---
 
-[Scaling and concurrency](/concepts/scaling) covers how many containers run and
-how much each one handles at once.
-
 ## Size a container
 
 ```python
@@ -50,8 +47,8 @@ container. GPU access and prices depend on your [plan](/platform/plans).
 
 ## Preemptible capacity
 
-Workloads run on preemptible capacity by default. That capacity can be
-reclaimed, sometimes without notice. A preempted function call retries under
+Workloads run on preemptible capacity by default, which the cloud provider can
+reclaim, sometimes without notice. A preempted function call retries under
 its retry policy, and LazyCloud replaces a preempted endpoint container.
 Functions that are safe to repeat, and long jobs that checkpoint to a volume,
 lose little to a preemption.

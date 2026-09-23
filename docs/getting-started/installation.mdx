@@ -13,7 +13,7 @@ uv tool install lazycloud-client
 lazycloud login
 ```
 
-This puts `lazycloud` on your path for downloading examples and managing your
+`lazycloud` is then on your path for downloading examples and managing your
 account from any directory.
 
 ## Add the SDK to a project
@@ -36,10 +36,10 @@ uv tool upgrade lazycloud-client     # the global CLI
 uv run lazycloud update              # a project, within its pyproject.toml constraints
 ```
 
-A downloaded example pins an exact SDK version, so its upgrade names the
-release: `uv add "lazycloud-client==<version>"`.
+A downloaded example pins an exact SDK version.
+`uv add "lazycloud-client==<version>"` moves it to another release.
 
 ## Sign-in state
 
-The CLI keeps sign-in state under `~/.lazycloud`, and the global and project
-commands share it. Set `LAZYCLOUD_HOME` to move it.
+The CLI keeps sign-in state under `~/.lazycloud`, shared by the global and
+project commands. `LAZYCLOUD_HOME` moves it.

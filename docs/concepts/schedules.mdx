@@ -36,7 +36,7 @@ Deploying the function registers its schedule:
 uv run lazycloud deploy daily_report:count_files
 ```
 
-To run it once now, without waiting for the schedule:
+One run right now, without waiting for the schedule:
 
 ```bash
 uv run lazycloud run daily_report:count_files
@@ -82,8 +82,8 @@ To stop it now:
 uv run lazycloud deployment stop count-files
 ```
 
-`uv run lazycloud deployment delete count-files` removes the example entirely.
-Deleting `report-inputs` also deletes its files, so any you need come out first.
+`uv run lazycloud deployment delete count-files` removes it entirely. The
+`report-inputs` volume and its files stay until you delete the volume.
 
 ## Shared settings
 
