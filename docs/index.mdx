@@ -6,8 +6,9 @@ description: "Infrastructure for agentic engineering. Building with agents is fa
 Your workloads are defined in Python next to the code they run. A decorator
 names the packages, CPU, memory, GPU, and storage a function needs, so the agent
 that writes the function also writes where and how it runs, in the same edit.
-LazyCloud builds the container, uploads the code, runs it, and stops it when the
-work is done. You pay per second while a container runs.
+LazyCloud builds the container, uploads the code, runs it on cloud CPUs and
+GPUs, and stops it when the work is done. Your machine only runs the client. You
+pay per second while a cloud container runs.
 
 ```python
 from lazycloud import App, Image
@@ -26,8 +27,8 @@ The same file runs at every stage, without code changes:
 
 ```bash
 uv run pytest                                           # develop locally with summarize.local(...)
-uv run lazycloud run reports:summarize '[12.5, 30, 8]'   # test once on cloud compute
-uv run lazycloud deploy reports                         # deploy for your app to call
+uv run lazycloud run reports:summarize '[12.5, 30, 8]'   # run once in the cloud
+uv run lazycloud deploy reports                         # keep it running in the cloud
 ```
 
 Each step is one command with no browser or prompt. Add `--json` and the result

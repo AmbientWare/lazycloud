@@ -52,11 +52,13 @@ uv run python quickstart.py
 ```
 
 The script calls `hello` twice. `.local()` runs it in your own Python process,
-with no upload and no charge. `.remote()` runs the same function in a container
-with 1 CPU and 256 MiB, streams its logs back, and returns `hello LazyCloud`.
-The first remote call takes longer while the image builds.
+with no upload and no charge. `.remote()` uploads your code to LazyCloud and runs
+the function on a cloud machine with 1 CPU and 256 MiB. Nothing runs in a
+container on your computer. The cloud container's logs stream back to your
+terminal, and the call returns `hello LazyCloud`. The first remote call takes
+longer while LazyCloud builds the image.
 
-The CLI makes the remote call without a `__main__` block:
+The CLI makes the same cloud call without a `__main__` block:
 
 ```bash
 uv run lazycloud run quickstart.py:hello LazyCloud
@@ -78,7 +80,8 @@ Then deploy the app:
 uv run lazycloud deploy quickstart
 ```
 
-The deploy output includes the endpoint's URL. Endpoints require a bearer token
+The app now runs on LazyCloud, not on your machine, and stays up after you
+close the terminal. The deploy output includes the endpoint's HTTPS URL. Endpoints require a bearer token
 by default. Create an access token in the
 [dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens, and
 call the endpoint with it:
