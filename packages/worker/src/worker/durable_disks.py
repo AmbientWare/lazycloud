@@ -463,6 +463,7 @@ class WorkerDurableDiskService:
     _attached: dict[str, _Attached] = field(default_factory=dict)
     _attached_lock: threading.Lock = field(default_factory=threading.Lock)
     _recovered_pending: dict[str, int] = field(default_factory=dict)
+    _recovered_roots: set[Path] = field(default_factory=set)
 
     def recover(self) -> None:
         """Stop what a previous worker process left attached; run before any attach.
@@ -471,22 +472,51 @@ class WorkerDurableDiskService:
         layers it reports pending are what the release of that container's lease
         publishes before letting the disk go. A disk on a volume is recovered on
         that volume, which is mounted again first.
+
+        Each root is recovered on its own. One that fails is logged and left for
+        its lease's release to recover again, which fails that release alone,
+        so the worker still starts and every other lease is still given back.
         """
         self.lease_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.layers_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        pending = dict(self.engine.recover(self.layers_root).pending)
-        if self.volumes is not None:
-            held: set[str] = set()
-            for record in self._load_all():
-                for lease in record.disks:
-                    if lease.released or not lease.volume_id:
-                        continue
-                    held.add(lease.disk_id)
-                    root = self.volumes.remount(lease.disk_id, lease.volume_id)
-                    if root is not None:
-                        pending.update(self.engine.recover(root).pending)
+        try:
+            self._recover_root(self.layers_root)
+        except Exception:
+            LOGGER.exception(
+                "recovering disks under %s failed; their releases retry it", self.layers_root
+            )
+        if self.volumes is None:
+            return
+        held: set[str] = set()
+        for record in self._load_all():
+            for lease in record.disks:
+                if lease.released or not lease.volume_id:
+                    continue
+                held.add(lease.disk_id)
+                try:
+                    self._recover_volume(lease, self.volumes)
+                except Exception:
+                    LOGGER.exception(
+                        "recovering disk %s on volume %s failed; its release retries it",
+                        lease.name,
+                        lease.volume_id,
+                    )
+        try:
             self.volumes.unmount_all_except(held)
-        self._recovered_pending = pending
+        except Exception:
+            LOGGER.exception("unmounting volumes no lease holds failed")
+
+    def _recover_root(self, root: Path) -> None:
+        self._recovered_pending.update(self.engine.recover(root).pending)
+        self._recovered_roots.add(root)
+
+    def _recover_volume(self, lease: DiskLease, volumes: DiskVolumeMounts) -> None:
+        """Mount a lease's volume again and recover it; one that holds nothing needs none."""
+        root = volumes.remount(lease.disk_id, lease.volume_id)
+        if root is None:
+            self._recovered_roots.add(volumes.root(lease.disk_id))
+            return
+        self._recover_root(root)
 
     def attach(self, request: ContainerRequestContext) -> DurableDiskAttachment:
         if not request.disks:
@@ -601,6 +631,11 @@ class WorkerDurableDiskService:
         """
         root = self._root(lease)
         if not lease.detached:
+            if not live and root not in self._recovered_roots:
+                if lease.volume_id and self.volumes is not None:
+                    self._recover_volume(lease, self.volumes)
+                else:
+                    self._recover_root(root)
             if live and lease.mountpoint:
                 self._publish_pending(attached, lease)
             else:
@@ -1062,10 +1097,15 @@ class WorkerDurableDiskService:
         return ContainerDiskLeases.model_validate_json(path.read_text(encoding="utf-8"))
 
     def _load_all(self) -> list[ContainerDiskLeases]:
-        return [
-            ContainerDiskLeases.model_validate_json(path.read_text(encoding="utf-8"))
-            for path in sorted(self.lease_root.glob("*.json"))
-        ]
+        records: list[ContainerDiskLeases] = []
+        for path in sorted(self.lease_root.glob("*.json")):
+            try:
+                records.append(
+                    ContainerDiskLeases.model_validate_json(path.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError):
+                LOGGER.exception("lease record %s cannot be read; skipping it", path)
+        return records
 
     def _save(self, record: ContainerDiskLeases) -> None:
         self.lease_root.mkdir(parents=True, exist_ok=True, mode=0o700)

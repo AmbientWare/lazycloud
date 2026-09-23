@@ -118,8 +118,18 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			return nil, err
 		}
 	}
-	if err := checkSpace(p, reuse, manifests, *minFree); err != nil {
-		return nil, err
+	// Reusing the local copy downloads nothing, so it needs no reserve: room
+	// for the head's writes is the worker's to watch. A restore is planned
+	// before the stale local copy is removed, counting that copy as free.
+	var plan []bool
+	if !reuse {
+		have, err := freeBytes(p, true)
+		if err != nil {
+			return nil, err
+		}
+		if plan, err = planRestore(p, have, *minFree, manifests); err != nil {
+			return nil, err
+		}
 	}
 	if reuse {
 		result.ReusedLocal = true
@@ -144,7 +154,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			state.Layers = []layer{base}
 			format = true
 		} else {
-			restored, err := restoreChain(ctx, p, state, store, chain, manifests, *minFree)
+			restored, err := restoreChain(ctx, p, state, store, chain, manifests, plan)
 			if err != nil {
 				return nil, err
 			}
@@ -306,28 +316,55 @@ func freeBytes(p diskPaths, countStale bool) (int64, error) {
 	return have, nil
 }
 
-// checkSpace refuses a restore that would leave the filesystem under root
-// with less than reserve free. A chain that does not fit whole still restores
-// when its base and largest layer do, by committing layers as it goes.
-func checkSpace(p diskPaths, reuse bool, manifests []layerManifest, reserve int64) error {
-	var need, largest int64
-	for i, manifest := range manifests {
-		need += storedBytes(manifest)
-		if i > 0 {
-			largest = max(largest, storedBytes(manifest))
+// qcow2MetadataBytes bounds the tables a qcow2 image of virtual size virt
+// needs on top of its data: 8-byte L2 entries and 2-byte refcounts per 64 KiB
+// cluster come to under 1/4096 of the size, plus fixed headers.
+func qcow2MetadataBytes(virt int64) int64 { return virt/4096 + 1<<20 }
+
+// planRestore decides, before anything local is removed, whether a restore
+// fits and when it must commit the layers it holds into the base to make room
+// for the next. Each download must leave reserve free. A commit copies a held
+// layer into the base before deleting it, so the base grows by at most that
+// layer, and never past its virtual size and metadata; the peak during a
+// commit must fit, though it may dip into the reserve. The restore follows the
+// plan, so a chain that passes here does not fail for space halfway.
+func planRestore(p diskPaths, have, reserve int64, manifests []layerManifest) ([]bool, error) {
+	commitBefore := make([]bool, len(manifests))
+	if len(manifests) == 0 {
+		if have < reserve {
+			return nil, &insufficientSpaceError{root: p.root, need: 0, have: have, reserve: reserve}
 		}
+		return commitBefore, nil
 	}
-	have, err := freeBytes(p, !reuse)
-	if err != nil {
-		return err
+	type held struct{ bytes, virt int64 }
+	used := storedBytes(manifests[0])
+	if have-used < reserve {
+		return nil, &insufficientSpaceError{root: p.root, need: used, have: have, reserve: reserve}
 	}
-	if have-need >= reserve {
-		return nil
+	baseBytes, baseVirt := used, manifests[0].VirtualSizeBytes
+	var holding []held
+	for i := 1; i < len(manifests); i++ {
+		need := storedBytes(manifests[i])
+		if have-used-need < reserve && len(holding) > 0 {
+			for _, layer := range holding {
+				baseVirt = max(baseVirt, layer.virt)
+				growth := max(min(layer.bytes, baseVirt+qcow2MetadataBytes(baseVirt)-baseBytes), 0)
+				if used+growth > have {
+					return nil, &insufficientSpaceError{root: p.root, need: used + growth, have: have}
+				}
+				baseBytes += growth
+				used += growth - layer.bytes
+			}
+			holding = nil
+			commitBefore[i] = true
+		}
+		if have-used-need < reserve {
+			return nil, &insufficientSpaceError{root: p.root, need: used + need, have: have, reserve: reserve}
+		}
+		used += need
+		holding = append(holding, held{bytes: need, virt: manifests[i].VirtualSizeBytes})
 	}
-	if len(manifests) > 1 && have-storedBytes(manifests[0])-largest >= reserve {
-		return nil
-	}
-	return &insufficientSpaceError{root: p.root, need: need, have: have, reserve: reserve}
+	return commitBefore, nil
 }
 
 // allocatedBytes is the disk space the files under dir occupy, holes excluded.
@@ -353,15 +390,14 @@ func allocatedBytes(dir string) (int64, error) {
 	return total, err
 }
 
-// restoreChain downloads the chain, base first. When the next layer would
-// leave less than reserve free, the layers already downloaded above the base
-// are committed into it first, so only as many layers are held as fit.
-func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest, reserve int64) (int64, error) {
+// restoreChain downloads the chain, base first, committing the layers it
+// holds into the base where the plan says the next would not fit.
+func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest, commitBefore []bool) (int64, error) {
 	var restored int64
 	for i, entry := range chain {
 		manifest := manifests[i]
-		if i > 0 {
-			if err := makeRoom(ctx, p, state, storedBytes(manifest), reserve); err != nil {
+		if commitBefore[i] {
+			if err := commitHeld(ctx, p, state); err != nil {
 				return 0, err
 			}
 		}
@@ -443,6 +479,9 @@ func teardown(ctx context.Context, p diskPaths, state *diskState) error {
 		if err := disconnectNBD(ctx, a.Device); err != nil {
 			return err
 		}
+		if err := releaseClaim(a.Device, p); err != nil {
+			return err
+		}
 	}
 	if daemonAlive(p, a.DaemonPID) {
 		if state.HeadFresh {
@@ -496,16 +535,9 @@ func commitIntoBelow(ctx context.Context, path string, below layer, belowPath st
 	return err
 }
 
-// makeRoom commits the restored layers above the base into it, oldest first,
-// when downloading need more bytes would leave less than reserve free.
-func makeRoom(ctx context.Context, p diskPaths, state *diskState, need, reserve int64) error {
-	have, err := freeBytes(p, false)
-	if err != nil {
-		return err
-	}
-	if have-need >= reserve {
-		return nil
-	}
+// commitHeld commits the restored layers above the base into it, oldest
+// first, deleting each once it is in.
+func commitHeld(ctx context.Context, p diskPaths, state *diskState) error {
 	base := state.Layers[0]
 	for _, held := range state.Layers[1:] {
 		if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", base.format(), "-b", base.file(), p.layerPath(held)); err != nil {
@@ -520,11 +552,5 @@ func makeRoom(ctx context.Context, p diskPaths, state *diskState, need, reserve 
 		base.Generation = held.Generation
 	}
 	state.Layers = []layer{base}
-	if have, err = freeBytes(p, false); err != nil {
-		return err
-	}
-	if have-need < reserve {
-		return &insufficientSpaceError{root: p.root, need: need, have: have, reserve: reserve}
-	}
 	return nil
 }

@@ -129,12 +129,17 @@ class DiskVolumeMounts:
             )
         node = self._device_node(volume.volume_id, device)
         if root not in mounted_paths():
-            has_filesystem = _holds_ext4(node)
-            if not has_filesystem:
+            # The volume is a cache of the object-storage chain, so one that
+            # holds no filesystem is formatted whatever the control plane
+            # recorded, and the engine restores the disk onto it. A device
+            # that does hold ext4 is never formatted.
+            if not _holds_ext4(node):
                 if volume.formatted:
-                    raise DiskVolumeError(
-                        f"volume {volume.volume_id} for disk {disk_id} was formatted before "
-                        "but holds no ext4 filesystem"
+                    LOGGER.warning(
+                        "volume %s for disk %s was used before but holds no filesystem; "
+                        "formatting it and restoring the disk from object storage",
+                        volume.volume_id,
+                        disk_id,
                     )
                 # No reserved blocks and few inodes: only the engine writes
                 # here, a handful of large files, and the headroom is sized

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -77,7 +78,8 @@ func nbdDevices() ([]string, error) {
 
 // claimedDevices lists the devices other disks under root record, attached or
 // left behind by a worker that died, so none is handed out twice before
-// recover has released it.
+// recover has released it. Claims under /run cover every root but not a
+// restart of the worker's container, which state under root outlives.
 func claimedDevices(root string) (map[string]bool, error) {
 	claimed := map[string]bool{}
 	entries, err := os.ReadDir(root)
@@ -102,6 +104,73 @@ func claimedDevices(root string) (map[string]bool, error) {
 // nbdLockPath serializes device selection across every root, since a disk
 // on its own volume has a root of its own.
 const nbdLockPath = "/run/lazycloud-disk/nbd.lock"
+
+// nbdClaimDir holds one file per device a disk has recorded, naming the disk,
+// so a device recorded under any root is taken for every other root. A claim
+// is dropped when its disk detaches, or found stale when that disk's state no
+// longer records the device. A disk whose state cannot be read keeps its
+// claim: its root may be a volume not yet mounted again.
+const nbdClaimDir = "/run/lazycloud-disk/claims"
+
+type deviceClaim struct {
+	Root string `json:"root"`
+	Disk string `json:"disk"`
+}
+
+func claimPath(device string) string { return filepath.Join(nbdClaimDir, deviceName(device)) }
+
+func writeClaim(device string, p diskPaths) error {
+	if err := os.MkdirAll(nbdClaimDir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(deviceClaim{Root: p.root, Disk: p.id})
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(claimPath(device), data)
+}
+
+// releaseClaim drops the claim on device if it is this disk's.
+func releaseClaim(device string, p diskPaths) error {
+	var claim deviceClaim
+	if err := readJSONFile(claimPath(device), &claim); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if claim.Root != p.root || claim.Disk != p.id {
+		return nil
+	}
+	if err := os.Remove(claimPath(device)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// claimTaken reports whether another disk holds device. A claim whose disk
+// state is readable and records a different device, or none, is stale and
+// removed.
+func claimTaken(device string) (bool, error) {
+	var claim deviceClaim
+	if err := readJSONFile(claimPath(device), &claim); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	state, err := loadState(diskPaths{root: claim.Root, id: claim.Disk})
+	if err != nil || state == nil {
+		return true, nil
+	}
+	if state.Attachment != nil && state.Attachment.Device == device {
+		return true, nil
+	}
+	if err := os.Remove(claimPath(device)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return false, nil
+}
 
 // connectNBD picks a free /dev/nbdN and connects it to the daemon's export.
 // Selection and connection happen under one lock, and a connected device
@@ -129,14 +198,24 @@ func connectNBD(ctx context.Context, p diskPaths, sizeBytes int64, record func(d
 		if claimed[name] || nbdConnected(device) {
 			continue
 		}
+		taken, err := claimTaken(device)
+		if err != nil {
+			return "", err
+		}
+		if taken {
+			continue
+		}
 		if size, err := nbdSizeBytes(device); err != nil || size != 0 {
 			continue
 		}
 		if _, err := os.Stat(device); err != nil {
 			return "", fmt.Errorf("%s exists in sysfs but not in /dev: the worker must see the host's /dev: %w", device, err)
 		}
-		// Recorded before connecting, so a crash between the two leaves recover
-		// something to disconnect.
+		// Claimed and recorded before connecting, so a crash between the two
+		// leaves recover something to disconnect and no other root the device.
+		if err := writeClaim(device, p); err != nil {
+			return "", err
+		}
 		if err := record(device); err != nil {
 			return "", err
 		}

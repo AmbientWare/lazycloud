@@ -36,7 +36,8 @@ class DiskBlockVolume(ContractModel):
 
     volume_id: str = Field(min_length=1)
     formatted: bool
-    """Whether the volume already holds a filesystem from an earlier attach."""
+    """Whether an earlier lease held this volume. A hint only: the worker probes
+    the device, and formats one that holds no filesystem either way."""
 
 
 class DiskAcquireResult(ContractModel):
