@@ -90,7 +90,11 @@ async def bridge_websocket_to_socket(
     backend: socket.socket,
     buffer_size_bytes: int,
 ) -> None:
-    """Relay bytes both ways until either side closes, then stop the other direction."""
+    """Relay bytes both ways until either side closes, then stop the other direction.
+
+    A backend socket failure is raised once both directions have stopped, so the
+    caller can close the client with the reason rather than as a normal close.
+    """
     backend.setblocking(False)
     loop = asyncio.get_running_loop()
     reader = asyncio.create_task(
@@ -103,7 +107,10 @@ async def bridge_websocket_to_socket(
     )
     for task in pending:
         task.cancel()
-    await asyncio.gather(*done, *pending, return_exceptions=True)
+    results = await asyncio.gather(*done, *pending, return_exceptions=True)
+    for result in results:
+        if isinstance(result, OSError):
+            raise result
 
 
 async def _socket_to_websocket(

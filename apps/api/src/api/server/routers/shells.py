@@ -230,6 +230,11 @@ async def shell_connect_websocket(
         await bridge_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
     except (WebSocketDisconnect, asyncio.CancelledError):
         return
+    except OSError as exc:
+        await websocket.close(
+            code=status.WS_1011_INTERNAL_ERROR,
+            reason=f"connection to the container shell failed: {exc}"[:120],
+        )
     finally:
         backend.close()
 

@@ -102,7 +102,7 @@ async def pod_ssh_tunnel(
         await close_websocket(
             websocket,
             code=status.WS_1011_INTERNAL_ERROR,
-            reason=f"pod SSH server is unreachable: {exc}",
+            reason=f"connection to the pod's SSH server failed: {exc}"[:120],
         )
         return
     await close_websocket(websocket, code=status.WS_1000_NORMAL_CLOSURE, reason="")
