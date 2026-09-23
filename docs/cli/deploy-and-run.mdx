@@ -32,21 +32,21 @@ With `--json`, a successful app deployment returns one object with the app
 name and its resource results. If a deployment fails, the command stops and
 leaves already deployed resources in place.
 
-Several app files deploy their combined definitions. The CLI imports every
-file before collecting workloads. References to the same app object count
-once. The CLI rejects two definitions that share an app, workload kind, and
-name. Multiple references must select complete apps.
-
 ```bash
-uv run lazycloud deploy api.py workers.py --diff
-uv run lazycloud deploy api.py workers.py --diff --prune
-uv run lazycloud deploy api.py workers.py -p
+uv run lazycloud deploy page_stats/api.py --diff
+uv run lazycloud deploy page_stats/api.py --diff --prune
+uv run lazycloud deploy page_stats/api.py -p
 ```
+
+Several references deploy their combined definitions, which suits separate
+apps deployed together. Each must select a complete app, and references to the
+same app object count once. The CLI rejects two definitions that share an app,
+workload kind, and name.
 
 `--diff` lists which workloads the deploy would add or redeploy, and marks
 deployed workloads the definitions omit as `retain`. It does not compare
-source or configuration. Existing workloads show `redeploy`
-because every deploy creates another version. `--diff` uploads no source,
+source or configuration. Existing workloads show `redeploy` because every
+deploy creates another version. `--diff` uploads no source,
 builds no images, and changes nothing remotely. It still imports your Python
 modules, so their module-level code runs.
 
