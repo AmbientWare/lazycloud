@@ -10,6 +10,11 @@ def hello(name: str = "world") -> str:
     return f"hello {name}"
 
 
+@app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
+def greet(name: str) -> dict[str, str]:
+    return {"greeting": hello.local(name)}
+
+
 if __name__ == "__main__":
     print("running local")
     print(hello.local("LazyCloud"))

@@ -38,6 +38,11 @@ def hello(name: str = "world") -> str:
     return f"hello {name}"
 
 
+@app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
+def greet(name: str) -> dict[str, str]:
+    return {"greeting": hello.local(name)}
+
+
 if __name__ == "__main__":
     print("running local")
     print(hello.local("LazyCloud"))
@@ -64,17 +69,10 @@ The CLI makes the same cloud call without a `__main__` block:
 uv run lazycloud run quickstart.py:hello LazyCloud
 ```
 
-## Deploy an endpoint
+## Deploy the endpoint
 
-Add this to `quickstart.py`, above the `if __name__` block:
-
-```python
-@app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
-def greet(name: str) -> dict[str, str]:
-    return {"greeting": hello.local(name)}
-```
-
-Then deploy the app:
+`greet` is an HTTP endpoint that calls `hello` inside its own container.
+Deploying the app puts both workloads in the cloud:
 
 ```bash
 uv run lazycloud deploy quickstart
