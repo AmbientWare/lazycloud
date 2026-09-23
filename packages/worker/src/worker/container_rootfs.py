@@ -76,6 +76,9 @@ class ContainerRootfsSetupResult(ContractModel):
     upper_path: str = ""
     disk_limit_bytes: int = 0
     quota_project_id: int = 0
+    durable: bool = False
+    """The upper layer lives on a durable disk, so root writes must reach it."""
+
     reason: str = ""
 
     @property
@@ -410,6 +413,7 @@ class ContainerRootfsOverlayManager:
                 status=ContainerRootfsStatus.AlreadyMounted,
                 root_path=plan.merged_dir,
                 upper_path=plan.upper_dir,
+                durable=upper_root is not None,
             )
 
         floor = self._free_space_rejection()
@@ -455,6 +459,7 @@ class ContainerRootfsOverlayManager:
             upper_path=plan.upper_dir,
             disk_limit_bytes=quota.limit_bytes,
             quota_project_id=quota.project_id,
+            durable=upper_root is not None,
         )
 
     def used_bytes(self, container_id: str) -> int:

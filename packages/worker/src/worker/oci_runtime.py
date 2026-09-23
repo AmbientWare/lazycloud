@@ -368,6 +368,7 @@ class OciRuntimeSpecBuilder:
             sandbox_supervisor_token_path=supervisor_token_path,
             spec=spec,
             docker_enabled=context.docker_enabled or self.docker_enabled,
+            durable_root=rootfs_result is not None and rootfs_result.durable,
             image_env=image_result.env if image_result is not None else [],
         )
 
@@ -912,6 +913,7 @@ class OciRuntimeCommandController:
                 bundle_path=spec.bundle_path,
                 docker_enabled=spec.docker_enabled,
                 nvproxy=spec_has_gpu(spec.spec),
+                durable_root=spec.durable_root,
             ),
         )
         command = self.start_command(plan.argv, output_sink=output_sink)
@@ -1133,6 +1135,7 @@ class OciRuntimeCommandController:
                 bundle_path=bundle_path,
                 tcp_close=tcp_close,
                 link_remap=link_remap,
+                durable_root=self._durable_root(container_id),
             ),
         )
         command = self.start_command(plan.argv, output_sink=output_sink)
@@ -1473,6 +1476,10 @@ class OciRuntimeCommandController:
             detail=detail,
             exit_code=result.exit_code,
         )
+
+    def _durable_root(self, container_id: str) -> bool:
+        prepared = self.prepared_specs.get(container_id)
+        return prepared is not None and prepared.durable_root
 
     def _runtime_config(self, container_id: str) -> RuntimeBinaryConfig:
         prepared = self.prepared_specs.get(container_id)
