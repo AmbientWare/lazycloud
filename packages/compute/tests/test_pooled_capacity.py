@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pytest
 from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
+from compute.block_volumes import BlockVolumeProvider
 from compute.capacity_errors import (
     CapacityReservationConflictError,
     CapacityReservationLeaseLostError,
@@ -154,6 +155,9 @@ class _PooledProvider:
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
         raise AssertionError("capacity lifecycle must not request network billing evidence")
+
+    def block_volumes(self, region: str) -> BlockVolumeProvider:
+        raise AssertionError("capacity lifecycle must not manage disk volumes")
 
     desired: int = 0
     offer: ComputeOffer = field(default_factory=lambda: _offer())
@@ -750,8 +754,8 @@ def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
                         "name": "internal-aws-cpu-sibling",
                         "selector": "internal-aws-cpu-sibling",
                         "capability_key": f"{pool.capability_key}:sibling",
-                        "provider": "hetzner",
-                        "provider_ref": "hetzner:platform",
+                        "provider": "aws",
+                        "provider_ref": "aws:platform",
                         "provider_connection_id": None,
                         "desired_machines": 4,
                         "max_machines": 4,
@@ -802,7 +806,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
     ):
         offer = _offer().model_copy(
             update={
-                "provider": f"hetzner:{name}",
+                "provider": f"aws:{name}",
                 "cost_terms": SupplierCostTerms(
                     compute_hourly_micros=cost,
                     root_disk_hourly_micros=0,
@@ -921,14 +925,12 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
         return
     assert acquired.status is SchedulerCapacityAcquisitionStatus.Requested
     purchased = next(item for item in units if item.capacity_owner_id == acquired.capacity_owner_id)
-    assert purchased.provider_ref == (
-        "hetzner:unused" if market_state == "cooling" else "hetzner:cheap"
-    )
+    assert purchased.provider_ref == ("aws:unused" if market_state == "cooling" else "aws:cheap")
     assert sum(item.desired_machines for item in units) == 1
     assert {item.provider_ref for item in units} == (
-        {"hetzner:existing", "hetzner:cheap", "hetzner:unused"}
+        {"aws:existing", "aws:cheap", "aws:unused"}
         if market_state == "cooling"
-        else {"hetzner:existing", "hetzner:cheap"}
+        else {"aws:existing", "aws:cheap"}
     )
 
 
@@ -1043,7 +1045,7 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     service_context: ServiceContext,
 ) -> None:
     workspace_id = PlatformNamespaceService(service_context.database).get().id
-    offer = _offer().model_copy(update={"provider": "hetzner:platform", "cloud": "hetzner"})
+    offer = _offer().model_copy(update={"provider": "aws:platform"})
     provider = _PooledProvider(offer=offer)
     resolved = ResolvedComputeProvider(
         ref=offer.provider,
@@ -1440,7 +1442,7 @@ def test_fleet_warm_targets_reuse_retired_identity_and_keep_serving_floor(
     ):
         offer = _offer().model_copy(
             update={
-                "provider": f"hetzner:{name}",
+                "provider": f"aws:{name}",
                 "preemptible": preemptible,
                 "cost_terms": SupplierCostTerms(
                     compute_hourly_micros=cost,
@@ -1513,24 +1515,24 @@ def test_fleet_warm_targets_reuse_retired_identity_and_keep_serving_floor(
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: unit.min_machines for unit in units} == {
-        "hetzner:cheap": 1,
-        "hetzner:regular": 1,
+        "aws:cheap": 1,
+        "aws:regular": 1,
     }
     assert {unit.worker_preemptible for unit in units} == {False, True}
-    assert next(unit.id for unit in units if unit.provider_ref == "hetzner:cheap") == adopted_id
+    assert next(unit.id for unit in units if unit.provider_ref == "aws:cheap") == adopted_id
 
     compute.fleet_policy = FleetCapacityPolicy(warm_cpu_preemptible_min=1)
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: unit.min_machines for unit in units} == {
-        "hetzner:cheap": 1,
-        "hetzner:regular": 0,
+        "aws:cheap": 1,
+        "aws:regular": 0,
     }
-    regular = next(unit for unit in units if unit.provider_ref == "hetzner:regular")
+    regular = next(unit for unit in units if unit.provider_ref == "aws:regular")
     compute.scale_internal_unit(workspace_id, regular.id, 0, before_mutation=_allow_scale)
 
-    cheap = next(unit for unit in units if unit.provider_ref == "hetzner:cheap")
+    cheap = next(unit for unit in units if unit.provider_ref == "aws:cheap")
     compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=2))
     _seed_serving_machine(
         service_context,
@@ -1553,11 +1555,11 @@ def test_fleet_warm_targets_reuse_retired_identity_and_keep_serving_floor(
         with service_context.database.session() as session:
             units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         assert {unit.provider_ref: unit.min_machines for unit in units} == {
-            "hetzner:cheap": 1,
-            "hetzner:expensive": 1,
-            "hetzner:regular": 0,
+            "aws:cheap": 1,
+            "aws:expensive": 1,
+            "aws:regular": 0,
         }
-    replacement = next(unit for unit in units if unit.provider_ref == "hetzner:expensive")
+    replacement = next(unit for unit in units if unit.provider_ref == "aws:expensive")
     compute.reconcile_unit_capacity(replacement.id, now=now + timedelta(seconds=5))
     _seed_serving_machine(
         service_context,
@@ -1571,9 +1573,9 @@ def test_fleet_warm_targets_reuse_retired_identity_and_keep_serving_floor(
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: unit.min_machines for unit in units} == {
-        "hetzner:cheap": 0,
-        "hetzner:expensive": 1,
-        "hetzner:regular": 0,
+        "aws:cheap": 0,
+        "aws:expensive": 1,
+        "aws:regular": 0,
     }
 
     desired_before_disable = {unit.id: unit.desired_machines for unit in units}
@@ -1703,7 +1705,7 @@ def test_failed_warm_purchase_preserves_serving_baseline_and_releases_unused_cap
     for name, price in (("cheap", 100_000), ("fallback", 120_000)):
         offer = _offer().model_copy(
             update={
-                "provider": f"hetzner:{name}",
+                "provider": f"aws:{name}",
                 "preemptible": True,
                 "cost_terms": SupplierCostTerms(
                     compute_hourly_micros=price,
@@ -1816,15 +1818,15 @@ def test_failed_warm_purchase_preserves_serving_baseline_and_releases_unused_cap
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
     assert {unit.provider_ref: (unit.desired_machines, unit.min_machines) for unit in units} == {
-        "hetzner:cheap": (serving_baseline, serving_baseline),
-        "hetzner:fallback": (1, 1),
+        "aws:cheap": (serving_baseline, serving_baseline),
+        "aws:fallback": (1, 1),
     }
-    retained = next(unit for unit in units if unit.provider_ref == "hetzner:cheap")
+    retained = next(unit for unit in units if unit.provider_ref == "aws:cheap")
     assert not retained.replacement_machine_id
     assert retained.provider_state.degraded_at == failed.provider_state.degraded_at
     assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
     assert suppliers[0].desired == serving_baseline
-    fallback = next(unit for unit in units if unit.provider_ref == "hetzner:fallback")
+    fallback = next(unit for unit in units if unit.provider_ref == "aws:fallback")
     compute.reconcile_unit_capacity(fallback.id, now=now + timedelta(seconds=3))
     assert suppliers[1].desired == 1
 

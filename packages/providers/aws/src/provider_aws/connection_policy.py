@@ -33,6 +33,22 @@ _MANAGED_REQUEST_TAG: JsonValue = {
     "StringEquals": {f"aws:RequestTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE}
 }
 
+DISK_VOLUME_TAG_KEY = "cloud-pool:resource"
+DISK_VOLUME_TAG_VALUE = "disk-volume"
+
+_DISK_VOLUME_REQUEST_TAGS: JsonValue = {
+    "StringEquals": {
+        f"aws:RequestTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,
+        f"aws:RequestTag/{DISK_VOLUME_TAG_KEY}": DISK_VOLUME_TAG_VALUE,
+    }
+}
+_DISK_VOLUME_RESOURCE_TAGS: JsonValue = {
+    "StringEquals": {
+        f"ec2:ResourceTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,
+        f"ec2:ResourceTag/{DISK_VOLUME_TAG_KEY}": DISK_VOLUME_TAG_VALUE,
+    }
+}
+
 
 class ArnRenderer(Protocol):
     """Spells one ARN for the audience the policy is being rendered for."""
@@ -278,6 +294,49 @@ def connection_role_statements(
                     }
                 },
             },
+            # Disk volumes. The role creates a volume only with the managed and
+            # disk-volume tags, and attaches, detaches or deletes one only while
+            # it carries both. Attach and detach reach only the managed
+            # instances the pools launched. The control plane modifies such an
+            # instance only to delete an attached volume when it terminates.
+            {
+                "Sid": "CreateTaggedDiskVolumes",
+                "Effect": "Allow",
+                "Action": "ec2:CreateVolume",
+                "Resource": arns.arn(_VOLUME),
+                "Condition": _DISK_VOLUME_REQUEST_TAGS,
+            },
+            {
+                "Sid": "TagDiskVolumesOnCreate",
+                "Effect": "Allow",
+                "Action": "ec2:CreateTags",
+                "Resource": arns.arn(_VOLUME),
+                "Condition": {
+                    "StringEquals": {
+                        f"aws:RequestTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,
+                        f"aws:RequestTag/{DISK_VOLUME_TAG_KEY}": DISK_VOLUME_TAG_VALUE,
+                        "ec2:CreateAction": "CreateVolume",
+                    }
+                },
+            },
+            {
+                "Sid": "ManageTaggedDiskVolumes",
+                "Effect": "Allow",
+                "Action": ["ec2:AttachVolume", "ec2:DeleteVolume", "ec2:DetachVolume"],
+                "Resource": arns.arn(_VOLUME),
+                "Condition": _DISK_VOLUME_RESOURCE_TAGS,
+            },
+            {
+                "Sid": "AttachDiskVolumesToManagedInstances",
+                "Effect": "Allow",
+                "Action": [
+                    "ec2:AttachVolume",
+                    "ec2:DetachVolume",
+                    "ec2:ModifyInstanceAttribute",
+                ],
+                "Resource": arns.arn(_INSTANCE),
+                "Condition": _MANAGED_RESOURCE_TAG,
+            },
             {
                 "Sid": "CreateAutoScalingServiceRole",
                 "Effect": "Allow",
@@ -379,6 +438,8 @@ def connection_role_policy(
 
 
 __all__ = [
+    "DISK_VOLUME_TAG_KEY",
+    "DISK_VOLUME_TAG_VALUE",
     "MANAGED_TAG_KEY",
     "MANAGED_TAG_VALUE",
     "ArnRenderer",

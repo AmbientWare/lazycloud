@@ -305,7 +305,7 @@ class ContainerTable(IdTable, DatabaseBase):
         CheckConstraint(
             "termination_reason IN "
             "('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', "
-            "'MEMORY_EVICTED', 'UNKNOWN')",
+            "'MEMORY_EVICTED', 'DISK_FULL', 'UNKNOWN')",
             name="ck_containers_termination_reason",
         ),
         CheckConstraint(
@@ -319,6 +319,10 @@ class ContainerTable(IdTable, DatabaseBase):
             "AND scheduling_gpu_count >= 0 AND scheduling_workspace_gpu_quota >= 0 "
             "AND scheduling_workspace_cpu_quota_millicores >= 0 AND scheduling_retry_count >= 0",
             name="ck_containers_scheduling_quantities",
+        ),
+        CheckConstraint(
+            "scheduling_disk_bytes >= 0 AND scheduling_disk_count >= 0",
+            name="ck_containers_scheduling_disks",
         ),
     )
 
@@ -392,9 +396,21 @@ class ContainerTable(IdTable, DatabaseBase):
     scheduling_deployment_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
     scheduling_cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_required_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_preferred_worker_id: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     scheduling_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     scheduling_gpu_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_disk_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    scheduling_disk_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    scheduling_preferred_availability_zone: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     scheduling_placement: Mapped[str | None] = mapped_column(String(120), nullable=True)
     """Where the scheduling request lands; null until a request is recorded."""
     scheduling_architecture: Mapped[str] = mapped_column(Text, nullable=False, default="")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -142,6 +143,11 @@ class RecordingContainerScheduler:
             status=SchedulerContainerSubmitStatus.Queued,
             container_id=request.container_id,
         )
+
+
+class _NoDiskVolumes:
+    def unheld_attachments(self, machine_ids: Sequence[str]) -> dict[str, int]:
+        return {}
 
 
 class _UnownedWorkspaces:
@@ -326,6 +332,7 @@ def _request_service(
         ),
         capacity_reservations=capacity_reservations,
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
         requeue_delay_seconds=requeue_delay_seconds,
         max_retry_count=max_retry_count,
         retry_grace_seconds=retry_grace_seconds,

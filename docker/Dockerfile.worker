@@ -112,6 +112,14 @@ COPY apps/image-runtime/ ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/lazycloud-image-runtime .
 
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS disk-engine
+ARG TARGETARCH
+
+WORKDIR /src
+COPY apps/disk-engine/ ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/lazycloud-disk .
+
 FROM ${PYTHON_IMAGE} AS python-manifests
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -332,17 +340,22 @@ WORKDIR /app
 
 COPY --from=container-worker-tools /out/usr/share/keyrings/ /usr/share/keyrings/
 COPY --from=container-worker-tools /out/etc/apt/sources.list.d/ /etc/apt/sources.list.d/
+# Durable disks use qemu-storage-daemon and qemu-img from qemu-utils. nbd-client
+# negotiates the export and hands its socket to the kernel over netlink, and
+# e2fsprogs formats a new disk. The host must have loaded the nbd module.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         aardvark-dns \
         buildah \
         ca-certificates \
         docker-cli \
+        e2fsprogs \
         fuse-overlayfs \
         fuse3 \
         gpg \
         iproute2 \
         iptables \
+        kmod \
         libbsd0 \
         libcap2 \
         libdrm2 \
@@ -356,17 +369,20 @@ RUN apt-get update \
         libnl-route-3-200 \
         libprotobuf-c1 \
         libseccomp2 \
+        nbd-client \
         netavark \
         nftables \
         nvidia-container-toolkit-base \
         nvidia-container-toolkit \
         procps \
         psmisc \
+        qemu-utils \
         skopeo \
         socat \
         slirp4netns \
         tini \
         uidmap \
+        util-linux \
         xfsprogs \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=container-worker-tools /out/usr/local/bin/geesefs /usr/local/bin/geesefs
@@ -388,6 +404,7 @@ COPY --from=qemu-binfmt /out/opt/lazycloud/binfmt/ /opt/lazycloud/binfmt/
 COPY --from=criu /out/usr/ /usr/
 COPY --from=sandbox-supervisor /out/lazycloud-sandbox-supervisor /usr/local/bin/lazycloud-sandbox-supervisor
 COPY --from=image-runtime /out/lazycloud-image-runtime /usr/local/bin/lazycloud-image-runtime
+COPY --from=disk-engine /out/lazycloud-disk /usr/local/bin/lazycloud-disk
 COPY --from=managed-runtime /out/ /opt/lazycloud/managed-runtime-source/
 COPY --from=managed-package-source /packages /app/packages
 RUN criu --version | grep -Fx 'Version: 4.2'

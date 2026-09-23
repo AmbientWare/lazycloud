@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
-from pathlib import Path
 from typing import Protocol
 
-from agent.provider_identity import ProviderHostCredentials
 from compute.provider_nodes import (
     ProviderNodeAdmission,
     ProviderNodeIdentityProof,
     ProviderNodeIdentityVerifier,
     VerifiedProviderNodeIdentity,
 )
-from coordination.redis_client import RedisClient
-from coordination.request_cooldown import RedisRequestCooldown
 from provider_aws import (
     AwsEc2ProviderNodeIdentityProofProvider,
     AwsProviderNodeIdentityError,
@@ -28,20 +22,11 @@ from provider_aws import (
     AwsStsProofHttpResponse,
     provider_node_identity,
 )
-from provider_hetzner.client import HetznerClient
-from provider_hetzner.identity import verify_node as verify_hetzner_node
 from pydantic import SecretStr
 from shared.compute_policy import ComputeUnitRecord
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.provider_config import ProviderKind
-from shared.provider_identity import (
-    ProviderBootstrapNodeEvidence,
-    ProviderBootstrapNodeIdentityTarget,
-)
 from shared.timestamps import utc_now
-
-from provider_clients.provider_definitions import PROVIDER_DEFINITIONS
-from provider_clients.settings import PlatformCapacitySettings
 
 
 class ProviderNodeIdentityHttpResponse(Protocol):
@@ -80,9 +65,6 @@ class ProviderNodeIdentityEvidence:
     region: str
     provider_instance_id: str
     proof_url: SecretStr
-    launch_id: str = ""
-    bootstrap_token: SecretStr = field(default_factory=lambda: SecretStr(""), repr=False)
-    node_agent_token: SecretStr = field(default_factory=lambda: SecretStr(""), repr=False)
 
 
 class ProviderNodeIdentityEvidenceError(RuntimeError):
@@ -96,15 +78,10 @@ class ProviderNodeIdentityEvidenceProvider(Protocol):
         expected_region: str | None = None,
     ) -> ProviderNodeIdentityEvidence: ...
 
-    def acknowledge(self) -> None: ...
-
 
 @dataclass(frozen=True, slots=True)
 class _AwsProviderNodeIdentityEvidenceProvider:
     provider: AwsEc2ProviderNodeIdentityProofProvider
-
-    def acknowledge(self) -> None:
-        pass
 
     def create(
         self,
@@ -123,40 +100,8 @@ class _AwsProviderNodeIdentityEvidenceProvider:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class _BootstrapProviderNodeIdentityEvidenceProvider:
-    provider: ProviderKind
-    credentials: ProviderHostCredentials
-
-    def create(self, *, expected_region: str | None = None) -> ProviderNodeIdentityEvidence:
-        token = self.credentials.node_token()
-        region = self.credentials.region()
-        if expected_region is not None and region != expected_region:
-            raise ProviderNodeIdentityEvidenceError("provider node is in the wrong region")
-        return ProviderNodeIdentityEvidence(
-            provider=self.provider,
-            region=region,
-            provider_instance_id=self.credentials.instance_id(),
-            proof_url=SecretStr("provider-bootstrap"),
-            launch_id=self.credentials.launch_id(),
-            bootstrap_token=self.credentials.bootstrap_token(),
-            node_agent_token=token,
-        )
-
-    def acknowledge(self) -> None:
-        self.credentials.acknowledge()
-
-
-def provider_node_identity_evidence_provider(
-    provider: ProviderKind,
-    *,
-    state_dir: Path,
-) -> ProviderNodeIdentityEvidenceProvider:
-    if provider is ProviderKind.Aws:
-        return _AwsProviderNodeIdentityEvidenceProvider(AwsEc2ProviderNodeIdentityProofProvider())
-    return _BootstrapProviderNodeIdentityEvidenceProvider(
-        provider, ProviderHostCredentials(state_dir)
-    )
+def provider_node_identity_evidence_provider() -> ProviderNodeIdentityEvidenceProvider:
+    return _AwsProviderNodeIdentityEvidenceProvider(AwsEc2ProviderNodeIdentityProofProvider())
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,12 +154,10 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
         proof: ProviderNodeIdentityProof,
         *,
         pool: ComputeUnitRecord,
-        admission: ProviderNodeAdmission | None,
+        admission: ProviderNodeAdmission,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity:
-        if proof.provider is not ProviderKind.Aws:
-            raise InvalidInputError(f"unsupported provider node identity: {proof.provider.value}")
-        if admission is None or not admission.machine_role_id or not admission.machine_profile_id:
+        if not admission.machine_role_id or not admission.machine_profile_id:
             raise UpstreamUnavailableError("AWS node identity is not ready")
         if not pool.provider_state.resource_id:
             raise UpstreamUnavailableError("AWS provider pool identity is not ready")
@@ -261,85 +204,6 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
         )
 
 
-class ProviderBootstrapNodeVerifier(Protocol):
-    def __call__(
-        self, *, instance_id: str, target: ProviderBootstrapNodeIdentityTarget
-    ) -> ProviderBootstrapNodeEvidence: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderNodeIdentityRegistry:
-    aws: AwsProviderNodeIdentityAdapter
-    bootstrap_nodes: Mapping[str, ProviderBootstrapNodeVerifier] = field(
-        default_factory=lambda: dict[str, ProviderBootstrapNodeVerifier]()
-    )
-
-    def verify(
-        self,
-        proof: ProviderNodeIdentityProof,
-        *,
-        pool: ComputeUnitRecord,
-        admission: ProviderNodeAdmission | None,
-        provider_instance_ids: tuple[str, ...],
-    ) -> VerifiedProviderNodeIdentity:
-        if proof.provider is ProviderKind.Aws:
-            return self.aws.verify(
-                proof,
-                pool=pool,
-                admission=admission,
-                provider_instance_ids=provider_instance_ids,
-            )
-        verifier = self.bootstrap_nodes.get(pool.provider_ref)
-        if verifier is None:
-            raise UpstreamUnavailableError(
-                f"provider identity binding {pool.provider_ref!r} is not configured"
-            )
-        if (
-            not pool.provider_ref.startswith(f"{proof.provider.value}:")
-            or proof.proof_url.get_secret_value() != "provider-bootstrap"
-            or proof.region != pool.region
-        ):
-            raise InvalidInputError("invalid provider host identity")
-        verified = verifier(
-            instance_id=proof.provider_instance_id,
-            target=ProviderBootstrapNodeIdentityTarget(
-                provider_ref=pool.provider_ref,
-                unit_id=pool.id,
-                launch_id=proof.launch_id,
-                region=pool.region,
-            ),
-        )
-        return VerifiedProviderNodeIdentity(
-            provider=proof.provider,
-            account_id=pool.provider_ref,
-            region=verified.region,
-            provider_instance_id=verified.instance_id,
-            role_arn="",
-            instance_profile_arn="",
-            provider_resource_id=pool.id,
-            verified_at=utc_now(),
-        )
-
-
-def configured_provider_node_identity_registry(
-    *,
-    aws: AwsProviderNodeIdentityAdapter,
-    platform_settings: PlatformCapacitySettings,
-    redis: RedisClient,
-) -> ProviderNodeIdentityRegistry:
-    bootstrap_nodes: dict[str, ProviderBootstrapNodeVerifier] = {}
-    definition = PROVIDER_DEFINITIONS["hetzner"]
-    if token := platform_settings.hetzner_tokens.get(definition.platform_ref):
-        bootstrap_nodes[definition.platform_ref] = partial(
-            verify_hetzner_node,
-            HetznerClient(
-                token,
-                cooldown=RedisRequestCooldown(redis, definition.platform_ref),
-            ),
-        )
-    return ProviderNodeIdentityRegistry(aws=aws, bootstrap_nodes=bootstrap_nodes)
-
-
 __all__ = [
     "AwsProviderNodeIdentityAdapter",
     "ProviderNodeIdentityEvidence",
@@ -350,6 +214,5 @@ __all__ = [
     "ProviderNodeIdentityHttpResponse",
     "ProviderNodeIdentityReplayError",
     "ProviderNodeIdentityReplayGuard",
-    "configured_provider_node_identity_registry",
     "provider_node_identity_evidence_provider",
 ]

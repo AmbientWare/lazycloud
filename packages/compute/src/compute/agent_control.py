@@ -472,7 +472,6 @@ def plan_agent_join(
     pool_state: PrivateUnitState | None,
     request: AgentJoinRequest,
     *,
-    agent_token: str = "",
     now: datetime | None = None,
     existing_machine_gpus: list[list[str]] | None = None,
     existing_agent: ComputeAgentTokenState | None = None,
@@ -569,7 +568,7 @@ def plan_agent_join(
             machine_id=machine_id,
         )
 
-    raw_agent_token = agent_token or generate_compute_token()
+    raw_agent_token = generate_compute_token()
     required_preflight_ok = bool(request.preflight) and all(
         check.ok or not check.required for check in request.preflight
     )

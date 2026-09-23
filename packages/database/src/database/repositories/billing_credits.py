@@ -21,7 +21,7 @@ from shared.billing_credits import (
     CreditKind,
     CreditSettlement,
 )
-from shared.billing_quotes import BilledDimension
+from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import ConflictError, NotFoundError
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, or_, select
@@ -230,6 +230,7 @@ class BillingCreditRepository:
                 user_id=segment.owner_user_id, started_at=start, ended_at=end
             )
             if segment.dimension == BilledDimension.VolumeStorage.value
+            or segment.component == LedgerComponent.DiskStorage.value
             else ()
         )
         for lower, upper in retention:

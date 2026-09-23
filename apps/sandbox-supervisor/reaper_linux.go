@@ -4,10 +4,13 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strconv"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func (s *supervisor) reapAdoptedChildren() {
@@ -42,4 +45,15 @@ func processParentPID(status []byte) int {
 		return pid
 	}
 	return 0
+}
+
+// awaitExit blocks until pid has exited without reaping it.
+func awaitExit(pid int) {
+	var info unix.Siginfo
+	for {
+		err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if !errors.Is(err, unix.EINTR) {
+			return
+		}
+	}
 }

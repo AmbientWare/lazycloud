@@ -58,6 +58,12 @@ class _PendingStream:
 
 
 @dataclass(slots=True)
+class _AgentValidation:
+    checked_at: float
+    result: asyncio.Task[None]
+
+
+@dataclass(slots=True)
 class _AgentSession:
     record: AgentConnectionRecord
     connect_task: asyncio.Task[None]
@@ -78,6 +84,7 @@ class AgentTunnelGateway:
     accepting: bool = True
     _sessions: dict[str, _AgentSession] = field(default_factory=dict, init=False)
     _maintenance: set[asyncio.Task[None]] = field(default_factory=set, init=False)
+    _validations: dict[str, _AgentValidation] = field(default_factory=dict, init=False)
 
     def server(self, credentials: TunnelCredentials, *, listen_address: str) -> grpc.aio.Server:
         server = grpc.aio.server(options=TUNNEL_GRPC_OPTIONS, maximum_concurrent_rpcs=4096)
@@ -174,7 +181,7 @@ class AgentTunnelGateway:
     async def attach(
         self, incoming: AsyncIterator[bytes], context: grpc.aio.ServicerContext[bytes, bytes]
     ) -> None:
-        identity, expiry = await self._agent(context)
+        identity, _ = await self._agent(context)
         stream = GrpcPacketStream(incoming, context.write)
         async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
             message = await stream.recv_message()
@@ -191,8 +198,7 @@ class AgentTunnelGateway:
             return
         pending.stream.set_result(stream)
         try:
-            async with asyncio.timeout(max(0, (expiry - datetime.now(UTC)).total_seconds())):
-                await asyncio.shield(pending.completed)
+            await asyncio.shield(pending.completed)
         finally:
             if not pending.completed.done():
                 pending.owner.cancel()
@@ -200,7 +206,7 @@ class AgentTunnelGateway:
     async def route(
         self, incoming: AsyncIterator[bytes], context: grpc.aio.ServicerContext[bytes, bytes]
     ) -> None:
-        expiry = await self._service(context)
+        await self._service(context)
         stream = GrpcPacketStream(incoming, context.write)
         async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
             request = TunnelRouteRequest.model_validate_json(await stream.recv_message() or b"")
@@ -238,8 +244,7 @@ class AgentTunnelGateway:
             async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
                 agent = await pending.stream
             await stream.send_message(TunnelPacket(kind=TunnelPacketKind.Opened).to_wire())
-            async with asyncio.timeout(max(0, (expiry - datetime.now(UTC)).total_seconds())):
-                await bridge_packets(stream, agent)
+            await bridge_packets(stream, agent)
         except asyncio.CancelledError:
             if session.close_status is not None:
                 await context.abort(session.close_status, "Agent session is no longer available")
@@ -253,7 +258,7 @@ class AgentTunnelGateway:
     async def control(
         self, incoming: AsyncIterator[bytes], context: grpc.aio.ServicerContext[bytes, bytes]
     ) -> None:
-        identity, expiry = await self._agent(context)
+        identity, _ = await self._agent(context)
         record = await asyncio.to_thread(
             self.directory.get, identity.workspace_id, identity.enrollment_id
         )
@@ -272,8 +277,7 @@ class AgentTunnelGateway:
             try:
                 stream = GrpcPacketStream(incoming, context.write)
                 await stream.send_message(TunnelPacket(kind=TunnelPacketKind.Opened).to_wire())
-                async with asyncio.timeout(max(0, (expiry - datetime.now(UTC)).total_seconds())):
-                    await bridge_socket(stream, reader, writer)
+                await bridge_socket(stream, reader, writer)
             finally:
                 writer.close()
                 with suppress(OSError):
@@ -305,12 +309,16 @@ class AgentTunnelGateway:
     async def _maintain(self, session: _AgentSession) -> None:
         status = grpc.StatusCode.UNAVAILABLE
         try:
+            # A certificate admits a connection; the enrollment keeps authorizing its
+            # streams. A session the agent replaced while renewing keeps the streams
+            # it accepted for as long as they last. A long SSH session survives the
+            # hourly certificate, and revocation still ends it at the next check.
             while session.connected or session.streams:
-                if datetime.now(UTC) >= session.record.expires_at:
+                if session.connected and datetime.now(UTC) >= session.record.expires_at:
                     status = grpc.StatusCode.UNAUTHENTICATED
                     return
                 async with asyncio.timeout(TUNNEL_HEARTBEAT_SECONDS):
-                    await asyncio.to_thread(self.authority.validate_agent, session.record.identity)
+                    await self._validate_agent(session.record.identity)
                     if session.connected and not await asyncio.to_thread(
                         self.directory.renew, session.record
                     ):
@@ -331,7 +339,26 @@ class AgentTunnelGateway:
                 await asyncio.gather(*owners, return_exceptions=True)
             finally:
                 self._sessions.pop(session.record.connection_id, None)
+                identity = session.record.identity
+                if all(other.record.identity != identity for other in self._sessions.values()):
+                    self._validations.pop(identity.model_dump_json(), None)
                 await self._release(session.record)
+
+    async def _validate_agent(self, identity: AgentTunnelIdentity) -> None:
+        # Every session of one agent shares a check per heartbeat, so the sessions a
+        # renewal leaves behind with open streams add no enrollment queries.
+        key = identity.model_dump_json()
+        now = asyncio.get_running_loop().time()
+        validation = self._validations.get(key)
+        if validation is None or (
+            validation.result.done() and now - validation.checked_at >= TUNNEL_HEARTBEAT_SECONDS
+        ):
+            validation = _AgentValidation(
+                now,
+                asyncio.create_task(asyncio.to_thread(self.authority.validate_agent, identity)),
+            )
+            self._validations[key] = validation
+        await asyncio.shield(validation.result)
 
     async def _release(self, record: AgentConnectionRecord) -> None:
         try:
@@ -387,7 +414,7 @@ class AgentTunnelGateway:
             raise
         return identity, x509.load_pem_x509_certificate(certificate.encode()).not_valid_after_utc
 
-    async def _service(self, context: grpc.aio.ServicerContext[bytes, bytes]) -> datetime:
+    async def _service(self, context: grpc.aio.ServicerContext[bytes, bytes]) -> None:
         certificate = await _certificate(context)
         try:
             identity = service_identity_from_verified_certificate(certificate)
@@ -395,7 +422,6 @@ class AgentTunnelGateway:
                 raise ValueError("Backend routes require a control plane identity")
         except ValueError as exc:
             await context.abort(grpc.StatusCode.PERMISSION_DENIED, str(exc))
-        return x509.load_pem_x509_certificate(certificate.encode()).not_valid_after_utc
 
 
 async def _certificate(context: grpc.aio.ServicerContext[bytes, bytes]) -> str:

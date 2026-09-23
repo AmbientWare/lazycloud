@@ -10,6 +10,7 @@ from shared.contracts import ContractModel
 from shared.usage import UsageBillingOwner
 
 from worker.container_rootfs import DEFAULT_CONTAINER_ROOTFS_ROOT
+from worker.durable_disks import DEFAULT_DISK_ROOT
 from worker.events import WorkerPoolMode
 from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,
@@ -44,12 +45,26 @@ class WorkerCapacityConfiguration(ContractModel):
     memory_mib: int = 0
     gpu_type: str = ""
     gpu_count: int = 0
+    disk_volume_slots: int | None = None
+    """Provider volumes the machine can still attach, one per disk it holds.
+
+    Set on a provider machine, whose disks each get a volume of their own; unset
+    on a joined machine, whose disks share its host storage.
+    """
 
     @field_validator("cpu_millicores", "memory_mib", "gpu_count")
     @classmethod
     def values_cannot_be_negative(cls, value: int) -> int:
         if value < 0:
             msg = "worker capacity values cannot be negative"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("disk_volume_slots")
+    @classmethod
+    def volume_slots_cannot_be_negative(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            msg = "disk volume slots cannot be negative"
             raise ValueError(msg)
         return value
 
@@ -100,6 +115,8 @@ class WorkerPathConfiguration(ContractModel):
     source_cache_root: Path | None = None
     checkpoint_root: str = WORKER_CHECKPOINT_ROOT
     container_rootfs_root: Path = Path(DEFAULT_CONTAINER_ROOTFS_ROOT)
+    disk_root: Path = Path(DEFAULT_DISK_ROOT)
+    """Host directory for durable disk layers and leases. It outlives the worker."""
 
     @model_validator(mode="after")
     def image_build_root_is_dedicated_disk_storage(self) -> Self:

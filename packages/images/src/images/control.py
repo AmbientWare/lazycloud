@@ -93,6 +93,7 @@ class ImageBuildWorkflow(Protocol):
         registry_credential_payload: str | None = None,
         build_args: dict[str, str] | None = None,
         request_id: str | None = None,
+        machine: str = "",
     ) -> ImageBuildRecord: ...
 
     def stream_events(
@@ -317,6 +318,7 @@ class ImageControlService:
             build_args=build_args,
             python_version=request.python_version,
             image_id=verify.image_id,
+            machine=request.machine,
         )
 
     def _verify_spec(
@@ -556,15 +558,21 @@ def _stream_image_execution(
     build_args: dict[str, str],
     python_version: str,
     image_id: str,
+    machine: str,
 ) -> Iterator[BuildImageResponse]:
-    record = services.images.build(
-        spec,
-        workspace_id=workspace_id,
-        request_id=request_id,
-        credential_plan=credential_plan,
-        registry_credential_payload=registry_credential_payload,
-        build_args=build_args,
-    )
+    try:
+        record = services.images.build(
+            spec,
+            workspace_id=workspace_id,
+            request_id=request_id,
+            credential_plan=credential_plan,
+            registry_credential_payload=registry_credential_payload,
+            build_args=build_args,
+            machine=machine,
+        )
+    except InvalidInputError as exc:
+        yield _failed_build_response(exc, image_id=image_id, python_version=python_version)
+        return
     yield BuildImageResponse(
         build_id=record.id,
         image_id=record.image_id or "",

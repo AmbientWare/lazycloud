@@ -30,9 +30,10 @@ export function UsageCostBreakdown({
   if (costs.isError && !costs.isFetchNextPageError)
     return <PanelError message={costs.error.message} />;
   if (!rows.length) return <PanelEmpty message={`No usage during ${caption}`} className="h-32" />;
-  const apps = rows.filter((row) => row.app_id && row.category !== "image-build");
+  const apps = rows.filter((row) => row.app_id && !row.category);
+  const disks = rows.filter((row) => row.category === "disk");
   const builds = rows.filter((row) => row.category === "image-build");
-  const unattributed = rows.filter((row) => !row.app_id && row.category !== "image-build");
+  const unattributed = rows.filter((row) => !row.app_id && !row.category);
   return (
     <div className="content-transition min-h-0 lg:flex-1 lg:overflow-y-auto">
       {apps.map((row) => (
@@ -45,7 +46,7 @@ export function UsageCostBreakdown({
           scope={{ groupBy: "workload", appId: row.app_id, workspaceId: row.workspace_id }}
         />
       ))}
-      {(builds.length > 0 || unattributed.length > 0) && (
+      {(disks.length > 0 || builds.length > 0 || unattributed.length > 0) && (
         <h3 className="border-y border-border/70 bg-muted/15 px-4 py-2 text-xs text-muted-foreground">
           Other usage
         </h3>
@@ -63,6 +64,15 @@ export function UsageCostBreakdown({
             workspaceId: row.workspace_id,
             category: "unattributed",
           }}
+        />
+      ))}
+      {disks.map((row) => (
+        <UsageGroup
+          key={rowKey(row)}
+          row={row}
+          title={row.disk_name ? `Disk ${row.disk_name}` : "Disk removed"}
+          window={window}
+          currency={currency}
         />
       ))}
       {builds.map((row) => (
@@ -138,5 +148,5 @@ function UsageGroup({
 }
 
 function rowKey(row: UsageCostRow): string {
-  return `${row.workspace_id}|${row.app_id}|${row.category}`;
+  return `${row.workspace_id}|${row.app_id}|${row.category}|${row.disk_id}`;
 }

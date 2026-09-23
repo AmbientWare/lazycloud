@@ -26,7 +26,6 @@ output "infrastructure_configuration" {
     control_principal_arn      = aws_iam_role.control_principal.arn
     public_origin              = "https://${data.terraform_remote_state.cloudflare.outputs.records.apex}"
     redis_host                 = aws_elasticache_replication_group.redis.primary_endpoint_address
-    hetzner_node_images        = var.hetzner_node_images
     fleet = {
       provider_ref              = "aws:${random_uuid.fleet_provider.result}"
       node_role_arn             = aws_iam_role.fleet_node.arn

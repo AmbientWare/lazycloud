@@ -51,12 +51,6 @@ class WorkspaceStorageMountPlan(ContractModel):
     previous_mount_path: str = ""
 
 
-class WorkspaceStorageCleanupPlan(ContractModel):
-    active_workspaces: set[str] = Field(default_factory=set)
-    unmount: list[WorkspaceMountState] = Field(default_factory=list)
-    keep: list[WorkspaceMountState] = Field(default_factory=list)
-
-
 def validate_workspace_storage(
     credentials: WorkspaceStorageCredentials | None,
 ) -> tuple[bool, str]:
@@ -121,22 +115,3 @@ def plan_workspace_storage_mount(
 
 def workspace_mount_healthy(mount: WorkspaceMountState) -> bool:
     return mount.mounted
-
-
-def plan_workspace_mount_cleanup(
-    mounts: list[WorkspaceMountState],
-    *,
-    active_workspace_names: set[str],
-) -> WorkspaceStorageCleanupPlan:
-    keep: list[WorkspaceMountState] = []
-    unmount: list[WorkspaceMountState] = []
-    for mount in mounts:
-        if mount.workspace_name in active_workspace_names:
-            keep.append(mount)
-        else:
-            unmount.append(mount)
-    return WorkspaceStorageCleanupPlan(
-        active_workspaces=active_workspace_names,
-        keep=keep,
-        unmount=unmount,
-    )

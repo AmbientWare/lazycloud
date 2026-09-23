@@ -159,6 +159,7 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "storage", "secrets"] as const,
     volumes: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "storage", "volumes"] as const,
+    disks: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage", "disks"] as const,
     volumePath: (workspaceId: string, volumeName: string, path?: string) =>
       [
         ...workspaceRoot(workspaceId),

@@ -15,6 +15,7 @@ from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeUnitRepository,
 )
+from database.repositories.disk_volumes import DiskVolumeRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -445,6 +446,11 @@ class AwsAccountConnectionService:
                 raise ConflictError(
                     "delete the workspaces that live in this AWS account before "
                     f"disconnecting it: {', '.join(resident)}"
+                )
+            if DiskVolumeRepository(session).connection_holds_volumes(current.id):
+                raise ConflictError(
+                    "disk volumes still exist in this AWS account; delete their disks, or "
+                    "wait for released volumes to expire, before disconnecting it"
                 )
             if current.active_authorization is None:
                 if current.pending_authorization is not None:
@@ -931,6 +937,8 @@ class AwsAccountConnectionService:
             dependent = pools.list_for_provider_connection(claimed.id)
             if any(pool.phase is not ComputeUnitPhase.Deleted for pool in dependent):
                 raise ConflictError("AWS account connection still has active compute pools")
+            if DiskVolumeRepository(session).connection_holds_volumes(claimed.id):
+                raise ConflictError("AWS account connection still holds disk volumes")
             CapacityRecoveryRepository(session).delete_completed_for_units(
                 [pool.id for pool in dependent]
             )

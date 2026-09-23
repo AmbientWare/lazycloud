@@ -94,7 +94,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         workload.app.deploy(
             workspace=workspace,
             source_root=SOURCE_ROOT,
-            env=deployment_environment,
         )
         marker = f"cloud-bucket-{secrets.token_hex(12)}"
         if workload.cloud_bucket_probe.remote("write", "accepted.txt", marker) != marker:

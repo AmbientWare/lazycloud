@@ -11,6 +11,7 @@ from typing import Protocol, runtime_checkable
 from database.client import DatabaseClient
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.storage import VolumeRepository
+from shared.disks import disk_object_prefix
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.volumes import PresignedUrlMethod
 from shared.identity import WorkspaceStatus
@@ -355,6 +356,13 @@ class WorkspaceVolumeFilesystem:
     def delete_volume(self, namespace: VolumeNamespace) -> None:
         store = self._store(namespace)
         prefix = store.prefix_key(namespace)
+        store.client.abort_multipart_uploads(prefix, bucket=store.bucket)
+        store.client.delete_prefix(prefix, bucket=store.bucket)
+
+    def delete_disk_objects(self, *, workspace_id: str, disk_id: str) -> None:
+        """Remove every chunk and manifest of one disk, and nothing beside it."""
+        store = self._store(VolumeNamespace(workspace_id=workspace_id, volume_id=disk_id))
+        prefix = f"{store.prefix}{disk_object_prefix(disk_id)}/"
         store.client.abort_multipart_uploads(prefix, bucket=store.bucket)
         store.client.delete_prefix(prefix, bucket=store.bucket)
 

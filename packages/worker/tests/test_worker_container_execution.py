@@ -4,6 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from threading import Event
 from time import sleep
 
@@ -209,12 +210,8 @@ class WorkspaceStorageMounter:
         if self.fail:
             raise RuntimeError("workspace storage mount failed")
 
-    def cleanup_unused(
-        self,
-        *,
-        active_workspace_names: set[str],
-    ) -> list[StorageMountResult]:
-        _ = active_workspace_names
+    def release_workspace_storage(self, container_id: str) -> list[StorageMountResult]:
+        _ = container_id
         return []
 
 
@@ -230,8 +227,9 @@ class RootfsPreparer:
         container_id: str,
         image_id: str,
         disk_limit_bytes: int = 0,
+        upper_root: Path | None = None,
     ) -> ContainerRootfsSetupResult:
-        _ = image_id
+        _ = image_id, upper_root
         self.disk_limits.append(disk_limit_bytes)
         self.log.calls.append(f"rootfs:{container_id}")
         return ContainerRootfsSetupResult(
@@ -520,6 +518,10 @@ class Cleanup:
     def release_container_rootfs(self, container_id: str) -> None:
         _ = container_id
         self.calls.append(ContainerFinalizationStep.ReleaseContainerRootfs)
+
+    def release_durable_disks(self, container_id: str) -> None:
+        _ = container_id
+        self.calls.append(ContainerFinalizationStep.ReleaseDurableDisks)
 
     def delete_local_state(self, container_id: str) -> None:
         _ = container_id

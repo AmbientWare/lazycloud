@@ -108,10 +108,13 @@ class DurableImageBuildDispatch:
                 identity_token=entry.get("identitytoken", ""),
             )
         workspace = _workspace(self.database, request.workspace_id)
-        # A build runs where the workspace's workloads run, so the image is baked
-        # on the capacity that will pull it.
+        # A build runs where its workload runs, on the machine the request names or
+        # else in the workspace's location, so the image is built on the capacity
+        # that will pull it. The resolver validates the machine as it would a workload's.
         with self.database.session() as session:
-            placement = self.placement_resolver.resolve_placement(session, workspace, "")
+            placement = self.placement_resolver.resolve_placement(
+                session, workspace, request.machine
+            )
         payload = ImageBuildDispatchPayload(
             plan=plan_image_build_container_request(
                 request,

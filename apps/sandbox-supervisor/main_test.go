@@ -30,6 +30,11 @@ func TestDrainClosesAcceptedConnectionsBeforeControlEOF(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A pipe refuses a deadline once the far end has closed, and the far end
+	// closes as soon as the drain is answered.
+	if err := controlClient.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if err := json.NewEncoder(controlClient).Encode(request{Version: protocolVersion, Op: "drain", Token: token}); err != nil {
 		t.Fatal(err)
 	}
@@ -40,9 +45,6 @@ func TestDrainClosesAcceptedConnectionsBeforeControlEOF(t *testing.T) {
 	}
 	if drained.Version != protocolVersion || drained.Type != "drained" {
 		t.Fatalf("unexpected drain response: %#v", drained)
-	}
-	if err := controlClient.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
 	}
 	if err := decoder.Decode(&response{}); err != io.EOF {
 		t.Fatalf("control connection did not close after drain: %v", err)

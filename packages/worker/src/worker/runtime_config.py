@@ -129,6 +129,15 @@ class RuntimeCommandRequest(ContractModel):
     all_processes: bool = False
     docker_enabled: bool = False
     nvproxy: bool = False
+    durable_root: bool = False
+    """Pass root writes through to the host overlay instead of gVisor's own.
+
+    gVisor wraps the root filesystem in an overlay whose upper layer is a file it
+    creates per container, so writes to `/` never reach the host's upper
+    directory. That is right for a disposable root and loses everything written
+    to a root that lives on a durable disk.
+    """
+
     image_path: str | None = None
     work_dir: str | None = None
     leave_running: bool = False
@@ -864,6 +873,7 @@ def _plan_runsc_command(
         config,
         docker_enabled=request.docker_enabled,
         nvproxy=request.nvproxy,
+        durable_root=request.durable_root,
     )
     cleanup_argv: list[str] | None = None
     operation = request.operation
@@ -925,6 +935,7 @@ def _runsc_base_args(
     *,
     docker_enabled: bool = False,
     nvproxy: bool = False,
+    durable_root: bool = False,
 ) -> list[str]:
     # runsc passes this error-log descriptor to the sandbox and gofer children.
     # Without it, a child fatal error is lost behind the parent's startup EOF.
@@ -942,6 +953,8 @@ def _runsc_base_args(
     # built against, and a mismatch must fail by name rather than run unproven.
     if nvproxy:
         args.append("--nvproxy")
+    if durable_root:
+        args.append("--overlay2=none")
     return args
 
 

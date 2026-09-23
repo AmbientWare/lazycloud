@@ -32,7 +32,7 @@ concurrency:
 jobs:
   select:
     name: Record the selected release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: ${{ inputs.deployment }}
     env:
       DEPLOYMENT: lazycloud-${{ inputs.deployment }}
@@ -42,8 +42,8 @@ jobs:
       - name: Validate deployment
         run: |
           case "$BRANCH" in prod|staging) ;; *) exit 1 ;; esac
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}

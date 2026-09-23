@@ -405,6 +405,11 @@ class _Wake:
         return True
 
 
+class _NoDiskVolumes:
+    def unheld_attachments(self, machine_ids: Sequence[str]) -> dict[str, int]:
+        return {}
+
+
 class _UnownedWorkspaces:
     """No workspace here has an account behind it.
 
@@ -848,6 +853,7 @@ def test_placement_miss_transfers_capacity_to_dispatch_before_reconciliation(
         lifecycle_events=_Events(),
         capacity_reservations=capacity,
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = _request("container-e2e")
@@ -924,6 +930,7 @@ def test_ready_gpu_backfill_dispatches_without_supplier_acquisition(
         dispatch_wake=_Wake(),
         lifecycle_events=_Events(),
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
         capacity_reservations=capacity,
         backfill_preemption=SchedulerGpuBackfillPreemptionService(workers, containers, Stopper()),
     )
@@ -985,6 +992,7 @@ def test_gpu_backfill_releases_only_its_pending_cpu_allocation(
         dispatch_wake=_Wake(),
         lifecycle_events=_Events(),
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
         capacity_reservations=capacity,
         backfill_preemption=SchedulerGpuBackfillPreemptionService(workers, containers, Stopper()),
     )
@@ -1061,6 +1069,7 @@ def test_registered_gpu_reservation_recovers_cpu_backfill_before_dispatch(
         dispatch_wake=_Wake(),
         lifecycle_events=_Events(),
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
         capacity_reservations=capacity,
         backfill_preemption=SchedulerGpuBackfillPreemptionService(workers, containers, Stopper()),
     )
@@ -1113,6 +1122,7 @@ def test_pending_purchase_does_not_pin_dispatch_or_release_shared_demand(
         lifecycle_events=_Events(),
         capacity_reservations=capacity,
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
     )
     now = datetime.now(UTC)
     request = _request("ready-elsewhere").model_copy(update={"timestamp": now})
@@ -1170,6 +1180,7 @@ def test_capacity_backoff_preserves_purchase_cooldown_but_fails_removed_pools(
             RedisCapacityReservationRepository(redis), tuple
         ),
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
     )
     now = datetime.now(UTC)
     request = _request("capacity-retry").model_copy(update={"timestamp": now})
@@ -1215,6 +1226,7 @@ def test_provider_reconciliation_does_not_block_final_dispatch(
         lifecycle_events=_Events(),
         capacity_reservations=capacity,
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = _request("container-provider-reconcile")
@@ -1265,6 +1277,7 @@ async def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
         lifecycle_events=_Events(),
         capacity_reservations=capacity,
         workspace_owners=_UnownedWorkspaces(),
+        disk_volume_attachments=_NoDiskVolumes(),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = _request("container-scale-zero-fence")

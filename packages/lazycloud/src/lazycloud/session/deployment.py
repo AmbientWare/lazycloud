@@ -345,7 +345,9 @@ class DeploymentClient(ControlClientConfigMixin):
                             "credentials": {**source_image.get_credentials_from_env()},
                         }
                     ),
-                    lambda: self._prepare_image(source_image),
+                    lambda: self._prepare_image(
+                        source_image, machine=_metadata_str(spec.metadata, "machine")
+                    ),
                 )
                 if self.client is None or self.image_client is not None
                 else None
@@ -613,11 +615,13 @@ class DeploymentClient(ControlClientConfigMixin):
                 self._channel = control_http_channel(self._config())
             return self._channel
 
-    def _prepare_image(self, image: Image) -> ImageSpec:
+    def _prepare_image(self, image: Image, *, machine: str) -> ImageSpec:
         if _needs_context_upload(image):
             image._sync_context(self._object_client())
 
-        with ImageBuildOperation(image, self._image_client(), terminal=self.terminal) as operation:
+        with ImageBuildOperation(
+            image, self._image_client(), terminal=self.terminal, machine=machine
+        ) as operation:
             operation.verify()
             result = operation.finish()
         if not result.success:
@@ -871,6 +875,8 @@ def _stub_request_from_spec(
         inputs=_metadata_schema(metadata, "inputs"),
         outputs=_metadata_schema(metadata, "outputs"),
         tcp=_metadata_bool(metadata, "tcp"),
+        ssh=_metadata_bool(metadata, "ssh"),
+        disks=list(spec.disks),
         block_network=_metadata_bool(metadata, "block_network"),
         allow_list=_metadata_str_list(metadata, "allow_list"),
         docker_enabled=_metadata_bool(metadata, "docker_enabled"),

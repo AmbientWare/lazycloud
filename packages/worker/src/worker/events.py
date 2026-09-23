@@ -10,6 +10,7 @@ from threading import Lock
 from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.container_requests import (
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
+    RequestDisk,
     RequestMount,
     StopContainerReason,
 )
@@ -90,6 +91,8 @@ class ContainerExitCode(IntEnum):
     exactly the misattribution the stop reason exists to prevent.
     """
 
+    DiskFull = 564
+
 
 class WorkerPoolMode(StrEnum):
     Public = "public"
@@ -161,6 +164,7 @@ class ContainerRequestContext(ContractModel):
     deployment_id: str = ""
     env: list[str] = Field(default_factory=list)
     mounts: list[RequestMount] = Field(default_factory=list)
+    disks: list[RequestDisk] = Field(default_factory=list)
     secret_names: list[str] = Field(default_factory=list)
     gateway_token_required: bool = False
     workspace_storage_required: bool = False
@@ -426,6 +430,8 @@ def normalize_container_exit_code(
         # Before the `oom_killed` branch: an eviction is a SIGKILL and the
         # runtime reports it as an OOM, which is the confusion being avoided.
         return int(ContainerExitCode.MemoryEvicted)
+    if reason is StopContainerReason.DiskFull:
+        return int(ContainerExitCode.DiskFull)
     if oom_killed:
         return int(ContainerExitCode.OomKill)
     if exit_code < 0:

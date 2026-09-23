@@ -9,6 +9,7 @@ from shared.mounts import MountAuthMode
 
 from worker.container_execution import ContainerExecutionContext
 from worker.credential_payloads import WorkerCredentialPrincipal
+from worker.ssh_identity import ContainerSshIdentityRequest, ContainerSshIdentitySource
 from worker.tools import (
     ContainerCredentialContext,
     ContainerCredentialRequest,
@@ -34,6 +35,7 @@ class ContainerCredentialVendor(Protocol):
 class WorkerCredentialHydrator:
     credentials: ContainerCredentialVendor
     principal: WorkerCredentialPrincipal | None = None
+    ssh_identities: ContainerSshIdentitySource | None = None
 
     def hydrate_container_credentials(
         self,
@@ -78,9 +80,18 @@ class WorkerCredentialHydrator:
                     }
                 )
 
-        if not changed:
-            return context
-        return context.model_copy(update={"request": hydrated_request})
+        hydrated = context.model_copy(update={"request": hydrated_request}) if changed else context
+        if context.ssh_enabled:
+            if self.ssh_identities is None:
+                raise RuntimeError("SSH identity source is not configured on this worker")
+            identity = self.ssh_identities.container_ssh_identity(
+                ContainerSshIdentityRequest(
+                    container_id=request.container_id,
+                    workspace_id=request.workspace_id,
+                )
+            )
+            hydrated = hydrated.model_copy(update={"ssh_identity": identity})
+        return hydrated
 
     def _principal_for_request(self, workspace_id: str) -> WorkerCredentialPrincipal:
         if self.principal is not None:

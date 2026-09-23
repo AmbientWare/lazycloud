@@ -10,6 +10,7 @@ from shared.autoscaling import Autoscaler
 from shared.contracts import ContractModel
 from shared.custom_domains import normalize_assignable_hostname
 from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
+from shared.disks import DiskMount, validate_disk_mounts
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
@@ -324,6 +325,7 @@ class DeploymentSpec(ContractModel):
     env: dict[str, str] = Field(default_factory=dict)
     secrets: list[str] = Field(default_factory=list)
     volumes: list[VolumeMount] = Field(default_factory=list)
+    disks: list[DiskMount] = Field(default_factory=list)
     route: str | None = None
     methods: list[str] = Field(default_factory=lambda: list(DEFAULT_ENDPOINT_METHODS))
     domain: str | None = None
@@ -348,6 +350,11 @@ class DeploymentSpec(ContractModel):
     def normalize_methods(cls, values: list[str]) -> list[str]:
         return [value.upper() for value in values]
 
+    @field_validator("disks")
+    @classmethod
+    def disks_are_distinct(cls, value: list[DiskMount]) -> list[DiskMount]:
+        return validate_disk_mounts(value)
+
     @field_validator("domain")
     @classmethod
     def normalize_domain(cls, value: str | None) -> str | None:
@@ -365,6 +372,9 @@ class DeploymentSpec(ContractModel):
         # has one. Refused here rather than at the tick, where the schedule
         # exists, fires against a stub that cannot serve it, and records the
         # same failure every minute for as long as the deployment lives.
+        if (self.disks or self.metadata.get("ssh") is True) and self.kind is not DeploymentKind.Pod:
+            msg = "ssh and disks are only supported for pod workloads"
+            raise ValueError(msg)
         if self.cron and self.kind is not DeploymentKind.Function:
             msg = "cron is only supported for function workloads"
             raise ValueError(msg)

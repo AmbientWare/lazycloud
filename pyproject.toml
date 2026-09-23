@@ -40,7 +40,6 @@ workspace = [
     "connection-gateway-app",
     "worker-bootstrap-app",
     "provider-aws",
-    "provider-hetzner",
     "provider-cloudflare",
     "provider-garage",
     "provider-github",
@@ -103,7 +102,6 @@ members = [
     "apps/worker-bootstrap",
     "packages/billing",
     "packages/providers/aws",
-    "packages/providers/hetzner",
     "packages/providers/cloudflare",
     "packages/providers/garage",
     "packages/providers/github",
@@ -151,7 +149,6 @@ worker = { workspace = true }
 worker-repository = { workspace = true }
 worker-bootstrap-app = { workspace = true }
 provider-aws = { workspace = true }
-provider-hetzner = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = [

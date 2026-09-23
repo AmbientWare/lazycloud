@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
+from compute.block_volumes import BlockVolumeProvider
 from compute.offers import (
     DEFAULT_POOLED_NODE_ARCHITECTURE,
     DEFAULT_POOLED_NODE_RUNTIME,
@@ -28,6 +29,7 @@ from shared.network_egress import NetworkEgressRouteEvidence
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 
 from .account_connection import AwsAccountConnectionTarget, AwsCapacityIdentity
+from .block_volumes import AwsBlockVolumes, is_block_volume_client
 from .instance_catalog import (
     AWS_INSTANCE_CATALOG,
     AwsInstanceCatalogEntry,
@@ -86,6 +88,12 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
             vpc_id=network.vpc_id,
             subnet_ids=network.subnet_ids,
         )
+
+    def block_volumes(self, region: str) -> BlockVolumeProvider:
+        ec2: object = self.client_provider.assume(self._target(region)).ec2
+        if not is_block_volume_client(ec2):
+            raise RuntimeError("boto3 EC2 client lacks block volume operations")
+        return AwsBlockVolumes(ec2)
 
     def unit_offer(self, unit: ComputeUnitRecord) -> ComputeOffer:
         parts = unit.offer_id.split(":")

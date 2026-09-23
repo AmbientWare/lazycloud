@@ -244,6 +244,13 @@ class StopContainerReason(StringEnum):
     which is exactly what a reservation is for.
     """
 
+    DiskFull = "DISK_FULL"
+    """A durable disk's volume ran short of space and publishing could not free it.
+
+    The worker stops the container before the disk's writes start failing.
+    Otherwise the filesystem inside would see I/O errors rather than a full disk.
+    """
+
     Unknown = "UNKNOWN"
 
     def describe(self) -> str:
@@ -276,6 +283,7 @@ _STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
     StopContainerReason.MemoryEvicted: (
         "the machine ran out of memory and this container was using the most above its request"
     ),
+    StopContainerReason.DiskFull: "one of its disks ran out of space to save its changes",
     StopContainerReason.Unknown: "",
 }
 
@@ -341,6 +349,15 @@ class RequestMount(ContractModel):
         return value
 
 
+class RequestDisk(ContractModel):
+    """A durable disk the worker attaches before the container starts."""
+
+    disk_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    mount_path: str
+    size_bytes: int = Field(gt=0)
+
+
 class WorkerContainerRequestPayload(ContractModel):
     image_id: str = ""
     # Digest of the image archive this dispatch is authorized to read. The archive
@@ -360,6 +377,8 @@ class WorkerContainerRequestPayload(ContractModel):
     gateway_token_required: bool = False
     workspace_storage_required: bool = False
     mounts: list[RequestMount] = Field(default_factory=list)
+    disks: list[RequestDisk] = Field(default_factory=list)
+    ssh_enabled: bool = False
     workspace_storage_available: bool = False
     workspace_storage_base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH
     ports: list[int] = Field(default_factory=list)
@@ -429,6 +448,7 @@ __all__ = [
     "ContainerMemoryReading",
     "ContainerShutdownTarget",
     "OciRuntimeName",
+    "RequestDisk",
     "RequestMount",
     "RequestMountPointConfig",
     "RequestMountType",

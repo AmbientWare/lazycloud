@@ -37,6 +37,7 @@ class BilledDimension(StringEnum):
     ComputeRuntime = "compute_runtime"
     NetworkEgress = "network_egress"
     VolumeStorage = "volume_storage"
+    Disk = "disk"
 
 
 class LedgerComponent(StringEnum):
@@ -55,6 +56,8 @@ class LedgerComponent(StringEnum):
     Gpu = "gpu"
     Egress = "egress"
     VolumeStorage = "volume_storage"
+    DiskStorage = "disk_storage"
+    DiskAttached = "disk_attached"
 
 
 class LedgerBasis(StringEnum):
@@ -91,6 +94,8 @@ _COMPONENT_DIMENSIONS: Mapping[LedgerComponent, BilledDimension] = {
     LedgerComponent.Gpu: BilledDimension.ComputeRuntime,
     LedgerComponent.Egress: BilledDimension.NetworkEgress,
     LedgerComponent.VolumeStorage: BilledDimension.VolumeStorage,
+    LedgerComponent.DiskStorage: BilledDimension.Disk,
+    LedgerComponent.DiskAttached: BilledDimension.Disk,
 }
 
 
@@ -143,8 +148,21 @@ BILLED_METRICS: Mapping[UsageMetric, BilledUsage] = {
         basis=LedgerBasis.Measured,
         components=(LedgerComponent.VolumeStorage,),
     ),
+    UsageMetric.DiskStoredByteSeconds: BilledUsage(
+        basis=LedgerBasis.Measured,
+        components=(LedgerComponent.DiskStorage,),
+    ),
+    UsageMetric.DiskAttachedByteSeconds: BilledUsage(
+        basis=LedgerBasis.Reserved,
+        components=(LedgerComponent.DiskAttached,),
+    ),
 }
 """Every metric that produces money, and what each one produces it for.
+
+A disk is one dimension with two components, because it is one line to the
+customer and two costs to the platform: the bytes it keeps in object storage for
+as long as it exists, and the block volume its declared size reserves while a
+container holds it.
 
 Every other metric is attribution or telemetry: it stays metered, it reaches the
 dashboard, and it writes no ledger row.
@@ -247,6 +265,7 @@ def measured_quantity(component: LedgerComponent, quantity: Decimal) -> Decimal:
         LedgerComponent.Cpu,
         LedgerComponent.Egress,
         LedgerComponent.VolumeStorage,
+        LedgerComponent.DiskStorage,
     ):
         return quantity
     raise ValueError(f"{component} has no measured counterpart")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from cache.server import (
@@ -10,6 +11,7 @@ from cache.server import (
 from foundation.process import ProcessTimeoutError, run_process
 from networking.internal_http import InternalHttpClient
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT, AGENT_TUNNEL_CONTROL_URL
+from shared.disks import DiskStorage, disk_capacity_bytes
 from shared.identity import TokenKind
 from shared.placement import PlacementKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
@@ -45,6 +47,13 @@ from worker.container_startup import (
 )
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.credential_payloads import WorkerCredentialPrincipal
+from worker.disk_volumes import DiskVolumeMounts
+from worker.durable_disks import (
+    DEFAULT_DISK_RUN_ROOT,
+    DiskEngine,
+    WorkerDurableDiskService,
+    disk_layout,
+)
 from worker.execution import (
     GatewayEndpointSettings,
     GatewayServiceSettings,
@@ -87,6 +96,7 @@ from worker.repository_client import (
     RemoteContainerLifecycleSink,
     RemoteContainerLogSink,
     RemoteContainerMetricsSink,
+    RemoteContainerSshIdentitySource,
     RemoteSandboxProcessLogSink,
     RemoteSchedulerContainerRepository,
     RemoteSchedulerWorkerRepository,
@@ -212,11 +222,31 @@ def build_worker_process_services(
         list(available_runtime_configs),
     )
     container_credentials = RemoteWorkerCredentialService(repository)
-    credential_hydrator = WorkerCredentialHydrator(credentials=container_credentials)
+    credential_hydrator = WorkerCredentialHydrator(
+        credentials=container_credentials,
+        ssh_identities=RemoteContainerSshIdentitySource(repository),
+    )
     event_sink = RemoteWorkerEventSink(repository)
     usage_recorder = RemoteWorkerUsageRecorder(repository)
     log_sink = RemoteSandboxProcessLogSink(repository)
     container_log_capture = WorkerContainerLogCaptureService(RemoteContainerLogSink(repository))
+    disk_layers_root, disk_lease_root = disk_layout(paths.disk_root.expanduser().resolve())
+    durable_disks = WorkerDurableDiskService(
+        engine=DiskEngine(run_root=Path(DEFAULT_DISK_RUN_ROOT)),
+        leases=repository,
+        credentials=container_credentials,
+        layers_root=disk_layers_root,
+        lease_root=disk_lease_root,
+        mount_root=Path(DEFAULT_DISK_RUN_ROOT) / "mounts",
+        volumes=(
+            DiskVolumeMounts()
+            if configuration.execution.capacity.disk_volume_slots is not None
+            else None
+        ),
+    )
+    # Runs before anything attaches. Daemons and devices a previous process left
+    # are orphans, and cleanup releases the leases they served.
+    durable_disks.recover()
     container_rootfs = ContainerRootfsOverlayManager(
         image_mount_root=Path(paths.image_mount_root),
         scratch_root=paths.container_rootfs_root,
@@ -381,6 +411,7 @@ def build_worker_process_services(
             runtime=runtime,
         ),
         container_logs=container_log_capture,
+        durable_disks=durable_disks,
         lifecycle_events=lifecycle_events,
         runtime_monitor=runtime_monitor,
     )
@@ -573,6 +604,8 @@ def _scheduler_worker_record(
 ) -> SchedulerWorkerRecord:
     execution = config.configuration.execution
     capacity = execution.capacity
+    volume_slots = capacity.disk_volume_slots
+    disk_bytes = _disk_capacity_bytes(config) if volume_slots is None else 0
     return SchedulerWorkerRecord(
         worker_id=identity.worker_id,
         runtime_image=config.runtime_image,
@@ -589,10 +622,21 @@ def _scheduler_worker_record(
         free_cpu_millicores=capacity.cpu_millicores,
         free_memory_mib=capacity.memory_mib,
         free_gpu_count=capacity.gpu_count,
+        free_disk_bytes=disk_bytes,
+        free_disk_volumes=volume_slots or 0,
         total_cpu_millicores=capacity.cpu_millicores,
         total_memory_mib=capacity.memory_mib,
         total_gpu_count=capacity.gpu_count,
+        total_disk_bytes=disk_bytes,
+        total_disk_volumes=volume_slots or 0,
+        disk_storage=DiskStorage.Host if volume_slots is None else DiskStorage.Volume,
     )
+
+
+def _disk_capacity_bytes(config: WorkerSettings) -> int:
+    root = config.configuration.paths.disk_root.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return disk_capacity_bytes(shutil.disk_usage(root).total)
 
 
 def _required_capacity_owner_id(config: WorkerSettings) -> str:
