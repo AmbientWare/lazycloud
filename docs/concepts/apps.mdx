@@ -1,6 +1,6 @@
 ---
 title: "Apps and workloads"
-description: "Lay out a project as an app of workloads, keep its configuration in code, and deploy, export, or remove it as a unit."
+description: "Lay out a project as an app of workloads, keep its configuration in code, and deploy it as a unit."
 ---
 
 An `App` is a named group of workloads in a workspace. Everything in one app is
@@ -58,10 +58,6 @@ A module reference deploys its only app. `module:object` selects one workload
 or, when a module has several apps, one app. See
 [handler references](/cli/overview#handler-references) for the full syntax. From
 Python, `app.deploy()` deploys the whole app and `count.deploy()` one workload.
-
-`--diff` shows what a deploy would add, redeploy, or remove without changing
-anything. `--prune` removes deployed workloads you deleted from the code;
-stored volumes and secrets stay. See [`lazycloud deploy`](/cli/deploy-and-run#lazycloud-deploy).
 
 ## Split an app across files
 
@@ -124,14 +120,8 @@ Routes the generator cannot type fail with an explanation, and an ASGI app with
 no schema keeps raw `request()`. Pods and sandboxes are not exported. Export
 again after deploying a contract change.
 
-## Manage a deployed app
+## Remove a workload
 
-```bash
-uv run lazycloud app show text_tools
-uv run lazycloud app pause text_tools     # stop every workload, keep definitions
-uv run lazycloud app resume text_tools
-uv run lazycloud app delete text_tools
-```
-
-Deleting an app or a workload never deletes the volumes, secrets, or other
-stored data it used. Remove those separately once you no longer need them.
+Delete it from the code and deploy with `--prune`; see
+[`lazycloud deploy`](/cli/deploy-and-run#lazycloud-deploy). Removing a workload
+or deleting an app never deletes the volumes and secrets it used.

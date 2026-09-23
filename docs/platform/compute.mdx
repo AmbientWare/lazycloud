@@ -7,39 +7,6 @@ Use LazyCloud compute to run without managing machines. Choose CPU, memory,
 and GPUs in your workload definition. You pay while its container runs,
 including startup and idle time.
 
-## Request a GPU
-
-Save this as `compute_demo.py`:
-
-```python
-import subprocess
-
-from lazycloud import App
-
-app = App("compute_demo")
-
-
-@app.function(cpu=2.0, memory="4Gi", gpu="l4", gpu_count=1)
-def gpu_name() -> str:
-    return subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True
-    ).strip()
-```
-
-Run `uv run lazycloud run compute_demo:gpu_name` to print the assigned GPU's name.
-Check your GPU access and balance in Settings, then Billing first.
-
-See [Request a GPU](/concepts/resources#request-a-gpu) for the available models
-and preference lists.
-
-Check what your workspace is using:
-
-```bash
-uv run lazycloud compute status
-uv run lazycloud compute instances
-uv run lazycloud compute workloads
-```
-
 ## Where a workload runs
 
 The workspace decides. Every workspace has a location fixed when you create
@@ -59,6 +26,16 @@ The one exception is a machine you joined yourself. A workload names it with
 `serve`, `shell`, or `dev`, and then runs only there. If that machine is
 offline, or does not serve the workload's workspace, the workload fails
 rather than running somewhere else.
+
+## Check usage
+
+```bash
+uv run lazycloud compute status
+uv run lazycloud compute instances
+uv run lazycloud compute workloads
+```
+
+To size a workload or request a GPU, see [Resources and options](/concepts/resources).
 
 ## Your own AWS account
 

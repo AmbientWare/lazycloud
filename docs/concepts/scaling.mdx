@@ -240,14 +240,3 @@ A six hour timeout, no retries because a restarted training run would repeat
 six hours of work, and non-preemptible capacity so the machine is not
 reclaimed under it. Write checkpoints to a [volume](/concepts/volumes) so a
 failure can resume.
-
-## Watch it scale
-
-```bash
-uv run lazycloud compute workloads
-uv run lazycloud container list
-uv run lazycloud task list --app etl
-```
-
-The dashboard's app page lists each workload's containers, and a task's detail
-shows the container it ran on.

@@ -1,0 +1,102 @@
+---
+title: "Develop with coding agents"
+description: "Let a coding agent test locally, run in the cloud, and deploy, using commands with machine-readable output and clear exit codes."
+---
+
+The LazyCloud loop is three commands: test locally, run in the cloud, deploy.
+None of them need a browser or a prompt, `--json` gives each one a parseable
+result, and a failure exits nonzero. A coding agent working in your repository
+can run the whole loop and read the outcome.
+
+## Give the agent the docs
+
+| Source | What it holds |
+| --- | --- |
+| `https://docs.lazycloud.dev/llms.txt` | An index of every page. |
+| `https://docs.lazycloud.dev/llms-full.txt` | The full docs as one text file. |
+| Any page URL plus `.md` | That page as Markdown, for example `/concepts/workflow.md`. |
+| `https://docs.lazycloud.dev/mcp` | An MCP server that searches these docs. |
+
+## Sign in once
+
+Run `lazycloud login` yourself on the machine the agent uses. The CLI stores the
+sign-in under `~/.lazycloud`, and every later command, including the agent's,
+uses it.
+
+Where the agent runs without your home directory, such as a container or CI,
+supply `LAZYCLOUD_TOKEN` from a secret store instead. Set
+`LAZYCLOUD_WORKSPACE` to a development workspace so the agent's runs and
+deployments land there. See [CI and scripts](/platform/auth#ci-and-scripts).
+
+## The loop
+
+**1. Test locally.** `.local()` runs the function in-process with no upload and
+no charge, so unit tests take seconds:
+
+```python
+from reports import summarize_sales
+
+
+def test_summarize_sales() -> None:
+    assert summarize_sales.local([1200, 3500]) == {"sales": 2, "total_cents": 4700}
+```
+
+**2. Run in the cloud.** One remote call with the real image, resources, and
+secrets:
+
+```bash
+uv run lazycloud --json run reports:summarize_sales '[1200, 3500, 800]'
+```
+
+stdout holds one JSON document with the result, and stderr holds progress and
+the remote logs. A failed call prints a JSON error and exits nonzero. The result
+must be JSON-compatible; see [Arguments and results](/concepts/functions#arguments-and-results).
+
+**3. Deploy.** Check the plan, then apply it:
+
+```bash
+uv run lazycloud --json deploy reports --diff
+uv run lazycloud --json deploy reports
+```
+
+`--diff` lists the workloads the deploy would add, redeploy, or remove, and
+changes nothing.
+
+**4. Inspect.** Every remote call leaves a [task](/concepts/tasks-and-logs):
+
+```bash
+uv run lazycloud --json task list --app reports
+uv run lazycloud --json task show <task-id>
+uv run lazycloud logs --task-id <task-id>
+```
+
+`lazycloud serve` is interactive and rejects `--json`. An agent can still start
+it in the background; its `lazycloud run` calls then go to the preview. For most
+agent work, step 2 is faster to reason about.
+
+## Keep a human on destructive steps
+
+`deploy --prune` and `app delete` take workloads offline, and `volume delete`
+and `secret delete` destroy data that cannot be recovered. Have the agent show you the
+`--diff` output or the target before it runs them. While iterating, set
+`retries=0` on functions with side effects so a failed attempt does not repeat
+a write.
+
+## Project instructions
+
+Drop this into the project's agent instruction file:
+
+```markdown
+## LazyCloud
+
+Docs: https://docs.lazycloud.dev/llms.txt
+
+- Workload configuration (image, cpu, memory, gpu, volumes, secrets, scaling)
+  lives in the decorators. Change it there, not with CLI flags.
+- Test logic with `.local()` in pytest before running remotely.
+- Run remotely with `uv run lazycloud --json run module:function ARGS`.
+  The result is on stdout; logs are on stderr; failure exits nonzero.
+- Before deploying, run `uv run lazycloud --json deploy APP --diff` and
+  report the plan. Ask before `--prune` or any delete command.
+- Debug a failed run with `uv run lazycloud logs --task-id TASK_ID`.
+```

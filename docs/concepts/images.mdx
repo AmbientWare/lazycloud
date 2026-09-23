@@ -202,9 +202,3 @@ image = Image.from_registry(
     credentials=["GHCR_USERNAME", "GHCR_PASSWORD"],
 )
 ```
-
-## From the CLI
-
-`uv run lazycloud deploy`, `run`, `serve`, `shell`, and `dev` accept `--image <ref>`
-for a registry image, or `--dockerfile <path>` with `--context <dir>` to build
-from a Dockerfile, without changing Python code.

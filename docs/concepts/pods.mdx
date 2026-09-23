@@ -157,15 +157,9 @@ with socket.create_connection((address.hostname, address.port)) as connection:
 This public example serves the container's directory over TLS. Stop it when
 finished with `uv run lazycloud deployment stop tcp-web`.
 
-## Containers
+## Inspect running containers
 
-Use container commands to investigate a running instance. Stop the deployment
-when you want the service to remain stopped; stopping just its container can
-cause the deployment to replace it. Pods incur compute charges while running.
-
-```bash
-uv run lazycloud container list
-uv run lazycloud container attach <container-id>      # stream output until it exits
-uv run lazycloud container checkpoint <container-id>
-uv run lazycloud container stop <container-id>
-```
+`uv run lazycloud container list`, `attach`, `checkpoint`, and `stop` act on
+individual pod containers; see [container commands](/cli/deployments-and-containers#lazycloud-container).
+Stop the deployment, not the container, when you want the service to stay down,
+because an active deployment replaces a stopped container.

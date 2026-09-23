@@ -1,20 +1,24 @@
 ---
-title: "Run, preview, deploy"
-description: "The four ways to run a workload, what each is for, and how a call decides where to go."
+title: "Local, cloud, deploy"
+description: "The development loop: test locally, run in the cloud, preview, and deploy, and how a call decides where to go."
 ---
 
-The same decorated function runs four ways. Pick by what you need from the run:
+The same decorated function runs locally, in the cloud, or as a deployment,
+with no change to the code. The recommended loop moves through them in order:
 
-| You want to | Use |
-| --- | --- |
-| Check logic or run unit tests | `.local()` |
-| Run once with the real image, GPU, and secrets | `lazycloud run` or `.remote()` |
-| Iterate on remote code, or test an endpoint from a browser | `lazycloud serve` |
-| Keep a URL, schedule, or callable function available | `lazycloud deploy` |
+1. Test the logic locally with `.local()`, in seconds and at no cost.
+2. Run it once in the cloud with `lazycloud run` to check the image, GPU, and
+   secrets.
+3. Deploy it with `lazycloud deploy` when something else needs to call it.
+
+`lazycloud serve` sits between steps 2 and 3 when you want to edit remote code
+and see each change without redeploying. Every step is one command with
+[machine-readable output](/cli/overview), so you or a
+[coding agent](/getting-started/agents) can run the loop from a script.
 
 The examples use `text_tools.py` from [Apps and workloads](/concepts/apps).
 
-## Local
+## Test locally
 
 ```python
 from text_tools import count_words
@@ -27,7 +31,7 @@ Both run in your Python process. Nothing is uploaded and no task is recorded.
 The image, volumes, secrets, GPU, retries, and lifecycle hooks on the decorator
 do not apply, so this suits logic with no remote dependencies and unit tests.
 
-## One remote run
+## Run in the cloud
 
 ```bash
 uv run lazycloud run text_tools:count_words "one two three"
@@ -111,12 +115,3 @@ weights in [volumes](/concepts/volumes) rather than the source tree.
 
 Your code is not part of the image. Editing it never rebuilds the image;
 changing a dependency does. See [Images](/concepts/images).
-
-## Debug the remote environment
-
-```bash
-uv run lazycloud shell text_tools:count_words   # shell in the function's image
-uv run lazycloud dev                             # shell with your working tree synced in
-```
-
-See the [CLI reference](/cli/deploy-and-run) for each command's flags.

@@ -86,24 +86,16 @@ outcome = task.wait(timeout_seconds=120)
 ## Look up a task from the CLI
 
 ```bash
-uv run lazycloud task list --app reports
 uv run lazycloud task show <task-id>
-uv run lazycloud task result <task-id>
 uv run lazycloud logs --task-id <task-id> --follow
 ```
 
-`logs` also reads by `--deployment` or `--container-id`. Anything your code
-prints is captured; print with `flush=True` or run Python unbuffered so lines
-appear promptly. See the [task and logs reference](/cli/tasks-and-logs) for
-every flag. The dashboard's Tasks page shows the same history.
+Anything your code prints is captured; print with `flush=True` so lines appear
+promptly. The [task and logs reference](/cli/tasks-and-logs) lists every
+command, and the dashboard's Tasks page shows the same history.
 
 ## Callbacks
 
 Functions, endpoints, ASGI apps, and realtime handlers accept `callback_url`.
 LazyCloud calls that webhook with execution events as the task changes state,
 so another system can react without polling.
-
-## Retention
-
-Failed tasks keep their error and full logs. Logs are kept for your plan's
-retention window; see [Plans and limits](/platform/plans).

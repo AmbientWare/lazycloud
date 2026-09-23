@@ -30,7 +30,8 @@
   "contextual": {
     "options": [
       "copy",
-      "view"
+      "view",
+      "mcp"
     ]
   },
   "navigation": {
@@ -40,7 +41,8 @@
         "pages": [
           "index",
           "getting-started/quickstart",
-          "getting-started/installation"
+          "getting-started/installation",
+          "getting-started/agents"
         ]
       },
       {

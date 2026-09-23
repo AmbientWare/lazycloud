@@ -1,10 +1,7 @@
 ---
 title: "Quickstart"
-description: "Run a function remotely, then deploy it behind an HTTP endpoint and call it."
+description: "Test a function locally, run it in the cloud, then deploy an HTTP endpoint and call it."
 ---
-
-You'll run a Python function on LazyCloud, then add an HTTP endpoint to the
-same file, deploy it, and call it with curl and from Python.
 
 ## Install and sign in
 
@@ -18,22 +15,15 @@ lazycloud login
 `login` prints a link and a code. Open the link, check that the code matches
 your terminal, and approve.
 
-## Run a function
-
-Download the quickstart project and run its function:
+## Download the project
 
 ```bash
 lazycloud example download quickstart
 cd quickstart
 uv sync
-uv run lazycloud run quickstart:hello LazyCloud
 ```
 
-The command builds the image, uploads your code, runs `hello` in a remote
-container, streams its logs, and prints `hello LazyCloud`. The first run takes
-longer while the image builds; later runs reuse it.
-
-This is `quickstart.py`:
+It contains `quickstart.py`:
 
 ```python
 from __future__ import annotations
@@ -54,14 +44,26 @@ if __name__ == "__main__":
     print(hello.remote("LazyCloud"))
 ```
 
-`quickstart:hello` names the module and the object in it. Arguments after it
-are passed to the function. `uv run python quickstart.py` makes the same remote
-call through `.remote()`.
+## Test locally
 
-If you belong to several workspaces, pick one first with
-`uv run lazycloud workspace use <name>`.
+```bash
+uv run python -c "from quickstart import hello; print(hello.local('LazyCloud'))"
+```
 
-## Add an endpoint
+`.local()` calls the function in your own Python process. Nothing is uploaded or
+billed.
+
+## Run in the cloud
+
+```bash
+uv run lazycloud run quickstart:hello LazyCloud
+```
+
+LazyCloud builds the image, uploads your code, runs `hello` in a remote
+container with 1 CPU and 256 MiB, streams its logs, and prints
+`hello LazyCloud`. The first run takes longer while the image builds.
+
+## Deploy an endpoint
 
 Add this to `quickstart.py`, above the `if __name__` block:
 
@@ -71,23 +73,16 @@ def greet(name: str) -> dict[str, str]:
     return {"greeting": hello.local(name)}
 ```
 
-The JSON request body maps to the function's arguments, and the returned
-dictionary becomes the JSON response. `hello.local()` calls `hello` inside the
-endpoint's own container.
-
-Deploy the app:
+Then deploy the app:
 
 ```bash
 uv run lazycloud deploy quickstart
 ```
 
-This deploys both workloads and prints the endpoint's URL.
-
-## Call it
-
-Endpoints require a bearer token by default. Create an access token in the
+The output includes the endpoint's URL. Endpoints require a bearer token by
+default, so create an access token in the
 [dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens, and
-read it without putting it in your shell history:
+call it:
 
 ```bash
 read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
@@ -100,40 +95,17 @@ curl --fail --show-error "<endpoint-url>" \
 
 The response is `{"greeting": "hello LazyCloud"}`.
 
-From Python, the decorated function is also a client. It uses your
-`lazycloud login` credentials:
-
-```python
-from quickstart import greet
-
-response = greet.target("deployed").request("LazyCloud")
-print(response.json())
-```
-
-## Edit with a live preview
-
-```bash
-uv run lazycloud serve quickstart:greet
-```
-
-This runs the endpoint with a temporary URL and syncs your edits into the
-container as you save. Change the greeting, send another request from a second
-terminal, and see the change without redeploying. Press Ctrl+C to end the
-preview, then deploy again when you want the deployment to use your changes.
-
 ## Clean up
 
 ```bash
 uv run lazycloud app pause quickstart
 ```
 
-This stops the app's workloads and keeps their definitions. Use
-`uv run lazycloud app delete quickstart` to remove the app. Tasks, results, and
-logs from these runs stay in the dashboard under Tasks.
+This stops the app's workloads and keeps their definitions.
+`uv run lazycloud app delete quickstart` removes the app.
 
 ## Next
 
+- [Develop with coding agents](/getting-started/agents) to hand this loop to an agent.
+- [Local, cloud, deploy](/concepts/workflow) for live previews and where each call goes.
 - [Apps and workloads](/concepts/apps) to lay out your own project.
-- [Run, preview, deploy](/concepts/workflow) for what each command does and where a call goes.
-- [Functions](/concepts/functions) to process a batch in parallel with `.map()`.
-- [Examples](/examples/index) to train a model, serve an LLM, or run a coding agent.

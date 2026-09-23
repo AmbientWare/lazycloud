@@ -52,19 +52,8 @@ Changing the mount path changes where a container sees the files. Changing the
 volume name selects another volume; it does not move or delete the old data.
 Removing a mount or deleting a deployment also leaves stored files intact.
 
-Volume storage is billed per GiB-month. See [Plans and limits](/platform/plans).
-
-## Where volumes live
-
-A volume is stored in its workspace's bucket, and that bucket is wherever the
-workspace was created: LazyCloud storage, or your connected AWS account when
-the workspace was created with `--cloud aws`. That location never changes. To
-move data to a workspace in another location, create the new workspace and
-copy the files with `lazycloud cp`.
-
-Volumes in a workspace that lives in your AWS account are billed by AWS, not
-by LazyCloud. See [Compute](/platform/compute) for how workspaces choose a
-location.
+A volume is stored where its workspace lives; see [Compute](/platform/compute).
+Storage is billed per GiB-month; see [Plans and limits](/platform/plans).
 
 ## Upload inputs before the first run
 
@@ -162,19 +151,6 @@ either no file or a complete one. Two containers starting at the same moment
 may both download; the rename makes that a wasted download rather than a
 corrupt file.
 
-## Ad hoc file operations
-
-Use the CLI to inspect or copy files outside your workflow:
-
-```bash
-uv run lazycloud ls sales-reports
-uv run lazycloud cp lazycloud://sales-reports/latest.json ./latest.json
-```
-
-Paths use `lazycloud://<volume>/<path>`. The scheme is optional except on
-the source of a download, where it marks the path as remote. See
-[storage commands](/cli/storage) for standalone volume creation and file commands.
-
 ## Mount an existing cloud bucket
 
 `CloudBucket` mounts an S3-compatible bucket you own. Reads and writes go
@@ -214,19 +190,10 @@ S3-compatible store, `force_path_style`, and `read_only`.
 The bucket must already exist; declaring a mount never creates it. See
 [parallel Parquet processing](/examples/parallel-parquet-s3) for a complete workflow.
 
-## Delete stored data deliberately
+## Delete stored data
 
-After saving a local copy, remove an individual report with
-`reports.remove("latest.json")`. `reports.delete()` deletes the whole volume
-and every file in it.
-
-For one-off cleanup, inspect the target before deleting:
-
-```bash
-uv run lazycloud ls sales-reports
-uv run lazycloud rm sales-reports/latest.json
-```
-
-Use `uv run lazycloud volume delete sales-reports` only when you no longer need
-any of its files. Stop workloads that use the volume first; another invocation
-can create an empty volume with the same name.
+`reports.remove("latest.json")` deletes one file, and `reports.delete()` deletes
+the volume and every file in it. Stop workloads that mount a volume before
+deleting it, because their next run creates an empty volume with the same name.
+To inspect or copy files from a terminal, use the
+[file commands](/cli/storage#files).
