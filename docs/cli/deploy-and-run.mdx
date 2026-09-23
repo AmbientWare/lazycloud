@@ -33,9 +33,9 @@ name and its resource results. If a deployment fails, the command stops and
 leaves already deployed resources in place.
 
 ```bash
-uv run lazycloud deploy page_stats/api.py --diff
-uv run lazycloud deploy page_stats/api.py --diff --prune
-uv run lazycloud deploy page_stats/api.py -p
+uv run lazycloud deploy page_stats.api --diff
+uv run lazycloud deploy page_stats.api --diff --prune
+uv run lazycloud deploy page_stats.api -p
 ```
 
 Several references deploy their combined definitions, which suits separate

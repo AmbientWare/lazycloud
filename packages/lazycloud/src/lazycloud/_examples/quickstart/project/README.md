@@ -6,7 +6,7 @@ Run these commands from this downloaded project directory:
 uv sync
 uv run lazycloud login
 uv run python quickstart.py
-uv run lazycloud run quickstart.py:hello LazyCloud
+uv run lazycloud run quickstart:hello LazyCloud
 uv run lazycloud deploy quickstart
 ```
 

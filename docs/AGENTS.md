@@ -33,7 +33,7 @@ page's frontmatter description renders above the body, so the first paragraph
 never repeats it. No sentence describes the page itself.
 
 Examples run as downloaded. They show `.local()` beside `.remote()`, a plain
-`python file.py` beside `lazycloud run file.py:function`, and say plainly when
+`python file.py` beside `lazycloud run module:function`, and say plainly when
 code runs or deploys in the cloud rather than on the reader's machine. GPU
 examples use `GpuType`. Internal runtime details, such as environment
 variables the platform sets or wire identifiers, stay out of the docs.

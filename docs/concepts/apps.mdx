@@ -113,17 +113,17 @@ def analyze(url: str) -> AnalysisStarted:
     return AnalysisStarted(task_id=analyze_page.spawn(url).task_id)
 ```
 
-`page_stats/workers.py` registers `analyze_page` the same way. Loading `api.py`
-imports `workers.py`, so pointing the CLI at the entry file deploys the whole
-app, and adding `:analyze` deploys one workload:
+`page_stats/workers.py` registers `analyze_page` the same way. Loading
+`page_stats.api` imports `page_stats.workers`, so pointing the CLI at the entry
+module deploys the whole app, and adding `:analyze` deploys one workload:
 
 ```bash
-uv run lazycloud deploy page_stats/api.py            # analyze and analyze_page
-uv run lazycloud deploy page_stats/api.py:analyze    # just the endpoint
+uv run lazycloud deploy page_stats.api            # analyze and analyze_page
+uv run lazycloud deploy page_stats.api:analyze    # just the endpoint
 ```
 
-The CLI finds workloads by importing the file it is given, so `page_stats/app.py`
-on its own holds no workloads. When no single file imports the rest, a short
+The CLI finds workloads by importing the module it is given, so `page_stats.app`
+on its own holds no workloads. When no single module imports the rest, a short
 entry module that imports each workload module fills that role.
 
 ## Remove workloads
