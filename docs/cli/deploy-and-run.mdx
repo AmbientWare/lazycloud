@@ -12,7 +12,7 @@ remote development environments.
 ## lazycloud deploy
 
 ```bash
-uv run lazycloud deploy HANDLER [options]
+uv run lazycloud deploy HANDLER [HANDLER ...] [options]
 ```
 
 Deploys one decorated object or every deployable resource registered with an `App`.
@@ -41,6 +41,39 @@ contains no app, supply an explicit handler reference. A decorated handler such 
 `--resource` also works with a module name. With `--json`, a successful app deployment
 returns one object containing the app name and its resource results. A deployment
 failure stops the command without undoing resources already deployed.
+
+Pass several app files to deploy their combined definitions. All files are imported
+before workloads are collected. References to the same app object count once;
+different definitions with the same app, workload kind, and name are rejected.
+Multiple references must select complete apps and cannot use `--resource` or `--name`.
+
+```bash
+uv run lazycloud deploy api.py workers.py --diff
+uv run lazycloud deploy api.py workers.py --diff --prune
+uv run lazycloud deploy api.py workers.py -p
+```
+
+`--diff` previews `add`, `redeploy`, and `retain` actions without uploading source,
+building images, or changing remote resources. It imports your Python modules, so
+their module-level code still executes. This is a workload membership preview;
+existing workloads show `redeploy` because deploying creates another version.
+
+`--prune`, or `-p`, removes deployed workloads absent from the supplied app
+definitions. With `--diff`, these appear as `remove` actions. Pruning includes
+stopped workloads and all surviving versions of an omitted workload. It stops
+their containers and removes their schedules and routes; volumes, secrets, and
+stored data are retained. Workloads declared in the files keep their prior versions.
+
+Supply the complete definition of each app when pruning. An explicitly empty
+`App` removes all its deployed workloads while retaining the app. Handler selections
+and `--resource` cannot prune. Pruning starts only after every requested deployment
+has registered successfully. Registration does not guarantee application health.
+If the app changes concurrently, pruning fails without selecting new deletion targets.
+Interrupted cleanup resumes on the server for the versions already selected.
+
+The SDK exposes the same operations through `app.plan(prune=True)` and
+`app.deploy(prune=True)`. Both accept `workspace`. `--json` returns the typed plan
+or deployment result, including the prune result when requested.
 
 ## lazycloud run
 

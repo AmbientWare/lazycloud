@@ -5,6 +5,7 @@ export * from "./client_manifests";
 export * from "./compute";
 export * from "./cron";
 export * from "./custom_domains";
+export * from "./deployment_plans";
 export * from "./events";
 export * from "./errors";
 export * from "./functions";

@@ -943,6 +943,18 @@ class StubRepository:
 class DeploymentRepository:
     session: Session
 
+    def lock_stub_deployment_active(self, stub_id: str, *, workspace_id: str) -> bool | None:
+        return self.session.scalar(
+            select(and_(DeploymentTable.active.is_(True), DeploymentTable.deleted_at.is_(None)))
+            .join(StubTable, StubTable.deployment_id == DeploymentTable.id)
+            .where(
+                StubTable.id == stub_id,
+                StubTable.workspace_id == workspace_id,
+                DeploymentTable.workspace_id == workspace_id,
+            )
+            .with_for_update(read=True, of=DeploymentTable)
+        )
+
     def workspaces_pinned_to(
         self, placement: Placement, workspace_ids: Collection[str]
     ) -> list[str]:
@@ -979,15 +991,55 @@ class DeploymentRepository:
 
     def upsert(self, deployment: Deployment, *, workspace_id: str) -> Deployment:
         WorkspaceRepository(self.session).lock_active_owner(workspace_id)
-        row = self.session.get(DeploymentTable, deployment.id)
+        if deployment.app_id is not None:
+            app = AppRepository(self.session).get_for_update(
+                deployment.app_id, workspace_id=workspace_id, include_deleted=True
+            )
+            if app is None or (app.deleted_at is not None and deployment.deleted_at is None):
+                raise ConflictError("deployment app is unavailable")
+        row = self.session.get(DeploymentTable, deployment.id, populate_existing=True)
         if row is None:
             row = DeploymentTable(id=deployment.id, workspace_id=workspace_id)
             self.session.add(row)
         elif str(row.workspace_id) != workspace_id:
             raise ConflictError("deployment ownership cannot change")
+        elif row.deleted_at is not None and deployment.deleted_at is None:
+            raise ConflictError("deleted deployment cannot be restored")
         write_deployment_row(row, deployment)
         self.session.flush()
         return deployment_from_table(row)
+
+    def next_version(
+        self, *, workspace_id: str, app_id: str | None, name: str, kind: DeploymentKind
+    ) -> int:
+        latest = self.session.scalar(
+            select(func.max(DeploymentTable.version)).where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.app_id.is_not_distinct_from(app_id),
+                DeploymentTable.name == name,
+                DeploymentTable.kind == kind.value,
+            )
+        )
+        return (latest or 0) + 1
+
+    def live_stub_ids(
+        self, *, workspace_id: str, app_id: str | None, name: str, kind: DeploymentKind
+    ) -> list[str]:
+        return list(
+            self.session.scalars(
+                select(StubTable.id)
+                .join(DeploymentTable, DeploymentTable.stub_id == StubTable.id)
+                .where(
+                    DeploymentTable.workspace_id == workspace_id,
+                    DeploymentTable.app_id.is_not_distinct_from(app_id),
+                    DeploymentTable.name == name,
+                    DeploymentTable.kind == kind.value,
+                    DeploymentTable.deleted_at.is_(None),
+                    DeploymentTable.active.is_(True),
+                    StubTable.workspace_id == workspace_id,
+                )
+            )
+        )
 
     def assert_subdomain_unclaimed(
         self,

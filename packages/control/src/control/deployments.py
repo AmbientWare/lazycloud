@@ -30,7 +30,7 @@ from shared.deployment_records import (
 )
 from shared.deployment_subdomains import deployment_subdomain
 from shared.deployments import DeploymentKind
-from shared.errors import InvalidInputError, NotFoundError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
@@ -133,26 +133,26 @@ class DeploymentService:
         with self.context.database.session() as session:
             repository = DeploymentRepository(session)
             app = (
-                AppRepository(session).get(app_id, workspace_id=workspace_record.id)
+                AppRepository(session).get_for_update(app_id, workspace_id=workspace_record.id)
                 if app_id is not None
                 else None
             )
             deployment_active = app.active if app is not None else True
-            existing = [
-                deployment
-                for deployment in repository.list(
-                    workspace_id=workspace_record.id,
-                    include_deleted=True,
-                )
-                if deployment.name == normalized_spec.name
-                and deployment.kind is normalized_spec.kind
-                and deployment.app_id == app_id
-            ]
-            version = max((item.version for item in existing), default=0) + 1
+            version = repository.next_version(
+                workspace_id=workspace_record.id,
+                app_id=app_id,
+                name=normalized_spec.name,
+                kind=normalized_spec.kind,
+            )
             if normalized_spec.kind is DeploymentKind.Function:
                 _release_superseded_warm_floors(
                     session,
-                    existing,
+                    repository.live_stub_ids(
+                        workspace_id=workspace_record.id,
+                        app_id=app_id,
+                        name=normalized_spec.name,
+                        kind=normalized_spec.kind,
+                    ),
                     workspace_id=workspace_record.id,
                 )
             subdomain = deployment_subdomain(
@@ -455,7 +455,7 @@ def _metadata_str(metadata: Mapping[str, JsonValue], key: str) -> str:
 
 def _release_superseded_warm_floors(
     session: Session,
-    existing: list[Deployment],
+    stub_ids: list[str],
     *,
     workspace_id: str,
 ) -> None:
@@ -481,10 +481,8 @@ def _release_superseded_warm_floors(
     """
 
     repository = StubRepository(session)
-    for prior in existing:
-        if not prior.active or prior.deleted_at is not None or not prior.stub_id:
-            continue
-        stub = repository.get(prior.stub_id, workspace_id=workspace_id)
+    for stub_id in stub_ids:
+        stub = repository.get(stub_id, workspace_id=workspace_id)
         if stub is None or stub.config.autoscaler.min_containers == 0:
             continue
         config = stub.config.model_copy(deep=True)
@@ -533,6 +531,10 @@ class CronJobService:
             raise InvalidInputError(str(exc)) from exc
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
+            if deployment.app_id is not None:
+                AppRepository(session).get_for_update(deployment.app_id, workspace_id=workspace_id)
+            if DeploymentRepository(session).get(deployment.id, workspace_id=workspace_id) is None:
+                raise ConflictError("cannot schedule a deleted deployment")
             repository = CronJobRepository(session)
             record = CronJobRecord(
                 workspace_id=workspace_id,

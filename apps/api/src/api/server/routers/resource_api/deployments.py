@@ -7,6 +7,12 @@ from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.client_manifests import ClientManifestResource
+from shared.http.deployment_plans import (
+    DeploymentPlanRequest,
+    DeploymentPlanResponse,
+    DeploymentPruneRequest,
+    DeploymentPruneResponse,
+)
 from shared.http.deployments import (
     DeploymentListResponse,
     DeploymentPackagePlanResponse,
@@ -27,6 +33,32 @@ from api.server.routers.resource_api.common import STUB_TYPE_ALIASES, _managemen
 from api.server.services import ApiServices
 
 router = APIRouter()
+
+
+@router.post(
+    "/api/v1/deployment-plans",
+    response_model=DeploymentPlanResponse,
+    operation_id="plan_app_deployment",
+)
+def plan_app_deployment(
+    request: DeploymentPlanRequest,
+    workspace_id: read_workspace,
+    services: ApiServices = Depends(current_services),
+) -> DeploymentPlanResponse:
+    return services.deployment_plans.plan(request, workspace=workspace_id)
+
+
+@router.post(
+    "/api/v1/deployment-prunes",
+    response_model=DeploymentPruneResponse,
+    operation_id="prune_app_deployments",
+)
+def prune_app_deployments(
+    request: DeploymentPruneRequest,
+    workspace_id: write_workspace,
+    services: ApiServices = Depends(current_services),
+) -> DeploymentPruneResponse:
+    return services.deployment_plans.prune(request, workspace=workspace_id)
 
 
 def _deployment_scaling_responses(

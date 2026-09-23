@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -355,7 +355,14 @@ class TaskRepository:
         task.started_at = None
         return self.upsert(task)
 
-    def cancel_queued_for_app(self, *, workspace_id: str, app_id: str, error: str) -> list[Task]:
+    def cancel_queued_for_app(
+        self,
+        *,
+        workspace_id: str,
+        app_id: str,
+        error: str,
+        deployment_ids: Collection[str] | None = None,
+    ) -> list[Task]:
         """Retire the work of an app that is going away.
 
         Deleting an app stops its containers, and its queued invocations have to
@@ -377,7 +384,7 @@ class TaskRepository:
         which is the point — a retry would put the row straight back.
         """
 
-        rows = self.session.scalars(
+        statement = (
             select(TaskTable)
             .where(
                 TaskTable.app_id == app_id,
@@ -388,6 +395,9 @@ class TaskRepository:
             )
             .with_for_update()
         )
+        if deployment_ids is not None:
+            statement = statement.where(TaskTable.deployment_id.in_(deployment_ids))
+        rows = self.session.scalars(statement)
         cancelled: list[Task] = []
         for row in rows:
             task = task_from_table(row)

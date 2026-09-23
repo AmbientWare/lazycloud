@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Any, Protocol, runtime_checkable
 
 import typer
+from pydantic import JsonValue
+from shared.http.deployment_plans import (
+    DeploymentPlanRequest,
+    DeploymentPlanResponse,
+    WorkloadIdentity,
+)
+from shared.http.gateway import DeployStubResponse
 
 from lazycloud._invocation import prepare_arguments
 from lazycloud.abstractions.app import App, AppDeployResult
+from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.shell import Shell, ShellSession
@@ -41,6 +50,7 @@ from lazycloud.cli.workflow_options import (
 )
 from lazycloud.control import control_workspace_scope, resolve_control_client_config
 from lazycloud.json_contracts import resource_payload
+from lazycloud.session.app_deployment import AppDeploymentSession, AppDeploymentTarget
 from lazycloud.session.deployment import DeploymentClient
 
 deployment_app = typer.Typer(help="Manage deployments.")
@@ -59,8 +69,17 @@ class RemoteWorkflow(Protocol):
 def deploy(
     ctx: typer.Context,
     handler: Annotated[
-        str, typer.Argument(help="Python file, module, or module:object reference.")
+        list[str], typer.Argument(help="Python files, modules, or module:object references.")
     ],
+    prune: Annotated[
+        bool,
+        typer.Option(
+            "--prune", "-p", help="Remove workloads omitted from the complete app definition."
+        ),
+    ] = False,
+    diff: Annotated[
+        bool, typer.Option("--diff", help="Preview deployment actions without deploying.")
+    ] = False,
     name: Annotated[str | None, typer.Option("--name")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
     source_root: Annotated[str | None, typer.Option("--source-root")] = None,
@@ -116,11 +135,30 @@ def deploy(
     selected_workspace = workspace or resolve_control_client_config().workspace
     with control_workspace_scope(selected_workspace):
         try:
-            user_object = load_deployment_object(handler)
+            loaded = [load_deployment_object(reference) for reference in handler]
         except HandlerLoadError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        if isinstance(user_object, App) and name is not None and resource is None:
-            raise typer.BadParameter("--name requires a handler reference or --resource")
+        apps = [item for item in loaded if isinstance(item, App)]
+        if len(loaded) > 1 and len(apps) != len(loaded):
+            raise typer.BadParameter("multiple references must select complete apps")
+        if prune and (len(apps) != len(loaded) or resource is not None):
+            raise typer.BadParameter("--prune requires complete apps without --resource")
+        if len(loaded) > 1 and (name is not None or resource is not None):
+            raise typer.BadParameter("--name and --resource require one reference")
+        if apps:
+            _deploy_apps(
+                ctx,
+                App.combine(apps),
+                overrides=overrides,
+                workspace=selected_workspace,
+                name=name,
+                source_root=source_root,
+                prune=prune,
+                diff=diff,
+            )
+            return
+        user_object = loaded[0]
+        selected_handler = handler[0]
         _attach_workflow_terminal(user_object)
         selected_image = deployment_image(overrides)
         if isinstance(user_object, Pod):
@@ -140,32 +178,23 @@ def deploy(
                 machine=overrides.machine,
                 preemptible=overrides.preemptible,
             )
-        elif not isinstance(user_object, App) and overrides.has_values():
+        elif overrides.has_values():
             msg = "deployment overrides require an App, Function, or Pod handler"
             raise typer.BadParameter(msg)
-        if isinstance(user_object, App):
-            response = user_object.deploy(
-                resource=overrides.resource,
-                name=name,
-                workspace=selected_workspace,
-                source_root=source_root,
-                image=selected_image,
-                cpu=overrides.cpu,
-                memory=overrides.memory,
-                gpu=overrides.gpu,
-                gpu_count=overrides.gpu_count,
-                env=overrides.env,
-                secrets=overrides.secrets,
-                ports=overrides.ports,
-                keep_warm=overrides.keep_warm,
-                tcp=overrides.tcp,
-                region=overrides.region,
-                availability_zone=overrides.availability_zone,
-                machine=overrides.machine,
-                preemptible=overrides.preemptible,
-                entrypoint=overrides.entrypoint,
+        if diff:
+            if not isinstance(user_object, (Pod, Function, Endpoint, ASGI)):
+                raise typer.BadParameter("--diff requires an app or a decorated workload")
+            spec = user_object.spec()
+            app_name = spec.metadata.get("app")
+            plan = resource_client(workspace=selected_workspace).plan_deployment(
+                DeploymentPlanRequest(
+                    app=app_name if isinstance(app_name, str) and app_name else spec.name,
+                    workloads=[WorkloadIdentity(kind=spec.kind, name=name or spec.name)],
+                )
             )
-        elif isinstance(user_object, (Pod, Function)):
+            _emit_deployment_plans(ctx, [plan])
+            return
+        if isinstance(user_object, (Pod, Function)):
             response = user_object.deploy(
                 name=name,
                 workspace=selected_workspace,
@@ -187,7 +216,7 @@ def deploy(
             ctx,
             payload=payload,
             view=result_card(
-                json_default(_deployment_summary(response, handler=handler, name=name)),
+                json_default(_deployment_summary(response, handler=selected_handler, name=name)),
                 title="App deployed"
                 if isinstance(response, AppDeployResult)
                 else "Deployment created",
@@ -196,6 +225,102 @@ def deploy(
         )
         return
     print_payload(ctx, payload)
+
+
+def _deploy_apps(
+    ctx: typer.Context,
+    apps: tuple[App, ...],
+    *,
+    overrides: DeploymentOverrides,
+    workspace: str,
+    name: str | None,
+    source_root: str | None,
+    prune: bool,
+    diff: bool,
+) -> None:
+    if name is not None and overrides.resource is None:
+        raise typer.BadParameter("--name requires a handler reference or --resource")
+    selected_image = deployment_image(overrides)
+
+    def submit(app: App) -> tuple[DeployStubResponse, ...]:
+        if prune and not app.deployment_manifest().workloads:
+            return ()
+        _attach_workflow_terminal(app)
+        return app.deploy(
+            resource=overrides.resource,
+            name=name,
+            workspace=workspace,
+            source_root=source_root,
+            image=selected_image,
+            cpu=overrides.cpu,
+            memory=overrides.memory,
+            gpu=overrides.gpu,
+            gpu_count=overrides.gpu_count,
+            env=overrides.env,
+            secrets=overrides.secrets,
+            ports=overrides.ports,
+            keep_warm=overrides.keep_warm,
+            tcp=overrides.tcp,
+            region=overrides.region,
+            availability_zone=overrides.availability_zone,
+            machine=overrides.machine,
+            preemptible=overrides.preemptible,
+            entrypoint=overrides.entrypoint,
+        ).resources
+
+    targets: list[AppDeploymentTarget] = []
+    for app in apps:
+        manifest = app.deployment_manifest(prune=prune, resource=overrides.resource, name=name)
+        targets.append(AppDeploymentTarget(manifest, partial(submit, app)))
+    session = AppDeploymentSession(
+        resource_client(workspace=workspace, timeout_seconds=60),
+        terminal=attach_terminal(apps[0]),
+    )
+    if diff:
+        _emit_deployment_plans(ctx, session.preview(targets))
+        return
+    outcomes = session.deploy(targets)
+    results = [AppDeployResult(item.app, item.resources, item.pruning) for item in outcomes]
+    payload: JsonValue = (
+        results[0].model_dump()
+        if len(results) == 1
+        else {
+            "apps": [item.model_dump() for item in results],
+        }
+    )
+    summaries = [_deployment_summary(result, handler=result.app, name=None) for result in results]
+    emit(
+        ctx,
+        payload=payload,
+        view=result_card(
+            json_default(summaries[0] if len(summaries) == 1 else summaries),
+            title="App deployed" if len(summaries) == 1 else "Apps deployed",
+            tone="success",
+        ),
+    )
+
+
+def _emit_deployment_plans(ctx: typer.Context, plans: list[DeploymentPlanResponse]) -> None:
+    payload = (
+        plans[0].model_dump(mode="json")
+        if len(plans) == 1
+        else {
+            "apps": [plan.model_dump(mode="json") for plan in plans],
+        }
+    )
+    emit(
+        ctx,
+        payload=payload,
+        view=table(
+            "deployment actions",
+            ["App", "Kind", "Workload", "Action", "Existing versions"],
+            [
+                [plan.app, item.kind.value, item.name, item.action.value, item.versions]
+                for plan in plans
+                for item in plan.data
+            ],
+        ),
+    )
 
 
 def run(
@@ -546,6 +671,8 @@ def _deployment_summary(
         ]
         if urls:
             summary["urls"] = urls
+        if response.pruning is not None:
+            summary["removed_versions"] = response.pruning.removed_versions
         return summary
 
     summary = {"name": name or handler}

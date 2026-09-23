@@ -891,6 +891,10 @@ class Scheduler:
 
         if include_containers and self.workloads.image_builds is not None:
             self.workloads.image_builds.cleanup(limit=container_limit)
+        try:
+            self.runtime_services.deployment_plans.reconcile_pending(limit=container_limit)
+        except Exception:
+            LOGGER.exception("scheduler deployment prune recovery failed")
         access_observed = None
         access_failures = 0
         if self.maintenance.storage_access is not None:
