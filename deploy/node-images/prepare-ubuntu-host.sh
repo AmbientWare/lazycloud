@@ -22,12 +22,18 @@ apt-get update
 apt-get install -y --no-install-recommends \
   fuse3 systemd-zram-generator "linux-modules-extra-$(uname -r)"
 modinfo zram
+modinfo nbd
 
 install -d /etc/systemd
 printf '[zram0]\nzram-size = ram / 4\nswap-priority = 100\nhost-memory-limit = none\n' \
   > /etc/systemd/zram-generator.conf
 printf 'vm.swappiness = 180\nvm.page-cluster = 0\n' \
   > /etc/sysctl.d/60-lazycloud-zram.conf
+printf 'nbd\n' > /etc/modules-load.d/lazycloud-nbd.conf
+printf 'options nbd nbds_max=128\n' > /etc/modprobe.d/lazycloud-nbd.conf
+modprobe nbd
+test "$(cat /sys/module/nbd/parameters/nbds_max)" = 128
+test -b /dev/nbd127
 systemctl daemon-reload
 systemctl start dev-zram0.swap
 sysctl --system
