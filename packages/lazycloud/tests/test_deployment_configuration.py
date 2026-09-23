@@ -59,8 +59,6 @@ def test_every_workload_preserves_region_intent_through_the_gateway_contract() -
         assert spec.resources.region is ProductRegion.EuCentral
         assert round_trip.region is ProductRegion.EuCentral
 
-    function.configure(region="us-east")
-    assert function.spec().resources.region is ProductRegion.UsEast
     assert app.pod(name="automatic").spec().resources.region is None
 
     with pytest.raises(ValidationError):

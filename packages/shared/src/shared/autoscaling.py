@@ -9,7 +9,7 @@ from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
 
-class QueueDepthAutoscaler(ContractModel):
+class Autoscaler(ContractModel):
     """How many containers a workload wants for the work it can see.
 
     `min_containers` is a floor held with nothing queued — containers already up
@@ -26,7 +26,7 @@ class QueueDepthAutoscaler(ContractModel):
     tasks_per_container: int = Field(default=1, gt=0)
 
     @model_validator(mode="after")
-    def minimum_cannot_exceed_maximum(self) -> QueueDepthAutoscaler:
+    def minimum_cannot_exceed_maximum(self) -> Autoscaler:
         if self.min_containers > self.max_containers:
             msg = "min_containers cannot exceed max_containers"
             raise ValueError(msg)
@@ -348,6 +348,7 @@ def _pod_stop_skip_reason(
 
 
 __all__ = [
+    "Autoscaler",
     "BacklogAutoscalerConfig",
     "BacklogAutoscalerSample",
     "BacklogScaleDecision",
@@ -361,7 +362,6 @@ __all__ = [
     "PodScaleReason",
     "PodStopPlan",
     "PodStubType",
-    "QueueDepthAutoscaler",
     "ScaleDecisionKind",
     "decide_backlog_scale",
     "decide_pod_scale",

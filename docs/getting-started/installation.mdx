@@ -1,6 +1,6 @@
 ---
 title: "Installation"
-description: "Install the lazycloud CLI and add the SDK to a project with uv."
+description: "The global CLI, the SDK in a project, upgrades, and where sign-in state lives."
 ---
 
 LazyCloud installs with [uv](https://docs.astral.sh/uv/getting-started/installation/).
@@ -13,7 +13,7 @@ uv tool install lazycloud-client
 lazycloud login
 ```
 
-This puts `lazycloud` on your path for downloading examples and managing your
+`lazycloud` is then on your path for downloading examples and managing your
 account from any directory.
 
 ## Add the SDK to a project
@@ -22,9 +22,9 @@ account from any directory.
 uv add lazycloud-client
 ```
 
-Run project commands through `uv run lazycloud` and `uv run python` so they use
-the project's pinned SDK. For a new project, run `uv init my-project` first.
-Commit `pyproject.toml` and `uv.lock`, and use `uv sync --locked` in CI.
+`uv run lazycloud` and `uv run python` use the project's pinned SDK. A new
+project starts with `uv init my-project`. `pyproject.toml` and `uv.lock` belong
+in version control, and `uv sync --locked` reproduces them in CI.
 
 Packages your code needs remotely go in the workload's
 [image](/concepts/images), not in your local environment.
@@ -36,10 +36,10 @@ uv tool upgrade lazycloud-client     # the global CLI
 uv run lazycloud update              # a project, within its pyproject.toml constraints
 ```
 
-A downloaded example pins an exact SDK version, so upgrade it by naming the
-release: `uv add "lazycloud-client==<version>"`.
+A downloaded example pins an exact SDK version.
+`uv add "lazycloud-client==<version>"` moves it to another release.
 
 ## Sign-in state
 
-The CLI keeps sign-in state under `~/.lazycloud`, and the global and project
-commands share it. Set `LAZYCLOUD_HOME` to move it.
+The CLI keeps sign-in state under `~/.lazycloud`, shared by the global and
+project commands. `LAZYCLOUD_HOME` moves it.

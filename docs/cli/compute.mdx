@@ -5,9 +5,8 @@ description: "Inspect compute, connect an AWS account, join your own machines, a
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-Workloads use LazyCloud compute by default. Use these commands to inspect
-capacity or connect compute you own. [Compute](/platform/compute) covers setup
-and host requirements.
+Workloads use LazyCloud compute by default. [Compute](/platform/compute)
+covers setup and host requirements.
 
 ## lazycloud compute
 
@@ -33,17 +32,10 @@ uv run lazycloud cloud retry               # retry the connection's pending acti
 uv run lazycloud cloud disconnect [--wait]
 ```
 
-For a managed connection, run `cloud authorize` with your AWS CLI profile after
-`cloud connect aws` or `cloud reconnect`. The CLI verifies that the profile
-belongs to the connected account, then submits the connection template directly
-to CloudFormation. Run `cloud validate` after the stack finishes. Your AWS
-credentials stay on your machine.
-
-`cloud status --until <phase>` waits for the connection to reach a phase, such
-as `ready`.
-
-LazyCloud manages provisioning settings for connected AWS accounts. A workload
-runs where its workspace lives and selects its CPU, memory, and GPU.
+`cloud authorize` checks that your AWS CLI profile belongs to the connected
+account and submits the connection stack to CloudFormation, so your AWS
+credentials stay local. `cloud validate` confirms the result once the stack
+finishes, and `cloud status --until ready` waits for it.
 
 ## lazycloud machine
 
@@ -55,9 +47,8 @@ uv run lazycloud machine remove MACHINE_ID
 ```
 
 A joined machine has a name that is unique across your account and a list of
-workspaces whose workloads may run on it. Pin a workload to it with
-`machine="<name>"` in the decorator or `--machine <name>` on the command line.
-The workload then runs on that machine or fails.
+workspaces whose workloads may run on it. A workload with `machine="<name>"` in
+its decorator runs on that machine or fails.
 
 `machine join` options:
 
@@ -71,7 +62,8 @@ The workload then runs on that machine or fails.
 | `--background`, `--foreground` | Install the agent as a service, or run it in the terminal. Default is `--foreground`. |
 | `--service-manager`, `--service-name`, `--state-dir` | Service installation details. |
 
-Read the [host requirements](/platform/compute#your-own-machines) first.
+The [host requirements](/platform/compute#your-own-machines) list what the
+machine needs.
 
 ## lazycloud domain
 

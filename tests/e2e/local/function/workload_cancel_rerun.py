@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 import time
 
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 
 from lazycloud import App, Image
 
@@ -21,7 +21,7 @@ app = App(APP_NAME)
     concurrency=CONCURRENCY,
     # One container, two slots: the two calls are co-resident by construction,
     # which is what makes cancelling one of them a statement about the other.
-    autoscaler=QueueDepthAutoscaler(max_containers=1, tasks_per_container=CONCURRENCY),
+    autoscaler=Autoscaler(max_containers=1, tasks_per_container=CONCURRENCY),
 )
 def delayed_square(value: int, delay_seconds: float) -> int:
     time.sleep(delay_seconds)

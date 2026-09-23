@@ -1,127 +1,168 @@
 ---
 title: "Apps and workloads"
-description: "Lay out a project as an app of workloads, keep its configuration in code, and deploy it as a unit."
+description: "The kinds of workload you can run, and how an app deploys, prunes, and exports them as one unit."
 ---
 
-An `App` is a named group of workloads in a workspace. You deploy, pause, and
-delete an app as one unit, so draw its boundary around code that ships together,
-such as an API and the batch functions it calls, or a model server and its
-warm-up job.
+A workspace holds apps, and an app holds workloads. A workload's decorator is
+its whole definition: image, resources, volumes, secrets, schedule, and
+scaling. Deploying makes the workspace match the code, with no dashboard
+setting or CLI flag on top, so infrastructure changes arrive as one reviewable
+diff.
+
+## Workload kinds
+
+| Kind | For | Triggered by | Scales |
+| --- | --- | --- | --- |
+| [Function](/concepts/functions) | Batch jobs, background work, GPU tasks | `.remote()`, `.map()`, `.spawn()`, `lazycloud run` | Autoscaler on queued calls |
+| [Schedule](/concepts/schedules) | Recurring work | A function's `cron` | Like a function |
+| [Endpoint](/concepts/endpoints#endpoints) | An HTTP API from one function | HTTPS requests | Autoscaler on requests in flight |
+| [ASGI app](/concepts/endpoints#asgi-applications) | A FastAPI or Starlette app | HTTPS requests | Autoscaler on requests in flight |
+| [Realtime handler](/concepts/endpoints#realtime-handlers) | A WebSocket service | WebSocket messages | Autoscaler on requests in flight |
+| [Pod](/concepts/pods) | A container command, such as a model server | Connections, or `create()` | By hand |
+| [Sandbox](/concepts/sandboxes) | Generated code, agent workspaces | `create()` from your code | One container per `create()` |
+
+Containers start when work arrives and
+[stop when idle](/concepts/scaling#warm-containers), and every remote call is a
+[task](/concepts/tasks-and-logs). A deploy starts every kind except sandboxes.
 
 ## Define an app
 
 ```python
+import urllib.request
+
 from lazycloud import App
+from pydantic import BaseModel
 
-app = App("text_tools")
-
-
-@app.function()
-def count_words(text: str) -> int:
-    return len(text.split())
+app = App("page_stats")
 
 
-@app.endpoint(name="count", methods=["POST"])
-def count(text: str) -> dict[str, int]:
-    return {"words": count_words.local(text)}
+class PageStats(BaseModel):
+    bytes: int
+    words: int
+    links: int
+
+
+class AnalysisStarted(BaseModel):
+    task_id: str
+
+
+@app.function(cpu=1, memory="512Mi", timeout_seconds=120)
+def analyze_page(url: str) -> PageStats:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        html = response.read().decode("utf-8", errors="replace")
+    return PageStats(bytes=len(html), words=len(html.split()), links=html.count("<a "))
+
+
+@app.endpoint(name="analyze", methods=["POST"])
+def analyze(url: str) -> AnalysisStarted:
+    call = analyze_page.spawn(url)
+    return AnalysisStarted(task_id=call.task_id)
 ```
 
-Each decorator registers a workload with the app. `@app.function`,
-`@app.endpoint`, `@app.asgi`, `@app.realtime`, and `app.pod(...)` deploy with
-the app. `app.sandbox(...)` defines containers your code creates on demand, and
-a deploy never starts them.
+The endpoint answers at once with a task ID, and `analyze_page` fetches the page
+in its own cloud container, so a slow site never holds the request open.
 
-App names start with a lowercase letter and contain lowercase letters, digits,
-or underscores, up to 63 characters. Workload names default to the Python name
-and must be unique per kind within the app.
+App names use lowercase letters, digits, and underscores, start with a letter,
+and run up to 63 characters. Workload names default to the Python name and are
+unique per kind within an app. Values that change between workspaces live
+outside the decorator, credentials in [secrets](/concepts/secrets) and files in
+[volumes](/concepts/volumes).
 
-## Keep configuration in code
-
-The decorator is the whole definition: image, CPU, memory, GPU, volumes, secret
-names, schedule, and scaling. Change it in the file and deploy again. CLI flags
-such as `--gpu` or `--memory` override a value for one command, which suits an
-experiment. The next deploy without the flag goes back to the file.
-
-Values that differ between workspaces or change without a code change belong
-outside the decorator. Put credentials in [secrets](/concepts/secrets) and files
-in [volumes](/concepts/volumes). The workspace shares volumes and secrets by
-name, so two apps that name the same volume read the same files.
-
-## Deploy the app or one workload
+## Deploy
 
 ```bash
-uv run lazycloud deploy text_tools          # every workload in the app
-uv run lazycloud deploy text_tools:count    # just the endpoint
+uv run lazycloud deploy page_stats            # every workload in the app
+uv run lazycloud deploy page_stats:analyze    # just the endpoint
 ```
 
-A module reference deploys the module's only app. `module:object` selects one
-workload or, when a module has several apps, one app. See [handler
-references](/cli/overview#handler-references) for the full syntax. From Python,
-`app.deploy()` deploys the whole app and `count.deploy()` one workload.
+From Python, `app.deploy()` and `analyze.deploy()` do the same.
+[Handler references](/cli/overview#handler-references) covers the syntax.
 
 ## Split an app across files
 
-A workload belongs to the `App` object that registers it, not to the file that
-defines it. Import the app into each module and register workloads there:
+Each module imports the app and registers its own workloads:
 
 ```python
-# text_tools/app.py
+# page_stats/app.py
 from lazycloud import App
 
-app = App("text_tools")
+app = App("page_stats")
 ```
 
 ```python
-# text_tools/api.py
-from text_tools.app import app
+# page_stats/api.py
+from page_stats.app import app
+from page_stats.workers import AnalysisStarted, analyze_page
 
 
-@app.endpoint(name="count", methods=["POST"])
-def count(text: str) -> dict[str, int]:
-    return {"words": len(text.split())}
+@app.endpoint(name="analyze", methods=["POST"])
+def analyze(url: str) -> AnalysisStarted:
+    return AnalysisStarted(task_id=analyze_page.spawn(url).task_id)
 ```
 
-If `text_tools/workers.py` registers the batch functions the same way, deploy
-both files so the CLI imports every registration:
+The CLI finds workloads by importing the module you name. `page_stats.api`
+imports `page_stats.workers`, so it reaches both:
 
 ```bash
-uv run lazycloud deploy text_tools/api.py text_tools/workers.py
+uv run lazycloud deploy page_stats.api            # analyze and analyze_page
+uv run lazycloud deploy page_stats.api:analyze    # just the endpoint
 ```
 
-## Call one workload from another
+`page_stats.app` alone holds no workloads. When no module imports the rest, a
+small entry module that imports each one does.
 
-Inside a container, `count_words.remote(...)` calls the deployed `count_words`,
-because a container has no working tree to upload. Deploy the whole app before
-running a parent that calls its siblings remotely. `.local(...)` instead runs
-the callee in the caller's own process, with the caller's image and resources.
+## Remove workloads
+
+A workload deleted from the code stays deployed until a deploy with `--prune`:
+
+```bash
+uv run lazycloud deploy page_stats --diff --prune   # preview
+uv run lazycloud deploy page_stats --prune
+```
+
+Pruning stops every deployed workload the app no longer declares and removes
+its schedules and routes. It needs the whole app, so a single-workload reference
+can't prune. Volumes, secrets, and stored data stay, even when you delete the
+whole app. From Python, `app.deploy(prune=True)`.
 
 ## Call deployed workloads from other projects
 
 ```bash
-uv run lazycloud app export text_tools
+uv run lazycloud app export page_stats
 ```
 
-This writes a typed Python package to `lazycloud_clients/text_tools`, so
-another project can call the deployed functions and endpoints without importing
-your source. Functions get `remote()` and `async_remote()`. Endpoints get
-`request()` and `async_request()`. Callers sign in with `lazycloud login`, and
-the package holds deployment references and schemas, never credentials.
+This writes a typed package to `lazycloud_clients/page_stats`, so another
+project can call the deployed functions with `remote()` and the endpoints with
+`request()`, without your source. ASGI routes get typed methods from the app's
+OpenAPI schema, from `/openapi.json` unless `--openapi-path` or `--openapi`
+points elsewhere.
 
-The generator types ASGI routes from the app's OpenAPI schema at `/openapi.json`
-and names methods after operation IDs. To read the schema from another path or
-a local file:
+The package holds no credentials, since callers sign in with `lazycloud login`.
+Pods and sandboxes aren't exported, and a contract change needs a new export.
+
+## Pause and delete
 
 ```bash
-uv run lazycloud app export web_app --openapi-path service=/schema/openapi.json
-uv run lazycloud app export web_app --openapi service=./openapi.json
+uv run lazycloud app pause page_stats     # stop every workload, keep definitions
+uv run lazycloud app resume page_stats
+uv run lazycloud app delete page_stats
 ```
 
-Routes the generator cannot type fail with an explanation. An ASGI app with no
-schema keeps raw `request()`. Export skips pods and sandboxes. Export again
-after deploying a contract change.
+## Workspaces
 
-## Remove a workload
+A workspace holds apps, deployments, tasks, and stored data. Within it, a name
+always means the same resource, so two apps mounting the `models` volume see
+the same files. Separate projects, or staging and production, fit separate
+workspaces. Tokens, a connected AWS account, joined machines, domains, and your
+plan belong to your account and apply to every workspace you own.
 
-Delete it from the code and deploy with `--prune`. See
-[`lazycloud deploy`](/cli/deploy-and-run#lazycloud-deploy). Removing a workload
-or deleting an app never deletes the volumes and secrets it used.
+```bash
+uv run lazycloud workspace list
+uv run lazycloud workspace use staging
+```
+
+`LAZYCLOUD_WORKSPACE` overrides the stored choice for every command, which
+suits CI, and `--workspace` overrides it for one.
+[Compute](/platform/compute#where-a-workload-runs) covers where a workspace's
+workloads run, and the [dashboard](/platform/dashboard#manage-access-and-compute)
+covers members.

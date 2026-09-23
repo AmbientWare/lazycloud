@@ -26,7 +26,7 @@ uv sync
 It contains `quickstart.py`:
 
 ```python
-from __future__ import annotations
+from pydantic import BaseModel
 
 from lazycloud import App, Image
 
@@ -40,60 +40,91 @@ def hello(name: str = "world") -> str:
     return f"hello {name}"
 
 
+class Greeting(BaseModel):
+    greeting: str
+
+
+@app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
+def greet(name: str) -> Greeting:
+    return Greeting(greeting=hello.local(name))
+
+
 if __name__ == "__main__":
+    print("running local")
+    print(hello.local("LazyCloud"))
+    print("running remote")
     print(hello.remote("LazyCloud"))
 ```
 
-## Develop locally
+## Run it
 
 ```bash
-uv run python -c "from quickstart import hello; print(hello.local('LazyCloud'))"
+uv run python quickstart.py
 ```
 
-`.local()` calls the function in your own Python process, with no upload and no
-charge.
+`.local()`, like a plain `hello("LazyCloud")` call, runs in your own Python
+process for free. `.remote()` uploads your code and runs the same function on a
+cloud machine with 1 CPU and 256 MiB, then streams its logs back and returns
+`hello LazyCloud`. The first remote call waits for the image to build.
 
-## Test in the cloud
+The CLI makes the same cloud call without a `__main__` block:
 
 ```bash
 uv run lazycloud run quickstart:hello LazyCloud
 ```
 
-LazyCloud builds the image, uploads your code, runs `hello` in a remote
-container with 1 CPU and 256 MiB, streams its logs, and prints
-`hello LazyCloud`. The first run takes longer while the image builds.
+## Deploy the endpoint
 
-## Deploy an endpoint
-
-Add this to `quickstart.py`, above the `if __name__` block:
-
-```python
-@app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
-def greet(name: str) -> dict[str, str]:
-    return {"greeting": hello.local(name)}
-```
-
-Then deploy the app:
+`greet` is an HTTP endpoint that calls `hello` inside its own container and
+returns a `Greeting` model, which LazyCloud sends as JSON.
+Deploying the app puts both workloads in the cloud:
 
 ```bash
 uv run lazycloud deploy quickstart
 ```
 
-The deploy output includes the endpoint's URL. Endpoints require a bearer token
-by default. Create an access token in the
-[dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens, and
-call the endpoint with it:
+The app now runs on LazyCloud, not on your machine, and stays up after you
+close the terminal. The deploy output includes the endpoint's HTTPS URL.
+
+## Call it
+
+Over HTTP, with an access token from the
+[dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens:
 
 ```bash
 read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
-export LAZYCLOUD_TOKEN
 curl --fail --show-error "<endpoint-url>" \
   -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "LazyCloud"}'
 ```
 
-The response is `{"greeting": "hello LazyCloud"}`.
+From code in the same project, the decorated function is the client. It uses
+your `lazycloud login` sign-in:
+
+```python
+from quickstart import greet
+
+print(greet.request("LazyCloud").json())
+```
+
+From another project, a generated package gives typed calls without your
+source. Run the export there:
+
+```bash
+uv run lazycloud app export quickstart
+```
+
+```python
+from lazycloud_clients.quickstart import greet
+
+print(greet.request("LazyCloud"))
+```
+
+The HTTP and in-project calls return `{"greeting": "hello LazyCloud"}`. The
+typed package returns the same fields as a typed object.
+[Typed client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
+covers regenerating the package after a deploy.
 
 ## Clean up
 

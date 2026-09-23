@@ -1,6 +1,6 @@
 ---
 title: "Tasks and logs"
-description: "Every remote call is a task with a status, a result, and logs. Follow it live, look it up later, or react to it from your own code."
+description: "Follow a call live, look it up later by ID, see why it is waiting, or react to it from your own code."
 ---
 
 Remote function calls, endpoint requests, and scheduled runs each create a
@@ -11,12 +11,13 @@ background work later. `.local()` calls do not create tasks.
 ## Live progress
 
 `lazycloud run` and `.remote()` called from your machine show the same live
-display: image build, source upload, task status, and the remote stdout and
-stderr, followed by a summary. A failed step keeps its recent logs on screen.
+display: image build, source upload, task status, and the cloud container's
+stdout and stderr, followed by a summary. A failed step keeps its recent logs on screen.
 When output is redirected, build logs print without live redraws.
 
 Progress and logs go to stderr. The CLI prints the result to stdout, and Python
-returns it to the caller. To silence the display in Python:
+returns it to the caller. `output(enabled=False)` silences the display in
+Python:
 
 ```python
 from lazycloud import output
@@ -80,8 +81,7 @@ task = Task.from_id("<task-id>")
 outcome = task.wait(timeout_seconds=120)
 ```
 
-`task.cancel()` cancels pending work. These examples use `reports.py` from
-[Functions](/concepts/functions).
+`task.cancel()` cancels pending work.
 
 ## Look up a task from the CLI
 
@@ -90,9 +90,9 @@ uv run lazycloud task show <task-id>
 uv run lazycloud logs --task-id <task-id> --follow
 ```
 
-LazyCloud captures everything your code prints. Print with `flush=True` so lines
-appear as they happen. The [task and logs reference](/cli/tasks-and-logs) lists
-every command, and the dashboard's Tasks page shows the same history.
+LazyCloud captures everything your code prints. `flush=True` makes lines appear
+as they happen. The [task and logs reference](/cli/tasks-and-logs) lists every
+command, and the dashboard's Tasks page shows the same history.
 
 ## Callbacks
 

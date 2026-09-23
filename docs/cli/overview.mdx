@@ -5,7 +5,7 @@ description: "The lazycloud command: global flags, handler references, and comma
 
 The `lazycloud` command installs with the `lazycloud-client` Python package. See
 [Installation](/getting-started/installation). Sign in once with
-`lazycloud login`, as described in [Sign-in and workspaces](/platform/auth).
+`lazycloud login`, as described in [Sign-in and tokens](/platform/auth).
 
 ```text
 uv run lazycloud [--json] [--debug] COMMAND [ARGS]...
@@ -20,27 +20,28 @@ tracebacks. `-h` or `--help` works on every command.
 Without `--json`, output is for humans. The CLI drops styling when you redirect
 output.
 
-[Develop, test, deploy](/concepts/workflow) explains when to use `run`, `serve`,
-and `deploy`. The pages below list each command's syntax and flags.
+[Develop, test, deploy](/concepts/workflow) explains when `run`, `serve`, and
+`deploy` each fit.
 
 ## Handler references
 
-Use `module:object` for commands that take a `HANDLER`. Run from your project root:
+Commands that take a `HANDLER` use `module:object`, resolved from your project
+root:
 
 - `quickstart:hello` selects `hello` in `quickstart.py`.
 - `myproject.api:app` selects `app` in `myproject/api.py`.
 
-Use dots between directory names and omit `.py`. A file reference such as
+Dots separate directory names, and `.py` is omitted. A file reference such as
 `quickstart.py:hello` also works and resolves to the same handler.
 
 The object is one decorated resource or an `App`. Deploying an `App` deploys
-everything it registers. To deploy one workload, reference its Python object,
-for example `text_tools:count`.
+everything it registers. Referencing one workload's Python object, for example
+`page_stats:analyze`, deploys only that workload.
 
 `deploy` also accepts a module without `:object`, such as
 `uv run lazycloud deploy quickstart`, when the module contains exactly one app.
-It deploys everything registered with that app. If the module has several apps,
-choose one with `module:app_name`.
+It deploys everything registered with that app. When the module has several
+apps, `module:app_name` selects one.
 
 ## Command groups
 

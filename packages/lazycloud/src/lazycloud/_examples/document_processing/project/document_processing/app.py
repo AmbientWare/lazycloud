@@ -10,8 +10,6 @@ documents and delete the deployment when finished. Both workloads mount the
 volume declared in resources.py; LazyCloud creates it on first use.
 """
 
-from __future__ import annotations
-
 from .api import api
 from .resources import (
     JOB_TOKEN_SECRET_NAME,

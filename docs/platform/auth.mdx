@@ -1,10 +1,7 @@
 ---
-title: "Sign-in and workspaces"
-description: "Sign in to the dashboard and the CLI, work in workspaces, and authenticate CI and scripts."
+title: "Sign-in and tokens"
+description: "Browser sign-in for your own work, access tokens for CI and scripts, and profiles for keeping several sign-ins."
 ---
-
-Use browser sign-in for your own development and access tokens for CI or
-scripts. Select a workspace before creating resources.
 
 ## Sign in to the dashboard
 
@@ -16,58 +13,19 @@ Your name, email, and avatar come from GitHub and refresh each time you sign
 in. A browser session lasts 12 hours. Signing out ends only that session. The
 CLI and other browsers stay signed in.
 
-## Sign in from the CLI
-
-```bash
-uv run lazycloud login
-```
-
-The CLI prints a link and a code. Open the link, confirm the code matches what
-your terminal shows, and approve. The code expires if you wait too long. Run
-`lazycloud login` again to get a new one.
-
-Approval signs the CLI in as you. It can reach every workspace your account
-belongs to, and it stores its credential in `~/.lazycloud/config.yaml`.
-
-## Workspaces
-
-A workspace holds apps, deployments, tasks, secrets, volumes, and queues. It
-separates one project from another. Your account can own or belong to several
-workspaces, and the same sign-in reaches all of them.
-
-The CLI acts in one workspace at a time:
-
-```bash
-uv run lazycloud workspace list
-uv run lazycloud workspace use <name>
-uv run lazycloud workspace rename <new-name>
-```
-
-To act in a different workspace for one command, pass `--workspace <name>`.
-
-Create workspaces from the workspace menu in the dashboard. The same menu
-manages members. An owner or administrator invites people by email, changes
-roles, and removes members. The invitation email carries a link. Opening it
-joins the workspace as whichever account you are signed in as, even if that
-account uses a different address from the one invited. Keep the link to
-yourself, because anyone who opens it takes the seat. An administrator can
-withdraw an invitation or resend it, which replaces the earlier link. Anyone
-except the owner can leave a workspace from the members dialog.
-
-Access tokens, your connected AWS account, joined machines, custom domains, and
-your plan belong to your account rather than to a workspace. They apply to
-every workspace you own.
+The CLI signs in with [`lazycloud login`](/cli/auth#lazycloud-login).
+[Workspaces](/concepts/apps#workspaces) covers choosing the workspace a command
+acts in.
 
 ## CI and scripts
 
-Create an access token in the dashboard under Settings, then Tokens. Give it a
-name and an expiry between 1 and 90 days, or no expiry. Copy the value right
-away, because the dashboard shows it only once. A token has the same reach as
-your sign-in, so treat it like a password. Deleting a token stops it working
-immediately.
+Access tokens come from the dashboard under Settings, then Tokens. Each has a
+name and an expiry between 1 and 90 days, or no expiry. The dashboard shows the
+value only once. A token has the same reach as your sign-in, so it needs the
+care of a password. Deleting a token stops it working immediately.
 
-In CI, inject the token from your CI secret store as `LAZYCLOUD_TOKEN`.
-For an interactive Bash session:
+CI injects the token from its secret store as `LAZYCLOUD_TOKEN`. For an
+interactive Bash session:
 
 ```bash
 read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
@@ -86,14 +44,10 @@ To store a token instead of exporting it each time:
 uv run lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <workspace-name>
 ```
 
-Use the token as a bearer credential when calling an authorized endpoint or
-pod directly:
+The same token authenticates HTTP calls to endpoints and pods that require it.
+See [Authentication](/concepts/endpoints#authentication).
 
-```bash
-curl "<endpoint-url>" -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
-```
-
-### Profiles
+## Profiles
 
 A profile is a separate stored sign-in, for another account or an automation
 token. Switching workspaces within one account only needs `workspace use`.

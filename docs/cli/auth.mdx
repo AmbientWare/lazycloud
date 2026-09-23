@@ -11,12 +11,14 @@ Sign in once on your machine:
 uv run lazycloud login
 ```
 
-Prints a link and a code. Approve the code in the browser to sign the CLI in
-as you. See [Sign-in and workspaces](/platform/auth).
+Prints a link and a code. Approving the code in the browser signs the CLI in as
+you, with access to every workspace your account belongs to. An expired code
+needs a fresh `lazycloud login`. The credential lives in
+`~/.lazycloud/config.yaml`.
 
-CI needs no login step. Set `LAZYCLOUD_TOKEN` from your CI secret store and
-`LAZYCLOUD_WORKSPACE` to the target workspace. To save an existing environment
-token in a local profile:
+CI needs no login step. It reads `LAZYCLOUD_TOKEN` from your CI secret store
+and `LAZYCLOUD_WORKSPACE` for the target workspace. To save an existing
+environment token in a local profile:
 
 ```bash
 uv run lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <name>
@@ -59,5 +61,5 @@ uv run lazycloud token show [--profile <name>]     # whether the profile holds a
 uv run lazycloud token set VALUE [--profile <name>]
 ```
 
-Create and delete tokens in the dashboard under Settings, then Tokens. These
+The dashboard creates and deletes tokens under Settings, then Tokens. These
 commands manage only the copy stored in a profile.

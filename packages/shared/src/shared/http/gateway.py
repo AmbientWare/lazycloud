@@ -100,14 +100,14 @@ class SecretVar(HttpModel):
     name: str = ""
 
 
-class Autoscaler(HttpModel):
+class GatewayAutoscaler(HttpModel):
     type: Literal["queue_depth"] = "queue_depth"
     max_containers: int = Field(default=1, ge=0)
     tasks_per_container: int = Field(default=1, gt=0)
     min_containers: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def minimum_cannot_exceed_maximum(self) -> Autoscaler:
+    def minimum_cannot_exceed_maximum(self) -> GatewayAutoscaler:
         if self.min_containers > self.max_containers:
             msg = "min_containers cannot exceed max_containers"
             raise ValueError(msg)
@@ -170,7 +170,7 @@ class GetOrCreateStubRequest(HttpModel):
     callback_url: str = ""
     authorized: bool = False
     secrets: list[SecretVar] = Field(default_factory=list)
-    autoscaler: Autoscaler = Field(default_factory=Autoscaler)
+    autoscaler: GatewayAutoscaler = Field(default_factory=GatewayAutoscaler)
     task_policy: GatewayTaskPolicy = Field(default_factory=GatewayTaskPolicy)
     concurrent_requests: int = Field(default=1, gt=0)
     in_process: bool = False
@@ -290,11 +290,11 @@ __all__ = [
     "AgentCapacityInterruptionResponse",
     "AttachToContainerRequest",
     "AttachToContainerResponse",
-    "Autoscaler",
     "CheckpointContainerRequest",
     "CheckpointContainerResponse",
     "DeployStubRequest",
     "DeployStubResponse",
+    "GatewayAutoscaler",
     "GatewayTaskPolicy",
     "GatewayUrlKind",
     "GetOrCreateStubRequest",

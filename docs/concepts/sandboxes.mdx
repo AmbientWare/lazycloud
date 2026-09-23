@@ -1,15 +1,15 @@
 ---
 title: "Sandboxes"
-description: "On-demand containers with process control, a filesystem API, exposed ports, snapshots, and optional Docker."
+description: "Remote containers your code creates on demand, with process control, a filesystem API, ports, snapshots, and optional Docker."
 ---
 
-A sandbox gives you a remote container for commands and files. Use one to
-run generated code, test a patch, or provide a development environment.
+A sandbox fits running generated code, testing a patch, or giving an agent a
+development environment. Each one is a container in the cloud that your code
+starts, drives, and terminates.
 
-## Run a command
+## Create a sandbox
 
-Save this as `sandbox_demo.py`, then run `uv run python sandbox_demo.py` after
-installing the SDK and signing in:
+Save this as `sandbox_demo.py` and run it with `uv run python sandbox_demo.py`:
 
 ```python
 from lazycloud import App, Image
@@ -31,18 +31,13 @@ finally:
     instance.terminate()
 ```
 
-The output includes exit code `0` and the remote Python version. The `finally`
-block terminates the container even if a command fails. A sandbox bills compute
-until it stops, so keep this `try`/`finally` shape when you adapt the examples
-below.
+It prints exit code `0` and the sandbox's Python version. A sandbox bills until
+it stops, so the `finally` block terminates it even when a command fails. A
+plain number for `memory` means MiB.
 
-A plain number for `memory` means MiB, so `memory=1024` is 1 GiB. You create
-sandboxes on demand. A deploy never starts one. Other defaults are in
-[Resources and options](/concepts/resources#defaults).
+### Reconnect to a running sandbox
 
-## Reconnect to a running sandbox
-
-Keep the sandbox ID if another process needs to reconnect before it expires:
+Another process can reconnect by ID before the sandbox expires:
 
 ```python
 instance = sandbox.create()
@@ -52,13 +47,14 @@ same = sandbox.connect(sandbox_id)   # reconnect later
 instance.update_ttl(1800)            # extend the idle lifetime
 ```
 
-`sandbox.list()` returns the workspace's sandboxes, `sandbox.stats()` counts
-them, and `sandbox.timeline(stub_id)` gives one sandbox's lifecycle.
+`sandbox.list()` returns the workspace's sandboxes, and `sandbox.stats()`
+counts them.
 
-## Commands and processes
+## Use a running sandbox
 
-`run` blocks until the command exits. `process` gives you control over
-long-running ones:
+### Commands and processes
+
+`run` waits for the command to exit, and `process` controls long-running ones:
 
 ```python
 result = instance.run("pytest -q", cwd="/workspace", timeout_seconds=300)
@@ -72,16 +68,12 @@ instance.process.run_code("print(2 + 2)")   # a Python snippet
 instance.list_processes()
 ```
 
-A process has `pid`, `wait(timeout)`, `kill()`, `status()`, and `stdout`,
-`stderr`, and `logs` streams with `read()` and `lines()`.
-The pytest command needs pytest in your image and tests uploaded to
-`/workspace`. For a web server, inspect `status()` or expose its port while it
-runs. `wait()` returns only after the process exits.
+A process has `pid`, `status()`, `kill()`, `wait()`, and `stdout`, `stderr`, and
+`logs` streams with `read()` and `lines()`.
 
-## Files
+### Files
 
-`instance.fs` works on the sandbox filesystem. The working directory is
-`/workspace`.
+`instance.fs` reads and writes the sandbox filesystem, rooted at `/workspace`:
 
 ```python
 instance.fs.upload_file("model.pt", "/workspace/model.pt")
@@ -94,7 +86,7 @@ instance.fs.find_in_files("/workspace/src", "TODO")
 instance.fs.replace_in_files("/workspace/src", "old", "new")
 ```
 
-## Ports and network
+### Ports and network
 
 ```python
 url = instance.expose_port(8000)
@@ -105,23 +97,11 @@ instance.update_network_permissions(block_network=True)
 instance.update_network_permissions(allow_list=["203.0.113.10/32"])
 ```
 
-An exposed URL points at this container and stops working when it stops.
-Declare `ports=[8000]` on the sandbox to expose ports as soon as an instance
-is ready. `block_network` and `allow_list` set the outbound policy, and you
-can set only one of them. Allow-list entries are CIDR networks, not hostnames.
+An exposed URL lives as long as the container. `ports=[8000]` on the sandbox
+exposes ports at start. Outbound access is either blocked or limited to CIDR
+ranges.
 
-## Docker inside a sandbox
-
-Set `image=Image().with_docker()` and `docker_enabled=True` to install and run
-a Docker daemon in the sandbox. `instance.docker` then wraps it with `run`,
-`build`, `pull`, `push`, `ps`, `logs`, `stop`, `rm`, `exec`, `login`,
-`compose_up`, `compose_down`, and volume commands.
-
-Nested containers share the sandbox's network, so bind each service to its own
-port and call `instance.expose_port(port)` for its URL. The sandbox rejects
-Docker and Compose port mappings.
-
-## Snapshots
+### Snapshots
 
 ```python
 snapshot_id = instance.snapshot_memory()
@@ -130,19 +110,33 @@ restored = sandbox.create_from_memory_snapshot(snapshot_id)
 image_id = instance.create_image_from_filesystem()
 ```
 
-A memory snapshot restores a running sandbox's state. A filesystem image
-captures the disk as an image id you can reuse with `Image.from_id(...)`.
+A memory snapshot restores a running sandbox. A filesystem image captures the
+disk for reuse with `Image.from_id(...)`.
 
-## Async
+### Async
 
-The command, process, and file APIs have async methods under `.aio`, such as
-`await instance.aio.run(...)`, `await instance.process.aio.exec(...)`, and
-`await instance.fs.aio.upload_file(...)`.
+Each API has an async form under `.aio`, such as `await instance.aio.run(...)`.
 
-## Definition options
+## Sandbox options
 
-Sandboxes also accept `env`, `secrets`, `volumes`, `gpu` and `gpu_count`,
+Sandboxes accept `env`, `secrets`, `volumes`, `gpu` and `gpu_count`,
 `sync_local_dir=True` to copy your working directory in at creation,
-`command` for the initial process, `docker_enabled`, and `machine`. The
-[dashboard](/platform/dashboard) shows running sandboxes on their app's page,
-with a terminal, file browser, and process list.
+`command` for the initial process, `ports`, `docker_enabled`, and `machine`.
+`keep_warm_seconds` sets how long an idle sandbox stays up, 600 by default.
+
+### Docker inside a sandbox
+
+`image=Image().with_docker()` with `docker_enabled=True` runs a Docker daemon in
+the sandbox, and `instance.docker` wraps `run`, `build`, `ps`, `logs`,
+`compose_up`, and the rest. Nested containers share the sandbox's network, so
+each service binds its own port and `instance.expose_port(port)` gives its URL.
+
+## Stop and clean up
+
+`instance.terminate()` stops a sandbox at once. Otherwise it stops after
+`keep_warm_seconds` idle. The [dashboard](/platform/dashboard) shows running
+sandboxes with a terminal, file browser, and process list.
+
+## Shared settings
+
+[Images](/concepts/images) and [resources](/concepts/resources).

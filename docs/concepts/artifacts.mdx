@@ -1,11 +1,10 @@
 ---
 title: "Artifacts"
-description: "Save files a task produces and share them with expiring public URLs."
+description: "Files a task produces, kept after the container stops for download or sharing through expiring public URLs."
 ---
 
-Save a task's output as an artifact when you want to download or share it
-after the container stops. Use a volume for files you need to keep beyond
-your plan's artifact retention period.
+Artifacts expire with your plan's retention window, so files you need for
+longer belong in a [volume](/concepts/volumes).
 
 ## Save one
 
@@ -55,11 +54,11 @@ artifact.
 ## Retrieve one
 
 `artifact.public_url(expires=3600)` returns a URL that serves the file without
-authentication until it expires. Hand it to a browser or a webhook.
+authentication until it expires, so a browser or a webhook can use it.
 `artifact.exists()` and `artifact.stat()` check and describe the saved file.
 
-Deleting the task that produced an artifact leaves the artifact in place. To
-save from outside the producing container, pass `task_id=...` explicitly. The
+Deleting the task that produced an artifact leaves the artifact in place.
+Saving from outside the producing container needs an explicit `task_id=...`. The
 [dashboard](/platform/dashboard#retrieve-files) lists, previews, and downloads
 them.
 
@@ -71,11 +70,8 @@ get the Business window.
 
 The plan at upload time sets the window, and it counts from the upload.
 `saved.expires_at` and the dashboard show the expiry date. Public URLs do not
-outlive the artifact. To delete one sooner, call `artifact.delete()`.
-
-For files that must last, use a volume or download a copy before the artifact
-expires. Artifacts bill as volume storage. See
-[Plans and limits](/platform/plans). The `/artifacts` mount is read-only.
+outlive the artifact, and `artifact.delete()` removes one sooner. Artifacts bill
+as volume storage. See [Plans and limits](/platform/plans).
 
 `uv run lazycloud artifact list`, `usage`, and `delete` manage artifacts from a
 terminal. See [storage commands](/cli/storage#lazycloud-artifact).

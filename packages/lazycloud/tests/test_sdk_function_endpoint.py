@@ -439,7 +439,7 @@ def test_a_function_declares_its_own_schedule(
     )
 
     spec = cron_task.spec()
-    response = cron_task.deploy(name="nightly-task", workspace="team")
+    response = cron_task.deploy(workspace="team")
 
     assert cron_task.local() == "local"
     assert spec.kind is DeploymentKind.Function
@@ -451,7 +451,7 @@ def test_a_function_declares_its_own_schedule(
     assert deployment_client.stub_requests[0].stub_type == "function"
     assert deployment_client.stub_requests[0].cron == "*/5 * * * *"
     assert deployment_client.deploy_requests[0].stub_id == "stub-function"
-    assert deployment_client.deploy_requests[0].name == "nightly-task"
+    assert deployment_client.deploy_requests[0].name == "cron-task"
     assert response.deployment_id == "dep-stub-function"
 
 

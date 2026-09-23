@@ -10,7 +10,7 @@ from typing import Any, ParamSpec, Protocol, TypeVar, overload
 
 from pydantic import JsonValue
 from shared.app_slug import validate_app_slug
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_FUNCTION_AUTHORIZED,
     DEFAULT_FUNCTION_CPU,
@@ -58,7 +58,6 @@ from lazycloud.abstractions.metadata import (
 )
 from lazycloud.abstractions.pod import Pod, PodOptions
 from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
-from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.control import resolve_control_client_config
 from lazycloud.control_clients import resource_control_client
@@ -169,7 +168,7 @@ class App:
         cron: str | None = None,
         keep_warm: int | None = None,
         max_pending_tasks: int | None = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
         retry_policy: RetryPolicyInput = None,
         retry_delay_seconds: float = 0.0,
@@ -214,7 +213,7 @@ class App:
         cron: str | None = None,
         keep_warm: int | None = None,
         max_pending_tasks: int | None = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
         retry_policy: RetryPolicyInput = None,
         retry_delay_seconds: float = 0.0,
@@ -258,7 +257,7 @@ class App:
         cron: str | None = None,
         keep_warm: int | None = None,
         max_pending_tasks: int | None = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         retries: int = DEFAULT_FUNCTION_RETRIES,
         retry_policy: RetryPolicyInput = None,
         retry_delay_seconds: float = 0.0,
@@ -392,7 +391,7 @@ class App:
         secrets: list[str] | None = None,
         volumes: Iterable[VolumeMount | VolumeExport] | None = None,
         on_start: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
         inputs: SchemaInput = None,
@@ -434,7 +433,7 @@ class App:
         secrets: list[str] | None = None,
         volumes: Iterable[VolumeMount | VolumeExport] | None = None,
         on_start: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
         inputs: SchemaInput = None,
@@ -475,7 +474,7 @@ class App:
         secrets: list[str] | None = None,
         volumes: Iterable[VolumeMount | VolumeExport] | None = None,
         on_start: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
         inputs: SchemaInput = None,
@@ -581,7 +580,7 @@ class App:
         secrets: list[str] | None = None,
         volumes: Iterable[VolumeMount | VolumeExport] | None = None,
         on_start: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
@@ -673,7 +672,7 @@ class App:
         secrets: list[str] | None = None,
         volumes: Iterable[VolumeMount | VolumeExport] | None = None,
         on_start: LifecycleHookInput = None,
-        autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+        autoscaler: Autoscaler | Mapping[str, Any] | None = None,
         task_policy: TaskPolicy | Mapping[str, Any] | None = None,
         checkpoint_enabled: bool = False,
         preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
@@ -912,26 +911,9 @@ class App:
         *,
         prune: bool = False,
         resource: str | None = None,
-        name: str | None = None,
         workspace: str | None = None,
         external_url: str | None = None,
         source_root: str | Path | None = None,
-        image: Image | None = None,
-        cpu: CpuRequest | None = None,
-        memory: MemoryRequest | None = None,
-        disk: str | None = None,
-        gpu: GpuInput = None,
-        gpu_count: int | None = None,
-        env: Mapping[str, str] | None = None,
-        secrets: Iterable[str] | None = None,
-        ports: Mapping[str, int] | None = None,
-        keep_warm: int | None = None,
-        tcp: bool | None = None,
-        region: str | None = None,
-        availability_zone: str | None = None,
-        machine: MachineInput = None,
-        preemptible: bool | None = None,
-        entrypoint: Iterable[str] | None = None,
     ) -> AppDeployResult:
         """Deploy this app or one selected app resource.
 
@@ -947,49 +929,21 @@ class App:
             prune: Remove omitted workloads after all deployments register successfully.
                 Requires a complete app. An empty app removes every deployed workload.
             resource: Optional resource selector to deploy only one item.
-            name: Deployment name override when deploying one resource.
             workspace: Workspace slug or name for the deployment.
             external_url: External URL to attach to endpoint-style deployments.
             source_root: Local source directory shared by the selected resources.
-            image, cpu, memory, gpu, gpu_count: Runtime overrides applied before deployment.
-            env, secrets, ports, keep_warm, tcp, machine, entrypoint: Additional runtime
-                overrides. Target-specific options fail explicitly when unsupported.
         """
         if prune and resource is not None:
             raise AppOperationError("pruning requires the complete app without a resource selector")
-        if prune and name is not None:
-            raise AppOperationError("pruning does not support a deployment name override")
         deployable = (
             self._select_many(resource=resource, method="deploy")
             if not prune or resource is not None or self.deployment_manifest().workloads
             else ()
         )
-        for item in deployable:
-            _configure_deployable_resource(
-                item,
-                image=image,
-                cpu=cpu,
-                memory=memory,
-                disk=disk,
-                gpu=gpu,
-                gpu_count=gpu_count,
-                env=env,
-                secrets=secrets,
-                ports=ports,
-                keep_warm=keep_warm,
-                tcp=tcp,
-                region=region,
-                availability_zone=availability_zone,
-                machine=machine,
-                preemptible=preemptible,
-                entrypoint=entrypoint,
-            )
 
         def submit() -> tuple[DeployStubResponse, ...]:
             return self._submit_deployments(
                 deployable,
-                resource=resource,
-                name=name,
                 workspace=workspace,
                 external_url=external_url,
                 source_root=source_root,
@@ -1014,8 +968,6 @@ class App:
         self,
         deployable: tuple[Function[..., Any] | Endpoint[..., Any] | ASGI | Pod, ...],
         *,
-        resource: str | None,
-        name: str | None,
         workspace: str | None,
         external_url: str | None,
         source_root: str | Path | None,
@@ -1032,7 +984,6 @@ class App:
                     _deploy_app_resource,
                     item,
                     {
-                        "name": name if resource else None,
                         "workspace": workspace,
                         "external_url": external_url,
                         "source_root": source_root,
@@ -1056,7 +1007,7 @@ class App:
         *,
         resource: str | None = None,
         timeout: int = 0,
-        options: ServeOptions | None = None,
+        sync_dir: str | None = None,
     ) -> object:
         """Serve one function, endpoint, or ASGI app resource for preview.
 
@@ -1066,9 +1017,11 @@ class App:
         Args:
             resource: Optional resource selector for the preview target.
             timeout: Serve timeout in seconds. `0` keeps serving until stopped.
+            sync_dir: Local directory synced into the preview. Defaults to the
+                resource's own setting, then the current directory.
         """
         selected = self._select_one(resource=resource, method="serve", serveable=True)
-        return _invoke_method(selected.serve, {"timeout": timeout, "options": options})
+        return _invoke_method(selected.serve, {"timeout": timeout, "sync_dir": sync_dir})
 
     def _register(self, resource: ResourceT) -> ResourceT:
         if not hasattr(resource, "spec"):
@@ -1146,169 +1099,6 @@ def _parse_selector(value: str) -> tuple[DeploymentKind | None, str]:
 def _resource_selector(resource: AppResource) -> str:
     spec = resource.spec()
     return f"{spec.kind.value}:{spec.name}"
-
-
-def _configure_deployable_resource(
-    resource: object,
-    *,
-    image: Image | None,
-    cpu: CpuRequest | None,
-    memory: MemoryRequest | None,
-    disk: str | None,
-    gpu: GpuInput,
-    gpu_count: int | None,
-    env: Mapping[str, str] | None,
-    secrets: Iterable[str] | None,
-    ports: Mapping[str, int] | None,
-    keep_warm: int | None,
-    tcp: bool | None,
-    region: str | None,
-    availability_zone: str | None,
-    machine: MachineInput,
-    preemptible: bool | None,
-    entrypoint: Iterable[str] | None,
-) -> None:
-    if isinstance(resource, Function):
-        unsupported = _unsupported_override_names(
-            ports=ports,
-            keep_warm=keep_warm,
-            tcp=tcp,
-            entrypoint=entrypoint,
-        )
-        if unsupported:
-            spec = resource.spec()
-            _raise_unsupported_overrides(spec, unsupported)
-        resource.configure(
-            image=image,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            env=env,
-            secrets=secrets,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            preemptible=preemptible,
-        )
-        return
-    if isinstance(resource, Endpoint):
-        unsupported = _unsupported_override_names(
-            ports=ports,
-            tcp=tcp,
-            entrypoint=entrypoint,
-        )
-        if unsupported:
-            spec = resource.spec()
-            _raise_unsupported_overrides(spec, unsupported)
-        if image is not None:
-            resource.image = image
-        if cpu is not None:
-            resource.cpu = cpu
-        if memory is not None:
-            resource.memory = memory
-        if gpu is not None:
-            resource.gpu = gpu
-        if gpu_count is not None:
-            resource.gpu_count = gpu_count
-        if env:
-            resource.env.update(env)
-        if secrets:
-            resource.secrets.extend(secret for secret in secrets if secret not in resource.secrets)
-        if keep_warm is not None:
-            resource.keep_warm = keep_warm
-        if machine is not None:
-            resource.machine = machine
-        if region is not None:
-            resource.region = region
-        if availability_zone is not None:
-            resource.availability_zone = availability_zone
-        if preemptible is not None:
-            resource.preemptible = preemptible
-        return
-    if isinstance(resource, ASGI):
-        unsupported = _unsupported_override_names(
-            ports=ports,
-            tcp=tcp,
-            entrypoint=entrypoint,
-        )
-        if unsupported:
-            spec = resource.spec()
-            _raise_unsupported_overrides(spec, unsupported)
-        if image is not None:
-            resource.image = image
-        if cpu is not None:
-            resource.cpu = cpu
-        if memory is not None:
-            resource.memory = memory
-        if gpu is not None:
-            resource.gpu = gpu
-        if gpu_count is not None:
-            resource.gpu_count = gpu_count
-        if env:
-            resource.env.update(env)
-        if secrets:
-            resource.secrets.extend(secret for secret in secrets if secret not in resource.secrets)
-        if keep_warm is not None:
-            resource.keep_warm_seconds = keep_warm
-        if machine is not None:
-            resource.machine = machine
-        if region is not None:
-            resource.region = region
-        if availability_zone is not None:
-            resource.availability_zone = availability_zone
-        if preemptible is not None:
-            resource.preemptible = preemptible
-        return
-    if isinstance(resource, Pod):
-        resource.configure(
-            image=image,
-            command=list(entrypoint) if entrypoint is not None else None,
-            ports=dict(ports) if ports is not None else None,
-            env=dict(env) if env is not None else None,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            gpu=gpu,
-            gpu_count=gpu_count,
-            keep_warm=keep_warm,
-            secrets=list(secrets) if secrets is not None else None,
-            tcp=tcp,
-            region=region,
-            availability_zone=availability_zone,
-            machine=machine,
-            preemptible=preemptible,
-        )
-        return
-    msg = "selected app resource does not support deployment overrides"
-    raise AppOperationError(msg)
-
-
-def _unsupported_override_names(
-    *,
-    ports: Mapping[str, int] | None = None,
-    keep_warm: int | None = None,
-    tcp: bool | None = None,
-    entrypoint: Iterable[str] | None = None,
-) -> list[str]:
-    unsupported: list[str] = []
-    if ports:
-        unsupported.append("ports")
-    if keep_warm is not None:
-        unsupported.append("keep_warm")
-    if tcp is not None:
-        unsupported.append("tcp")
-    if entrypoint:
-        unsupported.append("entrypoint")
-    return unsupported
-
-
-def _raise_unsupported_overrides(spec: DeploymentSpec, unsupported: list[str]) -> None:
-    options = ", ".join(unsupported)
-    selector = f"{spec.kind.value}:{spec.name}"
-    msg = f"{selector} does not support overrides: {options}"
-    raise AppOperationError(msg)
 
 
 def _is_serveable(resource: AppResource) -> bool:

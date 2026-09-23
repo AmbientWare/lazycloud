@@ -9,8 +9,6 @@ Stop GPU charges with ``uv run lazycloud deployment stop openai-server`` when fi
 The full request and cache cleanup are in https://docs.lazycloud.dev/examples/openai-compatible-llm.
 """
 
-from __future__ import annotations
-
 from lazycloud import App, GpuType, Image, Volume
 
 APP_NAME = "openai_compatible_llm"

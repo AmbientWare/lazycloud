@@ -1,4 +1,4 @@
-from __future__ import annotations
+from pydantic import BaseModel
 
 from lazycloud import App, Image
 
@@ -12,5 +12,17 @@ def hello(name: str = "world") -> str:
     return f"hello {name}"
 
 
+class Greeting(BaseModel):
+    greeting: str
+
+
+@app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
+def greet(name: str) -> Greeting:
+    return Greeting(greeting=hello.local(name))
+
+
 if __name__ == "__main__":
+    print("running local")
+    print(hello.local("LazyCloud"))
+    print("running remote")
     print(hello.remote("LazyCloud"))

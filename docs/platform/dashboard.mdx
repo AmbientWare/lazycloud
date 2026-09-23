@@ -3,57 +3,42 @@ title: "Use the dashboard"
 description: "Find run results, test an API, manage stored files, and check your spending."
 ---
 
-Open [the dashboard](https://lazycloud.dev/dashboard) and choose your workspace
-from the menu at the top.
+[The dashboard](https://lazycloud.dev/dashboard) shows one workspace at a time,
+chosen from the menu at the top.
 
 ## Find a result or investigate a failure
 
 Open Tasks and select the run. Its detail view shows status, timing, retries,
-the result or error, and logs. For a task that is still pending, check the
-displayed reason before retrying it.
+the result or error, and logs. A task that is still pending shows why it is
+waiting.
 
-You can also open an app to find its workloads and recent activity.
+An app's page lists its workloads and recent activity.
 
 ## Test or stop a deployed service
 
 Open the workload under Apps and use the request playground to send input.
-Use its controls to scale, pause, resume, or delete it. Pause to stop serving
-without removing the definition.
+Its controls scale, pause, resume, or delete it. Pausing stops serving without
+removing the definition.
 
 For a running sandbox, open its terminal, file browser, or process list from
 the app page.
 
 ## Retrieve files
 
-Storage contains volumes, artifacts, secrets, queues, and maps. Use the
-volume browser for shared files and the artifact browser for task output. The
-artifact browser searches filenames, filters by app, task, type, or date, and
-previews or downloads files. A task's Artifacts tab shows that task's files.
-The Storage page also shows total bytes stored and this month's storage
-charges. Artifact downloads and public URLs follow the
-[retention](/concepts/artifacts#retention) rules.
+Storage has browsers for volumes and artifacts, plus secrets, queues, and maps.
+Artifacts can be searched, filtered, previewed, and downloaded until their
+[retention](/concepts/artifacts#retention) runs out, and each task's Artifacts
+tab lists its own. The page also shows bytes stored and this month's storage
+charges.
 
 ## Edit queues and maps
 
-Open Storage, then Queues or Maps. Keep repeatable setup in your Python code.
-Use the dashboard to inspect data or make a one-off correction.
-
-For a map, select a key to view or edit its value and expiry. Saving fails if a
-workload changed the key in the meantime. Reload and try again. You can inspect
-and delete binary Python values but not edit them.
-
-Choose Add key to create a key without overwriting an existing one. To create
-a map, choose New map and enter its name and first key/value.
-
-For a queue, Add message appends JSON to the end. Viewing the head message
-does not remove it. Choose Remove next message to consume the next message
-without running it. The dashboard then shows what it removed. Another consumer
-can take the previewed message before you confirm, so the removed message may
-be different. Choose New queue to create a named queue with its first message.
-
-Deleting a queue removes its remaining messages. Deleting a map removes all
-its keys. Both actions require confirmation and cannot be undone. Running code
-can recreate a deleted collection with its next write.
+Storage, then Queues or Maps, is for inspecting data and one-off fixes. A map
+key's value and expiry are editable, and a save fails if a workload changed the
+key meanwhile. Binary Python values can be viewed and deleted but not edited.
+A queue takes new JSON messages at the end, and Remove next message consumes
+the head without running it. Deleting a queue or map can't be undone, though
+running code recreates it on its next write.
 
 ## Check spending
 
@@ -71,6 +56,7 @@ Compute connects an AWS account or joins a machine, and shows each machine's
 lifecycle phase. [Compute](/platform/compute) explains the phases. Domains
 registers a hostname for your API.
 
-Use the workspace menu to create or rename a workspace and manage members.
-Before opening an invitation link, check which account you are signed in as.
-Accepting joins that account to the workspace.
+The workspace menu renames workspaces and manages members. Owners and
+administrators invite by email, change roles, and remove members. An invitation
+link joins whichever account opens it, so it belongs only with the person
+invited. Resending or withdrawing replaces the link.

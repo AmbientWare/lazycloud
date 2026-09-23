@@ -1,13 +1,12 @@
 ---
 title: "Run a coding agent in a sandbox"
-description: "Plan a code change with an OpenAI-compatible model in a function, then test it in a sandbox with no network and no credentials."
+description: "Keep model credentials and network access away from the code an agent writes."
 ---
 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
-This example separates model access from running generated code. A function
-calls your OpenAI-compatible provider and returns one validated file
-replacement. A network-blocked sandbox receives only the seed project and
+A function calls your OpenAI-compatible provider and returns one validated
+file replacement. A network-blocked sandbox receives only the seed project and
 that replacement, then runs the unit test. The orchestrator terminates the
 sandbox whether the test passes, fails, or errors.
 

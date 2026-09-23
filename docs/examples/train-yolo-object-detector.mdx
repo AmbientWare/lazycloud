@@ -5,9 +5,8 @@ description: "Train YOLO26n on an L4, keep the checkpoint in a volume, and predi
 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
-This example trains a small detector in one GPU function and loads the
-checkpoint in a second one. A `yolo-artifacts` volume keeps checkpoints,
-metrics, and annotated images after both containers exit.
+The `yolo-artifacts` volume also keeps metrics and annotated images after both
+containers exit.
 
 The default run trains on Ultralytics' eight-image COCO8 dataset for one
 epoch. Use it to check training, checkpoint storage, and prediction before

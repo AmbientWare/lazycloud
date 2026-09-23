@@ -5,7 +5,7 @@ description: "Manage deployed apps, deployments, and running containers."
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-Pause an app to stop its workloads together. Stop one deployment to take a
+Pausing an app stops its workloads together. Stopping one deployment takes a
 single service offline. Container commands act on individual instances. An
 active deployment may replace a container you stop.
 
@@ -31,9 +31,8 @@ A deployment is addressed by name or id. `scale` pins a pod deployment to a
 container count and refuses other kinds. Functions and endpoints scale from the
 `autoscaler` on their decorator. See [Scaling and concurrency](/concepts/scaling).
 
-Use these commands to inspect and operate deployments. Keep workload resources
-and autoscaler settings in Python so the next deploy applies the configuration
-you intend.
+These commands inspect and operate deployments. Resources and autoscaler
+settings live in the Python definition, and each deploy applies them.
 
 ```bash
 uv run lazycloud deployment list [--app <name>] [--limit <n>]

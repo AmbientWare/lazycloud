@@ -21,9 +21,9 @@ from shared.http.functions import (
     FunctionInvokeResponse,
 )
 from shared.http.gateway import (
-    Autoscaler,
     DeployStubRequest,
     DeployStubResponse,
+    GatewayAutoscaler,
     GatewayTaskPolicy,
     GatewayUrlKind,
     GetOrCreateStubRequest,
@@ -264,7 +264,6 @@ class DeploymentClient(ControlClientConfigMixin):
         self,
         spec: DeploymentSpec,
         *,
-        name: str | None = None,
         workspace: str | None = None,
         external_url: str | None = None,
         image: Image | None = None,
@@ -283,7 +282,7 @@ class DeploymentClient(ControlClientConfigMixin):
         response = self.control_client.deploy_stub(
             DeployStubRequest(
                 stub_id=stub.stub_id,
-                name=name or spec.name,
+                name=spec.name,
                 workspace=selected_workspace,
                 external_url=external_url or config.endpoint,
             )
@@ -961,11 +960,11 @@ def _metadata_str_list(metadata: Mapping[str, JsonValue], key: str) -> list[str]
 def _deployment_autoscaler(
     spec: DeploymentSpec,
     metadata: Mapping[str, JsonValue],
-) -> Autoscaler:
+) -> GatewayAutoscaler:
     value = _metadata_mapping(metadata, "autoscaler")
     if not value:
-        return Autoscaler(tasks_per_container=_default_tasks_per_container(spec, metadata))
-    return Autoscaler.model_validate(value)
+        return GatewayAutoscaler(tasks_per_container=_default_tasks_per_container(spec, metadata))
+    return GatewayAutoscaler.model_validate(value)
 
 
 def _default_tasks_per_container(

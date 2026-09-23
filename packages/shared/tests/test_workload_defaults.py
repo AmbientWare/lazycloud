@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DeploymentSpec,
     Resources,
 )
 from shared.deployments import DeploymentKind
 from shared.http.deployments import DeploymentResourcesResponse
-from shared.http.gateway import Autoscaler, GetOrCreateStubRequest
+from shared.http.gateway import GatewayAutoscaler, GetOrCreateStubRequest
 from shared.http.stubs import StubConfigUpdateRequest, StubCreateRequest, StubRuntimeConfigResponse
 from shared.workload_config import StubRuntimeConfig
 
@@ -36,7 +36,7 @@ def test_new_workload_defaults_preserve_explicit_and_stored_preemption_choices()
 def test_deployment_concurrency_is_positive_at_public_http_boundaries() -> None:
     omitted = DeploymentSpec(name="omitted")
     request = GetOrCreateStubRequest(name="omitted")
-    autoscaler = QueueDepthAutoscaler()
+    autoscaler = Autoscaler()
 
     assert omitted.resources.concurrency == 1
     assert request.concurrent_requests == 1
@@ -66,5 +66,5 @@ def test_deployment_concurrency_is_positive_at_public_http_boundaries() -> None:
             name="contradictory",
             stub_type=DeploymentKind.Pod.value,
             keep_warm_seconds=-1,
-            autoscaler=Autoscaler(max_containers=0),
+            autoscaler=GatewayAutoscaler(max_containers=0),
         )

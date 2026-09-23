@@ -26,7 +26,6 @@ from shared.http.gateway import (
 from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.placement import ProductRegion
-from typing_extensions import Self
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
@@ -333,61 +332,6 @@ class Pod(ControlClientConfigMixin):
             ),
         )
 
-    def configure(
-        self,
-        *,
-        image: Image | None = None,
-        command: list[str] | None = None,
-        ports: dict[str, int] | None = None,
-        env: dict[str, str] | None = None,
-        cpu: CpuRequest | None = None,
-        memory: MemoryRequest | None = None,
-        disk: str | None = None,
-        gpu: GpuInput = None,
-        gpu_count: int | None = None,
-        keep_warm: int | None = None,
-        secrets: list[str] | None = None,
-        tcp: bool | None = None,
-        region: str | None = None,
-        availability_zone: str | None = None,
-        machine: MachineInput = None,
-        preemptible: bool | None = None,
-    ) -> Self:
-        if image is not None:
-            image.ignore_python = True
-            self.image = image
-        if command:
-            self.command = list(command)
-        if ports:
-            self.ports.update(ports)
-        if env:
-            self.env.update(env)
-        if cpu is not None:
-            self.cpu = cpu
-        if memory is not None:
-            self.memory = memory
-        if disk is not None:
-            self.disk = disk
-        if gpu is not None:
-            self.gpu = gpu
-        if gpu_count is not None:
-            self.gpu_count = gpu_count
-        if keep_warm is not None:
-            self.keep_warm = keep_warm
-        if secrets:
-            self.secrets.extend(secret for secret in secrets if secret not in self.secrets)
-        if tcp is not None:
-            self.tcp = tcp
-        if machine is not None:
-            self.machine = machine
-        if region is not None:
-            self.region = region
-        if availability_zone is not None:
-            self.availability_zone = availability_zone
-        if preemptible is not None:
-            self.preemptible = preemptible
-        return self
-
     def prepare(self, *, workspace: str | None = None) -> str:
         try:
             response = DeploymentClient(
@@ -462,14 +406,11 @@ class Pod(ControlClientConfigMixin):
     def deploy(
         self,
         *,
-        name: str | None = None,
         workspace: str | None = None,
         external_url: str | None = None,
         source_root: str | Path | None = None,
         _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
-        if name is not None:
-            self.name = name
         try:
             response = DeploymentClient(
                 client=self.deployment_client,

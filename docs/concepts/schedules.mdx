@@ -1,12 +1,13 @@
 ---
 title: "Schedules"
-description: "Run a Python function automatically at a set time or interval."
+description: "A deployed function with a cron expression, run at set times in UTC."
 ---
 
-Set `cron` on a function and deploy it to schedule recurring work. Each
-scheduled call has its own task record, result, and logs.
+A schedule fits recurring work such as a nightly report or an hourly cleanup.
+Each scheduled run is a [task](/concepts/tasks-and-logs) with its own result
+and logs.
 
-## Schedule a daily report
+## Define a schedule
 
 This function counts files in a volume every day at 03:00 UTC. Save it as
 `daily_report.py`:
@@ -27,15 +28,24 @@ def count_files() -> dict[str, int]:
     return {"files": count}
 ```
 
-Deploy the function to register its schedule:
+## Trigger it
+
+Deploying the function registers its schedule:
 
 ```bash
 uv run lazycloud deploy daily_report:count_files
 ```
 
+One run right now, without waiting for the schedule:
+
+```bash
+uv run lazycloud run daily_report:count_files
+```
+
 The first run creates the declared volume or reuses an existing one. While the
 volume is empty, the function returns `{"files": 0}`. Upload files to
-`report-inputs` and the next run counts them.
+`report-inputs` and the next run counts them. Scheduled runs appear in the
+dashboard and in `uv run lazycloud task list --app daily_report`.
 
 ## Choose a schedule
 
@@ -52,27 +62,19 @@ Other aliases are `@daily`, `@midnight`, `@weekly`, `@monthly`,
 `@yearly`, and `@annually`. Intervals accept up to 59 minutes, 23 hours, or
 31 days. Deploy rejects an invalid expression.
 
-## Try it now
+## Schedule options
 
-```bash
-uv run lazycloud run daily_report:count_files
-```
-
-This runs the function once, right away, and prints its logs and result.
-Review scheduled runs in the dashboard or with
-`uv run lazycloud task list --app daily_report`.
-
-Scheduled runs use the function's timeout and retry settings. Scheduled
-functions default to `keep_warm=0`, so the container stops as soon as a run
-finishes. Keeping it warm between runs minutes or hours apart would cost money
-and save nothing. A run that overlaps the previous one queues behind it unless
-the function has `concurrency` or an [autoscaler](/concepts/scaling) that lets
-them run side by side.
+Scheduled runs use the function's timeout and
+[retry](/concepts/functions#retries-and-timeouts) settings. A run that
+overlaps the previous one queues behind it unless the function has
+`concurrency` or an [autoscaler](/concepts/scaling) that lets them run side by
+side. Scheduled functions default to `keep_warm=0`, so the container stops as
+soon as a run finishes. See [Warm containers](/concepts/scaling#warm-containers).
 
 ## Change or stop the schedule
 
-Edit `cron` and deploy again to replace the schedule. Remove `cron` and
-redeploy to keep the function callable without automatic runs.
+Editing `cron` and deploying again replaces the schedule. Removing `cron` and
+redeploying keeps the function callable without automatic runs.
 
 To stop it now:
 
@@ -80,6 +82,12 @@ To stop it now:
 uv run lazycloud deployment stop count-files
 ```
 
-To remove the example entirely, delete the deployment with
-`uv run lazycloud deployment delete count-files`. Delete `report-inputs` only
-after downloading any files you need.
+`uv run lazycloud deployment delete count-files` removes it entirely. The
+`report-inputs` volume and its files stay until you delete the volume.
+
+## Shared settings
+
+A schedule is a function, so the
+[function options](/concepts/functions#function-options),
+[Images](/concepts/images), [Resources and options](/concepts/resources), and
+[Scaling and concurrency](/concepts/scaling) all apply.
