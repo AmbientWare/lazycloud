@@ -83,8 +83,9 @@ class SshPodHost:
     host_public_key: str
 
 
-def ssh_host_alias(workspace: str, pod: str) -> str:
-    return f"lazycloud-{_label(workspace)}-{_label(pod)}"
+def ssh_host_alias(workspace: str, app: str, pod: str) -> str:
+    """The host name a pod answers to in SSH config; pod names repeat across apps."""
+    return f"lazycloud-{_label(workspace)}-{_label(app)}-{_label(pod)}"
 
 
 @dataclass(slots=True)
@@ -129,13 +130,14 @@ class SshAccess:
     def pod_host(self, pod: str, *, app: str) -> SshPodHost:
         response = self.client.host_key(pod, app=app)
         return SshPodHost(
-            alias=ssh_host_alias(self.workspace, pod),
+            alias=ssh_host_alias(self.workspace, app, pod),
             pod=pod,
             app=app,
             host_public_key=response.host_public_key.strip(),
         )
 
     def write_hosts(self, hosts: list[SshPodHost]) -> None:
+        self._refuse_alias_collisions(hosts)
         _private_directory(self.paths.root)
         _private_directory(self.paths.hosts)
         self._write_known_hosts(hosts)
@@ -145,6 +147,27 @@ class SshAccess:
             )
         include = f"Include {_config_path(self.paths.hosts)}/*.conf\n"
         _write_atomic(self.paths.config, include, _PRIVATE_FILE_MODE)
+
+    def _refuse_alias_collisions(self, hosts: list[SshPodHost]) -> None:
+        # Labels are lowercased and hyphenated, so distinct app/pod names can
+        # meet at one alias; pinning two host keys under it would break both.
+        owners: dict[str, str] = {}
+        for host in hosts:
+            owner = self._host_owner(host)
+            path = self.paths.host_config(host.alias)
+            existing = path.read_text(encoding="utf-8").split("\n", 1)[0] if path.exists() else ""
+            recorded = existing if existing.startswith("# lazycloud ") else None
+            for claimed in (owners.get(host.alias), recorded):
+                if claimed is not None and claimed != owner:
+                    other = claimed.removeprefix("# lazycloud ")
+                    raise SshSetupError(
+                        f"SSH host {host.alias} already names another pod ({other}); "
+                        "rename the app or pod so their names differ"
+                    )
+            owners[host.alias] = owner
+
+    def _host_owner(self, host: SshPodHost) -> str:
+        return f"# lazycloud workspace={self.workspace} app={host.app} pod={host.pod}"
 
     def _host_block(self, host: SshPodHost) -> str:
         proxy = shlex.join(
@@ -164,6 +187,7 @@ class SshAccess:
         # ssh runs the exec while reading its config, before it loads the
         # certificate, so the file it names is already fresh when it is read.
         return (
+            f"{self._host_owner(host)}\n"
             f"Match originalhost {host.alias} exec {_quoted_exec(refresh)}\n"
             f"\n"
             f"Host {host.alias}\n"

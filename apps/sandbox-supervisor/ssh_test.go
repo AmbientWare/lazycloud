@@ -20,7 +20,11 @@ type directProcesses struct{}
 
 func (directProcesses) startChild(command *exec.Cmd) error { return command.Start() }
 
-func (directProcesses) waitChild(command *exec.Cmd) error { return command.Wait() }
+func (directProcesses) waitChild(command *exec.Cmd, exited func()) error {
+	awaitExit(command.Process.Pid)
+	exited()
+	return command.Wait()
+}
 
 type sshTestServer struct {
 	address   string
@@ -213,4 +217,45 @@ func TestSSHSessionRunsCommandsAndForwardsOnlyLocalDestinations(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "not permitted") {
 		t.Fatalf("expected a prohibited forward, got %v", err)
 	}
+}
+
+func TestSSHForwardClosesTargetThatIgnoresHalfClose(t *testing.T) {
+	server := startSSHTestServer(t)
+	now := time.Now()
+	client, err := dialSSH(server, sshLoginUser, certificateSigner(t, server.authority, []string{sshLoginUser}, now.Add(-time.Minute), now.Add(time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		connection, acceptErr := target.Accept()
+		if acceptErr == nil {
+			accepted <- connection
+		}
+	}()
+	forwarded, err := client.Dial("tcp", target.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := <-accepted
+	defer peer.Close()
+	_ = forwarded.Close()
+
+	// The peer never reads or closes. Once the server drops its end, writes
+	// here are reset; while it only half-closes them, they keep succeeding.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = peer.SetWriteDeadline(time.Now().Add(time.Second))
+		if _, err := peer.Write([]byte("x")); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("forwarded target stayed open after the client closed the channel")
 }

@@ -487,7 +487,11 @@ func (s *supervisor) startChild(command *exec.Cmd) error {
 	return nil
 }
 
-func (s *supervisor) waitChild(command *exec.Cmd) error {
+// waitChild calls exited once the process has exited but before it is reaped,
+// while its pid cannot yet be reused, then reaps it.
+func (s *supervisor) waitChild(command *exec.Cmd, exited func()) error {
+	awaitExit(command.Process.Pid)
+	exited()
 	err := command.Wait()
 	s.mu.Lock()
 	delete(s.directChildren, command.Process.Pid)

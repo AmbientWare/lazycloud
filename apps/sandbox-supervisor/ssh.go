@@ -45,7 +45,7 @@ var sshEnvironmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // session can never report.
 type childProcesses interface {
 	startChild(command *exec.Cmd) error
-	waitChild(command *exec.Cmd) error
+	waitChild(command *exec.Cmd, exited func()) error
 }
 
 type sshServer struct {
@@ -398,7 +398,7 @@ func (s *sshSession) startSFTP() bool {
 }
 
 func (s *sshSession) finish(cmd *exec.Cmd, drain func()) {
-	waitErr := s.server.processes.waitChild(cmd)
+	waitErr := s.server.processes.waitChild(cmd, s.forgetCommand)
 	drain()
 	var exitError *exec.ExitError
 	if errors.As(waitErr, &exitError) {
@@ -458,6 +458,14 @@ func (s *sshSession) signal(signal syscall.Signal) {
 	if s.command != nil && s.command.Process != nil {
 		_ = syscall.Kill(-s.command.Process.Pid, signal)
 	}
+}
+
+// forgetCommand runs before the session's process is reaped. Its group id is
+// free for reuse once it is, so a later signal request must not reach it.
+func (s *sshSession) forgetCommand() {
+	s.mu.Lock()
+	s.command = nil
+	s.mu.Unlock()
 }
 
 func (s *sshSession) closeTerminal() {
@@ -543,7 +551,13 @@ func (s *sshServer) forwardLocal(newChannel ssh.NewChannel) {
 		_ = target.Close()
 		return
 	}
-	go ssh.DiscardRequests(requests)
+	// The request stream ends when the client closes the channel or the
+	// connection drops. Closing the target then unblocks the copy reading it,
+	// which a target that ignores the client's half-close would hold forever.
+	go func() {
+		ssh.DiscardRequests(requests)
+		_ = target.Close()
+	}()
 	var copies sync.WaitGroup
 	copies.Add(2)
 	go func() {

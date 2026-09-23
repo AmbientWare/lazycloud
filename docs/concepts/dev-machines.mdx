@@ -54,9 +54,10 @@ uv run lazycloud ssh-config
 ```
 
 This writes a host entry for each deployed pod that serves SSH, named
-`lazycloud-<workspace>-<pod>`, and adds one `Include` line to `~/.ssh/config`.
-VS Code and Cursor Remote-SSH then list `lazycloud-<workspace>-box` beside your
-other hosts, and plain `ssh lazycloud-<workspace>-box` works too. Port
+`lazycloud-<workspace>-<app>-<pod>`, and adds one `Include` line to
+`~/.ssh/config`. VS Code and Cursor Remote-SSH then list
+`lazycloud-<workspace>-dev-box` beside your other hosts, and plain
+`ssh lazycloud-<workspace>-dev-box` works too. Port
 forwarding and SFTP work as they do on any SSH server.
 
 Connections go through the LazyCloud API with your `lazycloud login`, never to
