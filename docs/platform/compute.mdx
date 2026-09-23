@@ -1,11 +1,11 @@
 ---
 title: "Compute"
-description: "Where your workloads run: LazyCloud's compute, your own AWS account, or machines you join."
+description: "Where workloads run: LazyCloud compute, your own AWS account, or machines you join."
 ---
 
-LazyCloud compute runs your workloads with no machines to manage. CPU, memory,
-and GPUs come from the workload definition. You pay while its container runs,
-including startup and idle time.
+LazyCloud compute needs no machines to manage. CPU, memory, and GPUs come from
+the workload definition. You pay while its container runs, including startup
+and idle time.
 
 ## Where a workload runs
 
@@ -18,8 +18,9 @@ uv run lazycloud workspace create research            # runs on LazyCloud
 uv run lazycloud workspace create research --cloud aws # runs in your AWS account
 ```
 
-A workspace never changes location. Moving work means creating a workspace in
-the other location and copying the data across.
+`workspace create` also selects the new workspace. A workspace never changes
+location. Moving work means creating a workspace in the other location and
+copying the data across.
 
 The one exception is a machine you joined yourself. A workload names it with
 `machine="gpu-1"` on the decorator and then runs only there. If that machine is

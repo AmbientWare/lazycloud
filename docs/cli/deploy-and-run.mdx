@@ -1,15 +1,13 @@
 ---
 title: "deploy, run, serve, shell, dev"
-description: "Deploy, invoke, preview, and iterate on workloads from the CLI."
+description: "Deploy apps, call a function once, run a live preview, and open remote shells."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-`run` makes one remote call, `serve` runs a live preview, and `deploy` keeps
-workloads available. [Develop, test, deploy](/concepts/workflow) explains what
-each does and where calls go. `shell` and `dev` open remote shells. None of
-these commands override a workload's configuration, which comes only from its
-decorator or constructor.
+[Develop, test, deploy](/concepts/workflow) explains when each command fits and
+where calls go. None of these commands override a workload's configuration,
+which comes only from its decorator or constructor.
 
 ## lazycloud deploy
 
@@ -45,30 +43,19 @@ uv run lazycloud deploy api.py workers.py --diff --prune
 uv run lazycloud deploy api.py workers.py -p
 ```
 
-`--diff` lists which workloads the deploy would add, redeploy, or retain. It
-does not compare source or configuration. Existing workloads show `redeploy`
+`--diff` lists which workloads the deploy would add or redeploy, and marks
+deployed workloads the definitions omit as `retain`. It does not compare
+source or configuration. Existing workloads show `redeploy`
 because every deploy creates another version. `--diff` uploads no source,
 builds no images, and changes nothing remotely. It still imports your Python
 modules, so their module-level code runs.
 
 `--prune`, or `-p`, removes deployed workloads that the supplied app
-definitions omit. `--diff` shows them as `remove` actions. Pruning covers
-stopped workloads and every surviving version of an omitted workload. It stops
-their containers and removes their schedules and routes, but keeps volumes,
-secrets, and stored data. Workloads declared in the files keep their prior
-versions.
-
-Pruning expects the complete definition of each app. An explicitly empty `App`
-removes all its deployed workloads and keeps the app. A single-workload
-reference cannot prune. Pruning starts only after every requested deployment
-registers. A registered deployment is not necessarily healthy. If another
-operation changes the app during the deploy, pruning deletes nothing. Once
-pruning starts, the server retries interrupted cleanup for the same deployment
-versions.
-
-The SDK offers the same operations as `app.plan(prune=True)` and
-`app.deploy(prune=True)`. Both accept `workspace`. `--json` returns the typed plan
-or deployment result, including the prune result when requested.
+definitions omit, and `--diff` shows them as `remove` actions. See
+[Remove workloads](/concepts/apps#remove-workloads) for what pruning removes
+and keeps. `app.plan(prune=True)` and `app.deploy(prune=True)` are the SDK
+forms, and both accept `workspace`. `--json` returns the typed plan or
+deployment result, including the prune result when requested.
 
 ## lazycloud run
 

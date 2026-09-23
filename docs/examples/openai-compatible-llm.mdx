@@ -5,10 +5,9 @@ description: "Serve a small instruction model from an authenticated vLLM pod on 
 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
-This example deploys the official vLLM OpenAI server as a pod. It serves
-`Qwen/Qwen2.5-1.5B-Instruct` on one NVIDIA L4 and keeps downloaded model
-files in a volume, so a replacement container reuses them instead of
-downloading again.
+The model is `Qwen/Qwen2.5-1.5B-Instruct` on an NVIDIA L4, served by the
+official vLLM OpenAI server. A volume keeps the downloaded model files, so a
+replacement container reuses them instead of downloading again.
 
 `app.py` in the downloaded project defines the pod and its resources.
 

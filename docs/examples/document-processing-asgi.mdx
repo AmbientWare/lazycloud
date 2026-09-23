@@ -5,9 +5,9 @@ description: "Deploy a browser upload app that runs OCR in the background and re
 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
-Upload a PDF, JPEG, or PNG and read its text in a browser. This example runs
-FastAPI as an HTTP service and Tesseract in a separate background function.
-Files pass between them through a volume.
+FastAPI serves the upload page and API, and Tesseract runs in a separate
+background function. Files pass between them through a volume. The app accepts
+PDF, JPEG, and PNG files.
 
 Source is in `document_processing/`.
 

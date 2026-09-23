@@ -3,8 +3,6 @@ title: "Resources and options"
 description: "Size a container with CPU, memory, disk, and GPUs, choose capacity and placement, and look up every decorator option and default."
 ---
 
-Each workload sets its container size and runtime behavior on its decorator or
-constructor, and nothing outside the code overrides them.
 [Scaling and concurrency](/concepts/scaling) covers how many containers run and
 how much each one handles at once.
 
@@ -64,8 +62,9 @@ and no GPU premium.
 
 ## Placement
 
-A workload runs where its workspace lives. See [Compute](/platform/compute).
-Two options narrow that:
+A workload runs where its workspace lives. See
+[Where a workload runs](/platform/compute#where-a-workload-runs). Two options
+narrow that:
 
 - `machine="gpu-1"` pins the workload to a machine you
   [joined](/platform/compute#your-own-machines). It runs there or fails.

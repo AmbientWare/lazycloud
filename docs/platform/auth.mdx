@@ -1,10 +1,7 @@
 ---
-title: "Sign-in and workspaces"
-description: "Sign in to the dashboard and the CLI, work in workspaces, and authenticate CI and scripts."
+title: "Sign-in and tokens"
+description: "Browser sign-in for your own work, access tokens for CI and scripts, and profiles for keeping several sign-ins."
 ---
-
-Browser sign-in suits your own development, and access tokens suit CI and
-scripts. Resources belong to the workspace selected when you create them.
 
 ## Sign in to the dashboard
 
@@ -16,34 +13,9 @@ Your name, email, and avatar come from GitHub and refresh each time you sign
 in. A browser session lasts 12 hours. Signing out ends only that session. The
 CLI and other browsers stay signed in.
 
-## Workspaces
-
-A workspace holds apps, deployments, tasks, secrets, volumes, and queues. It
-separates one project from another. Your account can own or belong to several
-workspaces, and the same sign-in reaches all of them.
-
-The CLI acts in one workspace at a time:
-
-```bash
-uv run lazycloud workspace list
-uv run lazycloud workspace use <name>
-uv run lazycloud workspace rename <new-name>
-```
-
-`--workspace <name>` acts in a different workspace for one command.
-
-The dashboard's workspace menu creates workspaces and manages members. An owner
-or administrator invites people by email, changes roles, and removes members.
-The invitation email carries a link. Opening it joins the workspace as
-whichever account you are signed in as, even if that account uses a different
-address from the one invited. Anyone who opens the link takes the seat. An
-administrator can withdraw an invitation or resend it, which replaces the
-earlier link. Anyone except the owner can leave a workspace from the members
-dialog.
-
-Access tokens, your connected AWS account, joined machines, custom domains, and
-your plan belong to your account rather than to a workspace. They apply to
-every workspace you own.
+The CLI signs in with [`lazycloud login`](/cli/auth#lazycloud-login).
+[Workspaces](/concepts/apps#workspaces) covers choosing the workspace a command
+acts in.
 
 ## CI and scripts
 
@@ -72,13 +44,10 @@ To store a token instead of exporting it each time:
 uv run lazycloud login --token "$LAZYCLOUD_TOKEN" --workspace <workspace-name>
 ```
 
-An authorized endpoint or pod takes the token as a bearer credential:
+The same token authenticates HTTP calls to endpoints and pods that require it.
+See [Authentication](/concepts/endpoints#authentication).
 
-```bash
-curl "<endpoint-url>" -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
-```
-
-### Profiles
+## Profiles
 
 A profile is a separate stored sign-in, for another account or an automation
 token. Switching workspaces within one account only needs `workspace use`.

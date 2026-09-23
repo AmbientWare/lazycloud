@@ -1,14 +1,38 @@
 ---
 title: "Apps and workloads"
-description: "Lay out a project as an app of workloads, keep its configuration in code, and deploy it as a unit."
+description: "The kinds of workload you can run, and how an app deploys, prunes, and exports them as one unit."
 ---
 
-An `App` is a named group of workloads in a workspace. You deploy, pause, and
-delete an app as one unit, so its boundary fits code that ships together, such
-as an API and the batch functions it calls, or a model server and its warm-up
-job.
+A workspace holds apps, and an app holds workloads. A workload's decorator or
+constructor in Python is its whole definition, covering image, CPU, memory,
+GPU, volumes, secret names, schedule, and scaling, so a deploy makes the
+workspace match the code. No dashboard setting or CLI flag overrides it. This
+suits agent-driven development, because the code and the infrastructure it
+needs change in one reviewable diff, and the same command on the same files
+gives the same result.
+
+## Workload kinds
+
+| Kind | For | Triggered by | Scales |
+| --- | --- | --- | --- |
+| [Function](/concepts/functions) | Batch jobs, background work, GPU tasks | `.remote()`, `.map()`, `.spawn()`, `lazycloud run` | Autoscaler on queued calls |
+| [Schedule](/concepts/schedules) | Recurring work | A function's `cron` | Like a function |
+| [Endpoint](/concepts/endpoints#endpoints) | An HTTP API from one typed function | HTTPS requests | Autoscaler on requests in flight |
+| [ASGI app](/concepts/endpoints#asgi-applications) | A FastAPI or Starlette app | HTTPS requests | Autoscaler on requests in flight |
+| [Realtime handler](/concepts/endpoints#realtime-handlers) | A WebSocket service | WebSocket messages | Autoscaler on requests in flight |
+| [Pod](/concepts/pods) | A container command, such as a model server | Connections to its ports, or `create()` | By hand |
+| [Sandbox](/concepts/sandboxes) | Generated code, agent workspaces | `create()` from your code | One container per `create()` |
+
+Each workload runs in containers that start when work arrives and
+[stop when idle](/concepts/scaling#warm-containers), and each remote call to it
+is a [task](/concepts/tasks-and-logs). A deploy starts every kind except
+sandboxes, which your code creates when it needs one.
 
 ## Define an app
+
+An app groups workloads you deploy, pause, and delete as one unit, so its
+boundary fits code that ships together, such as an API and the batch functions
+it calls.
 
 ```python
 from lazycloud import App
@@ -26,26 +50,17 @@ def count(text: str) -> dict[str, int]:
     return {"words": count_words.local(text)}
 ```
 
-Each decorator registers a workload with the app. `@app.function`,
-`@app.endpoint`, `@app.asgi`, `@app.realtime`, and `app.pod(...)` deploy with
-the app. `app.sandbox(...)` defines containers your code creates on demand, and
-a deploy never starts them.
-
-App names start with a lowercase letter and contain lowercase letters, digits,
-or underscores, up to 63 characters. Workload names default to the Python name
-and must be unique per kind within the app.
+Each decorator registers a workload with the app. App names start with a
+lowercase letter and contain lowercase letters, digits, or underscores, up to
+63 characters. Workload names default to the Python name and must be unique per
+kind within the app.
 
 ## Keep configuration in code
 
-The decorator is the whole definition: image, CPU, memory, GPU, volumes, secret
-names, schedule, and scaling. No CLI flag or SDK call overrides it, so a deploy
-runs exactly what the file says. A change means editing the file and deploying
-again.
-
-Values that differ between workspaces or change without a code change belong
-outside the decorator. Credentials go in [secrets](/concepts/secrets) and files
-in [volumes](/concepts/volumes). The workspace shares volumes and secrets by
-name, so two apps that name the same volume read the same files.
+A change to a workload means editing its decorator and deploying again. Values
+that differ between workspaces, or change without a code change, belong outside
+the decorator. Credentials go in [secrets](/concepts/secrets), files in
+[volumes](/concepts/volumes), and plain settings in `env`.
 
 ## Deploy the app or one workload
 
@@ -88,13 +103,40 @@ deploy names both files so the CLI imports every registration:
 uv run lazycloud deploy text_tools/api.py text_tools/workers.py
 ```
 
+The CLI rejects two definitions that share an app, workload kind, and name.
+
+## Remove workloads
+
+A workload deleted from the code stays deployed until a deploy with `--prune`,
+or `-p`, removes it:
+
+```bash
+uv run lazycloud deploy text_tools --diff --prune   # list what would be removed
+uv run lazycloud deploy text_tools --prune
+```
+
+Pruning removes every deployed workload the supplied app definitions omit,
+including stopped ones and every surviving version. It stops their containers
+and removes their schedules and routes. Workloads still in the code keep their
+earlier versions. Volumes, secrets, and stored data stay, and deleting an app
+never removes them either.
+
+Pruning reads each supplied app as its complete definition, so it needs whole
+apps. A single-workload reference such as `text_tools:count` cannot prune, and
+an explicitly empty `App` removes all its deployed workloads and keeps the app.
+
+Pruning starts only after every requested deployment registers, which does not
+mean each one is healthy. If another operation changes the app during the
+deploy, pruning deletes nothing. Once pruning starts, the server retries
+interrupted cleanup for the same deployment versions. From Python,
+`app.plan(prune=True)` and `app.deploy(prune=True)` do the same.
+
 ## Call one workload from another
 
-Inside a container, `count_words.remote(...)` calls the deployed `count_words`,
-because a container has no working tree to upload. A parent that calls its
-siblings remotely therefore needs the whole app deployed. `.local(...)` instead
-runs the callee in the caller's own process, with the caller's image and
-resources.
+A workload that calls its siblings with `.remote()` needs them deployed, which
+is one reason to deploy the whole app. `.local()` runs the callee in the
+caller's own process instead. See
+[Where a call goes](/concepts/workflow#where-a-call-goes).
 
 ## Call deployed workloads from other projects
 
@@ -121,8 +163,37 @@ Routes the generator cannot type fail with an explanation. An ASGI app with no
 schema keeps raw `request()`. Export skips pods and sandboxes. A contract change
 needs a fresh export once it deploys.
 
-## Remove a workload
+## Pause and delete
 
-Deleting it from the code and deploying with `--prune` removes it. See
-[`lazycloud deploy`](/cli/deploy-and-run#lazycloud-deploy). Removing a workload
-or deleting an app never deletes the volumes and secrets it used.
+```bash
+uv run lazycloud app pause text_tools
+uv run lazycloud app resume text_tools
+uv run lazycloud app delete text_tools
+```
+
+`pause` stops every workload in the app and keeps their definitions, and
+`resume` starts them again. `delete` removes the deployed app. The dashboard
+has the same controls. See
+[`lazycloud app`](/cli/deployments-and-containers#lazycloud-app).
+
+## Workspaces
+
+A workspace holds apps, deployments, tasks, volumes, secrets, queues, maps, and
+artifacts. Inside one workspace a name always refers to the same resource, so
+two apps that mount the `models` volume read the same files. Separate projects,
+or staging and production, fit separate workspaces. Access tokens, a connected
+AWS account, joined machines, custom domains, and your plan belong to your
+account instead, and apply to every workspace you own.
+
+```bash
+uv run lazycloud workspace list
+uv run lazycloud workspace use staging
+```
+
+`workspace use` stores the choice in the active profile. `LAZYCLOUD_WORKSPACE`
+overrides it for every command, which suits CI, and `--workspace <name>`
+overrides it for one command. [Compute](/platform/compute#where-a-workload-runs)
+explains where a workspace's workloads run.
+
+Owners and administrators invite members from the dashboard's workspace menu.
+See [the dashboard guide](/platform/dashboard#manage-access-and-compute).

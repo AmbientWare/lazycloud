@@ -1,10 +1,9 @@
 ---
 title: "Develop, test, deploy"
-description: "Develop locally, test in the cloud, preview, and deploy, and see where each call goes."
+description: "Three stages for the same code, what each one costs, and where a call goes at each stage."
 ---
 
-The same decorated function runs locally, in the cloud, or as a deployment,
-with no change to the code. Each stage suits a different point in the work:
+Each stage suits a different point in the work:
 
 1. `.local()` runs in your own process, in seconds and at no cost.
 2. `lazycloud run` makes one call on cloud compute, which checks the image,
@@ -15,6 +14,24 @@ with no change to the code. Each stage suits a different point in the work:
 change without redeploying. Every step is one command with
 [machine-readable output](/cli/overview), so an agent or a script can run the
 loop.
+
+The examples below use this file, saved as `text_tools.py`:
+
+```python
+from lazycloud import App
+
+app = App("text_tools")
+
+
+@app.function()
+def count_words(text: str) -> int:
+    return len(text.split())
+
+
+@app.endpoint(name="count", methods=["POST"])
+def count(text: str) -> dict[str, int]:
+    return {"words": count_words.local(text)}
+```
 
 ## Develop locally
 
@@ -42,8 +59,8 @@ count_words.remote("one two three")
 This builds the image if it changed, uploads your working tree, starts a
 container with the decorator's resources, and streams progress, logs, and the
 result. It deploys nothing. The container stays up for the function's
-`keep_warm` window and then stops. LazyCloud records the run as a
-[task](/concepts/tasks-and-logs).
+[`keep_warm`](/concepts/scaling#warm-containers) window and then stops.
+LazyCloud records the run as a [task](/concepts/tasks-and-logs).
 
 It suits a job you run by hand, GPU work you don't want to keep warm, and a
 check of the image and secrets before deploying. Each run uploads your working
@@ -91,6 +108,10 @@ service, a schedule, a teammate, or a function running inside LazyCloud.
 1. A preview of this function, app, and workspace started from this machine.
 2. From your machine, a fresh run of the working tree.
 3. Inside a LazyCloud container, the deployed function.
+
+A container has no working tree to upload, so a deployed workload that calls
+another with `.remote()` needs that one deployed too. `.local()` instead runs
+the callee in the caller's own process, with the caller's image and resources.
 
 Endpoint clients let you choose. `count.request(...)` uses `target="auto"`,
 which calls the preview if one is running and the deployment otherwise.

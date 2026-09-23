@@ -1,11 +1,10 @@
 ---
 title: "Artifacts"
-description: "Save files a task produces and share them with expiring public URLs."
+description: "Files a task produces, kept after the container stops for download or sharing through expiring public URLs."
 ---
 
-An artifact holds a task's output for download or sharing after the container
-stops. Files you need beyond your plan's artifact retention period belong in a
-volume.
+Artifacts expire with your plan's retention window, so files you need for
+longer belong in a [volume](/concepts/volumes).
 
 ## Save one
 
@@ -75,7 +74,7 @@ outlive the artifact. To delete one sooner, call `artifact.delete()`.
 
 Files that must last belong in a volume, or in a copy downloaded before the
 artifact expires. Artifacts bill as volume storage. See
-[Plans and limits](/platform/plans). The `/artifacts` mount is read-only.
+[Plans and limits](/platform/plans).
 
 `uv run lazycloud artifact list`, `usage`, and `delete` manage artifacts from a
 terminal. See [storage commands](/cli/storage#lazycloud-artifact).

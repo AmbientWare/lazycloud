@@ -1,14 +1,13 @@
 ---
 title: "Functions"
-description: "Call Python remotely, fan a batch out across containers, submit background work, and handle retries."
+description: "Python that runs in a remote container and returns its result, one call at a time or fanned out over a batch."
 ---
 
-A function runs Python in a remote container and returns the result.
-`@app.function` defines it, and `.remote()` or `lazycloud run` calls it. HTTP
-callers suit an [endpoint](/concepts/endpoints), and recurring runs a
-[schedule](/concepts/schedules).
+A function fits batch jobs, background work, and GPU tasks that your code or a
+person calls. HTTP callers suit an [endpoint](/concepts/endpoints), and
+recurring runs a [schedule](/concepts/schedules).
 
-## Define and call a function
+## Define a function
 
 Save this as `reports.py`:
 
@@ -23,6 +22,8 @@ def summarize_sales(amounts_cents: list[int]) -> dict[str, int]:
     print(f"Summarizing {len(amounts_cents)} sales", flush=True)
     return {"sales": len(amounts_cents), "total_cents": sum(amounts_cents)}
 ```
+
+## Call it
 
 From the CLI, JSON arguments become Python values:
 
@@ -44,7 +45,7 @@ Both stream the function's logs, then return three sales totaling 5500 cents.
 [Develop, test, deploy](/concepts/workflow) covers when to use each and how
 `.remote()` chooses between a preview and a deployment.
 
-## Process a batch
+### Process a batch
 
 `.map()` submits one call per input and yields results in input order. Each
 tuple holds one call's arguments:
@@ -88,11 +89,11 @@ def count_words(text: str) -> int:
 A `.map()` over 1,000 texts now runs on up to 20 containers at once. The
 example raises `max_pending_tasks` because `.map()` submits every input up
 front and the default cap is 100. [Scaling and concurrency](/concepts/scaling)
-covers running several calls per container and keeping containers warm.
+covers running several calls per container.
 [Parallel Parquet processing](/examples/parallel-parquet-s3) is a complete batch
 workflow.
 
-## Submit work in the background
+### Submit work in the background
 
 ```python
 call = summarize_sales.spawn([1200, 3500, 800])
@@ -108,7 +109,7 @@ another process. `async_spawn()` is the awaitable form.
 You can pass a pending `FunctionCall` as an argument to another function. The
 callee receives the call's result.
 
-## Arguments and results
+### Arguments and results
 
 Calls from the Python SDK carry any serializable Python value, including NumPy
 arrays, dataclasses, custom class instances, tuples, and bytes:
@@ -136,12 +137,15 @@ need JSON-compatible values. Each argument payload and result can be at most
 16 MiB. Larger output fits in a [volume](/concepts/volumes) or an
 [artifact](/concepts/artifacts), with the call returning its path.
 
-## Retries and timeouts
+## Function options
+
+### Retries and timeouts
 
 `timeout_seconds` caps one attempt. `retries` sets how many extra attempts
 follow a failure. The default is 3, so one call can run the function four
-times. A function that writes somewhere needs writes that are safe to repeat,
-or `retries=0`. A `RetryPolicy` adds backoff:
+times, and an attempt can fail after doing part of its work. A function that
+writes somewhere needs writes that are safe to repeat, such as an output path
+or record keyed on the input, or `retries=0`. A `RetryPolicy` adds backoff:
 
 ```python
 import urllib.request
@@ -162,10 +166,11 @@ def fetch_text(url: str) -> str:
         return response.read().decode("utf-8")
 ```
 
-Retries also cover preempted capacity. See
-[Preemptible capacity](/concepts/resources#preemptible-capacity).
+Retries also cover preempted capacity, so a function on the default
+[preemptible capacity](/concepts/resources#preemptible-capacity) can run again
+even when its code never fails. Each retry reuses the same task.
 
-## Lifecycle hooks
+### Lifecycle hooks
 
 `on_start` runs before a container accepts calls. It loads a model or opens a
 client once instead of on every call:
@@ -191,13 +196,32 @@ With `in_process=True` it runs once per container. See
 
 Per-call hooks are `on_running`, `on_success`, `on_error`, `on_retry`,
 `on_failure`, and `on_finish`. Each takes a callable, a decorated function, a
-dotted import string, or a list of them. Inside a hook or the function,
-`lazycloud.current_task_id()` identifies the current call. When calls share a
-process, it stays accurate where the `TASK_ID` environment variable does not.
+dotted import string, or a list of them. Inside the function or a hook,
+`lazycloud.current_task_id()` returns the current call's task ID.
 
-## Dependencies and configuration
+## Stop and clean up
+
+A call's container stops after the function's idle window. See
+[Warm containers](/concepts/scaling#warm-containers).
+`uv run lazycloud task cancel <task-id>` cancels a pending call, and
+`task stop` stops a running one.
+
+A deployed function stays callable until you stop it:
+
+```bash
+uv run lazycloud deployment stop summarize_sales
+uv run lazycloud deployment delete summarize_sales
+```
+
+`stop` keeps the definition for `deployment start`. Deleting the function from
+the code and deploying with [`--prune`](/concepts/apps#remove-workloads) also
+removes it.
+
+## Shared settings
 
 Packages go in an [image](/concepts/images), credentials in
-[secrets](/concepts/secrets), files that outlive the container in
-[volumes](/concepts/volumes), and plain settings in `env`. Every decorator
-option and default is listed in [Resources and options](/concepts/resources).
+[secrets](/concepts/secrets), and files that outlive the container in
+[volumes](/concepts/volumes). [Resources and options](/concepts/resources)
+covers CPU, memory, GPUs, and every option and default.
+[Scaling and concurrency](/concepts/scaling) covers containers, concurrency,
+and idle windows.

@@ -1,6 +1,6 @@
 ---
 title: "Scaling and concurrency"
-description: "How many containers a workload runs, how much each one handles at once, and what happens when work arrives faster than that."
+description: "Concurrency, autoscaling, idle windows, and queue limits, with sizing patterns for batch jobs, GPU models, and APIs."
 ---
 
 Capacity is containers multiplied by what one container does at once. Both
@@ -112,7 +112,11 @@ volumes, and runs `on_start`, which can take a minute for a model server. The
 function default of 10 seconds assumes the next call may never come. The
 endpoint default of 180 assumes it will. A longer window suits expensive starts
 and spaced-out calls. `keep_warm=0` stops each container as soon as it is idle.
-You pay for warm containers while they run.
+You pay for warm containers while they run, so an idle window is a trade of
+money for start time. Scheduled functions default to `keep_warm=0`, because a
+container kept warm between runs minutes or hours apart costs money and saves
+nothing. [Pods](/concepts/pods#deploy-it) also accept `keep_warm=-1`, which
+keeps one container up until you stop the deployment.
 
 `min_containers` on the autoscaler keeps that many containers running with no
 work at all, so the first call after a quiet hour does not wait for a start:

@@ -1,11 +1,10 @@
 ---
 title: "Images"
-description: "Describe a workload's container image in Python."
+description: "Build a workload's container from Python: packages, system tools, a project's lockfile, or an existing registry image."
 ---
 
-An `Image` sets the Python version, packages, and system tools inside your
-remote container. Anything your function needs beyond the standard library
-goes here.
+Anything your function needs beyond the standard library goes in its `Image`,
+along with the Python version it runs.
 
 ## Install remote dependencies
 
@@ -56,8 +55,8 @@ Changing a dependency does. The build uploads nothing outside this directory,
 so workspace members and relative path dependencies belong inside it. Build
 backends run in the image, not on your laptop.
 
-The build does not install the root project. Code under `src/` is
-importable at runtime because the synced `src` directory is on `PYTHONPATH`.
+The build does not install the root project. Code under `src/` is still
+importable at runtime.
 
 ### uv
 

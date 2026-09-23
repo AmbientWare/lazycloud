@@ -1,11 +1,11 @@
 ---
 title: "Volumes and cloud buckets"
-description: "Declare persistent storage beside your workloads and share files between runs."
+description: "Files that outlive a container, shared by name across a workspace, and S3-compatible buckets you mount."
 ---
 
-A volume keeps files after your container stops. You declare it in Python and
-attach it to each workload that needs it. LazyCloud creates the volume the
-first time a container mounts it and reuses it on later runs.
+You declare a volume in Python and attach it to each workload that needs it.
+LazyCloud creates the volume the first time a container mounts it and reuses it
+on later runs.
 
 ## Declare and use a volume
 
@@ -53,8 +53,8 @@ volume name selects another volume and leaves the old data where it is.
 Removing a mount or deleting a deployment also leaves stored files intact.
 
 LazyCloud stores a volume where its workspace lives. See
-[Compute](/platform/compute). Storage bills per GiB-month. See
-[Plans and limits](/platform/plans).
+[Where a workload runs](/platform/compute#where-a-workload-runs). Storage bills
+per GiB-month. See [Plans and limits](/platform/plans).
 
 ## Upload inputs before the first run
 

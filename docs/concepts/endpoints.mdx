@@ -1,10 +1,9 @@
 ---
 title: "Endpoints, ASGI, and realtime"
-description: "Serve HTTP from a typed Python function, a FastAPI or Starlette app, or a WebSocket handler."
+description: "HTTPS and WebSocket services in Python, each with a stable URL and bearer-token auth by default."
 ---
 
-Three workloads serve traffic over the network. Which one fits depends on what
-you already have:
+Which workload fits depends on what you already have:
 
 | You have | Use |
 | --- | --- |
@@ -13,8 +12,7 @@ you already have:
 | A WebSocket message handler | `@app.realtime` |
 
 Each gets a stable URL when you deploy it and previews with
-[`lazycloud serve`](/concepts/workflow#live-preview). Each requires a workspace
-bearer token unless you set `authorized=False`.
+[`lazycloud serve`](/concepts/workflow#live-preview).
 
 ## Endpoints
 
@@ -45,8 +43,7 @@ curl --fail --show-error "<endpoint-url>" \
   -d '{"text": "Run Python on LazyCloud"}'
 ```
 
-The response is `{"words": 4}`. With `authorized=False`, anyone who has the URL
-can call it.
+The response is `{"words": 4}`.
 
 From Python, the decorated function is a client that uses your
 `lazycloud login` credentials:
@@ -58,39 +55,8 @@ response = count_words.request("Run Python on LazyCloud")
 print(response.status_code, response.json())
 ```
 
-`request()` calls a running preview if one exists, and the deployment
-otherwise. `count_words.target("deployed")` or `target("served")` picks one
-explicitly. `deployment_name` and `deployment_version` pin a deployment.
-
-### Capacity
-
-By default an endpoint runs one server process in one container, and that
-process handles one request at a time. Three settings raise that:
-
-```python
-from lazycloud import QueueDepthAutoscaler
-
-
-@app.endpoint(
-    name="word-count-scaled",
-    cpu=2,
-    workers=2,
-    concurrency=8,
-    autoscaler=QueueDepthAutoscaler(max_containers=8, tasks_per_container=16),
-)
-def count_words_scaled(text: str) -> dict[str, int]:
-    return {"words": len(text.split())}
-```
-
-Each container runs `workers` processes, and each process takes `concurrency`
-requests. This endpoint handles 16 requests per container and adds a container
-for every 16 in flight, up to 8. When requests in flight exceed
-`max_pending_tasks`, 100 by default, the endpoint answers `429`.
-[Scaling and concurrency](/concepts/scaling) explains how to choose these values
-and has sizing patterns for a GPU model and a CPU API.
-
-`checkpoint_enabled=True` snapshots a warmed worker so replacement containers
-restore from it instead of running `on_start` again.
+`request()` goes to a running preview or the deployment. See
+[Where a call goes](/concepts/workflow#where-a-call-goes) for choosing one.
 
 ## ASGI applications
 
@@ -120,11 +86,6 @@ service = app.asgi(
 uv run lazycloud deploy web_app:service
 ```
 
-ASGI apps take the endpoint options, with `concurrent_requests` in place of
-`concurrency` and `keep_warm_seconds` in place of `keep_warm`. `name` defaults
-to `"asgi"`. An async app can take a high `concurrent_requests` in one worker.
-A blocking app needs more `workers`.
-
 From Python, `request()` sends a full request to a route:
 
 ```python
@@ -138,6 +99,10 @@ print(response.json())
 plus the same target options as endpoints. An
 [exported client package](/concepts/apps#call-deployed-workloads-from-other-projects)
 gives each route a typed method from the app's OpenAPI schema.
+
+ASGI apps take the endpoint options, with `concurrent_requests` in place of
+`concurrency` and `keep_warm_seconds` in place of `keep_warm`. `name` defaults
+to `"asgi"`.
 
 ## Realtime handlers
 
@@ -154,12 +119,66 @@ def echo(message: str) -> str:
 Realtime handlers take the ASGI options and deploy, preview, and scale the same
 way. `name` defaults to `"realtime"`.
 
-## Domains and shutdown
+## Authentication
+
+All three require a bearer token by default. Any
+[access token](/platform/auth#ci-and-scripts) with access to the workspace
+works, sent as `Authorization: Bearer <token>`. The Python clients send your
+`lazycloud login` credentials.
+
+`authorized=False` makes the URL public, so anyone who has it can call the
+workload, and your own code decides whom to serve.
+
+## Capacity
+
+By default an endpoint runs one server process in one container, and that
+process handles one request at a time. Three settings raise that:
+
+```python
+from lazycloud import QueueDepthAutoscaler
+
+
+@app.endpoint(
+    name="word-count-scaled",
+    cpu=2,
+    workers=2,
+    concurrency=8,
+    autoscaler=QueueDepthAutoscaler(max_containers=8, tasks_per_container=16),
+)
+def count_words_scaled(text: str) -> dict[str, int]:
+    return {"words": len(text.split())}
+```
+
+Each container runs `workers` processes, and each process takes `concurrency`
+requests. This endpoint handles 16 requests per container and adds a container
+for every 16 in flight, up to 8. When requests in flight exceed
+`max_pending_tasks`, 100 by default, the endpoint answers `429`. An async ASGI
+app can take a high `concurrent_requests` in one worker, and a blocking one
+needs more `workers`. [Scaling and concurrency](/concepts/scaling) explains how
+to choose these values.
+
+`checkpoint_enabled=True` snapshots a warmed worker so replacement containers
+restore from it instead of running `on_start` again.
+
+## Custom domains
 
 On Team and Business plans, `domain="api.example.com"` serves any of the three
 from a hostname you own. See [Custom domains](/platform/domains).
 
-Warm containers are billed while they run.
-`uv run lazycloud deployment stop <name>` stops a deployment you no longer need.
+## Stop and clean up
 
-Defaults and every option are in [Resources and options](/concepts/resources).
+```bash
+uv run lazycloud deployment stop count_words
+uv run lazycloud deployment delete count_words
+```
+
+`stop` takes the endpoint offline and keeps its definition, and `delete`
+removes it. Deleting the workload from the code and deploying with
+[`--prune`](/concepts/apps#remove-workloads) also removes it.
+
+## Shared settings
+
+[Images](/concepts/images) set packages. [Resources and options](/concepts/resources)
+covers CPU, memory, GPUs, and every option and default.
+[Scaling and concurrency](/concepts/scaling) covers containers, idle windows,
+and their cost.
