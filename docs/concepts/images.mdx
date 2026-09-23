@@ -172,12 +172,29 @@ the snapshot returned.
 
 ### Private registries
 
-Credentials are environment variable names read at deploy time, never values
-in code:
+`credentials` names environment variables that LazyCloud reads on your machine
+when the image builds, so values stay out of code:
 
 ```python
 image = Image.from_registry(
     "ghcr.io/acme/models:latest",
-    credentials=["GHCR_USERNAME", "GHCR_PASSWORD"],
+    credentials=["GITHUB_USERNAME", "GITHUB_TOKEN"],
 )
 ```
+
+A dict maps the same names to values you've already loaded, such as
+`{"GITHUB_USERNAME": "acme-bot", "GITHUB_TOKEN": os.environ["CI_GHCR_TOKEN"]}`. A listed variable
+that isn't set stops the build before it starts. The names are fixed per
+registry, and any other name is ignored:
+
+| Registry | Names |
+| --- | --- |
+| GitHub, `ghcr.io` | `GITHUB_USERNAME` and `GITHUB_TOKEN` |
+| Amazon ECR | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN` and `AWS_REGION` |
+| Google, `gcr.io` and `pkg.dev` | `GCP_ACCESS_TOKEN` or `GOOGLE_APPLICATION_CREDENTIALS`, optional `GCP_PROJECT_ID` |
+| Azure, `azurecr.io` | `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, optional `AZURE_TENANT_ID` |
+| NVIDIA, `nvcr.io` | `NGC_API_KEY` |
+| Docker Hub and others | `DOCKERHUB_TOKEN`, or `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` |
+
+`GOOGLE_APPLICATION_CREDENTIALS` can be a file path or the JSON itself. The
+constructor and project factories take the same value as `base_image_creds`.
