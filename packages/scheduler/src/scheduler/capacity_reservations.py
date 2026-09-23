@@ -39,7 +39,6 @@ from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequ
 from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.container_requests import OciRuntimeName, capacity_memory_mib
 from shared.contracts import ContractModel
-from shared.disks import disk_capacity_bytes
 from shared.errors import CapacityLimitReachedError, UpstreamUnavailableError
 from shared.gpu import gpu_preference_accepts
 from shared.placement import Placement, ProductRegion, product_region
@@ -163,9 +162,6 @@ class CapacityRequestShape(ContractModel):
     memory_mib: int = Field(ge=0)
     gpu_type: str = ""
     gpu_count: int = Field(default=0, ge=0)
-    disk_bytes: int = Field(default=0, ge=0)
-    """Declared disk size the worker can hold, after the host reserve."""
-
     runtime_class: str = ""
     runtime_classes: tuple[str, ...] = (OciRuntimeName.Runsc.value,)
     docker_enabled: bool = False
@@ -188,8 +184,6 @@ class CapacityRequestShape(ContractModel):
         if self.memory_mib < capacity_memory_mib(request.memory_mib):
             return False
         if self.gpu_count < requested_gpu:
-            return False
-        if self.disk_bytes < request.disk_bytes:
             return False
         if requested_gpu <= 0 and self.gpu_count > 0:
             return False
@@ -219,7 +213,6 @@ class CapacityReservationAllocation(ContractModel):
     cpu_millicores: int = Field(ge=0)
     memory_mib: int = Field(ge=0)
     gpu_count: int = Field(ge=0)
-    disk_bytes: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -457,11 +450,6 @@ class ComputeUnitCapacityController:
             memory_mib=self.unit.worker_memory_mib,
             gpu_type=self.unit.worker_gpu_type,
             gpu_count=self.unit.worker_gpu_count,
-            disk_bytes=(
-                disk_capacity_bytes(self.unit.offer_storage_mib * 1024**2)
-                if self.unit.offer_storage_mib is not None
-                else 0
-            ),
             runtime_class=request.runtime_class or self.unit.worker_runtimes[0],
             runtime_classes=self.unit.worker_runtimes,
             docker_enabled=request.docker_enabled,
@@ -614,7 +602,6 @@ class ComputeUnitCapacityController:
                 and reservation.acquisition_shape.worker_capabilities_match(worker)
                 and worker.total_cpu_millicores >= reservation.acquisition_shape.cpu_millicores
                 and worker.total_memory_mib >= reservation.acquisition_shape.memory_mib
-                and worker.total_disk_bytes >= reservation.acquisition_shape.disk_bytes
             ):
                 return CapacityAcquisitionResult(
                     status=CapacityAcquisitionStatus.ExistingPending,
@@ -972,7 +959,6 @@ class RedisCapacityReservationRepository:
             cpu_millicores=request.cpu_millicores,
             memory_mib=capacity_memory_mib(request.memory_mib),
             gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
-            disk_bytes=request.disk_bytes,
             created_at=current_time,
         )
         self._store_reservation_and_allocation(reservation, allocation, created=created)
@@ -1188,14 +1174,12 @@ class RedisCapacityReservationRepository:
             used_cpu = sum(item.cpu_millicores for item in allocations)
             used_memory = sum(item.memory_mib for item in allocations)
             used_gpu = sum(item.gpu_count for item in allocations)
-            used_disk = sum(item.disk_bytes for item in allocations)
             requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
             if (
                 used_cpu + request.cpu_millicores <= reservation.allocation_shape.cpu_millicores
                 and used_memory + capacity_memory_mib(request.memory_mib)
                 <= reservation.allocation_shape.memory_mib
                 and used_gpu + requested_gpu <= reservation.allocation_shape.gpu_count
-                and used_disk + request.disk_bytes <= reservation.allocation_shape.disk_bytes
             ):
                 return reservation
         return None
@@ -1597,7 +1581,6 @@ class CapacityReservationService:
                 total.cpu_millicores += allocation.cpu_millicores
                 total.memory_mib += allocation.memory_mib
                 total.gpu_count += allocation.gpu_count
-                total.disk_bytes += allocation.disk_bytes
         return reserved
 
     def release_request(
@@ -2073,17 +2056,14 @@ def reservation_matches_worker(
     allocated_cpu = 0
     allocated_memory = 0
     allocated_gpu = 0
-    allocated_disk = 0
     for allocation in allocations:
         allocated_cpu += allocation.cpu_millicores
         allocated_memory += allocation.memory_mib
         allocated_gpu += allocation.gpu_count
-        allocated_disk += allocation.disk_bytes
     return (
         worker.total_cpu_millicores >= allocated_cpu
         and worker.total_memory_mib >= allocated_memory
         and worker.total_gpu_count >= allocated_gpu
-        and worker.total_disk_bytes >= allocated_disk
     )
 
 
@@ -2099,7 +2079,6 @@ def _schedulable_shape(
             "memory_mib": worker.total_memory_mib,
             "gpu_type": worker.gpu_type if worker.total_gpu_count > 0 else "",
             "gpu_count": worker.total_gpu_count,
-            "disk_bytes": worker.total_disk_bytes,
         }
     )
 

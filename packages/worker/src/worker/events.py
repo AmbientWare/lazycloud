@@ -91,6 +91,8 @@ class ContainerExitCode(IntEnum):
     exactly the misattribution the stop reason exists to prevent.
     """
 
+    DiskFull = 564
+
 
 class WorkerPoolMode(StrEnum):
     Public = "public"
@@ -428,6 +430,8 @@ def normalize_container_exit_code(
         # Before the `oom_killed` branch: an eviction is a SIGKILL and the
         # runtime reports it as an OOM, which is the confusion being avoided.
         return int(ContainerExitCode.MemoryEvicted)
+    if reason is StopContainerReason.DiskFull:
+        return int(ContainerExitCode.DiskFull)
     if oom_killed:
         return int(ContainerExitCode.OomKill)
     if exit_code < 0:

@@ -11,7 +11,7 @@ from cache.server import (
 from foundation.process import ProcessTimeoutError, run_process
 from networking.internal_http import InternalHttpClient
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT, AGENT_TUNNEL_CONTROL_URL
-from shared.disks import disk_capacity_bytes
+from shared.disks import DiskStorage, disk_capacity_bytes
 from shared.identity import TokenKind
 from shared.placement import PlacementKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
@@ -47,6 +47,7 @@ from worker.container_startup import (
 )
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.credential_payloads import WorkerCredentialPrincipal
+from worker.disk_volumes import DiskVolumeMounts
 from worker.durable_disks import (
     DEFAULT_DISK_RUN_ROOT,
     DiskEngine,
@@ -231,11 +232,17 @@ def build_worker_process_services(
     container_log_capture = WorkerContainerLogCaptureService(RemoteContainerLogSink(repository))
     disk_layers_root, disk_lease_root = disk_layout(paths.disk_root.expanduser().resolve())
     durable_disks = WorkerDurableDiskService(
-        engine=DiskEngine(layers_root=disk_layers_root, run_root=Path(DEFAULT_DISK_RUN_ROOT)),
+        engine=DiskEngine(run_root=Path(DEFAULT_DISK_RUN_ROOT)),
         leases=repository,
         credentials=container_credentials,
+        layers_root=disk_layers_root,
         lease_root=disk_lease_root,
         mount_root=Path(DEFAULT_DISK_RUN_ROOT) / "mounts",
+        volumes=(
+            DiskVolumeMounts()
+            if configuration.execution.capacity.disk_volume_slots is not None
+            else None
+        ),
     )
     # Before anything can attach: a previous process's daemons and devices are
     # orphans now, and the leases they served are released through cleanup.
@@ -597,7 +604,8 @@ def _scheduler_worker_record(
 ) -> SchedulerWorkerRecord:
     execution = config.configuration.execution
     capacity = execution.capacity
-    disk_bytes = _disk_capacity_bytes(config)
+    volume_slots = capacity.disk_volume_slots
+    disk_bytes = _disk_capacity_bytes(config) if volume_slots is None else 0
     return SchedulerWorkerRecord(
         worker_id=identity.worker_id,
         runtime_image=config.runtime_image,
@@ -615,10 +623,13 @@ def _scheduler_worker_record(
         free_memory_mib=capacity.memory_mib,
         free_gpu_count=capacity.gpu_count,
         free_disk_bytes=disk_bytes,
+        free_disk_volumes=volume_slots or 0,
         total_cpu_millicores=capacity.cpu_millicores,
         total_memory_mib=capacity.memory_mib,
         total_gpu_count=capacity.gpu_count,
         total_disk_bytes=disk_bytes,
+        total_disk_volumes=volume_slots or 0,
+        disk_storage=DiskStorage.Host if volume_slots is None else DiskStorage.Volume,
     )
 
 

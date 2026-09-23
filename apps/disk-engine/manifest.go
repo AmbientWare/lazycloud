@@ -30,13 +30,16 @@ type manifestChunk struct {
 }
 
 type layerManifest struct {
-	DiskID           string          `json:"disk_id"`
-	Generation       int64           `json:"generation"`
-	ParentGeneration int64           `json:"parent_generation"`
-	VirtualSizeBytes int64           `json:"virtual_size_bytes"`
-	LayerSizeBytes   int64           `json:"layer_size_bytes"`
-	Filesystem       string          `json:"filesystem"`
-	Chunks           []manifestChunk `json:"chunks"`
+	DiskID           string `json:"disk_id"`
+	Generation       int64  `json:"generation"`
+	ParentGeneration int64  `json:"parent_generation"`
+	VirtualSizeBytes int64  `json:"virtual_size_bytes"`
+	LayerSizeBytes   int64  `json:"layer_size_bytes"`
+	// Format is how the layer's bytes are laid out: a qcow2 file over its
+	// parent, or a flattened generation's raw contents. Absent means qcow2.
+	Format     string          `json:"format,omitempty"`
+	Filesystem string          `json:"filesystem"`
+	Chunks     []manifestChunk `json:"chunks"`
 }
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -69,6 +72,16 @@ func decodeManifest(data []byte, wantSHA256 string) (layerManifest, error) {
 	if manifest.Generation <= 0 || manifest.ParentGeneration < 0 ||
 		manifest.VirtualSizeBytes <= 0 || manifest.LayerSizeBytes < 0 {
 		return manifest, fmt.Errorf("manifest for generation %d has invalid sizes or generations", manifest.Generation)
+	}
+	switch manifest.Format {
+	case "", formatQcow2:
+		manifest.Format = formatQcow2
+	case formatRaw:
+		if manifest.ParentGeneration != 0 || manifest.LayerSizeBytes != manifest.VirtualSizeBytes {
+			return manifest, fmt.Errorf("raw generation %d must have no parent and span the disk", manifest.Generation)
+		}
+	default:
+		return manifest, fmt.Errorf("manifest for generation %d has unknown format %q", manifest.Generation, manifest.Format)
 	}
 	for _, chunk := range manifest.Chunks {
 		if chunk.Offset < 0 || chunk.Length <= 0 || chunk.Length > maxChunkBytes ||

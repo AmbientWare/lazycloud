@@ -9,10 +9,7 @@ from enum import StrEnum
 from functools import partial
 from typing import Protocol
 
-from compute.capacity_errors import (
-    CapacityReservationConflictError,
-    CapacityUnsatisfiableError,
-)
+from compute.capacity_errors import CapacityReservationConflictError
 from compute.request_placement import ComputeCapacityPurchase
 from control.releases import DeploymentReleaseService
 from coordination.wake_signal import WakeSignalPublisher
@@ -73,6 +70,7 @@ from scheduler.tools import (
     SchedulingOutcome,
     SchedulingRequest,
     WorkerCapacity,
+    disk_claim,
     gpu_request_matches_worker,
     plan_scheduling_batch,
 )
@@ -923,7 +921,7 @@ class SchedulerContainerRequestService:
                     acquired += 1
             except CapacityReservationConflictError:
                 continue
-            except (NotFoundError, CapacityUnsatisfiableError) as exc:
+            except NotFoundError as exc:
                 self._fail_request(candidate, str(exc), current_time)
                 acquired += 1
         return acquired
@@ -939,7 +937,7 @@ class SchedulerContainerRequestService:
                 purchases=partial(self.placement.purchase_candidates, request),
                 now=current_time,
             )
-        except (NotFoundError, CapacityUnsatisfiableError):
+        except NotFoundError:
             raise
         except CapacityReservationConflictError as exc:
             result = CapacityAcquisitionResult(
@@ -1374,6 +1372,7 @@ class SchedulerContainerRequestService:
             memory_mib=capacity_memory_mib(request.memory_mib),
             gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
             disk_bytes=request.disk_bytes,
+            disk_count=request.disk_count,
         )
 
     def _fail_request(
@@ -1522,6 +1521,7 @@ def container_state_for_request(
         cpu_millicores=request.cpu_millicores,
         memory_mib=request.memory_mib,
         disk_bytes=request.disk_bytes,
+        disk_count=request.disk_count,
         image_build_id=str(request.payload.get("build_id") or "") if is_image_build else "",
         image_id=str(request.payload.get("image_id") or ""),
         image_build_upload_capability=(
@@ -1553,6 +1553,7 @@ def _scheduling_request(
         gpu_count=gpu_count,
         gpu=list(request.gpu),
         disk_bytes=request.disk_bytes,
+        disk_count=request.disk_count,
         placement=request.placement,
         runtime_class=request.runtime_class,
         docker_enabled=request.docker_enabled,
@@ -1560,6 +1561,7 @@ def _scheduling_request(
         provisionable=provisionable and not request.required_worker_id,
         required_worker_id=request.required_worker_id,
         preferred_worker_id=request.preferred_worker_id,
+        preferred_availability_zone=request.preferred_availability_zone,
         retry_count=request.retry_count,
         created_at=request.timestamp,
     )
@@ -1603,6 +1605,9 @@ def _worker_capacity(
     reserved_capacity: WorkerReservedCapacity | None = None,
 ) -> WorkerCapacity:
     reserved = reserved_capacity or WorkerReservedCapacity()
+    claimed_bytes, claimed_volumes = disk_claim(
+        worker.disk_storage, disk_bytes=reserved.disk_bytes, disk_count=reserved.disk_count
+    )
     return WorkerCapacity(
         region=worker.region,
         availability_zone=worker.availability_zone,
@@ -1618,11 +1623,14 @@ def _worker_capacity(
         free_cpu=max(worker.free_cpu_millicores - reserved.cpu_millicores, 0) / 1000,
         free_memory_mib=max(worker.free_memory_mib - reserved.memory_mib, 0),
         free_gpu=max(worker.free_gpu_count - reserved.gpu_count, 0),
-        free_disk_bytes=max(worker.free_disk_bytes - reserved.disk_bytes, 0),
+        free_disk_bytes=max(worker.free_disk_bytes - claimed_bytes, 0),
+        free_disk_volumes=max(worker.free_disk_volumes - claimed_volumes, 0),
         total_cpu=worker.total_cpu_millicores / 1000,
         total_memory_mib=worker.total_memory_mib,
         total_gpu=worker.total_gpu_count,
         total_disk_bytes=worker.total_disk_bytes,
+        total_disk_volumes=worker.total_disk_volumes,
+        disk_storage=worker.disk_storage,
         pending=worker.request_intake_status(at=now) is SchedulerWorkerStatus.Pending,
     )
 

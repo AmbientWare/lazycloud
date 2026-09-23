@@ -8,6 +8,7 @@ from scheduler.tools import (
     plan_scheduling_batch,
     select_worker_for_request,
 )
+from shared.disks import DiskStorage
 from shared.placement import Placement, PlacementKind
 
 
@@ -234,37 +235,57 @@ def test_a_preference_falls_through_to_the_next_card_it_named() -> None:
     assert select_worker_for_request(request, [t4]) is None
 
 
-def test_declared_disk_size_is_reserved_until_the_worker_is_full() -> None:
-    """A disk can grow to its declared size, so placement holds all of it.
-
-    Counting only CPU and memory let several large disks land on one node and
-    fill its filesystem under running workloads.
-    """
+def test_disks_take_volume_attachments_on_provider_workers_and_bytes_on_joined_ones() -> None:
+    """Each disk on a provider machine gets its own volume, so what runs out there
+    is attachments; a joined machine's disks share its filesystem and reserve their
+    declared size on it."""
     gib = 1024**3
-    worker = WorkerCapacity(
-        worker_id="worker-1",
+    volumes = WorkerCapacity(
+        worker_id="provider",
         placement=Placement.platform(),
-        total_cpu=8,
-        free_cpu=8,
-        total_memory_mib=16384,
-        free_memory_mib=16384,
+        total_cpu=64,
+        free_cpu=64,
+        total_memory_mib=262144,
+        free_memory_mib=262144,
         total_gpu=0,
-        total_disk_bytes=100 * gib,
-        free_disk_bytes=100 * gib,
+        disk_storage=DiskStorage.Volume,
+        total_disk_volumes=3,
+        free_disk_volumes=3,
     )
-    first, second = (
+    two_disks, second_pair = (
         SchedulingRequest(
-            placement=Placement.platform(), id=f"c-{index}", cpu=1, disk_bytes=60 * gib
+            placement=Placement.platform(),
+            id=f"pod-{index}",
+            cpu=1,
+            disk_count=2,
+            disk_bytes=2 * 500 * gib,
         )
         for index in (1, 2)
     )
 
-    outcomes = plan_scheduling_batch([first, second], [worker], queued_gpu_requests=[]).outcomes
+    outcomes = plan_scheduling_batch(
+        [two_disks, second_pair], [volumes], queued_gpu_requests=[]
+    ).outcomes
 
     assert [outcome.decision for outcome in outcomes] == [
         SchedulingDecision.Dispatch,
         SchedulingDecision.ProvisionWorker,
     ]
-    assert worker.reserve(first).fit_rejection(second) == (
-        f"free disk {40 * gib} bytes < {60 * gib} bytes"
+    assert volumes.reserve(two_disks).fit_rejection(second_pair) == (
+        "free disk volume attachments 1 < 2"
+    )
+
+    joined = volumes.model_copy(
+        update={
+            "worker_id": "joined",
+            "disk_storage": DiskStorage.Host,
+            "total_disk_volumes": 0,
+            "free_disk_volumes": 0,
+            "total_disk_bytes": 1500 * gib,
+            "free_disk_bytes": 1500 * gib,
+        }
+    )
+    assert joined.can_fit(two_disks)
+    assert joined.reserve(two_disks).fit_rejection(second_pair) == (
+        f"free disk {500 * gib} bytes < {1000 * gib} bytes"
     )

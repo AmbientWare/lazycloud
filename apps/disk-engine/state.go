@@ -61,9 +61,24 @@ type layer struct {
 	// Generation is the published generation whose content the chain up to
 	// and including this layer equals; 0 while the layer is unpublished.
 	Generation int64 `json:"generation"`
+	// Raw marks a base restored from a flattened generation, which holds the
+	// disk's contents as a sparse raw file rather than as qcow2.
+	Raw bool `json:"raw,omitempty"`
 }
 
-func (l layer) file() string { return fmt.Sprintf("%06d.qcow2", l.Seq) }
+const (
+	formatQcow2 = "qcow2"
+	formatRaw   = "raw"
+)
+
+func (l layer) format() string {
+	if l.Raw {
+		return formatRaw
+	}
+	return formatQcow2
+}
+
+func (l layer) file() string { return fmt.Sprintf("%06d.%s", l.Seq, l.format()) }
 func (l layer) node() string { return fmt.Sprintf("layer%d", l.Seq) }
 
 type attachment struct {
@@ -99,7 +114,10 @@ type diskState struct {
 	NextSeq   int     `json:"next_seq"`
 	// HeadFresh is true while the head is known to have been created empty
 	// under the running daemon, whose write statistics then cover all of it.
-	HeadFresh               bool              `json:"head_fresh"`
+	HeadFresh bool `json:"head_fresh"`
+	// GrowFilesystem is true while the disk has grown and its ext4 has not
+	// yet been resized to fill it.
+	GrowFilesystem          bool              `json:"grow_filesystem,omitempty"`
 	PublishedGeneration     int64             `json:"published_generation"`
 	PublishedManifestSHA256 string            `json:"published_manifest_sha256"`
 	Published               []publishedRecord `json:"published"`

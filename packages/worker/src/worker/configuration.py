@@ -45,12 +45,26 @@ class WorkerCapacityConfiguration(ContractModel):
     memory_mib: int = 0
     gpu_type: str = ""
     gpu_count: int = 0
+    disk_volume_slots: int | None = None
+    """Provider volumes the machine can still attach, one per disk it holds.
+
+    Set on a provider machine, whose disks each get a volume of their own; unset
+    on a joined machine, whose disks share its host storage.
+    """
 
     @field_validator("cpu_millicores", "memory_mib", "gpu_count")
     @classmethod
     def values_cannot_be_negative(cls, value: int) -> int:
         if value < 0:
             msg = "worker capacity values cannot be negative"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("disk_volume_slots")
+    @classmethod
+    def volume_slots_cannot_be_negative(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            msg = "disk volume slots cannot be negative"
             raise ValueError(msg)
         return value
 

@@ -115,12 +115,15 @@ func fileChild(path string) map[string]any {
 // named, so seal and compact can address layers directly.
 func chainNode(p diskPaths, layers []layer, top int) map[string]any {
 	node := map[string]any{
-		"driver":    "qcow2",
+		"driver":    layers[top].format(),
 		"node-name": layers[top].node(),
 		"file":      fileChild(p.layerPath(layers[top])),
 	}
 	if top == 0 {
-		node["backing"] = nil
+		// A raw base takes no backing option at all.
+		if !layers[0].Raw {
+			node["backing"] = nil
+		}
 	} else {
 		node["backing"] = chainNode(p, layers, top-1)
 	}
@@ -141,6 +144,16 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 	}
 	head := chainNode(p, state.Layers, len(state.Layers)-1)
 	head["discard"] = "unmap"
+	// Compaction commits zeroes a discard left in the head into the base;
+	// detecting them there frees the base's space instead of writing them.
+	base := head
+	for base["backing"] != nil {
+		base = base["backing"].(map[string]any)
+	}
+	if len(state.Layers) > 1 {
+		base["discard"] = "unmap"
+		base["detect-zeroes"] = "unmap"
+	}
 	graph, err := json.Marshal(head)
 	if err != nil {
 		return 0, err

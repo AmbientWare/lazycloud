@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -41,7 +42,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 		return nil, fmt.Errorf("--mountpoint must be absolute, got %q", *mountpoint)
 	}
 	target := filepath.Clean(*mountpoint)
-	if err := requireTools(toolDaemon, toolImage, toolNBDClient, toolMkfs); err != nil {
+	if err := requireTools(toolDaemon, toolImage, toolNBDClient, toolMkfs, toolResizeFS); err != nil {
 		return nil, err
 	}
 	if err := requireNBDModule(); err != nil {
@@ -79,6 +80,9 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			if state.Attachment.Mountpoint != target {
 				return nil, fmt.Errorf("disk %s is already attached at %s", p.id, state.Attachment.Mountpoint)
 			}
+			if state.SizeBytes != *size {
+				return nil, fmt.Errorf("disk %s is attached at %d bytes; detach it before attaching at %d", p.id, state.SizeBytes, *size)
+			}
 			return attachResult{Mountpoint: target, Generation: state.PublishedGeneration, ReusedLocal: true}, nil
 		}
 		// A worker that died left this attachment; its daemon or device is gone.
@@ -105,8 +109,8 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if reuse && state.SizeBytes != *size {
-		return nil, fmt.Errorf("disk %s is %d bytes locally and %d requested; resizing a disk is not supported", p.id, state.SizeBytes, *size)
+	if reuse && state.SizeBytes > *size {
+		return nil, fmt.Errorf("disk %s is %d bytes and cannot shrink to %d", p.id, state.SizeBytes, *size)
 	}
 	var manifests []layerManifest
 	if !reuse {
@@ -119,6 +123,11 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	}
 	if reuse {
 		result.ReusedLocal = true
+		if state.SizeBytes < *size {
+			if err := growHead(ctx, p, state, *size); err != nil {
+				return nil, err
+			}
+		}
 	} else {
 		if err := os.RemoveAll(p.dir()); err != nil {
 			return nil, err
@@ -135,11 +144,12 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			state.Layers = []layer{base}
 			format = true
 		} else {
-			restored, err := restoreChain(ctx, p, state, store, chain, manifests)
+			restored, err := restoreChain(ctx, p, state, store, chain, manifests, *minFree)
 			if err != nil {
 				return nil, err
 			}
 			result.RestoredBytes = restored
+			state.GrowFilesystem = manifests[len(manifests)-1].VirtualSizeBytes < *size
 		}
 		state.HeadFresh = true
 		if err := saveState(p, state); err != nil {
@@ -179,6 +189,30 @@ func connectAndMount(ctx context.Context, p diskPaths, state *diskState, format 
 		return err
 	}
 	state.Attachment.Mounted = true
+	if err := saveState(p, state); err != nil {
+		return err
+	}
+	if !state.GrowFilesystem {
+		return nil
+	}
+	if err := growExt4(ctx, device); err != nil {
+		return err
+	}
+	state.GrowFilesystem = false
+	return saveState(p, state)
+}
+
+// growHead raises the disk's size to size before the daemon opens it. Only
+// the head changes: the sealed layers below keep their size, and reads past
+// the end of a smaller backing layer return zeroes. The filesystem is grown
+// once it is mounted, and the flag that asks for it is saved first, so an
+// attach that stops between the two still grows it next time.
+func growHead(ctx context.Context, p diskPaths, state *diskState, size int64) error {
+	if _, err := runTool(ctx, toolImage, "resize", "-q", "-f", "qcow2", p.layerPath(state.head()), fmt.Sprint(size)); err != nil {
+		return err
+	}
+	state.SizeBytes = size
+	state.GrowFilesystem = true
 	return saveState(p, state)
 }
 
@@ -203,7 +237,8 @@ func reusable(p diskPaths, state *diskState, newest chainEntry) (bool, error) {
 }
 
 // fetchChain reads and checks every manifest in the chain before anything
-// local is removed or written.
+// local is removed or written. A disk only grows, so each generation is at
+// least as large as the one it builds on and no larger than size.
 func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []chainEntry, size int64) ([]layerManifest, error) {
 	manifests := make([]layerManifest, len(chain))
 	for i, entry := range chain {
@@ -222,8 +257,10 @@ func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []
 			return nil, fmt.Errorf("%s holds generation %d, the chain says %d", entry.ManifestKey, manifest.Generation, entry.Generation)
 		case manifest.ParentGeneration != wantParent:
 			return nil, fmt.Errorf("generation %d builds on %d, the chain puts it on %d", entry.Generation, manifest.ParentGeneration, wantParent)
-		case manifest.VirtualSizeBytes != size:
-			return nil, fmt.Errorf("generation %d is %d bytes, the disk is %d; resizing a disk is not supported", entry.Generation, manifest.VirtualSizeBytes, size)
+		case manifest.VirtualSizeBytes > size:
+			return nil, fmt.Errorf("generation %d is %d bytes and cannot shrink to %d", entry.Generation, manifest.VirtualSizeBytes, size)
+		case i > 0 && manifest.VirtualSizeBytes < manifests[i-1].VirtualSizeBytes:
+			return nil, fmt.Errorf("generation %d is %d bytes, smaller than the %d bytes of the generation it builds on", entry.Generation, manifest.VirtualSizeBytes, manifests[i-1].VirtualSizeBytes)
 		case manifest.Filesystem != diskFilesystem:
 			return nil, fmt.Errorf("generation %d holds %s, not %s", entry.Generation, manifest.Filesystem, diskFilesystem)
 		}
@@ -241,30 +278,55 @@ func (e *insufficientSpaceError) Error() string {
 	return fmt.Sprintf("insufficient space on %s: need %d, have %d free, reserve %d", e.root, e.need, e.have, e.reserve)
 }
 
-// checkSpace refuses a restore that would leave the filesystem under root
-// with less than reserve free. Space the restore frees by replacing this
-// disk's stale local copy counts as free.
-func checkSpace(p diskPaths, reuse bool, manifests []layerManifest, reserve int64) error {
-	var need int64
-	for _, manifest := range manifests {
-		need += manifest.LayerSizeBytes
+// storedBytes is what restoring a layer writes: its chunks, not its holes.
+func storedBytes(manifest layerManifest) int64 {
+	var total int64
+	for _, chunk := range manifest.Chunks {
+		total += chunk.Length
 	}
+	return total
+}
+
+// freeBytes is the space the filesystem under root has for this disk. Space
+// the restore frees by replacing this disk's stale local copy counts as free.
+func freeBytes(p diskPaths, countStale bool) (int64, error) {
 	var fs unix.Statfs_t
 	if err := unix.Statfs(p.root, &fs); err != nil {
-		return fmt.Errorf("statfs %s: %w", p.root, err)
+		return 0, fmt.Errorf("statfs %s: %w", p.root, err)
 	}
 	have := int64(fs.Bavail) * int64(fs.Bsize)
-	if !reuse {
+	if countStale {
 		stale, err := allocatedBytes(p.dir())
 		if err != nil {
-			return err
+			return 0, err
 		}
 		have += stale
 	}
-	if have-need < reserve {
-		return &insufficientSpaceError{root: p.root, need: need, have: have, reserve: reserve}
+	return have, nil
+}
+
+// checkSpace refuses a restore that would leave the filesystem under root
+// with less than reserve free. A chain that does not fit whole still restores
+// when its base and largest layer do, by committing layers as it goes.
+func checkSpace(p diskPaths, reuse bool, manifests []layerManifest, reserve int64) error {
+	var need, largest int64
+	for i, manifest := range manifests {
+		need += storedBytes(manifest)
+		if i > 0 {
+			largest = max(largest, storedBytes(manifest))
+		}
 	}
-	return nil
+	have, err := freeBytes(p, !reuse)
+	if err != nil {
+		return err
+	}
+	if have-need >= reserve {
+		return nil
+	}
+	if len(manifests) > 1 && have-storedBytes(manifests[0])-largest >= reserve {
+		return nil
+	}
+	return &insufficientSpaceError{root: p.root, need: need, have: have, reserve: reserve}
 }
 
 // allocatedBytes is the disk space the files under dir occupy, holes excluded.
@@ -290,24 +352,33 @@ func allocatedBytes(dir string) (int64, error) {
 	return total, err
 }
 
-func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest) (int64, error) {
+// restoreChain downloads the chain, base first. When the next layer would
+// leave less than reserve free, the layers already downloaded above the base
+// are committed into it first, so only as many layers are held as fit.
+func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest, reserve int64) (int64, error) {
 	var restored int64
 	for i, entry := range chain {
 		manifest := manifests[i]
+		if i > 0 {
+			if err := makeRoom(ctx, p, state, storedBytes(manifest), reserve); err != nil {
+				return 0, err
+			}
+		}
 		next := state.newLayer()
+		next.Raw = manifest.Format == formatRaw
 		bytes, err := downloadLayer(ctx, store, manifest, p.layerPath(next))
 		if err != nil {
 			return 0, fmt.Errorf("restore generation %d: %w", entry.Generation, err)
 		}
 		restored += bytes
+		next.Generation = entry.Generation
 		if i > 0 {
 			// Backing names are relative, so the chain survives the root moving.
 			below := state.Layers[len(state.Layers)-1]
-			if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", "qcow2", "-b", below.file(), p.layerPath(next)); err != nil {
+			if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", below.format(), "-b", below.file(), p.layerPath(next)); err != nil {
 				return 0, err
 			}
 		}
-		next.Generation = entry.Generation
 		state.Layers = append(state.Layers, next)
 		state.Published = append(state.Published, publishedRecord{
 			Generation:       entry.Generation,
@@ -318,7 +389,7 @@ func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *obj
 	}
 	top := state.Layers[len(state.Layers)-1]
 	head := state.newLayer()
-	if err := createOverlay(ctx, p.layerPath(head), top.file(), state.SizeBytes); err != nil {
+	if err := createOverlay(ctx, p.layerPath(head), top, state.SizeBytes); err != nil {
 		return 0, err
 	}
 	state.Layers = append(state.Layers, head)
@@ -401,4 +472,58 @@ func daemonHeadWritten(ctx context.Context, p diskPaths, state *diskState) (bool
 		return false, err
 	}
 	return headWritten(client, state.head().node())
+}
+
+// commitIntoBelow commits a restored layer into the layer below it. The layer
+// below is opened the way the daemon opens the base, detecting zeroes and
+// unmapping them, so ranges a later generation zeroed free their space there
+// rather than being written out as zeroes. -d: the layer is deleted afterwards
+// rather than emptied.
+func commitIntoBelow(ctx context.Context, path string, below layer, belowPath string) error {
+	escape := func(value string) string { return strings.ReplaceAll(value, ",", ",,") }
+	opts := strings.Join([]string{
+		"driver=" + formatQcow2,
+		"file.driver=file",
+		"file.filename=" + escape(path),
+		"backing.driver=" + below.format(),
+		"backing.file.driver=file",
+		"backing.file.filename=" + escape(belowPath),
+		"backing.discard=unmap",
+		"backing.detect-zeroes=unmap",
+	}, ",")
+	_, err := runTool(ctx, toolImage, "commit", "-q", "-d", "--image-opts", opts)
+	return err
+}
+
+// makeRoom commits the restored layers above the base into it, oldest first,
+// when downloading need more bytes would leave less than reserve free.
+func makeRoom(ctx context.Context, p diskPaths, state *diskState, need, reserve int64) error {
+	have, err := freeBytes(p, false)
+	if err != nil {
+		return err
+	}
+	if have-need >= reserve {
+		return nil
+	}
+	base := state.Layers[0]
+	for _, held := range state.Layers[1:] {
+		if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", base.format(), "-b", base.file(), p.layerPath(held)); err != nil {
+			return err
+		}
+		if err := commitIntoBelow(ctx, p.layerPath(held), base, p.layerPath(base)); err != nil {
+			return err
+		}
+		if err := os.Remove(p.layerPath(held)); err != nil {
+			return err
+		}
+		base.Generation = held.Generation
+	}
+	state.Layers = []layer{base}
+	if have, err = freeBytes(p, false); err != nil {
+		return err
+	}
+	if have-need < reserve {
+		return &insufficientSpaceError{root: p.root, need: need, have: have, reserve: reserve}
+	}
+	return nil
 }

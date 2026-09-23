@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"time"
 )
@@ -87,7 +86,7 @@ func sealFrozen(ctx context.Context, p diskPaths, state *diskState, client *qmpC
 	}
 	next := state.newLayer()
 	path := p.layerPath(next)
-	if err := createOverlay(ctx, path, head.file(), state.SizeBytes); err != nil {
+	if err := createOverlay(ctx, path, head, state.SizeBytes); err != nil {
 		return false, err
 	}
 	// Recorded before the switch; reconcileHead drops it again if the switch
@@ -203,17 +202,12 @@ func runPublish(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	source := p.layerPath(target)
-	resultParent := *parent
+	var result publishResult
 	if *flatten {
-		source = filepath.Join(p.dir(), fmt.Sprintf("flatten-%d.qcow2", *generation))
-		defer os.Remove(source)
-		if _, err := runTool(ctx, toolImage, "convert", "-O", "qcow2", p.layerPath(target), source); err != nil {
-			return nil, err
-		}
-		resultParent = 0
+		result, err = uploadFlattened(ctx, store, p, state.Layers[:index+1], *generation)
+	} else {
+		result, err = uploadFile(ctx, store, p.id, p.layerPath(target), *generation, *parent)
 	}
-	result, err := uploadLayer(ctx, store, p.id, source, state.SizeBytes, *generation, resultParent)
 	if err != nil {
 		return nil, err
 	}
@@ -369,12 +363,42 @@ func runCompact(ctx context.Context, args []string) (any, error) {
 	if err := saveState(p, state); err != nil {
 		return nil, err
 	}
+	if err := releaseNodes(client, removed); err != nil {
+		return nil, err
+	}
 	for _, l := range removed {
 		if err := os.Remove(p.layerPath(l)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
 	}
 	return compactResult{CompactedLayers: len(removed)}, nil
+}
+
+// releaseNodes deletes the committed layers' nodes the daemon still holds,
+// newest first. The daemon's top node at startup and every head a seal added
+// are held by the monitor, which keeps them, and the older layers they back,
+// open after the commit drops them from the chain. Without this a compaction
+// frees no space until the disk is detached.
+func releaseNodes(client *qmpClient, layers []layer) error {
+	for _, l := range slices.Backward(layers) {
+		var nodes []struct {
+			NodeName string `json:"node-name"`
+		}
+		if err := client.execute("query-named-block-nodes", map[string]any{"flat": true}, &nodes); err != nil {
+			return err
+		}
+		open := false
+		for _, node := range nodes {
+			open = open || node.NodeName == l.node()
+		}
+		if !open {
+			continue
+		}
+		if err := client.execute("blockdev-del", map[string]any{"node-name": l.node()}, nil); err != nil {
+			return fmt.Errorf("release committed layer %s: %w", l.file(), err)
+		}
+	}
+	return nil
 }
 
 func awaitJob(ctx context.Context, client *qmpClient, id string) error {
@@ -492,7 +516,7 @@ func sealOrphanedHead(ctx context.Context, p diskPaths, state *diskState) error 
 	}
 	if held {
 		next := state.newLayer()
-		if err := createOverlay(ctx, p.layerPath(next), head.file(), state.SizeBytes); err != nil {
+		if err := createOverlay(ctx, p.layerPath(next), head, state.SizeBytes); err != nil {
 			return err
 		}
 		state.Layers = append(state.Layers, next)

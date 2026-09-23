@@ -99,11 +99,15 @@ func claimedDevices(root string) (map[string]bool, error) {
 	return claimed, nil
 }
 
+// nbdLockPath serializes device selection across every root, since a disk
+// on its own volume has a root of its own.
+const nbdLockPath = "/run/lazycloud-disk/nbd.lock"
+
 // connectNBD picks a free /dev/nbdN and connects it to the daemon's export.
-// Selection and connection happen under one host-wide lock, and a connected
-// device shows a pid in sysfs, so two attaches never pick the same device.
+// Selection and connection happen under one lock, and a connected device
+// shows a pid in sysfs, so two attaches never pick the same device.
 func connectNBD(ctx context.Context, p diskPaths, sizeBytes int64, record func(device string) error) (string, error) {
-	lock, err := lockFile(filepath.Join(p.root, ".locks", "nbd"))
+	lock, err := lockFile(nbdLockPath)
 	if err != nil {
 		return "", err
 	}
@@ -230,6 +234,13 @@ func mountExt4(device, mountpoint string) error {
 		return fmt.Errorf("mount %s at %s: %w", device, mountpoint, err)
 	}
 	return nil
+}
+
+// growExt4 resizes a mounted ext4 filesystem to fill its device. Growing
+// online needs no fsck first, which an unmounted resize would.
+func growExt4(ctx context.Context, device string) error {
+	_, err := runTool(ctx, toolResizeFS, device)
+	return err
 }
 
 func unmount(mountpoint string) error {

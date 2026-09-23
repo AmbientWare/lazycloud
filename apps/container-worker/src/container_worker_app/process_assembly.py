@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from shared.app_identity import WORKER_BUNDLE_ROOT
+from shared.container_requests import StopContainerReason
 from shared.scheduling import (
     SchedulerWorkerRecord,
 )
@@ -245,6 +246,12 @@ def assemble_worker_process_services(
         sandbox_docker=container_service_dependencies.sandbox_docker,
         worker_id=identity.worker_id,
     )
+    if dependencies.durable_disks is not None:
+        dependencies.durable_disks.stop_container = lambda container_id: (
+            runtime_stopper.stop_container(
+                container_id, force=False, reason=StopContainerReason.DiskFull
+            )
+        )
     address_publisher = SchedulerWorkerAddressPublisher(identity, container_repository)
     usage_supervisor = WorkerSupervisionService(
         worker_id=identity.worker_id,

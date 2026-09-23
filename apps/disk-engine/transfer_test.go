@@ -15,7 +15,7 @@ import (
 func TestManifestRoundTrip(t *testing.T) {
 	manifest := layerManifest{
 		DiskID: "d1", Generation: 3, ParentGeneration: 2,
-		VirtualSizeBytes: 1 << 30, LayerSizeBytes: 5 << 20, Filesystem: diskFilesystem,
+		VirtualSizeBytes: 1 << 30, LayerSizeBytes: 5 << 20, Format: formatQcow2, Filesystem: diskFilesystem,
 		Chunks: []manifestChunk{{Offset: 0, Length: 2 << 20, SHA256: fmt.Sprintf("%064x", 1)}},
 	}
 	data, digest, err := encodeManifest(manifest)
@@ -63,7 +63,23 @@ func TestRestoreReproducesLayer(t *testing.T) {
 	file.WriteAt(random[9<<20:], 40<<20)
 	file.Close()
 
-	published, err := uploadLayer(ctx, store, diskID, source, 1<<30, 1, 0)
+	upload := func(generation, parent int64) (publishResult, error) {
+		file, err := os.Open(source)
+		if err != nil {
+			return publishResult{}, err
+		}
+		defer file.Close()
+		info, _ := file.Stat()
+		runs, err := fileRuns(file, info.Size())
+		if err != nil {
+			return publishResult{}, err
+		}
+		return uploadLayer(ctx, store, layerManifest{
+			DiskID: diskID, Generation: generation, ParentGeneration: parent,
+			VirtualSizeBytes: 1 << 30, LayerSizeBytes: info.Size(), Format: formatQcow2,
+		}, runs)
+	}
+	published, err := upload(1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +88,7 @@ func TestRestoreReproducesLayer(t *testing.T) {
 	if published.StoredBytesAdded < 20<<20 || published.StoredBytesAdded >= 30<<20 {
 		t.Fatalf("stored %d new bytes for 20MiB of data beside 10MiB of zeros", published.StoredBytesAdded)
 	}
-	again, err := uploadLayer(ctx, store, diskID, source, 1<<30, 2, 1)
+	again, err := upload(2, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

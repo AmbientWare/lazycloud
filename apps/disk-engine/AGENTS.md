@@ -4,6 +4,11 @@
 it never talks to the control plane. Everything it knows about a disk lives in
 `<root>/<disk_id>/state.json`, beside the layer files and the daemon's sockets.
 
+A joined machine passes one root for every disk. A provider machine passes each
+disk's own volume as its root, so nothing under a root can be assumed to be the
+host's whole view. That is why the lock around picking an NBD device sits at a
+fixed path under `/run` rather than under the root.
+
 A disk is a qcow2 chain. Sealed layers below never change; the head on top takes
 every write. One `qemu-storage-daemon` per attached disk exports the head over
 NBD on a unix socket, `nbd-client` hands that socket to the kernel as
@@ -26,10 +31,28 @@ as unchanged. A head the engine did not create empty under the running daemon
 is always sealed, because the daemon's statistics do not cover what it held
 before.
 
+Compaction deletes the committed layers' nodes from the daemon as well as their
+files. A seal adds each head through the monitor, which keeps it open after the
+commit drops it from the chain, so a compaction that only removed the files
+freed nothing until detach. `usage` reports the bytes above the base without
+taking the disk lock, so the worker can watch a volume while a publish runs.
+
 Seal records the new head before switching the daemon to it. When the two
 disagree, the next command drops the unswitched layer. Compact commits only
 published layers into the base, and only while holding the disk lock, so
 publish never reads a file that compaction is rewriting.
+
+A disk only grows. Attach with a larger `--size` resizes the head before the
+daemon opens it and runs `resize2fs` once the filesystem is mounted; the layers
+below keep their size, and reads past a smaller layer's end return zeroes. A
+saved flag carries the resize across an attach that stops between the two
+steps. Each published layer records its own size, so a chain can mix sizes as
+long as none shrinks.
+
+A flattened layer is published as the disk's raw contents, read range by range
+from the layer files `qemu-img map` names. Writing a flattened copy first would
+need a second full disk of space. Restoring one produces a sparse raw base,
+which the chain above it backs onto like any other layer.
 
 Recover seals a head that a dead daemon left holding data, so the next publish
 uploads those writes instead of leaving them on one node. They are
@@ -41,8 +64,11 @@ publish returns that upload's result without storing its chunks again. State
 keeps a record of every committed generation for exactly this decision.
 
 Attach exits with code 3 when a restore would leave the root filesystem below
-`--min-free-bytes`. That is the worker's cue to evict and retry. Every other
-failure exits 1.
+`--min-free-bytes`. On host storage that is the worker's cue to evict and
+retry; a volume has nothing to evict. Before refusing, attach checks whether
+the base plus its largest layer fits, and if so restores anyway, committing the
+layers it holds into the base whenever the next download would not fit. Space is counted from the chunks a restore writes,
+not from layer sizes, which include holes. Every other failure exits 1.
 
 Chunk boundaries come from the gear table in `chunker.go`. Changing that table
 or the size bounds does not break old disks, but every chunk becomes new, so a

@@ -103,3 +103,33 @@ func headDirty(ctx context.Context, p diskPaths, state *diskState) (bool, error)
 	}
 	return daemonHeadWritten(ctx, p, current)
 }
+
+type usageResult struct {
+	// UnmergedBytes is what the layers above the base occupy: writes not yet
+	// compacted into it, each of which a compaction needs room to copy.
+	UnmergedBytes int64 `json:"unmerged_bytes"`
+}
+
+// runUsage reads the disk's state without its lock, because the worker asks
+// every few seconds and must get an answer while a publish holds the lock.
+// State is replaced atomically, so a read sees one whole version of it.
+func runUsage(ctx context.Context, args []string) (any, error) {
+	f := newFlags("usage", true)
+	if err := f.parse(args); err != nil {
+		return nil, err
+	}
+	p := f.paths()
+	state, err := requireState(p)
+	if err != nil {
+		return nil, err
+	}
+	var result usageResult
+	for _, l := range state.Layers[1:] {
+		allocated, err := allocatedBytes(p.layerPath(l))
+		if err != nil {
+			return nil, err
+		}
+		result.UnmergedBytes += allocated
+	}
+	return result, nil
+}

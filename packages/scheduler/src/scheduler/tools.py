@@ -6,6 +6,7 @@ from enum import StrEnum
 
 from pydantic import Field, JsonValue, model_validator
 from shared.contracts import ContractModel
+from shared.disks import DiskStorage
 from shared.gpu import gpu_preference_accepts
 from shared.placement import Placement, ProductRegion
 from shared.timestamps import utc_now
@@ -45,12 +46,18 @@ class SchedulingRequest(ContractModel):
 
     gpu_count: int = 0
     disk_bytes: int = 0
-    """Declared size of the request's durable disks, reserved whole on the worker."""
+    """Declared size of the request's durable disks, reserved whole on a host-storage worker."""
+
+    disk_count: int = 0
+    """Durable disks the request mounts, one volume attachment each on a volume-storage worker."""
 
     placement: Placement
     required_worker_id: str = ""
     preferred_worker_id: str = ""
     """Chosen over other workers that fit, below liveness and above packing."""
+
+    preferred_availability_zone: str = ""
+    """Where a disk's cached volume is; ranks just below the preferred worker."""
 
     runtime_class: str = ""
     docker_enabled: bool = False
@@ -58,6 +65,18 @@ class SchedulingRequest(ContractModel):
     provisionable: bool = True
     retry_count: int = 0
     created_at: datetime = Field(default_factory=utc_now)
+
+
+def disk_claim(storage: DiskStorage, *, disk_bytes: int, disk_count: int) -> tuple[int, int]:
+    """Bytes and volume attachments disks take on a worker with this storage.
+
+    A host-storage worker holds each disk's declared size on its one
+    filesystem. A volume-storage worker gives each disk a volume of its own, so
+    what runs out is how many more the machine can attach.
+    """
+    if storage is DiskStorage.Volume:
+        return 0, disk_count
+    return disk_bytes, 0
 
 
 class WorkerCapacity(ContractModel):
@@ -86,10 +105,13 @@ class WorkerCapacity(ContractModel):
     free_memory_mib: int = Field(default=0, ge=0)
     free_gpu: int = Field(default=0, ge=0)
     free_disk_bytes: int = Field(default=0, ge=0)
+    free_disk_volumes: int = Field(default=0, ge=0)
     total_cpu: float = Field(ge=0)
     total_memory_mib: int = Field(ge=0)
     total_gpu: int = Field(ge=0)
     total_disk_bytes: int = Field(default=0, ge=0)
+    total_disk_volumes: int = Field(default=0, ge=0)
+    disk_storage: DiskStorage = DiskStorage.Host
     pending: bool = False
 
     @model_validator(mode="after")
@@ -102,7 +124,22 @@ class WorkerCapacity(ContractModel):
             raise ValueError("free GPU count cannot exceed total GPU count")
         if self.free_disk_bytes > self.total_disk_bytes:
             raise ValueError("free disk bytes cannot exceed total disk bytes")
+        if self.free_disk_volumes > self.total_disk_volumes:
+            raise ValueError("free disk volumes cannot exceed total disk volumes")
         return self
+
+    def disk_claim(self, request: SchedulingRequest) -> tuple[int, int]:
+        return disk_claim(
+            self.disk_storage, disk_bytes=request.disk_bytes, disk_count=request.disk_count
+        )
+
+    def disk_rejection(self, request: SchedulingRequest) -> str:
+        disk_bytes, disk_volumes = self.disk_claim(request)
+        if self.free_disk_bytes < disk_bytes:
+            return f"free disk {self.free_disk_bytes} bytes < {disk_bytes} bytes"
+        if self.free_disk_volumes < disk_volumes:
+            return f"free disk volume attachments {self.free_disk_volumes} < {disk_volumes}"
+        return ""
 
     def fit_rejection(self, request: SchedulingRequest) -> str:
         """Name the first reason this worker cannot take the request, else "".
@@ -135,9 +172,7 @@ class WorkerCapacity(ContractModel):
             return f"free memory {self.free_memory_mib}MiB < {request.memory_mib}MiB"
         if self.free_gpu < request.gpu_count:
             return f"free gpu {self.free_gpu} < {request.gpu_count}"
-        if self.free_disk_bytes < request.disk_bytes:
-            return f"free disk {self.free_disk_bytes} bytes < {request.disk_bytes} bytes"
-        return ""
+        return self.disk_rejection(request)
 
     def can_fit(self, request: SchedulingRequest) -> bool:
         if request.placement != self.placement:
@@ -169,16 +204,18 @@ class WorkerCapacity(ContractModel):
             self.free_cpu >= request.cpu
             and self.free_memory_mib >= request.memory_mib
             and self.free_gpu >= request.gpu_count
-            and self.free_disk_bytes >= request.disk_bytes
+            and not self.disk_rejection(request)
         )
 
     def reserve(self, request: SchedulingRequest) -> WorkerCapacity:
+        disk_bytes, disk_volumes = self.disk_claim(request)
         return self.model_copy(
             update={
                 "free_cpu": self.free_cpu - request.cpu,
                 "free_memory_mib": self.free_memory_mib - request.memory_mib,
                 "free_gpu": self.free_gpu - request.gpu_count,
-                "free_disk_bytes": self.free_disk_bytes - request.disk_bytes,
+                "free_disk_bytes": self.free_disk_bytes - disk_bytes,
+                "free_disk_volumes": self.free_disk_volumes - disk_volumes,
             }
         )
 
@@ -217,6 +254,7 @@ def gpu_request_matches_worker(request: SchedulingRequest, worker: WorkerCapacit
             "free_memory_mib": worker.total_memory_mib,
             "free_gpu": worker.total_gpu,
             "free_disk_bytes": worker.total_disk_bytes,
+            "free_disk_volumes": worker.total_disk_volumes,
         }
     ).can_fit(request)
 
@@ -228,6 +266,7 @@ class WorkerCapacityReservation(ContractModel):
     memory_mib: int
     gpu_count: int = 0
     disk_bytes: int = 0
+    disk_volumes: int = 0
 
 
 class SchedulingOutcome(ContractModel):
@@ -280,13 +319,16 @@ def select_worker_for_request(
     # The worker named as preferred holds local state the request would otherwise
     # download, such as a disk's layers. It ranks under priority, so work still
     # fills the highest tier first, and over packing, which it would otherwise
-    # never outweigh.
+    # never outweigh. The preferred zone is the same kind of preference one step
+    # wider: any worker there can reattach the disk's cached volume.
     return min(
         candidates,
         key=lambda item: (
             item.pending,
             -item.priority,
             not request.preferred_worker_id or item.worker_id != request.preferred_worker_id,
+            not request.preferred_availability_zone
+            or item.availability_zone != request.preferred_availability_zone,
             *_post_placement_headroom(item, request),
             item.worker_id,
         ),
@@ -309,10 +351,17 @@ def _post_placement_headroom(
             if worker.total_gpu > 0
             else 0.0
         )
-    if request.disk_bytes > 0:
+    disk_bytes, disk_volumes = worker.disk_claim(request)
+    if disk_bytes > 0:
         headroom.append(
-            (worker.free_disk_bytes - request.disk_bytes) / worker.total_disk_bytes
+            (worker.free_disk_bytes - disk_bytes) / worker.total_disk_bytes
             if worker.total_disk_bytes > 0
+            else 0.0
+        )
+    if disk_volumes > 0:
+        headroom.append(
+            (worker.free_disk_volumes - disk_volumes) / worker.total_disk_volumes
+            if worker.total_disk_volumes > 0
             else 0.0
         )
     return tuple(sorted(headroom))
@@ -341,6 +390,7 @@ def plan_scheduling_batch(
             backfill = worker is not None
         if worker is not None:
             remaining[worker.worker_id] = worker.reserve(request)
+            disk_bytes, disk_volumes = worker.disk_claim(request)
             plan.dispatches.append(
                 PlannedDispatch(
                     worker_id=worker.worker_id,
@@ -355,7 +405,8 @@ def plan_scheduling_batch(
                     cpu=request.cpu,
                     memory_mib=request.memory_mib,
                     gpu_count=request.gpu_count,
-                    disk_bytes=request.disk_bytes,
+                    disk_bytes=disk_bytes,
+                    disk_volumes=disk_volumes,
                 )
             )
             plan.outcomes.append(
@@ -376,6 +427,7 @@ def plan_scheduling_batch(
         )
         if pending_worker is not None:
             remaining[pending_worker.worker_id] = pending_worker.reserve(request)
+            disk_bytes, disk_volumes = pending_worker.disk_claim(request)
             plan.reservations.append(
                 WorkerCapacityReservation(
                     worker_id=pending_worker.worker_id,
@@ -383,7 +435,8 @@ def plan_scheduling_batch(
                     cpu=request.cpu,
                     memory_mib=request.memory_mib,
                     gpu_count=request.gpu_count,
-                    disk_bytes=request.disk_bytes,
+                    disk_bytes=disk_bytes,
+                    disk_volumes=disk_volumes,
                 )
             )
             plan.outcomes.append(

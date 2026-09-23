@@ -72,6 +72,7 @@ from scheduler.preemption import (
     WorkerPreemptionOperation,
     WorkerPreemptionQueueResult,
 )
+from scheduler.tools import disk_claim
 
 DEFAULT_WORKER_STATE_TTL_SECONDS = 60
 DEFAULT_CONTAINER_EXIT_CODE_TTL_SECONDS = 86_400
@@ -621,6 +622,8 @@ class WorkerReservedCapacity:
     memory_mib: int = 0
     gpu_count: int = 0
     disk_bytes: int = 0
+    disk_count: int = 0
+    """Disks the work mounts; which of these two a worker spends depends on its storage."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1531,12 +1534,16 @@ class RedisSchedulerWorkerRepository:
             worker = self.get_worker(worker_id)
             if worker is None:
                 raise WorkerStateNotFoundError(worker_id)
+            disk_bytes, disk_volumes = disk_claim(
+                worker.disk_storage, disk_bytes=request.disk_bytes, disk_count=request.disk_count
+            )
             restored = _restored_worker_capacity(
                 worker,
                 cpu_millicores=request.cpu_millicores,
                 memory_mib=capacity_memory_mib(request.memory_mib),
                 gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
-                disk_bytes=request.disk_bytes,
+                disk_bytes=disk_bytes,
+                disk_volumes=disk_volumes,
             )
             self.redis.hash_set(
                 self.keys.worker_state(worker_id),
@@ -2335,8 +2342,13 @@ class RedisSchedulerWorkerRepository:
             updates["free_memory_mib"] = max(worker.total_memory_mib - reserved.memory_mib, 0)
         if worker.total_gpu_count > 0:
             updates["free_gpu_count"] = max(worker.total_gpu_count - reserved.gpu_count, 0)
+        claimed_bytes, claimed_volumes = disk_claim(
+            worker.disk_storage, disk_bytes=reserved.disk_bytes, disk_count=reserved.disk_count
+        )
         if worker.total_disk_bytes > 0:
-            updates["free_disk_bytes"] = max(worker.total_disk_bytes - reserved.disk_bytes, 0)
+            updates["free_disk_bytes"] = max(worker.total_disk_bytes - claimed_bytes, 0)
+        if worker.total_disk_volumes > 0:
+            updates["free_disk_volumes"] = max(worker.total_disk_volumes - claimed_volumes, 0)
         if not updates:
             return worker
         return worker.model_copy(update=updates)
@@ -2364,6 +2376,7 @@ class RedisSchedulerWorkerRepository:
             reserved.memory_mib += capacity_memory_mib(request.memory_mib)
             reserved.gpu_count += gpu_count_for_capacity(request.gpu, request.gpu_count)
             reserved.disk_bytes += request.disk_bytes
+            reserved.disk_count += request.disk_count
 
         index_key = self.keys.container_worker_index(worker_id)
         for state_key in sorted(
@@ -2389,6 +2402,7 @@ class RedisSchedulerWorkerRepository:
             # GPUs were undercounted by exactly the ones nobody had named.
             reserved.gpu_count += state.gpu_count
             reserved.disk_bytes += state.disk_bytes
+            reserved.disk_count += state.disk_count
         return reserved
 
     def _get_worker_from_key(self, key: str) -> SchedulerWorkerRecord | None:
@@ -3735,8 +3749,14 @@ def plan_worker_capacity_change(
         if reserved_capacity is not None
         else gpu_count_for_capacity(request.gpu, request.gpu_count)
     )
-    disk_bytes = (
-        reserved_capacity.disk_bytes if reserved_capacity is not None else request.disk_bytes
+    disk_bytes, disk_volumes = disk_claim(
+        worker.disk_storage,
+        disk_bytes=(
+            reserved_capacity.disk_bytes if reserved_capacity is not None else request.disk_bytes
+        ),
+        disk_count=(
+            reserved_capacity.disk_count if reserved_capacity is not None else request.disk_count
+        ),
     )
     if change is WorkerCapacityChange.Add:
         updated = _restored_worker_capacity(
@@ -3745,6 +3765,7 @@ def plan_worker_capacity_change(
             memory_mib=memory_mib,
             gpu_count=gpu_count,
             disk_bytes=disk_bytes,
+            disk_volumes=disk_volumes,
         )
         return WorkerCapacityPlan(
             worker=updated,
@@ -3814,12 +3835,21 @@ def plan_worker_capacity_change(
             accepted=False,
             reason="worker out of disk capacity",
         )
+    if worker.free_disk_volumes < disk_volumes:
+        return WorkerCapacityPlan(
+            worker=worker,
+            change=change,
+            request=request,
+            accepted=False,
+            reason="worker out of disk volume attachments",
+        )
     updated = worker.model_copy(
         update={
             "free_cpu_millicores": worker.free_cpu_millicores - cpu_millicores,
             "free_memory_mib": worker.free_memory_mib - memory_mib,
             "free_gpu_count": worker.free_gpu_count - gpu_count,
             "free_disk_bytes": worker.free_disk_bytes - disk_bytes,
+            "free_disk_volumes": worker.free_disk_volumes - disk_volumes,
             "resource_version": worker.resource_version + 1,
             "updated_at": utc_now(),
         }
@@ -3834,6 +3864,7 @@ def _restored_worker_capacity(
     memory_mib: int,
     gpu_count: int,
     disk_bytes: int,
+    disk_volumes: int,
 ) -> SchedulerWorkerRecord:
     return worker.model_copy(
         update={
@@ -3847,6 +3878,9 @@ def _restored_worker_capacity(
                 worker.free_gpu_count + gpu_count, worker.total_gpu_count
             ),
             "free_disk_bytes": min(worker.free_disk_bytes + disk_bytes, worker.total_disk_bytes),
+            "free_disk_volumes": min(
+                worker.free_disk_volumes + disk_volumes, worker.total_disk_volumes
+            ),
             "resource_version": worker.resource_version + 1,
             "updated_at": utc_now(),
         }
@@ -3862,6 +3896,7 @@ def _worker_capacity_changed(
         or worker.free_memory_mib != reconciled.free_memory_mib
         or worker.free_gpu_count != reconciled.free_gpu_count
         or worker.free_disk_bytes != reconciled.free_disk_bytes
+        or worker.free_disk_volumes != reconciled.free_disk_volumes
     )
 
 

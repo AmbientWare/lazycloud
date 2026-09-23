@@ -176,6 +176,10 @@ class SchedulerDiskDeletionService(Protocol):
     def reconcile_due(self, *, now: datetime | None = None, limit: int = 100) -> None: ...
 
 
+class SchedulerDiskVolumeService(Protocol):
+    def reconcile_due(self, *, now: datetime | None = None, limit: int = 100) -> None: ...
+
+
 class SchedulerMeterEventBatch(Protocol):
     @property
     def sent_count(self) -> int: ...
@@ -463,6 +467,7 @@ class SchedulerMaintenanceControls:
     volume_metering: SchedulerVolumeMeteringService | None = None
     volume_deletion: SchedulerVolumeDeletionService | None = None
     disk_deletion: SchedulerDiskDeletionService | None = None
+    disk_volumes: SchedulerDiskVolumeService | None = None
     meter_outbox: SchedulerMeterOutboxService | None = None
     email_outbox: SchedulerEmailOutboxService | None = None
     plan_changes: SchedulerPlanChangeService | None = None
@@ -912,6 +917,8 @@ class Scheduler:
             self.maintenance.volume_deletion.reconcile_due(now=now, limit=container_limit)
         if self.maintenance.disk_deletion is not None:
             self.maintenance.disk_deletion.reconcile_due(now=now, limit=container_limit)
+        if self.maintenance.disk_volumes is not None:
+            self.maintenance.disk_volumes.reconcile_due(now=now, limit=container_limit)
         volume_metering_count, volume_metering_failure_count = self._meter_persistent_volumes(
             now=now,
             limit=container_limit,

@@ -7,9 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-
-	"golang.org/x/sys/unix"
 )
 
 // Content-defined chunk bounds. A boundary depends only on the 64 bytes before
@@ -145,30 +142,4 @@ func chunkStream(r io.Reader, base int64, emit func(chunkSpan) error) error {
 			return readErr
 		}
 	}
-}
-
-// chunkFile chunks each allocated extent of file separately and never reads
-// holes, which a restored layer is full of.
-func chunkFile(file *os.File, size int64, emit func(chunkSpan) error) error {
-	fd := int(file.Fd())
-	offset := int64(0)
-	for offset < size {
-		start, err := unix.Seek(fd, offset, unix.SEEK_DATA)
-		if errors.Is(err, unix.ENXIO) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("seek data in %s: %w", file.Name(), err)
-		}
-		end, err := unix.Seek(fd, start, unix.SEEK_HOLE)
-		if err != nil {
-			return fmt.Errorf("seek hole in %s: %w", file.Name(), err)
-		}
-		end = min(end, size)
-		if err := chunkStream(io.NewSectionReader(file, start, end-start), start, emit); err != nil {
-			return err
-		}
-		offset = end
-	}
-	return nil
 }

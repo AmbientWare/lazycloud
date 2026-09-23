@@ -7,9 +7,16 @@ order that makes a publish safe to repeat. A generation is uploaded by the
 engine, recorded with the control plane, and only then committed locally, so a
 crash between any two steps is resumed rather than lost or doubled.
 
-The lease survives this process. It is written beside the disk layers, which
-live on a host directory that outlives the worker, so a restarted worker still
-knows which leases it holds and gives them back.
+The lease survives this process. It is written to a host directory that
+outlives the worker, so a restarted worker still knows which leases it holds
+and gives them back.
+
+On a joined machine every disk keeps its layers under one host directory, and
+cached disks nobody holds are evicted when a restore needs their space. On a
+provider machine each disk keeps them on its own volume, mounted at a root of
+its own, so its space is the volume's and nothing is ever evicted to make room.
+A disk is detached and its volume unmounted before its lease is released,
+because the control plane detaches the volume as soon as the lease is gone.
 """
 
 from __future__ import annotations
@@ -36,14 +43,17 @@ from shared.disks import (
     DISK_HOST_RESERVE_BYTES,
     DISK_PUBLISH_INTERVAL_SECONDS,
     DISK_ROOT_MOUNT_PATH,
+    disk_volume_size_bytes,
 )
 from shared.http.errors import HttpApiError
 from shared.identity import TokenKind
 
 from worker.credential_payloads import WorkerCredentialPrincipal
+from worker.disk_volumes import DiskVolumeMounts
 from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
+    DiskBlockVolume,
     DiskCollectPayload,
     DiskPublishPayload,
     DiskPublishResult,
@@ -51,6 +61,7 @@ from worker.durable_disk_records import (
 )
 from worker.events import ContainerRequestContext
 from worker.execution import OciMount
+from worker.repository_errors import WorkerRepositoryClientError
 from worker.tools import (
     ContainerCredentialRequest,
     ContainerCredentials,
@@ -66,13 +77,22 @@ DISK_LAYERS_DIR_NAME = "layers"
 DISK_LEASES_DIR_NAME = "leases"
 DISK_OVERLAY_DIR_NAME = "overlay"
 DISK_COMPACT_AFTER_LAYERS = 8
-"""Committed layers above the base that make the next publish compact them in."""
+"""Committed layers above the base that make the next publish compact them in.
+
+A disk on a volume compacts after every publish instead. Its volume holds the
+declared size plus a headroom, and committing a layer into the base needs free
+space for the layer's new clusters, so layers are never left to pile up there.
+"""
 # The scheduler reclaims a container that has not started within its start
 # deadline, and the restore that follows the wait counts against it too. The
-# wait only has to outlast the previous holder's final publish.
+# wait has to outlast the previous holder's final publish and the control plane
+# creating and attaching the disk's volume.
 DISK_ACQUIRE_DEADLINE_SECONDS = 180.0
 DISK_ACQUIRE_INITIAL_BACKOFF_SECONDS = 2.0
 DISK_ACQUIRE_MAX_BACKOFF_SECONDS = 30.0
+DISK_VOLUME_CHECK_SECONDS = 5.0
+"""How often a running disk's volume is checked for space between publishes."""
+
 _CONFLICT_STATUS = 409
 _INSUFFICIENT_SPACE_EXIT_CODE = 3
 _ATTACH_TIMEOUT_SECONDS = 3600.0
@@ -84,6 +104,7 @@ _COMMIT_TIMEOUT_SECONDS = 60.0
 _COMPACT_TIMEOUT_SECONDS = 3600.0
 _COLLECT_TIMEOUT_SECONDS = 3600.0
 _LIST_TIMEOUT_SECONDS = 60.0
+_USAGE_TIMEOUT_SECONDS = 30.0
 _EVICT_TIMEOUT_SECONDS = 600.0
 
 
@@ -152,6 +173,11 @@ class DiskEngineRecoverResult(ContractModel):
     """Sealed layers per disk awaiting publish, including heads recovery sealed."""
 
 
+class DiskEngineUsage(ContractModel):
+    unmerged_bytes: int = Field(ge=0)
+    """Space the layers above the base take: writes not yet compacted into it."""
+
+
 class DiskEngineLocalDisk(ContractModel):
     disk: str
     attached: bool
@@ -183,9 +209,12 @@ class DiskChainFileEntry(ContractModel):
 
 @dataclass(slots=True)
 class DiskEngine:
-    """The `lazycloud-disk` command line; each call is one engine operation."""
+    """The `lazycloud-disk` command line; each call is one engine operation.
 
-    layers_root: Path
+    Every call names the root the disk's layers live under: the shared host
+    directory on a joined machine, or the disk's own volume on a provider one.
+    """
+
     run_root: Path
     binary: str = DISK_ENGINE_BINARY
     run_command: DiskCommandRunner = field(
@@ -194,6 +223,7 @@ class DiskEngine:
 
     def attach(
         self,
+        root: Path,
         disk: RequestDisk,
         *,
         mountpoint: Path,
@@ -210,7 +240,7 @@ class DiskEngine:
             output = self._run(
                 _ATTACH_TIMEOUT_SECONDS,
                 "attach",
-                *self._disk_args(disk.disk_id),
+                *self._disk_args(root, disk.disk_id),
                 "--size",
                 str(disk.size_bytes),
                 "--mountpoint",
@@ -225,13 +255,14 @@ class DiskEngine:
         chain_path.unlink(missing_ok=True)
         return DiskEngineAttachResult.model_validate_json(output)
 
-    def seal(self, disk_id: str) -> DiskEngineSealResult:
+    def seal(self, root: Path, disk_id: str) -> DiskEngineSealResult:
         return DiskEngineSealResult.model_validate_json(
-            self._run(_SEAL_TIMEOUT_SECONDS, "seal", *self._disk_args(disk_id))
+            self._run(_SEAL_TIMEOUT_SECONDS, "seal", *self._disk_args(root, disk_id))
         )
 
     def publish(
         self,
+        root: Path,
         disk_id: str,
         *,
         generation: int,
@@ -242,7 +273,7 @@ class DiskEngine:
         with self._store_file(self._scratch_dir(disk_id), store) as store_path:
             argv = [
                 "publish",
-                *self._disk_args(disk_id),
+                *self._disk_args(root, disk_id),
                 "--store",
                 str(store_path),
                 "--generation",
@@ -255,26 +286,26 @@ class DiskEngine:
             output = self._run(_PUBLISH_TIMEOUT_SECONDS, *argv)
         return DiskEnginePublishResult.model_validate_json(output)
 
-    def commit_published(self, disk_id: str, *, generation: int) -> None:
+    def commit_published(self, root: Path, disk_id: str, *, generation: int) -> None:
         self._run(
             _COMMIT_TIMEOUT_SECONDS,
             "commit-published",
-            *self._disk_args(disk_id),
+            *self._disk_args(root, disk_id),
             "--generation",
             str(generation),
         )
 
-    def compact(self, disk_id: str) -> None:
-        self._run(_COMPACT_TIMEOUT_SECONDS, "compact", *self._disk_args(disk_id))
+    def compact(self, root: Path, disk_id: str) -> None:
+        self._run(_COMPACT_TIMEOUT_SECONDS, "compact", *self._disk_args(root, disk_id))
 
     def collect(
-        self, disk_id: str, *, generation: int, store: DiskStoreFile
+        self, root: Path, disk_id: str, *, generation: int, store: DiskStoreFile
     ) -> DiskEngineCollectResult:
         with self._store_file(self._scratch_dir(disk_id), store) as store_path:
             output = self._run(
                 _COLLECT_TIMEOUT_SECONDS,
                 "collect",
-                *self._disk_args(disk_id),
+                *self._disk_args(root, disk_id),
                 "--store",
                 str(store_path),
                 "--generation",
@@ -282,23 +313,28 @@ class DiskEngine:
             )
         return DiskEngineCollectResult.model_validate_json(output)
 
-    def detach(self, disk_id: str) -> None:
-        self._run(_DETACH_TIMEOUT_SECONDS, "detach", *self._disk_args(disk_id))
+    def detach(self, root: Path, disk_id: str) -> None:
+        self._run(_DETACH_TIMEOUT_SECONDS, "detach", *self._disk_args(root, disk_id))
 
-    def evict(self, disk_id: str) -> None:
-        self._run(_EVICT_TIMEOUT_SECONDS, "evict", *self._disk_args(disk_id))
+    def evict(self, root: Path, disk_id: str) -> None:
+        self._run(_EVICT_TIMEOUT_SECONDS, "evict", *self._disk_args(root, disk_id))
 
-    def list_local(self) -> list[DiskEngineLocalDisk]:
-        output = self._run(_LIST_TIMEOUT_SECONDS, "list", "--root", str(self.layers_root))
-        return _LOCAL_DISKS.validate_json(output)
-
-    def recover(self) -> DiskEngineRecoverResult:
-        return DiskEngineRecoverResult.model_validate_json(
-            self._run(_RECOVER_TIMEOUT_SECONDS, "recover", "--root", str(self.layers_root))
+    def usage(self, root: Path, disk_id: str) -> DiskEngineUsage:
+        return DiskEngineUsage.model_validate_json(
+            self._run(_USAGE_TIMEOUT_SECONDS, "usage", *self._disk_args(root, disk_id))
         )
 
-    def _disk_args(self, disk_id: str) -> list[str]:
-        return ["--root", str(self.layers_root), "--disk", disk_id]
+    def list_local(self, root: Path) -> list[DiskEngineLocalDisk]:
+        output = self._run(_LIST_TIMEOUT_SECONDS, "list", "--root", str(root))
+        return _LOCAL_DISKS.validate_json(output)
+
+    def recover(self, root: Path) -> DiskEngineRecoverResult:
+        return DiskEngineRecoverResult.model_validate_json(
+            self._run(_RECOVER_TIMEOUT_SECONDS, "recover", "--root", str(root))
+        )
+
+    def _disk_args(self, root: Path, disk_id: str) -> list[str]:
+        return ["--root", str(root), "--disk", disk_id]
 
     def _scratch_dir(self, disk_id: str) -> Path:
         _require_path_segment(disk_id, field="disk id")
@@ -358,7 +394,13 @@ class DiskLease(ContractModel):
     unrecorded_removed_bytes: int = 0
     """Bytes a collection deleted that the control plane has not yet subtracted."""
 
+    volume_id: str = ""
+    """The provider volume holding this disk's layers; empty on host storage."""
+
     mountpoint: str = ""
+    detached: bool = False
+    """Everything written is published and the engine has let the disk go."""
+
     released: bool = False
 
 
@@ -382,20 +424,39 @@ class _Attached:
     lock: threading.Lock = field(default_factory=threading.Lock)
     stop: threading.Event = field(default_factory=threading.Event)
     publisher: threading.Thread | None = None
+    watcher: threading.Thread | None = None
+    drain: threading.Event = field(default_factory=threading.Event)
+    """Publish and compact now rather than at the next interval."""
+
+    stopping: bool = False
+    """A volume ran out of space and the container was asked to stop."""
+
     store: DiskStoreFile | None = None
     store_expires_at: datetime | None = None
 
 
 @dataclass(slots=True)
 class WorkerDurableDiskService:
-    """Owns every disk lease this worker holds, for as long as it holds them."""
+    """Owns every disk lease this worker holds, for as long as it holds them.
+
+    ``volumes`` is set on a provider machine, where every disk arrives with a
+    volume of its own, and unset on a joined machine, where none does.
+    """
 
     engine: DiskEngine
     leases: DiskLeaseClient
     credentials: DiskCredentialVendor
+    layers_root: Path
+    """Host directory every disk's layers live under when the machine has no volumes."""
+
     lease_root: Path
     mount_root: Path
+    volumes: DiskVolumeMounts | None = None
+    stop_container: Callable[[str], None] | None = None
+    """Stops a container whose disk volume ran out of space."""
+
     publish_interval_seconds: float = DISK_PUBLISH_INTERVAL_SECONDS
+    volume_check_seconds: float = DISK_VOLUME_CHECK_SECONDS
     acquire_deadline_seconds: float = DISK_ACQUIRE_DEADLINE_SECONDS
     sleep: Callable[[float], None] = time.sleep
     monotonic: Callable[[], float] = time.monotonic
@@ -408,12 +469,24 @@ class WorkerDurableDiskService:
 
         Recovery seals whatever a dead attachment's head still held, and the
         layers it reports pending are what the release of that container's lease
-        publishes before letting the disk go.
+        publishes before letting the disk go. A disk on a volume is recovered on
+        that volume, which is mounted again first.
         """
         self.lease_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.engine.layers_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        recovered = self.engine.recover()
-        self._recovered_pending = dict(recovered.pending)
+        self.layers_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        pending = dict(self.engine.recover(self.layers_root).pending)
+        if self.volumes is not None:
+            held: set[str] = set()
+            for record in self._load_all():
+                for lease in record.disks:
+                    if lease.released or not lease.volume_id:
+                        continue
+                    held.add(lease.disk_id)
+                    root = self.volumes.remount(lease.disk_id, lease.volume_id)
+                    if root is not None:
+                        pending.update(self.engine.recover(root).pending)
+            self.volumes.unmount_all_except(held)
+        self._recovered_pending = pending
 
     def attach(self, request: ContainerRequestContext) -> DurableDiskAttachment:
         if not request.disks:
@@ -430,10 +503,11 @@ class WorkerDurableDiskService:
         attachment = DurableDiskAttachment()
         with attached.lock:
             for disk in request.disks:
-                lease, chain = self._acquire(attached, disk)
+                lease, chain, volume = self._acquire(attached, disk)
+                root = self._mount_volume(lease, volume)
                 mountpoint = self.mount_root / request.container_id / disk.disk_id
                 mountpoint.mkdir(parents=True, exist_ok=True)
-                result = self._attach_with_space(attached, disk, mountpoint, chain)
+                result = self._attach_with_space(attached, disk, root, mountpoint, chain)
                 lease.mountpoint = result.mountpoint
                 self._save(record)
                 LOGGER.info(
@@ -464,14 +538,22 @@ class WorkerDurableDiskService:
             daemon=True,
         )
         attached.publisher.start()
+        if self.volumes is not None:
+            attached.watcher = threading.Thread(
+                target=self._watch_volumes,
+                args=(attached, self.volumes),
+                name=f"disk-volumes-{request.container_id}",
+                daemon=True,
+            )
+            attached.watcher.start()
         return attachment
 
     def release(self, container_id: str) -> None:
         """Publish what the container wrote and give every lease back.
 
         Raises on any failure so finalization retries it: the lease holds the
-        disk for this container until the final publish lands or the release is
-        recorded, which is what keeps the next container from starting on a
+        disk for this container until every write is published and the release
+        is recorded, which is what keeps the next container from starting on a
         generation this one was about to replace.
         """
         with self._attached_lock:
@@ -483,31 +565,17 @@ class WorkerDurableDiskService:
                 return
             attached = _Attached(leases=record)
         attached.stop.set()
-        publisher = attached.publisher
-        if publisher is not None and publisher is not threading.current_thread():
-            publisher.join()
+        attached.drain.set()
+        for thread in (attached.publisher, attached.watcher):
+            if thread is not None and thread is not threading.current_thread():
+                thread.join()
         with attached.lock:
             failures: list[Exception] = []
             for lease in attached.leases.disks:
                 if lease.released:
                     continue
                 try:
-                    if live and lease.mountpoint:
-                        self._publish_pending(attached, lease, final=True)
-                    else:
-                        # A previous worker process attached this disk; recovery
-                        # already sealed its head, so only the pending layers are
-                        # left to publish. Nothing local releases without one.
-                        self._publish_layers(
-                            attached,
-                            lease,
-                            pending=self._recovered_pending.get(lease.disk_id, 0),
-                            final=True,
-                            live=False,
-                        )
-                    lease.released = True
-                    self._save(attached.leases)
-                    self.engine.detach(lease.disk_id)
+                    self._let_go(attached, lease, live=live)
                 except Exception as exc:
                     LOGGER.exception(
                         "releasing disk %s for container %s failed; it will be retried",
@@ -524,9 +592,38 @@ class WorkerDurableDiskService:
         with self._attached_lock:
             self._attached.pop(container_id, None)
 
+    def _let_go(self, attached: _Attached, lease: DiskLease, *, live: bool) -> None:
+        """Publish, detach, unmount the volume, then release the lease, in that order.
+
+        Each step is recorded before the next, so a retried release resumes
+        after the last one that finished.
+        """
+        root = self._root(lease)
+        if not lease.detached:
+            if live and lease.mountpoint:
+                self._publish_pending(attached, lease)
+            else:
+                # A previous worker process attached this disk; recovery
+                # already sealed its head, so only the pending layers are left
+                # to publish. Nothing local releases without one.
+                self._publish_layers(
+                    attached,
+                    lease,
+                    pending=self._recovered_pending.get(lease.disk_id, 0),
+                    live=False,
+                )
+            self.engine.detach(root, lease.disk_id)
+            lease.detached = True
+            self._save(attached.leases)
+        if lease.volume_id and self.volumes is not None:
+            self.volumes.unmount(lease.disk_id)
+        self._release_lease(attached, lease)
+        lease.released = True
+        self._save(attached.leases)
+
     def _acquire(
         self, attached: _Attached, disk: RequestDisk
-    ) -> tuple[DiskLease, list[DiskChainFileEntry]]:
+    ) -> tuple[DiskLease, list[DiskChainFileEntry], DiskBlockVolume | None]:
         record = attached.leases
         deadline = self.monotonic() + self.acquire_deadline_seconds
         backoff = DISK_ACQUIRE_INITIAL_BACKOFF_SECONDS
@@ -536,13 +633,17 @@ class WorkerDurableDiskService:
                     DiskAcquirePayload(container_id=record.container_id, disk_id=disk.disk_id)
                 )
                 break
-            except HttpApiError as exc:
+            except (HttpApiError, WorkerRepositoryClientError) as exc:
+                # A held disk answers 409. A request that timed out may still be
+                # creating or attaching the disk's volume, and asking again
+                # resumes that work rather than starting it twice.
                 remaining = deadline - self.monotonic()
-                if exc.status_code != _CONFLICT_STATUS or remaining <= 0:
+                held = isinstance(exc, HttpApiError) and exc.status_code == _CONFLICT_STATUS
+                if not (held or isinstance(exc, WorkerRepositoryClientError)) or remaining <= 0:
                     raise
                 wait = min(backoff, remaining)
                 LOGGER.warning(
-                    "disk %s for container %s is still held (%s); retrying in %.0fs",
+                    "acquiring disk %s for container %s did not finish (%s); retrying in %.0fs",
                     disk.name,
                     record.container_id,
                     exc,
@@ -555,6 +656,13 @@ class WorkerDurableDiskService:
                 f"disk {disk.name} is {result.size_bytes} bytes but the request names "
                 f"{disk.size_bytes}"
             )
+        if (result.volume is None) != (self.volumes is None):
+            raise DiskEngineError(
+                f"disk {disk.name} arrived without the volume this provider machine keeps disks on"
+                if result.volume is None
+                else f"disk {disk.name} arrived with volume {result.volume.volume_id}, but "
+                "this joined machine keeps disks on host storage"
+            )
         lease = DiskLease(
             disk_id=disk.disk_id,
             name=disk.name,
@@ -563,51 +671,147 @@ class WorkerDurableDiskService:
             lease_token=result.lease_token,
             generation=result.generation,
             chain_depth=len(result.chain),
+            volume_id=result.volume.volume_id if result.volume is not None else "",
         )
         record.disks = [item for item in record.disks if item.disk_id != disk.disk_id]
         record.disks.append(lease)
         self._save(record)
-        return lease, [
-            DiskChainFileEntry(
-                generation=layer.generation,
-                manifest_key=layer.manifest_key,
-                manifest_sha256=layer.manifest_sha256,
-            )
-            for layer in result.chain
-        ]
+        return (
+            lease,
+            [
+                DiskChainFileEntry(
+                    generation=layer.generation,
+                    manifest_key=layer.manifest_key,
+                    manifest_sha256=layer.manifest_sha256,
+                )
+                for layer in result.chain
+            ],
+            result.volume,
+        )
+
+    def _mount_volume(self, lease: DiskLease, volume: DiskBlockVolume | None) -> Path:
+        if volume is None or self.volumes is None:
+            return self.layers_root
+        return self.volumes.mount(
+            lease.disk_id, volume, min_size_bytes=disk_volume_size_bytes(lease.size_bytes)
+        )
+
+    def _root(self, lease: DiskLease) -> Path:
+        if lease.volume_id and self.volumes is not None:
+            return self.volumes.root(lease.disk_id)
+        return self.layers_root
 
     def _publish_periodically(self, attached: _Attached) -> None:
-        while not attached.stop.wait(self.publish_interval_seconds):
+        """Publish every interval, and at once when a volume's watcher asks for a drain.
+
+        The only thread that changes an attached disk, so a publish stalled on
+        object storage stalls nothing but itself.
+        """
+        while True:
+            draining = attached.drain.wait(self.publish_interval_seconds)
             with attached.lock:
                 if attached.stop.is_set():
                     return
                 for lease in attached.leases.disks:
-                    if lease.released or not lease.mountpoint:
+                    if lease.released or lease.detached or not lease.mountpoint:
                         continue
                     try:
-                        self._publish_pending(attached, lease, final=False)
+                        self._publish_pending(attached, lease)
+                        if draining and lease.volume_id:
+                            self.engine.compact(self._root(lease), lease.disk_id)
+                            lease.layers_since_compaction = 0
+                            self._save(attached.leases)
                     except Exception:
                         LOGGER.exception(
-                            "periodic publish of disk %s for container %s failed; "
-                            "the next pass retries it",
+                            "publishing disk %s for container %s failed; the next pass retries it",
                             lease.name,
                             attached.leases.container_id,
                         )
+                # Cleared once the pass is done, so a watcher that saw the
+                # volume still short while this drain ran does not ask again.
+                # Release sets it after stop to wake this loop, so it stays set.
+                if not attached.stop.is_set():
+                    attached.drain.clear()
+
+    def _watch_volumes(self, attached: _Attached, volumes: DiskVolumeMounts) -> None:
+        """Check each disk's volume for space far more often than publishes run."""
+        while not attached.stop.wait(self.volume_check_seconds):
+            for lease in attached.leases.disks:
+                if not lease.volume_id or lease.released or lease.detached:
+                    continue
+                try:
+                    self._check_volume(attached, lease, volumes)
+                except Exception:
+                    LOGGER.exception("checking the volume of disk %s failed", lease.name)
+
+    def _check_volume(
+        self, attached: _Attached, lease: DiskLease, volumes: DiskVolumeMounts
+    ) -> None:
+        """Ask for a drain before the disk's volume runs out of space, and stop if it does.
+
+        Sealing, publishing and compacting moves what the layers above the base
+        hold into it. A compaction copies those layers before deleting them, so
+        it needs as much free space as they take: the drain is asked for once
+        they reach half the headroom, or once free space falls below half of it.
+        A volume under a quarter of its headroom is holding writes the drain
+        could not publish, and the container is stopped with the reason rather
+        than left to fail its writes.
+        """
+        if attached.stopping:
+            return
+        headroom = disk_volume_size_bytes(lease.size_bytes) - lease.size_bytes
+        free = volumes.free_bytes(lease.disk_id)
+        if free < headroom // 4:
+            self._stop_for_space(
+                attached,
+                f"disk {lease.name} volume has {free} bytes free, under a quarter of its "
+                f"{headroom}-byte headroom, and publishing did not drain it",
+            )
+            return
+        unmerged = self.engine.usage(self._root(lease), lease.disk_id).unmerged_bytes
+        if (unmerged >= headroom // 2 or free < headroom // 2) and not attached.drain.is_set():
+            LOGGER.warning(
+                "disk %s has %d uncompacted bytes and its volume %d free of a %d-byte "
+                "headroom; publishing and compacting now",
+                lease.name,
+                unmerged,
+                free,
+                headroom,
+            )
+            attached.drain.set()
+
+    def _stop_for_space(self, attached: _Attached, reason: str) -> None:
+        LOGGER.error("%s; stopping container %s", reason, attached.leases.container_id)
+        if self.stop_container is None:
+            raise DiskEngineError(reason)
+        attached.stopping = True
+        self.stop_container(attached.leases.container_id)
 
     def _attach_with_space(
         self,
         attached: _Attached,
         disk: RequestDisk,
+        root: Path,
         mountpoint: Path,
         chain: list[DiskChainFileEntry],
     ) -> DiskEngineAttachResult:
+        on_volume = root != self.layers_root
+        # On a volume, the headroom above the declared size is what the head
+        # takes writes into after a restore.
+        reserve = (
+            disk_volume_size_bytes(disk.size_bytes) - disk.size_bytes
+            if on_volume
+            else DISK_HOST_RESERVE_BYTES
+        )
+
         def attach() -> DiskEngineAttachResult:
             return self.engine.attach(
+                root,
                 disk,
                 mountpoint=mountpoint,
                 chain=chain,
                 store=self._store(attached),
-                min_free_bytes=DISK_HOST_RESERVE_BYTES,
+                min_free_bytes=reserve,
             )
 
         try:
@@ -615,6 +819,13 @@ class WorkerDurableDiskService:
         except DiskEngineError as exc:
             if not exc.insufficient_space:
                 raise
+            if on_volume:
+                raise DiskEngineError(
+                    f"disk {disk.name} does not fit its volume with a {reserve}-byte "
+                    f"headroom ({exc.detail})",
+                    exit_code=exc.exit_code,
+                    detail=exc.detail,
+                ) from exc
             refusal = exc
         freed, blocked = self._evict_for(disk, shortfall=_space_shortfall(refusal.detail))
         LOGGER.warning(
@@ -645,7 +856,7 @@ class WorkerDurableDiskService:
         """
         freed = 0
         blocked: list[str] = []
-        local = sorted(self.engine.list_local(), key=lambda item: item.last_used_at)
+        local = sorted(self.engine.list_local(self.layers_root), key=lambda item: item.last_used_at)
         for item in local:
             if item.disk == disk.disk_id:
                 continue
@@ -657,14 +868,14 @@ class WorkerDurableDiskService:
                 continue
             if freed >= shortfall:
                 break
-            self.engine.evict(item.disk)
+            self.engine.evict(self.layers_root, item.disk)
             freed += item.local_bytes
             LOGGER.info("evicted cached disk %s (%d bytes)", item.disk, item.local_bytes)
         return freed, blocked
 
-    def _publish_pending(self, attached: _Attached, lease: DiskLease, *, final: bool) -> None:
-        sealed = self.engine.seal(lease.disk_id)
-        self._publish_layers(attached, lease, pending=sealed.pending, final=final, live=True)
+    def _publish_pending(self, attached: _Attached, lease: DiskLease) -> None:
+        sealed = self.engine.seal(self._root(lease), lease.disk_id)
+        self._publish_layers(attached, lease, pending=sealed.pending, live=True)
 
     def _publish_layers(
         self,
@@ -672,19 +883,15 @@ class WorkerDurableDiskService:
         lease: DiskLease,
         *,
         pending: int,
-        final: bool,
         live: bool,
     ) -> None:
         """Publish, record, then commit each pending layer, oldest first."""
-        if pending == 0:
-            if final:
-                self._release_lease(attached, lease)
-            return
+        root = self._root(lease)
         for index in range(pending):
-            last = index == pending - 1
             generation = lease.generation + 1
             flatten = lease.chain_depth >= DISK_FLATTEN_DEPTH
             uploaded = self.engine.publish(
+                root,
                 lease.disk_id,
                 generation=generation,
                 parent=lease.generation,
@@ -701,12 +908,9 @@ class WorkerDurableDiskService:
                     manifest_key=uploaded.manifest_key,
                     manifest_sha256=uploaded.manifest_sha256,
                     stored_bytes_added=uploaded.stored_bytes_added,
-                    # A flattened layer is collected under before the lease goes,
-                    # since only the holder may record what collection deleted.
-                    final=final and last and uploaded.parent_generation != 0,
                 )
             )
-            self.engine.commit_published(lease.disk_id, generation=uploaded.generation)
+            self.engine.commit_published(root, lease.disk_id, generation=uploaded.generation)
             lease.generation = uploaded.generation
             lease.chain_depth = 1 if uploaded.parent_generation == 0 else lease.chain_depth + 1
             lease.layers_since_compaction += 1
@@ -722,11 +926,10 @@ class WorkerDurableDiskService:
             )
             if uploaded.parent_generation == 0:
                 self._collect(attached, lease)
-                if final and last:
-                    self._release_lease(attached, lease)
-        if live and not final and lease.layers_since_compaction >= DISK_COMPACT_AFTER_LAYERS:
+        compact_after = 1 if lease.volume_id else DISK_COMPACT_AFTER_LAYERS
+        if live and lease.layers_since_compaction >= compact_after:
             try:
-                self.engine.compact(lease.disk_id)
+                self.engine.compact(root, lease.disk_id)
             except Exception:
                 LOGGER.exception("compacting disk %s failed; the next publish retries", lease.name)
             else:
@@ -751,7 +954,10 @@ class WorkerDurableDiskService:
         """
         try:
             collected = self.engine.collect(
-                lease.disk_id, generation=lease.generation, store=self._store(attached)
+                self._root(lease),
+                lease.disk_id,
+                generation=lease.generation,
+                store=self._store(attached),
             )
         except Exception:
             LOGGER.exception("collecting disk %s failed; the next flatten retries", lease.name)
@@ -830,6 +1036,12 @@ class WorkerDurableDiskService:
         if not path.exists():
             return None
         return ContainerDiskLeases.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def _load_all(self) -> list[ContainerDiskLeases]:
+        return [
+            ContainerDiskLeases.model_validate_json(path.read_text(encoding="utf-8"))
+            for path in sorted(self.lease_root.glob("*.json"))
+        ]
 
     def _save(self, record: ContainerDiskLeases) -> None:
         self.lease_root.mkdir(parents=True, exist_ok=True, mode=0o700)
