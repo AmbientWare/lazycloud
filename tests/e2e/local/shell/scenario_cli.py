@@ -67,7 +67,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         app.deploy(
             workspace=workspace,
             source_root=SOURCE_ROOT,
-            env={"LAZYCLOUD_E2E_APP": APP_NAME},
         )
         call = hold_shell_target.spawn(120.0)
         container_id = _await_container(call, timeout_seconds=60)

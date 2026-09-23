@@ -10,6 +10,10 @@ APP_NAME = os.getenv("LAZYCLOUD_E2E_APP", f"cache_restart_{secrets.token_hex(6)}
 BUILD_MARKER = os.getenv("LAZYCLOUD_E2E_CACHE_MARKER", secrets.token_hex(12))
 MARKER_PATH = Path("/opt/lazycloud/cache-e2e-marker")
 
+# A deployed container imports this module again, so it needs the names the
+# caller generated or it would mint different ones.
+DEPLOYMENT_ENV = {"LAZYCLOUD_E2E_APP": APP_NAME, "LAZYCLOUD_E2E_CACHE_MARKER": BUILD_MARKER}
+
 app = App(APP_NAME)
 image = Image(python_version="3.12").add_commands(
     [
@@ -19,7 +23,7 @@ image = Image(python_version="3.12").add_commands(
 )
 
 
-@app.function(name="cache-restart-probe", image=image, cpu=0.25, memory="128Mi")
+@app.function(name="cache-restart-probe", image=image, cpu=0.25, memory="128Mi", env=DEPLOYMENT_ENV)
 def cache_restart_probe(expected: str) -> str:
     actual = MARKER_PATH.read_text(encoding="utf-8").strip()
     if actual != expected:
