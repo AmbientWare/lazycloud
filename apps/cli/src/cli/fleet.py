@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 from compute.service import ComputeService
 from compute.supplier_costs import SupplierCostInspectionService
-from lazycloud.cli.components.output import console
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.results import emit_result
 from shared.compute_policy import ComputeUnitRecord
 from shared.contracts import ContractModel

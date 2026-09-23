@@ -1,0 +1,97 @@
+---
+title: "Develop, test, deploy"
+description: "Three stages for the same code, what each one costs, and where a call goes at each stage."
+---
+
+The same code moves through three stages without changes:
+
+1. Calling the function, or `.local()`, runs it in your own process, in seconds
+   and for free.
+2. `lazycloud run` makes one call in a cloud container, which proves the image,
+   GPU, and secrets.
+3. `lazycloud deploy` keeps it running in the cloud for anything else to call.
+
+`lazycloud serve` fits between 2 and 3 for live edits. `run` and `deploy` take
+[`--json`](/cli/overview) and exit nonzero on failure, so an agent or a script
+can drive the loop. The examples use
+[`page_stats.py`](/concepts/apps#define-an-app).
+
+## Develop locally
+
+```python
+from page_stats import analyze_page
+
+
+def test_analyze_page() -> None:
+    assert analyze_page("https://example.com").words > 0
+```
+
+Nothing uploads and no task is recorded. The decorator's image, volumes,
+secrets, GPU, and retries don't apply locally, so this suits unit tests and
+logic without remote dependencies.
+
+## Test in the cloud
+
+```bash
+uv run lazycloud run page_stats:analyze_page https://example.com
+```
+
+`analyze_page.remote(...)` does the same from Python. LazyCloud builds the image
+if it changed, uploads your working tree, and runs the call in a container on
+your workspace's [compute](/platform/compute), streaming logs and the result
+back. Nothing is deployed, and the container stops after its
+[`keep_warm`](/concepts/scaling#warm-containers) window. Each run uploads the
+tree as it is at that moment.
+
+## Live preview
+
+```bash
+uv run lazycloud serve page_stats:analyze
+```
+
+A preview runs the workload in a cloud container until Ctrl+C and syncs each
+saved file into it, so an edit costs a file sync instead of a build. Functions
+reload after in-flight calls finish. Endpoints restart their server and keep the
+same preview URL. `lazycloud run` and `.remote()` from the same machine go to
+the running preview.
+
+## Deploy
+
+```bash
+uv run lazycloud deploy page_stats
+```
+
+A deployment keeps running after your terminal and machine are off. Containers
+start on demand and [scale](/concepts/scaling) with load, endpoints get a stable
+URL, schedules start firing, and other deployed code and
+[exported clients](/concepts/apps#call-deployed-workloads-from-other-projects)
+can call its functions. Each deploy records a new version.
+
+## Where a call goes
+
+`.remote()`, `.spawn()`, `.map()`, and `lazycloud run` pick a target in order:
+
+1. A preview of this function started from this machine and workspace.
+2. From your machine, a fresh run of the working tree.
+3. Inside a LazyCloud container, the deployed function.
+
+A container has no working tree, so the deployed `analyze` endpoint reaches
+`analyze_page` because deploying the app deployed both.
+
+Endpoint clients choose explicitly. `analyze.request(...)` calls the preview if
+one is running and the deployment otherwise, `analyze.target("deployed")` skips
+the preview, and `analyze.target("served")` never falls back. `deployment_name`
+and `deployment_version` pin one deployment.
+
+## What gets uploaded
+
+`run`, `serve`, and `deploy` upload the current directory, normally the project
+root. `--source-root` on `deploy` and `--sync-dir` on `serve` pick another.
+
+The first upload writes a `.lazycloudignore`, in gitignore syntax, for you to
+edit and commit. `.git`, `.venv`, `__pycache__`, `*.pyc`, `.env`, and
+`.lazycloud/` never upload. Datasets and model weights belong in
+[volumes](/concepts/volumes).
+
+Your code isn't part of the image, so editing it never triggers a rebuild.
+Changing a dependency does. See [Images](/concepts/images).

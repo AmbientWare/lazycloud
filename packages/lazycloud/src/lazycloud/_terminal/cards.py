@@ -11,7 +11,7 @@ from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
 
-from lazycloud.cli.components import formatting, theme
+from lazycloud._terminal import formatting, theme
 
 CardTone = Literal["neutral", "info", "success", "warning", "error"]
 CARD_MAX_WIDTH = 88

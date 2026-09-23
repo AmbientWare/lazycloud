@@ -7,7 +7,7 @@ import typer
 from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
 from coordination.redis_client import RedisClient
-from lazycloud.cli.components.cards import notice_card
+from lazycloud._terminal.cards import notice_card
 from lazycloud.cli.components.output import emit
 from lazycloud.cli.components.results import emit_result
 from provider_clients.release import (

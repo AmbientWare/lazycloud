@@ -1,7 +1,5 @@
 """Durable OCR worker backed by Tesseract and Poppler."""
 
-from __future__ import annotations
-
 import json
 import subprocess
 import tempfile

@@ -1,14 +1,21 @@
 ---
-title: "Run your first function"
-description: "Write a Python function, run it on LazyCloud, and see its result in your terminal."
+title: "Quickstart"
+description: "Develop a function locally, test it in the cloud, then deploy an HTTP endpoint and call it."
 ---
 
-You'll run a Python function on remote compute and get `hello LazyCloud` back
-in your terminal. Start with the [client installed](/getting-started/installation).
+## Install and sign in
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
+
+```bash
+uv tool install lazycloud-client
+lazycloud login
+```
+
+`login` prints a link and a code. Open the link, check that the code matches
+your terminal, and approve.
 
 ## Download the project
-
-With the CLI [installed through uv](/getting-started/installation):
 
 ```bash
 lazycloud example download quickstart
@@ -16,30 +23,10 @@ cd quickstart
 uv sync
 ```
 
-This gives you `quickstart.py`, a README, and a project pinned to your SDK
-version. `uv sync` creates the environment and `uv.lock`. Keep the lockfile
-with your source so another machine can install the same dependencies.
-
-## Sign in
-
-```bash
-uv run lazycloud login
-```
-
-Open the link, check that the code matches your terminal, and approve the
-sign-in. If you belong to several workspaces, choose where to run:
-
-```bash
-uv run lazycloud workspace list
-uv run lazycloud workspace use <name>
-```
-
-## Read the function
-
-The downloaded `quickstart.py` contains:
+It contains `quickstart.py`:
 
 ```python
-from __future__ import annotations
+from pydantic import BaseModel
 
 from lazycloud import App, Image
 
@@ -53,42 +40,102 @@ def hello(name: str = "world") -> str:
     return f"hello {name}"
 
 
+class Greeting(BaseModel):
+    greeting: str
+
+
+@app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
+def greet(name: str) -> Greeting:
+    return Greeting(greeting=hello.local(name))
+
+
 if __name__ == "__main__":
+    print("running local")
+    print(hello.local("LazyCloud"))
+    print("running remote")
     print(hello.remote("LazyCloud"))
 ```
 
-`Image` selects the remote Python environment. `cpu` and `memory` reserve
-resources for the container. Your machine only needs the LazyCloud client.
-Change these settings in the file so your next run uses the same configuration.
-
 ## Run it
+
+```bash
+uv run python quickstart.py
+```
+
+`.local()`, like a plain `hello("LazyCloud")` call, runs in your own Python
+process for free. `.remote()` uploads your code and runs the same function on a
+cloud machine with 1 CPU and 256 MiB, then streams its logs back and returns
+`hello LazyCloud`. The first remote call waits for the image to build.
+
+The CLI makes the same cloud call without a `__main__` block:
 
 ```bash
 uv run lazycloud run quickstart:hello LazyCloud
 ```
 
-LazyCloud prepares the image, uploads your code, and runs `hello` remotely.
-The command shows progress and the function's logs, then prints `hello LazyCloud`.
-The first run can take longer while the image builds.
+## Deploy the endpoint
 
-Run the command from the directory containing `quickstart.py`.
-`quickstart:hello` selects `hello` from that module; omit the `.py` extension.
-Arguments follow it. Change `LazyCloud` to your name and run it again.
+`greet` is an HTTP endpoint that calls `hello` inside its own container and
+returns a `Greeting` model, which LazyCloud sends as JSON.
+Deploying the app puts both workloads in the cloud:
 
-You can also run `uv run python quickstart.py` when the SDK is installed in your Python
-environment. The `.remote()` call in the file submits the same remote work.
-Use `.local()` instead when you want to call the function on your own machine.
+```bash
+uv run lazycloud deploy quickstart
+```
 
-## What happens after the run
+The app now runs on LazyCloud, not on your machine, and stays up after you
+close the terminal. The deploy output includes the endpoint's HTTPS URL.
 
-The container shuts down after its idle window. Your task's status, result,
-and logs remain in the [dashboard](https://lazycloud.dev/dashboard).
-Use [Tasks and logs](/concepts/tasks-and-logs) to revisit a run later or
-inspect work submitted in the background.
+## Call it
 
-## Keep going
+Over HTTP, with an access token from the
+[dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens:
 
-- [Serve an HTTP endpoint](/getting-started/first-endpoint) for calls from another app.
-- [Local, preview, deploy](/getting-started/workflow) for when to use `.local()`, `run`, `serve`, and `deploy`.
-- [Run functions in parallel](/concepts/functions#process-several-inputs) for a batch of inputs.
-- [Choose an example](/examples/index) to train a model, process documents, or run a coding agent.
+```bash
+read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
+curl --fail --show-error "<endpoint-url>" \
+  -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "LazyCloud"}'
+```
+
+From code in the same project, the decorated function is the client. It uses
+your `lazycloud login` sign-in:
+
+```python
+from quickstart import greet
+
+print(greet.request("LazyCloud").json())
+```
+
+From another project, a generated package gives typed calls without your
+source. Run the export there:
+
+```bash
+uv run lazycloud app export quickstart
+```
+
+```python
+from lazycloud_clients.quickstart import greet
+
+print(greet.request("LazyCloud"))
+```
+
+The HTTP and in-project calls return `{"greeting": "hello LazyCloud"}`. The
+typed package returns the same fields as a typed object.
+[Typed client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
+covers regenerating the package after a deploy.
+
+## Clean up
+
+```bash
+uv run lazycloud app pause quickstart
+```
+
+`pause` stops the app's workloads and keeps their definitions.
+`uv run lazycloud app delete quickstart` removes the app.
+
+## Next
+
+- [Develop, test, deploy](/concepts/workflow) for live previews and where each call goes.
+- [Apps and workloads](/concepts/apps) to lay out your own project.

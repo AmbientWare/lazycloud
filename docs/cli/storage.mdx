@@ -1,16 +1,17 @@
 ---
 title: "volume, file commands, and secret"
-description: "Manage volumes, move files, and manage workspace secrets."
+description: "Volumes, files, secrets, and artifacts from a terminal."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-Use volumes for files your workloads share and artifacts for downloadable task
+Volumes hold files your workloads share, and artifacts hold downloadable task
 output. Both belong to the selected workspace.
 
-For repeatable workflows, [declare volumes](/concepts/volumes) and
-[secret dependencies](/concepts/secrets) in Python. Mounted volumes are created
-on first use. These commands are useful for ad hoc storage work and inspection.
+Repeatable workflows [declare volumes](/concepts/volumes) and
+[secret dependencies](/concepts/secrets) in Python, and LazyCloud creates a
+mounted volume on first use. These commands suit one-off storage work and
+inspection.
 
 ## lazycloud volume
 
@@ -22,8 +23,8 @@ uv run lazycloud volume delete NAME [-y]     # deletes the files too; -y skips t
 
 ## Files
 
-The example below creates standalone storage before any workload uses it.
-Skip creation when a running workload has already created its declared volume.
+The example creates a volume before any workload uses it. `volume create` is
+unnecessary if a running workload already created its declared volume.
 
 Volume paths are `lazycloud://<volume>/<path>`. The scheme is optional except
 on the source of a download, where it marks the path as remote.
@@ -44,8 +45,8 @@ uv run lazycloud mv models/checkpoints/model.safetensors models/archive/model.sa
 ```
 
 This uploads a local checkpoint, downloads a copy, and archives the remote file.
-To remove the archived file, run `uv run lazycloud rm models/archive/model.safetensors`.
-Deleting a volume removes all its files; download what you need first.
+`uv run lazycloud rm models/archive/model.safetensors` removes the archived
+file. Deleting a volume removes all its files, so download what you need first.
 
 ## lazycloud secret
 
@@ -58,21 +59,22 @@ uv run lazycloud secret delete NAME
 ```
 
 <Warning>
-  A value typed on the command line lands in your shell history. Read it from
-  a variable or a file instead: `uv run lazycloud secret create OPENAI_API_KEY "$OPENAI_API_KEY"`.
+  A value typed on the command line lands in your shell history. Reading it
+  from a variable or a file avoids that: `uv run lazycloud secret create OPENAI_API_KEY "$OPENAI_API_KEY"`.
 </Warning>
 
 ## lazycloud artifact
 
-Find reports saved by tasks and inspect their storage use:
+`artifact list` finds files saved by tasks, and `artifact usage` reports their
+storage use:
 
 ```bash
 uv run lazycloud artifact list --search report
 uv run lazycloud artifact usage
 ```
 
-Use `uv run lazycloud artifact delete <artifact-id>` to remove a saved file. Lists
-return a `next` cursor; pass `--cursor <cursor>` for another page. See
+`uv run lazycloud artifact delete <artifact-id>` removes a saved file. Lists
+return a `next` cursor, and `--cursor <cursor>` fetches the next page. See
 [Artifacts](/concepts/artifacts) for downloads and retention.
 
 <WorkspaceFlag />

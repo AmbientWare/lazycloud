@@ -8,16 +8,11 @@ from typing import Annotated
 import typer
 from shared.http.volumes import DeletePathRequest, ListPathRequest, MovePathRequest
 
+from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.formatting import timestamp
+from lazycloud._terminal.streams import console
 from lazycloud.abstractions.volume import Volume, VolumeOperationError
-from lazycloud.cli.components.cards import notice_card, result_card
-from lazycloud.cli.components.formatting import timestamp
-from lazycloud.cli.components.output import (
-    console,
-    emit,
-    json_output_enabled,
-    print_payload,
-    table,
-)
+from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import volume_client
 from lazycloud.terminal import humanize_bytes

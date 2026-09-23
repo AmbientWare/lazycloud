@@ -3,13 +3,13 @@ title: "Queues and maps"
 description: "Shared state for coordinating work across containers."
 ---
 
-Use a queue to pass work items between processes and a map for temporary shared
-values. Objects with the same name in the same workspace share data.
-Sign in before running these Python examples.
+A queue passes work items between processes, and a map holds temporary shared
+values. Within a workspace, a queue or map with the same name refers to the
+same data.
 
 ## Queue
 
-A FIFO queue of JSON-serializable values:
+`Queue` is a FIFO queue of JSON-serializable values:
 
 ```python
 from lazycloud import Queue
@@ -23,22 +23,17 @@ item = q.pop()
 print(item)
 ```
 
-`pop()` removes the item and returns `None` when the queue is empty. Each item
-goes to exactly one caller, however many containers are popping at once. Your
-consumer must decide what to do if processing fails afterward. For work that
-needs task results and retries, submit a
-[function](/concepts/functions#submit-work-in-the-background) instead.
-`QueueDepthAutoscaler` scales a function's pending calls, not this named queue.
+`pop()` hands each item to exactly one caller, or returns `None` when empty.
+Work that needs results and retries fits a
+[function call](/concepts/functions#submit-work-in-the-background) better.
 
 ## Coordinate containers
 
-Use `.map()` when you know every input up front. Use a queue when work is
-discovered as you go, when producers and consumers run at different times, or
-when a handful of long-lived workers should drain a stream of small items
-without a task per item. A map records progress those workers can share:
+`.map()` fits inputs known up front. A queue fits work discovered along the way,
+drained by a few long-lived workers, with a map to share progress:
 
 ```python
-from lazycloud import App, Map, Queue, QueueDepthAutoscaler
+from lazycloud import App, Autoscaler, Map, Queue
 
 app = App("crawler")
 frontier = Queue("crawl-frontier")
@@ -50,7 +45,7 @@ seen = Map("crawl-seen")
     memory="512Mi",
     timeout_seconds=3600,
     retries=0,
-    autoscaler=QueueDepthAutoscaler(max_containers=8),
+    autoscaler=Autoscaler(max_containers=8),
 )
 def crawl_worker() -> int:
     handled = 0
@@ -70,20 +65,15 @@ if __name__ == "__main__":
     print(sum(call.get() for call in calls))
 ```
 
-Eight workers on eight containers pop from one queue and stop when it is
-empty; without the autoscaler they would run one after another. The map's `in`
-check and `set` are two calls, so two workers can both pass the check for the
-same URL and fetch it twice; that is fine for a crawler and not for a payment.
-When an item must be handled exactly once, make the handler idempotent or put
-the item through a function call, which has a task record and retries.
-
-A worker that pops an item and then crashes loses it; the queue has no
-acknowledgement. Keep the items small and re-creatable, or write the item to a
-map before working on it and have a sweeper requeue stale entries.
+Eight workers drain one queue in parallel. The `in` check and `set` are two
+calls, so two workers can occasionally fetch the same URL. A crawler shrugs
+that off, and a payment can't, so exactly-once work belongs in an idempotent
+handler or a function call. A worker that crashes after `pop()` loses the item,
+since the queue has no acknowledgement.
 
 ## Map
 
-A key/value map with the `MutableMapping` interface:
+`Map` is a key/value store with the `MutableMapping` interface:
 
 ```python
 from lazycloud import Map
@@ -99,32 +89,15 @@ len(state)
 del state["cursor"]
 ```
 
-Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
-days is the maximum timed expiry. Use `ttl=0` to keep a key until you delete it.
+Keys expire after seven days, the longest timed expiry, and `ttl=0` keeps a key
+until deleted.
 
 ## Edit from the dashboard
 
-Open **Storage**, then **Queues** or **Maps**. Keep repeatable setup in your
-Python code; use the dashboard to inspect data or make an ad hoc correction.
+The [dashboard](/platform/dashboard#edit-queues-and-maps) inspects and edits
+both by hand.
 
-For a map, select a key to view or edit its value and expiry. Saving fails if a
-workload changed the key meanwhile; reload and try again. Binary Python values
-can be inspected and deleted but not edited.
+## Delete a queue or map
 
-**Add key** creates a key without overwriting an existing one. To create a
-map, choose **New map** and enter its name and first key/value.
-
-For a queue, **Add message** appends JSON to the end. Viewing the head message
-does not remove it. **Remove next message** consumes the next message without
-running it and shows what was removed. Another consumer can take the previewed
-message before you confirm, so the removed message may be different.
-**New queue** creates a named queue with its first message.
-
-Deleting a queue removes its remaining messages. Deleting a map removes all
-its keys. Both actions require confirmation and cannot be undone. Running code
-can recreate a deleted collection with its next write.
-
-## Remove example state
-
-When you no longer need the example data, `q.delete()` removes the queue and
-its remaining items, and `state.delete()` removes the map and all its keys.
+`q.delete()` removes the queue and its remaining items. `state.delete()`
+removes the map and all its keys.

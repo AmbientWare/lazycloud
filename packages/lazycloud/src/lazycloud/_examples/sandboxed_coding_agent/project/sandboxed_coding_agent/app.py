@@ -10,8 +10,6 @@ Read ``tests_passed`` and ``test_output`` in the result. The sandbox terminates
 after the test, and the seed files in your checkout remain unchanged.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import tempfile

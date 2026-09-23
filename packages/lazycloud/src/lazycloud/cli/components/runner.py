@@ -6,6 +6,7 @@ import traceback
 
 import typer
 
+from lazycloud._terminal.streams import error_console, json_output_active, set_json_output
 from lazycloud.cli.components.errors import (
     CliErrorPolicy,
     debug_errors_enabled,
@@ -13,7 +14,6 @@ from lazycloud.cli.components.errors import (
     mask_secrets,
     render_exception,
 )
-from lazycloud.cli.components.output import error_console, json_output_active, set_json_output
 
 
 def run_cli(

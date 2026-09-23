@@ -20,7 +20,7 @@ from typing import (
 )
 
 from pydantic import JsonValue
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_HTTP_CPU,
@@ -63,7 +63,6 @@ from lazycloud.abstractions.metadata import (
 )
 from lazycloud.abstractions.serve import (
     ServeGatewayClient,
-    ServeOptions,
     ServePreviewSession,
     ServeResourceClient,
     resolve_serve_url,
@@ -141,7 +140,7 @@ class EndpointOptions(TypedDict, total=False):
     secrets: list[str] | None
     volumes: Iterable[VolumeMount | VolumeExport] | None
     on_start: LifecycleHookInput
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
+    autoscaler: Autoscaler | Mapping[str, Any] | None
     task_policy: TaskPolicy | Mapping[str, Any] | None
     checkpoint_enabled: bool
     inputs: SchemaInput
@@ -175,7 +174,7 @@ class ASGIOptions(TypedDict, total=False):
     secrets: list[str] | None
     volumes: Iterable[VolumeMount | VolumeExport] | None
     on_start: LifecycleHookInput
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
+    autoscaler: Autoscaler | Mapping[str, Any] | None
     task_policy: TaskPolicy | Mapping[str, Any] | None
     checkpoint_enabled: bool
     preemptible: bool
@@ -227,7 +226,7 @@ class Endpoint(Generic[P, R]):
     secrets: list[str] = field(default_factory=list)
     volumes: list[VolumeMount] = field(default_factory=list)
     on_start: LifecycleHookInput = None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None
     task_policy: TaskPolicy | Mapping[str, Any] | None = None
     checkpoint_enabled: bool = False
     inputs: SchemaInput = None
@@ -351,29 +350,24 @@ class Endpoint(Generic[P, R]):
     def deploy(
         self,
         *,
-        name: str | None = None,
         workspace: str | None = None,
         source_root: str | Path | None = None,
         _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
         return _deploy_endpoint(
             self,
-            name=name,
             workspace=workspace,
             source_root=source_root,
             preparation=_preparation,
         )
 
-    def serve(
-        self, timeout: int = 0, *, options: ServeOptions | None = None
-    ) -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0, *, sync_dir: str | None = None) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
             workspace=None,
-            sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
+            sync_dir=sync_dir or self.sync_local_dir or ".",
             label="endpoint",
-            options=options,
         )
 
     def request(
@@ -476,7 +470,7 @@ def _endpoint(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     inputs: SchemaInput = None,
@@ -519,7 +513,7 @@ def _endpoint(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     inputs: SchemaInput = None,
@@ -561,7 +555,7 @@ def _endpoint(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     inputs: SchemaInput = None,
@@ -643,7 +637,7 @@ class ASGI:
     secrets: list[str] = field(default_factory=list)
     volumes: list[VolumeMount] = field(default_factory=list)
     on_start: LifecycleHookInput = None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None
     task_policy: TaskPolicy | Mapping[str, Any] | None = None
     checkpoint_enabled: bool = False
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
@@ -726,29 +720,24 @@ class ASGI:
     def deploy(
         self,
         *,
-        name: str | None = None,
         workspace: str | None = None,
         source_root: str | Path | None = None,
         _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
         return _deploy_endpoint(
             self,
-            name=name,
             workspace=workspace,
             source_root=source_root,
             preparation=_preparation,
         )
 
-    def serve(
-        self, timeout: int = 0, *, options: ServeOptions | None = None
-    ) -> StartEndpointServeResponse:
+    def serve(self, timeout: int = 0, *, sync_dir: str | None = None) -> StartEndpointServeResponse:
         return _serve_endpoint(
             self,
             timeout=timeout,
             workspace=None,
-            sync_dir=self.sync_local_dir if self.sync_local_dir is not None else ".",
+            sync_dir=sync_dir or self.sync_local_dir or ".",
             label="ASGI app",
-            options=options,
         )
 
     def request(
@@ -852,7 +841,7 @@ def _asgi(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,
@@ -1155,7 +1144,6 @@ def _endpoint_request_method(owner: Endpoint[..., Any] | ASGI) -> str:
 def _deploy_endpoint(
     owner: Endpoint[..., Any] | ASGI,
     *,
-    name: str | None = None,
     workspace: str | None,
     source_root: str | Path | None = None,
     preparation: DeploymentPreparation | None = None,
@@ -1172,7 +1160,6 @@ def _deploy_endpoint(
             preparation=preparation,
         ).create(
             owner.spec(),
-            name=name,
             workspace=workspace,
             image=owner.image,
             source_root=source_root,
@@ -1221,22 +1208,12 @@ def _serve_endpoint(
     workspace: str | None,
     sync_dir: str | None,
     label: str,
-    options: ServeOptions | None,
 ) -> StartEndpointServeResponse:
     terminal = owner.terminal or Terminal()
     owner.terminal = terminal
-    if options is not None:
-        options.apply(owner)
-        if options.keep_warm is not None:
-            if isinstance(owner, ASGI):
-                owner.keep_warm_seconds = options.keep_warm
-            else:
-                owner.keep_warm = options.keep_warm
-        if options.sync_dir is not None:
-            sync_dir = options.sync_dir
     source_root = sync_dir or None
     stub_id = owner.stub_id
-    if not stub_id or options is not None:
+    if not stub_id:
         stub_id = _prepare_endpoint(
             owner,
             workspace=workspace,

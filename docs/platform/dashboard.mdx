@@ -3,40 +3,42 @@ title: "Use the dashboard"
 description: "Find run results, test an API, manage stored files, and check your spending."
 ---
 
-Open [the dashboard](https://lazycloud.dev/dashboard) and choose your workspace
-from the menu at the top.
+[The dashboard](https://lazycloud.dev/dashboard) shows one workspace at a time,
+chosen from the menu at the top.
 
 ## Find a result or investigate a failure
 
 Open Tasks and select the run. Its detail view shows status, timing, retries,
-the result or error, and logs. For a task that is still pending, check the
-displayed reason before retrying it.
+the result or error, and logs. A task that is still pending shows why it is
+waiting.
 
-You can also open an app to find its workloads and recent activity.
+An app's page lists its workloads and recent activity.
 
 ## Test or stop a deployed service
 
 Open the workload under Apps and use the request playground to send input.
-Use its controls to scale, pause, resume, or delete it. Pausing is useful when
-you want to stop serving without removing the definition.
+Its controls scale, pause, resume, or delete it. Pausing stops serving without
+removing the definition.
 
 For a running sandbox, open its terminal, file browser, or process list from
 the app page.
 
 ## Retrieve files
 
-Storage contains volumes, artifacts, secrets, queues, and maps. Use the
-volume browser for shared files and the artifact browser for task output.
-Artifact downloads and public URLs are subject to
-[retention](/concepts/artifacts#retention).
+Storage has browsers for volumes and artifacts, plus secrets, queues, and maps.
+Artifacts can be searched, filtered, previewed, and downloaded until their
+[retention](/concepts/artifacts#retention) runs out, and each task's Artifacts
+tab lists its own. The page also shows bytes stored and this month's storage
+charges.
 
 ## Edit queues and maps
 
-In Storage, open **Queues** to add a message or remove the next one. Open
-**Maps** to find a key, edit its JSON value or expiry, or delete it.
-Use **New queue** or **New map** to create a collection with its first value.
-See [Queues and maps](/concepts/queues-maps#edit-from-the-dashboard) for conflict
-handling and deletion behavior.
+Storage, then Queues or Maps, is for inspecting data and one-off fixes. A map
+key's value and expiry are editable, and a save fails if a workload changed the
+key meanwhile. Binary Python values can be viewed and deleted but not edited.
+A queue takes new JSON messages at the end, and Remove next message consumes
+the head without running it. Deleting a queue or map can't be undone, though
+running code recreates it on its next write.
 
 ## Check spending
 
@@ -45,15 +47,16 @@ same across workspaces you own.
 
 Open Settings, then Billing to check your balance, payment method, plan, and
 monthly usage limit. See [Plans and limits](/platform/plans) for what happens
-when a limit is reached.
+when you reach a limit.
 
 ## Manage access and compute
 
 In Settings, Tokens creates access tokens for scripts and direct HTTP calls.
 Compute connects an AWS account or joins a machine, and shows each machine's
-lifecycle phase; see [Compute](/platform/compute) for what the phases mean.
-Domains registers a hostname for your API.
+lifecycle phase. [Compute](/platform/compute) explains the phases. Domains
+registers a hostname for your API.
 
-Use the workspace menu to create or rename a workspace and manage members.
-Check which account you are signed in as before opening an invitation link;
-accepting joins that account to the workspace.
+The workspace menu renames workspaces and manages members. Owners and
+administrators invite by email, change roles, and remove members. An invitation
+link joins whichever account opens it, so it belongs only with the person
+invited. Resending or withdrawing replaces the link.

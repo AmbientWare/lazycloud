@@ -1,85 +1,45 @@
 ---
 title: "Installation"
-description: "Use uv to install the CLI and manage each project's Python environment."
+description: "The global CLI, the SDK in a project, upgrades, and where sign-in state lives."
 ---
 
-Use uv for the CLI, project dependencies, and Python commands. Install
-[uv](https://docs.astral.sh/uv/getting-started/installation/) first.
+LazyCloud installs with [uv](https://docs.astral.sh/uv/getting-started/installation/).
+The client supports Python 3.10 or newer.
 
-## Get the CLI
+## Install the CLI
 
 ```bash
 uv tool install lazycloud-client
-lazycloud --help
+lazycloud login
 ```
 
-This installs the `lazycloud` command in an isolated environment. Use it to
-download an example or manage your account from any directory. It does not
-install the SDK into another project's Python environment.
+`lazycloud` is then on your path for downloading examples and managing your
+account from any directory.
 
-## Start from an example
-
-```bash
-lazycloud example download quickstart
-cd quickstart
-uv sync
-uv run lazycloud login
-uv run lazycloud run quickstart:hello LazyCloud
-```
-
-The download includes source, a README, `.python-version`, and
-`pyproject.toml`. The SDK dependency is pinned to the version that supplied the
-example. `uv sync` installs the project's dependencies and creates `uv.lock`.
-Run subsequent commands from this directory.
-
-Commit `pyproject.toml`, `uv.lock`, and the source. Keep `.venv` and
-credentials out of version control. In CI, use `uv sync --locked` to require
-the committed dependency versions.
-
-## Add LazyCloud to an existing project
-
-From your uv project:
+## Add the SDK to a project
 
 ```bash
 uv add lazycloud-client
-uv run lazycloud login
 ```
 
-For a new project, run `uv init my-project` and `cd my-project` first.
-Use `uv run lazycloud` for CLI workflows and `uv run python` for scripts.
-The guides use this project environment by default.
+`uv run lazycloud` and `uv run python` use the project's pinned SDK. A new
+project starts with `uv init my-project`. `pyproject.toml` and `uv.lock` belong
+in version control, and `uv sync --locked` reproduces them in CI.
 
-The client supports Python 3.10 or newer. Downloaded examples select Python
-3.12; uv can install that interpreter when needed. Remote Python and GPU
-dependencies belong in the workload's `Image` definition.
+Packages your code needs remotely go in the workload's
+[image](/concepts/images), not in your local environment.
 
-## Upgrade deliberately
-
-Upgrade the global tool:
+## Upgrade
 
 ```bash
-uv tool upgrade lazycloud-client
+uv tool upgrade lazycloud-client     # the global CLI
+uv run lazycloud update              # a project, within its pyproject.toml constraints
 ```
 
-For a project, run:
+A downloaded example pins an exact SDK version.
+`uv add "lazycloud-client==<version>"` moves it to another release.
 
-```bash
-uv run lazycloud update
-```
+## Sign-in state
 
-This updates the environment and lockfile within the constraints in
-`pyproject.toml`. A downloaded example pins the SDK, so select the release
-you want explicitly before upgrading:
-
-```bash
-uv add "lazycloud-client==<version>"
-```
-
-Review the changed dependency and lockfile, then rerun your workflow.
-Downloading a newer example into a new directory lets you compare its code
-without replacing your edits. Downloading never upgrades an existing project.
-
-The CLI keeps sign-in state under `~/.lazycloud`; global and project commands
-share it. Set `LAZYCLOUD_HOME` to use another location.
-
-Next, [run your first function](/getting-started/quickstart).
+The CLI keeps sign-in state under `~/.lazycloud`, shared by the global and
+project commands. `LAZYCLOUD_HOME` moves it.

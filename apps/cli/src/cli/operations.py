@@ -5,10 +5,10 @@ from time import sleep
 from typing import Annotated
 
 import typer
+from lazycloud._terminal.formatting import timestamp
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.formatting import timestamp
 from lazycloud.cli.components.output import (
-    console,
     json_output_enabled,
     print_events_table,
     print_payload,

@@ -8,8 +8,8 @@ from rich import box
 from rich.console import RenderableType
 from rich.table import Table
 
-from lazycloud.cli.components import formatting, theme
-from lazycloud.cli.components.cards import empty_state
+from lazycloud._terminal import formatting, theme
+from lazycloud._terminal.cards import empty_state
 
 
 def resource_table(

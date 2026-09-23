@@ -14,8 +14,6 @@ The commands show logs and output paths. Download the annotated image and use
 new run names for later trials; see https://docs.lazycloud.dev/examples/train-yolo-object-detector.
 """
 
-from __future__ import annotations
-
 import re
 import subprocess
 from pathlib import Path, PurePosixPath

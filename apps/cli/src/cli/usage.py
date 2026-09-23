@@ -4,7 +4,8 @@ from datetime import datetime
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud._terminal.streams import console
+from lazycloud.cli.components.output import json_output_enabled, print_payload, table
 from shared.usage import UsageMetric
 
 from cli.api_client import admin_api_client

@@ -5,10 +5,10 @@ from typing import Annotated
 import typer
 from shared.http.secrets import SecretWireRecord
 
-from lazycloud.cli.components.cards import notice_card, result_card
-from lazycloud.cli.components.formatting import timestamp
+from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.formatting import timestamp
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.output import (
-    console,
     emit,
     json_default,
     json_output_enabled,

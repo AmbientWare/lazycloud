@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,9 +15,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from shared.containers import ContainerStatus
-from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
-from shared.gpu import GpuInput
 from shared.http.compute import ContainerResponse, ContainerWithAppPageResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
@@ -46,8 +44,6 @@ from shared.transport_retry import (
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from lazycloud.abstractions.image import Image
-from lazycloud.abstractions.metadata import MachineInput
 from lazycloud.json_contracts import parse_json_object
 from lazycloud.source_sync import (
     SOURCE_IGNORE_FILE,
@@ -64,51 +60,6 @@ DEFAULT_SYNC_DEBOUNCE_SECONDS = 0.1
 DEFAULT_INITIAL_SYNC_TIMEOUT_SECONDS = 30.0
 DEFAULT_PREVIEW_RECORD_TTL_SECONDS = 24 * 60 * 60
 ACTIVE_PREVIEW_CONTAINER_STATUSES = {ContainerStatus.Pending, ContainerStatus.Running}
-
-
-class PreviewRuntime(Protocol):
-    image: Image
-    cpu: CpuRequest | None
-    memory: MemoryRequest | None
-    gpu: GpuInput
-    gpu_count: int
-    env: dict[str, str]
-    secrets: list[str]
-    region: str | None
-    machine: MachineInput
-
-
-@dataclass(frozen=True, slots=True)
-class ServeOptions:
-    image: Image | None = None
-    cpu: CpuRequest | None = None
-    memory: MemoryRequest | None = None
-    gpu: GpuInput = None
-    gpu_count: int | None = None
-    env: Mapping[str, str] = field(default_factory=dict[str, str], repr=False)
-    secrets: Sequence[str] = ()
-    keep_warm: int | None = None
-    region: str | None = None
-    machine: MachineInput = None
-    sync_dir: str | None = None
-
-    def apply(self, owner: PreviewRuntime) -> None:
-        if self.image is not None:
-            owner.image = self.image
-        if self.cpu is not None:
-            owner.cpu = self.cpu
-        if self.memory is not None:
-            owner.memory = self.memory
-        if self.gpu is not None:
-            owner.gpu = self.gpu
-        if self.gpu_count is not None:
-            owner.gpu_count = self.gpu_count
-        owner.env.update(self.env)
-        owner.secrets.extend(secret for secret in self.secrets if secret not in owner.secrets)
-        if self.region is not None:
-            owner.region = self.region
-        if self.machine is not None:
-            owner.machine = self.machine
 
 
 class ServeUrlClient(Protocol):
@@ -884,7 +835,6 @@ __all__ = [
     "ContainerWorkspaceSyncer",
     "PreviewContainerClient",
     "ServeGatewayClient",
-    "ServeOptions",
     "ServePreviewRecord",
     "ServePreviewSession",
     "ServePreviewUrl",
