@@ -1,0 +1,59 @@
+---
+title: "Disks"
+description: "A named, sized filesystem a pod keeps across restarts, for state that needs a real local disk."
+---
+
+A disk fits state that expects a local filesystem: git repositories,
+`node_modules`, databases, package caches. It is ext4 on the machine running
+the pod, so file locks, hard links, and `fsync` behave as they do on any Linux
+host. A [volume](/concepts/volumes) fits files shared between workloads.
+
+## Declare a disk
+
+```python
+from lazycloud import App, Disk, Image
+
+app = App("dev")
+
+box = app.pod(
+    name="box",
+    image=Image(python_version="3.12"),
+    command=["sleep", "infinity"],
+    disks=[Disk("box-root", size="100Gi")],
+)
+```
+
+The first deploy creates the disk, and every later deploy that names it gets
+the same files. A disk name means the same disk anywhere in the workspace.
+`size` takes the units memory does, from `1Gi` to `2Ti`, and can't change once
+the disk exists.
+
+`mount_path` defaults to `/`, which makes the disk hold the container's whole
+writable filesystem: packages installed with `apt-get`, files in `/root`, and
+anything else written outside a volume. The image still comes from the
+deployment, so a redeploy with a new image keeps what was written on top of
+it. `Disk("cache", size="20Gi", mount_path="/cache")` mounts at one directory
+instead.
+
+## How it persists
+
+While the pod runs, LazyCloud copies what changed to your workspace's storage
+every five minutes, and once more when the container stops. The next start
+restores that copy on whichever machine it lands on. Starting on the machine
+that last held the disk skips the download. After a machine failure, writes
+since the last copy can be lost.
+
+One container writes a disk at a time. A pod with a disk runs one container,
+and a redeploy's new container waits for the old one to hand the disk over.
+
+## List and delete
+
+```bash
+uv run lazycloud disk list
+uv run lazycloud disk delete box-root
+```
+
+A disk bills per GiB-month for what it stores, which can be less than its
+size. Deleting a pod or its deployment never deletes the disk, and deleting
+the disk removes everything written to it. A disk in use can't be deleted. The
+[storage page](/platform/dashboard) lists disks as well.

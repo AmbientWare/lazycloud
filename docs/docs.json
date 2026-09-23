@@ -56,6 +56,7 @@
               "concepts/schedules",
               "concepts/endpoints",
               "concepts/pods",
+              "concepts/dev-machines",
               "concepts/sandboxes"
             ]
           },
@@ -71,6 +72,7 @@
             "group": "Storage and secrets",
             "pages": [
               "concepts/volumes",
+              "concepts/disks",
               "concepts/secrets",
               "concepts/queues-maps",
               "concepts/artifacts"

@@ -89,6 +89,20 @@ uv run lazycloud shell --container-id <id>
 Opens an interactive shell in the handler's image, or attaches a shell to a
 running container.
 
+## lazycloud ssh
+
+```bash
+uv run lazycloud ssh POD [--app <app>]
+uv run lazycloud ssh-config [POD...] [--app <app>]
+```
+
+`ssh` opens a session on a deployed pod that sets `ssh=True`. `ssh-config`
+writes host entries for VS Code, Cursor, and plain `ssh`, one per pod, or one
+for every such pod when none is named. `--app` is needed only when several
+apps deploy a pod with the same name. The generated config calls
+`lazycloud ssh-proxy`, which carries the connection, and `lazycloud ssh-cert`,
+which renews the login certificate. See [Dev machines](/concepts/dev-machines).
+
 ## lazycloud dev
 
 ```bash
