@@ -11,6 +11,7 @@ from enum import Enum
 
 from rich.style import Style
 from rich.text import Text
+from shared.http.deployment_plans import DeploymentPlanAction
 
 SUCCESS = Style(color="green")
 ERROR = Style(color="red")
@@ -78,6 +79,15 @@ def state_style(state: object) -> Style:
     return _STATE_STYLES.get(str(raw).strip().lower().replace("-", "_"), PLAIN)
 
 
+def deployment_action_style(action: DeploymentPlanAction) -> Style:
+    return {
+        DeploymentPlanAction.Add: SUCCESS,
+        DeploymentPlanAction.Remove: ERROR,
+        DeploymentPlanAction.Redeploy: WARNING,
+        DeploymentPlanAction.Retain: PLAIN,
+    }[action]
+
+
 def styled(message: str, style: Style = PLAIN) -> Text:
     """Build text carrying one semantic style without markup interpretation."""
     return Text(message, style=style)
@@ -96,6 +106,7 @@ __all__ = [
     "SUCCESS",
     "TABLE_HEADER",
     "WARNING",
+    "deployment_action_style",
     "state_style",
     "styled",
 ]
