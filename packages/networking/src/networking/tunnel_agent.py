@@ -107,7 +107,8 @@ class AgentTunnelClient:
         if self._commands is not None:
             self._commands.cancel()
             await asyncio.gather(self._commands, return_exceptions=True)
-        # Accepted streams keep this channel until their directional EOFs or certificate expiry.
+        # Accepted streams keep this channel until their directional EOFs; the gateway
+        # ends them if the enrollment is revoked.
         await asyncio.gather(*self._streams, return_exceptions=True)
         await self.close()
 
@@ -237,4 +238,6 @@ class AgentTunnelClient:
 
     async def _expire(self) -> None:
         await asyncio.sleep(max(0, (self.expires_at - utc_now()).total_seconds()))
-        await self.close()
+        # A retired session is closed by retire() once its streams end.
+        if self.accepting:
+            await self.close()
