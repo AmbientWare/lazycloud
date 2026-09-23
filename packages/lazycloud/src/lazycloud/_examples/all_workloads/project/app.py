@@ -10,6 +10,8 @@ use ``uv run lazycloud app pause all_workloads`` when finished. See
 ``README.md`` for the other helpers and cleanup of on-demand containers.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import tempfile

@@ -135,7 +135,7 @@ An endpoint starts as one process handling one request at a time. Three
 settings raise that:
 
 ```python
-from lazycloud import QueueDepthAutoscaler
+from lazycloud import Autoscaler
 
 
 @app.endpoint(
@@ -143,7 +143,7 @@ from lazycloud import QueueDepthAutoscaler
     cpu=2,
     workers=2,
     concurrency=8,
-    autoscaler=QueueDepthAutoscaler(max_containers=8, tasks_per_container=16),
+    autoscaler=Autoscaler(max_containers=8, tasks_per_container=16),
 )
 def count_words_scaled(text: str) -> WordCount:
     return WordCount(words=len(text.split()))

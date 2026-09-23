@@ -99,7 +99,7 @@ options, and their pages list the rest.
 | `keep_warm` | `int` | Idle seconds a container waits for the next call. `keep_warm_seconds` on ASGI and realtime. |
 | `concurrency` | `int` | Calls or requests one process serves at once. `concurrent_requests` on ASGI and realtime. |
 | `workers` | `int` | Server processes per container. Not on functions. |
-| `autoscaler` | `QueueDepthAutoscaler` | Container floor, ceiling, and load per container. See [Scaling](/concepts/scaling). |
+| `autoscaler` | `Autoscaler` | Container floor, ceiling, and load per container. See [Scaling](/concepts/scaling). |
 | `max_pending_tasks` | `int` | Calls in flight before new ones are refused. |
 | `env` | `dict[str, str]` | Plain environment variables. |
 | `secrets` | `list[str]` | [Secret](/concepts/secrets) names, injected as environment variables. |

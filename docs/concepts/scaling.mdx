@@ -50,10 +50,10 @@ takes a high `concurrency` in one worker.
 
 ## More containers
 
-`QueueDepthAutoscaler` sets how many containers a workload may run:
+`Autoscaler` sets how many containers a workload may run:
 
 ```python
-from lazycloud import QueueDepthAutoscaler
+from lazycloud import Autoscaler
 
 
 @app.function(
@@ -61,7 +61,7 @@ from lazycloud import QueueDepthAutoscaler
     memory="2Gi",
     concurrency=4,
     max_pending_tasks=1000,
-    autoscaler=QueueDepthAutoscaler(max_containers=20, tasks_per_container=4),
+    autoscaler=Autoscaler(max_containers=20, tasks_per_container=4),
 )
 def transform(path: str) -> int:
     ...
@@ -92,7 +92,7 @@ after a quiet hour doesn't wait:
     memory="16Gi",
     concurrency=8,
     keep_warm=600,
-    autoscaler=QueueDepthAutoscaler(min_containers=1, max_containers=4, tasks_per_container=8),
+    autoscaler=Autoscaler(min_containers=1, max_containers=4, tasks_per_container=8),
 )
 def generate(prompt: str) -> dict[str, str]:
     ...
@@ -121,7 +121,7 @@ free slot. After five seconds, the CLI and dashboard show
     timeout_seconds=600,
     retries=2,
     max_pending_tasks=5000,
-    autoscaler=QueueDepthAutoscaler(max_containers=50, tasks_per_container=1),
+    autoscaler=Autoscaler(max_containers=50, tasks_per_container=1),
 )
 def process_page(url: str) -> int:
     ...
@@ -149,7 +149,7 @@ def load_model() -> None:
     concurrency=8,
     keep_warm=900,
     on_start=load_model,
-    autoscaler=QueueDepthAutoscaler(min_containers=1, max_containers=6, tasks_per_container=8),
+    autoscaler=Autoscaler(min_containers=1, max_containers=6, tasks_per_container=8),
 )
 def embed(texts: list[str]) -> list[list[float]]:
     ...
@@ -167,7 +167,7 @@ service = app.asgi(
     memory="2Gi",
     workers=4,
     concurrent_requests=32,
-    autoscaler=QueueDepthAutoscaler(max_containers=10, tasks_per_container=128),
+    autoscaler=Autoscaler(max_containers=10, tasks_per_container=128),
 )(fastapi_app)
 ```
 

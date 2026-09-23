@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 
 from lazycloud import App, Image
 
@@ -18,7 +18,7 @@ app = App(APP_NAME)
     image=Image(python_version="3.12"),
     cpu=0.25,
     memory="128Mi",
-    autoscaler=QueueDepthAutoscaler(min_containers=FLOOR, max_containers=4),
+    autoscaler=Autoscaler(min_containers=FLOOR, max_containers=4),
 )
 def floored(value: int) -> dict[str, str | int]:
     """Answer from whichever of the held containers takes the call."""

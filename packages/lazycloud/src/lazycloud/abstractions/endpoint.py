@@ -20,7 +20,7 @@ from typing import (
 )
 
 from pydantic import JsonValue
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_HTTP_CPU,
@@ -140,7 +140,7 @@ class EndpointOptions(TypedDict, total=False):
     secrets: list[str] | None
     volumes: Iterable[VolumeMount | VolumeExport] | None
     on_start: LifecycleHookInput
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
+    autoscaler: Autoscaler | Mapping[str, Any] | None
     task_policy: TaskPolicy | Mapping[str, Any] | None
     checkpoint_enabled: bool
     inputs: SchemaInput
@@ -174,7 +174,7 @@ class ASGIOptions(TypedDict, total=False):
     secrets: list[str] | None
     volumes: Iterable[VolumeMount | VolumeExport] | None
     on_start: LifecycleHookInput
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
+    autoscaler: Autoscaler | Mapping[str, Any] | None
     task_policy: TaskPolicy | Mapping[str, Any] | None
     checkpoint_enabled: bool
     preemptible: bool
@@ -226,7 +226,7 @@ class Endpoint(Generic[P, R]):
     secrets: list[str] = field(default_factory=list)
     volumes: list[VolumeMount] = field(default_factory=list)
     on_start: LifecycleHookInput = None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None
     task_policy: TaskPolicy | Mapping[str, Any] | None = None
     checkpoint_enabled: bool = False
     inputs: SchemaInput = None
@@ -470,7 +470,7 @@ def _endpoint(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     inputs: SchemaInput = None,
@@ -513,7 +513,7 @@ def _endpoint(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     inputs: SchemaInput = None,
@@ -555,7 +555,7 @@ def _endpoint(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     inputs: SchemaInput = None,
@@ -637,7 +637,7 @@ class ASGI:
     secrets: list[str] = field(default_factory=list)
     volumes: list[VolumeMount] = field(default_factory=list)
     on_start: LifecycleHookInput = None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None
     task_policy: TaskPolicy | Mapping[str, Any] | None = None
     checkpoint_enabled: bool = False
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
@@ -841,7 +841,7 @@ def _asgi(
     secrets: list[str] | None = None,
     volumes: Iterable[VolumeMount | VolumeExport] | None = None,
     on_start: LifecycleHookInput = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     task_policy: TaskPolicy | Mapping[str, Any] | None = None,
     checkpoint_enabled: bool = False,
     preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE,

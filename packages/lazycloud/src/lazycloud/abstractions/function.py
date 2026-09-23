@@ -22,7 +22,7 @@ from typing import (
 
 import cloudpickle
 from pydantic import ValidationError
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
@@ -134,7 +134,7 @@ class FunctionOptions(TypedDict, total=False):
     cron: str | None
     keep_warm: int | None
     max_pending_tasks: int | None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
+    autoscaler: Autoscaler | Mapping[str, Any] | None
     retries: int
     retry_policy: RetryPolicyInput
     retry_delay_seconds: float
@@ -178,7 +178,7 @@ class Function(Generic[P, R]):
     cron: str | None = None
     keep_warm: int | None = None
     max_pending_tasks: int | None = None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None
     retries: int = DEFAULT_FUNCTION_RETRIES
     retry_policy: RetryPolicyInput = None
     retry_delay_seconds: float = 0.0
@@ -395,7 +395,7 @@ class Function(Generic[P, R]):
         sync_dir = sync_dir or "."
         self.env[HOT_RELOAD_ENV] = "true"
         self.keep_warm = 0
-        self.autoscaler = QueueDepthAutoscaler(min_containers=0, max_containers=1)
+        self.autoscaler = Autoscaler(min_containers=0, max_containers=1)
         self.terminal = self.terminal or Terminal()
         stub_id = self.prepare(workspace=workspace, source_root=sync_dir)
         config = self._config()
@@ -808,7 +808,7 @@ def _function(
     cron: str | None = None,
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -854,7 +854,7 @@ def _function(
     cron: str | None = None,
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -899,7 +899,7 @@ def _function(
     cron: str | None = None,
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,

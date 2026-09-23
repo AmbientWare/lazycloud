@@ -79,14 +79,14 @@ Without an autoscaler the calls run one at a time in one container. An
 autoscaler lets the function start more containers and run them in parallel:
 
 ```python
-from lazycloud import QueueDepthAutoscaler
+from lazycloud import Autoscaler
 
 
 @app.function(
     cpu=1,
     memory="512Mi",
     max_pending_tasks=1000,
-    autoscaler=QueueDepthAutoscaler(max_containers=20, tasks_per_container=1),
+    autoscaler=Autoscaler(max_containers=20, tasks_per_container=1),
 )
 def count_words(text: str) -> int:
     return len(text.split())

@@ -4,7 +4,7 @@ import os
 import secrets
 import time
 
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 
 from lazycloud import App, Image
 
@@ -23,7 +23,7 @@ app = App(APP_NAME)
     cpu=0.25,
     memory="128Mi",
     concurrency=CONCURRENCY,
-    autoscaler=QueueDepthAutoscaler(
+    autoscaler=Autoscaler(
         max_containers=MAX_CONTAINERS,
         tasks_per_container=CONCURRENCY,
     ),

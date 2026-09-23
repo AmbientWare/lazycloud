@@ -21,9 +21,9 @@ from shared.http.functions import (
     FunctionInvokeResponse,
 )
 from shared.http.gateway import (
-    Autoscaler,
     DeployStubRequest,
     DeployStubResponse,
+    GatewayAutoscaler,
     GatewayTaskPolicy,
     GatewayUrlKind,
     GetOrCreateStubRequest,
@@ -960,11 +960,11 @@ def _metadata_str_list(metadata: Mapping[str, JsonValue], key: str) -> list[str]
 def _deployment_autoscaler(
     spec: DeploymentSpec,
     metadata: Mapping[str, JsonValue],
-) -> Autoscaler:
+) -> GatewayAutoscaler:
     value = _metadata_mapping(metadata, "autoscaler")
     if not value:
-        return Autoscaler(tasks_per_container=_default_tasks_per_container(spec, metadata))
-    return Autoscaler.model_validate(value)
+        return GatewayAutoscaler(tasks_per_container=_default_tasks_per_container(spec, metadata))
+    return GatewayAutoscaler.model_validate(value)
 
 
 def _default_tasks_per_container(

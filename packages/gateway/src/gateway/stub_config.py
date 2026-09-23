@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 from control.service import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
     DeploymentSpec,
@@ -276,7 +276,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             "health_check_path": runtime_config.health_check_path,
             "health_check_port": runtime_config.health_check_port,
             "schema": config.schema_config.model_dump(mode="json"),
-            "autoscaler": QueueDepthAutoscaler(
+            "autoscaler": Autoscaler(
                 min_containers=config.autoscaler.min_containers,
                 max_containers=config.autoscaler.max_containers,
                 tasks_per_container=config.autoscaler.tasks_per_container,

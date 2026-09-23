@@ -33,7 +33,7 @@ Work that needs results and retries fits a
 drained by a few long-lived workers, with a map to share progress:
 
 ```python
-from lazycloud import App, Map, Queue, QueueDepthAutoscaler
+from lazycloud import App, Autoscaler, Map, Queue
 
 app = App("crawler")
 frontier = Queue("crawl-frontier")
@@ -45,7 +45,7 @@ seen = Map("crawl-seen")
     memory="512Mi",
     timeout_seconds=3600,
     retries=0,
-    autoscaler=QueueDepthAutoscaler(max_containers=8),
+    autoscaler=Autoscaler(max_containers=8),
 )
 def crawl_worker() -> int:
     handled = 0
