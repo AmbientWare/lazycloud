@@ -278,11 +278,12 @@ func (e *insufficientSpaceError) Error() string {
 	return fmt.Sprintf("insufficient space on %s: need %d, have %d free, reserve %d", e.root, e.need, e.have, e.reserve)
 }
 
-// storedBytes is what restoring a layer writes: its chunks, not its holes.
+// storedBytes is the space restoring a layer takes: its chunks, not its
+// holes, each rounded up to the filesystem blocks it fills.
 func storedBytes(manifest layerManifest) int64 {
 	var total int64
 	for _, chunk := range manifest.Chunks {
-		total += chunk.Length
+		total += (chunk.Length + filesystemBlockBytes - 1) / filesystemBlockBytes * filesystemBlockBytes
 	}
 	return total
 }

@@ -378,6 +378,7 @@ def _container_requests_with_capacity(
         dispatch_wake=base.dispatch_wake,
         lifecycle_events=base.lifecycle_events,
         workspace_owners=base.workspace_owners,
+        disk_volume_attachments=base.disk_volume_attachments,
         capacity_reservations=capacity_reservations,
         backfill_preemption=base.backfill_preemption,
         usage=base.usage,

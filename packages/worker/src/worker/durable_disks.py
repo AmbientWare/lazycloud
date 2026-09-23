@@ -86,14 +86,14 @@ space for the layer's new clusters, so layers are never left to pile up there.
 # The scheduler reclaims a container that has not started within its start
 # deadline, and the restore that follows the wait counts against it too. The
 # wait has to outlast the previous holder's final publish and the control plane
-# creating and attaching the disk's volume.
-DISK_ACQUIRE_DEADLINE_SECONDS = 180.0
+# creating and attaching the disk's volume, which it reports as pending.
+DISK_ACQUIRE_DEADLINE_SECONDS = 300.0
 DISK_ACQUIRE_INITIAL_BACKOFF_SECONDS = 2.0
 DISK_ACQUIRE_MAX_BACKOFF_SECONDS = 30.0
 DISK_VOLUME_CHECK_SECONDS = 5.0
 """How often a running disk's volume is checked for space between publishes."""
 
-_CONFLICT_STATUS = 409
+_ACQUIRE_RETRY_STATUSES = frozenset({409, 503})
 _INSUFFICIENT_SPACE_EXIT_CODE = 3
 _ATTACH_TIMEOUT_SECONDS = 3600.0
 _PUBLISH_TIMEOUT_SECONDS = 3600.0
@@ -504,6 +504,7 @@ class WorkerDurableDiskService:
         with attached.lock:
             for disk in request.disks:
                 lease, chain, volume = self._acquire(attached, disk)
+                disk = disk.model_copy(update={"size_bytes": lease.size_bytes})
                 root = self._mount_volume(lease, volume)
                 mountpoint = self.mount_root / request.container_id / disk.disk_id
                 mountpoint.mkdir(parents=True, exist_ok=True)
@@ -634,24 +635,34 @@ class WorkerDurableDiskService:
                 )
                 break
             except (HttpApiError, WorkerRepositoryClientError) as exc:
-                # A held disk answers 409. A request that timed out may still be
-                # creating or attaching the disk's volume, and asking again
-                # resumes that work rather than starting it twice.
+                # 409 is a disk another container still holds, or a volume the
+                # control plane is still creating or attaching; 503 is the
+                # control plane itself unavailable. A request that failed in
+                # transit may have started that work, and asking again with the
+                # same container resumes it and returns the same lease.
                 remaining = deadline - self.monotonic()
-                held = isinstance(exc, HttpApiError) and exc.status_code == _CONFLICT_STATUS
-                if not (held or isinstance(exc, WorkerRepositoryClientError)) or remaining <= 0:
+                if isinstance(exc, HttpApiError):
+                    if exc.status_code not in _ACQUIRE_RETRY_STATUSES:
+                        raise
+                    cause = exc.code or f"HTTP {exc.status_code}"
+                else:
+                    cause = "no answer"
+                if remaining <= 0:
                     raise
                 wait = min(backoff, remaining)
                 LOGGER.warning(
-                    "acquiring disk %s for container %s did not finish (%s); retrying in %.0fs",
+                    "acquiring disk %s for container %s did not finish (%s: %s); retrying in %.0fs",
                     disk.name,
                     record.container_id,
+                    cause,
                     exc,
                     wait,
                 )
                 self.sleep(wait)
                 backoff = min(backoff * 2, DISK_ACQUIRE_MAX_BACKOFF_SECONDS)
-        if result.size_bytes != disk.size_bytes:
+        # A disk grown since the request was made arrives larger, and is
+        # attached at the size it has now; it never shrinks.
+        if result.size_bytes < disk.size_bytes:
             raise DiskEngineError(
                 f"disk {disk.name} is {result.size_bytes} bytes but the request names "
                 f"{disk.size_bytes}"
@@ -781,11 +792,22 @@ class WorkerDurableDiskService:
             attached.drain.set()
 
     def _stop_for_space(self, attached: _Attached, reason: str) -> None:
+        """Stop the container, marking it stopping only once the stop went through.
+
+        A stop that fails is logged, and the next check, seconds later, asks again.
+        """
         LOGGER.error("%s; stopping container %s", reason, attached.leases.container_id)
         if self.stop_container is None:
             raise DiskEngineError(reason)
+        try:
+            self.stop_container(attached.leases.container_id)
+        except Exception:
+            LOGGER.exception(
+                "stopping container %s for disk space failed; the next check retries",
+                attached.leases.container_id,
+            )
+            return
         attached.stopping = True
-        self.stop_container(attached.leases.container_id)
 
     def _attach_with_space(
         self,
@@ -796,10 +818,12 @@ class WorkerDurableDiskService:
         chain: list[DiskChainFileEntry],
     ) -> DiskEngineAttachResult:
         on_volume = root != self.layers_root
-        # On a volume, the headroom above the declared size is what the head
-        # takes writes into after a restore.
+        # On a volume, a restore must leave room for what the head takes before
+        # the watcher drains it: half the headroom. The other half covers the
+        # volume's filesystem and the layers' own metadata, so a disk restored
+        # full still fits the volume sized for it.
         reserve = (
-            disk_volume_size_bytes(disk.size_bytes) - disk.size_bytes
+            (disk_volume_size_bytes(disk.size_bytes) - disk.size_bytes) // 2
             if on_volume
             else DISK_HOST_RESERVE_BYTES
         )

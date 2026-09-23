@@ -1,10 +1,12 @@
-"""How many more EBS volumes this instance can attach, for the disks it will hold.
+"""How many EBS volumes this instance has for disks, before any disk is attached.
 
-Each durable disk on an EC2 worker gets an EBS volume of its own, so the number
-of disks a machine can hold is its instance type's EBS attachment limit, which
-the instance catalog records, less what already uses it: the root volume, any
-other volume the instance launched with, and on a shared limit each network
-interface beyond the primary.
+Each durable disk on an EC2 worker gets an EBS volume of its own. The machine
+reports its instance type's EBS attachment limit, which the instance catalog
+records, less what the instance launched with: the root volume, any other
+volume in its launch mapping, and on a shared limit each network interface
+beyond the primary. Instance metadata describes the launch, not what is
+attached now, so this never counts disk volumes; the scheduler subtracts those
+per machine from the disks' volume records.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ class AwsVolumeAttachmentError(RuntimeError):
 def disk_volume_slots(
     instance: AwsInstanceCatalogEntry, *, launched_volumes: int, network_interfaces: int
 ) -> int:
-    """Volumes left for disks once the instance's own attachments are counted."""
+    """Volumes left for disks once the instance's launch-time attachments are counted."""
     extra_interfaces = 0 if instance.ebs_volume_limit_dedicated else network_interfaces - 1
     return max(instance.ebs_volume_limit - launched_volumes - max(extra_interfaces, 0), 0)
 

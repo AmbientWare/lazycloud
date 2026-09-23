@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import stat
 import time
 from collections.abc import Callable
@@ -184,12 +185,25 @@ class DiskVolumeMounts:
         return root
 
     def unmount(self, disk_id: str) -> None:
-        """Unmount the disk's volume so the control plane can detach it."""
+        """Unmount the disk's volume so the control plane can detach it.
+
+        Raises while the volume stays mounted, since the lease must not be
+        released under it. The directory left behind is only this worker's: the
+        mount point, and whatever the engine created in it while nothing was
+        mounted there, such as its lock directory. Failing to remove it is
+        logged and does not hold up the release.
+        """
         root = self.root(disk_id)
         if root in mounted_paths():
             self._run(_MOUNT_TIMEOUT_SECONDS, "umount", str(root))
-        if root.exists():
-            root.rmdir()
+        if root in mounted_paths():
+            raise DiskVolumeError(f"volume of disk {disk_id} is still mounted at {root}")
+        try:
+            shutil.rmtree(root)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            LOGGER.warning("could not remove the unmounted root %s", root, exc_info=True)
 
     def unmount_all_except(self, disk_ids: set[str]) -> None:
         """Unmount volumes no held disk needs, left by a process that died releasing them."""

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
 from database.repositories.identity import WorkspaceRepository
+from database.tables.compute import ComputeProviderInstanceTable
 from database.tables.disks import DiskAttachmentTable, DiskGenerationTable, DiskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.orchestration import ContainerTable
@@ -198,6 +200,40 @@ class DiskRepository:
             )
             for name, last_worker_id, volume_zone, volume_state in rows
         }
+
+    def unheld_volume_attachments(self, machine_ids: Sequence[str]) -> dict[str, int]:
+        """Disk volumes on each machine that no running container holds.
+
+        Volumes still attaching, attached, or on their way off once their
+        container stopped all take one of the machine's attachments. A live
+        holder's volume is left out: its container's placement already counts it.
+        """
+        if not machine_ids:
+            return {}
+        live = [status.value for status in LIVE_CONTAINER_STATUSES]
+        held = (
+            select(ContainerTable.id)
+            .where(
+                ContainerTable.id == DiskTable.holder_container_id,
+                ContainerTable.status.in_(live),
+            )
+            .exists()
+        )
+        rows = self.session.execute(
+            select(ComputeProviderInstanceTable.machine_id, func.count())
+            .select_from(DiskTable)
+            .join(
+                ComputeProviderInstanceTable,
+                ComputeProviderInstanceTable.instance_id == DiskTable.volume_instance_id,
+            )
+            .where(
+                ComputeProviderInstanceTable.machine_id.in_(list(machine_ids)),
+                DiskTable.volume_state.in_(_VOLUME_ATTACHED_STATES),
+                ~held,
+            )
+            .group_by(ComputeProviderInstanceTable.machine_id)
+        ).tuples()
+        return {str(machine_id): count for machine_id, count in rows}
 
     def list(self, *, workspace_id: str, after: str, limit: int) -> list[DiskRecord]:
         statement = _with_holder_liveness().where(
@@ -543,6 +579,10 @@ class DiskRepository:
             .where(DiskTable.id == disk_id)
             .values(metered_bytes=metered_bytes, metered_at=metered_at)
         )
+
+
+_VOLUME_ATTACHED_STATES = ("attaching", "attached", "releasing", "detaching")
+"""Volume states in which the volume holds one of its machine's attachments."""
 
 
 def _with_holder_liveness() -> Select[tuple[DiskTable, bool]]:

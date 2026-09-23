@@ -19,6 +19,7 @@ from shared.capacity import CapacityFailureCode
 from shared.container_requests import capacity_memory_mib
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
+from shared.disks import DiskStorage
 from shared.errors import ConflictError, NotFoundError
 from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
 from shared.placement import PlacementRateClass, placement_rate_class
@@ -302,6 +303,12 @@ class SchedulerWorkspaceOwners(Protocol):
     def owner_user_id(self, workspace_id: str) -> str: ...
 
 
+class SchedulerDiskVolumeAttachments(Protocol):
+    """Disk volumes on each machine that no running container's placement counts."""
+
+    def unheld_attachments(self, machine_ids: Sequence[str]) -> dict[str, int]: ...
+
+
 class SchedulerCapacityReservations(Protocol):
     def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 
@@ -370,6 +377,7 @@ class SchedulerContainerRequestService:
     dispatch_wake: WakeSignalPublisher
     lifecycle_events: SchedulerContainerLifecycleEvents
     workspace_owners: SchedulerWorkspaceOwners
+    disk_volume_attachments: SchedulerDiskVolumeAttachments
     capacity_reservations: SchedulerCapacityReservations | None = None
     backfill_preemption: SchedulerGpuBackfillPreemptionService | None = None
     usage: SchedulerUsageRecorder | None = None
@@ -597,6 +605,18 @@ class SchedulerContainerRequestService:
             if self.capacity_reservations is not None
             else {}
         )
+        worker_capacities = [
+            _worker_capacity(
+                worker,
+                now=current_time,
+                reserved_capacity=reserved_by_worker.get(worker.worker_id),
+            )
+            for worker in schedulable_workers
+        ]
+        if any(request.disk_count for request in requests):
+            worker_capacities = _share_machine_disk_volumes(
+                worker_capacities, self.disk_volume_attachments
+            )
         outcomes = {
             outcome.request_id: outcome
             for outcome in plan_scheduling_batch(
@@ -608,14 +628,7 @@ class SchedulerContainerRequestService:
                     )
                     for request in requests
                 ],
-                [
-                    _worker_capacity(
-                        worker,
-                        now=current_time,
-                        reserved_capacity=reserved_by_worker.get(worker.worker_id),
-                    )
-                    for worker in schedulable_workers
-                ],
+                worker_capacities,
                 queued_gpu_requests=[
                     _scheduling_request(
                         queued,
@@ -1612,6 +1625,7 @@ def _worker_capacity(
         region=worker.region,
         availability_zone=worker.availability_zone,
         worker_id=worker.worker_id,
+        machine_id=worker.machine_id,
         placement=worker.placement,
         owner_user_id=worker.owner_user_id,
         private_worker=worker.private_worker,
@@ -1633,6 +1647,35 @@ def _worker_capacity(
         disk_storage=worker.disk_storage,
         pending=worker.request_intake_status(at=now) is SchedulerWorkerStatus.Pending,
     )
+
+
+def _share_machine_disk_volumes(
+    workers: list[WorkerCapacity], attachments: SchedulerDiskVolumeAttachments
+) -> list[WorkerCapacity]:
+    """Limit each volume-storage worker to the attachments its machine has left.
+
+    A machine's attachment limit is the machine's, however many workers run on
+    it, and volumes stay attached for a while after their container stops, so
+    each worker's own reservations are not the whole of what is used.
+    """
+    by_machine: dict[str, list[WorkerCapacity]] = {}
+    for worker in workers:
+        if worker.disk_storage is DiskStorage.Volume and worker.machine_id:
+            by_machine.setdefault(worker.machine_id, []).append(worker)
+    if not by_machine:
+        return workers
+    unheld = attachments.unheld_attachments(sorted(by_machine))
+    limited: dict[str, WorkerCapacity] = {}
+    for machine_id, siblings in by_machine.items():
+        used = unheld.get(machine_id, 0) + sum(
+            worker.total_disk_volumes - worker.free_disk_volumes for worker in siblings
+        )
+        free = max(max(worker.total_disk_volumes for worker in siblings) - used, 0)
+        for worker in siblings:
+            limited[worker.worker_id] = worker.model_copy(
+                update={"free_disk_volumes": min(worker.free_disk_volumes, free)}
+            )
+    return [limited.get(worker.worker_id, worker) for worker in workers]
 
 
 def _schedulable_workers(

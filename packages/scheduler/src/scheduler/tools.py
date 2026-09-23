@@ -83,6 +83,9 @@ class WorkerCapacity(ContractModel):
     region: ProductRegion | None = None
     availability_zone: str = ""
     worker_id: str
+    machine_id: str = ""
+    """Workers on one machine share its disk volume attachments."""
+
     placement: Placement
     """Where this worker is; a request lands here only when its placement is equal."""
 
@@ -367,6 +370,19 @@ def _post_placement_headroom(
     return tuple(sorted(headroom))
 
 
+def _share_volume_claim(
+    remaining: dict[str, WorkerCapacity], worker: WorkerCapacity, disk_volumes: int
+) -> None:
+    """Take the volumes a placement claimed from the other workers on its machine too."""
+    if not disk_volumes or not worker.machine_id:
+        return
+    for worker_id, sibling in remaining.items():
+        if worker_id != worker.worker_id and sibling.machine_id == worker.machine_id:
+            remaining[worker_id] = sibling.model_copy(
+                update={"free_disk_volumes": max(sibling.free_disk_volumes - disk_volumes, 0)}
+            )
+
+
 def plan_scheduling_batch(
     requests: Iterable[SchedulingRequest],
     workers: Iterable[WorkerCapacity],
@@ -391,6 +407,7 @@ def plan_scheduling_batch(
         if worker is not None:
             remaining[worker.worker_id] = worker.reserve(request)
             disk_bytes, disk_volumes = worker.disk_claim(request)
+            _share_volume_claim(remaining, worker, disk_volumes)
             plan.dispatches.append(
                 PlannedDispatch(
                     worker_id=worker.worker_id,
@@ -428,6 +445,7 @@ def plan_scheduling_batch(
         if pending_worker is not None:
             remaining[pending_worker.worker_id] = pending_worker.reserve(request)
             disk_bytes, disk_volumes = pending_worker.disk_claim(request)
+            _share_volume_claim(remaining, pending_worker, disk_volumes)
             plan.reservations.append(
                 WorkerCapacityReservation(
                     worker_id=pending_worker.worker_id,

@@ -166,6 +166,7 @@ from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
 )
+from scheduler.disk_volume_attachments import DatabaseDiskVolumeAttachments
 from scheduler.preemption import (
     CapacityInterruption,
     SchedulerCapacityInterruption,
@@ -848,6 +849,7 @@ class ApiServices(ApiServiceCore):
             dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
+            disk_volume_attachments=DatabaseDiskVolumeAttachments(context),
         )
         payment_admission = DatabaseBillingAdmission()
         container_shutdowns = ContainerShutdownService(

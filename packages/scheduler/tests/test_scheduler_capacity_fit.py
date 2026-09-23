@@ -289,3 +289,35 @@ def test_disks_take_volume_attachments_on_provider_workers_and_bytes_on_joined_o
     assert joined.reserve(two_disks).fit_rejection(second_pair) == (
         f"free disk {500 * gib} bytes < {1000 * gib} bytes"
     )
+
+
+def test_workers_on_one_machine_share_its_volume_attachments() -> None:
+    """Two worker slots on one machine each see the machine's free attachments, and a
+    disk placed on either takes one from both."""
+    workers = [
+        WorkerCapacity(
+            worker_id=worker_id,
+            machine_id="machine-1",
+            placement=Placement.platform(),
+            total_cpu=8,
+            free_cpu=8,
+            total_memory_mib=16384,
+            free_memory_mib=16384,
+            total_gpu=0,
+            disk_storage=DiskStorage.Volume,
+            total_disk_volumes=1,
+            free_disk_volumes=1,
+        )
+        for worker_id in ("slot-a", "slot-b")
+    ]
+    requests = [
+        SchedulingRequest(placement=Placement.platform(), id=f"pod-{index}", cpu=1, disk_count=1)
+        for index in (1, 2)
+    ]
+
+    outcomes = plan_scheduling_batch(requests, workers, queued_gpu_requests=[]).outcomes
+
+    assert [outcome.decision for outcome in outcomes] == [
+        SchedulingDecision.Dispatch,
+        SchedulingDecision.ProvisionWorker,
+    ]
