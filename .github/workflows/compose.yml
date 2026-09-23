@@ -36,10 +36,10 @@ permissions:
 jobs:
   validate:
     name: Render Compose
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Initialize local environment
         run: bash deploy/setup-local-env.sh

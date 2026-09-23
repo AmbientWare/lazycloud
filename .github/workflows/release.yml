@@ -39,7 +39,7 @@ permissions:
 jobs:
   connected-aws-assets:
     name: Publish connected AWS assets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: release
     outputs:
       manifest_url: ${{ steps.published.outputs.manifest_url }}
@@ -50,12 +50,12 @@ jobs:
       AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION || 'us-east-1' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.commit }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.11.21"
 
