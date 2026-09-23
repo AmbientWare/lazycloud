@@ -3,9 +3,9 @@ title: "Pods"
 description: "Run a long-lived container command under your app."
 ---
 
-A pod runs a container command, such as a web server or a model server. Use
-one when you already have a command or image to run. For Python you want to call
-as a function or serve over HTTP, an [endpoint](/concepts/endpoints) needs less
+A pod runs a container command, such as a web server or a model server. It fits
+when you already have a command or image to run. For Python you want to call as
+a function or serve over HTTP, an [endpoint](/concepts/endpoints) needs less
 setup.
 
 ## Define a web server
@@ -45,13 +45,13 @@ uv run lazycloud deploy tools:web
 ```
 
 The Python definition holds the pod's image, command, resources, and mounts.
-To change any of them, edit the definition and deploy again.
+Changing any of them means editing the definition and deploying again.
 
 A deployed pod runs one container while it has connections and stops it after
 `keep_warm` seconds without any. The next request then waits while a new
 container starts. A model server that must answer without that delay needs
 `keep_warm=-1`, which holds one container up until you stop the deployment.
-Pods do not autoscale on load. To run more than one container, set the count
+Pods do not autoscale on load. More than one container means setting the count
 by hand:
 
 ```bash
@@ -61,8 +61,9 @@ uv run lazycloud deployment stop web
 ```
 
 `scale` pins the deployment to that many containers until you scale again.
-`--containers 0` stops them all unless the pod is always-on. From Python, use
-`web.scale(containers)`, `web.pause()`, `web.resume()`, and `web.delete()`.
+`--containers 0` stops them all unless the pod is always-on. From Python,
+`web.scale(containers)`, `web.pause()`, `web.resume()`, and `web.delete()` do
+the same.
 
 ## Or create an instance on demand
 
@@ -114,14 +115,13 @@ HTTP probe LazyCloud checks before taking the snapshot.
 `docker_enabled=True` gives the pod its own Docker daemon. `machine` names a
 joined machine the pod must run on.
 
-`web.configure(...)` returns the pod with changed settings, and `web.shell()`
-opens a shell in a pod container.
+`web.shell()` opens a shell in a pod container.
 
 ## TCP connections
 
-Set `tcp=True`, declare the server's port, and use `pod.deploy()`. TCP pods are
-public, with `authorized=False`, so your server must authenticate its own
-clients.
+A TCP pod sets `tcp=True`, declares the server's port, and deploys with
+`pod.deploy()`. TCP pods are public, with `authorized=False`, so your server
+must authenticate its own clients.
 
 The deployment returns a `tls://hostname:port` address. Connect with TLS and send
 that hostname as SNI.
@@ -153,13 +153,13 @@ with socket.create_connection((address.hostname, address.port)) as connection:
         print(stream.recv(1024))
 ```
 
-This public example serves the container's directory over TLS. Stop it when
-finished with `uv run lazycloud deployment stop tcp-web`.
+This public example serves the container's directory over TLS until
+`uv run lazycloud deployment stop tcp-web` stops it.
 
 ## Inspect running containers
 
 `uv run lazycloud container list`, `attach`, `checkpoint`, and `stop` act on
 individual pod containers. See
 [container commands](/cli/deployments-and-containers#lazycloud-container). An
-active deployment replaces a stopped container, so stop the deployment when you
-want the service to stay down.
+active deployment replaces a stopped container, so a service stays down only
+once its deployment stops.

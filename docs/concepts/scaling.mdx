@@ -18,12 +18,12 @@ its own process unless you set `in_process=True`, which runs them as threads
 in one interpreter:
 
 ```python
-from lazycloud import App
+from lazycloud import App, GpuType
 
 app = App("inference")
 
 
-@app.function(gpu="l4", memory="8Gi", concurrency=4, in_process=True)
+@app.function(gpu=GpuType.L4, memory="8Gi", concurrency=4, in_process=True)
 def classify(image_bytes: bytes) -> str:
     ...
 ```
@@ -51,11 +51,11 @@ def lookup(key: str) -> dict[str, str]:
 ```
 
 Workers are separate processes, so they do not share memory. `on_start` runs in
-each worker, so each one loads its own copy of the model. For a GPU model, keep
-`workers=1` and raise `concurrency`. For a CPU-bound handler, set `workers` to
-the number of CPUs and `concurrency` to one or two, since more requests per
-process only queue behind the GIL. Async handlers and I/O-bound code can take a
-high `concurrency` in one worker.
+each worker, so each one loads its own copy of the model. A GPU model suits
+`workers=1` with a higher `concurrency`. A CPU-bound handler suits `workers`
+equal to the CPU count and a `concurrency` of one or two, since more requests
+per process only queue behind the GIL. Async handlers and I/O-bound code can
+take a high `concurrency` in one worker.
 
 ## More containers
 
@@ -85,15 +85,15 @@ def transform(path: str) -> int:
 
 `max_containers` is the ceiling. `tasks_per_container` is how many queued
 calls justify one container. The autoscaler starts
-`ceil(queued / tasks_per_container)` containers, up to the ceiling. Set it to
-the container's real concurrency, `concurrency` for a function or
+`ceil(queued / tasks_per_container)` containers, up to the ceiling. It fits best
+at the container's real concurrency, `concurrency` for a function or
 `workers * concurrency` for an endpoint. A lower value starts containers that
 sit half empty. A higher value queues calls that a new container could have
 taken.
 
 When you omit `autoscaler`, the workload gets `max_containers=1` and a
 `tasks_per_container` equal to its per-container concurrency. When you supply
-one, `tasks_per_container` defaults to `1`, so set it.
+one, `tasks_per_container` defaults to `1` rather than that concurrency.
 
 Functions scale on queued calls and endpoints scale on requests in flight,
 including requests waiting for a container. With `max_containers=20` and
@@ -110,16 +110,16 @@ A container that has finished its work stays up for the idle window, `keep_warm`
 seconds, so the next call skips the start. A start pulls the image, mounts
 volumes, and runs `on_start`, which can take a minute for a model server. The
 function default of 10 seconds assumes the next call may never come. The
-endpoint default of 180 assumes it will. Raise the window when starts are
-expensive and calls are spaced out. Set `keep_warm=0` to stop each container as
-soon as it is idle. You pay for warm containers while they run.
+endpoint default of 180 assumes it will. A longer window suits expensive starts
+and spaced-out calls. `keep_warm=0` stops each container as soon as it is idle.
+You pay for warm containers while they run.
 
 `min_containers` on the autoscaler keeps that many containers running with no
 work at all, so the first call after a quiet hour does not wait for a start:
 
 ```python
 @app.endpoint(
-    gpu="l4",
+    gpu=GpuType.L4,
     memory="16Gi",
     concurrency=8,
     keep_warm=600,
@@ -140,8 +140,8 @@ stops after `keep_warm` seconds with no requests, but never below
 Past the cap a function call fails immediately with a capacity error naming the
 limit, and an endpoint returns `429`. The default is 100. `.map()` submits
 every input before the first one finishes, so a batch of 500 needs
-`max_pending_tasks=500` or more on the decorator. Raise the cap for bursts you
-expect to drain, or leave it and treat the error as backpressure in the caller.
+`max_pending_tasks=500` or more on the decorator. A higher cap suits bursts you
+expect to drain. Otherwise the error works as backpressure in the caller.
 
 A queued function call stays pending until a container claims it, and
 `.remote()` gives up waiting after the function's `timeout_seconds`. An
@@ -155,9 +155,9 @@ See [pending tasks](/concepts/tasks-and-logs#why-a-task-is-pending).
 
 ### Batch over many inputs
 
-Size the container for one input, then set the autoscaler for the batch.
-Failed inputs return `None` from `.map()`. Use `spawn_map()` when every input
-must succeed before you use the results. See
+The container is sized for one input and the autoscaler for the batch. Failed
+inputs return `None` from `.map()`, and `spawn_map()` suits a batch where every
+input must succeed before you use the results. See
 [Process a batch](/concepts/functions#process-a-batch).
 
 ```python
@@ -194,7 +194,7 @@ def load_model() -> None:
 
 
 @app.endpoint(
-    gpu="a10g",
+    gpu=GpuType.A10G,
     memory="16Gi",
     workers=1,
     concurrency=8,
@@ -238,5 +238,5 @@ def train(config: dict[str, float]) -> str:
 
 The timeout is six hours. `retries=0` prevents a restart that would repeat the
 work already done, and `preemptible=False` keeps the machine from being
-reclaimed mid-run. Write checkpoints to a [volume](/concepts/volumes) so a new
-run can resume after a failure.
+reclaimed mid-run. Checkpoints written to a [volume](/concepts/volumes) let a
+new run resume after a failure.

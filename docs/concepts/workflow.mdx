@@ -4,19 +4,17 @@ description: "Develop locally, test in the cloud, preview, and deploy, and see w
 ---
 
 The same decorated function runs locally, in the cloud, or as a deployment,
-with no change to the code. Work through them in this order:
+with no change to the code. Each stage suits a different point in the work:
 
-1. Develop locally with `.local()`, in seconds and at no cost.
-2. Test once in the cloud with `lazycloud run` to check the image, GPU, and
-   secrets.
-3. Deploy with `lazycloud deploy` when something else needs to call it.
+1. `.local()` runs in your own process, in seconds and at no cost.
+2. `lazycloud run` makes one call on cloud compute, which checks the image,
+   GPU, and secrets.
+3. `lazycloud deploy` keeps the workload up for anything else that calls it.
 
-`lazycloud serve` sits between steps 2 and 3 when you want to edit remote code
-and see each change without redeploying. Every step is one command with
+`lazycloud serve` sits between 2 and 3, for editing remote code and seeing each
+change without redeploying. Every step is one command with
 [machine-readable output](/cli/overview), so an agent or a script can run the
 loop.
-
-The examples use `text_tools.py` from [Apps and workloads](/concepts/apps).
 
 ## Develop locally
 
@@ -28,8 +26,8 @@ count_words("one two three")
 ```
 
 Both run in your Python process, with no upload and no task. The decorator's
-image, volumes, secrets, GPU, retries, and lifecycle hooks do not apply, so use
-this for unit tests and for logic with no remote dependencies.
+image, volumes, secrets, GPU, retries, and lifecycle hooks do not apply, which
+suits unit tests and logic with no remote dependencies.
 
 ## Test in the cloud
 
@@ -47,8 +45,8 @@ result. It deploys nothing. The container stays up for the function's
 `keep_warm` window and then stops. LazyCloud records the run as a
 [task](/concepts/tasks-and-logs).
 
-Use it for a job you run by hand, for GPU work you don't want to keep warm, and
-to check the image and secrets before deploying. Each run uploads your working
+It suits a job you run by hand, GPU work you don't want to keep warm, and a
+check of the image and secrets before deploying. Each run uploads your working
 tree as it stands at the moment of the call, so two runs a minute apart can run
 different code.
 
@@ -83,8 +81,8 @@ schedules start firing, and functions become callable from other deployed code
 and from [exported client packages](/concepts/apps#call-deployed-workloads-from-other-projects).
 Each deploy records a new version.
 
-Deploy when something other than you calls the code: another service, a
-schedule, a teammate, or a function running inside LazyCloud.
+A deployment fits when something other than you calls the code: another
+service, a schedule, a teammate, or a function running inside LazyCloud.
 
 ## Where a call goes
 
@@ -102,16 +100,17 @@ rather than fall through to the deployment. `deployment_name` and
 
 ## What gets uploaded
 
-`run`, `serve`, and `deploy` upload your project source. Run them from the
-project root. They reject a handler file outside the current directory.
-`--source-root` on `deploy` and `--sync-dir` on `serve` choose another directory.
+`run`, `serve`, and `deploy` upload your project source from the current
+directory, which is normally the project root. They reject a handler file
+outside it. `--source-root` on `deploy` and `--sync-dir` on `serve` choose
+another directory.
 
 The first upload writes a `.lazycloudignore` with default exclusions into the
-uploaded directory. Edit and commit it. It uses gitignore syntax, so `build/`,
-`**/*.log`, and `!keep.log` mean what they do in `.gitignore`. Every upload
-excludes `.git`, `.venv`, `__pycache__`, `*.pyc`, `.env`, and `.lazycloud/`.
-Keep datasets and model weights in [volumes](/concepts/volumes) rather than the
-source tree.
+uploaded directory, for you to edit and commit. It uses gitignore syntax, so
+`build/`, `**/*.log`, and `!keep.log` mean what they do in `.gitignore`. Every
+upload excludes `.git`, `.venv`, `__pycache__`, `*.pyc`, `.env`, and
+`.lazycloud/`. Datasets and model weights belong in
+[volumes](/concepts/volumes) rather than the source tree.
 
 Your code is not part of the image. Editing it never rebuilds the image.
 Changing a dependency does. See [Images](/concepts/images).

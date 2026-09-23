@@ -29,17 +29,17 @@ def ffmpeg_version() -> str:
 
 Save this as `audio.py` and run `uv run lazycloud run audio:ffmpeg_version`.
 The result is the remote ffmpeg version, and your machine does not need ffmpeg.
-Use `.add_python_packages(["httpx"])` to install a Python dependency.
+`.add_python_packages(["httpx"])` installs a Python dependency.
 
-LazyCloud caches images by content. Pin dependency versions when you need
-reproducible builds.
+LazyCloud caches images by content. Pinned dependency versions make builds
+reproducible.
 
 `Image()` with no arguments is the managed Python 3.12 image. Python 3.10
 through 3.14 are available. You can also pin a patch release, such as `3.12.11`.
 
 ## Create an image from a project
 
-Use a factory to select Python and install the project's dependencies:
+A factory selects Python and installs the project's dependencies:
 
 ```python
 from lazycloud import Image
@@ -52,9 +52,9 @@ lockfile, and `.python-version`, plus any local dependencies they name. It
 honors a dependency's `.lazycloudignore` when it has one and never writes that
 file into a dependency. Your own code is not part of the image. It reaches the
 container through source sync, so editing it never rebuilds the image.
-Changing a dependency does. Keep workspace members and relative path
-dependencies inside this directory, because the build does not upload files
-outside it. Build backends run in the image, not on your laptop.
+Changing a dependency does. The build uploads nothing outside this directory,
+so workspace members and relative path dependencies belong inside it. Build
+backends run in the image, not on your laptop.
 
 The build does not install the root project. Code under `src/` is
 importable at runtime because the synced `src` directory is on `PYTHONPATH`.
@@ -67,7 +67,7 @@ image = Image.from_uv(".", extras=["gpu"], groups=["inference"])
 
 Requires `pyproject.toml` and `uv.lock`. The build checks that the lockfile
 matches the project and installs its locked dependencies. It excludes default
-dependency groups, including `dev`. Name them in `groups` to include them.
+dependency groups, including `dev`, unless `groups` names them.
 Workspace members and path sources install without editable mode. The root
 project is not installed.
 
@@ -89,8 +89,8 @@ image = Image.from_pyproject(".", extras=["gpu"], groups=["inference"])
 
 Uses standard `[project]` metadata and `[dependency-groups]` and needs no
 lockfile. The build resolves dependencies itself and does not treat a uv or
-Poetry lockfile as a guarantee. Use `Image.from_uv` or `Image.from_poetry` when
-you need locked dependencies.
+Poetry lockfile as a guarantee. `Image.from_uv` and `Image.from_poetry` install
+locked dependencies.
 
 The build installs only dependencies. It reads workspace members and
 `[tool.uv.sources]` path entries from `pyproject.toml` and uploads them with it.
@@ -148,8 +148,8 @@ image = Image.from_uv(
 
 These factories configure the remote environment. The CLI still imports your
 handler module locally, so its top-level imports must resolve on your machine.
-Run `uv run lazycloud run main:handler` from your project environment, or place
-remote-only imports inside the handler.
+Running `uv run lazycloud run main:handler` from the project environment
+handles that, and remote-only imports can live inside the handler.
 
 ## Constructor
 
@@ -196,8 +196,8 @@ the snapshot returned.
 
 ### Private registries
 
-Pass credentials as environment variable names to read at deploy time, never
-as values in code:
+Credentials are environment variable names read at deploy time, never values
+in code:
 
 ```python
 image = Image.from_registry(

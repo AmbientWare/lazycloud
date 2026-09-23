@@ -3,8 +3,8 @@ title: "Sandboxes"
 description: "On-demand containers with process control, a filesystem API, exposed ports, snapshots, and optional Docker."
 ---
 
-A sandbox gives you a remote container for commands and files. Use one to
-run generated code, test a patch, or provide a development environment.
+A sandbox gives you a remote container for commands and files. It suits
+running generated code, testing a patch, or a development environment.
 
 ## Run a command
 
@@ -33,8 +33,7 @@ finally:
 
 The output includes exit code `0` and the remote Python version. The `finally`
 block terminates the container even if a command fails. A sandbox bills compute
-until it stops, so keep this `try`/`finally` shape when you adapt the examples
-below.
+until it stops, which is why every example keeps this `try`/`finally` shape.
 
 A plain number for `memory` means MiB, so `memory=1024` is 1 GiB. You create
 sandboxes on demand. A deploy never starts one. Other defaults are in
@@ -42,7 +41,7 @@ sandboxes on demand. A deploy never starts one. Other defaults are in
 
 ## Reconnect to a running sandbox
 
-Keep the sandbox ID if another process needs to reconnect before it expires:
+The sandbox ID lets another process reconnect before the sandbox expires:
 
 ```python
 instance = sandbox.create()
@@ -106,19 +105,19 @@ instance.update_network_permissions(allow_list=["203.0.113.10/32"])
 ```
 
 An exposed URL points at this container and stops working when it stops.
-Declare `ports=[8000]` on the sandbox to expose ports as soon as an instance
-is ready. `block_network` and `allow_list` set the outbound policy, and you
-can set only one of them. Allow-list entries are CIDR networks, not hostnames.
+`ports=[8000]` on the sandbox exposes ports as soon as an instance is ready.
+`block_network` and `allow_list` set the outbound policy, and you can set only
+one of them. Allow-list entries are CIDR networks, not hostnames.
 
 ## Docker inside a sandbox
 
-Set `image=Image().with_docker()` and `docker_enabled=True` to install and run
-a Docker daemon in the sandbox. `instance.docker` then wraps it with `run`,
+`image=Image().with_docker()` with `docker_enabled=True` installs and runs a
+Docker daemon in the sandbox. `instance.docker` then wraps it with `run`,
 `build`, `pull`, `push`, `ps`, `logs`, `stop`, `rm`, `exec`, `login`,
 `compose_up`, `compose_down`, and volume commands.
 
-Nested containers share the sandbox's network, so bind each service to its own
-port and call `instance.expose_port(port)` for its URL. The sandbox rejects
+Nested containers share the sandbox's network, so each service binds its own
+port and `instance.expose_port(port)` returns its URL. The sandbox rejects
 Docker and Compose port mappings.
 
 ## Snapshots

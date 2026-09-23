@@ -3,9 +3,9 @@ title: "Queues and maps"
 description: "Shared state for coordinating work across containers."
 ---
 
-Use a queue to pass work items between processes and a map for temporary shared
+A queue passes work items between processes, and a map holds temporary shared
 values. Within a workspace, a queue or map with the same name refers to the
-same data. Sign in before running these Python examples.
+same data.
 
 ## Queue
 
@@ -33,10 +33,10 @@ queue.
 
 ## Coordinate containers
 
-Use `.map()` when you know every input up front. Use a queue when you discover
-work as you go, when producers and consumers run at different times, or
-when a handful of long-lived workers should drain a stream of small items
-without a task per item. A map records progress those workers can share:
+`.map()` fits when every input is known up front. A queue fits work discovered
+as you go, producers and consumers that run at different times, or a handful of
+long-lived workers draining a stream of small items without a task per item. A
+map records progress those workers can share:
 
 ```python
 from lazycloud import App, Map, Queue, QueueDepthAutoscaler
@@ -75,12 +75,13 @@ Eight workers on eight containers pop from one queue and stop when it is
 empty. Without the autoscaler they would run one after another. The map's `in`
 check and `set` are separate calls, so two workers can both pass the check for
 the same URL and fetch it twice. A crawler can tolerate that. A payment cannot.
-When an item must be handled exactly once, make the handler idempotent or
-submit the item as a function call, which has a task record and retries.
+An item that must be handled exactly once needs an idempotent handler, or a
+function call, which has a task record and retries.
 
 The queue has no acknowledgement, so a worker that crashes after a pop loses
-the item. Keep items small and re-creatable, or write each item to a map before
-working on it and have a sweeper requeue stale entries.
+the item. Small, re-creatable items limit the loss. Otherwise a worker can
+write each item to a map before working on it, and a sweeper can requeue stale
+entries.
 
 ## Map
 
@@ -101,12 +102,13 @@ del state["cursor"]
 ```
 
 Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
-days is the maximum timed expiry. Use `ttl=0` to keep a key until you delete it.
+days is the maximum timed expiry. `ttl=0` keeps a key until you delete it.
 
 ## Edit from the dashboard
 
-In the dashboard, open Storage, then Queues or Maps, to inspect and correct
-data by hand. See [the dashboard guide](/platform/dashboard#edit-queues-and-maps).
+The dashboard's Storage section has Queues and Maps pages for inspecting and
+correcting data by hand. See
+[the dashboard guide](/platform/dashboard#edit-queues-and-maps).
 
 ## Remove example state
 

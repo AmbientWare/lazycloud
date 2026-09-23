@@ -4,7 +4,7 @@ description: "Size a container with CPU, memory, disk, and GPUs, choose capacity
 ---
 
 Each workload sets its container size and runtime behavior on its decorator or
-constructor. This page is the reference for those options.
+constructor, and nothing outside the code overrides them.
 [Scaling and concurrency](/concepts/scaling) covers how many containers run and
 how much each one handles at once.
 
@@ -29,30 +29,34 @@ faster and pack more containers per machine. The ceiling protects the machine
 from a runaway process. One CPU is one vCPU.
 
 `disk` is scratch space that disappears with the container, 100 GiB unless you
-set it. Use a [volume](/concepts/volumes) for files that must outlive it.
+set it. Files that must outlive it belong in a [volume](/concepts/volumes).
 
 ## Request a GPU
 
 ```python
-@app.function(gpu="l4", gpu_count=1, memory="16Gi")
+from lazycloud import GpuType
+
+
+@app.function(gpu=GpuType.L4, gpu_count=1, memory="16Gi")
 def embed(texts: list[str]) -> list[list[float]]:
     ...
 ```
 
-Models are `"t4"`, `"l4"`, `"a10g"`, `"l40s"`, `"a100-40"`, `"a100-80"`,
-`"h100"`, and `"h200"`. A list sets a preference order, best first.
-`gpu=["h100", "a100-80", "l4"]` takes the first model with free capacity, and
-`"any"` at the end takes whatever is free. The two A100 sizes are not
-interchangeable, so each has its own name and plain `"a100"` is rejected.
-`gpu_count` sets GPUs per container. GPU access and prices depend on your
-[plan](/platform/plans).
+`GpuType` names the models: `T4`, `A10G`, `L4`, `L40S`, `A100_40`, `A100_80`,
+`H100`, and `H200`. A list sets a preference order, best first.
+`gpu=[GpuType.H100, GpuType.A100_80, GpuType.L4]` takes the first model with
+free capacity, and `GpuType.Any`, valid only at the end of a list, takes
+whatever is free. The two A100 sizes are not interchangeable, so each has its
+own member and plain `GpuType.A100` is rejected. `gpu_count` sets GPUs per
+container. GPU access and prices depend on your [plan](/platform/plans).
 
 ## Preemptible capacity
 
 Workloads run on preemptible capacity by default. That capacity can be
 reclaimed, sometimes without notice. A preempted function call retries under
-its retry policy, and LazyCloud replaces a preempted endpoint container. Make
-functions safe to repeat, and checkpoint long work to a volume.
+its retry policy, and LazyCloud replaces a preempted endpoint container.
+Functions that are safe to repeat, and long jobs that checkpoint to a volume,
+lose little to a preemption.
 
 `preemptible=False` requires capacity that is not reclaimed. It adds the CPU
 and memory premium listed on the [pricing page](https://lazycloud.dev/pricing),
@@ -100,7 +104,7 @@ network, and placement options. Their own pages list what else they accept.
 | `cpu` | `float` or `(float, float)` | CPUs reserved, or reserved and ceiling. |
 | `memory` | `str` or `(str, str)` | Memory reserved, or reserved and ceiling, for example `"512Mi"` or `("2Gi", "8Gi")`. |
 | `disk` | `str` | Scratch disk, for example `"20Gi"`. |
-| `gpu` | `str \| list[str]` | GPU model, or a preference list. |
+| `gpu` | `GpuType \| list[GpuType]` | GPU model, or a preference list. |
 | `gpu_count` | `int` | GPUs per container. Set it with `gpu`. |
 | `timeout_seconds` | `int` | Limit for one call or request. |
 | `retries`, `retry_policy` | `int`, `RetryPolicy` | Extra attempts after a failure. Functions and endpoints. See [retries](/concepts/functions#retries-and-timeouts). |
@@ -123,6 +127,3 @@ network, and placement options. Their own pages list what else they accept.
 | `machine` | `str` | A joined machine this workload must run on. |
 | `region`, `availability_zone` | `str` | Placement inside the workspace's cloud. |
 | `metadata` | `dict` | Custom metadata stored with the deployment. Not on ASGI or realtime. |
-
-CLI commands accept overrides for most of these for a single run. See
-[workload options](/cli/deploy-and-run#workload-options).

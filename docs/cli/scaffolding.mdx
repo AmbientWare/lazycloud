@@ -32,14 +32,14 @@ Each project includes its source, assets, README, `.python-version`,
 installed release, and `uv sync` creates the lockfile. Commit `uv.lock` and
 use `uv sync --locked` in CI.
 
-Choose another directory with `--output`:
+`--output` picks another directory:
 
 ```bash
 lazycloud example download quickstart --output my-project
 ```
 
-Edit the `App("quickstart")` name in `quickstart.py` for your own app.
-The directory name does not rename resources.
+The app name comes from `App("quickstart")` in `quickstart.py`, so renaming the
+directory does not rename resources.
 
 ## Download all examples
 
@@ -47,19 +47,19 @@ The directory name does not rename resources.
 lazycloud example download all --output lazycloud-examples
 ```
 
-Each example has its own directory and dependencies. Run `uv sync` inside
-the project you want to use.
+Each example has its own directory and dependencies, and `uv sync` runs inside
+each project.
 
 ## Existing files
 
 The command checks every destination before writing. If any example file
-already exists, it stops and writes nothing. To compare a newer release with
-your work, download it to a new directory.
+already exists, it stops and writes nothing. A new directory works for
+comparing a newer release with your work.
 
 `--force` replaces files supplied by the example. It leaves unrelated files,
-including an existing `uv.lock`, in place. Review the changes and run `uv sync`
-to update that lockfile. The command refuses to write through symlinks inside
-the destination.
+including an existing `uv.lock`, in place, and `uv sync` then updates that
+lockfile. The command refuses to write through symlinks inside the
+destination.
 
-Use `lazycloud --json example list` or
-`lazycloud --json example download NAME` for machine-readable output.
+`lazycloud --json example list` and `lazycloud --json example download NAME`
+print machine-readable output.

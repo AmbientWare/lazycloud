@@ -29,7 +29,6 @@ from lazycloud.abstractions.sandbox import (
     SandboxProcessStream,
 )
 from lazycloud.abstractions.secret import Secret
-from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from lazycloud.progress import (
     PendingProgressCallback,
@@ -75,7 +74,6 @@ __all__ = [
     "SandboxProcessResponse",
     "SandboxProcessStream",
     "Secret",
-    "ServeOptions",
     "Task",
     "TaskPendingProgress",
     "TaskPendingReason",

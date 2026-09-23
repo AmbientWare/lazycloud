@@ -22,9 +22,9 @@ account from any directory.
 uv add lazycloud-client
 ```
 
-Run project commands through `uv run lazycloud` and `uv run python` so they use
-the project's pinned SDK. For a new project, run `uv init my-project` first.
-Commit `pyproject.toml` and `uv.lock`, and use `uv sync --locked` in CI.
+`uv run lazycloud` and `uv run python` use the project's pinned SDK. A new
+project starts with `uv init my-project`. `pyproject.toml` and `uv.lock` belong
+in version control, and `uv sync --locked` reproduces them in CI.
 
 Packages your code needs remotely go in the workload's
 [image](/concepts/images), not in your local environment.
@@ -36,7 +36,7 @@ uv tool upgrade lazycloud-client     # the global CLI
 uv run lazycloud update              # a project, within its pyproject.toml constraints
 ```
 
-A downloaded example pins an exact SDK version, so upgrade it by naming the
+A downloaded example pins an exact SDK version, so its upgrade names the
 release: `uv add "lazycloud-client==<version>"`.
 
 ## Sign-in state

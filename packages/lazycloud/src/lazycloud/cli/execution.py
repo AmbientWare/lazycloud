@@ -43,12 +43,6 @@ from lazycloud.cli.handler_workflows import (
     load_deployment_object,
     load_handler_object,
 )
-from lazycloud.cli.workflow_options import (
-    DeploymentOverrides,
-    build_deployment_overrides,
-    deployment_image,
-    workflow_kwargs,
-)
 from lazycloud.control import control_workspace_scope, resolve_control_client_config
 from lazycloud.json_contracts import resource_payload
 from lazycloud.session.app_deployment import AppDeploymentSession, AppDeploymentTarget
@@ -81,56 +75,9 @@ def deploy(
     diff: Annotated[
         bool, typer.Option("--diff", help="Preview deployment actions without deploying.")
     ] = False,
-    name: Annotated[str | None, typer.Option("--name")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
     source_root: Annotated[str | None, typer.Option("--source-root")] = None,
-    cpu: Annotated[float | None, typer.Option("--cpu")] = None,
-    memory: Annotated[str | None, typer.Option("--memory")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
-    gpu_count: Annotated[int | None, typer.Option("--gpu-count", min=0)] = None,
-    image: Annotated[str | None, typer.Option("--image")] = None,
-    dockerfile: Annotated[str | None, typer.Option("--dockerfile")] = None,
-    context_dir: Annotated[str | None, typer.Option("--context")] = None,
-    env: Annotated[list[str] | None, typer.Option("--env")] = None,
-    secrets: Annotated[list[str] | None, typer.Option("--secret")] = None,
-    ports: Annotated[list[str] | None, typer.Option("--port")] = None,
-    keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
-    tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
-    region: Annotated[
-        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
-    ] = None,
-    availability_zone: Annotated[
-        str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
-    ] = None,
-    machine: Annotated[
-        str | None,
-        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
-    ] = None,
-    preemptible: Annotated[
-        bool | None,
-        typer.Option("--preemptible/--no-preemptible"),
-    ] = None,
-    entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
-    overrides = build_deployment_overrides(
-        cpu=cpu,
-        memory=memory,
-        gpu=gpu,
-        gpu_count=gpu_count,
-        image=image,
-        dockerfile=dockerfile,
-        context_dir=context_dir,
-        env=env,
-        secrets=secrets,
-        ports=ports,
-        keep_warm=keep_warm,
-        tcp=tcp,
-        region=region,
-        availability_zone=availability_zone,
-        machine=machine,
-        preemptible=preemptible,
-        entrypoint=entrypoint,
-    )
     selected_workspace = workspace or resolve_control_client_config().workspace
     with control_workspace_scope(selected_workspace):
         try:
@@ -142,15 +89,11 @@ def deploy(
             raise typer.BadParameter("multiple references must select complete apps")
         if prune and len(apps) != len(loaded):
             raise typer.BadParameter("--prune requires complete apps")
-        if len(loaded) > 1 and name is not None:
-            raise typer.BadParameter("--name requires one workload reference")
         if apps:
             _deploy_apps(
                 ctx,
                 App.combine(apps),
-                overrides=overrides,
                 workspace=selected_workspace,
-                name=name,
                 source_root=source_root,
                 prune=prune,
                 diff=diff,
@@ -159,27 +102,6 @@ def deploy(
         user_object = loaded[0]
         selected_handler = handler[0]
         attach_terminal(user_object)
-        selected_image = deployment_image(overrides)
-        if isinstance(user_object, Pod):
-            _configure_pod(user_object, overrides)
-        elif isinstance(user_object, Function):
-            _validate_function_overrides(overrides)
-            user_object.configure(
-                image=selected_image,
-                cpu=overrides.cpu,
-                memory=overrides.memory,
-                gpu=overrides.gpu,
-                gpu_count=overrides.gpu_count,
-                env=overrides.env,
-                secrets=overrides.secrets,
-                region=overrides.region,
-                availability_zone=overrides.availability_zone,
-                machine=overrides.machine,
-                preemptible=overrides.preemptible,
-            )
-        elif overrides.has_values():
-            msg = "deployment overrides require an App, Function, or Pod handler"
-            raise typer.BadParameter(msg)
         if diff:
             if not isinstance(user_object, (Pod, Function, Endpoint, ASGI)):
                 raise typer.BadParameter("--diff requires an app or a decorated workload")
@@ -191,14 +113,13 @@ def deploy(
                         app_name if isinstance(app_name, str) else None,
                         default=spec.name,
                     ),
-                    workloads=[WorkloadIdentity(kind=spec.kind, name=name or spec.name)],
+                    workloads=[WorkloadIdentity(kind=spec.kind, name=spec.name)],
                 )
             )
             _emit_deployment_plans(ctx, [plan])
             return
         if isinstance(user_object, (Pod, Function)):
             response = user_object.deploy(
-                name=name,
                 workspace=selected_workspace,
                 source_root=source_root,
             )
@@ -208,7 +129,6 @@ def deploy(
                 "deploy",
                 kwargs={
                     "workspace": selected_workspace,
-                    "name": name,
                     "source_root": source_root,
                 },
             )
@@ -218,7 +138,7 @@ def deploy(
             ctx,
             payload=payload,
             view=result_card(
-                json_default(_deployment_summary(response, handler=selected_handler, name=name)),
+                json_default(_deployment_summary(response, handler=selected_handler)),
                 title="App deployed"
                 if isinstance(response, AppDeployResult)
                 else "Deployment created",
@@ -233,40 +153,19 @@ def _deploy_apps(
     ctx: typer.Context,
     apps: tuple[App, ...],
     *,
-    overrides: DeploymentOverrides,
     workspace: str,
-    name: str | None,
     source_root: str | None,
     prune: bool,
     diff: bool,
 ) -> None:
-    if name is not None:
-        raise typer.BadParameter("--name requires a workload reference")
-    selected_image = deployment_image(overrides)
 
     def submit(app: App) -> tuple[DeployStubResponse, ...]:
         if prune and not app.deployment_manifest().workloads:
             return ()
         attach_terminal(app)
         return app.deploy(
-            name=name,
             workspace=workspace,
             source_root=source_root,
-            image=selected_image,
-            cpu=overrides.cpu,
-            memory=overrides.memory,
-            gpu=overrides.gpu,
-            gpu_count=overrides.gpu_count,
-            env=overrides.env,
-            secrets=overrides.secrets,
-            ports=overrides.ports,
-            keep_warm=overrides.keep_warm,
-            tcp=overrides.tcp,
-            region=overrides.region,
-            availability_zone=overrides.availability_zone,
-            machine=overrides.machine,
-            preemptible=overrides.preemptible,
-            entrypoint=overrides.entrypoint,
         ).resources
 
     targets: list[AppDeploymentTarget] = []
@@ -289,7 +188,7 @@ def _deploy_apps(
             "apps": [item.model_dump() for item in results],
         }
     )
-    summaries = [_deployment_summary(result, handler=result.app, name=None) for result in results]
+    summaries = [_deployment_summary(result, handler=result.app) for result in results]
     emit(
         ctx,
         payload=payload,
@@ -328,33 +227,6 @@ def run(
     ctx: typer.Context,
     command: Annotated[list[str] | None, typer.Argument()] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-    cpu: Annotated[float | None, typer.Option("--cpu")] = None,
-    memory: Annotated[str | None, typer.Option("--memory")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
-    gpu_count: Annotated[int | None, typer.Option("--gpu-count", min=0)] = None,
-    image: Annotated[str | None, typer.Option("--image")] = None,
-    dockerfile: Annotated[str | None, typer.Option("--dockerfile")] = None,
-    context_dir: Annotated[str | None, typer.Option("--context")] = None,
-    env: Annotated[list[str] | None, typer.Option("--env")] = None,
-    secrets: Annotated[list[str] | None, typer.Option("--secret")] = None,
-    ports: Annotated[list[str] | None, typer.Option("--port")] = None,
-    keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
-    tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
-    region: Annotated[
-        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
-    ] = None,
-    availability_zone: Annotated[
-        str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
-    ] = None,
-    machine: Annotated[
-        str | None,
-        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
-    ] = None,
-    preemptible: Annotated[
-        bool | None,
-        typer.Option("--preemptible/--no-preemptible"),
-    ] = None,
-    entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
     output: Annotated[
         Path | None,
         typer.Option(
@@ -368,25 +240,6 @@ def run(
     args = command or []
     if not args:
         raise typer.BadParameter("handler is required")
-    overrides = build_deployment_overrides(
-        cpu=cpu,
-        memory=memory,
-        gpu=gpu,
-        gpu_count=gpu_count,
-        image=image,
-        dockerfile=dockerfile,
-        context_dir=context_dir,
-        env=env,
-        secrets=secrets,
-        ports=ports,
-        keep_warm=keep_warm,
-        tcp=tcp,
-        region=region,
-        availability_zone=availability_zone,
-        machine=machine,
-        preemptible=preemptible,
-        entrypoint=entrypoint,
-    )
     selected_workspace = workspace or resolve_control_client_config().workspace
     with control_workspace_scope(selected_workspace):
         user_object = _load_run_target(args[0])
@@ -397,35 +250,17 @@ def run(
         target = apply_handler_reference(user_object, args[0])
         attach_terminal(target)
         if isinstance(target, Pod):
-            _configure_pod(target, overrides)
             response = target.run(*args[1:], workspace=selected_workspace)
         elif isinstance(target, Function):
-            _validate_function_overrides(overrides)
             prepared_args, prepared_kwargs = prepare_arguments(
                 target.func, tuple(payload_args), {}, target.inputs
             )
-            target.configure(
-                image=deployment_image(overrides),
-                cpu=overrides.cpu,
-                memory=overrides.memory,
-                gpu=overrides.gpu,
-                gpu_count=overrides.gpu_count,
-                env=overrides.env,
-                secrets=overrides.secrets,
-                region=overrides.region,
-                availability_zone=overrides.availability_zone,
-                machine=overrides.machine,
-                preemptible=overrides.preemptible,
-            )
             response = call_handler(target.remote, args=list(prepared_args), kwargs=prepared_kwargs)
         elif isinstance(target, RunWorkflow):
-            _reject_unapplied_overrides(target, overrides)
             response = call_handler(target.run, args=payload_args)
         elif isinstance(target, RemoteWorkflow):
-            _reject_unapplied_overrides(target, overrides)
             response = call_handler(target.remote, args=payload_args)
         else:
-            _reject_unapplied_overrides(target, overrides)
             response = call_handler(target, args=payload_args)
     emit_python_result(ctx, response, output=output)
 
@@ -436,29 +271,6 @@ def shell(
     container_id: Annotated[str | None, typer.Option("--container-id")] = None,
     sync_dir: Annotated[str | None, typer.Option("--sync-dir", "--sync")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-    cpu: Annotated[float | None, typer.Option("--cpu")] = None,
-    memory: Annotated[str | None, typer.Option("--memory")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
-    gpu_count: Annotated[int | None, typer.Option("--gpu-count", min=0)] = None,
-    image: Annotated[str | None, typer.Option("--image")] = None,
-    dockerfile: Annotated[str | None, typer.Option("--dockerfile")] = None,
-    context_dir: Annotated[str | None, typer.Option("--context")] = None,
-    env: Annotated[list[str] | None, typer.Option("--env")] = None,
-    secrets: Annotated[list[str] | None, typer.Option("--secret")] = None,
-    ports: Annotated[list[str] | None, typer.Option("--port")] = None,
-    keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=-1)] = None,
-    tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
-    region: Annotated[
-        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
-    ] = None,
-    availability_zone: Annotated[
-        str | None, typer.Option("--availability-zone", help="Provider availability zone ID.")
-    ] = None,
-    machine: Annotated[
-        str | None,
-        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
-    ] = None,
-    entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
     _require_interactive_output(ctx)
     if handler is None:
@@ -471,37 +283,15 @@ def shell(
             workspace=workspace,
         )
         return
-    overrides = build_deployment_overrides(
-        cpu=cpu,
-        memory=memory,
-        gpu=gpu,
-        gpu_count=gpu_count,
-        image=image,
-        dockerfile=dockerfile,
-        context_dir=context_dir,
-        env=env,
-        secrets=secrets,
-        ports=ports,
-        keep_warm=keep_warm,
-        tcp=tcp,
-        region=region,
-        availability_zone=availability_zone,
-        machine=machine,
-        entrypoint=entrypoint,
-        sync_dir=sync_dir,
-        container_id=container_id,
-    )
     try:
         user_object = load_handler_object(handler)
     except HandlerLoadError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    if isinstance(user_object, Pod):
-        _configure_pod(user_object, overrides)
     attach_terminal(user_object)
     response = invoke_handler_method(
         apply_handler_reference(user_object, handler),
         "shell",
-        kwargs=workflow_kwargs(overrides, workspace=workspace),
+        kwargs={"workspace": workspace, "sync_dir": sync_dir},
     )
     if isinstance(response, ShellSession):
         open_shell_session(ctx, response, workspace=workspace)
@@ -650,7 +440,6 @@ def _deployment_summary(
     response: object,
     *,
     handler: str,
-    name: str | None,
 ) -> dict[str, object]:
     if isinstance(response, AppDeployResult):
         summary: dict[str, object] = {
@@ -668,7 +457,7 @@ def _deployment_summary(
             summary["removed_versions"] = response.pruning.removed_versions
         return summary
 
-    summary = {"name": name or handler}
+    summary = {"name": handler}
     version = getattr(response, "version", 0)
     if version:
         summary["version"] = version
@@ -692,47 +481,3 @@ def _load_run_target(reference: str) -> object | None:
             msg = f"could not load handler {reference!r}: {exc}"
             raise typer.BadParameter(msg) from exc
     return None
-
-
-def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
-    image = deployment_image(overrides)
-    pod.configure(
-        image=image,
-        command=overrides.entrypoint,
-        ports=overrides.ports,
-        env=overrides.env,
-        cpu=overrides.cpu,
-        memory=overrides.memory,
-        gpu=overrides.gpu,
-        gpu_count=overrides.gpu_count,
-        keep_warm=overrides.keep_warm,
-        secrets=overrides.secrets,
-        tcp=overrides.tcp,
-        region=overrides.region,
-        availability_zone=overrides.availability_zone,
-        machine=overrides.machine,
-        preemptible=overrides.preemptible,
-    )
-
-
-def _validate_function_overrides(overrides: DeploymentOverrides) -> None:
-    unsupported: list[str] = []
-    if overrides.ports:
-        unsupported.append("ports")
-    if overrides.keep_warm is not None:
-        unsupported.append("keep_warm")
-    if overrides.tcp is not None:
-        unsupported.append("tcp")
-    if overrides.entrypoint:
-        unsupported.append("entrypoint")
-    if unsupported:
-        options = ", ".join(unsupported)
-        raise typer.BadParameter(f"Function does not support overrides: {options}")
-
-
-def _reject_unapplied_overrides(target: object, overrides: DeploymentOverrides) -> None:
-    if not overrides.has_values():
-        return
-    target_name = type(target).__name__
-    msg = f"{target_name} does not support deployment overrides"
-    raise typer.BadParameter(msg)

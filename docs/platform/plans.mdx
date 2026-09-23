@@ -8,8 +8,9 @@ change it, and add a payment method in the dashboard under Settings > Billing.
 Current prices and per-plan limits are on the
 [pricing page](https://lazycloud.dev/pricing).
 
-Before starting a long job, check your balance and monthly usage limit in
-Billing. A saved card unlocks your plan's GPU access but adds no credit.
+Billing shows your balance and monthly usage limit, which are worth a look
+before a long job. A saved card unlocks your plan's GPU access but adds no
+credit.
 
 ## What you pay for
 
@@ -27,9 +28,9 @@ credit in Settings > Billing, or save an automatic reload threshold and amount.
 Purchased credit does not expire. Trial and subscription credit expire on their
 stated dates.
 
-To reduce idle charges, stop pods you no longer need and set shorter
-`keep_warm` windows on functions and endpoints. Downloading an output does not
-delete the stored copy, so remove unused files separately.
+Stopping pods you no longer need and shorter `keep_warm` windows on functions
+and endpoints reduce idle charges. Downloading an output does not delete the
+stored copy, so unused files need removing separately.
 
 ## Automatic reload
 
@@ -38,14 +39,14 @@ you choose. Trial, subscription, and purchased credit all count toward that
 balance. Select a suggested amount or choose Custom amount to enter your own.
 The billing form shows the permitted credit purchase range.
 
-Add a payment method in Billing before buying credit, enabling automatic reload,
-or changing plans. When a card is saved, use Update payment method to replace it.
+Buying credit, enabling automatic reload, and changing plans each need a
+payment method in Billing. Update payment method replaces a saved card.
 Invoices and the monthly usage limit remain available without a saved card.
 
 A declined payment or one that needs bank authentication pauses automatic
-reload. Update your payment method, then resume reload in Billing. You can also
-add credit through checkout. Payments already processing may finish after you
-disable reload.
+reload. Reload resumes in Billing after you update the payment method, and
+checkout still adds credit meanwhile. Payments already processing may finish
+after you disable reload.
 
 The monthly usage limit applies to metered usage, not card payments. A reload
 can add credit beyond that limit. Unused purchased credit stays in your
@@ -102,10 +103,10 @@ longer log and artifact retention. It also lets you connect one AWS account
 and create workspaces that run inside it.
 Joining your own machines is available on every plan.
 
-Change plans from Settings > Billing, then Change plan. You cannot move to a
-plan whose limits your account already exceeds. The dashboard names what has
-to go first. While a plan change is processing, you cannot add plan-limited
-resources.
+Plan changes happen in Settings > Billing, under Change plan. You cannot move
+to a plan whose limits your account already exceeds. The dashboard names what
+has to go first. While a plan change is processing, you cannot add
+plan-limited resources.
 
 ## Without a payment method
 
@@ -128,10 +129,10 @@ before work stops. Added credit covers that negative balance first.
 You can also save a monthly usage limit across your workspaces. It counts usage
 paid with any credit and resets on the first of each month at midnight UTC.
 Reaching it stops compute and blocks new work and transfers in the same way.
-Subscription fees do not count toward this limit. Choose No limit to remove it,
-or set $0 to stop new work and transfers. Running compute can exceed the limit
-between usage records and shutdown.
+Subscription fees do not count toward this limit. No limit removes it, and $0
+stops new work and transfers. Running compute can exceed the limit between
+usage records and shutdown.
 
 If funds run out, LazyCloud keeps existing stored data for 30 days, then
-deletes it. To keep your data, add enough credit to restore a positive balance
-within that period. Storage is free during this grace period.
+deletes it. Credit that restores a positive balance within that period keeps
+the data. Storage is free during this grace period.

@@ -5,9 +5,9 @@ description: "Inspect compute, connect an AWS account, join your own machines, a
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-Workloads use LazyCloud compute by default. Use these commands to inspect
-capacity or connect compute you own. [Compute](/platform/compute) covers setup
-and host requirements.
+Workloads use LazyCloud compute by default. These commands inspect capacity
+and connect compute you own. [Compute](/platform/compute) covers setup and host
+requirements.
 
 ## lazycloud compute
 
@@ -55,9 +55,8 @@ uv run lazycloud machine remove MACHINE_ID
 ```
 
 A joined machine has a name that is unique across your account and a list of
-workspaces whose workloads may run on it. Pin a workload to it with
-`machine="<name>"` in the decorator or `--machine <name>` on the command line.
-The workload then runs on that machine or fails.
+workspaces whose workloads may run on it. A workload with `machine="<name>"` in
+its decorator runs on that machine or fails.
 
 `machine join` options:
 
@@ -71,7 +70,8 @@ The workload then runs on that machine or fails.
 | `--background`, `--foreground` | Install the agent as a service, or run it in the terminal. Default is `--foreground`. |
 | `--service-manager`, `--service-name`, `--state-dir` | Service installation details. |
 
-Read the [host requirements](/platform/compute#your-own-machines) first.
+The [host requirements](/platform/compute#your-own-machines) list what the
+machine needs.
 
 ## lazycloud domain
 

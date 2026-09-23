@@ -3,8 +3,8 @@ title: "Compute"
 description: "Where your workloads run: LazyCloud's compute, your own AWS account, or machines you join."
 ---
 
-Use LazyCloud compute to run without managing machines. Choose CPU, memory,
-and GPUs in your workload definition. You pay while its container runs,
+LazyCloud compute runs your workloads with no machines to manage. CPU, memory,
+and GPUs come from the workload definition. You pay while its container runs,
 including startup and idle time.
 
 ## Where a workload runs
@@ -18,14 +18,13 @@ uv run lazycloud workspace create research            # runs on LazyCloud
 uv run lazycloud workspace create research --cloud aws # runs in your AWS account
 ```
 
-A workspace never changes location. To move work, create a new workspace in
-the other location and copy the data across.
+A workspace never changes location. Moving work means creating a workspace in
+the other location and copying the data across.
 
 The one exception is a machine you joined yourself. A workload names it with
-`machine="gpu-1"` on the decorator, or `--machine gpu-1` on `deploy`, `run`,
-`serve`, `shell`, or `dev`, and then runs only there. If that machine is
-offline, or does not serve the workload's workspace, the workload fails
-rather than running somewhere else.
+`machine="gpu-1"` on the decorator and then runs only there. If that machine is
+offline, or does not serve the workload's workspace, the workload fails rather
+than running somewhere else.
 
 ## Check usage
 
@@ -35,7 +34,8 @@ uv run lazycloud compute instances
 uv run lazycloud compute workloads
 ```
 
-To size a workload or request a GPU, see [Resources and options](/concepts/resources).
+[Resources and options](/concepts/resources) covers sizing a workload and
+requesting a GPU.
 
 ## Your own AWS account
 
@@ -66,8 +66,8 @@ the result. The dashboard shows the same connection under Settings, then
 Compute. Once it is ready, create a workspace in it.
 
 LazyCloud manages instance selection, regions, capacity limits, warm workers,
-idle shutdown, and root disks for every workspace in the account. Choose CPU,
-memory, and GPU on each workload.
+idle shutdown, and root disks for every workspace in the account. Each workload
+chooses its CPU, memory, and GPU.
 
 If the authorization stops working, for example after a role change in AWS,
 `uv run lazycloud cloud status` says so. `uv run lazycloud cloud reconnect`
@@ -82,9 +82,10 @@ first.
 
 ## Your own machines
 
-Join a Linux server you own, such as an on-premises GPU box, a bare-metal
-host, or a VM, and choose which workspaces run workloads on it. Containers on
-your own machines incur no compute charges. Volumes and egress still bill.
+A Linux server you own, such as an on-premises GPU box, a bare-metal host, or
+a VM, can join your account and run workloads for the workspaces you choose.
+Containers on your own machines incur no compute charges. Volumes and egress
+still bill.
 
 The host needs:
 
@@ -104,7 +105,7 @@ workloads from the listed workspaces may land on the machine. The command runs
 the agent in the foreground. Add `--background` to install a service that
 keeps running after the terminal closes.
 
-Change which workspaces a machine serves at any time:
+`machine update` changes which workspaces a machine serves at any time:
 
 ```bash
 uv run lazycloud machine update gpu-1 --workspaces research,staging,prod
@@ -115,10 +116,13 @@ The dashboard has the same flow under Settings, then Compute, then Join a
 machine, and shows the host checks as they pass. Each machine row there lists
 the workspaces it serves and lets you edit them.
 
-Run a workload on the machine by naming it:
+A workload that names the machine runs there:
 
 ```python
-@app.function(cpu=2.0, memory="4Gi", gpu="a100-80", machine="gpu-1")
+from lazycloud import GpuType
+
+
+@app.function(cpu=2.0, memory="4Gi", gpu=GpuType.A100_80, machine="gpu-1")
 def gpu_name() -> str:
     return subprocess.check_output(
         ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True

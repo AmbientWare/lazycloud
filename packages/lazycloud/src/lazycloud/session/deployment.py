@@ -264,7 +264,6 @@ class DeploymentClient(ControlClientConfigMixin):
         self,
         spec: DeploymentSpec,
         *,
-        name: str | None = None,
         workspace: str | None = None,
         external_url: str | None = None,
         image: Image | None = None,
@@ -283,7 +282,7 @@ class DeploymentClient(ControlClientConfigMixin):
         response = self.control_client.deploy_stub(
             DeployStubRequest(
                 stub_id=stub.stub_id,
-                name=name or spec.name,
+                name=spec.name,
                 workspace=selected_workspace,
                 external_url=external_url or config.endpoint,
             )

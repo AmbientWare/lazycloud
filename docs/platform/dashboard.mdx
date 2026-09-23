@@ -9,24 +9,24 @@ from the menu at the top.
 ## Find a result or investigate a failure
 
 Open Tasks and select the run. Its detail view shows status, timing, retries,
-the result or error, and logs. For a task that is still pending, check the
-displayed reason before retrying it.
+the result or error, and logs. A task that is still pending shows why it is
+waiting.
 
-You can also open an app to find its workloads and recent activity.
+An app's page lists its workloads and recent activity.
 
 ## Test or stop a deployed service
 
 Open the workload under Apps and use the request playground to send input.
-Use its controls to scale, pause, resume, or delete it. Pause to stop serving
-without removing the definition.
+Its controls scale, pause, resume, or delete it. Pausing stops serving without
+removing the definition.
 
 For a running sandbox, open its terminal, file browser, or process list from
 the app page.
 
 ## Retrieve files
 
-Storage contains volumes, artifacts, secrets, queues, and maps. Use the
-volume browser for shared files and the artifact browser for task output. The
+Storage contains volumes, artifacts, secrets, queues, and maps. The volume
+browser holds shared files and the artifact browser holds task output. The
 artifact browser searches filenames, filters by app, task, type, or date, and
 previews or downloads files. A task's Artifacts tab shows that task's files.
 The Storage page also shows total bytes stored and this month's storage
@@ -35,8 +35,8 @@ charges. Artifact downloads and public URLs follow the
 
 ## Edit queues and maps
 
-Open Storage, then Queues or Maps. Keep repeatable setup in your Python code.
-Use the dashboard to inspect data or make a one-off correction.
+Open Storage, then Queues or Maps. Repeatable setup belongs in Python code, and
+the dashboard suits inspecting data or a one-off correction.
 
 For a map, select a key to view or edit its value and expiry. Saving fails if a
 workload changed the key in the meantime. Reload and try again. You can inspect
@@ -71,6 +71,5 @@ Compute connects an AWS account or joins a machine, and shows each machine's
 lifecycle phase. [Compute](/platform/compute) explains the phases. Domains
 registers a hostname for your API.
 
-Use the workspace menu to create or rename a workspace and manage members.
-Before opening an invitation link, check which account you are signed in as.
-Accepting joins that account to the workspace.
+The workspace menu creates and renames workspaces and manages members. An
+invitation link joins whichever account is signed in when you open it.

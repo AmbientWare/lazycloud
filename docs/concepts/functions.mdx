@@ -4,9 +4,9 @@ description: "Call Python remotely, fan a batch out across containers, submit ba
 ---
 
 A function runs Python in a remote container and returns the result.
-Decorate it with `@app.function` and call it with `.remote()` or
-`lazycloud run`. For HTTP callers, use an [endpoint](/concepts/endpoints). For
-recurring runs, add a [schedule](/concepts/schedules).
+`@app.function` defines it, and `.remote()` or `lazycloud run` calls it. HTTP
+callers suit an [endpoint](/concepts/endpoints), and recurring runs a
+[schedule](/concepts/schedules).
 
 ## Define and call a function
 
@@ -57,7 +57,7 @@ for result in summarize_sales.map([([1200, 3500],), ([800, 900],)]):
 ```
 
 A failed call yields `None`. When every item must succeed before you use the
-batch, use `spawn_map()` and check each outcome:
+batch, `spawn_map()` returns each outcome to check:
 
 ```python
 calls = summarize_sales.spawn_map([([1200, 3500],), ([800, 900],)])
@@ -68,8 +68,8 @@ if failed:
 print([outcome.value for outcome in outcomes])
 ```
 
-Without an autoscaler the calls run one at a time in one container. To run them
-in parallel, let the function start more containers:
+Without an autoscaler the calls run one at a time in one container. An
+autoscaler lets the function start more containers and run them in parallel:
 
 ```python
 from lazycloud import QueueDepthAutoscaler
@@ -100,9 +100,9 @@ print(call.task_id)
 value = call.get()
 ```
 
-`.spawn()` returns a `FunctionCall` without waiting. Call `.get()` when you need
-the value, or collect it later from another process with
-`uv run lazycloud task result <task-id>`. `async_spawn()` is the awaitable form.
+`.spawn()` returns a `FunctionCall` without waiting. `.get()` waits for the
+value, and `uv run lazycloud task result <task-id>` collects it later from
+another process. `async_spawn()` is the awaitable form.
 [Tasks and logs](/concepts/tasks-and-logs) covers reconnecting to a call by ID.
 
 You can pass a pending `FunctionCall` as an argument to another function. The
@@ -133,15 +133,15 @@ code you trust.
 HTTP calls, the dashboard playground, `lazycloud run --json`, and
 [exported client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
 need JSON-compatible values. Each argument payload and result can be at most
-16 MiB. Store larger output in a [volume](/concepts/volumes) or as an
-[artifact](/concepts/artifacts) and return its path.
+16 MiB. Larger output fits in a [volume](/concepts/volumes) or an
+[artifact](/concepts/artifacts), with the call returning its path.
 
 ## Retries and timeouts
 
 `timeout_seconds` caps one attempt. `retries` sets how many extra attempts
 follow a failure. The default is 3, so one call can run the function four
-times. If it writes somewhere, make the writes safe to repeat or set
-`retries=0`. For backoff, pass a `RetryPolicy`:
+times. A function that writes somewhere needs writes that are safe to repeat,
+or `retries=0`. A `RetryPolicy` adds backoff:
 
 ```python
 import urllib.request
@@ -167,10 +167,12 @@ Retries also cover preempted capacity. See
 
 ## Lifecycle hooks
 
-`on_start` runs before a container accepts calls. Use it to load a model or open
-a client once instead of on every call:
+`on_start` runs before a container accepts calls. It loads a model or opens a
+client once instead of on every call:
 
 ```python
+from lazycloud import GpuType
+
 MODEL = {}
 
 
@@ -178,7 +180,7 @@ def load_model() -> None:
     MODEL["classifier"] = load_classifier()  # your loading code
 
 
-@app.function(gpu="l4", on_start=load_model)
+@app.function(gpu=GpuType.L4, on_start=load_model)
 def classify(text: str) -> str:
     return MODEL["classifier"](text)
 ```
@@ -191,11 +193,11 @@ Per-call hooks are `on_running`, `on_success`, `on_error`, `on_retry`,
 `on_failure`, and `on_finish`. Each takes a callable, a decorated function, a
 dotted import string, or a list of them. Inside a hook or the function,
 `lazycloud.current_task_id()` identifies the current call. When calls share a
-process, use it instead of the `TASK_ID` environment variable.
+process, it stays accurate where the `TASK_ID` environment variable does not.
 
 ## Dependencies and configuration
 
-Put packages in an [image](/concepts/images), credentials in
+Packages go in an [image](/concepts/images), credentials in
 [secrets](/concepts/secrets), files that outlive the container in
 [volumes](/concepts/volumes), and plain settings in `env`. Every decorator
 option and default is listed in [Resources and options](/concepts/resources).

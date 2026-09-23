@@ -3,7 +3,8 @@ title: "Endpoints, ASGI, and realtime"
 description: "Serve HTTP from a typed Python function, a FastAPI or Starlette app, or a WebSocket handler."
 ---
 
-Three workloads serve traffic over the network. Pick by what you already have:
+Three workloads serve traffic over the network. Which one fits depends on what
+you already have:
 
 | You have | Use |
 | --- | --- |
@@ -93,7 +94,7 @@ restore from it instead of running `on_start` again.
 
 ## ASGI applications
 
-Wrap an existing FastAPI or Starlette app with `app.asgi(...)`. Save this as
+`app.asgi(...)` wraps an existing FastAPI or Starlette app. Save this as
 `web_app.py`, and run `uv add fastapi` so the CLI can import it locally:
 
 ```python
@@ -124,7 +125,7 @@ ASGI apps take the endpoint options, with `concurrent_requests` in place of
 to `"asgi"`. An async app can take a high `concurrent_requests` in one worker.
 A blocking app needs more `workers`.
 
-Call a route from Python with a full request:
+From Python, `request()` sends a full request to a route:
 
 ```python
 from web_app import service
@@ -158,7 +159,7 @@ way. `name` defaults to `"realtime"`.
 On Team and Business plans, `domain="api.example.com"` serves any of the three
 from a hostname you own. See [Custom domains](/platform/domains).
 
-Warm containers are billed while they run. Stop a deployment you no longer
-need with `uv run lazycloud deployment stop <name>`.
+Warm containers are billed while they run.
+`uv run lazycloud deployment stop <name>` stops a deployment you no longer need.
 
 Defaults and every option are in [Resources and options](/concepts/resources).

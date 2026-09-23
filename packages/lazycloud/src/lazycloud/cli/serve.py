@@ -7,7 +7,6 @@ import typer
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function
-from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.cli.components.output import json_output_enabled
 from lazycloud.cli.components.progress import attach_terminal
 from lazycloud.cli.handler_workflows import (
@@ -15,72 +14,16 @@ from lazycloud.cli.handler_workflows import (
     apply_handler_reference,
     load_handler_object,
 )
-from lazycloud.cli.workflow_options import build_deployment_overrides, deployment_image
 
 
 def serve(
     ctx: typer.Context,
     handler: Annotated[str, typer.Argument()],
     timeout: Annotated[int, typer.Option("--timeout")] = 0,
-    cpu: Annotated[float | None, typer.Option("--cpu")] = None,
-    memory: Annotated[str | None, typer.Option("--memory")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
-    gpu_count: Annotated[int | None, typer.Option("--gpu-count", min=0)] = None,
-    image: Annotated[str | None, typer.Option("--image")] = None,
-    dockerfile: Annotated[str | None, typer.Option("--dockerfile")] = None,
-    context_dir: Annotated[str | None, typer.Option("--context")] = None,
-    env: Annotated[list[str] | None, typer.Option("--env")] = None,
-    secrets: Annotated[list[str] | None, typer.Option("--secret")] = None,
-    container_ports: Annotated[
-        list[str] | None,
-        typer.Option("--container-port"),
-    ] = None,
-    keep_warm: Annotated[int | None, typer.Option("--keep-warm", min=0)] = None,
-    tcp: Annotated[bool | None, typer.Option("--tcp/--no-tcp")] = None,
-    region: Annotated[
-        str | None, typer.Option("--region", help="Product region. Omit for Automatic placement.")
-    ] = None,
-    machine: Annotated[
-        str | None,
-        typer.Option("--machine", help="Joined machine this workload must run on, by name."),
-    ] = None,
-    entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
     sync_dir: Annotated[str | None, typer.Option("--sync-dir", "--sync")] = None,
-    container_id: Annotated[str | None, typer.Option("--container-id")] = None,
 ) -> None:
     if json_output_enabled(ctx):
         raise typer.BadParameter("--json cannot be used with the live serve stream")
-    unsupported = [
-        name
-        for name, supplied in (
-            ("--container-port", container_ports is not None),
-            ("--tcp/--no-tcp", tcp is not None),
-            ("--entrypoint", entrypoint is not None),
-            ("--container-id", container_id is not None),
-        )
-        if supplied
-    ]
-    if unsupported:
-        raise typer.BadParameter("serve previews do not support " + ", ".join(unsupported))
-    overrides = build_deployment_overrides(
-        cpu=cpu,
-        memory=memory,
-        gpu=gpu,
-        gpu_count=gpu_count,
-        image=image,
-        dockerfile=dockerfile,
-        context_dir=context_dir,
-        env=env,
-        secrets=secrets,
-        ports=container_ports,
-        keep_warm=keep_warm,
-        tcp=tcp,
-        region=region,
-        machine=machine,
-        entrypoint=entrypoint,
-        sync_dir=sync_dir,
-        container_id=container_id,
-    )
     try:
         user_object = apply_handler_reference(load_handler_object(handler), handler)
     except HandlerLoadError as exc:
@@ -88,17 +31,4 @@ def serve(
     attach_terminal(user_object)
     if not isinstance(user_object, (App, Function, Endpoint, ASGI)):
         raise typer.BadParameter("serve requires an App, Function, Endpoint, or ASGI handler")
-    options = ServeOptions(
-        image=deployment_image(overrides),
-        cpu=overrides.cpu,
-        memory=overrides.memory,
-        gpu=overrides.gpu,
-        gpu_count=overrides.gpu_count,
-        env=overrides.env,
-        secrets=overrides.secrets,
-        keep_warm=overrides.keep_warm,
-        region=overrides.region,
-        machine=overrides.machine,
-        sync_dir=overrides.sync_dir,
-    )
-    user_object.serve(timeout=timeout, options=options)
+    user_object.serve(timeout=timeout, sync_dir=sync_dir)

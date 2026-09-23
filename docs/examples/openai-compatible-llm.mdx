@@ -74,8 +74,8 @@ server = app.pod(
 reaches vLLM. The example sets no separate vLLM API key.
 
 `volumes=[model_cache]` creates or reuses `vllm-model-cache` in your workspace
-when the pod starts. Keep the volume name and mount path in this definition.
-There is no separate storage setup.
+when the pod starts. The volume name and mount path live in this definition,
+with no separate storage setup.
 
 ## Deploy
 

@@ -4,9 +4,9 @@ description: "Lay out a project as an app of workloads, keep its configuration i
 ---
 
 An `App` is a named group of workloads in a workspace. You deploy, pause, and
-delete an app as one unit, so draw its boundary around code that ships together,
-such as an API and the batch functions it calls, or a model server and its
-warm-up job.
+delete an app as one unit, so its boundary fits code that ships together, such
+as an API and the batch functions it calls, or a model server and its warm-up
+job.
 
 ## Define an app
 
@@ -38,12 +38,12 @@ and must be unique per kind within the app.
 ## Keep configuration in code
 
 The decorator is the whole definition: image, CPU, memory, GPU, volumes, secret
-names, schedule, and scaling. Change it in the file and deploy again. CLI flags
-such as `--gpu` or `--memory` override a value for one command, which suits an
-experiment. The next deploy without the flag goes back to the file.
+names, schedule, and scaling. No CLI flag or SDK call overrides it, so a deploy
+runs exactly what the file says. A change means editing the file and deploying
+again.
 
 Values that differ between workspaces or change without a code change belong
-outside the decorator. Put credentials in [secrets](/concepts/secrets) and files
+outside the decorator. Credentials go in [secrets](/concepts/secrets) and files
 in [volumes](/concepts/volumes). The workspace shares volumes and secrets by
 name, so two apps that name the same volume read the same files.
 
@@ -62,7 +62,7 @@ references](/cli/overview#handler-references) for the full syntax. From Python,
 ## Split an app across files
 
 A workload belongs to the `App` object that registers it, not to the file that
-defines it. Import the app into each module and register workloads there:
+defines it. Each module imports the app and registers its workloads:
 
 ```python
 # text_tools/app.py
@@ -81,8 +81,8 @@ def count(text: str) -> dict[str, int]:
     return {"words": len(text.split())}
 ```
 
-If `text_tools/workers.py` registers the batch functions the same way, deploy
-both files so the CLI imports every registration:
+If `text_tools/workers.py` registers the batch functions the same way, the
+deploy names both files so the CLI imports every registration:
 
 ```bash
 uv run lazycloud deploy text_tools/api.py text_tools/workers.py
@@ -91,9 +91,10 @@ uv run lazycloud deploy text_tools/api.py text_tools/workers.py
 ## Call one workload from another
 
 Inside a container, `count_words.remote(...)` calls the deployed `count_words`,
-because a container has no working tree to upload. Deploy the whole app before
-running a parent that calls its siblings remotely. `.local(...)` instead runs
-the callee in the caller's own process, with the caller's image and resources.
+because a container has no working tree to upload. A parent that calls its
+siblings remotely therefore needs the whole app deployed. `.local(...)` instead
+runs the callee in the caller's own process, with the caller's image and
+resources.
 
 ## Call deployed workloads from other projects
 
@@ -117,11 +118,11 @@ uv run lazycloud app export web_app --openapi service=./openapi.json
 ```
 
 Routes the generator cannot type fail with an explanation. An ASGI app with no
-schema keeps raw `request()`. Export skips pods and sandboxes. Export again
-after deploying a contract change.
+schema keeps raw `request()`. Export skips pods and sandboxes. A contract change
+needs a fresh export once it deploys.
 
 ## Remove a workload
 
-Delete it from the code and deploy with `--prune`. See
+Deleting it from the code and deploying with `--prune` removes it. See
 [`lazycloud deploy`](/cli/deploy-and-run#lazycloud-deploy). Removing a workload
 or deleting an app never deletes the volumes and secrets it used.
