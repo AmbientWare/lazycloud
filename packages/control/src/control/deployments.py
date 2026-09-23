@@ -485,7 +485,7 @@ class CronJobService:
         cron: str | None,
         workspace: str,
     ) -> CronJobRecord | None:
-        """Replace or remove the workload's schedule under the app lock.
+        """Replace or remove the workload's schedule under a deployment row lock.
 
         The subdomain identifies the schedule across deployment versions. Check
         that this deployment still exists before either write, so a registration
@@ -498,12 +498,12 @@ class CronJobService:
             raise InvalidInputError(str(exc)) from exc
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
-            if deployment.app_id is not None:
-                AppRepository(session).get_for_update(deployment.app_id, workspace_id=workspace_id)
-            if DeploymentRepository(session).get(deployment.id, workspace_id=workspace_id) is None:
-                raise ConflictError("cannot change the schedule of a deleted deployment")
             repository = CronJobRepository(session)
             if normalized_cron is None:
+                if not DeploymentRepository(session).lock_live(
+                    deployment.id, workspace_id=workspace_id
+                ):
+                    raise ConflictError("cannot change the schedule of a deleted deployment")
                 record = repository.get(deployment.subdomain, workspace_id=workspace_id)
                 repository.delete(deployment.subdomain, workspace_id=workspace_id)
             else:

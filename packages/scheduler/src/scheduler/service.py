@@ -1699,7 +1699,9 @@ class Scheduler:
         cron_job.next_run_at = next_run_after(cron_job.cron, now)
         cron_job.updated_at = utc_now()
         with self.runtime_services.context.database.session() as session:
-            CronJobRepository(session).upsert(cron_job, workspace_id=cron_job.workspace_id)
+            updated = CronJobRepository(session).record_run(
+                cron_job, workspace_id=cron_job.workspace_id
+            )
             saved_run = CronJobRunRepository(session).append(
                 CronJobRun(
                     id=str(uuid4()),
@@ -1710,10 +1712,11 @@ class Scheduler:
                     reason=run.reason,
                 )
             )
-        self.runtime_services.cron_jobs.publish_change(
-            cron_job,
-            WorkspaceChangeType.Updated,
-        )
+        if updated:
+            self.runtime_services.cron_jobs.publish_change(
+                cron_job,
+                WorkspaceChangeType.Updated,
+            )
         return saved_run
 
     def _run_cron_function(

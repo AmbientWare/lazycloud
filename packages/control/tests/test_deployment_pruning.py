@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from api.server.services import ApiServices
-from database.repositories.apps import DeploymentRepository
+from database.repositories.apps import CronJobRepository, DeploymentRepository
 from database.repositories.deployment_plans import DeploymentPlanRepository
 from execution.containers.service import PendingContainerReservation
 from operations.management import ManagementService
@@ -161,9 +161,11 @@ def test_interrupted_prune_resumes_exact_targets_without_deleting_redeployment(
         DeploymentSpec(
             name="old",
             handler="pkg:old",
+            cron="0 * * * *",
             metadata={"app_id": app.id},
         )
     )
+    old_schedule = services.cron_jobs.list()[0]
     manifest = DeploymentPlanRequest(app=app.name, workloads=[], prune=True)
     plan = services.deployment_plans.plan(manifest, workspace="default")
     request = DeploymentPruneRequest(
@@ -188,9 +190,19 @@ def test_interrupted_prune_resumes_exact_targets_without_deleting_redeployment(
             str(request.operation_id), workspace_id=app.workspace_id
         )
         assert pending is not None and not pending.complete
+        assert not CronJobRepository(session).record_run(
+            old_schedule, workspace_id=app.workspace_id
+        )
+    assert services.cron_jobs.list() == []
     replacement = services.deployments.deploy(old.spec.model_copy(update={"cron": "0 * * * *"}))
     with pytest.raises(ConflictError, match="deleted deployment"):
         services.cron_jobs.set_for_deployment(old, cron=None, workspace="default")
+    with services.context.database.session() as session:
+        assert not CronJobRepository(session).record_run(
+            old_schedule, workspace_id=app.workspace_id
+        )
+        with pytest.raises(ConflictError, match="deleted deployment"):
+            CronJobRepository(session).upsert(old_schedule, workspace_id=app.workspace_id)
     services.deployment_plans.reconcile_pending()
     with services.context.database.session() as session:
         completed = DeploymentPlanRepository(session).operation(

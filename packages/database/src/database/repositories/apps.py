@@ -943,6 +943,20 @@ class StubRepository:
 class DeploymentRepository:
     session: Session
 
+    def lock_live(self, deployment_id: str, *, workspace_id: str) -> bool:
+        return (
+            self.session.scalar(
+                select(DeploymentTable.id)
+                .where(
+                    DeploymentTable.id == deployment_id,
+                    DeploymentTable.workspace_id == workspace_id,
+                    DeploymentTable.deleted_at.is_(None),
+                )
+                .with_for_update(read=True)
+            )
+            is not None
+        )
+
     def lock_stub_deployment_active(self, stub_id: str, *, workspace_id: str) -> bool | None:
         return self.session.scalar(
             select(and_(DeploymentTable.active.is_(True), DeploymentTable.deleted_at.is_(None)))
@@ -1361,6 +1375,10 @@ class CronJobRepository:
         WorkspaceRepository(self.session).lock_active_owner(workspace_id)
         if cron_job.workspace_id != workspace_id:
             raise ConflictError("cron job ownership cannot change")
+        if not DeploymentRepository(self.session).lock_live(
+            cron_job.deployment_id, workspace_id=workspace_id
+        ):
+            raise ConflictError("cannot change the schedule of a deleted deployment")
         self.session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
             {"lock_key": f"cron-job:{workspace_id}:{cron_job.name}"},
@@ -1377,6 +1395,28 @@ class CronJobRepository:
         write_cron_job_row(row, cron_job)
         self.session.flush()
         return cron_job_from_table(row)
+
+    def record_run(self, cron_job: CronJobRecord, *, workspace_id: str) -> bool:
+        if cron_job.workspace_id != workspace_id:
+            raise ConflictError("cron job ownership cannot change")
+        return (
+            self.session.scalar(
+                update(CronJobTable)
+                .where(
+                    CronJobTable.workspace_id == workspace_id,
+                    CronJobTable.name == cron_job.name,
+                    CronJobTable.deployment_id == cron_job.deployment_id,
+                    CronJobTable.cron == cron_job.cron,
+                )
+                .values(
+                    last_run_at=cron_job.last_run_at,
+                    next_run_at=cron_job.next_run_at,
+                    updated_at=cron_job.updated_at,
+                )
+                .returning(CronJobTable.name)
+            )
+            is not None
+        )
 
     def get(self, name: str, *, workspace_id: str) -> CronJobRecord | None:
         row = self.session.scalar(
