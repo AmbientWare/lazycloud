@@ -6,6 +6,7 @@ from datetime import datetime
 from agent.binary import AgentBinarySettings
 from billing.payment_maintenance import BillingPaymentMaintenance
 from compute.aws_connections import AwsAccountConnectionDirectory
+from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_launches import ProviderNodeLaunchService
 from compute.provider_state import ProviderUnitStateService
@@ -21,6 +22,7 @@ from control.apps import (
 )
 from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import AppDeploymentLifecycleService
+from control.deployment_plans import DeploymentPlanService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
@@ -60,6 +62,7 @@ from provider_aws.storage_access import AwsStorageAccessSettings, AwsStorageAcce
 from provider_clients import (
     workspace_compute_provider_resolver,
 )
+from provider_clients.aws_connections import configured_aws_account_connection_components
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacitySettings,
@@ -150,6 +153,7 @@ class SchedulerAppServices:
     autoscaler_states: AutoscalerStateService
     apps: AppService
     deployments: DeploymentService
+    deployment_plans: DeploymentPlanService
     cron_jobs: CronJobService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
@@ -402,20 +406,40 @@ class SchedulerAppServices:
             containers=containers,
             events=events,
         )
+        placement_resources = (
+            AwsDeploymentBucketAccessService(
+                context,
+                configured_aws_account_connection_components(
+                    capacity.aws_connections,
+                    capacity=capacity.aws_capacity,
+                    gateway_origin=gateway_origin,
+                ).bucket_access,
+            )
+            if capacity.aws_connections.configured
+            else None
+        )
         deployment_lifecycle = AppDeploymentLifecycleService(
             context,
             workspace_changes=workspace_changes,
+            placement_resources=placement_resources,
+        )
+        execution_lifecycle = ProductionAppExecutionLifecycleEffects(
+            context,
+            containers,
+            tasks,
+            redis,
+            container_shutdowns,
+        )
+        deployment_plans = DeploymentPlanService(
+            context,
+            execution_lifecycle,
+            workspace_changes=workspace_changes,
+            placement_resources=placement_resources,
         )
         apps = AppService(
             context,
             deployment_lifecycle,
-            ProductionAppExecutionLifecycleEffects(
-                context,
-                containers,
-                tasks,
-                redis,
-                container_shutdowns,
-            ),
+            execution_lifecycle,
             DatabaseAppImageAvailability(),
             workspace_changes=workspace_changes,
         )
@@ -440,6 +464,7 @@ class SchedulerAppServices:
             autoscaler_states=AutoscalerStateService(context),
             apps=apps,
             deployments=deployments,
+            deployment_plans=deployment_plans,
             cron_jobs=cron_jobs,
             containers=containers,
             container_shutdowns=container_shutdowns,

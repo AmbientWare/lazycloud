@@ -349,6 +349,15 @@ class DeploymentTable(IdTable, DatabaseBase):
         Index("ix_deployments_workspace_created", "workspace_id", "created_at", "id"),
         Index("ix_deployments_app_created", "app_id", "created_at", "id"),
         Index("ix_deployments_stub", "stub_id"),
+        Index(
+            "ix_deployments_app_workload_live",
+            "workspace_id",
+            "app_id",
+            "kind",
+            "name",
+            "version",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         # The public edge routes on this pair alone, so a digest collision between two
         # resources must fail the second deploy rather than silently answer for it.
         Index(

@@ -28,6 +28,7 @@ from control.apps import (
 )
 from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import AppDeploymentLifecycleService
+from control.deployment_plans import DeploymentPlanService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
@@ -459,6 +460,7 @@ class ApiServiceCore:
     workspace_compute_policy_service: WorkspaceComputePolicyService
     apps: AppService
     deployments: DeploymentService
+    deployment_plans: DeploymentPlanService
     deployment_resources: DeploymentResourceService
     custom_domains: CustomDomainService
     cron_jobs: CronJobService
@@ -886,16 +888,23 @@ class ApiServices(ApiServiceCore):
             workspace_changes=workspace_changes,
             placement_resources=placement_resources,
         )
+        execution_lifecycle = ProductionAppExecutionLifecycleEffects(
+            context,
+            containers,
+            tasks,
+            redis,
+            container_shutdowns,
+        )
+        deployment_plans = DeploymentPlanService(
+            context,
+            execution_lifecycle,
+            workspace_changes=workspace_changes,
+            placement_resources=placement_resources,
+        )
         apps = AppService(
             context,
             deployment_lifecycle,
-            ProductionAppExecutionLifecycleEffects(
-                context,
-                containers,
-                tasks,
-                redis,
-                container_shutdowns,
-            ),
+            execution_lifecycle,
             DatabaseAppImageAvailability(),
             workspace_changes=workspace_changes,
         )
@@ -1011,6 +1020,7 @@ class ApiServices(ApiServiceCore):
             workspace_compute_policy_service=compute_policies,
             apps=apps,
             deployments=deployments,
+            deployment_plans=deployment_plans,
             deployment_resources=deployment_resources,
             custom_domains=custom_domains,
             cron_jobs=cron_jobs,
@@ -1300,6 +1310,7 @@ def _compose_api_services(
         workspace_compute_policy_service=core.workspace_compute_policy_service,
         apps=core.apps,
         deployments=core.deployments,
+        deployment_plans=core.deployment_plans,
         deployment_resources=core.deployment_resources,
         custom_domains=core.custom_domains,
         cron_jobs=core.cron_jobs,

@@ -30,7 +30,7 @@ from shared.deployment_records import (
 )
 from shared.deployment_subdomains import deployment_subdomain
 from shared.deployments import DeploymentKind
-from shared.errors import InvalidInputError, NotFoundError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.tasks import RetryPolicy
 from shared.timestamps import utc_now
@@ -133,26 +133,26 @@ class DeploymentService:
         with self.context.database.session() as session:
             repository = DeploymentRepository(session)
             app = (
-                AppRepository(session).get(app_id, workspace_id=workspace_record.id)
+                AppRepository(session).get_for_update(app_id, workspace_id=workspace_record.id)
                 if app_id is not None
                 else None
             )
             deployment_active = app.active if app is not None else True
-            existing = [
-                deployment
-                for deployment in repository.list(
-                    workspace_id=workspace_record.id,
-                    include_deleted=True,
-                )
-                if deployment.name == normalized_spec.name
-                and deployment.kind is normalized_spec.kind
-                and deployment.app_id == app_id
-            ]
-            version = max((item.version for item in existing), default=0) + 1
+            version = repository.next_version(
+                workspace_id=workspace_record.id,
+                app_id=app_id,
+                name=normalized_spec.name,
+                kind=normalized_spec.kind,
+            )
             if normalized_spec.kind is DeploymentKind.Function:
                 _release_superseded_warm_floors(
                     session,
-                    existing,
+                    repository.live_stub_ids(
+                        workspace_id=workspace_record.id,
+                        app_id=app_id,
+                        name=normalized_spec.name,
+                        kind=normalized_spec.kind,
+                    ),
                     workspace_id=workspace_record.id,
                 )
             subdomain = deployment_subdomain(
@@ -210,12 +210,8 @@ class DeploymentService:
                     deployment,
                     workspace_id=workspace_record.id,
                 )
-            # Unconditional, because a spec without a schedule is stating that
-            # this resource has none — and the row a prior version wrote is
-            # named for the same subdomain. After the stub exists, because a
-            # schedule names the stub it fires, and inside this block so a
-            # failure here is compensated with the rest of the deploy rather
-            # than leaving a schedule for a deployment that was rolled back.
+            # Register the stub before its schedule can fire. Keep schedule writes
+            # inside the compensation block so a failed deploy leaves no schedule.
             self.schedules.set_for_deployment(
                 deployment,
                 cron=normalized_spec.cron,
@@ -455,36 +451,20 @@ def _metadata_str(metadata: Mapping[str, JsonValue], key: str) -> str:
 
 def _release_superseded_warm_floors(
     session: Session,
-    existing: list[Deployment],
+    stub_ids: list[str],
     *,
     workspace_id: str,
 ) -> None:
-    """Let prior versions of this function drain.
+    """Release prior versions' warm containers while keeping those versions invocable.
 
-    A warm floor is asked for on a resource, not on a version of it: an author
-    who wants two interpreters resident wants two, not two per deploy. It is
-    held per stub and every version keeps its own, so without this each deploy
-    pins another floor's worth of containers that no name resolves to — and a
-    floor makes the idle window infinite, so nothing else ever removes them.
-
-    The version stays active and invocable by number, which is the contract
-    prior versions have. It stops being warm, which costs it a cold start and
-    nothing else.
-
-    The window is deliberately left infinite while the floor goes to zero. A
-    container reads its keep-warm seconds from the environment it was started
-    with, so restoring a finite window here would reach the config and not the
-    containers already holding the old floor: they would retire on a window
-    nothing told them about, which is to say never. Zero floor with no window is
-    what puts them under the autoscaler, which stops the idle ones on the next
-    tick and leaves the busy ones alone.
+    Leave the idle window infinite. Running containers read it from their startup
+    environment and would not see a shorter window written here. A zero floor
+    lets the autoscaler stop idle containers without interrupting busy ones.
     """
 
     repository = StubRepository(session)
-    for prior in existing:
-        if not prior.active or prior.deleted_at is not None or not prior.stub_id:
-            continue
-        stub = repository.get(prior.stub_id, workspace_id=workspace_id)
+    for stub_id in stub_ids:
+        stub = repository.get(stub_id, workspace_id=workspace_id)
         if stub is None or stub.config.autoscaler.min_containers == 0:
             continue
         config = stub.config.model_copy(deep=True)
@@ -505,45 +485,44 @@ class CronJobService:
         cron: str | None,
         workspace: str,
     ) -> CronJobRecord | None:
-        """Make this deployment's schedule match what its spec declared.
+        """Replace or remove the workload's schedule under a deployment row lock.
 
-        One call for both answers, because the absence of a schedule is a fact a
-        deploy states as deliberately as its presence. Called only where a spec
-        declares one, the row a previous version wrote would outlive the source
-        line that asked for it: the author deletes `cron=`, redeploys, and the
-        old version keeps firing on a schedule nothing in their code names.
-
-        Takes the deployment rather than an id because the caller has already
-        resolved it, and because looking it up here would mean depending on the
-        service that deploys — which depends on the registration that calls this.
-
-        Named for the deployment's subdomain, which is the one identity a
-        resource keeps across its versions and is already checked for collisions
-        when it is minted. So a redeploy addresses the previous version's row
-        without anything having to go looking for it.
+        The subdomain identifies the schedule across deployment versions. Check
+        that this deployment still exists before either write, so a registration
+        delayed past pruning cannot change a replacement workload's schedule.
         """
-
-        if not cron:
-            self.delete(deployment.subdomain, workspace=workspace)
-            return None
         try:
-            normalized_cron = normalize_cron_expression(cron)
-            next_run_at = next_cron_run(normalized_cron)
+            normalized_cron = normalize_cron_expression(cron) if cron else None
+            next_run_at = next_cron_run(normalized_cron) if normalized_cron else None
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
         with self.context.database.session() as session:
             workspace_id = self.context.workspace(session, workspace).id
             repository = CronJobRepository(session)
-            record = CronJobRecord(
-                workspace_id=workspace_id,
-                name=deployment.subdomain,
-                cron=normalized_cron,
-                deployment_id=deployment.id,
-                next_run_at=next_run_at,
+            if normalized_cron is None:
+                if not DeploymentRepository(session).lock_live(
+                    deployment.id, workspace_id=workspace_id
+                ):
+                    raise ConflictError("cannot change the schedule of a deleted deployment")
+                record = repository.get(deployment.subdomain, workspace_id=workspace_id)
+                repository.delete(deployment.subdomain, workspace_id=workspace_id)
+            else:
+                record = repository.upsert(
+                    CronJobRecord(
+                        workspace_id=workspace_id,
+                        name=deployment.subdomain,
+                        cron=normalized_cron,
+                        deployment_id=deployment.id,
+                        next_run_at=next_run_at,
+                    ),
+                    workspace_id=workspace_id,
+                )
+        if record is not None:
+            self.publish_change(
+                record,
+                WorkspaceChangeType.Created if normalized_cron else WorkspaceChangeType.Deleted,
             )
-            saved = repository.upsert(record, workspace_id=workspace_id)
-        self.publish_change(saved, WorkspaceChangeType.Created)
-        return saved
+        return record if normalized_cron else None
 
     def list(self, *, workspace: str = "default") -> list[CronJobRecord]:
         with self.context.database.session() as session:

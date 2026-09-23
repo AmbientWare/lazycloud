@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
-from database.repositories.apps import StubRepository
+from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
@@ -240,6 +240,14 @@ class ContainerService:
                 app_id=app_id,
                 workspace_id=reservation.workspace_id,
             )
+        if reservation.stub_id:
+            # Keep deletion behind this reservation until its container is durable.
+            active = DeploymentRepository(session).lock_stub_deployment_active(
+                reservation.stub_id,
+                workspace_id=reservation.workspace_id,
+            )
+            if active is False:
+                raise ConflictError("cannot start a container for a stopped or deleted deployment")
         values = reservation.model_dump(mode="python", exclude_none=True)
         values["app_id"] = app_id
         values["stub_id"] = optional_uuid(reservation.stub_id, field="stub_id")

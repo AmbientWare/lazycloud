@@ -130,6 +130,10 @@ class SchedulerAppLifecycleService(Protocol):
     def reconcile_pending(self, *, limit: int = 25) -> list[AppRecord]: ...
 
 
+class SchedulerDeploymentPruneService(Protocol):
+    def reconcile_pending(self, *, limit: int = 25) -> None: ...
+
+
 class SchedulerCronJobService(Protocol):
     def list(self, *, workspace: str = "default") -> list[CronJobRecord]: ...
 
@@ -204,6 +208,9 @@ class SchedulerServices(Protocol):
 
     @property
     def apps(self) -> SchedulerAppLifecycleService: ...
+
+    @property
+    def deployment_plans(self) -> SchedulerDeploymentPruneService: ...
 
     @property
     def deployments(self) -> SchedulerDeploymentService: ...

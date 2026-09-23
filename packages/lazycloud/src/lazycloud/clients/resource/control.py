@@ -15,6 +15,12 @@ from shared.http.compute import (
     UnitListResponse,
     WorkerListResponse,
 )
+from shared.http.deployment_plans import (
+    DeploymentPlanRequest,
+    DeploymentPlanResponse,
+    DeploymentPruneRequest,
+    DeploymentPruneResponse,
+)
 from shared.http.deployments import (
     DeploymentListResponse,
     DeploymentResponse,
@@ -55,6 +61,24 @@ class ResourceControlClient:
 
     channel: ResourceControlChannel
     workspace: str = "default"
+
+    def plan_deployment(self, request: DeploymentPlanRequest) -> DeploymentPlanResponse:
+        return _validate_response(
+            DeploymentPlanResponse,
+            self.channel.post(
+                workspace_path("/api/v1/deployment-plans", self.workspace),
+                request.model_dump(mode="json"),
+            ),
+        )
+
+    def prune_deployments(self, request: DeploymentPruneRequest) -> DeploymentPruneResponse:
+        return _validate_response(
+            DeploymentPruneResponse,
+            self.channel.post(
+                workspace_path("/api/v1/deployment-prunes", self.workspace),
+                request.model_dump(mode="json"),
+            ),
+        )
 
     @classmethod
     def from_endpoint(
