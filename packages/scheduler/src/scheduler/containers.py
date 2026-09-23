@@ -1553,6 +1553,7 @@ def _scheduling_request(
         preemptible=request.preemptible,
         provisionable=provisionable and not request.required_worker_id,
         required_worker_id=request.required_worker_id,
+        preferred_worker_id=request.preferred_worker_id,
         retry_count=request.retry_count,
         created_at=request.timestamp,
     )

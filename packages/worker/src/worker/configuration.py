@@ -10,6 +10,7 @@ from shared.contracts import ContractModel
 from shared.usage import UsageBillingOwner
 
 from worker.container_rootfs import DEFAULT_CONTAINER_ROOTFS_ROOT
+from worker.durable_disks import DEFAULT_DISK_ROOT
 from worker.events import WorkerPoolMode
 from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,
@@ -100,6 +101,8 @@ class WorkerPathConfiguration(ContractModel):
     source_cache_root: Path | None = None
     checkpoint_root: str = WORKER_CHECKPOINT_ROOT
     container_rootfs_root: Path = Path(DEFAULT_CONTAINER_ROOTFS_ROOT)
+    disk_root: Path = Path(DEFAULT_DISK_ROOT)
+    """Durable disk layers and leases; a host directory that outlives the worker."""
 
     @model_validator(mode="after")
     def image_build_root_is_dedicated_disk_storage(self) -> Self:

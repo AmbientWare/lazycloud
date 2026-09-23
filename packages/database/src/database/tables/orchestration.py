@@ -392,6 +392,9 @@ class ContainerTable(IdTable, DatabaseBase):
     scheduling_deployment_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
     scheduling_cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_required_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_preferred_worker_id: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     scheduling_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     scheduling_gpu_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

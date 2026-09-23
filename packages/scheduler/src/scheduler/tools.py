@@ -46,6 +46,9 @@ class SchedulingRequest(ContractModel):
     gpu_count: int = 0
     placement: Placement
     required_worker_id: str = ""
+    preferred_worker_id: str = ""
+    """Chosen over other workers that fit, below liveness and above packing."""
+
     runtime_class: str = ""
     docker_enabled: bool = False
     preemptible: bool = False
@@ -260,11 +263,17 @@ def select_worker_for_request(
     # request now leaves the request waiting beside capacity that was ready.
     # Within a tier the key is unchanged, so packing stays exact, and a tier
     # that receives nothing empties faster than it does today.
+    #
+    # The worker named as preferred holds local state the request would otherwise
+    # download, such as a disk's layers. It ranks under priority, so work still
+    # fills the highest tier first, and over packing, which it would otherwise
+    # never outweigh.
     return min(
         candidates,
         key=lambda item: (
             item.pending,
             -item.priority,
+            not request.preferred_worker_id or item.worker_id != request.preferred_worker_id,
             *_post_placement_headroom(item, request),
             item.worker_id,
         ),

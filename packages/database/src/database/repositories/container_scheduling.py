@@ -33,6 +33,7 @@ def _request_statement(*, include_payload: bool = True) -> Select[tuple[Containe
         ContainerTable.scheduling_provider_runtime,
         ContainerTable.scheduling_region,
         ContainerTable.scheduling_requested_at,
+        ContainerTable.scheduling_preferred_worker_id,
         ContainerTable.scheduling_required_worker_id,
         ContainerTable.scheduling_retry_count,
         ContainerTable.scheduling_runtime_class,

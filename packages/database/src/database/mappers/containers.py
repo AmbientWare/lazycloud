@@ -89,6 +89,7 @@ def scheduling_request_from_row(
             "container_id": row.id,
             "cpu_millicores": row.scheduling_cpu_millicores,
             "required_worker_id": row.scheduling_required_worker_id,
+            "preferred_worker_id": row.scheduling_preferred_worker_id,
             "memory_mib": row.scheduling_memory_mib,
             "gpu": row.scheduling_gpu,
             "gpu_count": row.scheduling_gpu_count,
@@ -116,6 +117,7 @@ def write_scheduling_request(row: ContainerTable, request: SchedulerWorkerReques
     row.scheduling_deployment_id = request.deployment_id
     row.scheduling_cpu_millicores = request.cpu_millicores
     row.scheduling_required_worker_id = request.required_worker_id
+    row.scheduling_preferred_worker_id = request.preferred_worker_id
     row.scheduling_memory_mib = request.memory_mib
     row.scheduling_gpu = list(request.gpu)
     row.scheduling_gpu_count = request.gpu_count

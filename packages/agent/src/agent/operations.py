@@ -52,6 +52,7 @@ from worker.configuration import (
     WorkerNetworkConfiguration,
     WorkerPathConfiguration,
 )
+from worker.durable_disks import DEFAULT_DISK_ROOT
 from worker.events import WorkerPoolMode
 from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,
@@ -892,6 +893,7 @@ class AgentWorkerDirs(ContractModel):
     cache: str
     builds: str
     checkpoints: str
+    disks: str
     logs: str
 
     def all_paths(self) -> list[str]:
@@ -904,6 +906,7 @@ class AgentWorkerDirs(ContractModel):
             self.cache,
             self.builds,
             self.checkpoints,
+            self.disks,
             self.logs,
         ]
 
@@ -1251,6 +1254,9 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
         cache=posixpath.join(root, "cache"),
         builds=posixpath.join(root, "builds"),
         checkpoints=posixpath.join(root, "checkpoints"),
+        # Per slot: the engine's recover stops every daemon under its root, so
+        # two workers sharing one would stop each other's disks.
+        disks=posixpath.join(root, "disks", slot_name),
         logs=posixpath.join(root, "logs", slot_name),
     )
 
@@ -1379,6 +1385,7 @@ def plan_worker_container(
         f"{dirs.cache}:/cache",
         f"{dirs.builds}:/builds",
         f"{dirs.checkpoints}:/checkpoints",
+        f"{dirs.disks}:{DEFAULT_DISK_ROOT}",
         f"{dirs.logs}:{AGENT_CONTAINER_LOG_PATH}",
         f"{config_path}:{DEFAULT_WORKER_CONFIG_PATH}:ro",
     ]

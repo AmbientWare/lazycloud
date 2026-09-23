@@ -10,6 +10,7 @@ from threading import Lock
 from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.container_requests import (
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
+    RequestDisk,
     RequestMount,
     StopContainerReason,
 )
@@ -161,6 +162,7 @@ class ContainerRequestContext(ContractModel):
     deployment_id: str = ""
     env: list[str] = Field(default_factory=list)
     mounts: list[RequestMount] = Field(default_factory=list)
+    disks: list[RequestDisk] = Field(default_factory=list)
     secret_names: list[str] = Field(default_factory=list)
     gateway_token_required: bool = False
     workspace_storage_required: bool = False

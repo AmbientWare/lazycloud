@@ -57,6 +57,7 @@ from worker.container_service.protocols import (
 )
 from worker.container_service.service import WorkerContainerService
 from worker.container_service.transport import WorkerContainerServiceTransport
+from worker.durable_disks import WorkerDurableDiskService
 from worker.event_bridge import WorkerSourceCacheReconciler, WorkerStreamEventHandler
 from worker.events import WorkerBuildCancelRegistry, WorkerPoolMode, WorkerStreamEvent
 from worker.finalization import (
@@ -148,6 +149,7 @@ class WorkerProcessExecutionDependencies:
     checkpoint_restorer: ContainerCheckpointRestorer | None = None
     automatic_checkpoints: ContainerAutomaticCheckpointCoordinator | None = None
     container_logs: ContainerLogCaptureService | None = None
+    durable_disks: WorkerDurableDiskService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +268,7 @@ def assemble_worker_process_services(
             source_workspaces=finalization_dependencies.source_workspaces,
             workspace_storage=dependencies.workspace_storage_mounter,
             container_rootfs=dependencies.rootfs_preparer,
+            durable_disks=dependencies.durable_disks,
             bundle_root=finalization_dependencies.bundle_root,
         ),
     )
@@ -319,6 +322,7 @@ def assemble_worker_process_services(
         checkpoint_restorer=dependencies.checkpoint_restorer,
         automatic_checkpoints=dependencies.automatic_checkpoints,
         container_logs=dependencies.container_logs,
+        durable_disks=dependencies.durable_disks,
     )
     transport = WorkerContainerServiceTransport(container_service)
 

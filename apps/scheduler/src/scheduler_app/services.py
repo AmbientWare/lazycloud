@@ -94,6 +94,7 @@ from shared.deployment_settings import MissingDeploymentSettingError
 from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
 from shared.workspace_storage import WorkspaceStorageProvider
 from storage.access_metering import StorageAccessMeteringService
+from storage.disks import DiskDeletionService, DiskService
 from storage.image_archive import ImageArchiveSettings
 from storage.retention import (
     RetentionResult,
@@ -169,6 +170,7 @@ class SchedulerAppServices:
     volume_metering: PersistentVolumeMeteringService
     storage_access: StorageAccessMeteringService | None
     volume_deletion: VolumeDeletionService
+    disk_deletion: DiskDeletionService
     meter_outbox: BillingMeterOutboxService
     email_outbox: EmailOutboxDrain
     plan_changes: BillingPlanChangeService
@@ -485,6 +487,15 @@ class SchedulerAppServices:
             volume_metering=volume_metering,
             storage_access=_storage_access(context.database, storage.object_store),
             volume_deletion=volume_deletion,
+            disk_deletion=DiskDeletionService(
+                context.database,
+                disks=DiskService(
+                    context.database,
+                    worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+                ),
+                objects=volume_filesystem,
+                metering=volume_metering,
+            ),
             meter_outbox=meter_outbox,
             email_outbox=email_outbox,
             plan_changes=plan_changes,

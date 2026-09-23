@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol
 
 from foundation.process import ProcessOutputSink
@@ -34,6 +35,7 @@ from worker.container_rootfs import (
     ContainerRootfsSetupResult,
     ContainerRootfsStatus,
 )
+from worker.durable_disks import DurableDiskAttachment
 from worker.events import (
     ContainerEventPayload,
     ContainerExecutionPhase,
@@ -81,6 +83,7 @@ from worker.runtime_config import (
     OciRuntimeName,
     apply_unsupported_cgroup_parameters,
 )
+from worker.ssh_identity import ContainerSshIdentity
 from worker.supervision import WorkerOomHandlingResult, WorkerSupervisionService
 
 LOGGER = logging.getLogger(__name__)
@@ -140,9 +143,14 @@ class ContainerRootfsPreparer(Protocol):
         container_id: str,
         image_id: str,
         disk_limit_bytes: int = 0,
+        upper_root: Path | None = None,
     ) -> ContainerRootfsSetupResult: ...
 
     def release(self, container_id: str) -> ContainerRootfsReleaseResult: ...
+
+
+class ContainerDurableDisks(Protocol):
+    def attach(self, request: ContainerRequestContext) -> DurableDiskAttachment: ...
 
 
 class ContainerWorkspaceStorageMounter(Protocol):
@@ -333,6 +341,10 @@ class ContainerExecutionContext(ContractModel):
     cwd: str = "/workspace"
     runtime: OciRuntimeName = OciRuntimeName.Runsc
     docker_enabled: bool = False
+    ssh_enabled: bool = False
+    ssh_identity: ContainerSshIdentity | None = None
+    """Filled by credential hydration for an SSH-enabled container."""
+
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)
     memory_enforced: bool = True
@@ -344,6 +356,11 @@ class ContainerExecutionContext(ContractModel):
 
     cgroup_path: str | None = None
     run_delayed_cleanup: bool = False
+
+    @property
+    def supervised(self) -> bool:
+        """Whether the sandbox supervisor is the container's init and starts the workload."""
+        return self.request.stub_type == "sandbox" or self.docker_enabled or self.ssh_enabled
 
     @property
     def checkpoint_readiness_probe(self) -> CheckpointReadinessProbe | None:
@@ -377,6 +394,7 @@ class ContainerExecutionResult(ContractModel):
     mount_result: ContainerMountSetupResult | None = None
     gpu_result: ContainerGpuAssignmentResult | None = None
     rootfs_result: ContainerRootfsSetupResult | None = None
+    disk_mounts: list[OciMount] = Field(default_factory=list)
     oom_watcher: WorkerOomWatcherPlan | None = None
     oom_result: WorkerOomHandlingResult | None = None
     monitoring: ContainerRuntimeMonitoringResult | None = None
@@ -461,6 +479,7 @@ class WorkerContainerExecutionService:
     checkpoint_restorer: ContainerCheckpointRestorer | None = None
     automatic_checkpoints: ContainerAutomaticCheckpointCoordinator | None = None
     container_logs: ContainerLogCaptureService | None = None
+    durable_disks: ContainerDurableDisks | None = None
     container_started: Callable[[str, int], None] | None = None
     """Told the sandbox process id the moment a container has one.
 
@@ -536,6 +555,7 @@ class WorkerContainerExecutionService:
                 ports=context.ports,
                 requested_ports=context.requested_ports,
                 checkpoint_exposed_ports=context.checkpoint_exposed_ports,
+                ssh_enabled=context.ssh_enabled,
             )
         )
         if not self._phase(
@@ -552,6 +572,7 @@ class WorkerContainerExecutionService:
                 ports=ports,
                 requested_ports=context.requested_ports,
                 checkpoint_exposed_ports=context.checkpoint_exposed_ports,
+                ssh_enabled=context.ssh_enabled,
             ),
             bind_ports=result.bind_ports,
         )
@@ -636,7 +657,7 @@ class WorkerContainerExecutionService:
                 result,
                 ContainerExecutionPhase.PrepareWorkload,
                 lambda: self._prepare_workload(context),
-                skip=context.request.stub_type != "sandbox" and not context.docker_enabled,
+                skip=not context.supervised,
                 request=context.request,
             ):
                 msg = result.phases[-1].error_message
@@ -867,6 +888,10 @@ class WorkerContainerExecutionService:
         gpu_result: ContainerGpuAssignmentResult | None,
         rootfs_result: ContainerRootfsSetupResult | None = None,
     ) -> None:
+        if result.disk_mounts:
+            mount_result = mount_result.model_copy(
+                update={"oci_mounts": [*mount_result.oci_mounts, *result.disk_mounts]}
+            )
         holder["spec"] = self.spec_builder.build_spec(
             context,
             bind_ports=bind_ports,
@@ -883,12 +908,25 @@ class WorkerContainerExecutionService:
         context: ContainerExecutionContext,
         result: ContainerExecutionResult,
     ) -> None:
+        upper_root: Path | None = None
+        if context.request.disks:
+            if self.durable_disks is None:
+                raise RuntimeError("this worker cannot attach durable disks")
+            attachment = self.durable_disks.attach(context.request)
+            result.disk_mounts = list(attachment.oci_mounts)
+            upper_root = Path(attachment.root_upper) if attachment.root_upper else None
         rootfs_result = self.rootfs_preparer.prepare(
             container_id=context.request.container_id,
             image_id=context.request.image_id,
             disk_limit_bytes=context.request.disk_limit_bytes,
+            upper_root=upper_root,
         )
         result.rootfs_result = rootfs_result
+        if upper_root is not None and not rootfs_result.prepared:
+            raise RuntimeError(
+                "a root disk needs the container's overlay root, and this request has none: "
+                + (rootfs_result.reason or rootfs_result.status.value)
+            )
         if rootfs_result.status is ContainerRootfsStatus.Failed:
             # Falling through would hand the container the shared image directory
             # as its writable root, which is the isolation break this exists to

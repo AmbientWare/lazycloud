@@ -35,6 +35,7 @@ class ContainerFinalizationStep(StrEnum):
     StopOomWatcher = "stop-oom-watcher"
     UnmountRequestMounts = "unmount-request-mounts"
     ReleaseContainerRootfs = "release-container-rootfs"
+    ReleaseDurableDisks = "release-durable-disks"
     DeleteLocalState = "delete-local-state"
     DeleteRemoteState = "delete-remote-state"
 
@@ -82,6 +83,8 @@ class ContainerFinalizationCleanup(Protocol):
     def unmount_request_mounts(self, container_id: str) -> None: ...
 
     def release_container_rootfs(self, container_id: str) -> None: ...
+
+    def release_durable_disks(self, container_id: str) -> None: ...
 
     def delete_local_state(self, container_id: str) -> None: ...
 
@@ -217,6 +220,13 @@ class WorkerContainerFinalizationService:
             (
                 ContainerFinalizationStep.ReleaseContainerRootfs,
                 lambda: self.cleanup.release_container_rootfs(container_id),
+            ),
+            # After the overlay is gone, since a root disk holds its upper layer,
+            # and before storage is reported released: that report is what lets
+            # the control plane hand the disk to another container.
+            (
+                ContainerFinalizationStep.ReleaseDurableDisks,
+                lambda: self.cleanup.release_durable_disks(container_id),
             ),
             (
                 ContainerFinalizationStep.DeleteLocalState,

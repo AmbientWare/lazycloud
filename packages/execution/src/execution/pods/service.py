@@ -25,6 +25,7 @@ from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
     WORKER_USER_CODE_VOLUME,
+    RequestDisk,
     RuntimeContainerStatus,
     StopContainerReason,
     WorkerStartupKind,
@@ -92,6 +93,7 @@ from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
 from shared.urls import pod_proxy_url
 from shared.workload_keys import pod_keep_warm_lock_key
+from storage.disks import get_or_create_disks
 
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
@@ -214,6 +216,10 @@ class PodControlService:
             raise InvalidInputError("memory checkpoints can only restore Sandbox workloads")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
+        if stub.config.ssh and stub.deployment_id is None:
+            raise InvalidInputError(
+                "SSH requires Pod.deploy(); standalone Pod.create() is not supported"
+            )
         if stub.config.tcp and stub.deployment_id is None:
             raise InvalidInputError(
                 "raw TCP ingress requires Pod.deploy(); standalone Pod.create() is not supported"
@@ -275,6 +281,11 @@ class PodControlService:
         env = parse_environment(plan.env)
         if request.checkpoint_id:
             env["CHECKPOINT_ID"] = request.checkpoint_id
+        disks = get_or_create_disks(
+            self.services.context.database,
+            list(stub.config.disks),
+            workspace_id=stub.workspace_id,
+        )
         with self.services.context.database.session() as session:
             placement = workload_placement(
                 session,
@@ -380,6 +391,7 @@ class PodControlService:
                     runtime=config.runtime.runtime,
                     runtime_class=config.runtime.runtime_class or "",
                     docker_enabled=config.runtime.docker_enabled,
+                    ssh_enabled=stub.config.ssh,
                     block_network=config.runtime.block_network,
                     allow_list=config.runtime.allow_list,
                     preemptible=config.runtime.preemptible,
@@ -395,6 +407,18 @@ class PodControlService:
                         )
                     ),
                     mounts=resource_mounts,
+                    disks=[
+                        RequestDisk(
+                            disk_id=disk.record.id,
+                            name=disk.record.name,
+                            mount_path=disk.mount.mount_path,
+                            size_bytes=disk.record.size_bytes,
+                        )
+                        for disk in disks
+                    ],
+                    preferred_worker_id=next(
+                        (disk.last_worker_id for disk in disks if disk.last_worker_id), ""
+                    ),
                 ),
             )
         except Exception:

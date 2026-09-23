@@ -394,6 +394,10 @@ class SchedulerSandboxPortPublisher(BridgeSandboxPortPublisher):
         )
 
 
+class WorkerDurableDiskReleaser(Protocol):
+    def release(self, container_id: str) -> None: ...
+
+
 @dataclass(slots=True)
 class WorkerFinalizationCleanup:
     runtime: WorkerContainerRuntimeController | None = None
@@ -407,6 +411,7 @@ class WorkerFinalizationCleanup:
     source_workspaces: SourceWorkspaceLifecycle | None = None
     workspace_storage: ContainerWorkspaceStorageMounter | None = None
     container_rootfs: ContainerRootfsReleaser | None = None
+    durable_disks: WorkerDurableDiskReleaser | None = None
     upload_root: Path = Path(DEFAULT_WORKER_UPLOAD_ROOT)
     bundle_root: Path = Path(WORKER_BUNDLE_ROOT)
 
@@ -457,6 +462,10 @@ class WorkerFinalizationCleanup:
             # A failed unmount is reported, never swallowed: leaving the overlay
             # mounted strands the upper layer and its disk on this worker.
             raise RuntimeError(result.reason)
+
+    def release_durable_disks(self, container_id: str) -> None:
+        if self.durable_disks is not None:
+            self.durable_disks.release(container_id)
 
     def delete_local_state(self, container_id: str) -> None:
         release_container_accounting_cgroup(container_id)

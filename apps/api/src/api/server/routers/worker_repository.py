@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from identity.auth import AuthError, AuthorizationDeniedError
 from identity.authz import worker_requirement
@@ -14,6 +14,13 @@ from shared.http.worker_usage import (
     WorkerUsageWindowResponse,
 )
 from shared.identity import AuthScope
+from worker.durable_disk_records import (
+    DiskAcquirePayload,
+    DiskAcquireResult,
+    DiskPublishPayload,
+    DiskPublishResult,
+    DiskReleasePayload,
+)
 from worker.events import WorkerStreamEvent
 from worker.origin_access import (
     CacheOriginCredentialRequest,
@@ -122,6 +129,7 @@ from worker.repository_payloads import (
     WorkerRecordResponse,
     WorkerRepositoryPrincipal,
 )
+from worker.ssh_identity import ContainerSshIdentity, ContainerSshIdentityRequest
 from worker.tools import ContainerCredentialRequest
 
 from api.server.dependencies import (
@@ -655,6 +663,18 @@ def get_container_credentials(
 
 
 @router.post(
+    "/worker-repository/get-container-ssh-identity",
+    response_model=ContainerSshIdentity,
+)
+def get_container_ssh_identity(
+    request: ContainerSshIdentityRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> ContainerSshIdentity:
+    return service.get_container_ssh_identity(request, principal=principal)
+
+
+@router.post(
     "/worker-repository/save-checkpoint-state",
     response_model=SaveCheckpointStateResponse,
 )
@@ -689,6 +709,37 @@ def release_automatic_checkpoint_lease(
     principal: WorkerPrincipal,
 ) -> ReleaseAutomaticCheckpointLeaseResponse:
     return service.release_automatic_checkpoint_lease(request, principal=principal)
+
+
+@router.post("/worker-repository/acquire-disk", response_model=DiskAcquireResult)
+def acquire_disk(
+    request: DiskAcquirePayload,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> DiskAcquireResult:
+    return service.acquire_disk(request, principal=principal)
+
+
+@router.post("/worker-repository/publish-disk", response_model=DiskPublishResult)
+def publish_disk(
+    request: DiskPublishPayload,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> DiskPublishResult:
+    return service.publish_disk(request, principal=principal)
+
+
+@router.post(
+    "/worker-repository/release-disk",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def release_disk(
+    request: DiskReleasePayload,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> None:
+    service.release_disk(request, principal=principal)
 
 
 @router.post(

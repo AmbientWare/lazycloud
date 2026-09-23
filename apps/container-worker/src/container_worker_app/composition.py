@@ -45,6 +45,12 @@ from worker.container_startup import (
 )
 from worker.credential_hydration import WorkerCredentialHydrator
 from worker.credential_payloads import WorkerCredentialPrincipal
+from worker.durable_disks import (
+    DEFAULT_DISK_RUN_ROOT,
+    DiskEngine,
+    WorkerDurableDiskService,
+    disk_layout,
+)
 from worker.execution import (
     GatewayEndpointSettings,
     GatewayServiceSettings,
@@ -87,6 +93,7 @@ from worker.repository_client import (
     RemoteContainerLifecycleSink,
     RemoteContainerLogSink,
     RemoteContainerMetricsSink,
+    RemoteContainerSshIdentitySource,
     RemoteSandboxProcessLogSink,
     RemoteSchedulerContainerRepository,
     RemoteSchedulerWorkerRepository,
@@ -212,11 +219,25 @@ def build_worker_process_services(
         list(available_runtime_configs),
     )
     container_credentials = RemoteWorkerCredentialService(repository)
-    credential_hydrator = WorkerCredentialHydrator(credentials=container_credentials)
+    credential_hydrator = WorkerCredentialHydrator(
+        credentials=container_credentials,
+        ssh_identities=RemoteContainerSshIdentitySource(repository),
+    )
     event_sink = RemoteWorkerEventSink(repository)
     usage_recorder = RemoteWorkerUsageRecorder(repository)
     log_sink = RemoteSandboxProcessLogSink(repository)
     container_log_capture = WorkerContainerLogCaptureService(RemoteContainerLogSink(repository))
+    disk_layers_root, disk_lease_root = disk_layout(paths.disk_root.expanduser().resolve())
+    durable_disks = WorkerDurableDiskService(
+        engine=DiskEngine(layers_root=disk_layers_root, run_root=Path(DEFAULT_DISK_RUN_ROOT)),
+        leases=repository,
+        credentials=container_credentials,
+        lease_root=disk_lease_root,
+        mount_root=Path(DEFAULT_DISK_RUN_ROOT) / "mounts",
+    )
+    # Before anything can attach: a previous process's daemons and devices are
+    # orphans now, and the leases they served are released through cleanup.
+    durable_disks.recover()
     container_rootfs = ContainerRootfsOverlayManager(
         image_mount_root=Path(paths.image_mount_root),
         scratch_root=paths.container_rootfs_root,
@@ -381,6 +402,7 @@ def build_worker_process_services(
             runtime=runtime,
         ),
         container_logs=container_log_capture,
+        durable_disks=durable_disks,
         lifecycle_events=lifecycle_events,
         runtime_monitor=runtime_monitor,
     )

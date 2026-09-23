@@ -48,6 +48,13 @@ from shared.worker_events import WorkerEventRecord
 
 from worker.checkpoints import CheckpointStatePayload
 from worker.credential_payloads import WorkerCredentialPrincipal
+from worker.durable_disk_records import (
+    DiskAcquirePayload,
+    DiskAcquireResult,
+    DiskPublishPayload,
+    DiskPublishResult,
+    DiskReleasePayload,
+)
 from worker.events import (
     ContainerExecutionPhase,
     ContainerLifecyclePayload,
@@ -165,6 +172,7 @@ from worker.source_cache_cleanup import (
     record_source_cache_session,
 )
 from worker.source_code import SourceCodePackageMaterializer
+from worker.ssh_identity import ContainerSshIdentity, ContainerSshIdentityRequest
 from worker.tools import ContainerCredentialRequest, ContainerCredentials
 
 type JsonObject = dict[str, JsonValue]
@@ -619,6 +627,16 @@ class WorkerRepositoryHttpClient:
             GetContainerCredentialsResponse,
         )
 
+    def get_container_ssh_identity(
+        self,
+        request: ContainerSshIdentityRequest,
+    ) -> ContainerSshIdentity:
+        return self._post_model(
+            "/worker-repository/get-container-ssh-identity",
+            request,
+            ContainerSshIdentity,
+        )
+
     def set_network_lock(self, request: NetworkLockRequest) -> NetworkLockResponse:
         return self._post_model(
             "/worker-repository/set-network-lock",
@@ -701,6 +719,15 @@ class WorkerRepositoryHttpClient:
             request,
             ReleaseAutomaticCheckpointLeaseResponse,
         )
+
+    def acquire_disk(self, payload: DiskAcquirePayload) -> DiskAcquireResult:
+        return self._post_model("/worker-repository/acquire-disk", payload, DiskAcquireResult)
+
+    def publish_disk(self, payload: DiskPublishPayload) -> DiskPublishResult:
+        return self._post_model("/worker-repository/publish-disk", payload, DiskPublishResult)
+
+    def release_disk(self, payload: DiskReleasePayload) -> None:
+        self.transport.post("/worker-repository/release-disk", _model_payload(payload))
 
     def get_checkpoint_restore(
         self,
@@ -1385,6 +1412,17 @@ class RemoteWorkerCredentialService:
             msg = "container credentials were not returned by repository"
             raise WorkerRepositoryClientError(msg)
         return response.credentials
+
+
+@dataclass(slots=True)
+class RemoteContainerSshIdentitySource:
+    client: WorkerRepositoryHttpClient
+
+    def container_ssh_identity(
+        self,
+        request: ContainerSshIdentityRequest,
+    ) -> ContainerSshIdentity:
+        return self.client.get_container_ssh_identity(request)
 
 
 @dataclass(slots=True)

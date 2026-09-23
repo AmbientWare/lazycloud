@@ -7,6 +7,7 @@ from pydantic import Field
 from shared.container_requests import (
     DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH,
     OciRuntimeName,
+    RequestDisk,
     RequestMount,
     WorkerStartupKind,
 )
@@ -58,12 +59,15 @@ class ContainerSchedulingOptions(ContractModel):
     runtime: OciRuntimeName | str = OciRuntimeName.Runsc
     runtime_class: str = ""
     docker_enabled: bool = False
+    ssh_enabled: bool = False
     block_network: bool = False
     allow_list: list[str] | None = None
     preemptible: bool = False
     workspace_gpu_quota: int = 0
     workspace_cpu_quota_millicores: int = 0
     mounts: list[RequestMount] | None = None
+    disks: list[RequestDisk] = Field(default_factory=list)
+    preferred_worker_id: str = ""
     secret_names: list[str] | None = None
     gateway_token_required: bool = False
     workspace_storage_required: bool = False

@@ -213,6 +213,7 @@ from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
 from shared.tasks import Task
 from shared.workspace_storage import WorkspaceStorageIssuer
+from storage.disks import DiskDeletionService, DiskService
 from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
@@ -233,6 +234,7 @@ from worker.origin_access import ImageRegistryCredentials
 from worker.settings import ContainerServiceSettings
 from worker_repository.checkpoint_records import CheckpointService
 from worker_repository.credentials import WorkerCredentialService
+from worker_repository.disk_leases import WorkerDiskLeaseService
 from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 from worker_repository.origin_credentials import (
     CacheOriginCredentialConfig,
@@ -487,6 +489,8 @@ class ApiServiceCore:
     autoscaler_states: AutoscalerStateService
     volume_metering: PersistentVolumeMeteringService
     volume_filesystem: VolumeFilesystem
+    disks: DiskService
+    disk_deletion: DiskDeletionService
     payment_admission: DatabaseBillingAdmission
     redis_client: RedisClient
     binary_redis_client: RedisClient
@@ -865,6 +869,16 @@ class ApiServices(ApiServiceCore):
             storage_release=DatabaseContainerStorageRelease(context),
             durable_worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
         )
+        disks = DiskService(
+            context.database,
+            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
+        disk_deletion = DiskDeletionService(
+            context.database,
+            disks=disks,
+            objects=resolved_volume_filesystem,
+            metering=volume_metering_service,
+        )
         containers = ContainerService(
             context,
             events,
@@ -1048,6 +1062,8 @@ class ApiServices(ApiServiceCore):
             volume_metering=volume_metering_service,
             payment_admission=payment_admission,
             volume_filesystem=resolved_volume_filesystem,
+            disks=disks,
+            disk_deletion=disk_deletion,
             aws_connections=aws_composition.service if aws_composition is not None else None,
             redis_client=redis,
             binary_redis_client=binary_redis_client,
@@ -1338,6 +1354,8 @@ def _compose_api_services(
         volume_metering=core.volume_metering,
         payment_admission=core.payment_admission,
         volume_filesystem=core.volume_filesystem,
+        disks=core.disks,
+        disk_deletion=core.disk_deletion,
         redis_client=core.redis_client,
         binary_redis_client=core.binary_redis_client,
         async_io=core.async_io,
@@ -1502,6 +1520,7 @@ def _worker_repository_service(
                 stubs=core.control_plane_service,
             ),
             tasks=core.tasks,
+            disk_leases=WorkerDiskLeaseService(core.context.database, core.disks),
         ),
         redis=redis,
     )

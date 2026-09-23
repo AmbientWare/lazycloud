@@ -11,13 +11,17 @@ that records it rather than by a later pass. A record committed without its cost
 is money this platform measured and can no longer charge for, and the usage row
 alone cannot say whether the cost was skipped or never owed.
 
-A sized block device with its own filesystem and a restore point is something
-this package does not offer, and that is a decision rather than an oversight.
-It is what anything stateful actually wants, and a shared volume mount is not
-it. Under bring-your-own capacity the disk sits on the customer's own
-infrastructure and is usually already provisioned, so the gap costs them
-nothing they cannot solve where the hardware is. Reach for this note before
-concluding that snapshots were simply forgotten.
+A durable disk is the sized block device with its own filesystem that stateful
+workloads want, and a shared volume mount is not. This package owns its record
+and its lease. A disk is named in its workspace and one container holds it at a
+time. Every publish carries the holder's lease token, so a container that lost
+the disk cannot publish over the one that holds it. The holder keeps the lease
+until its final publish or release lands, or until its worker is gone, because
+releasing earlier lets the next container start from a generation the holder was
+about to replace. Chunks and manifests live under `disks/<id>/` in the workspace
+bucket, and deleting a disk removes that prefix and nothing beside it.
+Superseded chunks are not collected, so stored bytes grow until the disk is
+deleted.
 
 This package handles user data, so its invariants are the ones whose failure
 cannot be undone. Validate paths and keys against traversal, verify checksums,

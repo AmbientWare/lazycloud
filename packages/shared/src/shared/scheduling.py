@@ -114,6 +114,13 @@ class WorkerExecutionRequest(ContractModel):
 
 class SchedulerWorkerRequest(WorkerExecutionRequest):
     backfill: bool = False
+    preferred_worker_id: str = ""
+    """A worker to choose among equals, never a requirement.
+
+    The worker that last held the request's disk keeps its layers, so it
+    restarts the disk without a download.
+    """
+
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
     capacity_retry_at: datetime | None = None

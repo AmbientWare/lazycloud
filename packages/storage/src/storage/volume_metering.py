@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.observability import UsageRepository
 from database.repositories.storage import VolumeMeteringTarget, VolumeRepository
@@ -94,6 +95,9 @@ class PersistentVolumeMeteringService:
         metered_count, failure_count = meter_due_artifacts(
             self.context, now=observed_at, limit=limit
         )
+        disk_metered, disk_failures = self._meter_due_disks(observed_at, limit=limit)
+        metered_count += disk_metered
+        failure_count += disk_failures
         for target in targets:
             try:
                 observed_size = self._occupancy_bytes(target)
@@ -165,6 +169,95 @@ class PersistentVolumeMeteringService:
             observed_size_bytes,
             requested_observed_at or to_utc(utc_now()),
         )
+
+    def finalize_disk_deletion(
+        self, disk_id: str, *, workspace_id: str, now: datetime | None = None
+    ) -> None:
+        self._record_disk_observation(
+            disk_id, workspace_id=workspace_id, observed_at=to_utc(now or utc_now())
+        )
+
+    def _meter_due_disks(self, observed_at: datetime, *, limit: int) -> tuple[int, int]:
+        with self.context.database.session() as session:
+            targets = DiskRepository(session).list_metering_targets(
+                metered_before=observed_at - self.interval,
+                limit=limit,
+            )
+        metered_count = 0
+        failure_count = 0
+        for target in targets:
+            try:
+                if (
+                    self._record_disk_observation(
+                        target.id, workspace_id=target.workspace_id, observed_at=observed_at
+                    )
+                    is not None
+                ):
+                    metered_count += 1
+            except Exception:
+                failure_count += 1
+                LOGGER.exception(
+                    "disk metering failed",
+                    extra={"workspace_id": target.workspace_id, "disk_name": target.name},
+                )
+        return metered_count, failure_count
+
+    def _record_disk_observation(
+        self, disk_id: str, *, workspace_id: str, observed_at: datetime
+    ) -> UsageRecord | None:
+        """Bill the bytes a disk stored over the window its checkpoint opened.
+
+        Stored bytes only change when a generation is published, and that count is
+        already durable, so the window bills the figure it started with and hands
+        the current one to the next window. Nothing is listed in object storage.
+        """
+        with self.context.database.session() as session:
+            WorkspaceRepository(session).lock_storage_accounting_owner(workspace_id)
+            disks = DiskRepository(session)
+            checkpoint = disks.lock_metering_checkpoint(disk_id)
+            if checkpoint is None:
+                return None
+            if checkpoint.deleted_at is not None:
+                observed_at = min(observed_at, checkpoint.deleted_at)
+            window_started_at = checkpoint.metered_at
+            if window_started_at >= observed_at:
+                return None
+            elapsed_ms = (observed_at - window_started_at) // _MILLISECOND
+            byte_seconds = Decimal(checkpoint.metered_bytes * elapsed_ms) / _MILLISECONDS_PER_SECOND
+            record = UsageRecord(
+                id=usage_record_id(
+                    UsageMetric.PersistentVolumeByteSeconds.value,
+                    checkpoint.workspace_id,
+                    "disk",
+                    checkpoint.id,
+                    window_started_at.isoformat(),
+                    observed_at.isoformat(),
+                ),
+                workspace_id=checkpoint.workspace_id,
+                resource_type="disk",
+                resource_id=checkpoint.name,
+                metric=UsageMetric.PersistentVolumeByteSeconds,
+                quantity=float(byte_seconds),
+                unit=UsageUnit.ByteSeconds,
+                labels={"disk_name": checkpoint.name, "disk_id": checkpoint.id},
+                metadata={
+                    METERING_WINDOW_STARTED_AT_METADATA_KEY: window_started_at.isoformat(),
+                    METERING_WINDOW_ENDED_AT_METADATA_KEY: observed_at.isoformat(),
+                    METERING_OBSERVATION_QUALITY_METADATA_KEY: (
+                        MeteringObservationQuality.Authoritative.value
+                    ),
+                    "previous_size_bytes": checkpoint.metered_bytes,
+                    "observed_size_bytes": checkpoint.stored_bytes,
+                },
+            )
+            record = UsageRepository(session).append_storage(record)
+            MeteredUsagePricer(session).price(record)
+            disks.advance_metering_checkpoint(
+                checkpoint.id,
+                metered_bytes=checkpoint.stored_bytes,
+                metered_at=observed_at,
+            )
+            return record
 
     def _record_observation(
         self,

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import socket
 from collections.abc import AsyncIterable, Mapping
 
-from fastapi import Request, Response, WebSocket
+from fastapi import Request, Response, WebSocket, WebSocketDisconnect
 from foundation.http import HOP_BY_HOP_REQUEST_HEADERS
 from starlette.requests import HTTPConnection
 from starlette.responses import StreamingResponse
@@ -81,6 +83,60 @@ async def close_websocket(websocket: WebSocket, *, code: int, reason: str) -> No
         await websocket.close(code=code, reason=reason[:120])
     except RuntimeError:
         return
+
+
+async def bridge_websocket_to_socket(
+    websocket: WebSocket,
+    backend: socket.socket,
+    buffer_size_bytes: int,
+) -> None:
+    """Relay bytes both ways until either side closes, then stop the other direction."""
+    backend.setblocking(False)
+    loop = asyncio.get_running_loop()
+    reader = asyncio.create_task(
+        _socket_to_websocket(websocket, backend, max(buffer_size_bytes, 1))
+    )
+    writer = asyncio.create_task(_websocket_to_socket(websocket, backend, loop))
+    done, pending = await asyncio.wait(
+        {reader, writer},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*done, *pending, return_exceptions=True)
+
+
+async def _socket_to_websocket(
+    websocket: WebSocket,
+    backend: socket.socket,
+    buffer_size_bytes: int,
+) -> None:
+    loop = asyncio.get_running_loop()
+    while True:
+        data = await loop.sock_recv(backend, buffer_size_bytes)
+        if not data:
+            return
+        await websocket.send_bytes(data)
+
+
+async def _websocket_to_socket(
+    websocket: WebSocket,
+    backend: socket.socket,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    while True:
+        try:
+            message = await websocket.receive()
+        except WebSocketDisconnect:
+            return
+        if message["type"] == "websocket.disconnect":
+            return
+        data: bytes | None = message.get("bytes")
+        if data is None:
+            text: str | None = message.get("text")
+            data = text.encode() if text is not None else b""
+        if data:
+            await loop.sock_sendall(backend, data)
 
 
 def forwarded_response(
