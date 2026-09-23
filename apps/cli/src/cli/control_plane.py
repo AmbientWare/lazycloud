@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud._terminal.streams import console
+from lazycloud.cli.components.output import json_output_enabled, print_payload, table
 from lazycloud.cli.components.results import emit_result
 from lazycloud.json_contracts import JsonValue, validate_json_object
 from shared.app_identity import DEFAULT_RESOURCE_TYPE

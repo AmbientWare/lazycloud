@@ -1,7 +1,5 @@
 """FastAPI upload, polling, result, and cleanup surface."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import uuid

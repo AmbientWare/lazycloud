@@ -1,4 +1,4 @@
-"""Semantic Rich styles for the ``lazycloud`` and ``lazycloud-admin`` commands.
+"""Semantic Rich styles for SDK progress and CLI commands.
 
 One small set of semantic styles replaces per-command color literals, and one
 mapping ties domain states (task/build/container status, machine/worker/unit

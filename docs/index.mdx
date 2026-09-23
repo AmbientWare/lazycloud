@@ -1,55 +1,67 @@
 ---
-title: "Run Python on LazyCloud"
-description: "Run Python functions, serve APIs, and execute code in remote containers."
+title: "Introduction"
+description: "Infrastructure for agentic engineering. Building with agents is fast, and deploying with LazyCloud is too."
 ---
 
-LazyCloud runs your code on remote CPUs and GPUs. Define the environment and
-resources in Python, then run your function from a terminal or another Python
-program. The client shows progress, logs, and the result.
-
-Save this as `hello.py`:
+A decorator on your Python function names the packages, CPU, memory, GPU, and
+storage it needs, so whoever writes the function, you or an agent, also writes
+where it runs. LazyCloud builds the container, runs it on cloud CPUs and GPUs,
+and stops it when the work is done. You pay per second while it runs.
 
 ```python
-from lazycloud import App
+from lazycloud import App, Image
+from pydantic import BaseModel
 
-app = App("hello")
+app = App("reports")
 
 
-@app.function()
-def square(number: int) -> int:
-    return number * number
+class Summary(BaseModel):
+    total: float
+    mean: float
+
+
+@app.function(image=Image(python_version="3.12"), cpu=2, memory="4Gi")
+def summarize(amounts: list[float]) -> Summary:
+    return Summary(total=sum(amounts), mean=sum(amounts) / len(amounts))
 ```
 
-With the [client installed](/getting-started/installation), sign in and run it:
+## Develop locally, test in the cloud, deploy
+
+The same file runs at every stage, without code changes:
 
 ```bash
-uv run lazycloud login
-uv run lazycloud run hello:square 12
+uv run pytest                                           # tests call summarize.local(...)
+uv run lazycloud run reports:summarize '[12.5, 30, 8]'   # run once in the cloud
+uv run lazycloud deploy reports                         # keep it running in the cloud
 ```
 
-The result is `144`. Follow the [quickstart](/getting-started/quickstart)
-for the full walkthrough.
+Each step is one command with no browser or prompt. Add `--json` and the result
+arrives on stdout as one JSON document, logs go to stderr, and a failure exits
+nonzero. An agent can run the whole loop and read the outcome the same way you
+do.
 
-## What do you want to build?
+## What you can ship
 
-| Goal | Start here |
-| --- | --- |
-| Run a batch job or call Python remotely | [Functions](/concepts/functions) |
-| Serve an HTTP API or a FastAPI app | [Endpoints](/concepts/endpoints) |
-| Run a job on a schedule | [Schedules](/concepts/schedules) |
-| Host a container command or model server | [Pods](/concepts/pods) |
-| Execute generated code in a disposable container | [Sandboxes](/concepts/sandboxes) |
-| Run 500 inputs at once, or keep a GPU warm | [Scaling and concurrency](/concepts/scaling) |
-| Keep datasets and model weights between runs | [Volumes](/concepts/volumes) |
-| Pass work items or share temporary state | [Queues and maps](/concepts/queues-maps) |
-| Go from a local call to a preview to a deployment | [Local, preview, deploy](/getting-started/workflow) |
+- [APIs](/concepts/endpoints): a function as an HTTPS endpoint, or a full
+  FastAPI app.
+- [Jobs](/concepts/functions): tests, evals, data processing, and GPU work,
+  fanned out across containers.
+- [Background work and crons](/concepts/schedules): tasks with retries,
+  cancellation, and live logs.
+- [Agent sandboxes](/concepts/sandboxes): isolated containers for running your
+  agent's code and tests.
 
-The [examples](/examples/index) walk through GPU inference, training,
-document processing, a coding agent, and parallel data processing.
+## Point your agent at these docs
 
-## Choose where it runs
+`https://docs.lazycloud.dev/llms-full.txt` holds every page as one text file,
+any page URL with `.md` appended returns Markdown, and
+`https://docs.lazycloud.dev/mcp` is an MCP server that searches the docs.
 
-LazyCloud supplies compute by default and charges per second while your
-containers run. You can also [join your own machines](/platform/compute#your-own-machines)
-or, on the Business plan, connect your AWS account. See
-[Plans and limits](/platform/plans) for billing and account limits.
+## Next steps
+
+- [Quickstart](/getting-started/quickstart): develop, test, and deploy your
+  first workload.
+- [Apps and workloads](/concepts/apps): the workload kinds, and how an app
+  groups them.
+- [Examples](/examples/index): GPU inference, training, document processing,
+  and a sandboxed coding agent.

@@ -1,15 +1,14 @@
 ---
 title: "Run a coding agent in a sandbox"
-description: "Plan a code change with an OpenAI-compatible model in a function, then test it in a sandbox with no network and no credentials."
+description: "Keep model credentials and network access away from the code an agent writes."
 ---
 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
-This example separates model access from running generated code. A function
-calls your OpenAI-compatible provider and returns one validated file
-replacement. A network-blocked sandbox receives only the seed project and
-that replacement, runs the unit test, and is terminated whether the test
-passes, fails, or errors.
+A function calls your OpenAI-compatible provider and returns one validated
+file replacement. A network-blocked sandbox receives only the seed project and
+that replacement, then runs the unit test. The orchestrator terminates the
+sandbox whether the test passes, fails, or errors.
 
 The downloaded project contains the source and seed files under
 `sandboxed_coding_agent/`.
@@ -40,9 +39,8 @@ model cannot modify the test.
 
 ## Configure a provider
 
-Use your provider's HTTPS base URL ending in `/v1`, the model name, and its
-API key. The example appends
-`/chat/completions` itself.
+You need your provider's HTTPS base URL ending in `/v1`, a model name, and an
+API key. The example appends `/chat/completions` itself.
 
 ```bash
 export CODING_AGENT_BASE_URL="https://provider.example/v1"
@@ -55,9 +53,10 @@ unset CODING_AGENT_BASE_URL CODING_AGENT_MODEL CODING_AGENT_API_KEY
 ```
 
 `configure.py` reads the names from the app's `PROVIDER_SECRET_NAMES` and stores
-their environment values with `Secret(name).set(value)`. Running it again replaces
-the stored values. The planner declares `secrets=list(PROVIDER_SECRET_NAMES)`;
-the sandbox declares none. Keep the key out of the prompt, URLs, and source files.
+their environment values with `Secret(name).set(value)`. Running it again
+replaces the stored values. The planner declares
+`secrets=list(PROVIDER_SECRET_NAMES)`, and the sandbox declares none. Keep the
+key out of the prompt, URLs, and source files.
 
 <Warning>
   The planner sends the prompt and the seed source files to the provider you
@@ -67,18 +66,19 @@ the sandbox declares none. Keep the key out of the prompt, URLs, and source file
 
 ## Deploy and run
 
-Deploying the app deploys the planner. Sandboxes are created on demand.
+Deploying the app deploys the planner. The orchestrator creates a sandbox for
+each run.
 
 ```bash
 uv run lazycloud deploy sandboxed_coding_agent.app:app
 uv run lazycloud run sandboxed_coding_agent.app:run_agent
 ```
 
-The default prompt asks the planner to fix the deliberately wrong
+The default prompt asks the planner to fix the deliberately broken
 `calculator.add` without changing its test. The result includes the planner
-task id, the terminated sandbox id, changed paths, the test exit code,
-test output, and `tests_passed`. A successful repair returns `tests_passed: true`
-and `test_exit_code: 0`. The command does not change your local seed project.
+task ID, the terminated sandbox ID, changed paths, the test exit code, test
+output, and `tests_passed`. A successful repair returns `tests_passed: true`
+and `test_exit_code: 0`. The command leaves your local seed project unchanged.
 
 Pass a different instruction as the first argument:
 
@@ -96,19 +96,19 @@ uv run lazycloud run sandboxed_coding_agent.app:inspect_sandboxes 20
 
 Use the returned planner task ID to investigate provider failures. A failed
 provider request creates no sandbox. For a failing test, read `test_output`
-and revise the instruction. `test_exit_code` is the test process's exit code;
-check `tests_passed` even when the CLI command itself completes.
+and revise the instruction. `test_exit_code` is the test process's exit code.
+The CLI command can complete while the test fails, so check `tests_passed`.
 The orchestrator terminates its sandbox in a `finally` block.
 
 ## Adapt the example
 
 Each run costs your provider's tokens plus a short planner function and one
-CPU sandbox. The seed project is tiny; costs grow with source size, model
+CPU sandbox. The seed project is tiny. Costs grow with source size, model
 pricing, and retries.
 
-To work on another project, change the seed files and explicitly allowed
+To work on another project, change the seed files and the list of allowed
 patch paths. Keep tests outside the model's editable files. Review generated
-changes before applying them to a real repository; passing a test only proves
+changes before applying them to a real repository. A passing test proves only
 what that test checks.
 
 ## Clean up

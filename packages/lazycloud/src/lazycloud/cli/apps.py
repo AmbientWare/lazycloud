@@ -6,15 +6,10 @@ from uuid import UUID
 
 import typer
 
-from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.output import (
-    console,
-    emit,
-    json_output_enabled,
-    print_payload,
-    table,
-)
+from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.control import resource_client
 from lazycloud.client_codegen import (
     CLIENT_PACKAGE_ROOT,

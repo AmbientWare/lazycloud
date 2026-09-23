@@ -7,9 +7,10 @@ from typing import Annotated
 import typer
 from shared.client_version import release_is_newer
 
-from lazycloud.cli.components.cards import notice_card
+from lazycloud._terminal.cards import notice_card
+from lazycloud._terminal.streams import json_output_active
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import emit, json_output_active, write_stream
+from lazycloud.cli.components.output import emit, write_stream
 from lazycloud.self_update import (
     SelfUpdateError,
     current_installation,

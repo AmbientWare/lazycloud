@@ -9,16 +9,11 @@ from pydantic import JsonValue
 from rich.pretty import Pretty
 from rich.text import Text
 
-from lazycloud.cli.components import theme
-from lazycloud.cli.components.cards import CardTone, notice_card, result_card
+from lazycloud._terminal import theme
+from lazycloud._terminal.cards import CardTone, notice_card, result_card
+from lazycloud._terminal.streams import console, error_console
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import (
-    console,
-    emit,
-    error_console,
-    json_default,
-    json_output_enabled,
-)
+from lazycloud.cli.components.output import emit, json_default, json_output_enabled
 from lazycloud.cli.result_output import ResultExport, rich_display_hint
 
 

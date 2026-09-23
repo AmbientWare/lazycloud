@@ -14,7 +14,7 @@ from rich.text import Text
 from shared.http.deployment_plans import DeploymentPlanAction
 from shared.serialization import to_json_value
 
-from lazycloud.cli.components import theme
+from lazycloud._terminal import theme
 
 
 def label(value: str) -> str:

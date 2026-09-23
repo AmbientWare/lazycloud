@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Barrier, Lock
@@ -21,71 +20,9 @@ from shared.http.objects import (
     HeadObjectResponse,
     PutObjectRequest,
 )
-from tests.fakes import FakeDeploymentClient
 from tests.http_server import running_http_server
 
 from lazycloud import App, Image
-
-
-def test_app_deploy_applies_the_machine_to_every_deployable_resource() -> None:
-    app = App("machine_deploy")
-    deployments = FakeDeploymentClient(stub_id_from_type=True)
-
-    function = app.function(lambda: "function", name="function")
-    endpoint = app.endpoint(name="endpoint")(lambda: "endpoint")
-    pod = app.pod(name="pod")
-
-    async def asgi_handler(
-        scope: dict[str, object],
-        receive: Callable[[], Awaitable[dict[str, object]]],
-        send: Callable[[dict[str, object]], Awaitable[None]],
-    ) -> None:
-        del scope, receive, send
-
-    asgi = app.asgi(name="asgi")(asgi_handler)
-
-    function.deployment_client = deployments
-    endpoint.deployment_client = deployments
-    pod.deployment_client = deployments
-    asgi.deployment_client = deployments
-
-    result = app.deploy(
-        workspace="production",
-        machine="box-a",
-    )
-
-    assert len(result.resources) == 4
-    assert {request.name for request in deployments.stub_requests} == {
-        "function",
-        "endpoint",
-        "pod",
-        "asgi",
-    }
-    assert all(
-        request.workspace == "production" and request.machine == "box-a"
-        for request in deployments.stub_requests
-    )
-
-
-def test_app_deploy_machine_only_changes_the_selected_resource() -> None:
-    app = App("selected_machine")
-    deployments = FakeDeploymentClient(stub_id_from_type=True)
-    function = app.function(
-        lambda: "function",
-        name="function",
-    )
-    pod = app.pod(name="pod", machine="box-b")
-    function.deployment_client = deployments
-
-    app.deploy(
-        resource="function:function",
-        machine="box-a",
-    )
-
-    assert function.machine == "box-a"
-    assert pod.machine == "box-b"
-    assert len(deployments.stub_requests) == 1
-    assert deployments.stub_requests[0].machine == "box-a"
 
 
 def test_app_deploy_overlaps_builds_and_uploads_and_shares_only_one_source_snapshot(

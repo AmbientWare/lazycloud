@@ -1,11 +1,10 @@
 ---
 title: "Volumes and cloud buckets"
-description: "Declare persistent storage beside your workloads and share files between runs."
+description: "Files that outlive a container, shared by name across a workspace, and S3-compatible buckets you mount."
 ---
 
-A volume keeps files after your container stops. Declare it in Python and
-attach it to each workload that needs it. LazyCloud creates a missing volume
-when preparing the first container's mounts and reuses it on later runs.
+A volume is declared in Python and attached to each workload that needs it.
+LazyCloud creates it on first mount and reuses it after that.
 
 ## Declare and use a volume
 
@@ -33,43 +32,22 @@ if __name__ == "__main__":
     reports.get("latest.json", "latest.json")
 ```
 
-Run it with the SDK installed and signed in:
+Run it:
 
 ```bash
 uv run python reports.py
 ```
 
-The function returns three sales totaling 5500 cents. The script downloads
-`latest.json` to your current directory. No separate volume-creation command
-is needed. Repeating the run replaces that file.
-
-`Volume(...)` declares the name and mount path; constructing the object alone
-makes no API call. Attaching it with `volumes=[reports]` tells LazyCloud to
-mount it. The same name in the same workspace refers to the same stored files,
-even when used by another app. Choose a different name for separate data.
-
-Changing the mount path changes where a container sees the files. Changing the
-volume name selects another volume; it does not move or delete the old data.
-Removing a mount or deleting a deployment also leaves stored files intact.
-
-Volume storage is billed per GiB-month. See [Plans and limits](/platform/plans).
-
-## Where volumes live
-
-A volume is stored in its workspace's bucket, and that bucket is wherever the
-workspace was created: LazyCloud storage, or your connected AWS account when
-the workspace was created with `--cloud aws`. That location never changes. To
-move data to a workspace in another location, create the new workspace and
-copy the files with `lazycloud cp`.
-
-Volumes in a workspace that lives in your AWS account are billed by AWS, not
-by LazyCloud. See [Compute](/platform/compute) for how workspaces choose a
-location.
+The cloud function writes the report, and the script downloads it to your
+current directory. Within a workspace a volume name always means the same
+files, even from another app. A new name is a new, empty volume, and removing a
+mount or a deployment never deletes stored files. Volumes live
+[with their workspace](/platform/compute#where-a-workload-runs) and bill per
+GiB-month.
 
 ## Upload inputs before the first run
 
-If a workload needs files before it starts, create or reuse its declared
-volume from your local setup script, then upload them:
+A local setup script can seed a volume before any workload runs:
 
 ```python
 from lazycloud import Volume
@@ -79,19 +57,14 @@ models.create()
 models.put("weights.pt", "weights.pt")
 ```
 
-This needs a local `weights.pt`. Attach the same `models` object to your
-function with `volumes=[models]` to read `/models/weights.pt` remotely.
-`create()` returns the existing volume when its name already exists.
-`get_or_create()` performs the same operation and returns a boolean.
-
-Keep provisioning and uploads in an explicit setup function or an
-`if __name__ == "__main__":` block. Workload imports should declare resources
-without uploading data or changing stored values.
+A function with `volumes=[models]` then reads `/models/weights.pt`. `create()`
+reuses an existing volume. Setup like this belongs behind
+`if __name__ == "__main__":`, so importing the module never uploads anything.
 
 ## Read and write from Python
 
-Inside a container, a mounted volume is a directory. From your local script,
-use the `Volume` object:
+Inside a container a volume is a directory. Locally, the `Volume` object reads
+and writes it:
 
 ```python
 from reports import reports
@@ -102,41 +75,30 @@ print(reports.stat("latest.json"))
 reports.get("latest.json", "downloaded-report.json")
 ```
 
-`put(source, destination)` uploads a local file or directory.
-`write_text()` and `write_bytes()` write content directly.
-`read_text()` and `read_bytes()` retrieve it.
-`list_path()` returns entries with size and time, and `move()` renames a path.
-
-For multi-gigabyte uploads, `presigned_url(...)`,
-`create_multipart_upload(...)`, `complete_multipart_upload(...)`, and
-`abort_multipart_upload(...)` let you upload in parts.
+`put()`, `write_text()`, `write_bytes()`, `read_bytes()`, `list_path()`, and
+`move()` cover the rest. Multi-gigabyte uploads go in parts through
+`create_multipart_upload()` and its companions.
 
 ## Share files between containers
 
-Every container that mounts a volume sees the same files, so a volume is how
-parallel calls and long-lived services share data. A volume is object storage
-presented as a directory, and that shapes what works well:
+Every container that mounts a volume sees the same files. Under the directory
+is object storage, which sets a few rules:
 
-- A file becomes visible to other containers when the writer closes it, and it
-  is durable at that point. Write whole files and close them; do not rely on
-  another container seeing a partially written file.
-- Two containers writing the same path do not merge; the last close wins.
-  Give each call its own output path, such as `/reports/{task_id}.json`, and
-  have a final step combine them.
-- There are no file locks. Coordinate through a [queue or map](/concepts/queues-maps)
-  when containers must take turns.
-- Appending to a large file or seeking inside one rewrites the object. Keep
-  logs and append-only data in many small files or send them elsewhere.
-- The first read of a large file downloads it; later reads on the same machine
-  come from a local cache. Large read-mostly data such as model weights is what
-  volumes do best.
+- A file appears to other containers, and becomes durable, when its writer
+  closes it.
+- Two writers to one path don't merge. The last close wins, so each call writes
+  its own path, such as `/reports/{task_id}.json`.
+- There are no locks. A [queue or map](/concepts/queues-maps) coordinates turns.
+- Appending to a large file rewrites it, so logs fit better as many small files.
+- Large reads are cached on the machine, which makes volumes good for model
+  weights.
 
-Download weights once and let every container reuse them:
+Weights downloaded once serve every container:
 
 ```python
 from pathlib import Path
 
-from lazycloud import App, Volume
+from lazycloud import App, GpuType, Volume
 
 app = App("inference")
 models = Volume("models", "/models")
@@ -151,34 +113,19 @@ def ensure_weights() -> None:
     partial.rename(WEIGHTS)
 
 
-@app.function(gpu="l4", volumes=[models], on_start=ensure_weights, concurrency=4, in_process=True)
+@app.function(gpu=GpuType.L4, volumes=[models], on_start=ensure_weights, concurrency=4, in_process=True)
 def encode(text: str) -> list[float]:
     ...
 ```
 
-The `on_start` hook runs before the container takes calls. Downloading to a
-`.part` path and renaming means a container that starts mid-download sees
-either no file or a complete one. Two containers starting at the same moment
-may both download; the rename makes that a wasted download rather than a
-corrupt file.
-
-## Ad hoc file operations
-
-Use the CLI to inspect or copy files outside your workflow:
-
-```bash
-uv run lazycloud ls sales-reports
-uv run lazycloud cp lazycloud://sales-reports/latest.json ./latest.json
-```
-
-Paths use `lazycloud://<volume>/<path>`. The scheme is optional except on
-the source of a download, where it marks the path as remote. See
-[storage commands](/cli/storage) for standalone volume creation and file commands.
+Writing to `.part` and renaming means no container ever sees a half-written
+file. Two containers starting together may both download, which wastes one
+download but corrupts nothing.
 
 ## Mount an existing cloud bucket
 
-`CloudBucket` mounts an S3-compatible bucket you own. Reads and writes go
-to the bucket in place; nothing is copied into LazyCloud storage.
+`CloudBucket` mounts an S3-compatible bucket you own, reading and writing it in
+place.
 
 ```python
 from pathlib import Path
@@ -202,31 +149,14 @@ def read_text_file(key: str) -> str:
     return (Path("/data") / key).read_text()
 ```
 
-`access_key` and `secret_key` name [workspace secrets](/concepts/secrets).
-Provision their values before running the workload. Set both names or neither.
-With neither, the mount uses the compute's credentials, such as the instance role
-on your [connected AWS account](/platform/compute).
+`access_key` and `secret_key` name [secrets](/concepts/secrets). Without them,
+the mount uses the machine's own credentials, such as an instance role in your
+[AWS account](/platform/compute). `bucket`, `prefix`, `endpoint`,
+`force_path_style`, and `read_only` cover other layouts and stores. The bucket
+must already exist. See the [Parquet example](/examples/parallel-parquet-s3).
 
-`CloudBucketConfig` also accepts `bucket` when the bucket name differs from the
-mount name, `prefix` to mount part of the bucket, `endpoint` for another
-S3-compatible store, `force_path_style`, and `read_only`.
+## Delete stored data
 
-The bucket must already exist; declaring a mount never creates it. See
-[parallel Parquet processing](/examples/parallel-parquet-s3) for a complete workflow.
-
-## Delete stored data deliberately
-
-After saving a local copy, remove an individual report with
-`reports.remove("latest.json")`. `reports.delete()` deletes the whole volume
-and every file in it.
-
-For one-off cleanup, inspect the target before deleting:
-
-```bash
-uv run lazycloud ls sales-reports
-uv run lazycloud rm sales-reports/latest.json
-```
-
-Use `uv run lazycloud volume delete sales-reports` only when you no longer need
-any of its files. Stop workloads that use the volume first; another invocation
-can create an empty volume with the same name.
+`reports.remove("latest.json")` deletes one file and `reports.delete()` the whole
+volume. A workload that still mounts it recreates it empty on its next run. The
+[file commands](/cli/storage#files) work from a terminal too.

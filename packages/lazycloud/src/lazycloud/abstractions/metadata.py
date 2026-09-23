@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import JsonValue
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.lifecycle import LifecycleHooks
 from shared.tasks import RetryPolicy, TaskPolicy, normalize_retry_policy
 
@@ -121,12 +121,12 @@ def retry_policy_config(
 
 
 def autoscaler_metadata(
-    value: QueueDepthAutoscaler | Mapping[str, JsonValue] | None,
+    value: Autoscaler | Mapping[str, JsonValue] | None,
 ) -> dict[str, JsonValue]:
     if value is None:
         return {}
     raw = value.model_dump(mode="json") if isinstance(value, ModelDumpable) else value
-    return QueueDepthAutoscaler.model_validate(raw).model_dump(mode="json")
+    return Autoscaler.model_validate(raw).model_dump(mode="json")
 
 
 def build_resource_metadata(
@@ -136,7 +136,7 @@ def build_resource_metadata(
     max_pending_tasks: int | None = None,
     callback_url: str | None = None,
     authorized: bool | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, JsonValue] | None = None,
+    autoscaler: Autoscaler | Mapping[str, JsonValue] | None = None,
     task_policy: TaskPolicy | Mapping[str, JsonValue] | None = None,
     checkpoint_enabled: bool | None = None,
     in_process: bool | None = None,

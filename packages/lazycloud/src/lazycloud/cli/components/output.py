@@ -1,7 +1,7 @@
 """Single output owner for the ``lazycloud`` and ``lazycloud-admin`` commands.
 
-Decorative output (tables, tips, progress lines) goes through ``console`` and
-``error_console``. Machine-readable payloads go through ``print_payload``,
+Decorative output uses the shared terminal consoles.
+Machine-readable payloads go through ``print_payload``,
 which in ``--json`` mode writes plain ``json.dumps`` to stdout. While JSON
 output is active every decorative console write is routed to stderr, so stdout
 stays a pure payload stream without per-command discipline.
@@ -12,70 +12,25 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Sequence
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import IO, Any
 
 import typer
 from pydantic import JsonValue
-from rich.console import Console, RenderableType
+from rich.console import RenderableType
 from shared.events import Event
 from shared.serialization import to_json_value
 
-from lazycloud.cli.components.cards import empty_state, result_card
+from lazycloud._terminal.cards import empty_state, result_card
+from lazycloud._terminal.streams import console, error_console
 from lazycloud.cli.components.tables import resource_table
 from lazycloud.json_contracts import parse_json_value
-
-_json_output_active = ContextVar("lazycloud_cli_json_output_active", default=False)
 
 
 @dataclass(frozen=True, slots=True)
 class CliContextState:
     json: bool = False
     debug: bool = False
-
-
-def set_json_output(enabled: bool) -> None:
-    """Declare whether stdout is reserved for JSON payloads this invocation.
-
-    Called by the root command callback; while enabled, ``CliConsole`` routes
-    decorative output to stderr.
-    """
-    _json_output_active.set(enabled)
-
-
-def json_output_active() -> bool:
-    return _json_output_active.get()
-
-
-class CliConsole(Console):
-    """Console for decorative CLI output.
-
-    Resolves its target stream per write: stdout for human output, stderr for
-    error output, and stderr for everything while JSON output is active so
-    stray decorative prints can never corrupt a machine-readable payload.
-    Rich drops styling automatically when the resolved stream is not a TTY.
-    """
-
-    @property
-    def file(self) -> IO[str]:
-        if self._file is not None:
-            file = self._file
-        elif self.stderr or json_output_active():
-            file = sys.stderr
-        else:
-            file = sys.stdout
-        # A live display swaps sys.stdout for a proxy that prints through this
-        # console; writing to the proxy from here would recurse without end.
-        return getattr(file, "rich_proxied_file", file)
-
-    @file.setter
-    def file(self, new_file: IO[str]) -> None:
-        self._file = new_file
-
-
-console = CliConsole()
-error_console = CliConsole(stderr=True)
 
 
 def json_default(value: object) -> JsonValue:
@@ -178,20 +133,15 @@ def print_events_table(events: Sequence[Event]) -> None:
 
 
 __all__ = [
-    "CliConsole",
     "command_from_args",
-    "console",
     "emit",
-    "error_console",
     "event_table",
     "json_default",
-    "json_output_active",
     "json_output_enabled",
     "parse_json_argument",
     "print_events_table",
     "print_json_line",
     "print_payload",
-    "set_json_output",
     "table",
     "write_stream",
 ]

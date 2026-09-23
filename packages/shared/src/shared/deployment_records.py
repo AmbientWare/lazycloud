@@ -6,7 +6,7 @@ from typing import Annotated
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.contracts import ContractModel
 from shared.custom_domains import normalize_assignable_hostname
 from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
@@ -158,7 +158,7 @@ def declared_min_containers(metadata: Mapping[str, JsonValue]) -> int:
     raw = metadata.get("autoscaler")
     if raw is None:
         return 0
-    return QueueDepthAutoscaler.model_validate(raw).min_containers
+    return Autoscaler.model_validate(raw).min_containers
 
 
 def resolve_keep_warm_seconds(
@@ -383,7 +383,7 @@ class DeploymentSpec(ContractModel):
             raise ValueError(msg)
         autoscaler = self.metadata.get("autoscaler")
         if autoscaler is not None:
-            autoscaler_config = QueueDepthAutoscaler.model_validate(autoscaler)
+            autoscaler_config = Autoscaler.model_validate(autoscaler)
             if self.resources.keep_warm == -1 and autoscaler_config.max_containers == 0:
                 msg = "keep_warm=-1 requires max_containers to be greater than zero"
                 raise ValueError(msg)

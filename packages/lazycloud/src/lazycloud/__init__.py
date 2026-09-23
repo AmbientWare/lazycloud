@@ -1,4 +1,4 @@
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.gpu import GpuType
 from shared.image_building.authoring import LinuxArchitecture, PythonVersion
 from shared.task_context import current_root_task_id, current_task_id
@@ -29,7 +29,6 @@ from lazycloud.abstractions.sandbox import (
     SandboxProcessStream,
 )
 from lazycloud.abstractions.secret import Secret
-from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from lazycloud.progress import (
     PendingProgressCallback,
@@ -44,6 +43,7 @@ from lazycloud.terminal import output
 __all__ = [
     "App",
     "Artifact",
+    "Autoscaler",
     "CloudBucket",
     "CloudBucketConfig",
     "Container",
@@ -56,7 +56,6 @@ __all__ = [
     "PendingProgressCallback",
     "PythonVersion",
     "Queue",
-    "QueueDepthAutoscaler",
     "RetryBackoff",
     "RetryPolicy",
     "Sandbox",
@@ -75,7 +74,6 @@ __all__ = [
     "SandboxProcessResponse",
     "SandboxProcessStream",
     "Secret",
-    "ServeOptions",
     "Task",
     "TaskPendingProgress",
     "TaskPendingReason",

@@ -4,7 +4,7 @@ import os
 import secrets
 import time
 
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 
 from lazycloud import App, Image
 
@@ -20,7 +20,7 @@ app = App(APP_NAME)
     image=Image(python_version="3.12"),
     cpu=0.25,
     memory="128Mi",
-    autoscaler=QueueDepthAutoscaler(max_containers=BURST, tasks_per_container=1),
+    autoscaler=Autoscaler(max_containers=BURST, tasks_per_container=1),
 )
 def burst(value: int) -> dict[str, str | int]:
     """Hold a container long enough that a backlog cannot drain through one."""

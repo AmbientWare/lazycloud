@@ -1,39 +1,27 @@
 ---
 title: "Compute"
-description: "Where your workloads run: LazyCloud's compute, your own AWS account, or machines you join."
+description: "Where workloads run: LazyCloud compute, your own AWS account, or machines you join."
 ---
 
-Use LazyCloud compute to run without managing machines. Choose CPU, memory,
-and GPUs in your workload definition. You pay while its container runs,
-including startup and idle time.
+## Where a workload runs
 
-## Request a GPU
+The workspace decides. Its location is fixed when it is created, either
+LazyCloud's compute or a connected AWS account, and its workloads and volumes
+live there. Moving work means a new workspace in the other location and a copy
+of the data.
 
-Save this as `compute_demo.py`:
-
-```python
-import subprocess
-
-from lazycloud import App
-
-app = App("compute_demo")
-
-
-@app.function(cpu=2.0, memory="4Gi", gpu="l4", gpu_count=1)
-def gpu_name() -> str:
-    return subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True
-    ).strip()
+```bash
+uv run lazycloud workspace create research             # runs on LazyCloud
+uv run lazycloud workspace create research --cloud aws  # runs in your AWS account
 ```
 
-Run `uv run lazycloud run compute_demo:gpu_name` to print the assigned GPU's name.
-Check your GPU access and balance in Settings, then Billing first.
+`workspace create` needs administrator access and selects the new workspace.
 
-Available GPU models are `t4`, `a10g`, `l4`, `l40s`, `a100-40`, `a100-80`,
-`h100`, and `h200`. Pass a list to state a preference, best first, and `"any"`
-last to take whatever is free.
+The exception is a machine you joined. A workload with `machine="gpu-1"` runs
+only there, and fails rather than running elsewhere when that machine is
+offline or doesn't serve its workspace.
 
-Check what your workspace is using:
+## Check usage
 
 ```bash
 uv run lazycloud compute status
@@ -41,153 +29,84 @@ uv run lazycloud compute instances
 uv run lazycloud compute workloads
 ```
 
-## Where a workload runs
-
-The workspace decides. Every workspace has a location fixed when you create
-it: LazyCloud's own compute, or an AWS account you have connected. A workload
-runs where its workspace lives, and its volumes are stored there too.
-
-```bash
-uv run lazycloud workspace create research            # runs on LazyCloud
-uv run lazycloud workspace create research --cloud aws # runs in your AWS account
-```
-
-A workspace never changes location. To move work, create a new workspace in
-the other location and copy the data across.
-
-The one exception is a machine you joined yourself. A workload names it with
-`machine="gpu-1"` on the decorator, or `--machine gpu-1` on `deploy`, `run`,
-`serve`, `shell`, or `dev`, and then runs only there. If that machine is
-offline, or does not serve the workload's workspace, the workload fails
-rather than running somewhere else.
+[Resources and options](/concepts/resources) covers sizing and GPUs.
 
 ## Your own AWS account
 
-On the Business plan you can connect one AWS account. Workspaces you create
-with `--cloud aws` then run there: LazyCloud launches instances inside your
-account when a workload needs them and shuts them down when they go idle. The
-containers, the instances, and a bucket holding the workspace's volumes all
-live in your account. AWS bills you for them, and LazyCloud charges a
-management fee based on compute rates. Egress is billed the same as
-everywhere else.
+On the Business plan, one AWS account can back your workspaces. LazyCloud
+launches instances there when work arrives and shuts them down when idle. The
+instances, containers, and the bucket holding the workspace's volumes all live
+in your account. AWS bills the machines, and LazyCloud charges a management
+fee based on compute rates.
 
 ```bash
 uv run lazycloud cloud connect aws --account-id 123456789012
-```
-
-Authorize the connection with your AWS profile. The command submits a
-CloudFormation stack that creates the management role and network:
-
-```bash
 uv run lazycloud cloud authorize --profile YOUR_AWS_PROFILE
+uv run lazycloud cloud validate
 uv run lazycloud cloud status
 ```
 
-Check the CloudFormation stack's events in your AWS account if authorization
-has not completed. After the stack finishes, run `uv run lazycloud cloud validate`,
-then `uv run lazycloud cloud status` to read the result. The dashboard shows the same
-connection under Settings, then Compute. Once it is ready, create a workspace
-in it.
+`authorize` submits a CloudFormation stack that creates the management role and
+network, and your AWS credentials never leave your machine. If it stalls, the
+stack's events in AWS show why. `validate` checks the result once the stack
+finishes. The dashboard shows the connection under Settings, then Compute.
 
-LazyCloud manages instance selection, regions, capacity limits, warm workers,
-idle shutdown, and root disks for every workspace in the account. Choose CPU,
-memory, and GPU on each workload.
+LazyCloud picks instance types, regions, and warm capacity. Each workload still
+sets its own CPU, memory, and GPU.
 
-If the authorization stops working, for example after a role change in AWS,
-`uv run lazycloud cloud status` says so. `uv run lazycloud cloud reconnect` starts a
-replacement authorization, and `uv run lazycloud cloud validate` rechecks the current
-one.
-
-`uv run lazycloud cloud disconnect` drains instances and removes the
-connection; add `--wait` to block until it is gone. It is refused while any
-workspace lives in the account, because those workspaces have nowhere else to
-run and their volumes are in your bucket. Delete them first.
+`cloud status` reports a broken authorization, for example after a role change.
+`cloud reconnect` starts a replacement, and `cloud disconnect --wait` drains and
+removes the connection once no workspace lives in the account.
 
 ## Your own machines
 
-You can join a Linux server you own and run workloads from workspaces you
-choose on it. This suits an on-premises GPU box, a bare-metal host, or a VM.
-Containers on your own machines are not charged compute; volumes and egress
-still are.
+Any Linux server you own can join your account and run workloads for the
+workspaces you choose, with no compute charge. Volumes and egress still bill.
 
-The host needs:
+The host needs Linux on amd64 or arm64 with systemd and root access, a rootful
+Docker daemon, and outbound DNS and TCP 443. No inbound port or static IP.
 
-- Linux on amd64 or arm64, with systemd and root or sudo access.
-- A rootful Docker daemon.
-- Outbound DNS and TCP port 443 for HTTPS and authenticated TLS connections.
-  No inbound port, port forwarding, or static IP is needed.
-
-Run the join on the machine itself:
+On the machine:
 
 ```bash
-uv run lazycloud machine join --name gpu-1 --workspaces research,staging --gpu a100-80 --max-gpus 4 --max-cpu 32 --max-memory 128Gi
+uv run lazycloud machine join --name gpu-1 --workspaces research,staging --gpu a100-80 --max-gpus 4
 ```
 
-The name is unique across your account, and it is what workloads pin to. The
-workspaces are the only ones whose workloads may land on the machine. The
-command runs the agent in the foreground; add `--background` to install a
-service that keeps running after the terminal closes.
-
-Change which workspaces a machine serves at any time:
-
-```bash
-uv run lazycloud machine update gpu-1 --workspaces research,staging,prod
-uv run lazycloud machine list
-```
-
-The dashboard has the same flow under Settings, then Compute, then Join a
-machine, and shows the host checks as they pass. Each machine row there lists
-the workspaces it serves and lets you edit them.
-
-Run a workload on the machine by naming it:
+The name is unique in your account and is what workloads pin to. Only the
+listed workspaces can use the machine, and `machine update` changes the list.
+`--background` installs the agent as a service instead of running it in the
+terminal. The dashboard has the same flow under Settings, then Compute.
 
 ```python
-@app.function(cpu=2.0, memory="4Gi", gpu="a100-80", machine="gpu-1")
-def gpu_name() -> str:
-    return subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True
-    ).strip()
+from lazycloud import GpuType
+
+
+@app.function(gpu=GpuType.A100_80, machine="gpu-1")
+def train() -> None:
+    ...
 ```
 
-## What the compute panels show
+A deployment stays on its machine. If the machine leaves, the deployment waits
+until one joins under that name again and you redeploy. Runs and sandboxes fail
+at once while the machine is gone. `uv run lazycloud machine remove <id>`
+retires a machine and stops any agent still running on it.
 
-Settings, then Compute has two panels. The connected cloud card lists the
-machines LazyCloud launched in your AWS account, with the instance type,
-availability zone and launch time from the provider. The self-hosted panel
-lists the machines you joined, by name, with the workspaces each one serves.
-A machine appears in exactly one of them: the placement recorded on the
-machine decides, so a node launched in your account never shows up as a
-self-hosted machine, and a joined host never counts as cloud capacity. The
-card's counts come from the same list as its rows.
+## Machine phases
 
-Every machine carries one lifecycle phase, and both panels show the same chip:
+`compute instances`, `machine list`, and the dashboard's Compute panels show
+each machine's phase:
 
-- `requested`: a join command was issued, or the provider was asked for an
-  instance, and nothing has reported yet.
-- `provisioning`: the provider reports the instance running; the node has
-  not reported for itself.
-- `booting`: the node is installing the agent.
-- `joining`: the agent has enrolled and is waiting for its first heartbeat.
-- `ready`: the machine takes workloads.
-- `draining`: no new work is placed here; running work finishes.
-- `terminating`: the shutdown was requested at the provider or the host.
-- `deleted`: the provider or the host confirmed it is gone. Deleted machines
-  leave the list.
-- `failed`: the machine did not become ready, or stopped serving long enough
-  to be believed. The chip names the reason.
+| Phase | Meaning |
+| --- | --- |
+| `requested` | Asked for, nothing has reported yet. |
+| `provisioning` | The provider reports it running, the agent hasn't. |
+| `booting` | Installing the agent. |
+| `joining` | Enrolled, waiting for the first heartbeat. |
+| `ready` | Taking workloads. |
+| `draining` | No new work, running work finishes. |
+| `terminating` | Shutdown requested. |
+| `deleted` | Gone. Leaves the list. |
+| `failed` | Never became ready, or stopped serving. The chip names the reason. |
 
-A machine that stops sending heartbeats stays `ready`; the row says how long
-it has been quiet and a second badge shows it offline, or draining, cordoned
-or at risk when the host's capacity is limited. The panels update from the
-workspace change stream as phases move, without polling.
-
-`uv run lazycloud compute instances` prints the connected cloud's machines
-with the same phases; `uv run lazycloud machine list` prints the joined ones.
-
-Going offline does not remove a machine, but leaving does. A deployment keeps
-the machine it was deployed to and waits for capacity until you redeploy it after
-a machine joins under that name again. A run or sandbox resolves the name each
-time it starts and fails at once while the machine is gone. When retiring a machine, finish its active workloads and remove it
-with `uv run lazycloud machine remove <machine-id>`, using the ID from `machine list`.
-Removing from the account side revokes the host: an agent still running there
-stops, and a host that lost its local identity gets its name back this way.
+A `ready` machine that stops sending heartbeats shows an offline badge with how
+long it has been quiet.

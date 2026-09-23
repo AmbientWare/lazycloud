@@ -5,16 +5,16 @@ description: "Manage deployed apps, deployments, and running containers."
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
 
-Pause an app to stop its workloads together. Stop one deployment to take a
-single service offline. Container commands act on individual instances;
-an active deployment may replace a container you stop.
+Pausing an app stops its workloads together. Stopping one deployment takes a
+single service offline. Container commands act on individual instances. An
+active deployment may replace a container you stop.
 
 ## lazycloud app
 
 An app is addressed by name or id.
 
-The blocks below show command syntax. Replace uppercase names and omit
-square brackets when supplying an optional flag.
+In the syntax below, replace uppercase names, and drop the square brackets
+when you pass an optional flag.
 
 ```bash
 uv run lazycloud app list [--active | --inactive | --all]
@@ -29,11 +29,10 @@ uv run lazycloud app delete APP
 
 A deployment is addressed by name or id. `scale` pins a pod deployment to a
 container count and refuses other kinds. Functions and endpoints scale from the
-`autoscaler` on their decorator; see [Scaling and concurrency](/concepts/scaling).
+`autoscaler` on their decorator. See [Scaling and concurrency](/concepts/scaling).
 
-Use these commands for inspection and operational changes. Keep workload
-resources and autoscaler settings in Python so a later deploy uses your intended
-configuration.
+These commands inspect and operate deployments. Resources and autoscaler
+settings live in the Python definition, and each deploy applies them.
 
 ```bash
 uv run lazycloud deployment list [--app <name>] [--limit <n>]

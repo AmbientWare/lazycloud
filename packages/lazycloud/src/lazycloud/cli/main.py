@@ -8,17 +8,13 @@ from typing import Annotated, Protocol, TypeVar
 import typer
 from shared.client_version import observe_client_versions, release_is_newer
 
+from lazycloud._terminal.streams import error_console, json_output_active, set_json_output
 from lazycloud.cli.apps import app_app
 from lazycloud.cli.artifacts import artifact_app
 from lazycloud.cli.components.errors import (
     CLIENT_ERROR_POLICY,
 )
-from lazycloud.cli.components.output import (
-    CliContextState,
-    error_console,
-    json_output_active,
-    set_json_output,
-)
+from lazycloud.cli.components.output import CliContextState
 from lazycloud.cli.components.runner import run_cli
 from lazycloud.cli.development import dev
 from lazycloud.cli.domains import domain_app

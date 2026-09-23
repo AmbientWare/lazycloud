@@ -4,12 +4,12 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.cards import empty_state
+from lazycloud._terminal.cards import empty_state
+from lazycloud._terminal.formatting import duration
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.formatting import duration
 from lazycloud.cli.components.output import (
     command_from_args,
-    console,
     json_output_enabled,
     print_events_table,
     print_payload,

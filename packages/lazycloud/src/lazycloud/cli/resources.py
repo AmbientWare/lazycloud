@@ -27,21 +27,20 @@ from shared.http.gateway import (
 )
 from shared.tasks import is_terminal_task_status
 
+from lazycloud._terminal.cards import empty_state, notice_card, result_card
+from lazycloud._terminal.formatting import duration, timestamp
+from lazycloud._terminal.streams import console, error_console
+from lazycloud._terminal.theme import MUTED, state_style, styled
 from lazycloud.cli.apps import resolve_app_id
-from lazycloud.cli.components.cards import empty_state, notice_card, result_card
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.formatting import duration, timestamp
 from lazycloud.cli.components.output import (
-    console,
     emit,
-    error_console,
     json_default,
     json_output_enabled,
     print_payload,
     table,
     write_stream,
 )
-from lazycloud.cli.components.theme import MUTED, state_style, styled
 from lazycloud.cli.control import (
     compute_client,
     gateway_client,

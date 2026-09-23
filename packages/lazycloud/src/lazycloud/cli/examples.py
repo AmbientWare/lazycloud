@@ -5,8 +5,9 @@ from typing import Annotated
 
 import typer
 
-from lazycloud.cli.components.cards import result_card
-from lazycloud.cli.components.output import console, emit, json_output_enabled, print_payload, table
+from lazycloud._terminal.cards import result_card
+from lazycloud._terminal.streams import console
+from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.example_catalog import example_catalog, write_projects
 
 example_app = typer.Typer(help="List and download standalone example projects.")

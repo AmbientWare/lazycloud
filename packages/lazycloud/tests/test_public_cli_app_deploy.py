@@ -32,11 +32,6 @@ def test_file_deploy_selects_the_whole_app_and_deduplicates_aliases(
         assert app is load_deployment_object("workloads:app")
         assert [item.spec().name for item in app.resources] == ["worker", "hello"]
         assert load_deployment_object("workloads:hello") is app.resources[1]
-        result = CliRunner().invoke(
-            build_public_cli(), ["deploy", "workloads.py", "--name", "collision"]
-        )
-        assert result.exit_code != 0
-        assert "--name requires a handler reference or --resource" in result.output
     finally:
         sys.modules.pop("workloads", None)
         sys.modules.pop("app_definition", None)

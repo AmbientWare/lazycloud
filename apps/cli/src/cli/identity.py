@@ -3,13 +3,9 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.formatting import timestamp
-from lazycloud.cli.components.output import (
-    console,
-    json_output_enabled,
-    print_payload,
-    table,
-)
+from lazycloud._terminal.formatting import timestamp
+from lazycloud._terminal.streams import console
+from lazycloud.cli.components.output import json_output_enabled, print_payload, table
 from lazycloud.cli.components.results import emit_result
 from lazycloud.cli.identity import profile_payload
 from lazycloud.config import (

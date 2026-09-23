@@ -3,14 +3,13 @@ title: "Examples"
 description: "Complete applications built on the LazyCloud SDK: GPU inference, model training, an ASGI service, a coding agent, and parallel data processing."
 ---
 
-Choose a workflow and download its standalone uv project. Each guide walks
-through setup, a first run, and cleanup. The source and assets come with the SDK;
-no repository access is needed.
+Each workflow is a standalone uv project to download. The source and assets
+ship with the SDK, so you do not need repository access.
 
-Each app defines its images, compute, and storage mounts in Python. Run or
-deploy it to use those definitions; mounted volumes need no separate CLI
-creation step. Examples that need credentials include an explicit Python setup
-step. CLI storage commands are for inspecting, downloading, and cleaning up data.
+Each app defines its images, compute, and storage mounts in Python. Running or
+deploying the app applies those definitions, so mounted volumes need no
+separate CLI step to create them. Examples that need credentials include a
+Python setup step for them.
 
 <CardGroup cols={2}>
   <Card
@@ -63,19 +62,20 @@ uv sync
 ```
 
 Each download includes a README and dependencies pinned to the installed SDK.
-Run the guide's commands from the downloaded directory. Use `uv run` for Python
-scripts and CLI workflows. Commit the generated `uv.lock`; use `uv sync --locked`
-in CI. GPU libraries install in remote images, so you do not need a local GPU.
+Run the guide's commands from the downloaded directory, and use `uv run` for
+Python scripts and CLI workflows. Commit the generated `uv.lock` and use
+`uv sync --locked` in CI. GPU libraries install in remote images, so you do not
+need a local GPU.
 
 ```bash
 uv run lazycloud login
 ```
 
 If you use several workspaces, select one with `uv run lazycloud workspace use <name>`.
-Check your credit balance and GPU access in Settings, then Billing before
-running a GPU example. The storage examples leave files behind so you can
-reuse their outputs. Follow each guide's cleanup steps when finished.
+Before running a GPU example, check your credit balance and GPU access in
+Settings, then Billing. The storage examples keep their files after a run so
+you can reuse the outputs. Follow each guide's cleanup steps when you finish.
 
 The catalog also includes `quickstart`, `artifacts`, and `all-workloads`.
-Their downloaded READMEs include run commands and cleanup. Use
+Their READMEs cover run commands and cleanup. Use
 `lazycloud example download all` to write every project into its own directory.

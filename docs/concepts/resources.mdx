@@ -1,0 +1,117 @@
+---
+title: "Resources and options"
+description: "Size a container with CPU, memory, disk, and GPUs, choose capacity and placement, and look up every decorator option and default."
+---
+
+## Size a container
+
+```python
+from lazycloud import App
+
+app = App("render")
+
+
+@app.function(cpu=(1, 4), memory=("2Gi", "8Gi"), disk="20Gi")
+def render(scene: dict[str, float]) -> bytes:
+    ...
+```
+
+`cpu` and `memory` are reservations the container always keeps. A pair adds a
+ceiling, so this function reserves 1 CPU and 2 GiB, is throttled at 4 CPUs, and
+is killed above 8 GiB. Smaller reservations start faster. One CPU is one vCPU.
+
+`disk` is scratch space, 100 GiB by default, gone when the container stops.
+Files that must last go in a [volume](/concepts/volumes).
+
+## Request a GPU
+
+```python
+from lazycloud import GpuType
+
+
+@app.function(gpu=GpuType.L4, gpu_count=1, memory="16Gi")
+def embed(texts: list[str]) -> list[list[float]]:
+    ...
+```
+
+Models are `GpuType.T4`, `A10G`, `L4`, `L40S`, `A100_40`, `A100_80`, `H100`, and
+`H200`. A list is a preference order:
+`gpu=[GpuType.H100, GpuType.A100_80, GpuType.Any]` takes the first model with
+free capacity, and `GpuType.Any` at the end takes whatever is left. Plain
+`GpuType.A100` is rejected because the two sizes aren't interchangeable.
+`gpu_count` sets GPUs per container, and your [plan](/platform/plans) sets
+which models you can use.
+
+## Preemptible capacity
+
+Workloads run on cheaper preemptible capacity by default, which the provider
+can reclaim without notice. A preempted function call retries, and a preempted
+endpoint container is replaced, so functions that are safe to repeat lose
+little. `preemptible=False` keeps a workload on capacity that isn't reclaimed,
+at a CPU and memory [premium](/platform/plans#compute-pricing).
+
+## Placement
+
+A workload runs where [its workspace lives](/platform/compute#where-a-workload-runs).
+Two options narrow that:
+
+- `machine="gpu-1"` pins the workload to a machine you
+  [joined](/platform/compute#your-own-machines). It runs there or fails.
+- `region` and `availability_zone` pin placement within the workspace's cloud.
+  Regions are `"us-east"`, `"us-west"`, `"eu-central"`, `"eu-north"`, and
+  `"ap-southeast"`. Pinning costs more, needs a plan that allows it, and can't
+  combine with `machine`.
+
+## Defaults
+
+| | Function | Endpoint | ASGI and realtime | Pod | Sandbox |
+| --- | --- | --- | --- | --- | --- |
+| `cpu` | `0.125` | `1.0` | `1.0` | `1.0` | `1.0` |
+| `memory` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `128` MiB |
+| `timeout_seconds` | `3600` per call | `180` per request | `180` per request | | |
+| `retries` | `3` | `0` | | | |
+| Idle window | `keep_warm=10` | `keep_warm=180` | `keep_warm_seconds=180` | `keep_warm=600` | `keep_warm_seconds=600` |
+| Per container | `concurrency=1` | `workers=1`, `concurrency=1` | `workers=1`, `concurrent_requests=1` | one process | |
+| Containers | at most 1 | at most 1 | at most 1 | 1 | 1 per `create()` |
+| Queue limit | `max_pending_tasks=100` | `max_pending_tasks=100` | `max_pending_tasks=100` | | |
+| `authorized` | `True` | `True` | `True` | `False` | `False` |
+
+Scheduled functions default to `keep_warm=0`. Every workload defaults to
+`disk="100Gi"`.
+
+## Options
+
+Options apply to functions, endpoints, ASGI apps, and realtime handlers unless
+a row says otherwise. Pods and sandboxes take the sizing, storage, and placement
+options, and their pages list the rest.
+
+| Option | Type | What it does |
+| --- | --- | --- |
+| `image` | `Image` | [Container image](/concepts/images). Defaults to the managed Python image. |
+| `name` | `str` | Workload name. Defaults to the decorated callable's name. |
+| `cpu` | `float` or `(float, float)` | CPUs reserved, or reserved and ceiling. |
+| `memory` | `str` or `(str, str)` | Memory reserved, or reserved and ceiling, for example `"512Mi"` or `("2Gi", "8Gi")`. |
+| `disk` | `str` | Scratch disk, for example `"20Gi"`. |
+| `gpu` | `GpuType \| list[GpuType]` | GPU model, or a preference list. |
+| `gpu_count` | `int` | GPUs per container. Set it with `gpu`. |
+| `timeout_seconds` | `int` | Limit for one call or request. |
+| `retries`, `retry_policy` | `int`, `RetryPolicy` | Extra attempts after a failure. Functions and endpoints. See [retries](/concepts/functions#retries-and-timeouts). |
+| `keep_warm` | `int` | Idle seconds a container waits for the next call. `keep_warm_seconds` on ASGI and realtime. |
+| `concurrency` | `int` | Calls or requests one process serves at once. `concurrent_requests` on ASGI and realtime. |
+| `workers` | `int` | Server processes per container. Not on functions. |
+| `autoscaler` | `Autoscaler` | Container floor, ceiling, and load per container. See [Scaling](/concepts/scaling). |
+| `max_pending_tasks` | `int` | Calls in flight before new ones are refused. |
+| `env` | `dict[str, str]` | Plain environment variables. |
+| `secrets` | `list[str]` | [Secret](/concepts/secrets) names, injected as environment variables. |
+| `volumes` | `list` | [`Volume` and `CloudBucket`](/concepts/volumes) mounts. |
+| `on_start` | callable | Runs before a container accepts work. See [lifecycle hooks](/concepts/functions#lifecycle-hooks). |
+| `authorized` | `bool` | Whether HTTP calls need a workspace bearer token. |
+| `domain` | `str` | [Custom domain](/platform/domains). Endpoints, ASGI, and realtime. |
+| `callback_url` | `str` | Webhook called with [task events](/concepts/tasks-and-logs#callbacks). |
+| `task_policy` | `TaskPolicy` | Scheduling policy for invocations. |
+| `inputs` / `outputs` | schema | Schema metadata for clients and validation. Functions and endpoints. |
+| `docker_enabled` | `bool` | Give the container its own Docker daemon. Not on ASGI or realtime. |
+| `preemptible` | `bool` | Allow reclaimable capacity. Defaults to `True`. |
+| `machine` | `str` | A joined machine this workload must run on. |
+| `region`, `availability_zone` | `str` | Placement inside the workspace's cloud. |
+| `metadata` | `dict` | Custom metadata stored with the deployment. Not on ASGI or realtime. |

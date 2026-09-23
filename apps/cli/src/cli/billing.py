@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 from billing.rate_publication import publish_metered_rate_history
 from database.repositories.billing_ledger import BillingLedgerRepository
-from lazycloud.cli.components.cards import result_card
+from lazycloud._terminal.cards import result_card
 from lazycloud.cli.components.output import emit, table
 from lazycloud.cli.components.results import emit_result
 from provider_stripe import METER_EVENT_BACKFILL_DAYS, PublishedCatalog, StripeSettings

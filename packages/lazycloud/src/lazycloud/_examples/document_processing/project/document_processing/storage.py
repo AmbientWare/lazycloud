@@ -1,7 +1,5 @@
 """Validated, atomic file operations for uploaded documents and OCR results."""
 
-from __future__ import annotations
-
 import json
 import os
 import re

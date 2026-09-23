@@ -11,7 +11,6 @@ from lazycloud.abstractions.shell import ShellSession
 from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
 from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
-from lazycloud.cli.workflow_options import DeploymentOverrides
 from shared.http.secrets import GetSecretResponse, SecretWireRecord
 from shared.http.tasks import TaskPageResponse, TaskResponse
 from shared.http.volumes import DeleteVolumeResponse
@@ -130,7 +129,7 @@ def test_development_session_connects_without_printing_credentials(
         assert workspace == "team"
         opened.append(selected)
 
-    def default_dev_pod(_overrides: DeploymentOverrides) -> FakePod:
+    def default_dev_pod() -> FakePod:
         return FakePod()
 
     monkeypatch.setattr("lazycloud.cli.development._default_dev_pod", default_dev_pod)

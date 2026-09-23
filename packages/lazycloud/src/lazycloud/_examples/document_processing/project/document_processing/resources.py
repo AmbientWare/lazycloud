@@ -1,7 +1,5 @@
 """Shared LazyCloud resources for the document-processing example."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from lazycloud import App, Image, Volume

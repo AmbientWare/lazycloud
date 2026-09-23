@@ -22,7 +22,7 @@ from typing import (
 
 import cloudpickle
 from pydantic import ValidationError
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
     DEFAULT_FUNCTION_AUTHORIZED,
@@ -69,7 +69,6 @@ from lazycloud.abstractions.metadata import (
     retry_policy_config,
 )
 from lazycloud.abstractions.serve import (
-    ServeOptions,
     ServePreviewSession,
     read_serve_preview,
     write_serve_preview,
@@ -135,7 +134,7 @@ class FunctionOptions(TypedDict, total=False):
     cron: str | None
     keep_warm: int | None
     max_pending_tasks: int | None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None
+    autoscaler: Autoscaler | Mapping[str, Any] | None
     retries: int
     retry_policy: RetryPolicyInput
     retry_delay_seconds: float
@@ -179,7 +178,7 @@ class Function(Generic[P, R]):
     cron: str | None = None
     keep_warm: int | None = None
     max_pending_tasks: int | None = None
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None
     retries: int = DEFAULT_FUNCTION_RETRIES
     retry_policy: RetryPolicyInput = None
     retry_delay_seconds: float = 0.0
@@ -259,47 +258,6 @@ class Function(Generic[P, R]):
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )
-
-    def configure(
-        self,
-        *,
-        image: Image | None = None,
-        cpu: CpuRequest | None = None,
-        memory: MemoryRequest | None = None,
-        disk: str | None = None,
-        gpu: GpuInput = None,
-        gpu_count: int | None = None,
-        env: Mapping[str, str] | None = None,
-        secrets: Iterable[str] | None = None,
-        region: str | None = None,
-        availability_zone: str | None = None,
-        machine: MachineInput = None,
-        preemptible: bool | None = None,
-    ) -> Function[P, R]:
-        """Apply explicit authoring overrides before preparation or invocation."""
-        if image is not None:
-            self.image = image
-        if cpu is not None:
-            self.cpu = cpu
-        if memory is not None:
-            self.memory = memory
-        if gpu is not None:
-            self.gpu = gpu
-        if gpu_count is not None:
-            self.gpu_count = gpu_count
-        if env:
-            self.env.update(env)
-        if secrets:
-            self.secrets.extend(secret for secret in secrets if secret not in self.secrets)
-        if machine is not None:
-            self.machine = machine
-        if region is not None:
-            self.region = region
-        if availability_zone is not None:
-            self.availability_zone = availability_zone
-        if preemptible is not None:
-            self.preemptible = preemptible
-        return self
 
     def spec(self) -> DeploymentSpec:
         kind = DeploymentKind.Function
@@ -402,7 +360,6 @@ class Function(Generic[P, R]):
     def deploy(
         self,
         *,
-        name: str | None = None,
         workspace: str | None = None,
         source_root: str | Path | None = None,
         _preparation: DeploymentPreparation | None = None,
@@ -419,7 +376,6 @@ class Function(Generic[P, R]):
                 preparation=_preparation,
             ).create(
                 self.spec(),
-                name=name,
                 workspace=workspace,
                 image=self.image,
                 source_root=source_root,
@@ -434,15 +390,12 @@ class Function(Generic[P, R]):
         *,
         timeout: int = 0,
         workspace: str | None = None,
-        sync_dir: str = ".",
-        options: ServeOptions | None = None,
+        sync_dir: str | None = None,
     ) -> FunctionServeResponse:
-        if options is not None:
-            options.apply(self)
-            sync_dir = options.sync_dir or sync_dir
+        sync_dir = sync_dir or "."
         self.env[HOT_RELOAD_ENV] = "true"
         self.keep_warm = 0
-        self.autoscaler = QueueDepthAutoscaler(min_containers=0, max_containers=1)
+        self.autoscaler = Autoscaler(min_containers=0, max_containers=1)
         self.terminal = self.terminal or Terminal()
         stub_id = self.prepare(workspace=workspace, source_root=sync_dir)
         config = self._config()
@@ -855,7 +808,7 @@ def _function(
     cron: str | None = None,
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -901,7 +854,7 @@ def _function(
     cron: str | None = None,
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,
@@ -946,7 +899,7 @@ def _function(
     cron: str | None = None,
     keep_warm: int | None = None,
     max_pending_tasks: int | None = None,
-    autoscaler: QueueDepthAutoscaler | Mapping[str, Any] | None = None,
+    autoscaler: Autoscaler | Mapping[str, Any] | None = None,
     retries: int = DEFAULT_FUNCTION_RETRIES,
     retry_policy: RetryPolicy | Mapping[str, Any] | None = None,
     retry_delay_seconds: float = 0.0,

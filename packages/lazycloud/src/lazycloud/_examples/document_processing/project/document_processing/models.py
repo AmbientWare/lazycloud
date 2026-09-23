@@ -1,7 +1,5 @@
 """HTTP and worker result models for the document-processing example."""
 
-from __future__ import annotations
-
 from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field

@@ -1,117 +1,73 @@
 ---
 title: "Endpoints, ASGI, and realtime"
-description: "Serve HTTP from a typed Python callable, an ASGI application, or a WebSocket-style handler."
+description: "HTTPS and WebSocket services in Python, each with a stable URL and bearer-token auth by default."
 ---
 
-import WorkloadOptions from '/snippets/workload-options.mdx';
+Pick by what you already have:
+
+| You have | Use |
+| --- | --- |
+| A Python function that answers HTTP requests | `@app.endpoint` |
+| A FastAPI or Starlette app with several routes | `app.asgi(...)` |
+| A WebSocket message handler | `@app.realtime` |
+
+Each gets a stable HTTPS URL in the cloud when deployed, and previews with
+[`lazycloud serve`](/concepts/workflow#live-preview).
 
 ## Endpoints
 
-Use `@app.endpoint` when another application needs to call your Python over
-HTTP. Save this as `api_demo.py`. It counts words in a JSON request:
+Save this as `api_demo.py`:
 
 ```python
-from lazycloud import App, Image
+from lazycloud import App
+from pydantic import BaseModel
 
 app = App("api_demo")
-image = Image(python_version="3.12")
 
 
-@app.endpoint(name="count_words", route="/word-count", methods=["POST"], image=image)
-def count_words(text: str) -> dict[str, int]:
-    return {"words": len(text.split())}
+class WordCount(BaseModel):
+    words: int
+
+
+@app.endpoint(name="count_words", route="/word-count", methods=["POST"])
+def count_words(text: str) -> WordCount:
+    return WordCount(words=len(text.split()))
 ```
 
-`route` defaults to `/` and `methods` to `GET` and `POST`. Endpoints default
-to `cpu=1.0`, `memory="128Mi"`, `timeout_seconds=180`, `retries=0`,
-`keep_warm=180`, and `authorized=True`, and serve one request at a time in one
-container until you change that; see [Scaling](#scaling).
+LazyCloud maps the JSON request body to the function's arguments and sends the
+returned model as JSON. The model also becomes the response schema that
+[typed client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
+use. `route` defaults to `/` and `methods` to `GET` and `POST`.
 
-### Calling an endpoint
-
-Deploy it:
+Deployed, it answers at the printed URL with an
+[access token](/platform/auth#ci-and-scripts):
 
 ```bash
 uv run lazycloud deploy api_demo:count_words
-```
-
-The command prints the endpoint's URL. Send a bearer token for the
-workspace unless the endpoint sets `authorized=False`:
-
-```bash
 curl --fail --show-error "<endpoint-url>" \
   -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"text": "Run Python on LazyCloud"}'
 ```
 
-The response is `{"words": 4}`. Set `LAZYCLOUD_TOKEN` to an access token from
-Settings, then Tokens. See [the endpoint walkthrough](/getting-started/first-endpoint)
-for the complete sign-in and request steps. `authorized=False` allows anyone
-who has the URL to call the endpoint.
+The response is `{"words": 4}`.
 
-The decorated object is a typed client too:
+In Python, the decorated function is also the client:
 
 ```python
 from api_demo import count_words
 
-response = count_words.target("deployed").request("Run Python on LazyCloud")
+response = count_words.request("Run Python on LazyCloud")
 print(response.status_code, response.json())
 ```
 
-`target()` takes `"auto"`, `"served"`, or `"deployed"`, plus
-`deployment_name` and `deployment_version` to pin one deployment.
-`count_words.request(...)` uses a served preview when one exists, otherwise the
-deployment. `count_words.local("some text")` calls the function in your process.
-
-### Scaling
-
-Three numbers set an endpoint's capacity. `workers` is the number of server
-processes in one container. `concurrency` is how many requests each process
-handles at once, so a container accepts `workers * concurrency` requests in
-flight. `autoscaler` is how many containers the endpoint may run:
-
-```python
-from lazycloud import QueueDepthAutoscaler
-
-
-@app.endpoint(
-    name="word-count-scaled",
-    cpu=2,
-    workers=2,
-    concurrency=8,
-    autoscaler=QueueDepthAutoscaler(min_containers=0, max_containers=8, tasks_per_container=16),
-)
-def count_words_scaled(text: str) -> dict[str, int]:
-    return {"words": len(text.split())}
-```
-
-This endpoint handles 16 requests per container and adds a container for every
-16 requests in flight, up to 8. Set `tasks_per_container` to match
-`workers * concurrency`; when you omit `autoscaler` that happens for you, with
-`max_containers=1`.
-
-Workers are separate processes, so `on_start` runs in each one and a model
-loaded there is loaded once per worker. For a GPU model keep `workers=1` and
-raise `concurrency`.
-
-`keep_warm` is how long a container with no requests stays up, 180 seconds by
-default. `min_containers` keeps containers up regardless, so the first request
-after a quiet period does not pay for a start. `max_pending_tasks`, 100 by
-default, caps requests in flight; past it the endpoint answers `429`. A
-request that finds every slot busy waits up to `timeout_seconds` for one.
-
-`checkpoint_enabled=True` snapshots a warmed worker so replacements restore
-from it instead of running startup again.
-
-[Scaling and concurrency](/concepts/scaling) has sizing examples for a GPU
-model behind HTTP and for a CPU API with steady traffic.
+`request()` uses your `lazycloud login` sign-in and goes to a running preview or
+the deployment. See [Where a call goes](/concepts/workflow#where-a-call-goes).
 
 ## ASGI applications
 
-Use `@app.asgi` for an existing FastAPI or Starlette application with several
-routes. Save this complete example as `web_app.py`. Install FastAPI locally
-with `uv add fastapi` so the CLI can import the file:
+`app.asgi(...)` wraps an existing FastAPI or Starlette app. FastAPI needs to be
+installed locally too, with `uv add fastapi`, because the CLI imports the file:
 
 ```python
 from fastapi import FastAPI
@@ -136,39 +92,26 @@ service = app.asgi(
 uv run lazycloud deploy web_app:service
 ```
 
-ASGI apps take the endpoint options with two renamed: `concurrent_requests`
-and `keep_warm_seconds`. `name` defaults to `"asgi"`. The defaults are
-`workers=1`, `concurrent_requests=1`, `keep_warm_seconds=180`,
-`timeout_seconds=180`, and `max_pending_tasks=100`. An async FastAPI app can
-take a high `concurrent_requests` in one worker; a blocking one needs more
-`workers` instead:
+`request()` sends a full request to a route:
 
 ```python
-service = app.asgi(
-    name="service",
-    cpu=2,
-    workers=2,
-    concurrent_requests=32,
-    image=Image().add_python_packages(["fastapi"]),
-)(api)
-```
+from web_app import service
 
-Call a deployed ASGI app with a full request:
-
-```python
 response = service.request(method="GET", path="/health", target="deployed")
 print(response.json())
 ```
 
-`request()` accepts `method`, `path`, `json`, `data`, `headers`, `params`,
-and the same `target`, `deployment_name`, and `deployment_version` options as
-endpoints.
+It takes `method`, `path`, `json`, `data`, `headers`, and `params`. An
+[exported client](/concepts/apps#call-deployed-workloads-from-other-projects)
+gives each route a typed method instead. ASGI apps take the endpoint options,
+with `concurrent_requests` for `concurrency` and `keep_warm_seconds` for
+`keep_warm`.
 
 ## Realtime handlers
 
 `@app.realtime` turns a function into a WebSocket handler. Each incoming
-message calls the handler with the message; the return value is sent back, and
-an iterable return sends each item.
+message calls the handler, and LazyCloud sends the return value back. An
+iterable return value sends each item as its own message.
 
 ```python
 @app.realtime(name="echo")
@@ -176,36 +119,58 @@ def echo(message: str) -> str:
     return message
 ```
 
-Realtime handlers take the ASGI options and deploy, serve, and scale the same
-way. `name` defaults to `"realtime"`.
+Realtime handlers take the ASGI options and deploy, preview, and scale the same
+way.
 
-## Preview before deploying
+## Authentication
 
-`uv run lazycloud serve` runs an endpoint or ASGI app on LazyCloud with a temporary
-URL and streams logs, syncing your working directory into the container as you
-edit:
+All three require `Authorization: Bearer <token>` with an
+[access token](/platform/auth#ci-and-scripts) for the workspace, and the Python
+clients send your sign-in. `authorized=False` makes the URL public, leaving
+access control to your code.
 
-```bash
-uv run lazycloud serve api_demo:count_words
+## Capacity
+
+An endpoint starts as one process handling one request at a time. Three
+settings raise that:
+
+```python
+from lazycloud import Autoscaler
+
+
+@app.endpoint(
+    name="word-count-scaled",
+    cpu=2,
+    workers=2,
+    concurrency=8,
+    autoscaler=Autoscaler(max_containers=8, tasks_per_container=16),
+)
+def count_words_scaled(text: str) -> WordCount:
+    return WordCount(words=len(text.split()))
 ```
 
-While the preview runs, `count_words.request(...)` from this machine goes to it
-instead of the deployment. [Local, preview, deploy](/getting-started/workflow)
-explains the target rules.
+Two workers of eight requests make 16 per container, and the autoscaler adds a
+container per 16 in flight, up to 8. Past `max_pending_tasks`, 100 by default,
+requests get `429`. [Scaling](/concepts/scaling) covers choosing the numbers.
+`checkpoint_enabled=True` lets new containers restore a warmed worker instead
+of rerunning `on_start`.
 
 ## Custom domains
 
-On Team and Business plans, `domain="app.example.com"` on an endpoint, ASGI app, or
-realtime handler serves it from a hostname you own. See
-[Custom domains](/platform/domains).
+On Team and Business plans, `domain="api.example.com"` serves any of the three
+from a hostname you own. See [Custom domains](/platform/domains).
 
-## Shared options
+## Stop and clean up
 
-To stop an endpoint, use `uv run lazycloud deployment stop <name>`. Warm containers
-incur compute charges while they remain running.
+```bash
+uv run lazycloud deployment stop count_words
+uv run lazycloud deployment delete count_words
+```
 
-Endpoints, ASGI apps, and realtime handlers also accept `env`, `secrets`,
-`volumes`, an `on_start` hook that runs in each worker process as it starts,
-`task_policy`, and the options below.
+`stop` takes it offline and keeps the definition, and `delete` removes it, as
+does [`--prune`](/concepts/apps#remove-workloads) once it's gone from the code.
 
-<WorkloadOptions />
+## Shared settings
+
+[Images](/concepts/images), [resources](/concepts/resources), and
+[scaling](/concepts/scaling).

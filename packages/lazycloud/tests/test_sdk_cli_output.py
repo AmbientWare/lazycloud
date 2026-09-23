@@ -9,16 +9,11 @@ from collections.abc import Iterator
 
 import pytest
 import typer
+from lazycloud._terminal.streams import console, error_console, set_json_output
 from lazycloud.cli.components.errors import (
     normalize_exception,
 )
-from lazycloud.cli.components.output import (
-    CliContextState,
-    console,
-    error_console,
-    print_payload,
-    set_json_output,
-)
+from lazycloud.cli.components.output import CliContextState, print_payload
 from shared.http.errors import HttpApiError
 from typer.core import TyperCommand
 
@@ -180,10 +175,10 @@ def test_normalize_exception_preserves_safe_actionable_details(case: str) -> Non
 
 
 def test_cli_console_prints_through_a_live_stdout_proxy(capsys: pytest.CaptureFixture[str]) -> None:
-    from lazycloud.cli.components.output import CliConsole
+    from lazycloud._terminal.streams import OutputConsole
     from rich.file_proxy import FileProxy
 
-    console = CliConsole(force_terminal=False)
+    console = OutputConsole(force_terminal=False)
     original = sys.stdout
     sys.stdout = FileProxy(console, original)
     try:

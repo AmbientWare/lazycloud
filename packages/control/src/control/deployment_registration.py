@@ -7,7 +7,7 @@ from typing import Protocol
 from database.records.apps import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.app_slug import app_slug_or_default
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
@@ -330,7 +330,7 @@ def _deployment_autoscaler_config(spec: DeploymentSpec) -> dict[str, JsonValue]:
         min_containers = 0
         tasks_per_container = _default_tasks_per_container(spec)
     else:
-        configured = QueueDepthAutoscaler.model_validate(raw)
+        configured = Autoscaler.model_validate(raw)
         max_containers = configured.max_containers
         min_containers = configured.min_containers
         tasks_per_container = configured.tasks_per_container

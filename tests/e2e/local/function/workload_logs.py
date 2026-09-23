@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 
-from shared.autoscaling import QueueDepthAutoscaler
+from shared.autoscaling import Autoscaler
 
 from lazycloud import App, Image, current_task_id
 
@@ -22,7 +22,7 @@ overlap = threading.Barrier(2, timeout=30)
     concurrency=2,
     in_process=True,
     keep_warm=30,
-    autoscaler=QueueDepthAutoscaler(max_containers=1, tasks_per_container=2),
+    autoscaler=Autoscaler(max_containers=1, tasks_per_container=2),
 )
 def emit(value: int) -> dict[str, str | int | float]:
     started = time.monotonic()

@@ -47,9 +47,11 @@ def test_cli_combines_files_for_read_only_preview_and_prunes_an_explicit_empty_a
     )
     (tmp_path / "empty.py").write_text('from lazycloud import App\napp = App("cli_prune")\n')
     (tmp_path / "invalid.py").write_text(
-        'from lazycloud import App\napp = App("invalid_app")\n'
-        "@app.function()\ndef invalid(): return 1\n"
+        'from lazycloud import App, Image\napp = App("invalid_app")\n'
+        'image = Image.from_registry("ghcr.io/acme/private", credentials=["CLI_PRUNE_MISSING"])\n'
+        "@app.function(image=image)\ndef invalid(): return 1\n"
     )
+    monkeypatch.delenv("CLI_PRUNE_MISSING", raising=False)
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     sock.listen(128)
@@ -90,14 +92,12 @@ def test_cli_combines_files_for_read_only_preview_and_prunes_an_explicit_empty_a
                 "-p",
                 "empty.py",
                 "invalid.py",
-                "--port",
-                "web=8080",
                 "--workspace",
                 app.workspace_id,
             ],
         )
         assert failed.exit_code != 0
-        assert "does not support" in str(failed.exception)
+        assert "CLI_PRUNE_MISSING" in str(failed.exception)
         assert services.deployments.get(old.id).active
         pruned = runner.invoke(
             build_public_cli(),

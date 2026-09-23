@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from lazycloud.cli.components.formatting import timestamp
-from lazycloud.cli.components.output import console, json_output_enabled, print_payload, table
+from lazycloud._terminal.formatting import timestamp
+from lazycloud._terminal.streams import console
+from lazycloud.cli.components.output import json_output_enabled, print_payload, table
 from lazycloud.cli.components.results import emit_notice, emit_result
 from shared.app_identity import AGENT_NAME, STATE_DIR
 from shared.http.operations import AgentLeaseRequest
