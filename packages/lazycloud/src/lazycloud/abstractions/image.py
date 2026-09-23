@@ -423,7 +423,9 @@ class Image:
             resolved.update(resolve_registry_credentials(unresolved_keys, env=env))
         return _registry_credentials_for_transport(resolved)
 
-    def _build_request(self, *, env: Mapping[str, str] | None = None) -> BuildImageRequest:
+    def _build_request(
+        self, *, env: Mapping[str, str] | None = None, machine: str = ""
+    ) -> BuildImageRequest:
         spec = self.spec()
         return BuildImageRequest(
             architecture=spec.architecture,
@@ -440,6 +442,7 @@ class Image:
             secrets=list(spec.secrets),
             gpu=spec.gpu or "",
             ignore_python=spec.ignore_python,
+            machine=machine,
         )
 
     def _verify_request(
@@ -503,8 +506,9 @@ class Image:
         client: ImageBuildClient,
         *,
         env: Mapping[str, str] | None = None,
+        machine: str = "",
     ) -> Iterator[BuildImageResponse]:
-        yield from client.build_image(self._build_request(env=env))
+        yield from client.build_image(self._build_request(env=env, machine=machine))
 
     def build(
         self,
@@ -512,8 +516,11 @@ class Image:
         *,
         terminal: Terminal | None = None,
         env: Mapping[str, str] | None = None,
+        machine: str = "",
     ) -> ImageBuildResult:
-        with ImageBuildOperation(self, client, terminal=terminal, env=env) as operation:
+        with ImageBuildOperation(
+            self, client, terminal=terminal, env=env, machine=machine
+        ) as operation:
             operation.verify()
             return operation.finish()
 
@@ -604,6 +611,7 @@ class ImageBuildOperation:
     client: ImageBuildClient
     terminal: Terminal | None = None
     env: Mapping[str, str] | None = field(default=None, repr=False)
+    machine: str = ""
     _step: TerminalStep | None = field(default=None, init=False, repr=False)
     _verified: bool = field(default=False, init=False)
     _result: ImageBuildResult | None = field(default=None, init=False)
@@ -641,7 +649,7 @@ class ImageBuildOperation:
             return self._result
         responses: list[BuildImageResponse] = []
         last_response: BuildImageResponse | None = None
-        for response in self.image._build_stream(self.client, env=self.env):
+        for response in self.image._build_stream(self.client, env=self.env, machine=self.machine):
             responses.append(response)
             if self._step is not None:
                 _write_build_response(self._step, response)
