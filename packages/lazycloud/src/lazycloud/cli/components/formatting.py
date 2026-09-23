@@ -11,6 +11,7 @@ from rich.console import Group, RenderableType
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
+from shared.http.deployment_plans import DeploymentPlanAction
 from shared.serialization import to_json_value
 
 from lazycloud.cli.components import theme
@@ -58,6 +59,8 @@ def fields(items: dict[str, JsonValue]) -> Table:
 
 
 def cell(item: object, *, key: str = "") -> RenderableType:
+    if isinstance(item, DeploymentPlanAction):
+        return text(item, style=theme.deployment_action_style(item))
     source = item.value if isinstance(item, Enum) else item
     return value(to_json_value(source), key=key)
 

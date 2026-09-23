@@ -319,7 +319,7 @@ def _emit_deployment_plans(ctx: typer.Context, plans: list[DeploymentPlanRespons
             "deployment actions",
             ["App", "Kind", "Workload", "Action", "Existing versions"],
             [
-                [plan.app, item.kind.value, item.name, item.action.value, item.versions]
+                [plan.app, item.kind.value, item.name, item.action, item.versions]
                 for plan in plans
                 for item in plan.data
             ],
