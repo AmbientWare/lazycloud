@@ -4,8 +4,8 @@ description: "Declare persistent storage beside your workloads and share files b
 ---
 
 A volume keeps files after your container stops. Declare it in Python and
-attach it to each workload that needs it. LazyCloud creates a missing volume
-when preparing the first container's mounts and reuses it on later runs.
+attach it to each workload that needs it. LazyCloud creates the volume the
+first time a container mounts it and reuses it on later runs.
 
 ## Declare and use a volume
 
@@ -39,21 +39,22 @@ Run it with the SDK installed and signed in:
 uv run python reports.py
 ```
 
-The function returns three sales totaling 5500 cents. The script downloads
-`latest.json` to your current directory. No separate volume-creation command
-is needed. Repeating the run replaces that file.
+The function returns three sales totaling 5500 cents, and the script downloads
+`latest.json` to your current directory. You don't create the volume first.
+Running the script again replaces the file.
 
-`Volume(...)` declares the name and mount path; constructing the object alone
-makes no API call. Attaching it with `volumes=[reports]` tells LazyCloud to
-mount it. The same name in the same workspace refers to the same stored files,
-even when used by another app. Choose a different name for separate data.
+`Volume(...)` declares the name and mount path and makes no API call on its
+own. `volumes=[reports]` tells LazyCloud to mount it. Within a workspace, a
+name always refers to the same stored files, even from another app. Use a
+different name for separate data.
 
 Changing the mount path changes where a container sees the files. Changing the
-volume name selects another volume; it does not move or delete the old data.
+volume name selects another volume and leaves the old data where it is.
 Removing a mount or deleting a deployment also leaves stored files intact.
 
-A volume is stored where its workspace lives; see [Compute](/platform/compute).
-Storage is billed per GiB-month; see [Plans and limits](/platform/plans).
+LazyCloud stores a volume where its workspace lives. See
+[Compute](/platform/compute). Storage bills per GiB-month. See
+[Plans and limits](/platform/plans).
 
 ## Upload inputs before the first run
 
@@ -74,8 +75,8 @@ function with `volumes=[models]` to read `/models/weights.pt` remotely.
 `get_or_create()` performs the same operation and returns a boolean.
 
 Keep provisioning and uploads in an explicit setup function or an
-`if __name__ == "__main__":` block. Workload imports should declare resources
-without uploading data or changing stored values.
+`if __name__ == "__main__":` block. Importing a workload module should only
+declare resources, never upload data or change stored values.
 
 ## Read and write from Python
 
@@ -102,23 +103,23 @@ For multi-gigabyte uploads, `presigned_url(...)`,
 
 ## Share files between containers
 
-Every container that mounts a volume sees the same files, so a volume is how
-parallel calls and long-lived services share data. A volume is object storage
-presented as a directory, and that shapes what works well:
+Every container that mounts a volume sees the same files, so parallel calls
+and long-lived services can share data through it. A volume is object storage
+presented as a directory, which leads to these rules:
 
-- A file becomes visible to other containers when the writer closes it, and it
-  is durable at that point. Write whole files and close them; do not rely on
-  another container seeing a partially written file.
-- Two containers writing the same path do not merge; the last close wins.
-  Give each call its own output path, such as `/reports/{task_id}.json`, and
-  have a final step combine them.
+- Other containers see a file once the writer closes it, and the file is
+  durable from then on. Write whole files and close them. Another container
+  may not see a partly written file.
+- When two containers write the same path, the last close wins and nothing
+  merges. Give each call its own output path, such as
+  `/reports/{task_id}.json`, and have a final step combine them.
 - There are no file locks. Coordinate through a [queue or map](/concepts/queues-maps)
   when containers must take turns.
 - Appending to a large file or seeking inside one rewrites the object. Keep
   logs and append-only data in many small files or send them elsewhere.
-- The first read of a large file downloads it; later reads on the same machine
-  come from a local cache. Large read-mostly data such as model weights is what
-  volumes do best.
+- The first read of a large file downloads it. Later reads on the same
+  machine come from a local cache. Volumes suit large, read-mostly data such
+  as model weights.
 
 Download weights once and let every container reuse them:
 
@@ -147,14 +148,14 @@ def encode(text: str) -> list[float]:
 
 The `on_start` hook runs before the container takes calls. Downloading to a
 `.part` path and renaming means a container that starts mid-download sees
-either no file or a complete one. Two containers starting at the same moment
-may both download; the rename makes that a wasted download rather than a
+either no file or a complete one. Two containers that start at the same moment
+may both download. Because of the rename, that costs a wasted download, not a
 corrupt file.
 
 ## Mount an existing cloud bucket
 
 `CloudBucket` mounts an S3-compatible bucket you own. Reads and writes go
-to the bucket in place; nothing is copied into LazyCloud storage.
+straight to the bucket, and LazyCloud copies nothing into its own storage.
 
 ```python
 from pathlib import Path
@@ -187,8 +188,9 @@ on your [connected AWS account](/platform/compute).
 mount name, `prefix` to mount part of the bucket, `endpoint` for another
 S3-compatible store, `force_path_style`, and `read_only`.
 
-The bucket must already exist; declaring a mount never creates it. See
-[parallel Parquet processing](/examples/parallel-parquet-s3) for a complete workflow.
+The bucket must already exist. Declaring a mount never creates it. See
+[parallel Parquet processing](/examples/parallel-parquet-s3) for a complete
+workflow.
 
 ## Delete stored data
 

@@ -1,12 +1,12 @@
 ---
 title: "Introduction"
-description: "LazyCloud runs your Python on remote CPUs and GPUs. You describe the container in code; LazyCloud builds it, runs it, scales it, and stops it."
+description: "LazyCloud runs your Python on remote CPUs and GPUs. You describe the container in code, and LazyCloud builds it, runs it, scales it, and stops it."
 ---
 
-LazyCloud runs Python on remote CPUs and GPUs. You add a decorator that says
-what a function needs (packages, CPU, memory, GPU, storage), and LazyCloud
-builds the container, uploads your code, runs it, and stops it when the work is
-done. You pay per second while a container runs.
+LazyCloud runs Python on remote CPUs and GPUs. A decorator on a function names
+the packages, CPU, memory, GPU, and storage it needs. LazyCloud builds the
+container, uploads your code, runs it, and stops it when the work is done. You
+pay per second while a container runs.
 
 ```python
 from lazycloud import App, Image
@@ -19,7 +19,7 @@ def summarize(amounts: list[float]) -> dict[str, float]:
     return {"total": sum(amounts), "mean": sum(amounts) / len(amounts)}
 ```
 
-The same file runs at each stage of development, with no change to the code:
+The same file runs at every stage of development without code changes:
 
 ```bash
 uv run pytest                                           # test locally with summarize.local(...)

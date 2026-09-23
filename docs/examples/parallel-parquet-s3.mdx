@@ -6,11 +6,11 @@ description: "Summarize partitions in your S3 bucket with remote Python function
 import ExampleSetup from '/snippets/example-setup.mdx';
 
 Process one Parquet file per task, then combine the results into a JSON summary
-in your bucket. The batch fails if any partition fails, so a partial run does
-not overwrite the summary.
+in your bucket. The batch fails if any partition fails, so a partial run never
+overwrites the summary.
 
-Source is `parallel_parquet/app.py`. PyArrow installs in the remote
-image; your machine only runs the coordinator.
+Source is `parallel_parquet/app.py`. PyArrow installs in the remote image, and
+your machine only runs the coordinator.
 
 <ExampleSetup />
 
@@ -32,9 +32,10 @@ export LAZYCLOUD_PARQUET_INPUT_PREFIX="examples/parallel-parquet/first-run/input
 export LAZYCLOUD_PARQUET_OUTPUT_KEY="examples/parallel-parquet/first-run/output/summary.json"
 ```
 
-Replace the bucket and region. The bucket must exist. A successful run writes
-to the output key, replacing a previous summary there. Keep that key outside
-the input prefix and choose a new one if you want to preserve earlier results.
+Replace the bucket and region with your own. The bucket must already exist. A
+successful run writes the output key and replaces any summary already there.
+Keep that key outside the input prefix, and pick a new key to preserve earlier
+results.
 
 Paths must be relative object keys without `..`, backslashes, or empty path
 segments. The output key must end in `.json`.
@@ -60,11 +61,12 @@ unset PARQUET_S3_ACCESS_KEY_ID PARQUET_S3_SECRET_ACCESS_KEY
 `configure.py` reads the two credential values from your environment and uses
 `Secret(...).set(...)` to store them under the names in the app's configuration.
 Running it again replaces those values. The `LAZYCLOUD_PARQUET_*` variables
-hold bucket settings and secret names. Keep them exported where you run the batch.
+hold bucket settings and secret names. Keep them exported in the shell that
+runs the batch.
 
 The app declares one `CloudBucket` and attaches it to all four functions with
-`volumes=[data_bucket]`. Edit that definition to change the mount path or access
-mode. The external bucket must already exist.
+`volumes=[data_bucket]`. Edit that definition to change the mount path or
+access mode.
 
 For another S3-compatible store, also set its HTTPS endpoint:
 
@@ -84,9 +86,10 @@ permissions. See [cloud buckets](/concepts/volumes#mount-an-existing-cloud-bucke
 uv run lazycloud run parallel_parquet.app:run_batch true 4 10 false
 ```
 
-The arguments mean seed the input, create four partitions of ten rows each,
-and refuse to overwrite seed files. The coordinator runs locally and submits
-the remote functions as needed. A separate deployment is not required.
+The arguments tell the batch to seed the input, write four partitions of ten
+rows each, and refuse to overwrite existing seed files. The coordinator runs
+locally and submits the remote functions as needed, so you do not need a
+separate deployment.
 
 The result includes `partition_count: 4`, `row_count: 40`, the total
 `amount_cents`, per-partition counts, task IDs, and the output key.
@@ -101,12 +104,12 @@ Set the input prefix to those files and run without seeding:
 uv run lazycloud run parallel_parquet.app:run_batch false
 ```
 
-The coordinator uses `spawn_map()` for one task per partition. It checks
-each result before calling the summary writer.
+The coordinator calls `spawn_map()` to start one task per partition and checks
+every result before it calls the summary writer.
 
-To repeat the sample with existing input, also use `false`. Use a new prefix
-for a fresh sample. Passing `true` as the fourth argument allows seed-file
-replacement and should only be used for disposable data.
+To rerun the sample on input that already exists, pass `false` as well. For a
+fresh sample, use a new prefix. Passing `true` as the fourth argument lets the
+run replace seed files, so use it only on disposable data.
 
 ## Read the summary
 
@@ -120,7 +123,7 @@ aws s3 cp \
 
 For another S3-compatible store, add
 `--endpoint-url "$LAZYCLOUD_PARQUET_ENDPOINT"`. The AWS CLI uses its own
-credentials, independently of LazyCloud workspace secrets.
+credentials, not the LazyCloud workspace secrets.
 
 ## Investigate a failed partition
 
@@ -139,14 +142,15 @@ Fix the input or bucket access, then rerun without seeding.
 Function containers shut down after their idle window. Your bucket keeps the
 input and summary, and its storage and request charges continue.
 
-First list what your selected prefix contains:
+List what the input prefix contains first:
 
 ```bash
 aws s3 ls "s3://$LAZYCLOUD_PARQUET_BUCKET/$LAZYCLOUD_PARQUET_INPUT_PREFIX/" \
   --recursive --region "$LAZYCLOUD_PARQUET_REGION"
 ```
 
-Only for the four-file sample created above, remove its exact seed keys:
+For the four-file sample seeded above only, remove its exact seed keys and the
+summary:
 
 ```bash
 for index in 0 1 2 3; do
@@ -157,11 +161,11 @@ aws s3 rm "s3://$LAZYCLOUD_PARQUET_BUCKET/$LAZYCLOUD_PARQUET_OUTPUT_KEY" \
   --region "$LAZYCLOUD_PARQUET_REGION"
 ```
 
-Check the listed filenames against the seed result before deleting. Keep your
-own datasets and any summary you still need. Include `--endpoint-url` on
-these commands too when using another S3-compatible store.
+Before deleting, compare the listed filenames with the seed result. Keep your
+own datasets and any summary you still need. For another S3-compatible store,
+add `--endpoint-url` to these commands too.
 
-If created only for this example, delete the two workspace secrets:
+If you created the two workspace secrets only for this example, delete them:
 
 ```bash
 uv run lazycloud secret delete PARQUET_S3_ACCESS_KEY_ID

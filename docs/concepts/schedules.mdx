@@ -33,9 +33,9 @@ Deploy the function to register its schedule:
 uv run lazycloud deploy daily_report:count_files
 ```
 
-The first invocation creates or reuses the declared volume. An empty volume
-produces `{"files": 0}`. Upload your files to
-`report-inputs` to count them on the next run.
+The first run creates the declared volume or reuses an existing one. While the
+volume is empty, the function returns `{"files": 0}`. Upload files to
+`report-inputs` and the next run counts them.
 
 ## Choose a schedule
 
@@ -49,8 +49,8 @@ All schedules use UTC.
 | Every five minutes | `"every 5m"` |
 
 Other aliases are `@daily`, `@midnight`, `@weekly`, `@monthly`,
-`@yearly`, and `@annually`. Intervals support minutes up to 59, hours up
-to 23, and days up to 31. Invalid expressions fail at deploy time.
+`@yearly`, and `@annually`. Intervals accept up to 59 minutes, 23 hours, or
+31 days. Deploy rejects an invalid expression.
 
 ## Try it now
 
@@ -58,13 +58,13 @@ to 23, and days up to 31. Invalid expressions fail at deploy time.
 uv run lazycloud run daily_report:count_files
 ```
 
-This runs once immediately and shows its logs and result. It does not wait
-for the schedule. Review automatic runs in the dashboard or with
+This runs the function once, right away, and prints its logs and result.
+Review scheduled runs in the dashboard or with
 `uv run lazycloud task list --app daily_report`.
 
-Functions keep their normal timeout and retry settings. Scheduled functions
-default to `keep_warm=0`, so the container stops as soon as a run finishes;
-holding it warm between runs that are minutes or hours apart would cost money
+Scheduled runs use the function's timeout and retry settings. Scheduled
+functions default to `keep_warm=0`, so the container stops as soon as a run
+finishes. Keeping it warm between runs minutes or hours apart would cost money
 and save nothing. A run that overlaps the previous one queues behind it unless
 the function has `concurrency` or an [autoscaler](/concepts/scaling) that lets
 them run side by side.

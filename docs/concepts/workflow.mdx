@@ -1,10 +1,10 @@
 ---
 title: "Local, cloud, deploy"
-description: "The development loop: test locally, run in the cloud, preview, and deploy, and how a call decides where to go."
+description: "Test locally, run in the cloud, preview, and deploy, and see where each call goes."
 ---
 
 The same decorated function runs locally, in the cloud, or as a deployment,
-with no change to the code. The recommended loop moves through them in order:
+with no change to the code. Work through them in this order:
 
 1. Test the logic locally with `.local()`, in seconds and at no cost.
 2. Run it once in the cloud with `lazycloud run` to check the image, GPU, and
@@ -27,9 +27,9 @@ count_words.local("one two three")
 count_words("one two three")
 ```
 
-Both run in your Python process. Nothing is uploaded and no task is recorded.
-The image, volumes, secrets, GPU, retries, and lifecycle hooks on the decorator
-do not apply, so this suits logic with no remote dependencies and unit tests.
+Both run in your Python process, with no upload and no task. The decorator's
+image, volumes, secrets, GPU, retries, and lifecycle hooks do not apply, so use
+this for unit tests and for logic with no remote dependencies.
 
 ## Run in the cloud
 
@@ -43,13 +43,13 @@ count_words.remote("one two three")
 
 This builds the image if it changed, uploads your working tree, starts a
 container with the decorator's resources, and streams progress, logs, and the
-result. Nothing is deployed. The container stays up for the function's
-`keep_warm` window and then stops. The run is recorded as a
+result. It deploys nothing. The container stays up for the function's
+`keep_warm` window and then stops. LazyCloud records the run as a
 [task](/concepts/tasks-and-logs).
 
 Use it for a job you run by hand, for GPU work you don't want to keep warm, and
-to check the image and secrets before deploying. The code that runs is your
-working tree at the moment of the call, so two runs a minute apart can run
+to check the image and secrets before deploying. Each run uploads your working
+tree as it stands at the moment of the call, so two runs a minute apart can run
 different code.
 
 ## Live preview
@@ -94,8 +94,8 @@ schedule, a teammate, or a function running inside LazyCloud.
 2. From your machine, a fresh run of the working tree.
 3. Inside a LazyCloud container, the deployed function.
 
-Endpoint clients let you choose. `count.request(...)` uses `target="auto"`: the
-preview if one is running, otherwise the deployment.
+Endpoint clients let you choose. `count.request(...)` uses `target="auto"`,
+which calls the preview if one is running and the deployment otherwise.
 `count.target("deployed")` skips the preview, and `count.target("served")` fails
 rather than fall through to the deployment. `deployment_name` and
 `deployment_version` pin one deployment.
@@ -103,15 +103,15 @@ rather than fall through to the deployment. `deployment_name` and
 ## What gets uploaded
 
 `run`, `serve`, and `deploy` upload your project source. Run them from the
-project root; a handler file outside the current directory is rejected.
+project root. They reject a handler file outside the current directory.
 `--source-root` on `deploy` and `--sync-dir` on `serve` choose another directory.
 
-The first upload writes a `.lazycloudignore` into the uploaded directory with
-default exclusions.
-Edit it and commit it; it uses gitignore syntax, so `build/`, `**/*.log`, and
-`!keep.log` mean what they do in `.gitignore`. `.git`, `.venv`, `__pycache__`,
-`*.pyc`, `.env`, and `.lazycloud/` are always excluded. Keep datasets and model
-weights in [volumes](/concepts/volumes) rather than the source tree.
+The first upload writes a `.lazycloudignore` with default exclusions into the
+uploaded directory. Edit and commit it. It uses gitignore syntax, so `build/`,
+`**/*.log`, and `!keep.log` mean what they do in `.gitignore`. Every upload
+excludes `.git`, `.venv`, `__pycache__`, `*.pyc`, `.env`, and `.lazycloud/`.
+Keep datasets and model weights in [volumes](/concepts/volumes) rather than the
+source tree.
 
-Your code is not part of the image. Editing it never rebuilds the image;
-changing a dependency does. See [Images](/concepts/images).
+Your code is not part of the image. Editing it never rebuilds the image.
+Changing a dependency does. See [Images](/concepts/images).

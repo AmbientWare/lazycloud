@@ -4,32 +4,32 @@ description: "What your plan includes, what usage costs, and what happens when y
 ---
 
 Your plan belongs to your account and covers every workspace you own. See it,
-change it, and add a payment method in the dashboard under Settings > Billing. Current
-prices and per-plan limits are on the
+change it, and add a payment method in the dashboard under Settings > Billing.
+Current prices and per-plan limits are on the
 [pricing page](https://lazycloud.dev/pricing).
 
 Before starting a long job, check your balance and monthly usage limit in
-Billing. A saved card unlocks your plan's GPU access but does not itself add credit.
+Billing. A saved card unlocks your plan's GPU access but adds no credit.
 
 ## What you pay for
 
 Compute charges include a base rate per running container, plus CPU, memory,
-and GPU rates. Startup, model loading, and warm idle time count toward runtime. Volumes
-are billed by the GiB-month stored. Compute, storage, and transfer charges all
-deduct from one prepaid credit balance. Trial credit, subscription credit, and
-purchased credit fund that same balance. Subscription fees are separate.
+and GPU rates. Startup, model loading, and warm idle time count toward runtime.
+Volumes bill by the GiB-month stored. Compute, storage, and transfer charges
+all deduct from one prepaid credit balance. Trial credit, subscription credit,
+and purchased credit fund that same balance. Subscription fees are separate.
 
-Direct downloads through signed object-storage URLs are not charged. Responses
-served through the API and workload internet egress are metered.
+Direct downloads through signed object-storage URLs are free. LazyCloud meters
+responses served through the API and workload internet egress.
 
 The Usage page shows spend over time, broken down by app and workload. Add
-credit in Settings > Billing, or save an automatic reload threshold and amount. Purchased
-credit does not expire. Trial and subscription credit expire on their stated
-dates.
+credit in Settings > Billing, or save an automatic reload threshold and amount.
+Purchased credit does not expire. Trial and subscription credit expire on their
+stated dates.
 
 To reduce idle charges, stop pods you no longer need and set shorter
 `keep_warm` windows on functions and endpoints. Downloading an output does not
-delete the stored copy; remove unused files separately.
+delete the stored copy, so remove unused files separately.
 
 ## Automatic reload
 
@@ -48,21 +48,22 @@ add credit through checkout. Payments already processing may finish after you
 disable reload.
 
 The monthly usage limit applies to metered usage, not card payments. A reload
-can add credit beyond that limit; unused purchased credit stays in your balance.
+can add credit beyond that limit. Unused purchased credit stays in your
+balance.
 
 ## Compute pricing
 
 The pricing page lists base rates for automatic placement. LazyCloud chooses
 where the workload runs, and workloads allow interruptions. These rates have
-no regional surcharge. Compute is metered per second even when the pricing
-page displays hourly rates.
+no regional surcharge. LazyCloud meters compute per second, even when the
+pricing page shows hourly rates.
 
 One CPU is one vCPU and matches `cpu=1` in a workload definition. CPU and memory
-are each billed at the greater of the reserved amount and measured usage.
+each bill at the greater of the reserved amount and measured usage.
 
 GPU rates are per card. Add the CPU and memory charges for the same workload
-size to calculate total compute costs. GPU availability depends on the model
-and whether the workload allows interruptions.
+size to get the total compute cost. GPU availability depends on the model and
+whether the workload allows interruptions.
 
 Pinning a region or availability zone requires a plan that allows it. Placement
 choices apply the following multipliers to base compute prices:
@@ -74,12 +75,12 @@ choices apply the following multipliers to base compute prices:
 | Both | 4.5× | 1.5× |
 
 Storage and transfer rates do not change with these choices. Volume storage
-includes artifacts and uses a 30-day month for the quoted rate, with charges
-prorated to the time stored.
+includes artifacts. The quoted rate uses a 30-day month, and charges prorate to
+the time stored.
 
-For a connected cloud account, the management fee is a percentage of base compute
-rates. Your cloud provider bills the underlying machines separately. Storage and
-transfer retain their full published rates.
+For a connected cloud account, the management fee is a percentage of base
+compute rates. Your cloud provider bills the underlying machines separately.
+Storage and transfer keep their full published rates.
 
 The [pricing catalog](https://lazycloud.dev/api/v1/pricing) lists published
 rates, regional multipliers, and the date the rates take effect.
@@ -93,8 +94,8 @@ Every plan can use all offered GPU models with a saved payment method and a
 positive credit balance, subject to GPU availability.
 
 Team includes monthly usage credit, higher concurrency, custom domains, and
-three members total, including the owner. The member limit is shared across
-all workspaces the account owns; the same person counts once.
+three members total, including the owner. The member limit spans all
+workspaces the account owns, and each person counts once.
 
 Business adds unlimited members, more usage credit, higher concurrency, and
 longer log and artifact retention. It also lets you connect one AWS account
@@ -102,27 +103,27 @@ and create workspaces that run inside it.
 Joining your own machines is available on every plan.
 
 Change plans from Settings > Billing, then Change plan. You cannot move to a
-plan whose limits your account already exceeds; the dashboard names what has
+plan whose limits your account already exceeds. The dashboard names what has
 to go first. While a plan change is processing, you cannot add plan-limited
 resources.
 
 ## Without a payment method
 
 An account with no card on file has lower concurrency limits and can use only
-the trial GPU models listed on the pricing page. Adding a card allows the
-plan's full concurrency and GPU selection; it does not add credit. Work still
+the trial GPU models listed on the pricing page. Adding a card unlocks the
+plan's full concurrency and GPU selection, but adds no credit. Work still
 requires a positive credit balance.
 
 ## When you reach a limit
 
 Starting a container past your concurrency limit fails with a message naming
-the limit. Workspace and member limits are checked when those resources are
-created. Existing work is not stopped for a concurrency limit.
+the limit. LazyCloud checks workspace and member limits when you create those
+resources. Reaching a concurrency limit does not stop existing work.
 
-When your credit balance reaches zero, new work and transfers are blocked and
-the usage monitor stops running compute. Already-started transfers may finish.
-Usage is recorded periodically, so the balance can become negative before work
-stops. Added credit covers that negative balance first.
+When your credit balance reaches zero, LazyCloud blocks new work and transfers,
+and the usage monitor stops running compute. Transfers already under way may
+finish. LazyCloud records usage periodically, so the balance can go negative
+before work stops. Added credit covers that negative balance first.
 
 You can also save a monthly usage limit across your workspaces. It counts usage
 paid with any credit and resets on the first of each month at midnight UTC.
@@ -131,6 +132,6 @@ Subscription fees do not count toward this limit. Choose No limit to remove it,
 or set $0 to stop new work and transfers. Running compute can exceed the limit
 between usage records and shutdown.
 
-If funds run out, existing stored data is retained for 30 days before deletion.
-Add enough credit to restore a positive balance during that period to retain
-your data. Storage is not charged during this grace period.
+If funds run out, LazyCloud keeps existing stored data for 30 days, then
+deletes it. To keep your data, add enough credit to restore a positive balance
+within that period. Storage is free during this grace period.

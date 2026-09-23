@@ -3,14 +3,14 @@ title: "Custom domains"
 description: "Serve an endpoint or ASGI app from a hostname you own."
 ---
 
-Every deployed HTTP workload gets a LazyCloud hostname. On Team and Business plans you
-can also use a hostname you own. Domains belong to your account and
-are available to every workspace you own.
+Every deployed HTTP workload gets a LazyCloud hostname. On Team and Business
+plans you can also use a hostname you own. Domains belong to your account and
+work in every workspace you own.
 
 ## Register the domain
 
-Domain registration and DNS verification are account setup. The workload's
-`domain` setting selects a registered hostname; it does not create DNS records.
+Registering a domain and verifying its DNS are account setup. A workload's
+`domain` setting selects a registered hostname and creates no DNS records.
 
 ```bash
 uv run lazycloud domain add app.acme.com
@@ -49,7 +49,7 @@ hostname, then run `uv run lazycloud deploy custom_domain:count_words`.
 Send a request as in the [quickstart](/getting-started/quickstart#call-it),
 with your custom URL. The endpoint still requires authentication by default.
 
-`domain` is accepted by `@app.endpoint`, `@app.asgi`, and `@app.realtime`.
+`@app.endpoint`, `@app.asgi`, and `@app.realtime` accept `domain`.
 The hostname must be the registered domain or a name under it.
 
 ## Remove it

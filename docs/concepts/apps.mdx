@@ -3,9 +3,9 @@ title: "Apps and workloads"
 description: "Lay out a project as an app of workloads, keep its configuration in code, and deploy it as a unit."
 ---
 
-An `App` is a named group of workloads in a workspace. Everything in one app is
-deployed, paused, and deleted together, so draw the boundary around code that
-ships together: an API and the batch functions it calls, a model server and its
+An `App` is a named group of workloads in a workspace. You deploy, pause, and
+delete an app as one unit, so draw its boundary around code that ships together,
+such as an API and the batch functions it calls, or a model server and its
 warm-up job.
 
 ## Define an app
@@ -27,9 +27,9 @@ def count(text: str) -> dict[str, int]:
 ```
 
 Each decorator registers a workload with the app. `@app.function`,
-`@app.endpoint`, `@app.asgi`, `@app.realtime`, and `app.pod(...)` are deployed
-with the app. `app.sandbox(...)` defines containers your code creates on
-demand; a deploy never starts them.
+`@app.endpoint`, `@app.asgi`, `@app.realtime`, and `app.pod(...)` deploy with
+the app. `app.sandbox(...)` defines containers your code creates on demand, and
+a deploy never starts them.
 
 App names start with a lowercase letter and contain lowercase letters, digits,
 or underscores, up to 63 characters. Workload names default to the Python name
@@ -40,12 +40,12 @@ and must be unique per kind within the app.
 The decorator is the whole definition: image, CPU, memory, GPU, volumes, secret
 names, schedule, and scaling. Change it in the file and deploy again. CLI flags
 such as `--gpu` or `--memory` override a value for one command, which suits an
-experiment; the next deploy without the flag goes back to the file.
+experiment. The next deploy without the flag goes back to the file.
 
 Values that differ between workspaces or change without a code change belong
-elsewhere: credentials in [secrets](/concepts/secrets), files in
-[volumes](/concepts/volumes). A volume or secret is shared by name across the
-workspace, so two apps that name the same volume read the same files.
+outside the decorator. Put credentials in [secrets](/concepts/secrets) and files
+in [volumes](/concepts/volumes). The workspace shares volumes and secrets by
+name, so two apps that name the same volume read the same files.
 
 ## Deploy the app or one workload
 
@@ -54,15 +54,15 @@ uv run lazycloud deploy text_tools          # every workload in the app
 uv run lazycloud deploy text_tools:count    # just the endpoint
 ```
 
-A module reference deploys its only app. `module:object` selects one workload
-or, when a module has several apps, one app. See
-[handler references](/cli/overview#handler-references) for the full syntax. From
-Python, `app.deploy()` deploys the whole app and `count.deploy()` one workload.
+A module reference deploys the module's only app. `module:object` selects one
+workload or, when a module has several apps, one app. See [handler
+references](/cli/overview#handler-references) for the full syntax. From Python,
+`app.deploy()` deploys the whole app and `count.deploy()` one workload.
 
 ## Split an app across files
 
-Workloads belong to the `App` object they are registered on, not to the file
-that defines them. Import the app into each module and register workloads there:
+A workload belongs to the `App` object that registers it, not to the file that
+defines it. Import the app into each module and register workloads there:
 
 ```python
 # text_tools/app.py
@@ -92,9 +92,8 @@ uv run lazycloud deploy text_tools/api.py text_tools/workers.py
 
 Inside a container, `count_words.remote(...)` calls the deployed `count_words`,
 because a container has no working tree to upload. Deploy the whole app before
-running a parent that calls its siblings remotely. `.local(...)` runs the
-callee in the caller's own process instead, with the caller's image and
-resources.
+running a parent that calls its siblings remotely. `.local(...)` instead runs
+the callee in the caller's own process, with the caller's image and resources.
 
 ## Call deployed workloads from other projects
 
@@ -104,24 +103,25 @@ uv run lazycloud app export text_tools
 
 This writes a typed Python package to `lazycloud_clients/text_tools`, so
 another project can call the deployed functions and endpoints without importing
-your source. Functions get `remote()` and `async_remote()`; endpoints get
-`request()` and `async_request()`. Callers sign in with `lazycloud login`; the
-package holds deployment references and schemas, never credentials.
+your source. Functions get `remote()` and `async_remote()`. Endpoints get
+`request()` and `async_request()`. Callers sign in with `lazycloud login`, and
+the package holds deployment references and schemas, never credentials.
 
-ASGI routes are typed from the app's OpenAPI schema at `/openapi.json`, with
-methods named after operation IDs. Point elsewhere when needed:
+The generator types ASGI routes from the app's OpenAPI schema at `/openapi.json`
+and names methods after operation IDs. To read the schema from another path or
+a local file:
 
 ```bash
 uv run lazycloud app export web_app --openapi-path service=/schema/openapi.json
 uv run lazycloud app export web_app --openapi service=./openapi.json
 ```
 
-Routes the generator cannot type fail with an explanation, and an ASGI app with
-no schema keeps raw `request()`. Pods and sandboxes are not exported. Export
-again after deploying a contract change.
+Routes the generator cannot type fail with an explanation. An ASGI app with no
+schema keeps raw `request()`. Export skips pods and sandboxes. Export again
+after deploying a contract change.
 
 ## Remove a workload
 
-Delete it from the code and deploy with `--prune`; see
+Delete it from the code and deploy with `--prune`. See
 [`lazycloud deploy`](/cli/deploy-and-run#lazycloud-deploy). Removing a workload
 or deleting an app never deletes the volumes and secrets it used.

@@ -1,16 +1,16 @@
 ---
 title: "OpenAI-compatible LLM service"
-description: "Run a small instruction model behind an authenticated vLLM pod on one GPU."
+description: "Serve a small instruction model from an authenticated vLLM pod on one GPU."
 ---
 
 import ExampleSetup from '/snippets/example-setup.mdx';
 
 This example deploys the official vLLM OpenAI server as a pod. It serves
 `Qwen/Qwen2.5-1.5B-Instruct` on one NVIDIA L4 and keeps downloaded model
-files in a volume, so a replacement container reuses the cache instead of
+files in a volume, so a replacement container reuses them instead of
 downloading again.
 
-The downloaded project's `app.py` contains the pod and its resources.
+`app.py` in the downloaded project defines the pod and its resources.
 
 <ExampleSetup />
 
@@ -23,22 +23,22 @@ uv run lazycloud login
 
 ## Prerequisites
 
-- Check that your account can run an L4 and has credit. This pod holds a GPU
-  while running; stop it after your requests if you do not need a server.
-- Create an access token in the dashboard for calling the service directly,
-  and export it:
+- Check that your account can run an L4 and has credit. The pod holds a GPU
+  for as long as it runs. Stop it after your requests if you do not need a
+  server.
+- Create an access token in the dashboard to call the service, and export it:
 
 ```bash
 read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
 export LAZYCLOUD_TOKEN
 ```
 
-The model is public, so no Hugging Face token is needed.
+The model is public, so you do not need a Hugging Face token.
 
 ## The pod
 
 The pod runs the pinned `vllm/vllm-openai:v0.23.0` image. vLLM, PyTorch, and
-CUDA stay in that image; nothing is installed locally.
+CUDA stay in that image. Nothing installs on your machine.
 
 ```python
 from lazycloud import App, GpuType, Image, Volume
@@ -74,8 +74,8 @@ server = app.pod(
 reaches vLLM. The example sets no separate vLLM API key.
 
 `volumes=[model_cache]` creates or reuses `vllm-model-cache` in your workspace
-when the pod starts. Keep the volume name and mount path in this definition;
-no separate storage setup is needed.
+when the pod starts. Keep the volume name and mount path in this definition.
+There is no separate storage setup.
 
 ## Deploy
 
@@ -83,7 +83,7 @@ no separate storage setup is needed.
 uv run lazycloud deploy app:server
 ```
 
-The first start downloads the model, so it takes a while. Copy the pod URL
+The first start takes longer because it downloads the model. Copy the pod URL
 from the deploy output, without a trailing slash:
 
 ```bash
@@ -97,9 +97,10 @@ curl --fail --show-error "$VLLM_URL/health" \
   -H "Authorization: Bearer $LAZYCLOUD_TOKEN"
 ```
 
-A request without the header is rejected before it reaches vLLM. If health
-fails during startup, inspect `uv run lazycloud logs --deployment openai-server -n 50`
-for download or GPU errors, then check health again.
+LazyCloud rejects a request without the header before it reaches vLLM. If
+health fails during startup, look for download or GPU errors in
+`uv run lazycloud logs --deployment openai-server -n 50`, then check health
+again.
 
 ## Use it
 
@@ -133,22 +134,21 @@ uv run lazycloud deployment list --app openai_compatible_llm
 uv run lazycloud logs --deployment openai-server --follow --show-timestamp
 ```
 
-Use the logs when startup or a request fails. Model-loading and GPU errors
-appear here. A missing bearer token produces an authorization error.
+Check these logs when startup or a request fails. They show model-loading and
+GPU errors. A request without a bearer token gets an authorization error.
 
 ## Cost and licensing
 
-The pod holds an L4 while it runs, so it costs GPU, CPU, and memory time
-until you stop or delete the deployment. Check the Usage page before leaving
-it up. The 1.5B model fits on one L4; concurrency and context length still
-affect GPU memory.
+The pod holds an L4 while it runs and bills GPU, CPU, and memory time until you
+stop or delete the deployment. Check the Usage page before leaving it up. The
+1.5B model fits on one L4, but concurrency and context length still affect GPU
+memory.
 
 - vLLM publishes the server image and its
   [Docker instructions](https://docs.vllm.ai/en/latest/deployment/docker/).
-- `Qwen/Qwen2.5-1.5B-Instruct` is on its
-  [Hugging Face model card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
-  under the Apache 2.0 license. Read the card before using the weights in a
-  product.
+- The [Hugging Face model card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
+  lists `Qwen/Qwen2.5-1.5B-Instruct` under the Apache 2.0 license. Read the
+  card before using the weights in a product.
 
 ## Clean up
 
@@ -168,5 +168,5 @@ uv run lazycloud volume delete vllm-model-cache
 unset VLLM_URL
 ```
 
-Keep the volume if you want the next deployment to reuse the download. It is
-billed while it exists.
+Keep the volume if you want the next deployment to reuse the download.
+LazyCloud bills the volume for as long as it exists.

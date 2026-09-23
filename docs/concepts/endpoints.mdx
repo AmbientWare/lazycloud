@@ -7,13 +7,13 @@ Three workloads serve traffic over the network. Pick by what you already have:
 
 | You have | Use |
 | --- | --- |
-| One Python function that should answer HTTP requests | `@app.endpoint` |
+| A Python function that answers HTTP requests | `@app.endpoint` |
 | A FastAPI or Starlette app with several routes | `app.asgi(...)` |
-| A handler that answers WebSocket messages | `@app.realtime` |
+| A WebSocket message handler | `@app.realtime` |
 
-All three get a stable URL when deployed, require a workspace bearer token
-unless you set `authorized=False`, and preview with
-[`lazycloud serve`](/concepts/workflow#live-preview).
+Each gets a stable URL when you deploy it and previews with
+[`lazycloud serve`](/concepts/workflow#live-preview). Each requires a workspace
+bearer token unless you set `authorized=False`.
 
 ## Endpoints
 
@@ -57,14 +57,14 @@ response = count_words.request("Run Python on LazyCloud")
 print(response.status_code, response.json())
 ```
 
-`request()` goes to a running preview if there is one and to the deployment
+`request()` calls a running preview if one exists, and the deployment
 otherwise. `count_words.target("deployed")` or `target("served")` picks one
-explicitly, and `deployment_name` and `deployment_version` pin a deployment.
+explicitly. `deployment_name` and `deployment_version` pin a deployment.
 
 ### Capacity
 
-An endpoint runs one server process that handles one request at a time, in one
-container. Three settings raise that:
+By default an endpoint runs one server process in one container, and that
+process handles one request at a time. Three settings raise that:
 
 ```python
 from lazycloud import QueueDepthAutoscaler
@@ -81,9 +81,10 @@ def count_words_scaled(text: str) -> dict[str, int]:
     return {"words": len(text.split())}
 ```
 
-Each container runs `workers` processes that each take `concurrency` requests,
-so this one handles 16 at once and adds a container for every 16 in flight, up
-to 8. Past `max_pending_tasks` (100 by default) the endpoint answers `429`.
+Each container runs `workers` processes, and each process takes `concurrency`
+requests. This endpoint handles 16 requests per container and adds a container
+for every 16 in flight, up to 8. When requests in flight exceed
+`max_pending_tasks`, 100 by default, the endpoint answers `429`.
 [Scaling and concurrency](/concepts/scaling) explains how to choose these values
 and has sizing patterns for a GPU model and a CPU API.
 
@@ -120,8 +121,8 @@ uv run lazycloud deploy web_app:service
 
 ASGI apps take the endpoint options, with `concurrent_requests` in place of
 `concurrency` and `keep_warm_seconds` in place of `keep_warm`. `name` defaults
-to `"asgi"`. An async app can take a high `concurrent_requests` in one worker;
-a blocking one needs more `workers`.
+to `"asgi"`. An async app can take a high `concurrent_requests` in one worker.
+A blocking app needs more `workers`.
 
 Call a route from Python with a full request:
 
@@ -140,8 +141,8 @@ gives each route a typed method from the app's OpenAPI schema.
 ## Realtime handlers
 
 `@app.realtime` turns a function into a WebSocket handler. Each incoming
-message calls the handler; the return value is sent back, and an iterable
-return sends each item as its own message.
+message calls the handler, and LazyCloud sends the return value back. An
+iterable return value sends each item as its own message.
 
 ```python
 @app.realtime(name="echo")
@@ -155,7 +156,7 @@ way. `name` defaults to `"realtime"`.
 ## Domains and shutdown
 
 On Team and Business plans, `domain="api.example.com"` serves any of the three
-from a hostname you own; see [Custom domains](/platform/domains).
+from a hostname you own. See [Custom domains](/platform/domains).
 
 Warm containers are billed while they run. Stop a deployment you no longer
 need with `uv run lazycloud deployment stop <name>`.

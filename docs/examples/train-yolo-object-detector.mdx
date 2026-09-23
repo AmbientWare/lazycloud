@@ -13,7 +13,7 @@ The default run trains on Ultralytics' eight-image COCO8 dataset for one
 epoch. Use it to check training, checkpoint storage, and prediction before
 spending GPU time on your own dataset.
 
-The downloaded project's `app.py` contains both functions and their resources.
+`app.py` in the downloaded project defines both functions and their resources.
 
 <ExampleSetup />
 
@@ -30,11 +30,10 @@ before adapting the example for commercial use.
 
 ## Define shared storage
 
-Both functions use the pinned Ultralytics image in
-`app.py`. Training writes a checkpoint and metrics;
-prediction reads that checkpoint from the same volume. The code rejects paths
-outside the volume and refuses to overwrite an existing run directory.
-
+Both functions use the pinned Ultralytics image in `app.py`. Training writes a
+checkpoint and metrics, and prediction reads that checkpoint from the same
+volume. The code rejects paths outside the volume and refuses to overwrite an
+existing run directory.
 
 ```python
 from lazycloud import Volume
@@ -43,15 +42,15 @@ artifact_volume = Volume("yolo-artifacts", "/artifacts")
 ```
 
 Both decorators include `volumes=[artifact_volume]`. The first invocation
-creates the volume if needed; later calls reuse it. Importing the Python
-module alone creates no remote resources.
+creates the volume if it does not exist, and later calls reuse it. Importing
+the module creates no remote resources.
 
-Torch, CUDA, and Ultralytics stay inside the image; nothing is installed
-locally.
+Torch, CUDA, and Ultralytics stay inside the image. Nothing installs on your
+machine.
 
 ## Train
 
-With no arguments the function uses `coco8.yaml`, YOLO26n, and one epoch:
+With no arguments, the function uses `coco8.yaml`, YOLO26n, and one epoch:
 
 ```bash
 uv run lazycloud run app:train_yolo
@@ -64,31 +63,32 @@ Download the metrics CSV:
 uv run lazycloud cp lazycloud://yolo-artifacts/training/coco8-smoke/results.csv ./results.csv
 ```
 
-Compute is charged while the container runs, including startup and its idle
-window. For this one-epoch run,
-startup and the model download often take longer than training. Check the
-Usage page before raising `epochs`, image size, or dataset size.
+LazyCloud charges compute while the container runs, including startup and its
+idle window. For this one-epoch run, startup and the model download often take
+longer than training. Check the Usage page before raising `epochs`, image size,
+or dataset size.
 
 ## Predict
 
-The prediction function loads the saved `best.pt` and, by default, runs it on
-Ultralytics' public `bus.jpg`:
+The prediction function loads the saved `best.pt` and runs it on Ultralytics'
+public `bus.jpg` by default:
 
 ```bash
 uv run lazycloud run app:predict_yolo
 uv run lazycloud cp lazycloud://yolo-artifacts/predictions/bus-prediction/bus.jpg ./bus-prediction.jpg
 ```
 
-Open `bus-prediction.jpg` to see the detected objects. The one-epoch run
-checks the workflow; evaluate accuracy on your own data before using the
+Open `bus-prediction.jpg` to see the detected objects. A one-epoch run only
+checks the workflow. Evaluate accuracy on your own data before using the
 predictions in a product.
 
 ## Use your own data
 
 Upload the dataset and its Ultralytics YAML to the volume. Paths inside the
-YAML must point at files under `/artifacts` too.
+YAML must also point at files under `/artifacts`.
 
-Provision and upload from Python first. This also works before running the sample:
+Create the volume and upload from Python. This works even if you have not run
+the sample:
 
 ```python
 from app import artifact_volume
@@ -97,7 +97,7 @@ artifact_volume.create()
 artifact_volume.put("datasets/my-detector", "datasets/my-detector")
 ```
 
-`create()` reuses an existing volume. Once the files are uploaded:
+`create()` reuses an existing volume. After the upload, train on your data:
 
 ```bash
 uv run lazycloud run app:train_yolo custom-run 50 datasets/my-detector/data.yaml
@@ -111,16 +111,17 @@ uv run lazycloud cp ./sample.jpg lazycloud://yolo-artifacts/inputs/sample.jpg
 uv run lazycloud run app:predict_yolo custom-run sample-prediction inputs/sample.jpg
 ```
 
-Run names cannot be reused. Pick a new training name for another trial and
-use that same name for prediction. This preserves your earlier checkpoint.
+A run name works only once, so earlier checkpoints stay intact. Give each new
+trial a new training name and pass that name to prediction.
 
-If training fails, use `uv run lazycloud task list --app yolo_training` and inspect
-that task's logs. Check the dataset path before retrying with a new name.
+If training fails, find the task with `uv run lazycloud task list --app yolo_training`
+and read its logs. Check the dataset path before retrying with a new name.
 
 ## Clean up
 
 The function containers shut down after their idle window. Keep the volume
-while you still need the checkpoints. Download important files before deleting them.
+while you still need the checkpoints, and download the files you want before
+deleting anything.
 
 Remove runs you no longer need:
 

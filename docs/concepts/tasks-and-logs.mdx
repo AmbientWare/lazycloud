@@ -5,8 +5,8 @@ description: "Every remote call is a task with a status, a result, and logs. Fol
 
 Remote function calls, endpoint requests, and scheduled runs each create a
 task. The task keeps the call's status, result or error, and logs after the
-container stops, so you can revisit a run, investigate a failure, or collect
-work submitted in the background. Local `.local()` calls do not create tasks.
+container stops, so you can inspect a failure or collect the result of
+background work later. `.local()` calls do not create tasks.
 
 ## Live progress
 
@@ -31,7 +31,7 @@ Calls made inside LazyCloud containers are quiet unless wrapped in
 ## Lifecycle
 
 A task is `pending` until a container picks it up, then `running`. If an
-attempt fails and retries remain it becomes `retry`, on the same task. It ends
+attempt fails and retries remain, the same task moves to `retry`. It ends
 as `complete`, `failed`, `timeout`, `cancelled`, or `expired`.
 
 ### Why a task is pending
@@ -39,8 +39,8 @@ as `complete`, `failed`, `timeout`, `cancelled`, or `expired`.
 After five seconds pending, the CLI and dashboard show the reason: compute is
 starting, the container is starting, every container is busy, the workspace is
 at its compute limit, an input call has not finished, or a retry delay is
-running. "Every container is busy" for longer than a container start takes means
-the workload is at its `max_containers`; see [Scaling](/concepts/scaling).
+running. If "every container is busy" lasts longer than a container start, the
+workload is at its `max_containers`. See [Scaling](/concepts/scaling).
 
 Your own code receives the same reason through `lazycloud.progress()`:
 
@@ -90,9 +90,9 @@ uv run lazycloud task show <task-id>
 uv run lazycloud logs --task-id <task-id> --follow
 ```
 
-Anything your code prints is captured; print with `flush=True` so lines appear
-promptly. The [task and logs reference](/cli/tasks-and-logs) lists every
-command, and the dashboard's Tasks page shows the same history.
+LazyCloud captures everything your code prints. Print with `flush=True` so lines
+appear as they happen. The [task and logs reference](/cli/tasks-and-logs) lists
+every command, and the dashboard's Tasks page shows the same history.
 
 ## Callbacks
 

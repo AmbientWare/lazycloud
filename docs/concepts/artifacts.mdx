@@ -35,10 +35,10 @@ uv run lazycloud run report:create_report '[1200, 3500, 800]'
 ```
 
 Open the returned URL to download `sales.csv`. Anyone with that URL can read
-the file until it expires. The task ID is attached automatically.
+the file until it expires. LazyCloud attaches the task ID for you.
 
-`save()` uploads the file, zipping it first if the path is a directory, and
-returns a `SavedArtifact` with `artifact_id`, `task_id`, and `filename`.
+`save()` uploads the file and returns a `SavedArtifact` with `artifact_id`,
+`task_id`, and `filename`. If the path is a directory, `save()` zips it first.
 
 Other ways to construct one:
 
@@ -58,24 +58,24 @@ artifact.
 authentication until it expires. Hand it to a browser or a webhook.
 `artifact.exists()` and `artifact.stat()` check and describe the saved file.
 
-Artifacts remain accessible after the originating task is deleted. To save
-from outside the producing container, pass `task_id=...` explicitly. The
+Deleting the task that produced an artifact leaves the artifact in place. To
+save from outside the producing container, pass `task_id=...` explicitly. The
 [dashboard](/platform/dashboard#retrieve-files) lists, previews, and downloads
 them.
 
 ## Retention
 
-Artifacts expire automatically using the same plan retention window as logs:
-Free keeps them for one day, Team for 30 days, and Business for 90 days.
-Complimentary accounts use the Business window.
+Artifacts expire on the same plan retention window as logs. Free keeps them
+for one day, Team for 30 days, and Business for 90 days. Complimentary accounts
+get the Business window.
 
-The window is fixed by the plan at upload and counted from the upload. Read
-`saved.expires_at` or see the date in the dashboard. Public URLs do not outlive
-the artifact. Delete earlier with `artifact.delete()`.
+The plan at upload time sets the window, and it counts from the upload.
+`saved.expires_at` and the dashboard show the expiry date. Public URLs do not
+outlive the artifact. To delete one sooner, call `artifact.delete()`.
 
-For durable files, use a Volume or download a copy before expiration.
-Artifacts are billed as volume storage; see [Plans and limits](/platform/plans).
-The `/artifacts` mount is read-only.
+For files that must last, use a volume or download a copy before the artifact
+expires. Artifacts bill as volume storage. See
+[Plans and limits](/platform/plans). The `/artifacts` mount is read-only.
 
 `uv run lazycloud artifact list`, `usage`, and `delete` manage artifacts from a
-terminal; see [storage commands](/cli/storage#lazycloud-artifact).
+terminal. See [storage commands](/cli/storage#lazycloud-artifact).

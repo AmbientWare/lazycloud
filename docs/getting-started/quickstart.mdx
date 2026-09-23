@@ -50,8 +50,8 @@ if __name__ == "__main__":
 uv run python -c "from quickstart import hello; print(hello.local('LazyCloud'))"
 ```
 
-`.local()` calls the function in your own Python process. Nothing is uploaded or
-billed.
+`.local()` calls the function in your own Python process, with no upload and no
+charge.
 
 ## Run in the cloud
 
@@ -79,10 +79,10 @@ Then deploy the app:
 uv run lazycloud deploy quickstart
 ```
 
-The output includes the endpoint's URL. Endpoints require a bearer token by
-default, so create an access token in the
+The deploy output includes the endpoint's URL. Endpoints require a bearer token
+by default. Create an access token in the
 [dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens, and
-call it:
+call the endpoint with it:
 
 ```bash
 read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
@@ -101,7 +101,7 @@ The response is `{"greeting": "hello LazyCloud"}`.
 uv run lazycloud app pause quickstart
 ```
 
-This stops the app's workloads and keeps their definitions.
+`pause` stops the app's workloads and keeps their definitions.
 `uv run lazycloud app delete quickstart` removes the app.
 
 ## Next

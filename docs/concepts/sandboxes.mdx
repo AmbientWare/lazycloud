@@ -32,11 +32,12 @@ finally:
 ```
 
 The output includes exit code `0` and the remote Python version. The `finally`
-block terminates the container even if a command fails. Compute charges continue
-while a sandbox runs, so use this pattern when adapting the examples below.
+block terminates the container even if a command fails. A sandbox bills compute
+until it stops, so keep this `try`/`finally` shape when you adapt the examples
+below.
 
-A plain number for `memory` means MiB, so `memory=1024` is 1 GiB. Sandboxes
-are created on demand, and a deploy never starts them. Other defaults are in
+A plain number for `memory` means MiB, so `memory=1024` is 1 GiB. You create
+sandboxes on demand. A deploy never starts one. Other defaults are in
 [Resources and options](/concepts/resources#defaults).
 
 ## Reconnect to a running sandbox
@@ -73,9 +74,9 @@ instance.list_processes()
 
 A process has `pid`, `wait(timeout)`, `kill()`, `status()`, and `stdout`,
 `stderr`, and `logs` streams with `read()` and `lines()`.
-The pytest command needs pytest in your image and tests uploaded to `/workspace`.
-For a web server, inspect `status()` or expose its port while it runs; `wait()`
-returns only after the process exits.
+The pytest command needs pytest in your image and tests uploaded to
+`/workspace`. For a web server, inspect `status()` or expose its port while it
+runs. `wait()` returns only after the process exits.
 
 ## Files
 
@@ -106,20 +107,19 @@ instance.update_network_permissions(allow_list=["203.0.113.10/32"])
 
 An exposed URL points at this container and stops working when it stops.
 Declare `ports=[8000]` on the sandbox to expose ports as soon as an instance
-is ready. `block_network` and `allow_list` set the outbound policy and cannot
-be combined. Allow-list entries are CIDR networks; hostnames are not supported.
+is ready. `block_network` and `allow_list` set the outbound policy, and you
+can set only one of them. Allow-list entries are CIDR networks, not hostnames.
 
 ## Docker inside a sandbox
 
-Use `image=Image().with_docker()` and `docker_enabled=True` to install and run
-the sandbox's Docker daemon. Then
-`instance.docker` wraps it: `run`, `build`, `pull`, `push`, `ps`, `logs`,
-`stop`, `rm`, `exec`, `login`, `compose_up`, `compose_down`, and volume
-commands.
+Set `image=Image().with_docker()` and `docker_enabled=True` to install and run
+a Docker daemon in the sandbox. `instance.docker` then wraps it with `run`,
+`build`, `pull`, `push`, `ps`, `logs`, `stop`, `rm`, `exec`, `login`,
+`compose_up`, `compose_down`, and volume commands.
 
 Nested containers share the sandbox's network, so bind each service to its own
-port and call `instance.expose_port(port)` for its URL. Docker and Compose port
-mappings are rejected.
+port and call `instance.expose_port(port)` for its URL. The sandbox rejects
+Docker and Compose port mappings.
 
 ## Snapshots
 
@@ -135,14 +135,14 @@ captures the disk as an image id you can reuse with `Image.from_id(...)`.
 
 ## Async
 
-The command, process, and file APIs have async methods under `.aio`: `await instance.aio.run(...)`,
-`await instance.process.aio.exec(...)`, `await instance.fs.aio.upload_file(...)`.
+The command, process, and file APIs have async methods under `.aio`, such as
+`await instance.aio.run(...)`, `await instance.process.aio.exec(...)`, and
+`await instance.fs.aio.upload_file(...)`.
 
 ## Definition options
 
 Sandboxes also accept `env`, `secrets`, `volumes`, `gpu` and `gpu_count`,
 `sync_local_dir=True` to copy your working directory in at creation,
-`command` for the initial process, `docker_enabled`, and `machine`. Running
-sandboxes appear on their app's page in the
-[dashboard](/platform/dashboard) with a terminal, file browser, and process
-list.
+`command` for the initial process, `docker_enabled`, and `machine`. The
+[dashboard](/platform/dashboard) shows running sandboxes on their app's page,
+with a terminal, file browser, and process list.

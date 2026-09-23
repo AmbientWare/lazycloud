@@ -4,9 +4,9 @@ description: "Size a container with CPU, memory, disk, and GPUs, choose capacity
 ---
 
 Each workload sets its container size and runtime behavior on its decorator or
-constructor. This page is the reference for those options. How many containers
-run, and how much each one handles at once, is covered in
-[Scaling and concurrency](/concepts/scaling).
+constructor. This page is the reference for those options.
+[Scaling and concurrency](/concepts/scaling) covers how many containers run and
+how much each one handles at once.
 
 ## Size a container
 
@@ -23,9 +23,9 @@ def render(scene: dict[str, float]) -> bytes:
 
 `cpu` and `memory` are reservations. The scheduler places a container on a
 machine with that much free, and under pressure the container keeps what it
-reserved. A pair sets a ceiling as well: this function reserves 1 CPU and 2 GiB,
+reserved. A pair also sets a ceiling. This function reserves 1 CPU and 2 GiB,
 is throttled at 4 CPUs, and is killed above 8 GiB. Smaller reservations place
-faster and pack more containers per machine; the ceiling protects the machine
+faster and pack more containers per machine. The ceiling protects the machine
 from a runaway process. One CPU is one vCPU.
 
 `disk` is scratch space that disappears with the container, 100 GiB unless you
@@ -40,42 +40,42 @@ def embed(texts: list[str]) -> list[list[float]]:
 ```
 
 Models are `"t4"`, `"l4"`, `"a10g"`, `"l40s"`, `"a100-40"`, `"a100-80"`,
-`"h100"`, and `"h200"`. A list is a preference, best first:
+`"h100"`, and `"h200"`. A list sets a preference order, best first.
 `gpu=["h100", "a100-80", "l4"]` takes the first model with free capacity, and
-`"any"` at the end takes whatever is free. The two A100 sizes are separate names
-because they are not interchangeable, so plain `"a100"` is rejected.
+`"any"` at the end takes whatever is free. The two A100 sizes are not
+interchangeable, so each has its own name and plain `"a100"` is rejected.
 `gpu_count` sets GPUs per container. GPU access and prices depend on your
 [plan](/platform/plans).
 
 ## Preemptible capacity
 
-Workloads run on preemptible capacity by default, which can be reclaimed,
-sometimes without notice. A preempted function call retries under its retry
-policy, and a preempted endpoint container is replaced. Make retries
-safe to repeat and checkpoint long work to a volume.
+Workloads run on preemptible capacity by default. That capacity can be
+reclaimed, sometimes without notice. A preempted function call retries under
+its retry policy, and LazyCloud replaces a preempted endpoint container. Make
+functions safe to repeat, and checkpoint long work to a volume.
 
 `preemptible=False` requires capacity that is not reclaimed. It adds the CPU
-and memory premium on the [pricing page](https://lazycloud.dev/pricing), with no
-GPU premium.
+and memory premium listed on the [pricing page](https://lazycloud.dev/pricing),
+and no GPU premium.
 
 ## Placement
 
-A workload runs where its workspace lives; see [Compute](/platform/compute).
+A workload runs where its workspace lives. See [Compute](/platform/compute).
 Two options narrow that:
 
 - `machine="gpu-1"` pins the workload to a machine you
   [joined](/platform/compute#your-own-machines). It runs there or fails.
 - `region` and `availability_zone` pin placement inside the workspace's cloud
-  where it supports it. Regions are `"us-east"`, `"us-west"`, `"eu-central"`,
-  `"eu-north"`, and `"ap-southeast"`. Pinning needs a plan that allows it and
-  adds a price multiplier. It cannot be combined with `machine`.
+  where that cloud supports it. Regions are `"us-east"`, `"us-west"`,
+  `"eu-central"`, `"eu-north"`, and `"ap-southeast"`. Pinning needs a plan that
+  allows it and adds a price multiplier. You cannot combine it with `machine`.
 
 ## Defaults
 
 | | Function | Endpoint | ASGI and realtime | Pod | Sandbox |
 | --- | --- | --- | --- | --- | --- |
 | `cpu` | `0.125` | `1.0` | `1.0` | `1.0` | `1.0` |
-| `memory` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `128` (MiB) |
+| `memory` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `"128Mi"` | `128` MiB |
 | `timeout_seconds` | `3600` per call | `180` per request | `180` per request | | |
 | `retries` | `3` | `0` | | | |
 | Idle window | `keep_warm=10` | `keep_warm=180` | `keep_warm_seconds=180` | `keep_warm=600` | `keep_warm_seconds=600` |
@@ -91,7 +91,7 @@ Scheduled functions default to `keep_warm=0`. Every workload defaults to
 
 These apply to functions, endpoints, ASGI apps, and realtime handlers except
 where a row says otherwise. Pods and sandboxes take the sizing, storage,
-network, and placement options; their pages list what else they accept.
+network, and placement options. Their own pages list what else they accept.
 
 | Option | Type | What it does |
 | --- | --- | --- |
@@ -124,5 +124,5 @@ network, and placement options; their pages list what else they accept.
 | `region`, `availability_zone` | `str` | Placement inside the workspace's cloud. |
 | `metadata` | `dict` | Custom metadata stored with the deployment. Not on ASGI or realtime. |
 
-CLI commands accept overrides for most of these for a single run; see
+CLI commands accept overrides for most of these for a single run. See
 [workload options](/cli/deploy-and-run#workload-options).

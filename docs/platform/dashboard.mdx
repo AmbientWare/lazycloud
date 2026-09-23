@@ -17,8 +17,8 @@ You can also open an app to find its workloads and recent activity.
 ## Test or stop a deployed service
 
 Open the workload under Apps and use the request playground to send input.
-Use its controls to scale, pause, resume, or delete it. Pausing is useful when
-you want to stop serving without removing the definition.
+Use its controls to scale, pause, resume, or delete it. Pause to stop serving
+without removing the definition.
 
 For a running sandbox, open its terminal, file browser, or process list from
 the app page.
@@ -28,28 +28,28 @@ the app page.
 Storage contains volumes, artifacts, secrets, queues, and maps. Use the
 volume browser for shared files and the artifact browser for task output. The
 artifact browser searches filenames, filters by app, task, type, or date, and
-previews or downloads files; a task's Artifacts tab shows its own. The Storage
-page also shows total bytes stored and this month's storage charges.
-Artifact downloads and public URLs are subject to
-[retention](/concepts/artifacts#retention).
+previews or downloads files. A task's Artifacts tab shows that task's files.
+The Storage page also shows total bytes stored and this month's storage
+charges. Artifact downloads and public URLs follow the
+[retention](/concepts/artifacts#retention) rules.
 
 ## Edit queues and maps
 
-Open **Storage**, then **Queues** or **Maps**. Keep repeatable setup in your
-Python code; use the dashboard to inspect data or make an ad hoc correction.
+Open Storage, then Queues or Maps. Keep repeatable setup in your Python code.
+Use the dashboard to inspect data or make a one-off correction.
 
 For a map, select a key to view or edit its value and expiry. Saving fails if a
-workload changed the key meanwhile; reload and try again. Binary Python values
-can be inspected and deleted but not edited.
+workload changed the key in the meantime. Reload and try again. You can inspect
+and delete binary Python values but not edit them.
 
-**Add key** creates a key without overwriting an existing one. To create a
-map, choose **New map** and enter its name and first key/value.
+Choose Add key to create a key without overwriting an existing one. To create
+a map, choose New map and enter its name and first key/value.
 
-For a queue, **Add message** appends JSON to the end. Viewing the head message
-does not remove it. **Remove next message** consumes the next message without
-running it and shows what was removed. Another consumer can take the previewed
-message before you confirm, so the removed message may be different.
-**New queue** creates a named queue with its first message.
+For a queue, Add message appends JSON to the end. Viewing the head message
+does not remove it. Choose Remove next message to consume the next message
+without running it. The dashboard then shows what it removed. Another consumer
+can take the previewed message before you confirm, so the removed message may
+be different. Choose New queue to create a named queue with its first message.
 
 Deleting a queue removes its remaining messages. Deleting a map removes all
 its keys. Both actions require confirmation and cannot be undone. Running code
@@ -62,15 +62,15 @@ same across workspaces you own.
 
 Open Settings, then Billing to check your balance, payment method, plan, and
 monthly usage limit. See [Plans and limits](/platform/plans) for what happens
-when a limit is reached.
+when you reach a limit.
 
 ## Manage access and compute
 
 In Settings, Tokens creates access tokens for scripts and direct HTTP calls.
 Compute connects an AWS account or joins a machine, and shows each machine's
-lifecycle phase; see [Compute](/platform/compute) for what the phases mean.
-Domains registers a hostname for your API.
+lifecycle phase. [Compute](/platform/compute) explains the phases. Domains
+registers a hostname for your API.
 
 Use the workspace menu to create or rename a workspace and manage members.
-Check which account you are signed in as before opening an invitation link;
-accepting joins that account to the workspace.
+Before opening an invitation link, check which account you are signed in as.
+Accepting joins that account to the workspace.

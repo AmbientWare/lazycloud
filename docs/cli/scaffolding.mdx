@@ -24,13 +24,13 @@ uv run lazycloud login
 uv run lazycloud run app:train_yolo
 ```
 
-This example uses a GPU and incurs compute and storage charges when run.
+Running this example uses a GPU and incurs compute and storage charges.
 Downloading files and running `uv sync` create no cloud resources.
 
 Each project includes its source, assets, README, `.python-version`,
 `.gitignore`, and `pyproject.toml`. The manifest pins the SDK to the
-installed release; `uv sync` creates the lockfile. Commit `uv.lock` and use
-`uv sync --locked` in CI.
+installed release, and `uv sync` creates the lockfile. Commit `uv.lock` and
+use `uv sync --locked` in CI.
 
 Choose another directory with `--output`:
 
@@ -53,8 +53,8 @@ the project you want to use.
 ## Existing files
 
 The command checks every destination before writing. If any example file
-already exists, it stops without writing other files. Download to a new directory
-to compare a newer release with your work.
+already exists, it stops and writes nothing. To compare a newer release with
+your work, download it to a new directory.
 
 `--force` replaces files supplied by the example. It leaves unrelated files,
 including an existing `uv.lock`, in place. Review the changes and run `uv sync`

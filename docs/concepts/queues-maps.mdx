@@ -4,12 +4,12 @@ description: "Shared state for coordinating work across containers."
 ---
 
 Use a queue to pass work items between processes and a map for temporary shared
-values. Objects with the same name in the same workspace share data.
-Sign in before running these Python examples.
+values. Within a workspace, a queue or map with the same name refers to the
+same data. Sign in before running these Python examples.
 
 ## Queue
 
-A FIFO queue of JSON-serializable values:
+`Queue` is a FIFO queue of JSON-serializable values:
 
 ```python
 from lazycloud import Queue
@@ -23,17 +23,18 @@ item = q.pop()
 print(item)
 ```
 
-`pop()` removes the item and returns `None` when the queue is empty. Each item
-goes to exactly one caller, however many containers are popping at once. Your
-consumer must decide what to do if processing fails afterward. For work that
-needs task results and retries, submit a
+`pop()` removes and returns the next item, or `None` when the queue is empty.
+Each item goes to exactly one caller, however many containers pop at once. If
+processing fails after the pop, your consumer decides what happens to the item.
+For work that needs task results and retries, submit a
 [function](/concepts/functions#submit-work-in-the-background) instead.
-`QueueDepthAutoscaler` scales a function's pending calls, not this named queue.
+`QueueDepthAutoscaler` scales on a function's pending calls, not on this named
+queue.
 
 ## Coordinate containers
 
-Use `.map()` when you know every input up front. Use a queue when work is
-discovered as you go, when producers and consumers run at different times, or
+Use `.map()` when you know every input up front. Use a queue when you discover
+work as you go, when producers and consumers run at different times, or
 when a handful of long-lived workers should drain a stream of small items
 without a task per item. A map records progress those workers can share:
 
@@ -71,19 +72,19 @@ if __name__ == "__main__":
 ```
 
 Eight workers on eight containers pop from one queue and stop when it is
-empty; without the autoscaler they would run one after another. The map's `in`
-check and `set` are two calls, so two workers can both pass the check for the
-same URL and fetch it twice; that is fine for a crawler and not for a payment.
-When an item must be handled exactly once, make the handler idempotent or put
-the item through a function call, which has a task record and retries.
+empty. Without the autoscaler they would run one after another. The map's `in`
+check and `set` are separate calls, so two workers can both pass the check for
+the same URL and fetch it twice. A crawler can tolerate that. A payment cannot.
+When an item must be handled exactly once, make the handler idempotent or
+submit the item as a function call, which has a task record and retries.
 
-A worker that pops an item and then crashes loses it; the queue has no
-acknowledgement. Keep the items small and re-creatable, or write the item to a
-map before working on it and have a sweeper requeue stale entries.
+The queue has no acknowledgement, so a worker that crashes after a pop loses
+the item. Keep items small and re-creatable, or write each item to a map before
+working on it and have a sweeper requeue stale entries.
 
 ## Map
 
-A key/value map with the `MutableMapping` interface:
+`Map` is a key/value store with the `MutableMapping` interface:
 
 ```python
 from lazycloud import Map
@@ -104,10 +105,10 @@ days is the maximum timed expiry. Use `ttl=0` to keep a key until you delete it.
 
 ## Edit from the dashboard
 
-Storage, then Queues or Maps, lets you inspect and correct data by hand; see
-[the dashboard guide](/platform/dashboard#edit-queues-and-maps).
+In the dashboard, open Storage, then Queues or Maps, to inspect and correct
+data by hand. See [the dashboard guide](/platform/dashboard#edit-queues-and-maps).
 
 ## Remove example state
 
-When you no longer need the example data, `q.delete()` removes the queue and
-its remaining items, and `state.delete()` removes the map and all its keys.
+`q.delete()` removes the queue and its remaining items. `state.delete()`
+removes the map and all its keys.

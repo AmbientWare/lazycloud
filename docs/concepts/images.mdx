@@ -3,9 +3,9 @@ title: "Images"
 description: "Describe a workload's container image in Python."
 ---
 
-An `Image` defines the Python version, packages, and system tools available
-inside your remote container. Add dependencies here when your function needs
-packages that are not part of Python.
+An `Image` sets the Python version, packages, and system tools inside your
+remote container. Anything your function needs beyond the standard library
+goes here.
 
 ## Install remote dependencies
 
@@ -28,10 +28,10 @@ def ffmpeg_version() -> str:
 ```
 
 Save this as `audio.py` and run `uv run lazycloud run audio:ffmpeg_version`.
-The result reports the remote ffmpeg version. Your machine does not need ffmpeg.
+The result is the remote ffmpeg version, and your machine does not need ffmpeg.
 Use `.add_python_packages(["httpx"])` to install a Python dependency.
 
-Images are cached by content. Keep dependency versions pinned when you need
+LazyCloud caches images by content. Pin dependency versions when you need
 reproducible builds.
 
 `Image()` with no arguments is the managed Python 3.12 image. Python 3.10
@@ -47,16 +47,16 @@ from lazycloud import Image
 image = Image.from_uv(".")
 ```
 
-The path is the project directory. The image is built from the manifests
-(`pyproject.toml`, the lockfile, `.python-version`) and any local dependencies
-they name, respecting each dependency's `.lazycloudignore` when it has one (the
-build never writes that file into a dependency). Your own code is not
-part of the image. It reaches the container through source sync, so editing it
-never rebuilds the image; changing a dependency does. Put workspace members and
-relative path dependencies inside this directory; files outside it are not
-uploaded. Build backends run in the image, not on your laptop.
+The path is the project directory. The build reads its `pyproject.toml`,
+lockfile, and `.python-version`, plus any local dependencies they name. It
+honors a dependency's `.lazycloudignore` when it has one and never writes that
+file into a dependency. Your own code is not part of the image. It reaches the
+container through source sync, so editing it never rebuilds the image.
+Changing a dependency does. Keep workspace members and relative path
+dependencies inside this directory, because the build does not upload files
+outside it. Build backends run in the image, not on your laptop.
 
-The root project is not installed into the environment. Code under `src/` is
+The build does not install the root project. Code under `src/` is
 importable at runtime because the synced `src` directory is on `PYTHONPATH`.
 
 ### uv
@@ -65,10 +65,11 @@ importable at runtime because the synced `src` directory is on `PYTHONPATH`.
 image = Image.from_uv(".", extras=["gpu"], groups=["inference"])
 ```
 
-Requires `pyproject.toml` and `uv.lock`. The build checks that the lockfile matches
-the project and installs its locked dependencies. Default dependency groups,
-including `dev`, are excluded; use `groups` to include them. Workspace members
-and path sources are installed without editable mode; the root project is not.
+Requires `pyproject.toml` and `uv.lock`. The build checks that the lockfile
+matches the project and installs its locked dependencies. It excludes default
+dependency groups, including `dev`. Name them in `groups` to include them.
+Workspace members and path sources install without editable mode. The root
+project is not installed.
 
 ### Poetry
 
@@ -86,13 +87,13 @@ The root project is never installed, whatever Poetry's package mode says.
 image = Image.from_pyproject(".", extras=["gpu"], groups=["inference"])
 ```
 
-Uses standard `[project]` metadata and `[dependency-groups]`. No lockfile is
-required. Dependencies are resolved during the build; this factory does not use
-uv or Poetry lockfiles as installation guarantees. Use the corresponding
-factory when you need locked dependencies.
+Uses standard `[project]` metadata and `[dependency-groups]` and needs no
+lockfile. The build resolves dependencies itself and does not treat a uv or
+Poetry lockfile as a guarantee. Use `Image.from_uv` or `Image.from_poetry` when
+you need locked dependencies.
 
-Only dependencies are installed. Workspace members and `[tool.uv.sources]` path
-entries are read from `pyproject.toml` and uploaded with it.
+The build installs only dependencies. It reads workspace members and
+`[tool.uv.sources]` path entries from `pyproject.toml` and uploads them with it.
 
 ### Micromamba
 
@@ -111,8 +112,9 @@ image = Image.from_micromamba("environment.yml")
 ```
 
 The environment file supplies Python requirements, channels, Conda packages,
-and pip dependencies. An environment YAML is not a lockfile; unpinned packages
-are resolved during the build. Relative files are included from its directory.
+and pip dependencies. An environment YAML is not a lockfile, so the build
+resolves unpinned packages. The build includes relative files from the YAML's
+directory.
 
 ### Python selection
 
@@ -122,9 +124,10 @@ An explicit `python_version` overrides the project's interpreter pin:
 image = Image.from_uv(".", python_version="3.12.11")
 ```
 
-Otherwise the project's pin is used: `.python-version` for Python projects, the
-`python=` entry for Micromamba. Without a pin, Python 3.12 is used when
-compatible. Unsupported pins fail rather than change versions.
+Otherwise the image uses the project's pin, which is `.python-version` for
+Python projects and the `python=` entry for Micromamba. Without a pin, it uses
+Python 3.12 when compatible. An unsupported pin fails instead of switching
+versions.
 
 Factories return an ordinary image that you can extend:
 
@@ -135,7 +138,7 @@ image = Image.from_uv(".").add_commands([
 ```
 
 All four factories also accept `base_image`, `base_image_creds`, and
-`architecture`, using the same values as the constructor. For example:
+`architecture`, with the same values as the constructor:
 
 ```python
 image = Image.from_uv(
@@ -144,8 +147,8 @@ image = Image.from_uv(
 ```
 
 These factories configure the remote environment. The CLI still imports your
-handler module locally, so top-level imports must be available locally. Run
-`uv run lazycloud run main:handler` from your project environment, or place
+handler module locally, so its top-level imports must resolve on your machine.
+Run `uv run lazycloud run main:handler` from your project environment, or place
 remote-only imports inside the handler.
 
 ## Constructor
@@ -188,8 +191,8 @@ gpu_image = Image.from_registry(
 custom_image = Image.from_dockerfile("./Dockerfile", context_dir=".")
 ```
 
-Use `Image.from_id(image_id)` with the ID returned by a sandbox filesystem
-snapshot to reuse that filesystem.
+`Image.from_id(image_id)` reuses a sandbox filesystem snapshot, given the ID
+the snapshot returned.
 
 ### Private registries
 

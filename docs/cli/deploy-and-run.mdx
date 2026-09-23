@@ -28,14 +28,14 @@ uv run lazycloud deploy quickstart:hello     # one workload
 `--name` overrides the deployment name when you select one workload.
 `--source-root <dir>` packages a different directory as the code root.
 
-With `--json`, a successful app deployment returns one object containing the
-app name and its resource results. A deployment failure stops the command
-without undoing resources already deployed.
+With `--json`, a successful app deployment returns one object with the app
+name and its resource results. If a deployment fails, the command stops and
+leaves already deployed resources in place.
 
-Pass several app files to deploy their combined definitions. The CLI imports every
-file before collecting workloads. References to the same app object count once.
-The CLI rejects conflicting definitions with the same app, workload kind, and name.
-Multiple references must select complete apps and cannot use `--name`.
+Pass several app files to deploy their combined definitions. The CLI imports
+every file before collecting workloads. References to the same app object count
+once. The CLI rejects two definitions that share an app, workload kind, and
+name. Multiple references must select complete apps and cannot use `--name`.
 
 ```bash
 uv run lazycloud deploy api.py workers.py --diff
@@ -43,27 +43,28 @@ uv run lazycloud deploy api.py workers.py --diff --prune
 uv run lazycloud deploy api.py workers.py -p
 ```
 
-`--diff` lists which workloads the deploy would add, redeploy, or retain. It does
-not compare source or configuration. Existing workloads show `redeploy` because
-deploying creates another version. The command skips source uploads and image
-builds and makes no remote changes. It imports your Python modules, so their
-module-level code still executes.
+`--diff` lists which workloads the deploy would add, redeploy, or retain. It
+does not compare source or configuration. Existing workloads show `redeploy`
+because every deploy creates another version. `--diff` uploads no source,
+builds no images, and changes nothing remotely. It still imports your Python
+modules, so their module-level code runs.
 
-`--prune`, or `-p`, removes deployed workloads absent from the supplied app
-definitions. With `--diff`, these appear as `remove` actions. Pruning includes
-stopped workloads and all surviving versions of an omitted workload. It stops
-their containers and removes their schedules and routes. It preserves volumes,
-secrets, and stored data. Workloads declared in the files keep their prior versions.
+`--prune`, or `-p`, removes deployed workloads that the supplied app
+definitions omit. `--diff` shows them as `remove` actions. Pruning covers
+stopped workloads and every surviving version of an omitted workload. It stops
+their containers and removes their schedules and routes, but keeps volumes,
+secrets, and stored data. Workloads declared in the files keep their prior
+versions.
 
-Supply the complete definition of each app when pruning. An explicitly empty
-`App` removes all its deployed workloads while retaining the app. A single-workload
+When pruning, supply the complete definition of each app. An explicitly empty
+`App` removes all its deployed workloads and keeps the app. A single-workload
 reference cannot prune. Pruning starts only after every requested deployment
-has registered successfully. Registration does not guarantee application health.
-If another operation changes the app during deployment, pruning refuses to delete
-workloads. Once pruning has started, the server retries interrupted cleanup for
-the same deployment versions.
+registers. A registered deployment is not necessarily healthy. If another
+operation changes the app during the deploy, pruning deletes nothing. Once
+pruning starts, the server retries interrupted cleanup for the same deployment
+versions.
 
-The SDK exposes the same operations through `app.plan(prune=True)` and
+The SDK offers the same operations as `app.plan(prune=True)` and
 `app.deploy(prune=True)`. Both accept `workspace`. `--json` returns the typed plan
 or deployment result, including the prune result when requested.
 
@@ -74,8 +75,8 @@ uv run lazycloud run HANDLER [ARGS]... [options]
 ```
 
 Calls a decorated function remotely from your working tree, shows its progress
-and logs, and prints the result. No deploy is needed. JSON arguments become
-Python values; other arguments stay strings:
+and logs, and prints the result. You don't need to deploy first. JSON arguments
+become Python values, and other arguments stay strings:
 
 ```bash
 uv run lazycloud run quickstart:hello LazyCloud
@@ -86,14 +87,14 @@ The second command uses the [functions example](/concepts/functions).
 Arguments are positional. Quote lists and objects so your shell passes them
 as one argument.
 
-Pass a pod to start an instance with a command. A plain Python callable runs
-locally, which lets an example coordinate remote calls. Objects with `.run()`
-or `.remote()` use those methods.
+Passing a pod starts an instance with a command. A plain Python callable runs
+locally, so an example can coordinate remote calls from it. For objects with
+`.run()` or `.remote()`, the CLI calls those methods.
 
-Progress and remote logs go to stderr and the result to stdout; see
-[live progress](/concepts/tasks-and-logs#live-progress). Human output displays
+Progress and remote logs go to stderr, and the result goes to stdout. See
+[live progress](/concepts/tasks-and-logs#live-progress). Human output prints
 Python results directly, including NumPy arrays and custom objects. `--json`
-requires a JSON-compatible result and reports an output error otherwise.
+needs a JSON-compatible result and reports an output error for anything else.
 `--output result.pkl` saves a Python result to a file.
 
 ## lazycloud serve
@@ -106,13 +107,13 @@ Runs a function, endpoint, or ASGI app as a [live preview](/concepts/workflow#li
 and streams its logs until Ctrl+C. `--sync-dir <dir>` syncs a directory other
 than the current one. `--timeout 0`, the default, serves until you interrupt
 it. Image, environment, secret, resource, and placement overrides apply to the
-preview. Endpoint and ASGI previews manage their own HTTP listener, so custom
-container ports, TCP mode, entrypoints, and attaching an existing container are
-unsupported.
+preview. Endpoint and ASGI previews manage their own HTTP listener, so they
+don't support custom container ports, TCP mode, entrypoints, or attaching an
+existing container.
 
-Edits transfer only changed files, and each becomes visible after its contents
-pass checksum verification. Large files transfer in chunks and need temporary
-disk space locally and on the worker. [What gets uploaded](/concepts/workflow#what-gets-uploaded)
+After an edit, `serve` transfers only the changed files. A file becomes visible
+only after its checksum verifies. Large files transfer in chunks and need
+temporary disk space locally and on the worker. [What gets uploaded](/concepts/workflow#what-gets-uploaded)
 covers `.lazycloudignore`.
 
 The SDK accepts the same preview configuration through `ServeOptions`:
@@ -127,9 +128,10 @@ count.serve(
 ```
 
 This uses `text_tools.py` from [Apps and workloads](/concepts/apps). Function,
-endpoint, and ASGI objects all accept `serve(options=...)`. Supplying options
-prepares a fresh preview configuration even if the object is already deployed.
-ASGI previews use one HTTP worker so source changes restart the application.
+endpoint, and ASGI objects all accept `serve(options=...)`. Passing options
+builds a fresh preview configuration, even for an object that is already
+deployed. ASGI previews run one HTTP worker so that source changes restart the
+application.
 
 ## lazycloud shell
 
@@ -147,17 +149,19 @@ running container.
 uv run lazycloud dev [HANDLER] [--sync <dir>] [options]
 ```
 
-Opens a shell in a remote container with your working directory synced in
-(`--sync ./` by default), for iterating without deploying. Without a handler
-it uses the managed Python image, or `--image` or `--dockerfile` if given.
+Opens a shell in a remote container with your working directory synced in, so
+you can iterate without deploying. `--sync` defaults to `./`. Without a
+handler, `dev` uses the managed Python image, or the image from `--image` or
+`--dockerfile`.
 
 ## Workload options
 
-Define persistent settings in the app's Python code. Use these flags for an
-ad hoc override, such as trying another GPU or debugging with extra memory.
+Keep persistent settings in the app's Python code. Use these flags for a
+one-off override, such as trying another GPU or debugging with extra memory.
+An omitted flag keeps the value from the definition.
 
-These flags vary by command and workload. Run `lazycloud COMMAND --help`
-for the flags that command accepts. An omitted option keeps the definition's value.
+Not every command and workload accepts every flag. Run
+`lazycloud COMMAND --help` to see what a command takes.
 
 | Option | What it does |
 | --- | --- |
@@ -170,13 +174,13 @@ for the flags that command accepts. An omitted option keeps the definition's val
 | `--port <spec>` | Port to expose, as `8080` or `name=8080`. Repeatable. `serve` uses `--container-port`. |
 | `--keep-warm <seconds>` | Idle seconds a container stays up. |
 | `--tcp`, `--no-tcp` | Raw TCP ingress instead of HTTP. |
-| `--machine <name>` | Joined machine this workload must run on, by name. Unset runs in the workspace. |
-| `--region <name>`, `--availability-zone <id>` | Placement overrides where supported. Availability-zone selection is available on `deploy`, `run`, and `shell`. |
-| `--preemptible`, `--no-preemptible` | Allow reclaimable capacity or require non-preemptible capacity (`deploy` and `run`). Workloads are preemptible by default. |
+| `--machine <name>` | Name of a joined machine to run on. Unset runs in the workspace. |
+| `--region <name>`, `--availability-zone <id>` | Placement overrides where supported. `--availability-zone` works on `deploy`, `run`, and `shell`. |
+| `--preemptible`, `--no-preemptible` | Allow reclaimable capacity, or require non-preemptible capacity. `deploy` and `run` only. Default is preemptible. |
 | `--entrypoint <cmd>` | Container entrypoint override. |
 
-A direct function target rejects port, keep-warm, TCP, and entrypoint overrides.
-Set function keep-warm on its decorator. Select a workload with `module:object`,
+A direct function target rejects port, keep-warm, TCP, and entrypoint
+overrides. Set a function's keep-warm on its decorator. Select a workload with `module:object`,
 for example `text_tools:count`.
 
 <WorkspaceFlag />

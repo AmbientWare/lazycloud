@@ -3,10 +3,10 @@ title: "Functions"
 description: "Call Python remotely, fan a batch out across containers, submit background work, and handle retries."
 ---
 
-A function is Python that returns a result: process a file, run inference,
-build a report. Decorate it with `@app.function` and call it with `.remote()` or
-`lazycloud run`. For HTTP callers use an [endpoint](/concepts/endpoints); for
-recurring runs add a [schedule](/concepts/schedules).
+A function runs Python in a remote container and returns the result.
+Decorate it with `@app.function` and call it with `.remote()` or
+`lazycloud run`. For HTTP callers, use an [endpoint](/concepts/endpoints). For
+recurring runs, add a [schedule](/concepts/schedules).
 
 ## Define and call a function
 
@@ -40,9 +40,9 @@ print(summarize_sales.remote([1200, 3500, 800]))
 
 Both stream the function's logs, then return three sales totaling 5500 cents.
 `await summarize_sales.async_remote(...)` is the async form.
-`summarize_sales.local(...)` runs it in your own process;
-[Local, cloud, deploy](/concepts/workflow) covers when to use each, and how
-`.remote()` picks a preview or deployment.
+`summarize_sales.local(...)` runs it in your own process.
+[Local, cloud, deploy](/concepts/workflow) covers when to use each and how
+`.remote()` chooses between a preview and a deployment.
 
 ## Process a batch
 
@@ -85,10 +85,10 @@ def count_words(text: str) -> int:
     return len(text.split())
 ```
 
-A `.map()` over 1,000 texts now runs on up to 20 containers at once.
-`max_pending_tasks` is raised because `.map()` submits every input up front and
-the default cap is 100. [Scaling and concurrency](/concepts/scaling) covers
-running several calls per container and keeping containers warm.
+A `.map()` over 1,000 texts now runs on up to 20 containers at once. The
+example raises `max_pending_tasks` because `.map()` submits every input up
+front and the default cap is 100. [Scaling and concurrency](/concepts/scaling)
+covers running several calls per container and keeping containers warm.
 [Parallel Parquet processing](/examples/parallel-parquet-s3) is a complete batch
 workflow.
 
@@ -105,12 +105,12 @@ the value, or collect it later from another process with
 `uv run lazycloud task result <task-id>`. `async_spawn()` is the awaitable form.
 [Tasks and logs](/concepts/tasks-and-logs) covers reconnecting to a call by ID.
 
-A function can take a pending `FunctionCall` as an argument; the callee receives
-its result.
+You can pass a pending `FunctionCall` as an argument to another function. The
+callee receives the call's result.
 
 ## Arguments and results
 
-Calls from the Python SDK preserve serializable Python values, including NumPy
+Calls from the Python SDK carry any serializable Python value, including NumPy
 arrays, dataclasses, custom class instances, tuples, and bytes:
 
 ```python
@@ -126,22 +126,22 @@ def matrix() -> np.ndarray:
     return np.arange(6, dtype=np.int64).reshape(2, 3)
 ```
 
-The caller needs the same packages, and the same code for custom classes, at
-matching versions. Only load results from code you trust, because unpickling can
-execute code.
+The caller needs the same packages at matching versions, plus the same code
+for any custom class. Unpickling can execute code, so only load results from
+code you trust.
 
 HTTP calls, the dashboard playground, `lazycloud run --json`, and
 [exported client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
-need JSON-compatible values. Arguments and results are limited to 16 MiB each;
-store larger output in a [volume](/concepts/volumes) or as an
+need JSON-compatible values. Each argument payload and result can be at most
+16 MiB. Store larger output in a [volume](/concepts/volumes) or as an
 [artifact](/concepts/artifacts) and return its path.
 
 ## Retries and timeouts
 
-`timeout_seconds` caps one attempt. `retries` is the number of extra attempts
-after a failure, 3 by default, so a function that writes somewhere can run four
-times for one call. Make writes safe to repeat, or set `retries=0`. For
-backoff, pass a `RetryPolicy`:
+`timeout_seconds` caps one attempt. `retries` sets how many extra attempts
+follow a failure. The default is 3, so one call can run the function four
+times. If it writes somewhere, make the writes safe to repeat or set
+`retries=0`. For backoff, pass a `RetryPolicy`:
 
 ```python
 import urllib.request
@@ -162,7 +162,7 @@ def fetch_text(url: str) -> str:
         return response.read().decode("utf-8")
 ```
 
-Retries also cover preempted capacity; see
+Retries also cover preempted capacity. See
 [Preemptible capacity](/concepts/resources#preemptible-capacity).
 
 ## Lifecycle hooks
@@ -183,15 +183,15 @@ def classify(text: str) -> str:
     return MODEL["classifier"](text)
 ```
 
-With `concurrency` above one, `on_start` runs in each call slot's process, or
-once per container with `in_process=True`; see
+With `concurrency` above one, `on_start` runs in each call slot's process.
+With `in_process=True` it runs once per container. See
 [Scaling](/concepts/scaling#functions).
 
 Per-call hooks are `on_running`, `on_success`, `on_error`, `on_retry`,
 `on_failure`, and `on_finish`. Each takes a callable, a decorated function, a
 dotted import string, or a list of them. Inside a hook or the function,
-`lazycloud.current_task_id()` identifies the current call; prefer it to the
-`TASK_ID` environment variable when calls share a process.
+`lazycloud.current_task_id()` identifies the current call. When calls share a
+process, use it instead of the `TASK_ID` environment variable.
 
 ## Dependencies and configuration
 

@@ -5,19 +5,20 @@ description: "The lazycloud command: global flags, handler references, and comma
 
 The `lazycloud` command installs with the `lazycloud-client` Python package. See
 [Installation](/getting-started/installation). Sign in once with
-`lazycloud login`; see [Sign-in and workspaces](/platform/auth).
+`lazycloud login`, as described in [Sign-in and workspaces](/platform/auth).
 
 ```text
 uv run lazycloud [--json] [--debug] COMMAND [ARGS]...
 ```
 
-`--json` prints one JSON document to stdout for scripting; progress goes to
-stderr and errors become one JSON error document with a nonzero exit code.
-Log-follow commands print newline-delimited JSON, one record per event.
-Interactive commands (`shell`, `dev`, `serve`) reject `--json`. `--debug`
-shows full tracebacks. `-h` or `--help` works on every command.
+`--json` prints one JSON document to stdout for scripting. Progress goes to
+stderr. An error prints one JSON error document and exits nonzero. Log-follow
+commands print newline-delimited JSON, one record per event. The interactive
+commands `shell`, `dev`, and `serve` reject `--json`. `--debug` shows full
+tracebacks. `-h` or `--help` works on every command.
 
-Human output is the default. Styling is dropped when output is redirected.
+Without `--json`, output is for humans. The CLI drops styling when you redirect
+output.
 
 [Local, cloud, deploy](/concepts/workflow) explains when to use `run`, `serve`,
 and `deploy`. The pages below list each command's syntax and flags.
@@ -29,17 +30,17 @@ Use `module:object` for commands that take a `HANDLER`. Run from your project ro
 - `quickstart:hello` selects `hello` in `quickstart.py`.
 - `myproject.api:app` selects `app` in `myproject/api.py`.
 
-Use dots between directory names and omit `.py`. File references such as
-`quickstart.py:hello` are also supported; both forms resolve to the same handler.
+Use dots between directory names and omit `.py`. A file reference such as
+`quickstart.py:hello` also works and resolves to the same handler.
 
 The object is one decorated resource or an `App`. Deploying an `App` deploys
 everything it registers. To deploy one workload, reference its Python object,
 for example `text_tools:count`.
 
 `deploy` also accepts a module without `:object`, such as
-`uv run lazycloud deploy quickstart`, when it contains exactly one app. This deploys
-everything registered with that app. If there are several apps, choose one with
-`module:app_name`.
+`uv run lazycloud deploy quickstart`, when the module contains exactly one app.
+It deploys everything registered with that app. If the module has several apps,
+choose one with `module:app_name`.
 
 ## Command groups
 

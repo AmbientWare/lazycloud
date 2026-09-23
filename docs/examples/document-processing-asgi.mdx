@@ -33,19 +33,18 @@ from lazycloud import Volume
 data_volume = Volume("document-processing-data", "/document-processing")
 ```
 
-Both workloads include `volumes=[data_volume]`; LazyCloud creates or reuses
-the volume when they start. The secret needs an initial value. Run the
-example's Python setup module once:
+Both workloads include `volumes=[data_volume]`, and LazyCloud creates or
+reuses the volume when they start. The secret that signs job tokens needs an
+initial value. Run the example's Python setup module once:
 
 ```bash
 uv run python -m document_processing.configure
 ```
 
-`configure.py` uses `Secret(JOB_TOKEN_SECRET_NAME).create(...)` with a random
-value and never prints it. It refuses to replace an existing secret. If you
-already configured this workspace, go straight to deployment; rerunning setup
-is unnecessary. The signing secret protects individual results, and only the
-HTTP service receives it.
+`configure.py` calls `Secret(JOB_TOKEN_SECRET_NAME).create(...)` with a random
+value and never prints it. It refuses to replace an existing secret, so if you
+already configured this workspace, skip to deployment. The signing secret
+protects individual results, and only the HTTP service receives it.
 
 <Warning>
   This example's upload URL is public. Anyone with the URL can submit work
@@ -59,14 +58,14 @@ HTTP service receives it.
 uv run lazycloud deploy document_processing.app:app
 ```
 
-Open the `document-api` URL from the deploy output. Select a document in the
-upload form. The page submits it, shows job progress, and displays the extracted
-text. PDFs can contain up to 20 pages; uploads are limited to 10 MiB and text
-results to 200,000 characters.
+Open the `document-api` URL from the deploy output and pick a document in the
+upload form. The page submits it, shows job progress, and displays the
+extracted text. The limits are 20 pages per PDF, 10 MiB per upload, and
+200,000 characters per text result.
 
-The worker removes the raw upload after processing, including on failure.
-Click Delete result in the browser when you no longer need it. Results from abandoned jobs
-remain in the volume until you delete them.
+The worker removes the raw upload after processing, even when processing
+fails. Click Delete result in the browser when you no longer need the text.
+Results from abandoned jobs stay in the volume until you delete them.
 
 ## Call the API from a script
 
@@ -98,11 +97,12 @@ curl --fail --show-error "$DOCUMENT_API_URL/api/jobs/result" \
   -H "X-Job-Token: $JOB_TOKEN"
 ```
 
-The result route returns HTTP 409 while the task is unfinished. If the task
-fails, inspect its error before retrying the upload. The token expires after
-24 hours and permits reading or deleting that job. Keep it out of logs and URLs.
+The result route returns HTTP 409 until the task finishes. If the task fails,
+inspect its error before retrying the upload. The token lets its holder read
+or delete that one job and expires after 24 hours. Keep it out of logs and
+URLs.
 
-Delete the result when your script has saved it:
+Delete the result once your script has saved it:
 
 ```bash
 curl --fail --show-error -X DELETE "$DOCUMENT_API_URL/api/jobs" \
@@ -110,7 +110,7 @@ curl --fail --show-error -X DELETE "$DOCUMENT_API_URL/api/jobs" \
 unset JOB_TOKEN
 ```
 
-Deletion returns HTTP 409 if work is still running.
+Deletion returns HTTP 409 while work is still running.
 
 ## Diagnose a failed upload or job
 
@@ -122,10 +122,10 @@ uv run lazycloud task list --app document_processing --limit 20
 uv run lazycloud task logs <task-id>
 ```
 
-The API and worker definitions live in `app.py` and `worker.py`.
-Change resource sizes and upload limits there and in `resources.py` when
-adapting the app. Add a retention job for abandoned results.
-Rotating `DOCUMENT_JOB_TOKEN_SECRET` invalidates outstanding job tokens.
+The API and worker definitions live in `app.py` and `worker.py`. To adapt the
+app, change resource sizes and upload limits there and in `resources.py`, and
+add a retention job for abandoned results. Rotating
+`DOCUMENT_JOB_TOKEN_SECRET` invalidates every outstanding job token.
 
 ## Clean up
 
