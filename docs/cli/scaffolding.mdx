@@ -27,10 +27,8 @@ uv run lazycloud run app:train_yolo
 Running this example uses a GPU and incurs compute and storage charges.
 Downloading files and running `uv sync` create no cloud resources.
 
-Each project includes its source, assets, README, `.python-version`,
-`.gitignore`, and `pyproject.toml`. The manifest pins the SDK to the
-installed release, and `uv sync` creates the lockfile. Commit `uv.lock` and
-use `uv sync --locked` in CI.
+Each project has its source, a README, and a `pyproject.toml` pinned to the
+installed SDK release. `uv sync` creates the lockfile.
 
 `--output` picks another directory:
 
@@ -47,8 +45,7 @@ directory does not rename resources.
 lazycloud example download all --output lazycloud-examples
 ```
 
-Each example has its own directory and dependencies, and `uv sync` runs inside
-each project.
+Each example gets its own directory and dependencies.
 
 ## Existing files
 

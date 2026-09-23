@@ -32,17 +32,10 @@ uv run lazycloud cloud retry               # retry the connection's pending acti
 uv run lazycloud cloud disconnect [--wait]
 ```
 
-For a managed connection, run `cloud authorize` with your AWS CLI profile after
-`cloud connect aws` or `cloud reconnect`. The CLI verifies that the profile
-belongs to the connected account, then submits the connection template directly
-to CloudFormation. Run `cloud validate` after the stack finishes. Your AWS
-credentials stay on your machine.
-
-`cloud status --until <phase>` waits for the connection to reach a phase, such
-as `ready`.
-
-LazyCloud manages provisioning settings for connected AWS accounts. A workload
-runs where its workspace lives and selects its CPU, memory, and GPU.
+`cloud authorize` checks that your AWS CLI profile belongs to the connected
+account and submits the connection stack to CloudFormation, so your AWS
+credentials stay local. `cloud validate` confirms the result once the stack
+finishes, and `cloud status --until ready` waits for it.
 
 ## lazycloud machine
 
