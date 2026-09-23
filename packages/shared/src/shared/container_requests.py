@@ -341,6 +341,15 @@ class RequestMount(ContractModel):
         return value
 
 
+class RequestDisk(ContractModel):
+    """A durable disk the worker attaches before the container starts."""
+
+    disk_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    mount_path: str
+    size_bytes: int = Field(gt=0)
+
+
 class WorkerContainerRequestPayload(ContractModel):
     image_id: str = ""
     # Digest of the image archive this dispatch is authorized to read. The archive
@@ -360,6 +369,8 @@ class WorkerContainerRequestPayload(ContractModel):
     gateway_token_required: bool = False
     workspace_storage_required: bool = False
     mounts: list[RequestMount] = Field(default_factory=list)
+    disks: list[RequestDisk] = Field(default_factory=list)
+    ssh_enabled: bool = False
     workspace_storage_available: bool = False
     workspace_storage_base_mount_path: str = DEFAULT_WORKSPACE_STORAGE_BASE_MOUNT_PATH
     ports: list[int] = Field(default_factory=list)
@@ -429,6 +440,7 @@ __all__ = [
     "ContainerMemoryReading",
     "ContainerShutdownTarget",
     "OciRuntimeName",
+    "RequestDisk",
     "RequestMount",
     "RequestMountPointConfig",
     "RequestMountType",

@@ -871,6 +871,8 @@ def _stub_request_from_spec(
         inputs=_metadata_schema(metadata, "inputs"),
         outputs=_metadata_schema(metadata, "outputs"),
         tcp=_metadata_bool(metadata, "tcp"),
+        ssh=_metadata_bool(metadata, "ssh"),
+        disks=list(spec.disks),
         block_network=_metadata_bool(metadata, "block_network"),
         allow_list=_metadata_str_list(metadata, "allow_list"),
         docker_enabled=_metadata_bool(metadata, "docker_enabled"),

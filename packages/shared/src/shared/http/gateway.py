@@ -9,6 +9,7 @@ from shared.app_slug import validate_app_slug
 from shared.compute_enrollment import AgentCapacityState
 from shared.deployment_records import DEFAULT_WORKLOAD_PREEMPTIBLE, CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind
+from shared.disks import DiskMount, validate_disk_mounts
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
 from shared.http.client_manifests import ClientContract
@@ -185,6 +186,8 @@ class GetOrCreateStubRequest(HttpModel):
     outputs: Schema = Field(default_factory=Schema)
     command: list[str] = Field(default_factory=list)
     tcp: bool = False
+    ssh: bool = False
+    disks: list[DiskMount] = Field(default_factory=list)
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)
     docker_enabled: bool = False
@@ -200,8 +203,12 @@ class GetOrCreateStubRequest(HttpModel):
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> GetOrCreateStubRequest:
         validate_placement_machine(self.region, self.availability_zone, self.machine)
-        # Both rules the deployment record states, checked here too because this
+        validate_disk_mounts(self.disks)
+        # The rules the deployment record states, checked here too because this
         # is the other owner that builds a runtime-ready stub config.
+        if (self.ssh or self.disks) and self.stub_type != DeploymentKind.Pod.value:
+            msg = "ssh and disks are only supported for pod workloads"
+            raise ValueError(msg)
         if self.cron and self.stub_type != DeploymentKind.Function.value:
             msg = "cron is only supported for function workloads"
             raise ValueError(msg)
