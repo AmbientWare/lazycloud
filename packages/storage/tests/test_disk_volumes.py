@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import uuid4
@@ -7,6 +8,7 @@ from api.server.services import ApiServices
 from compute.block_volumes import (
     BlockVolume,
     BlockVolumeMissingError,
+    BlockVolumePendingError,
     BlockVolumeProvider,
     BlockVolumeRequest,
     BlockVolumeScope,
@@ -17,9 +19,14 @@ from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.disks import DISK_VOLUME_CACHE_SECONDS, DiskMount
+from shared.errors import DiskVolumePendingError
 from shared.timestamps import utc_now
-from storage.disk_volumes import DISK_VOLUME_RELEASE_GRACE_SECONDS, DiskVolumeService
-from storage.disks import DiskDeletionService, get_or_create_disks
+from storage.disk_volumes import (
+    DISK_VOLUME_RELEASE_GRACE_SECONDS,
+    DISK_VOLUME_STUCK_SECONDS,
+    DiskVolumeService,
+)
+from storage.disks import DiskDeletionService, DiskService, get_or_create_disks
 from tests.workspaces import on_team_plan
 
 GIB = 1024**3
@@ -38,8 +45,9 @@ class _Provider(BlockVolumeProvider):
     volumes: dict[str, _Volume] = field(default_factory=dict)
     calls: list[str] = field(default_factory=list)
     lose_create_answer: bool = False
+    attach_pending: bool = False
 
-    def create_volume(self, request: BlockVolumeRequest) -> BlockVolume:
+    def create_volume(self, request: BlockVolumeRequest, *, wait_seconds: float) -> BlockVolume:
         self.calls.append("create")
         found = [key for key, item in self.volumes.items() if item.request.token == request.token]
         volume_id = found[0] if found else f"vol-{uuid4().hex[:12]}"
@@ -49,15 +57,18 @@ class _Provider(BlockVolumeProvider):
             raise TimeoutError("the answer to CreateVolume was lost")
         return self._view(volume_id)
 
-    def attach_volume(self, volume_id: str, *, instance_id: str) -> None:
+    def attach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
         self.calls.append("attach")
         volume = self.volumes.get(volume_id)
         if volume is None:
             raise BlockVolumeMissingError(volume_id)
         assert volume.attached_to in {"", instance_id}
         volume.attached_to = instance_id
+        if self.attach_pending:
+            self.attach_pending = False
+            raise BlockVolumePendingError(volume_id)
 
-    def detach_volume(self, volume_id: str, *, instance_id: str) -> None:
+    def detach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
         self.calls.append("detach")
         volume = self.volumes.get(volume_id)
         if volume is not None:
@@ -101,9 +112,15 @@ class _Clock:
         return self.now
 
 
-class _NoWorkerIsAbsent:
+@dataclass
+class _WorkerAbsence:
+    absent: bool = False
+    when_asked: Callable[[], None] | None = None
+
     def is_absent(self, worker_id: str) -> bool:
-        return False
+        if self.when_asked is not None:
+            self.when_asked()
+        return self.absent
 
 
 def _host(instance_id: str, zone: str = "use2-az1") -> DiskVolumeHost:
@@ -118,7 +135,7 @@ def _host(instance_id: str, zone: str = "use2-az1") -> DiskVolumeHost:
 
 
 def _setup(
-    services: ApiServices, name: str
+    services: ApiServices, name: str, absence: _WorkerAbsence | None = None
 ) -> tuple[DiskVolumeService, _Provider, _Clock, str, str]:
     with services.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
@@ -132,7 +149,7 @@ def _setup(
         services.database,
         providers=_Providers(provider),
         deployment="deployment-a",
-        worker_absence=_NoWorkerIsAbsent(),
+        worker_absence=absence or _WorkerAbsence(),
         clock=clock,
     )
     return volumes, provider, clock, workspace_id, resolved.record.id
@@ -230,8 +247,17 @@ def test_a_lost_create_answer_and_a_dead_holder_recover_without_a_second_volume(
     with pytest.raises(TimeoutError):
         volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
     assert _state(isolated_services, disk_id) == "creating"
+
+    # The retried acquire keeps its lease, and an attach still under way answers
+    # pending rather than holding the request past the worker's timeout.
+    retried = disks.acquire(disk_id, container_id=holder, worker_id="worker")
+    assert retried.lease_token == lease.lease_token
+    provider.attach_pending = True
+    with pytest.raises(DiskVolumePendingError):
+        volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
     grant = volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
     assert list(provider.volumes) == [grant.volume_id]
+    assert provider.calls.count("create") == 2
 
     with isolated_services.database.session() as session:
         row = session.get(ContainerTable, holder)
@@ -254,3 +280,40 @@ def test_a_lost_create_answer_and_a_dead_holder_recover_without_a_second_volume(
     )
     assert deletion.request("vol-crash", workspace_id=workspace_id)
     assert provider.volumes == {}
+
+
+def test_a_sweep_that_loses_the_disk_to_a_new_holder_leaves_its_volume_attached(
+    isolated_services: ApiServices,
+) -> None:
+    absence = _WorkerAbsence(absent=True)
+    volumes, provider, clock, workspace_id, disk_id = _setup(isolated_services, "vol-race", absence)
+    disks = isolated_services.disks
+    first = _container(isolated_services, workspace_id)
+    lease = disks.acquire(disk_id, container_id=first, worker_id="worker")
+    grant = volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
+    with isolated_services.database.session() as session:
+        row = session.get(ContainerTable, first)
+        assert row is not None
+        row.status = ContainerStatus.Stopped.value
+
+    # The sweep finds the holder's worker gone and decides to detach; while it
+    # does, a new container takes the disk on the same machine.
+    taken_over: list[str] = []
+
+    def take_over() -> None:
+        absence.when_asked = None
+        second = _container(isolated_services, workspace_id)
+        taker = DiskService(isolated_services.database, worker_absence=absence)
+        taken = taker.acquire(disk_id, container_id=second, worker_id="worker")
+        taken_over.append(
+            volumes.attach(disk_id, host=_host("i-a"), lease_token=taken.lease_token).volume_id
+        )
+
+    absence.when_asked = take_over
+    clock.now += timedelta(seconds=DISK_VOLUME_STUCK_SECONDS + 1)
+    volumes.reconcile_due(now=clock.now)
+
+    assert taken_over == [grant.volume_id]
+    assert "detach" not in provider.calls
+    assert provider.volumes[grant.volume_id].attached_to == "i-a"
+    assert _state(isolated_services, disk_id) == "attached"

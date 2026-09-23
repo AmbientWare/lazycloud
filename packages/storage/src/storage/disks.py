@@ -28,7 +28,6 @@ from shared.disks import (
     DiskRecord,
     DiskStatus,
     disk_manifest_key,
-    disk_shrink_message,
 )
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.timestamps import to_utc, utc_now
@@ -91,8 +90,10 @@ def get_or_create_disks(
 
     A larger declared size grows the disk: it is recorded here, and the next
     container to acquire the disk gets a volume of the new size and grows the
-    filesystem into it. A smaller one would cut into a filesystem that may
-    already fill the device, so it is refused before anything changes.
+    filesystem into it. A smaller one is not refused here. Stub creation refuses
+    it before a deploy, and a container launched from an older stub, whether a
+    rollback or a previous version restarting mid-rollout, gets the disk at the
+    size it has, which the returned record carries.
     """
     if not mounts:
         return []
@@ -105,8 +106,6 @@ def get_or_create_disks(
                 mount.name, workspace_id=workspace_id, size_bytes=mount.size_bytes
             )
             created = created or inserted
-            if mount.size_bytes < record.size_bytes:
-                raise InvalidInputError(disk_shrink_message(mount.name, record.size_bytes))
             if mount.size_bytes > record.size_bytes:
                 row = repository.lock(record.id)
                 if row is None:
@@ -173,6 +172,16 @@ class DiskService:
             repository = DiskRepository(session)
             row = self._lock_live(repository, disk_id)
             holder_id = str(row.holder_container_id or "")
+            if holder_id == container_id and row.lease_token:
+                # A retried acquire keeps its lease, so the volume work the first
+                # attempt started continues under it instead of being fenced out.
+                return DiskAcquisition(
+                    disk_id=disk_id,
+                    lease_token=row.lease_token,
+                    size_bytes=row.size_bytes,
+                    generation=row.generation,
+                    chain=tuple(repository.chain(disk_id)),
+                )
             if holder_id and holder_id != container_id:
                 holder = repository.holder(holder_id)
                 if self._holds(holder):

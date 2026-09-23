@@ -45,6 +45,14 @@ class EndpointReplicaLimitReachedError(CapacityLimitReachedError):
     """An endpoint already holds its configured maximum number of containers."""
 
 
+class DiskVolumePendingError(ConflictError):
+    """A disk's provider volume is still being created, attached or detached.
+
+    The work continues without the caller, and asking again picks it up, so the
+    right response is to retry shortly rather than to give up.
+    """
+
+
 class InvalidInputError(DomainError):
     """Request is well-formed but semantically invalid."""
 
@@ -68,6 +76,7 @@ class PaymentRequiredError(DomainError):
 __all__ = [
     "CapacityLimitReachedError",
     "ConflictError",
+    "DiskVolumePendingError",
     "DomainError",
     "EndpointReplicaLimitReachedError",
     "ExpiredCursorError",

@@ -10,7 +10,7 @@ from database.tables.orchestration import ContainerTable, WorkerTable
 from foundation.ids import try_uuid
 from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.timestamps import to_utc
-from sqlalchemy import Text, and_, cast, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 
@@ -19,7 +19,7 @@ class DiskVolumeHost:
     """The provider machine a worker runs on, as far as its disk volumes need to know."""
 
     workspace_id: str
-    """A workspace the machine's provider resolves through."""
+    """The workspace the machine's capacity belongs to; the provider resolves through it."""
 
     provider_ref: str
     connection_id: str | None
@@ -40,6 +40,7 @@ class DiskVolumeSnapshot:
     volume_id: str
     provider_ref: str
     connection_id: str | None
+    capacity_workspace_id: str
     region: str
     zone: str
     instance_id: str
@@ -47,6 +48,7 @@ class DiskVolumeSnapshot:
     token: str
     formatted: bool
     revision: int
+    driver: str
     changed_at: datetime | None
 
 
@@ -68,6 +70,7 @@ _COLUMNS = (
     DiskTable.volume_id,
     DiskTable.volume_provider_ref,
     DiskTable.volume_connection_id,
+    DiskTable.volume_capacity_workspace_id,
     DiskTable.volume_region,
     DiskTable.volume_zone,
     DiskTable.volume_instance_id,
@@ -75,6 +78,7 @@ _COLUMNS = (
     DiskTable.volume_token,
     DiskTable.volume_formatted,
     DiskTable.volume_revision,
+    DiskTable.volume_driver,
     DiskTable.volume_changed_at,
 )
 
@@ -98,6 +102,7 @@ class DiskVolumeRepository:
             volume_id,
             provider_ref,
             connection_id,
+            capacity_workspace_id,
             region,
             zone,
             instance_id,
@@ -105,6 +110,7 @@ class DiskVolumeRepository:
             token,
             formatted,
             revision,
+            driver,
             changed_at,
         ) = row
         return DiskVolumeSnapshot(
@@ -118,6 +124,7 @@ class DiskVolumeRepository:
             volume_id=volume_id,
             provider_ref=provider_ref,
             connection_id=str(connection_id) if connection_id is not None else None,
+            capacity_workspace_id=capacity_workspace_id,
             region=region,
             zone=zone,
             instance_id=instance_id,
@@ -125,6 +132,7 @@ class DiskVolumeRepository:
             token=token,
             formatted=formatted,
             revision=revision,
+            driver=driver,
             changed_at=to_utc(changed_at) if changed_at is not None else None,
         )
 
@@ -134,9 +142,11 @@ class DiskVolumeRepository:
         *,
         at: datetime,
         state: str,
+        driver: str,
         volume_id: str | None = None,
         provider_ref: str | None = None,
         connection_id: str | None = None,
+        capacity_workspace_id: str | None = None,
         region: str | None = None,
         zone: str | None = None,
         instance_id: str | None = None,
@@ -152,6 +162,7 @@ class DiskVolumeRepository:
         values: dict[str, object] = {
             "volume_state": state,
             "volume_revision": snapshot.revision + 1,
+            "volume_driver": driver,
             "volume_changed_at": at,
         }
         if state == "none":
@@ -166,6 +177,7 @@ class DiskVolumeRepository:
         for column, value in (
             ("volume_id", volume_id),
             ("volume_provider_ref", provider_ref),
+            ("volume_capacity_workspace_id", capacity_workspace_id),
             ("volume_region", region),
             ("volume_zone", zone),
             ("volume_instance_id", instance_id),
@@ -189,6 +201,19 @@ class DiskVolumeRepository:
             .execution_options(synchronize_session=False)
         )
         return moved is not None
+
+    def defer(self, snapshot: DiskVolumeSnapshot, *, at: datetime) -> None:
+        """Push an unchanged volume to the back of the due order without moving it."""
+        self.session.execute(
+            update(DiskTable)
+            .where(
+                DiskTable.id == snapshot.disk_id,
+                DiskTable.volume_revision == snapshot.revision,
+                DiskTable.lease_token == snapshot.lease_token,
+            )
+            .values(volume_changed_at=at)
+            .execution_options(synchronize_session=False)
+        )
 
     def host_for_worker(self, worker_id: str) -> DiskVolumeHost | None:
         """The provider machine under a worker; None for a machine no provider launched."""
@@ -229,14 +254,18 @@ class DiskVolumeRepository:
         cached_before: datetime,
         released_before: datetime,
         stuck_before: datetime,
+        recheck_before: datetime,
         limit: int,
     ) -> tuple[str, ...]:
         """Disks whose volume has work waiting: one indexed read, idle or not.
 
         A cached volume is due when its window has passed, a released one after
         the grace its worker has to unmount it, and one in any other transition
-        once whoever drove it has plainly stopped. An attached volume is due only
-        when the container holding it has finished.
+        once whoever drove it has plainly stopped. An attached volume is due when
+        its holder is gone, or finished with its storage released. A finished
+        holder whose storage is not released may still publish, so its volume is
+        only rechecked once `recheck_before` has passed since it was last looked
+        at; the sweep pushes it back each time it finds the holder still keeps it.
         """
         live = [status.value for status in LIVE_CONTAINER_STATUSES]
         rows = self.session.scalars(
@@ -274,7 +303,13 @@ class DiskVolumeRepository:
                         or_(
                             DiskTable.holder_container_id.is_(None),
                             ContainerTable.id.is_(None),
-                            ContainerTable.status.not_in(live),
+                            and_(
+                                ContainerTable.status.not_in(live),
+                                or_(
+                                    ContainerTable.storage_released_at.is_not(None),
+                                    DiskTable.volume_changed_at <= recheck_before,
+                                ),
+                            ),
                         ),
                     ),
                 ),
@@ -290,9 +325,12 @@ class DiskVolumeRepository:
             select(
                 DiskTable.volume_provider_ref,
                 DiskTable.volume_region,
-                func.min(cast(DiskTable.workspace_id, Text)),
+                func.min(DiskTable.volume_capacity_workspace_id),
             )
-            .where(DiskTable.volume_provider_ref != "")
+            .where(
+                DiskTable.volume_provider_ref != "",
+                DiskTable.volume_capacity_workspace_id != "",
+            )
             .group_by(DiskTable.volume_provider_ref, DiskTable.volume_region)
         ).tuples()
         return tuple(

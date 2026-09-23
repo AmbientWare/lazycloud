@@ -71,22 +71,31 @@ class BlockVolumeMissingError(Exception):
     """The provider has no such volume, or it is already being deleted."""
 
 
+class BlockVolumePendingError(Exception):
+    """The provider accepted the operation but had not finished it within the wait.
+
+    Every operation is idempotent, so calling it again later picks up where this
+    one left off rather than starting another.
+    """
+
+
 class BlockVolumeProvider(Protocol):
     """Block volumes in one provider account and region."""
 
-    def create_volume(self, request: BlockVolumeRequest) -> BlockVolume:
+    def create_volume(self, request: BlockVolumeRequest, *, wait_seconds: float) -> BlockVolume:
         """Create and wait until the volume can attach; the same token returns the same one."""
         ...
 
-    def attach_volume(self, volume_id: str, *, instance_id: str) -> None:
+    def attach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
         """Attach and wait until attached, deleting it with the instance if the instance ends.
 
         Succeeds when already attached there. Raises `BlockVolumeMissingError`
-        when the volume is gone.
+        when the volume is gone. Every wait raises `BlockVolumePendingError` once
+        `wait_seconds` pass.
         """
         ...
 
-    def detach_volume(self, volume_id: str, *, instance_id: str) -> None:
+    def detach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
         """Detach from this instance and wait until available; a missing volume is detached."""
         ...
 
@@ -149,6 +158,7 @@ __all__ = [
     "BlockVolume",
     "BlockVolumeMissingError",
     "BlockVolumeOwner",
+    "BlockVolumePendingError",
     "BlockVolumeProvider",
     "BlockVolumeProviders",
     "BlockVolumeRequest",

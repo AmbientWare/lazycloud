@@ -64,6 +64,7 @@ def upgrade() -> None:
         sa.Column("volume_id", sa.String(64), nullable=False),
         sa.Column("volume_provider_ref", sa.String(160), nullable=False),
         sa.Column("volume_connection_id", sa.UUID(), nullable=True),
+        sa.Column("volume_capacity_workspace_id", sa.Text(), nullable=False),
         sa.Column("volume_region", sa.Text(), nullable=False),
         sa.Column("volume_zone", sa.Text(), nullable=False),
         sa.Column("volume_instance_id", sa.String(64), nullable=False),
@@ -71,6 +72,7 @@ def upgrade() -> None:
         sa.Column("volume_token", sa.String(64), nullable=False),
         sa.Column("volume_formatted", sa.Boolean(), nullable=False),
         sa.Column("volume_revision", sa.BigInteger(), nullable=False),
+        sa.Column("volume_driver", sa.String(64), nullable=False),
         sa.Column("volume_changed_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "volume_state IN ('none', 'creating', 'attaching', 'attached', 'releasing', "
@@ -80,6 +82,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "volume_state = 'none' OR (volume_provider_ref <> '' AND volume_region <> '' "
             "AND volume_zone <> '' AND volume_size_bytes > 0 AND volume_token <> '' "
+            "AND volume_capacity_workspace_id <> '' AND volume_driver <> '' "
             "AND volume_changed_at IS NOT NULL)",
             name="ck_disks_volume_scope",
         ),

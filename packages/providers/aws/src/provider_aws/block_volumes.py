@@ -26,6 +26,7 @@ from compute.block_volumes import (
     BlockVolume,
     BlockVolumeMissingError,
     BlockVolumeOwner,
+    BlockVolumePendingError,
     BlockVolumeProvider,
     BlockVolumeRequest,
     BlockVolumeState,
@@ -60,8 +61,7 @@ VOLUME_TOKEN_TAG_KEY = "cloud-pool:volume-token"
 _DISK_DEVICE_NAMES = tuple(f"/dev/sd{letter}" for letter in "fghijklmnopqrstuvwxyz")
 
 _GIB = 1024**3
-_WAIT_DELAY_SECONDS = 3
-_WAIT_ATTEMPTS = 40
+_WAIT_DELAY_SECONDS = 2
 
 
 def is_disk_volume_device(device_name: str) -> bool:
@@ -217,7 +217,8 @@ class AwsBlockVolumes(BlockVolumeProvider):
     sleep: Callable[[float], None] = field(default=time.sleep)
     monotonic: Callable[[], float] = field(default=time.monotonic)
 
-    def create_volume(self, request: BlockVolumeRequest) -> BlockVolume:
+    def create_volume(self, request: BlockVolumeRequest, *, wait_seconds: float) -> BlockVolume:
+        deadline = self.monotonic() + wait_seconds
         existing = self._by_token(request.token)
         if existing is None:
             response = self._call(
@@ -241,7 +242,12 @@ class AwsBlockVolumes(BlockVolumeProvider):
                     detail=f"volume {existing.volume_id} from this creation is {existing.state}",
                 )
             volume_id = existing.volume_id
-        self._wait("volume_available", volume_id, operation="wait for disk volume creation")
+        self._wait(
+            "volume_available",
+            volume_id,
+            operation="wait for disk volume creation",
+            deadline=deadline,
+        )
         described = self._describe(volume_id)
         if described is None:
             raise AwsProviderControlError(
@@ -251,7 +257,8 @@ class AwsBlockVolumes(BlockVolumeProvider):
             )
         return _block_volume(described)
 
-    def attach_volume(self, volume_id: str, *, instance_id: str) -> None:
+    def attach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
+        deadline = self.monotonic() + wait_seconds
         volume = self._require(volume_id)
         attachment = _live_attachment(volume)
         if attachment is not None and attachment.instance_id != instance_id:
@@ -262,11 +269,16 @@ class AwsBlockVolumes(BlockVolumeProvider):
             if volume.state == "creating" or any(
                 item.state == "detaching" for item in volume.attachments
             ):
-                self._wait("volume_available", volume_id, operation="wait for disk volume")
+                self._wait(
+                    "volume_available",
+                    volume_id,
+                    operation="wait for disk volume",
+                    deadline=deadline,
+                )
             device = self._attach(volume_id, instance_id=instance_id)
         else:
             device = attachment.device
-        attached = self._await_attached(volume_id, instance_id=instance_id)
+        attached = self._await_attached(volume_id, instance_id=instance_id, deadline=deadline)
         if not attached.delete_on_termination:
             # A machine that ends takes its disk volumes with it; the object
             # store holds the durable copy, and nothing else would delete them.
@@ -283,7 +295,8 @@ class AwsBlockVolumes(BlockVolumeProvider):
                 ),
             )
 
-    def detach_volume(self, volume_id: str, *, instance_id: str) -> None:
+    def detach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
+        deadline = self.monotonic() + wait_seconds
         volume = self._describe(volume_id)
         if volume is None or volume.state in {"deleting", "deleted"}:
             return
@@ -305,7 +318,12 @@ class AwsBlockVolumes(BlockVolumeProvider):
                 raise upstream_error(exc, operation="detach disk volume") from exc
         elif volume.state == "available":
             return
-        self._wait("volume_available", volume_id, operation="wait for disk volume detach")
+        self._wait(
+            "volume_available",
+            volume_id,
+            operation="wait for disk volume detach",
+            deadline=deadline,
+        )
 
     def delete_volume(self, volume_id: str) -> None:
         try:
@@ -364,8 +382,7 @@ class AwsBlockVolumes(BlockVolumeProvider):
             detail=f"instance {instance_id} has no free disk device name",
         )
 
-    def _await_attached(self, volume_id: str, *, instance_id: str) -> _Attachment:
-        deadline = self.monotonic() + _WAIT_DELAY_SECONDS * _WAIT_ATTEMPTS
+    def _await_attached(self, volume_id: str, *, instance_id: str, deadline: float) -> _Attachment:
         while True:
             volume = self._require(volume_id)
             for attachment in volume.attachments:
@@ -380,11 +397,7 @@ class AwsBlockVolumes(BlockVolumeProvider):
                         detail=f"volume {volume_id} attachment is {attachment.state}",
                     )
             if self.monotonic() >= deadline:
-                raise AwsProviderControlError(
-                    AwsProviderControlErrorCode.UpstreamUnavailable,
-                    operation="attach disk volume",
-                    detail=f"volume {volume_id} did not attach to {instance_id} in time",
-                )
+                raise BlockVolumePendingError(f"volume {volume_id} is still attaching")
             self.sleep(_WAIT_DELAY_SECONDS)
 
     def _devices(self, instance_id: str) -> frozenset[str]:
@@ -454,13 +467,19 @@ class AwsBlockVolumes(BlockVolumeProvider):
         volumes = _parse(_Volumes, response, operation="describe disk volume").volumes
         return volumes[0] if volumes else None
 
-    def _wait(self, waiter: str, volume_id: str, *, operation: str) -> None:
+    def _wait(self, waiter: str, volume_id: str, *, operation: str, deadline: float) -> None:
+        remaining = max(deadline - self.monotonic(), 0.0)
         try:
             self.ec2.get_waiter(waiter).wait(
                 VolumeIds=[volume_id],
-                WaiterConfig={"Delay": _WAIT_DELAY_SECONDS, "MaxAttempts": _WAIT_ATTEMPTS},
+                WaiterConfig={
+                    "Delay": _WAIT_DELAY_SECONDS,
+                    "MaxAttempts": max(1, math.ceil(remaining / _WAIT_DELAY_SECONDS)),
+                },
             )
         except WaiterError as exc:
+            if "Max attempts exceeded" in str(exc):
+                raise BlockVolumePendingError(f"volume {volume_id}: {operation}") from exc
             raise AwsProviderControlError(
                 AwsProviderControlErrorCode.UpstreamUnavailable,
                 operation=operation,

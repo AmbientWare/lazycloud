@@ -65,6 +65,7 @@ class DiskTable(IdTable, DatabaseBase):
         CheckConstraint(
             "volume_state = 'none' OR (volume_provider_ref <> '' AND volume_region <> '' "
             "AND volume_zone <> '' AND volume_size_bytes > 0 AND volume_token <> '' "
+            "AND volume_capacity_workspace_id <> '' AND volume_driver <> '' "
             "AND volume_changed_at IS NOT NULL)",
             name="ck_disks_volume_scope",
         ),
@@ -126,6 +127,9 @@ class DiskTable(IdTable, DatabaseBase):
     volume_connection_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
     """The connected account holding the volume, while one exists there."""
 
+    volume_capacity_workspace_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    """The workspace the machine's capacity belongs to, which resolves the provider account."""
+
     volume_region: Mapped[str] = mapped_column(Text, nullable=False, default="")
     volume_zone: Mapped[str] = mapped_column(Text, nullable=False, default="")
     volume_instance_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -140,6 +144,9 @@ class DiskTable(IdTable, DatabaseBase):
 
     volume_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     """Advances with every volume transition; each one is conditional on the one it read."""
+
+    volume_driver: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    """Who moved the volume into its current state, and so who may make its provider call."""
 
     volume_changed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -32,6 +32,11 @@ disk row records the volume's state; provider calls run outside transactions and
 each result is recorded only if the row still has the revision and lease it was
 read under. That fence is what lets the holder, the housekeeping sweep and
 deletion all drive the same volume and resume each other's half-finished work.
+A housekeeping decision stops the moment the lease or revision it read changes,
+so a sweep never detaches a volume a new holder just took. Only the driver that
+moved a volume into a state makes that state's provider call, until it has
+plainly stopped; an acquire that finds the work unfinished answers
+`DiskVolumePendingError` and the worker asks again under the same lease.
 Every volume carries the deployment's tags, and orphan collection deletes only
 detached volumes with this deployment's complete tag set that no disk row names.
 
