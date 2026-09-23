@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -82,6 +83,15 @@ type pendingPublish struct {
 	Result publishResult `json:"result"`
 }
 
+// publishedRecord is a generation this node knows the control plane recorded,
+// kept so collect can tell which manifests and chunks are still reachable.
+type publishedRecord struct {
+	Generation       int64  `json:"generation"`
+	ParentGeneration int64  `json:"parent_generation"`
+	ManifestKey      string `json:"manifest_key"`
+	ManifestSHA256   string `json:"manifest_sha256"`
+}
+
 type diskState struct {
 	DiskID    string  `json:"disk_id"`
 	SizeBytes int64   `json:"size_bytes"`
@@ -89,11 +99,22 @@ type diskState struct {
 	NextSeq   int     `json:"next_seq"`
 	// HeadFresh is true while the head is known to have been created empty
 	// under the running daemon, whose write statistics then cover all of it.
-	HeadFresh               bool            `json:"head_fresh"`
-	PublishedGeneration     int64           `json:"published_generation"`
-	PublishedManifestSHA256 string          `json:"published_manifest_sha256"`
-	Pending                 *pendingPublish `json:"pending_publish,omitempty"`
-	Attachment              *attachment     `json:"attachment,omitempty"`
+	HeadFresh               bool              `json:"head_fresh"`
+	PublishedGeneration     int64             `json:"published_generation"`
+	PublishedManifestSHA256 string            `json:"published_manifest_sha256"`
+	Published               []publishedRecord `json:"published"`
+	Pending                 *pendingPublish   `json:"pending_publish,omitempty"`
+	Attachment              *attachment       `json:"attachment,omitempty"`
+	LastUsedAt              time.Time         `json:"last_used_at"`
+}
+
+func (s *diskState) record(generation int64) (publishedRecord, bool) {
+	for _, record := range s.Published {
+		if record.Generation == generation {
+			return record, true
+		}
+	}
+	return publishedRecord{}, false
 }
 
 func (s *diskState) head() layer { return s.Layers[len(s.Layers)-1] }
@@ -203,6 +224,22 @@ func lockFile(path string) (*fileLock, error) {
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
 		file.Close()
+		return nil, fmt.Errorf("lock %s: %w", path, err)
+	}
+	return &fileLock{file: file}, nil
+}
+
+// tryLockFile returns nil without waiting when another process holds the lock.
+func tryLockFile(path string) (*fileLock, error) {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	return &fileLock{file: file}, nil

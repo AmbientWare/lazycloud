@@ -31,6 +31,19 @@ disagree, the next command drops the unswitched layer. Compact commits only
 published layers into the base, and only while holding the disk lock, so
 publish never reads a file that compaction is rewriting.
 
+Recover seals a head that a dead daemon left holding data, so the next publish
+uploads those writes instead of leaving them on one node. They are
+crash-consistent, which is all a killed daemon allows.
+
+Collect deletes only what a parentless generation makes unreachable. Chunks
+named by an upload still waiting for its commit survive, because a retried
+publish returns that upload's result without storing its chunks again. State
+keeps a record of every committed generation for exactly this decision.
+
+Attach exits with code 3 when a restore would leave the root filesystem below
+`--min-free-bytes`. That is the worker's cue to evict and retry. Every other
+failure exits 1.
+
 Chunk boundaries come from the gear table in `chunker.go`. Changing that table
 or the size bounds does not break old disks, but every chunk becomes new, so a
 publish after the change re-uploads whole disks.

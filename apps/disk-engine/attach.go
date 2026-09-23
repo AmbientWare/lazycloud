@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type attachResult struct {
@@ -22,12 +26,16 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	mountpoint := f.set.String("mountpoint", "", "where to mount the filesystem")
 	chainPath := f.set.String("chain", "", "CHAIN.json: published generations to restore, base first")
 	storePath := f.set.String("store", "", "STORE.json: workspace bucket credentials")
+	minFree := f.set.Int64("min-free-bytes", 0, "free space the filesystem under --root must keep after a restore")
 	f.require("size", "mountpoint", "chain", "store")
 	if err := f.parse(args); err != nil {
 		return nil, err
 	}
 	if *size <= 0 || *size%4096 != 0 {
 		return nil, fmt.Errorf("--size must be a positive multiple of 4096, got %d", *size)
+	}
+	if *minFree < 0 {
+		return nil, fmt.Errorf("--min-free-bytes must not be negative, got %d", *minFree)
 	}
 	if !filepath.IsAbs(*mountpoint) {
 		return nil, fmt.Errorf("--mountpoint must be absolute, got %q", *mountpoint)
@@ -97,10 +105,19 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if reuse {
-		if state.SizeBytes != *size {
-			return nil, fmt.Errorf("disk %s is %d bytes locally and %d requested; resizing a disk is not supported", p.id, state.SizeBytes, *size)
+	if reuse && state.SizeBytes != *size {
+		return nil, fmt.Errorf("disk %s is %d bytes locally and %d requested; resizing a disk is not supported", p.id, state.SizeBytes, *size)
+	}
+	var manifests []layerManifest
+	if !reuse {
+		if manifests, err = fetchChain(ctx, store, p.id, chain, *size); err != nil {
+			return nil, err
 		}
+	}
+	if err := checkSpace(p, reuse, manifests, *minFree); err != nil {
+		return nil, err
+	}
+	if reuse {
 		result.ReusedLocal = true
 	} else {
 		if err := os.RemoveAll(p.dir()); err != nil {
@@ -109,7 +126,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 		if err := os.MkdirAll(p.layerDir(), 0o700); err != nil {
 			return nil, err
 		}
-		state = &diskState{DiskID: p.id, SizeBytes: *size}
+		state = &diskState{DiskID: p.id, SizeBytes: *size, Published: []publishedRecord{}}
 		if len(chain) == 0 {
 			base := state.newLayer()
 			if err := createBase(ctx, p.layerPath(base), *size); err != nil {
@@ -118,7 +135,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			state.Layers = []layer{base}
 			format = true
 		} else {
-			restored, err := restoreChain(ctx, p, state, store, chain)
+			restored, err := restoreChain(ctx, p, state, store, chain, manifests)
 			if err != nil {
 				return nil, err
 			}
@@ -135,6 +152,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 	state.Attachment = &attachment{Mountpoint: target, DaemonPID: pid}
+	state.LastUsedAt = time.Now().UTC()
 	if err := saveState(p, state); err != nil {
 		return nil, errors.Join(err, stopDaemon(context.WithoutCancel(ctx), p, pid))
 	}
@@ -184,29 +202,98 @@ func reusable(p diskPaths, state *diskState, newest chainEntry) (bool, error) {
 	return true, nil
 }
 
-func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry) (int64, error) {
-	var restored int64
+// fetchChain reads and checks every manifest in the chain before anything
+// local is removed or written.
+func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []chainEntry, size int64) ([]layerManifest, error) {
+	manifests := make([]layerManifest, len(chain))
 	for i, entry := range chain {
 		manifest, err := fetchManifest(ctx, store, entry)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		wantParent := int64(0)
 		if i > 0 {
 			wantParent = chain[i-1].Generation
 		}
 		switch {
-		case manifest.DiskID != p.id:
-			return 0, fmt.Errorf("%s belongs to disk %s", entry.ManifestKey, manifest.DiskID)
+		case manifest.DiskID != diskID:
+			return nil, fmt.Errorf("%s belongs to disk %s", entry.ManifestKey, manifest.DiskID)
 		case manifest.Generation != entry.Generation:
-			return 0, fmt.Errorf("%s holds generation %d, the chain says %d", entry.ManifestKey, manifest.Generation, entry.Generation)
+			return nil, fmt.Errorf("%s holds generation %d, the chain says %d", entry.ManifestKey, manifest.Generation, entry.Generation)
 		case manifest.ParentGeneration != wantParent:
-			return 0, fmt.Errorf("generation %d builds on %d, the chain puts it on %d", entry.Generation, manifest.ParentGeneration, wantParent)
-		case manifest.VirtualSizeBytes != state.SizeBytes:
-			return 0, fmt.Errorf("generation %d is %d bytes, the disk is %d; resizing a disk is not supported", entry.Generation, manifest.VirtualSizeBytes, state.SizeBytes)
+			return nil, fmt.Errorf("generation %d builds on %d, the chain puts it on %d", entry.Generation, manifest.ParentGeneration, wantParent)
+		case manifest.VirtualSizeBytes != size:
+			return nil, fmt.Errorf("generation %d is %d bytes, the disk is %d; resizing a disk is not supported", entry.Generation, manifest.VirtualSizeBytes, size)
 		case manifest.Filesystem != diskFilesystem:
-			return 0, fmt.Errorf("generation %d holds %s, not %s", entry.Generation, manifest.Filesystem, diskFilesystem)
+			return nil, fmt.Errorf("generation %d holds %s, not %s", entry.Generation, manifest.Filesystem, diskFilesystem)
 		}
+		manifests[i] = manifest
+	}
+	return manifests, nil
+}
+
+type insufficientSpaceError struct {
+	root                string
+	need, have, reserve int64
+}
+
+func (e *insufficientSpaceError) Error() string {
+	return fmt.Sprintf("insufficient space on %s: need %d, have %d free, reserve %d", e.root, e.need, e.have, e.reserve)
+}
+
+// checkSpace refuses a restore that would leave the filesystem under root
+// with less than reserve free. Space the restore frees by replacing this
+// disk's stale local copy counts as free.
+func checkSpace(p diskPaths, reuse bool, manifests []layerManifest, reserve int64) error {
+	var need int64
+	for _, manifest := range manifests {
+		need += manifest.LayerSizeBytes
+	}
+	var fs unix.Statfs_t
+	if err := unix.Statfs(p.root, &fs); err != nil {
+		return fmt.Errorf("statfs %s: %w", p.root, err)
+	}
+	have := int64(fs.Bavail) * int64(fs.Bsize)
+	if !reuse {
+		stale, err := allocatedBytes(p.dir())
+		if err != nil {
+			return err
+		}
+		have += stale
+	}
+	if have-need < reserve {
+		return &insufficientSpaceError{root: p.root, need: need, have: have, reserve: reserve}
+	}
+	return nil
+}
+
+// allocatedBytes is the disk space the files under dir occupy, holes excluded.
+func allocatedBytes(dir string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var stat unix.Stat_t
+		if err := unix.Lstat(path, &stat); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				return nil
+			}
+			return err
+		}
+		total += stat.Blocks * 512
+		return nil
+	})
+	return total, err
+}
+
+func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest) (int64, error) {
+	var restored int64
+	for i, entry := range chain {
+		manifest := manifests[i]
 		next := state.newLayer()
 		bytes, err := downloadLayer(ctx, store, manifest, p.layerPath(next))
 		if err != nil {
@@ -222,6 +309,12 @@ func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *obj
 		}
 		next.Generation = entry.Generation
 		state.Layers = append(state.Layers, next)
+		state.Published = append(state.Published, publishedRecord{
+			Generation:       entry.Generation,
+			ParentGeneration: manifest.ParentGeneration,
+			ManifestKey:      entry.ManifestKey,
+			ManifestSHA256:   entry.ManifestSHA256,
+		})
 	}
 	top := state.Layers[len(state.Layers)-1]
 	head := state.newLayer()
@@ -294,6 +387,7 @@ func teardown(ctx context.Context, p diskPaths, state *diskState) error {
 		state.HeadFresh = false
 	}
 	state.Attachment = nil
+	state.LastUsedAt = time.Now().UTC()
 	return saveState(p, state)
 }
 

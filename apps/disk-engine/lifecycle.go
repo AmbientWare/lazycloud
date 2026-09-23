@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -264,6 +265,12 @@ func commitPending(state *diskState) error {
 	for i := range state.Layers {
 		if state.Layers[i].Seq == pending.Seq {
 			state.Layers[i].Generation = pending.Result.Generation
+			state.Published = append(state.Published, publishedRecord{
+				Generation:       pending.Result.Generation,
+				ParentGeneration: pending.Result.ParentGeneration,
+				ManifestKey:      pending.Result.ManifestKey,
+				ManifestSHA256:   pending.Result.ManifestSHA256,
+			})
 			state.PublishedGeneration = pending.Result.Generation
 			state.PublishedManifestSHA256 = pending.Result.ManifestSHA256
 			state.Pending = nil
@@ -409,6 +416,9 @@ func awaitJob(ctx context.Context, client *qmpClient, id string) error {
 
 type recoverResult struct {
 	Recovered []string `json:"recovered"`
+	// Pending counts each recovered disk's sealed layers awaiting publish,
+	// including the head a dead worker left with writes in it.
+	Pending map[string]int `json:"pending"`
 }
 
 func runRecover(ctx context.Context, args []string) (any, error) {
@@ -416,26 +426,30 @@ func runRecover(ctx context.Context, args []string) (any, error) {
 	if err := f.parse(args); err != nil {
 		return nil, err
 	}
+	result := recoverResult{Recovered: []string{}, Pending: map[string]int{}}
 	entries, err := os.ReadDir(*f.root)
 	if errors.Is(err, os.ErrNotExist) {
-		return recoverResult{Recovered: []string{}}, nil
+		return result, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	result := recoverResult{Recovered: []string{}}
+	if err := requireTools(toolImage); err != nil {
+		return nil, err
+	}
 	var failures []error
 	for _, entry := range entries {
 		if !entry.IsDir() || validateDiskID(entry.Name()) != nil {
 			continue
 		}
-		recovered, err := recoverDisk(ctx, diskPaths{root: *f.root, id: entry.Name()})
+		recovered, pending, err := recoverDisk(ctx, diskPaths{root: *f.root, id: entry.Name()})
 		if err != nil {
 			failures = append(failures, fmt.Errorf("disk %s: %w", entry.Name(), err))
 			continue
 		}
 		if recovered {
 			result.Recovered = append(result.Recovered, entry.Name())
+			result.Pending[entry.Name()] = pending
 		}
 	}
 	if len(failures) > 0 {
@@ -444,23 +458,69 @@ func runRecover(ctx context.Context, args []string) (any, error) {
 	return result, nil
 }
 
-func recoverDisk(ctx context.Context, p diskPaths) (bool, error) {
+func recoverDisk(ctx context.Context, p diskPaths) (bool, int, error) {
 	lock, err := lockDisk(p)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	defer lock.release()
 	state, err := loadState(p)
 	if err != nil || state == nil || state.Attachment == nil {
-		return false, err
+		return false, 0, err
 	}
 	// The worker that attached this disk is gone, so the head's write
 	// statistics went with its daemon; the next seal must not trust them.
 	state.HeadFresh = false
 	if err := teardown(ctx, p, state); err != nil {
+		return false, 0, err
+	}
+	if err := sealOrphanedHead(ctx, p, state); err != nil {
+		return false, 0, err
+	}
+	return true, state.unpublishedSealed(), nil
+}
+
+// sealOrphanedHead seals, with no daemon running, a head that holds writes
+// nobody sealed, so the next publish uploads them rather than leaving them to
+// whichever node next attaches here. The writes are crash-consistent: what
+// had reached the file when the daemon died.
+func sealOrphanedHead(ctx context.Context, p diskPaths, state *diskState) error {
+	head := state.head()
+	held, err := layerHoldsData(ctx, p.layerPath(head))
+	if err != nil {
+		return err
+	}
+	if held {
+		next := state.newLayer()
+		if err := createOverlay(ctx, p.layerPath(next), head.file(), state.SizeBytes); err != nil {
+			return err
+		}
+		state.Layers = append(state.Layers, next)
+	}
+	state.HeadFresh = true
+	return saveState(p, state)
+}
+
+// layerHoldsData reports whether the top layer of an image maps any range of
+// its own, data or zeroes, instead of passing it through to its backing file.
+func layerHoldsData(ctx context.Context, path string) (bool, error) {
+	out, err := runTool(ctx, toolImage, "map", "--output=json", "-f", "qcow2", path)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	var extents []struct {
+		Depth   int  `json:"depth"`
+		Present bool `json:"present"`
+	}
+	if err := json.Unmarshal([]byte(out), &extents); err != nil {
+		return false, fmt.Errorf("parse qemu-img map of %s: %w", path, err)
+	}
+	for _, extent := range extents {
+		if extent.Depth == 0 && extent.Present {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type evictResult struct {
