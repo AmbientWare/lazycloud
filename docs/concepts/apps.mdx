@@ -33,22 +33,29 @@ boundary fits code that ships together, such as an API and the batch functions
 it calls.
 
 ```python
+import urllib.request
+
 from lazycloud import App
 
-app = App("text_tools")
+app = App("page_stats")
 
 
-@app.function()
-def count_words(text: str) -> int:
-    return len(text.split())
+@app.function(cpu=1, memory="512Mi", timeout_seconds=120)
+def analyze_page(url: str) -> dict[str, int]:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        html = response.read().decode("utf-8", errors="replace")
+    return {"bytes": len(html), "words": len(html.split()), "links": html.count("<a ")}
 
 
-@app.endpoint(name="count", methods=["POST"])
-def count(text: str) -> dict[str, int]:
-    return {"words": count_words.local(text)}
+@app.endpoint(name="analyze", methods=["POST"])
+def analyze(url: str) -> dict[str, str]:
+    call = analyze_page.spawn(url)
+    return {"task_id": call.task_id}
 ```
 
-Each decorator registers a workload with the app. App names start with a
+Each decorator registers a workload with the app. The `analyze` endpoint
+answers at once with a task ID while `analyze_page` fetches the page in its own
+cloud container, so a slow site never holds the HTTP request open. App names start with a
 lowercase letter and contain lowercase letters, digits, or underscores, up to
 63 characters. Workload names default to the Python name and must be unique per
 kind within the app.
@@ -63,14 +70,14 @@ the decorator. Credentials go in [secrets](/concepts/secrets), files in
 ## Deploy the app or one workload
 
 ```bash
-uv run lazycloud deploy text_tools          # every workload in the app
-uv run lazycloud deploy text_tools:count    # just the endpoint
+uv run lazycloud deploy page_stats            # every workload in the app
+uv run lazycloud deploy page_stats:analyze    # just the endpoint
 ```
 
 A module reference deploys the module's only app. `module:object` selects one
 workload or, when a module has several apps, one app. See [handler
 references](/cli/overview#handler-references) for the full syntax. From Python,
-`app.deploy()` deploys the whole app and `count.deploy()` one workload.
+`app.deploy()` deploys the whole app and `analyze.deploy()` one workload.
 
 ## Split an app across files
 
@@ -78,27 +85,28 @@ A workload belongs to the `App` object that registers it, not to the file that
 defines it. Each module imports the app and registers its workloads:
 
 ```python
-# text_tools/app.py
+# page_stats/app.py
 from lazycloud import App
 
-app = App("text_tools")
+app = App("page_stats")
 ```
 
 ```python
-# text_tools/api.py
-from text_tools.app import app
+# page_stats/api.py
+from page_stats.app import app
+from page_stats.workers import analyze_page
 
 
-@app.endpoint(name="count", methods=["POST"])
-def count(text: str) -> dict[str, int]:
-    return {"words": len(text.split())}
+@app.endpoint(name="analyze", methods=["POST"])
+def analyze(url: str) -> dict[str, str]:
+    return {"task_id": analyze_page.spawn(url).task_id}
 ```
 
-When `text_tools/workers.py` registers the batch functions the same way,
-deploying both files imports every registration:
+When `page_stats/workers.py` registers `analyze_page` the same way, deploying
+both files imports every registration:
 
 ```bash
-uv run lazycloud deploy text_tools/api.py text_tools/workers.py
+uv run lazycloud deploy page_stats/api.py page_stats/workers.py
 ```
 
 The CLI rejects two definitions that share an app, workload kind, and name.
@@ -109,8 +117,8 @@ A workload deleted from the code stays deployed until a deploy with `--prune`,
 or `-p`, removes it:
 
 ```bash
-uv run lazycloud deploy text_tools --diff --prune   # list what would be removed
-uv run lazycloud deploy text_tools --prune
+uv run lazycloud deploy page_stats --diff --prune   # list what would be removed
+uv run lazycloud deploy page_stats --prune
 ```
 
 Pruning removes every deployed workload the app definition omits, stopping its
@@ -118,7 +126,7 @@ containers and removing its schedules and routes. Volumes, secrets, and stored
 data stay, and deleting an app never removes them either.
 
 Each supplied app counts as its complete definition, so pruning needs whole
-apps. A single-workload reference such as `text_tools:count` cannot prune, and
+apps. A single-workload reference such as `page_stats:analyze` cannot prune, and
 an empty `App` removes all its deployed workloads while keeping the app.
 Pruning runs only after every deployment in the command registers. From
 Python, `app.plan(prune=True)` and `app.deploy(prune=True)` do the same.
@@ -133,10 +141,10 @@ caller's own process instead. See
 ## Call deployed workloads from other projects
 
 ```bash
-uv run lazycloud app export text_tools
+uv run lazycloud app export page_stats
 ```
 
-This writes a typed Python package to `lazycloud_clients/text_tools`. Another
+This writes a typed Python package to `lazycloud_clients/page_stats`. Another
 project calls the deployed functions and endpoints through it without your
 source. Functions get `remote()` and `async_remote()`. Endpoints get
 `request()` and `async_request()`. Callers sign in with `lazycloud login`, and
@@ -158,9 +166,9 @@ needs a fresh export once it deploys.
 ## Pause and delete
 
 ```bash
-uv run lazycloud app pause text_tools
-uv run lazycloud app resume text_tools
-uv run lazycloud app delete text_tools
+uv run lazycloud app pause page_stats
+uv run lazycloud app resume page_stats
+uv run lazycloud app delete page_stats
 ```
 
 `pause` stops every workload in the app and keeps their definitions, and

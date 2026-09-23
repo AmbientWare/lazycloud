@@ -16,45 +16,54 @@ change without redeploying. `run` and `deploy` take
 [`--json`](/cli/overview) and exit nonzero on failure, so an agent or a script
 can drive the loop.
 
-`text_tools.py`:
+`page_stats.py`, where an endpoint hands each URL to a function that runs in
+the background:
 
 ```python
+import urllib.request
+
 from lazycloud import App
 
-app = App("text_tools")
+app = App("page_stats")
 
 
-@app.function()
-def count_words(text: str) -> int:
-    return len(text.split())
+@app.function(cpu=1, memory="512Mi", timeout_seconds=120)
+def analyze_page(url: str) -> dict[str, int]:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        html = response.read().decode("utf-8", errors="replace")
+    return {"bytes": len(html), "words": len(html.split()), "links": html.count("<a ")}
 
 
-@app.endpoint(name="count", methods=["POST"])
-def count(text: str) -> dict[str, int]:
-    return {"words": count_words.local(text)}
+@app.endpoint(name="analyze", methods=["POST"])
+def analyze(url: str) -> dict[str, str]:
+    call = analyze_page.spawn(url)
+    return {"task_id": call.task_id}
 ```
 
 ## Develop locally
 
 ```python
-from text_tools import count_words
+from page_stats import analyze_page
 
-count_words.local("one two three")
-count_words("one two three")
+
+def test_analyze_page() -> None:
+    stats = analyze_page.local("https://example.com")
+    assert stats["words"] > 0
 ```
 
-Both run in your Python process, with no upload and no task. The decorator's
+`.local()`, or a plain `analyze_page(...)` call, runs in your Python process,
+with no upload and no task. The decorator's
 image, volumes, secrets, GPU, retries, and lifecycle hooks do not apply, which
 suits unit tests and logic with no remote dependencies.
 
 ## Test in the cloud
 
 ```bash
-uv run lazycloud run text_tools:count_words "one two three"
+uv run lazycloud run page_stats:analyze_page https://example.com
 ```
 
 ```python
-count_words.remote("one two three")
+analyze_page.remote("https://example.com")
 ```
 
 This builds the image if it changed, uploads your working tree, and starts a
@@ -73,7 +82,7 @@ different code.
 ## Live preview
 
 ```bash
-uv run lazycloud serve text_tools:count
+uv run lazycloud serve page_stats:analyze
 ```
 
 A preview runs the workload in a cloud container and keeps it up until you
@@ -92,7 +101,7 @@ container.
 ## Deploy
 
 ```bash
-uv run lazycloud deploy text_tools
+uv run lazycloud deploy page_stats
 ```
 
 A deployment runs in the cloud and keeps running after you close the terminal
@@ -113,14 +122,15 @@ service, a schedule, a teammate, or a function running inside LazyCloud.
 2. From your machine, a fresh run of the working tree.
 3. Inside a LazyCloud container, the deployed function.
 
-A container has no working tree to upload, so a deployed workload that calls
-another with `.remote()` needs that one deployed too. `.local()` instead runs
-the callee in the caller's own process, with the caller's image and resources.
+`.spawn()` and `.map()` follow the same order. A container has no working tree
+to upload, so the deployed `analyze` endpoint reaches `analyze_page` only
+because deploying the app deployed both. `.local()` instead runs the callee in
+the caller's own process, with the caller's image and resources.
 
-Endpoint clients let you choose. `count.request(...)` uses `target="auto"`,
+Endpoint clients let you choose. `analyze.request(...)` uses `target="auto"`,
 which calls the preview if one is running and the deployment otherwise.
-`count.target("deployed")` skips the preview, and `count.target("served")` fails
-rather than fall through to the deployment. `deployment_name` and
+`analyze.target("deployed")` skips the preview, and `analyze.target("served")`
+fails rather than fall through to the deployment. `deployment_name` and
 `deployment_version` pin one deployment.
 
 ## What gets uploaded
