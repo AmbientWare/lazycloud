@@ -23,7 +23,6 @@ from pathlib import Path
 from threading import Event
 from types import TracebackType
 from typing import Protocol
-from urllib.parse import urlparse
 
 from agent.capacity_shutdown import DEFAULT_INTERRUPTION_GRACE_SECONDS, CapacityShutdown
 from agent.image_preparation import WorkerImagePreparation
@@ -94,6 +93,7 @@ from provider_aws import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
 )
+from provider_aws.volume_attachments import AwsInstanceDiskVolumeSlots
 from provider_clients import (
     ProviderNodeIdentityEvidenceProvider,
     provider_node_identity_evidence_provider,
@@ -178,13 +178,6 @@ type AgentCapacityInterruptionDetector = Callable[[], AgentCapacityInterruptionN
 
 class ProviderInstanceIdentityMode(StrEnum):
     ImdsV2 = "imds-v2"
-    Bootstrap = "provider-bootstrap"
-
-
-_PROVIDER_IDENTITY_MODES = {
-    ProviderKind.Aws: ProviderInstanceIdentityMode.ImdsV2,
-    ProviderKind.Hetzner: ProviderInstanceIdentityMode.Bootstrap,
-}
 
 
 class AgentCapacityInterruptionDetectionError(RuntimeError):
@@ -255,17 +248,6 @@ class AgentDaemonOptions(ContractModel):
             )
         if all(provider_values) and (self.join_token or self.join_token_file):
             raise ValueError("join credentials and provider enrollment cannot be combined")
-        if self.provider is not None:
-            if (
-                self.provider is not ProviderKind.Aws
-                and urlparse(self.gateway_url).scheme != "https"
-            ):
-                raise ValueError("provider bootstrap enrollment requires an HTTPS gateway")
-            expected = _PROVIDER_IDENTITY_MODES.get(self.provider)
-            if expected is None:
-                raise ValueError(f"provider node identity {self.provider.value!r} is not supported")
-            if self.provider_instance_identity is not expected:
-                raise ValueError("provider instance identity mode does not match provider")
         return self
 
 
@@ -614,6 +596,10 @@ class DockerAgentWorkerController:
     host_aliases: list[str] = field(default_factory=list)
     platform: str = ""
     telemetry: AgentTelemetryBuffer | None = None
+    disk_volume_slots: Callable[[], int] | None = None
+    """How many disk volumes this provider machine can still attach; unset on a
+    joined machine, whose worker keeps disks on host storage."""
+
     _images: WorkerImagePreparation = field(init=False)
 
     def __post_init__(self) -> None:
@@ -779,6 +765,9 @@ class DockerAgentWorkerController:
             platform=self.platform,
             host_aliases=self.host_aliases,
             network=self.worker_network,
+            disk_volume_slots=(
+                self.disk_volume_slots() if self.disk_volume_slots is not None else None
+            ),
         )
         for path in plan.dirs.all_paths():
             Path(path).mkdir(parents=True, exist_ok=True)
@@ -968,9 +957,7 @@ class AgentDaemonService:
         if self.options.provider is None:
             msg = "provider node reporting requires a provider"
             raise ValueError(msg)
-        return self.provider_identity or provider_node_identity_evidence_provider(
-            self.options.provider, state_dir=self.state_store.state_dir
-        )
+        return self.provider_identity or provider_node_identity_evidence_provider()
 
     def _report_bootstrap_phase(self, phase: MachineLifecycle) -> None:
         """Best effort: a phase report must not prevent enrollment retries."""
@@ -986,13 +973,9 @@ class AgentDaemonService:
                     region=proof.region,
                     provider_instance_id=proof.provider_instance_id,
                     identity_proof_url=proof.proof_url.get_secret_value(),
-                    launch_id=proof.launch_id,
-                    bootstrap_token=proof.bootstrap_token.get_secret_value(),
-                    node_agent_token=proof.node_agent_token.get_secret_value(),
                     phase=phase,
                 )
             )
-            provider.acknowledge()
 
     def _report_bootstrap_failure(self, reason: MachineBootstrapFailureReason) -> None:
         if not self.options.provider_enrollment_request or self._bootstrap_failure_reported:
@@ -1011,14 +994,10 @@ class AgentDaemonService:
                     region=proof.region,
                     provider_instance_id=proof.provider_instance_id,
                     identity_proof_url=proof.proof_url.get_secret_value(),
-                    launch_id=proof.launch_id,
-                    bootstrap_token=proof.bootstrap_token.get_secret_value(),
-                    node_agent_token=proof.node_agent_token.get_secret_value(),
                     failure_reason=reason,
                     diagnostic_excerpt=excerpt,
                 )
             )
-            provider.acknowledge()
 
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
@@ -1551,9 +1530,6 @@ class AgentDaemonService:
             region=proof.region,
             provider_instance_id=proof.provider_instance_id,
             identity_proof_url=proof.proof_url.get_secret_value(),
-            launch_id=proof.launch_id,
-            bootstrap_token=proof.bootstrap_token.get_secret_value(),
-            node_agent_token=proof.node_agent_token.get_secret_value(),
             machine_fingerprint=registration.machine_fingerprint,
             hostname=registration.hostname,
             os=self.options.os_name,
@@ -1572,7 +1548,6 @@ class AgentDaemonService:
         )
         try:
             response = self.client.enroll_provider_node(enrollment)
-            proof_provider.acknowledge()
         except Exception:
             self._bootstrap_failure_reported = True
             with suppress(Exception):
@@ -1584,13 +1559,9 @@ class AgentDaemonService:
                         region=failed_proof.region,
                         provider_instance_id=failed_proof.provider_instance_id,
                         identity_proof_url=failed_proof.proof_url.get_secret_value(),
-                        launch_id=failed_proof.launch_id,
-                        bootstrap_token=failed_proof.bootstrap_token.get_secret_value(),
-                        node_agent_token=failed_proof.node_agent_token.get_secret_value(),
                         failure_reason=MachineBootstrapFailureReason.AgentEnrollmentFailed,
                     )
                 )
-                proof_provider.acknowledge()
             raise
         return _agent_state_from_join_response(response, gateway_url=gateway_url)
 
@@ -1754,6 +1725,7 @@ def build_agent_daemon_service(
             host_aliases=list(dict.fromkeys(options.worker_host_aliases)),
             platform=agent_worker_platform(options.os_name, options.arch),
             telemetry=telemetry,
+            disk_volume_slots=_provider_disk_volume_slots(options),
         ),
         resource_detector=resource_detector,
         interruption_detector=(
@@ -1763,13 +1735,19 @@ def build_agent_daemon_service(
     )
 
 
+def _provider_disk_volume_slots(options: AgentDaemonOptions) -> Callable[[], int] | None:
+    """Reads the machine's free volume attachments; None on a joined machine."""
+    if options.provider is None:
+        return None
+    if options.provider is not ProviderKind.Aws:
+        raise ValueError(f"provider {options.provider.value!r} has no disk volume support")
+    return AwsInstanceDiskVolumeSlots().slots
+
+
 def _provider_capacity_interruption_detector(
     options: AgentDaemonOptions,
 ) -> AgentCapacityInterruptionDetector | None:
-    if (
-        options.provider is not ProviderKind.Aws
-        or options.provider_instance_identity is not ProviderInstanceIdentityMode.ImdsV2
-    ):
+    if options.provider is None:
         return None
     monitor = AwsEc2SpotInterruptionMonitor()
 

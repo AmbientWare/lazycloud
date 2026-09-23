@@ -34,7 +34,7 @@ from database.tables.billing_ledger import (
 from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
 from database.tables.billing_preferences import BillingPreferencesTable
-from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
+from database.tables.billing_rates import ComputeRateTable, DiskRateTable, PlatformRateTable
 from database.tables.billing_webhook_events import BillingWebhookEventTable
 from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import (
@@ -48,7 +48,7 @@ from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.credit_purchases import CreditPurchaseTable
 from database.tables.custom_domains import CustomDomainTable
 from database.tables.deployment_prunes import DeploymentPruneTable, DeploymentPruneTargetTable
-from database.tables.disks import DiskGenerationTable, DiskTable
+from database.tables.disks import DiskAttachmentTable, DiskGenerationTable, DiskTable
 from database.tables.email_outbox import EmailOutboxTable
 from database.tables.endpoint_dispatch import EndpointDispatchTable
 from database.tables.execution import (
@@ -93,7 +93,6 @@ from database.tables.orchestration import (
     MachineWorkspaceTable,
     WorkerTable,
 )
-from database.tables.provider_launches import ProviderNodeLaunchTable
 from database.tables.source_cache import (
     SourceCacheCleanupTargetTable,
     WorkerCacheGenerationTable,
@@ -146,7 +145,9 @@ __all__ = [
     "DeploymentPruneTable",
     "DeploymentPruneTargetTable",
     "DeploymentTable",
+    "DiskAttachmentTable",
     "DiskGenerationTable",
+    "DiskRateTable",
     "DiskTable",
     "EmailOutboxTable",
     "EndpointDispatchTable",
@@ -163,7 +164,6 @@ __all__ = [
     "ObjectTable",
     "PlatformRateTable",
     "PodUrlTable",
-    "ProviderNodeLaunchTable",
     "SecretTable",
     "SourceCacheCleanupTargetTable",
     "StorageAccessTable",

@@ -43,11 +43,29 @@ DISK_VOLUME_CACHE_SECONDS = 30 * 60
 """How long a released disk's volume is kept for a restart on the same machine
 before the control plane deletes it; the object-storage copy is the durable one."""
 
+DISK_VOLUME_MIN_HEADROOM_BYTES = 10 * 1024**3
+
+
+def disk_volume_size_bytes(disk_size_bytes: int) -> int:
+    """Size of the provider volume that backs a disk of this declared size.
+
+    The volume holds the disk's layer chain: the compacted base, which never
+    exceeds the declared size, plus writes not yet sealed, published and
+    compacted into it. The headroom covers those, a quarter of the disk or 10 GiB
+    whichever is larger. Flattening streams the chain rather than copying it, so
+    no second full copy ever needs room.
+    """
+    return disk_size_bytes + max(DISK_VOLUME_MIN_HEADROOM_BYTES, disk_size_bytes // 4)
+
+
 MAX_DISK_SIZE_BYTES = 1024**4
 DEFAULT_DISK_FILESYSTEM = "ext4"
 
 DISK_OBJECT_PREFIX = "disks"
 """Workspace-bucket prefix under which each disk keeps its chunks and manifests."""
+
+DISK_USAGE_SUBJECT = "disk"
+"""The resource type a disk's usage records and ledger segments are filed under."""
 
 DISK_FLATTEN_DEPTH = 64
 """Published chain length at which the next publish is a parentless full layer.
@@ -116,6 +134,14 @@ def parse_disk_size_bytes(value: str | int) -> int:
     return size
 
 
+def disk_shrink_message(name: str, recorded_size_bytes: int) -> str:
+    """Why a declared size below the recorded one is refused, naming the way out."""
+    return (
+        f"disk {name} is {recorded_size_bytes} bytes and cannot shrink; declare "
+        f"{recorded_size_bytes} bytes or more, or delete the disk to start smaller"
+    )
+
+
 def validate_disk_mount_path(value: str) -> str:
     if not value.startswith("/"):
         msg = "disk mount_path must be absolute"
@@ -168,6 +194,24 @@ def validate_disk_mounts(disks: list[DiskMount]) -> list[DiskMount]:
     return disks
 
 
+class DiskStorage(StrEnum):
+    """Where a machine keeps the disks it holds, and so what limits how many."""
+
+    Host = "host"
+    """Under one host directory whose space they share; a joined machine."""
+
+    Volume = "volume"
+    """Each on a provider volume of its own; limited by the volumes the machine can attach."""
+
+
+class DiskLayerFormat(StrEnum):
+    Qcow2 = "qcow2"
+    """A qcow2 file holding what the generation changed over its parent."""
+
+    Raw = "raw"
+    """A flattened generation: the disk's whole contents, with zero ranges left out."""
+
+
 class DiskStatus(StrEnum):
     Detached = "detached"
     Attached = "attached"
@@ -212,6 +256,7 @@ class DiskLayerManifest(ContractModel):
 
     virtual_size_bytes: int = Field(gt=0)
     layer_size_bytes: int = Field(ge=0)
+    format: DiskLayerFormat = DiskLayerFormat.Qcow2
     filesystem: str = DEFAULT_DISK_FILESYSTEM
     chunks: list[DiskLayerChunk] = Field(default_factory=list)
 
@@ -236,19 +281,25 @@ __all__ = [
     "DISK_OBJECT_PREFIX",
     "DISK_PUBLISH_INTERVAL_SECONDS",
     "DISK_ROOT_MOUNT_PATH",
+    "DISK_USAGE_SUBJECT",
     "DISK_VOLUME_CACHE_SECONDS",
+    "DISK_VOLUME_MIN_HEADROOM_BYTES",
     "DISK_VOLUME_THROUGHPUT_MIBPS",
     "MAX_DISK_SIZE_BYTES",
     "MIN_DISK_SIZE_BYTES",
     "DiskLayerChunk",
+    "DiskLayerFormat",
     "DiskLayerManifest",
     "DiskMount",
     "DiskRecord",
     "DiskStatus",
+    "DiskStorage",
     "disk_capacity_bytes",
     "disk_chunk_key",
     "disk_manifest_key",
     "disk_object_prefix",
+    "disk_shrink_message",
+    "disk_volume_size_bytes",
     "parse_disk_size_bytes",
     "validate_disk_mount_path",
     "validate_disk_mounts",

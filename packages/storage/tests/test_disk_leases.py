@@ -9,6 +9,7 @@ from shared.disks import DiskMount, DiskStatus, disk_manifest_key
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
 from storage.disks import DiskPublication, get_or_create_disks
+from tests.workspaces import on_team_plan
 
 
 def _container(services: ApiServices, workspace_id: str, worker_id: str) -> str:
@@ -49,6 +50,7 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
     disks = isolated_services.disks
     with isolated_services.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    on_team_plan(isolated_services.database, workspace_id)
     [resolved] = get_or_create_disks(
         isolated_services.database,
         [DiskMount(name="box-root", size_bytes=1024**3)],
@@ -112,6 +114,7 @@ def test_only_the_holder_collects_under_its_newest_self_contained_generation(
     disks = isolated_services.disks
     with isolated_services.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
+    on_team_plan(isolated_services.database, workspace_id)
     [resolved] = get_or_create_disks(
         isolated_services.database,
         [DiskMount(name="box-data", size_bytes=1024**3)],

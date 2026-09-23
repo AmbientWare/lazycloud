@@ -7,7 +7,6 @@ from agent.binary import AgentBinarySettings
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.capacity_errors import ProviderAuthorizationPendingError
 from compute.catalog import ComputeCatalogInstance, ComputeCatalogRegion
-from compute.provider_launches import ProviderNodeLaunchCredentials
 from compute.provider_nodes import ProviderNodeAdmission
 from compute.providers import (
     ComputeProviderResolver,
@@ -15,8 +14,6 @@ from compute.providers import (
     ResolvedComputeProvider,
     ResolvedProviderPolicy,
 )
-from coordination.redis_client import RedisClient
-from coordination.request_cooldown import RedisRequestCooldown
 from networking.settings import (
     validate_remote_provider_network_configuration,
 )
@@ -31,9 +28,6 @@ from provider_aws import (
 )
 from provider_aws.platform_pool import AwsPlatformCapacityProvider
 from provider_aws.supplier_prices import AWS_REGIONAL_PRICES
-from provider_hetzner.client import HetznerClient
-from provider_hetzner.pooled_provider import HetznerPooledProvider
-from provider_hetzner.supplier_prices import PRIMARY_IPV4_HOURLY_MICROS, USD_PER_CURRENCY_UNIT
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationPhase,
@@ -53,100 +47,54 @@ PlatformProviderLoader = Callable[[], tuple[ResolvedComputeProvider, ...]]
 def configured_platform_compute_providers(
     settings: PlatformCapacitySettings,
     *,
-    launch_credentials: ProviderNodeLaunchCredentials,
     provider_state: ProviderUnitStateCheckpoints,
     capacity_workspace: Callable[[], str],
-    redis: RedisClient,
     binaries_by_region: Mapping[str, AwsManagedPoolBinaries],
 ) -> PlatformProviderLoader:
-    definition = PROVIDER_DEFINITIONS["hetzner"]
-    if not settings.configured:
-        return tuple
-    token = settings.hetzner_tokens.get(definition.platform_ref)
-    if settings.hetzner_images and (token is None or not token.get_secret_value().strip()):
-        raise ValueError(f"{definition.platform_ref} requires a provider token")
-    if (
-        token is not None
-        and definition.policy.purchases_enabled
-        and not set(definition.policy.allowed_regions) <= settings.hetzner_images.keys()
-    ):
-        raise ValueError(f"{definition.platform_ref} requires images for its approved regions")
-    adapter = (
-        HetznerPooledProvider(
-            provider_ref=definition.platform_ref,
-            client=HetznerClient(
-                token, cooldown=RedisRequestCooldown(redis, definition.platform_ref)
-            ),
-            images_by_location=settings.hetzner_images,
-            usd_per_currency_unit=USD_PER_CURRENCY_UNIT,
-            primary_ipv4_hourly_micros=PRIMARY_IPV4_HOURLY_MICROS,
-            launch_credentials=launch_credentials,
-        )
-        if token is not None
-        else None
-    )
     aws_binding = settings.aws
-    aws_adapter = None
-    if aws_binding is not None:
-        if not binaries_by_region:
-            raise ValueError("platform AWS requires published capacity artifacts")
-        aws_adapter = AwsPlatformCapacityProvider(
-            provider_ref=aws_binding.provider_ref,
-            connection=aws_binding,
-            networks=aws_binding.networks,
-            binaries_by_region=binaries_by_region,
-            client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-            regional_prices=AWS_REGIONAL_PRICES,
-            checkpoints=provider_state,
-        )
+    if aws_binding is None:
+        return tuple
+    if not binaries_by_region:
+        raise ValueError("platform AWS requires published capacity artifacts")
+    aws_adapter = AwsPlatformCapacityProvider(
+        provider_ref=aws_binding.provider_ref,
+        connection=aws_binding,
+        networks=aws_binding.networks,
+        binaries_by_region=binaries_by_region,
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        regional_prices=AWS_REGIONAL_PRICES,
+        checkpoints=provider_state,
+    )
 
     def providers() -> tuple[ResolvedComputeProvider, ...]:
-        namespace_id = capacity_workspace()
-        resolved: list[ResolvedComputeProvider] = []
-        if adapter is not None:
-            resolved.append(
-                ResolvedComputeProvider(
-                    ref=definition.platform_ref,
-                    capacity_mode=ComputeCapacityMode.Pooled,
-                    policy=ResolvedProviderPolicy(
-                        **definition.policy.model_dump(),
-                        workspace_id=namespace_id,
-                        placement=Placement.platform(),
-                        platform_fleet=True,
-                    ),
-                    pooled=adapter,
-                )
-            )
-        if aws_adapter is not None and aws_binding is not None:
-            policy = PROVIDER_DEFINITIONS["aws"].policy
-            resolved.append(
-                ResolvedComputeProvider(
-                    ref=aws_binding.provider_ref,
-                    capacity_mode=ComputeCapacityMode.Pooled,
-                    policy=ResolvedProviderPolicy(
-                        **policy.model_copy(
-                            update={
-                                "allowed_offers": tuple(
-                                    offer
-                                    for offer in policy.allowed_offers
-                                    if offer.region in aws_binding.networks
-                                    and offer.region in binaries_by_region
-                                )
-                            }
-                        ).model_dump(),
-                        workspace_id=namespace_id,
-                        placement=Placement.platform(),
-                        platform_fleet=True,
-                    ),
-                    pooled=aws_adapter,
-                    node_admission=ProviderNodeAdmission(
-                        account_id=aws_binding.account_id,
-                        machine_role_id=aws_binding.node_role_arn,
-                        machine_profile_id=aws_binding.node_instance_profile_arn,
-                    ),
-                )
-            )
-        return tuple(resolved)
+        policy = PROVIDER_DEFINITIONS["aws"].policy
+        return (
+            ResolvedComputeProvider(
+                ref=aws_binding.provider_ref,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                policy=ResolvedProviderPolicy(
+                    **policy.model_copy(
+                        update={
+                            "allowed_offers": tuple(
+                                offer
+                                for offer in policy.allowed_offers
+                                if offer.region in aws_binding.networks
+                                and offer.region in binaries_by_region
+                            )
+                        }
+                    ).model_dump(),
+                    workspace_id=capacity_workspace(),
+                    placement=Placement.platform(),
+                    platform_fleet=True,
+                ),
+                pooled=aws_adapter,
+                node_admission=ProviderNodeAdmission(
+                    account_id=aws_binding.account_id,
+                    machine_role_id=aws_binding.node_role_arn,
+                    machine_profile_id=aws_binding.node_instance_profile_arn,
+                ),
+            ),
+        )
 
     return providers
 

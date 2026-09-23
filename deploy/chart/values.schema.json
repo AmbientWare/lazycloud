@@ -221,7 +221,6 @@
       "required": [
         "LAZYCLOUD_RELEASE_MANIFEST_URL",
         "LAZYCLOUD_STRIPE_ACCOUNT_ID",
-        "LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES",
         "LAZYCLOUD_PLATFORM_CAPACITY_AWS"
       ],
       "properties": {

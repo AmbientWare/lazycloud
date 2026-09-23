@@ -17,12 +17,14 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.contracts import ContractModel
+from shared.errors import UpstreamUnavailableError
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
 from shared.timestamps import to_utc
 from shared.urls import normalize_http_origin
 
 from compute.agent_control import MachineWorkerAvailability
+from compute.block_volumes import BlockVolumeProvider, BlockVolumeProviders, BlockVolumeScope
 from compute.offers import ComputeOffer
 from compute.provider_nodes import ProviderNodeAdmission
 
@@ -190,7 +192,6 @@ class ProviderDefinition(ContractModel):
 
     kind: str
     policy: ProviderCapacityPolicy
-    platform_ref: str = ""
     workspace: str = "default"
 
 
@@ -291,6 +292,10 @@ class PooledCapacityProvider(Protocol):
         storage_volume_ids: tuple[str, ...],
     ) -> bool: ...
 
+    def block_volumes(self, region: str) -> BlockVolumeProvider:
+        """Block volumes in this provider's account, for its machines in one region."""
+        ...
+
 
 class CapacityOwnerMutationLease(Protocol):
     """Serialize provider mutations and fence destructive changes from dispatch."""
@@ -338,6 +343,26 @@ class ComputeProviderResolver(Protocol):
     def list_providers(self, workspace_id: str) -> Iterable[ResolvedComputeProvider]: ...
 
     def resolve(self, workspace_id: str, provider_ref: str) -> ResolvedComputeProvider: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedBlockVolumes(BlockVolumeProviders):
+    """Block volumes from the pooled provider that owns a machine's capacity."""
+
+    resolver: ComputeProviderResolver | None
+
+    def volumes(self, scope: BlockVolumeScope) -> BlockVolumeProvider:
+        if self.resolver is None:
+            raise UpstreamUnavailableError(
+                f"no compute provider is configured for {scope.provider_ref}, "
+                "so its disk volumes cannot be managed"
+            )
+        resolved = self.resolver.resolve(scope.workspace_id, scope.provider_ref)
+        if resolved.pooled is None:
+            raise UpstreamUnavailableError(
+                f"compute provider {scope.provider_ref} does not manage block volumes"
+            )
+        return resolved.pooled.block_volumes(scope.region)
 
 
 def internal_unit_identity(

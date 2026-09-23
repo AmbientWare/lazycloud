@@ -9,9 +9,11 @@ from database.repositories.common import bucket_index, names_by_id
 from database.tables.apps import AppTable, StubTable
 from database.tables.billing_credits import BillingCreditAllocationTable, BillingCreditLotTable
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from database.tables.disks import DiskTable
 from database.tables.identity import WorkspaceTable
 from shared.artifacts import ARTIFACT_STORAGE_SUBJECT
 from shared.billing_quotes import BilledDimension, LedgerComponent
+from shared.disks import DISK_USAGE_SUBJECT
 from shared.errors import InvalidInputError
 from shared.http.usage import UsageCostCategory, UsageCostGroupKey
 from shared.usage import IMAGE_BUILD_WORKLOAD_ID
@@ -29,29 +31,45 @@ type _GroupColumn = ColumnElement[str] | InstrumentedAttribute[str]
 
 _CATEGORY: ColumnElement[str] = case(
     (BillingLedgerSegmentTable.workload_id == IMAGE_BUILD_WORKLOAD_ID, IMAGE_BUILD_WORKLOAD_ID),
+    (BillingLedgerSegmentTable.subject_type == DISK_USAGE_SUBJECT, UsageCostCategory.Disk.value),
     else_="",
 ).label("category")
-"""What kind of usage a row is when no app can say: image builds, or nothing.
+"""What kind of usage a row is when no app can say: image builds, disks, or nothing.
 
 Grouped by app, image builds would otherwise share the empty `app_id` with
 every other app-less row in a workspace and be shown as one unattributed sum."""
+
+_DISK: ColumnElement[str] = case(
+    (
+        BillingLedgerSegmentTable.subject_type == DISK_USAGE_SUBJECT,
+        BillingLedgerSegmentTable.subject_id,
+    ),
+    else_="",
+).label("disk_id")
+"""The disk a row is, so each disk is one charge whatever level is asked for.
+
+Its stored bytes and attached capacity are separate segments and separate
+components; grouping on the disk rather than on them is what makes it one row."""
 
 _GROUP_COLUMNS: dict[UsageCostGroupKey, tuple[_GroupColumn, ...]] = {
     UsageCostGroupKey.App: (
         BillingLedgerSegmentTable.workspace_id,
         BillingLedgerSegmentTable.app_id,
         _CATEGORY,
+        _DISK,
     ),
     UsageCostGroupKey.Workload: (
         BillingLedgerSegmentTable.workspace_id,
         BillingLedgerSegmentTable.app_id,
         BillingLedgerSegmentTable.workload_id,
+        _DISK,
     ),
     UsageCostGroupKey.Task: (
         BillingLedgerSegmentTable.workspace_id,
         BillingLedgerSegmentTable.app_id,
         BillingLedgerSegmentTable.workload_id,
         BillingLedgerSegmentTable.task_id,
+        _DISK,
     ),
 }
 """Every level carries the ids above it, so a row names its own place in the
@@ -140,6 +158,8 @@ class LedgerCostRow:
     workload_name: str
     workload_kind: str
     task_id: str
+    disk_id: str
+    disk_name: str
     category: str
     cost_nanos: int
     components: tuple[LedgerComponentTotal, ...]
@@ -536,7 +556,9 @@ class BillingLedgerCostRepository:
 
         if not keys:
             return {}
-        deepest = columns[-1]
+        # The level's own column rather than the disk beside it, which is empty
+        # on every row that is not a disk and so narrows nothing.
+        deepest = columns[-2]
         totals: dict[tuple[str, ...], list[LedgerComponentTotal]] = {}
         found = self.session.execute(
             select(
@@ -556,7 +578,7 @@ class BillingLedgerCostRepository:
                     workspace_id=workspace_id,
                     category=category,
                 ),
-                deepest.in_([key[-1] for key in keys]),
+                deepest.in_([key[-2] for key in keys]),
             )
             .group_by(
                 *columns,
@@ -602,6 +624,7 @@ class BillingLedgerCostRepository:
         """
 
         workspace_ids = {key[0] for key in keys if key[0]}
+        disk_ids = {key[-1] for key in keys if key[-1]}
         app_ids = {key[1] for key in keys if len(key) > 1 and key[1]}
         workload_ids = (
             set[str]()
@@ -632,7 +655,8 @@ class BillingLedgerCostRepository:
             if workload_ids
             else {}
         )
-        return _ResolvedNames(workspaces=workspaces, apps=apps, workloads=workloads)
+        disks = names_by_id(self.session, DiskTable.id, DiskTable.name, disk_ids)
+        return _ResolvedNames(workspaces=workspaces, apps=apps, workloads=workloads, disks=disks)
 
 
 @dataclass(frozen=True, slots=True)
@@ -640,6 +664,7 @@ class _ResolvedNames:
     workspaces: dict[str, str]
     apps: dict[str, str]
     workloads: dict[str, tuple[str, str]]
+    disks: dict[str, str]
 
 
 def _after(
@@ -686,11 +711,14 @@ def _window(
         predicates = (*predicates, BillingLedgerSegmentTable.workspace_id == workspace_id)
     if category is UsageCostCategory.ImageBuild:
         predicates = (*predicates, BillingLedgerSegmentTable.workload_id == IMAGE_BUILD_WORKLOAD_ID)
+    elif category is UsageCostCategory.Disk:
+        predicates = (*predicates, BillingLedgerSegmentTable.subject_type == DISK_USAGE_SUBJECT)
     elif category is UsageCostCategory.Unattributed:
         predicates = (
             *predicates,
             BillingLedgerSegmentTable.app_id == "",
             BillingLedgerSegmentTable.workload_id != IMAGE_BUILD_WORKLOAD_ID,
+            BillingLedgerSegmentTable.subject_type != DISK_USAGE_SUBJECT,
         )
     return predicates
 
@@ -709,15 +737,22 @@ def _cost_row(
     components: tuple[LedgerComponentTotal, ...],
     names: _ResolvedNames,
 ) -> LedgerCostRow:
-    # The key carries the ids above its level and stops there, so a shallower
-    # grouping leaves the levels below it empty rather than absent. Grouped by
-    # app the third member is the category rather than a workload.
+    # The key carries the ids above its level and stops there, then the disk,
+    # so a shallower grouping leaves the levels below it empty rather than
+    # absent. Grouped by app the third member is the category, not a workload.
+    *levels, disk_id = key
     if group_by is UsageCostGroupKey.App:
-        workspace_id, app_id, category = key
+        workspace_id, app_id, category = levels
         workload_id = task_id = ""
     else:
-        workspace_id, app_id, workload_id, task_id = (*key, "")[:4]
-        category = IMAGE_BUILD_WORKLOAD_ID if workload_id == IMAGE_BUILD_WORKLOAD_ID else ""
+        workspace_id, app_id, workload_id, task_id = (*levels, "")[:4]
+        category = (
+            UsageCostCategory.Disk.value
+            if disk_id
+            else IMAGE_BUILD_WORKLOAD_ID
+            if workload_id == IMAGE_BUILD_WORKLOAD_ID
+            else ""
+        )
     workload_name, workload_kind = names.workloads.get(workload_id, ("", ""))
     if workload_id == ARTIFACT_STORAGE_SUBJECT:
         workload_name = "Artifacts"
@@ -730,6 +765,8 @@ def _cost_row(
         workload_name=workload_name,
         workload_kind=workload_kind,
         task_id=task_id,
+        disk_id=disk_id,
+        disk_name=names.disks.get(disk_id, ""),
         category=category,
         cost_nanos=cost_nanos,
         components=components,

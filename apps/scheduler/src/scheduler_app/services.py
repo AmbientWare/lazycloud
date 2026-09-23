@@ -8,8 +8,8 @@ from billing.payment_maintenance import BillingPaymentMaintenance
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.policy import WorkspaceComputePolicyService
-from compute.provider_launches import ProviderNodeLaunchService
 from compute.provider_state import ProviderUnitStateService
+from compute.providers import ResolvedBlockVolumes
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
@@ -33,7 +33,6 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from database.workspace_secrets import WorkspaceSecretCipher
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
@@ -94,6 +93,7 @@ from shared.deployment_settings import MissingDeploymentSettingError
 from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
 from shared.workspace_storage import WorkspaceStorageProvider
 from storage.access_metering import StorageAccessMeteringService
+from storage.disk_volumes import DiskVolumeService
 from storage.disks import DiskDeletionService, DiskService
 from storage.image_archive import ImageArchiveSettings
 from storage.retention import (
@@ -171,6 +171,7 @@ class SchedulerAppServices:
     storage_access: StorageAccessMeteringService | None
     volume_deletion: VolumeDeletionService
     disk_deletion: DiskDeletionService
+    disk_volumes: DiskVolumeService
     meter_outbox: BillingMeterOutboxService
     email_outbox: EmailOutboxDrain
     plan_changes: BillingPlanChangeService
@@ -301,15 +302,6 @@ class SchedulerAppServices:
         def platform_capacity_workspace() -> str:
             return platform_namespace_id
 
-        def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
-            with context.database.session() as session:
-                workspace = context.workspace(session, workspace_id)
-            return WorkspaceSecretCipher.from_workspace(workspace)
-
-        provider_node_launches = ProviderNodeLaunchService(
-            database=context.database,
-            cipher_for_workspace=provider_node_cipher,
-        )
         provider_resolver = (
             workspace_compute_provider_resolver(
                 capacity.aws_capacity,
@@ -318,10 +310,8 @@ class SchedulerAppServices:
                 capacity_workspace=connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity,
-                    launch_credentials=provider_node_launches,
                     provider_state=ProviderUnitStateService(context.database),
                     capacity_workspace=platform_capacity_workspace,
-                    redis=redis,
                     binaries_by_region=(
                         capacity.aws_capacity.binaries_by_region(capacity.agent_binaries)
                         if capacity.aws_capacity.configured
@@ -333,6 +323,12 @@ class SchedulerAppServices:
             )
             if capacity.aws_connections.configured or platform_capacity.configured
             else None
+        )
+        disk_volumes = DiskVolumeService(
+            context.database,
+            providers=ResolvedBlockVolumes(provider_resolver),
+            deployment=platform_namespace_id,
+            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
         )
         agent_version, agent_sha256 = (
             capacity.agent_binaries.require_amd64() if provider_resolver is not None else ("", "")
@@ -495,9 +491,11 @@ class SchedulerAppServices:
             disk_deletion=DiskDeletionService(
                 context.database,
                 disks=disks,
+                volumes=disk_volumes,
                 objects=volume_filesystem,
                 metering=volume_metering,
             ),
+            disk_volumes=disk_volumes,
             meter_outbox=meter_outbox,
             email_outbox=email_outbox,
             plan_changes=plan_changes,

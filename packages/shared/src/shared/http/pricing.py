@@ -45,6 +45,8 @@ class PlanEntitlementsResponse(HttpModel):
     self_hosted: bool
     retention_days: int = Field(gt=0)
     region_selection: bool
+    max_workspace_disk_gib: int = Field(ge=0)
+    """Declared disk size one workspace may hold across its live disks; 0 is no disks."""
 
 
 class PublishedPlanResponse(HttpModel):
@@ -80,6 +82,13 @@ class PublishedPlatformRateResponse(HttpModel):
     nanos_per_egress_gib: int = Field(ge=0)
     nanos_per_volume_gib_month: int = Field(ge=0)
     storage_month_seconds: int = Field(gt=0)
+
+
+class PublishedDiskRateResponse(HttpModel):
+    """The two parts a disk is priced from, charged to the customer as one line."""
+
+    nanos_per_stored_gib_month: int = Field(ge=0)
+    nanos_per_attached_gib_month: int = Field(ge=0)
 
 
 class PlacementComputeRateResponse(HttpModel):
@@ -124,11 +133,14 @@ class PricingCatalogResponse(HttpModel):
     shape_rates: list[PublishedShapeRateResponse]
     gpu_rates: list[PublishedGpuRateResponse]
     platform_rate: PublishedPlatformRateResponse
+    disk_rate: PublishedDiskRateResponse | None
+    """None at an instant before disks were first priced."""
+
     placement_rates: list[PublishedPlacementRateResponse]
     credit_purchase: CreditPurchaseTermsResponse
 
 
-def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsResponse:
+def plan_entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsResponse:
     return PlanEntitlementsResponse(
         max_concurrent_cpu_containers=entitlements.max_concurrent_cpu_containers,
         max_concurrent_gpus=entitlements.max_concurrent_gpus,
@@ -142,6 +154,7 @@ def _entitlements_response(entitlements: PlanEntitlements) -> PlanEntitlementsRe
         self_hosted=entitlements.self_hosted,
         retention_days=entitlements.retention_days,
         region_selection=entitlements.region_selection,
+        max_workspace_disk_gib=entitlements.max_workspace_disk_gib,
     )
 
 
@@ -211,7 +224,7 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
                 summary=plan.summary,
                 monthly_nanos=plan.monthly_nanos,
                 included_nanos=plan.included_nanos,
-                entitlements=_entitlements_response(plan.entitlements),
+                entitlements=plan_entitlements_response(plan.entitlements),
                 terms=list(plan.terms),
             )
             for plan in PUBLISHED_PLANS
@@ -242,6 +255,14 @@ def pricing_catalog_response(*, at: datetime | None = None) -> PricingCatalogRes
             nanos_per_volume_gib_month=platform_rate.nanos_per_volume_gib_month,
             storage_month_seconds=SECONDS_PER_30_DAY_MONTH,
         ),
+        disk_rate=(
+            PublishedDiskRateResponse(
+                nanos_per_stored_gib_month=active.disk_rate.nanos_per_stored_gib_month,
+                nanos_per_attached_gib_month=active.disk_rate.nanos_per_attached_gib_month,
+            )
+            if active.disk_rate is not None
+            else None
+        ),
     )
 
 
@@ -250,10 +271,12 @@ __all__ = [
     "PlacementComputeRateResponse",
     "PlanEntitlementsResponse",
     "PricingCatalogResponse",
+    "PublishedDiskRateResponse",
     "PublishedGpuRateResponse",
     "PublishedPlacementRateResponse",
     "PublishedPlanResponse",
     "PublishedPlatformRateResponse",
     "PublishedShapeRateResponse",
+    "plan_entitlements_response",
     "pricing_catalog_response",
 ]

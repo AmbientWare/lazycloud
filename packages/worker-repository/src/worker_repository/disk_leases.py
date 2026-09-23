@@ -8,10 +8,12 @@ from database.repositories.apps import StubRepository
 from identity.auth import AuthorizationDeniedError
 from shared.containers import ContainerRecord
 from shared.errors import NotFoundError
+from storage.disk_volumes import DiskVolumeService
 from storage.disks import DiskPublication, DiskService
 from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
+    DiskBlockVolume,
     DiskChainLayer,
     DiskCollectPayload,
     DiskPublishPayload,
@@ -34,6 +36,7 @@ class WorkerDiskLeaseService:
 
     database: DatabaseClient
     disks: DiskService
+    volumes: DiskVolumeService
 
     def acquire(
         self, payload: DiskAcquirePayload, *, container: ContainerRecord, worker_id: str
@@ -41,6 +44,13 @@ class WorkerDiskLeaseService:
         self._authorize(payload.disk_id, container=container)
         acquisition = self.disks.acquire(
             payload.disk_id, container_id=container.id, worker_id=worker_id
+        )
+        # The machine comes from the authenticated worker's own record, never the payload.
+        host = self.volumes.host(worker_id)
+        grant = (
+            self.volumes.attach(acquisition.disk_id, host=host, lease_token=acquisition.lease_token)
+            if host is not None
+            else None
         )
         return DiskAcquireResult(
             disk_id=acquisition.disk_id,
@@ -55,6 +65,11 @@ class WorkerDiskLeaseService:
                 )
                 for link in acquisition.chain
             ],
+            volume=(
+                DiskBlockVolume(volume_id=grant.volume_id, formatted=grant.formatted)
+                if grant is not None
+                else None
+            ),
         )
 
     def publish(
@@ -74,13 +89,18 @@ class WorkerDiskLeaseService:
                 final=payload.final,
             )
         )
+        if payload.final:
+            self.volumes.release(payload.disk_id)
         return DiskPublishResult(generation=generation)
 
     def release(self, payload: DiskReleasePayload, *, container: ContainerRecord) -> bool:
         self._authorize(payload.disk_id, container=container)
-        return self.disks.release(
+        released = self.disks.release(
             payload.disk_id, container_id=container.id, lease_token=payload.lease_token
         )
+        if released:
+            self.volumes.release(payload.disk_id)
+        return released
 
     def collect(self, payload: DiskCollectPayload, *, container: ContainerRecord) -> None:
         self._authorize(payload.disk_id, container=container)

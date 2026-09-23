@@ -18,6 +18,7 @@ from shared.capacity import CapacityFailureCode
 from shared.compute_policy import ComputeUnitProviderState
 from shared.timestamps import utc_now
 
+from .block_volumes import is_disk_volume_device
 from .managed_pool import (
     AWS_MANAGED_POOL_TAG,
     AWS_MANAGED_POOL_TAG_VALUE,
@@ -113,7 +114,15 @@ class _Ebs(_Response):
 
 
 class _BlockDevice(_Response):
+    name: str = Field(default="", alias="DeviceName")
     ebs: _Ebs | None = Field(default=None, alias="Ebs")
+
+    @property
+    def machine_volume_id(self) -> str:
+        """The volume id when this is the machine's own storage, not a disk passing through."""
+        if self.ebs is None or is_disk_volume_device(self.name):
+            return ""
+        return self.ebs.id
 
 
 class _Instance(_Response):
@@ -260,7 +269,9 @@ class AwsRetainedPool:
                         "spot_request_id": instance.spot_request_id,
                         "availability_zone": instance.placement.zone,
                         "storage_volume_ids": tuple(
-                            device.ebs.id for device in instance.devices if device.ebs is not None
+                            device.machine_volume_id
+                            for device in instance.devices
+                            if device.machine_volume_id
                         )
                         or slot.storage_volume_ids,
                         "phase": (
@@ -534,7 +545,9 @@ class AwsRetainedPool:
                     provider_instance_id=instance.id,
                     status=status,
                     availability_zone=instance.placement.zone,
-                    storage_volume_ids=tuple(d.ebs.id for d in instance.devices if d.ebs),
+                    storage_volume_ids=tuple(
+                        d.machine_volume_id for d in instance.devices if d.machine_volume_id
+                    ),
                     booted_template_version=slot.host_revision,
                 )
             )

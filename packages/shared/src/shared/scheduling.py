@@ -9,6 +9,7 @@ from pydantic import Field, JsonValue, field_validator
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
+from shared.disks import DiskStorage
 from shared.enums import StringEnum
 from shared.http.task_progress import TaskPendingProgress
 from shared.placement import AvailabilityZone, Placement, ProductRegion
@@ -81,9 +82,13 @@ class WorkerExecutionRequest(ContractModel):
     disk_bytes: int = 0
     """Declared size of every durable disk the container mounts, summed.
 
-    A disk can grow to its declared size, so placement reserves all of it on the
-    worker that will hold the disk rather than what the disk holds today.
+    A disk can grow to its declared size, so a machine keeping disks on host
+    storage reserves all of it rather than what the disk holds today.
     """
+
+    disk_count: int = 0
+    """Durable disks the container mounts; each takes a volume attachment on a
+    machine that keeps disks on provider volumes."""
 
     placement: Placement
     """Where this request must land, resolved from its stub when the stub was created.
@@ -108,6 +113,7 @@ class WorkerExecutionRequest(ContractModel):
         "memory_mib",
         "gpu_count",
         "disk_bytes",
+        "disk_count",
         "workspace_gpu_quota",
         "workspace_cpu_quota_millicores",
         "retry_count",
@@ -131,6 +137,13 @@ class SchedulerWorkerRequest(WorkerExecutionRequest):
 
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
+    preferred_availability_zone: AvailabilityZone = ""
+    """The zone a disk's cached volume is in, chosen among equals like the worker above.
+
+    A worker there reattaches the volume the disk left behind rather than
+    restoring onto a new one, since a volume attaches only within its zone.
+    """
+
     capacity_retry_at: datetime | None = None
 
     def requeued(self, *, now: datetime | None = None) -> SchedulerWorkerRequest:
@@ -216,11 +229,18 @@ class WorkerExecutionRecord(ContractModel):
     free_memory_mib: int = 0
     free_gpu_count: int = 0
     free_disk_bytes: int = 0
+    free_disk_volumes: int = 0
     total_cpu_millicores: int = 0
     total_memory_mib: int = 0
     total_gpu_count: int = 0
     total_disk_bytes: int = 0
-    """Declared disk size this worker's host can hold: its disk filesystem less the reserve."""
+    """Declared disk size a host-storage worker can hold: its disk filesystem less the reserve."""
+
+    total_disk_volumes: int = 0
+    """Volumes a volume-storage worker's machine can still attach, one per disk."""
+
+    disk_storage: DiskStorage = DiskStorage.Host
+    """What bounds this worker's disks: host bytes, or volume attachments."""
 
     resource_version: int = 0
     created_at: datetime = Field(default_factory=utc_now)
@@ -231,10 +251,12 @@ class WorkerExecutionRecord(ContractModel):
         "free_memory_mib",
         "free_gpu_count",
         "free_disk_bytes",
+        "free_disk_volumes",
         "total_cpu_millicores",
         "total_memory_mib",
         "total_gpu_count",
         "total_disk_bytes",
+        "total_disk_volumes",
         "resource_version",
     )
     @classmethod
@@ -297,12 +319,13 @@ class WorkerContainerState(ContractModel):
     cpu_millicores: int = 0
     memory_mib: int = 0
     disk_bytes: int = 0
+    disk_count: int = 0
     image_build_id: str = ""
     image_id: str = ""
     image_build_upload_capability: str = ""
     failure_reason: str = ""
 
-    @field_validator("gpu_count", "cpu_millicores", "memory_mib", "disk_bytes")
+    @field_validator("gpu_count", "cpu_millicores", "memory_mib", "disk_bytes", "disk_count")
     @classmethod
     def container_numbers_cannot_be_negative(cls, value: int) -> int:
         if value < 0:

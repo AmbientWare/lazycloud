@@ -11,7 +11,7 @@ from shared.containers import ContainerRecord, ContainerStatus
 from shared.disks import DiskMount
 from shared.workload_config import StubConfig
 from storage.disks import get_or_create_disks
-from tests.workspaces import owned_workspace
+from tests.workspaces import on_team_plan, owned_workspace
 from worker.durable_disk_records import DiskAcquirePayload, DiskCollectPayload
 from worker.repository_payloads import WorkerRepositoryPrincipal
 
@@ -25,6 +25,8 @@ def test_a_worker_leases_only_the_disks_its_assigned_container_declares(
     workspace = owned_workspace(control, "default")
     other = owned_workspace(control, "other-tenant")
     database = isolated_services.database
+    on_team_plan(database, workspace.id)
+    on_team_plan(database, other.id)
     stub_id = str(uuid4())
     container_id = str(uuid4())
     with database.session() as session:

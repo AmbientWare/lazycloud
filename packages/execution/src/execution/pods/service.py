@@ -419,6 +419,9 @@ class PodControlService:
                     preferred_worker_id=next(
                         (disk.last_worker_id for disk in disks if disk.last_worker_id), ""
                     ),
+                    preferred_availability_zone=next(
+                        (disk.volume_zone for disk in disks if disk.volume_zone), ""
+                    ),
                 ),
             )
         except Exception:

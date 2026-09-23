@@ -242,6 +242,7 @@ function entitlements() {
     self_hosted: true,
     region_selection: false,
     retention_days: 1,
+    max_workspace_disk_gib: 0,
   };
 }
 
@@ -299,6 +300,7 @@ function pricingCatalog(): PricingCatalog {
       nanos_per_volume_gib_month: 50_000_000,
       storage_month_seconds: 2_592_000,
     },
+    disk_rate: null,
   };
 }
 

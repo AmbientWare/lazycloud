@@ -305,7 +305,7 @@ class ContainerTable(IdTable, DatabaseBase):
         CheckConstraint(
             "termination_reason IN "
             "('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', "
-            "'MEMORY_EVICTED', 'UNKNOWN')",
+            "'MEMORY_EVICTED', 'DISK_FULL', 'UNKNOWN')",
             name="ck_containers_termination_reason",
         ),
         CheckConstraint(
@@ -321,8 +321,8 @@ class ContainerTable(IdTable, DatabaseBase):
             name="ck_containers_scheduling_quantities",
         ),
         CheckConstraint(
-            "scheduling_disk_bytes >= 0",
-            name="ck_containers_scheduling_disk_bytes",
+            "scheduling_disk_bytes >= 0 AND scheduling_disk_count >= 0",
+            name="ck_containers_scheduling_disks",
         ),
     )
 
@@ -404,6 +404,12 @@ class ContainerTable(IdTable, DatabaseBase):
     scheduling_gpu_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_disk_bytes: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default="0"
+    )
+    scheduling_disk_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    scheduling_preferred_availability_zone: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
     )
     scheduling_placement: Mapped[str | None] = mapped_column(String(120), nullable=True)
     """Where the scheduling request lands; null until a request is recorded."""

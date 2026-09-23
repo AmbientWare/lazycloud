@@ -180,6 +180,62 @@
       "Sid": "TagManagedInstancesOnLaunch"
     },
     {
+      "Action": "ec2:CreateVolume",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/cloud-pool:managed-by": "control-plane",
+          "aws:RequestTag/cloud-pool:resource": "disk-volume"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:volume/*",
+      "Sid": "CreateTaggedDiskVolumes"
+    },
+    {
+      "Action": "ec2:CreateTags",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/cloud-pool:managed-by": "control-plane",
+          "aws:RequestTag/cloud-pool:resource": "disk-volume",
+          "ec2:CreateAction": "CreateVolume"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:volume/*",
+      "Sid": "TagDiskVolumesOnCreate"
+    },
+    {
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:DeleteVolume",
+        "ec2:DetachVolume"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/cloud-pool:managed-by": "control-plane",
+          "ec2:ResourceTag/cloud-pool:resource": "disk-volume"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:volume/*",
+      "Sid": "ManageTaggedDiskVolumes"
+    },
+    {
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:DetachVolume",
+        "ec2:ModifyInstanceAttribute"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/cloud-pool:managed-by": "control-plane"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Sid": "AttachDiskVolumesToManagedInstances"
+    },
+    {
       "Action": "iam:CreateServiceLinkedRole",
       "Condition": {
         "StringEquals": {

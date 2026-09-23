@@ -244,6 +244,13 @@ class StopContainerReason(StringEnum):
     which is exactly what a reservation is for.
     """
 
+    DiskFull = "DISK_FULL"
+    """A durable disk's volume ran short of space and publishing could not free it.
+
+    Stopped before the disk's writes start failing, which the filesystem inside
+    would otherwise meet as I/O errors rather than as a full disk.
+    """
+
     Unknown = "UNKNOWN"
 
     def describe(self) -> str:
@@ -275,6 +282,9 @@ _STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
     StopContainerReason.Unfunded: "the account has no payment method on file",
     StopContainerReason.MemoryEvicted: (
         "the machine ran out of memory and this container was using the most above its request"
+    ),
+    StopContainerReason.DiskFull: (
+        "one of its disks could not save its changes and ran out of space"
     ),
     StopContainerReason.Unknown: "",
 }

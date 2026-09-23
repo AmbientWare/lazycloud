@@ -94,6 +94,8 @@ def scheduling_request_from_row(
             "gpu": row.scheduling_gpu,
             "gpu_count": row.scheduling_gpu_count,
             "disk_bytes": row.scheduling_disk_bytes,
+            "disk_count": row.scheduling_disk_count,
+            "preferred_availability_zone": row.scheduling_preferred_availability_zone,
             "placement": Placement.parse(row.scheduling_placement),
             "architecture": row.scheduling_architecture,
             "provider_runtime": row.scheduling_provider_runtime,
@@ -123,6 +125,8 @@ def write_scheduling_request(row: ContainerTable, request: SchedulerWorkerReques
     row.scheduling_gpu = list(request.gpu)
     row.scheduling_gpu_count = request.gpu_count
     row.scheduling_disk_bytes = request.disk_bytes
+    row.scheduling_disk_count = request.disk_count
+    row.scheduling_preferred_availability_zone = request.preferred_availability_zone
     row.scheduling_placement = request.placement.key
     row.scheduling_architecture = request.architecture
     row.scheduling_provider_runtime = request.provider_runtime

@@ -23,6 +23,18 @@ bucket, and deleting a disk removes that prefix and nothing beside it.
 Superseded chunks are not collected, so stored bytes grow until the disk is
 deleted.
 
+On a provider machine each disk gets its own block volume, created in the
+machine's zone at `disk_volume_size_bytes` of the declared size and attached for
+as long as a container holds the disk. Released, it stays detached for
+`DISK_VOLUME_CACHE_SECONDS` so a restart in the same zone reuses it, then it is
+deleted. A joined machine gets no volume and keeps disks in host storage. The
+disk row records the volume's state; provider calls run outside transactions and
+each result is recorded only if the row still has the revision and lease it was
+read under. That fence is what lets the holder, the housekeeping sweep and
+deletion all drive the same volume and resume each other's half-finished work.
+Every volume carries the deployment's tags, and orphan collection deletes only
+detached volumes with this deployment's complete tag set that no disk row names.
+
 This package handles user data, so its invariants are the ones whose failure
 cannot be undone. Validate paths and keys against traversal, verify checksums,
 track multipart state, scope credentials and presigned URLs narrowly and briefly,

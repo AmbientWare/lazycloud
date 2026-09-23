@@ -7,7 +7,6 @@ from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode, ComputeUnitRecord
 from shared.container_requests import OciRuntimeName, capacity_with_overhead
 from shared.contracts import ContractModel
-from shared.disks import disk_capacity_bytes
 from shared.gpu import gpu_preference_accepts, gpu_preference_rank
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 
@@ -151,9 +150,6 @@ class OfferRequest(ContractModel):
     min_cpu_millicores: int = 0
     min_memory_mb: int = 0
     min_storage_mb: int = 0
-    min_disk_bytes: int = 0
-    """Declared durable disk size the node must hold after the host reserve."""
-
     architecture: str = ""
     runtime: str = ""
     gpu: list[str] = Field(default_factory=list)
@@ -205,55 +201,50 @@ def record_purchase_terms(unit: ComputeUnitRecord, offer: ComputeOffer) -> Compu
     )
 
 
-def offer_disk_capacity_bytes(offer: ComputeOffer) -> int:
-    """Declared durable disk size a node from this offer can hold."""
-    return disk_capacity_bytes(offer.storage_mb * 1024**2)
-
-
-def offer_matches_request(offer: ComputeOffer, request: OfferRequest) -> bool:
-    """Whether the machine type fits the request, whatever its current availability."""
-    if request.offer_id and offer.id != request.offer_id:
-        return False
-    if request.providers and offer.provider not in request.providers:
-        return False
-    if request.regions and offer.region not in request.regions:
-        return False
-    if request.availability_zone and offer.availability_zone != request.availability_zone:
-        return False
-    if offer.preemptible and not request.preemptible:
-        return False
-    if offer.cpu_millicores < capacity_with_overhead(request.min_cpu_millicores):
-        return False
-    if offer.memory_mb < capacity_with_overhead(request.min_memory_mb):
-        return False
-    if offer.storage_mb < request.min_storage_mb:
-        return False
-    if offer_disk_capacity_bytes(offer) < request.min_disk_bytes:
-        return False
-    if request.architecture and offer.architecture != request.architecture:
-        return False
-    if request.runtime and offer.runtime != request.runtime:
-        return False
-    # Through the shared rule rather than a string compare, so an offer for a
-    # card the request would accept is not passed over for spelling it the
-    # way the provider does, and `any` means here what it means everywhere.
-    if request.gpu and not gpu_preference_accepts(request.gpu, offer.gpu or ""):
-        return False
-    if offer.gpu_count < request.min_gpu_count:
-        return False
-    if request.nodes > 0 and not request.gpu and offer.gpu_count > 0:
-        return False
-    return not (
-        request.min_reliability > 0
-        and offer.reliability > 0
-        and offer.reliability < request.min_reliability
-    )
-
-
 def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[ComputeOffer]:
-    return [
-        offer for offer in offers if offer.available > 0 and offer_matches_request(offer, request)
-    ]
+    required_cpu = capacity_with_overhead(request.min_cpu_millicores)
+    required_memory = capacity_with_overhead(request.min_memory_mb)
+    selected: list[ComputeOffer] = []
+    for offer in offers:
+        if request.offer_id and offer.id != request.offer_id:
+            continue
+        if request.providers and offer.provider not in request.providers:
+            continue
+        if request.regions and offer.region not in request.regions:
+            continue
+        if request.availability_zone and offer.availability_zone != request.availability_zone:
+            continue
+        if offer.preemptible and not request.preemptible:
+            continue
+        if offer.cpu_millicores < required_cpu:
+            continue
+        if offer.memory_mb < required_memory:
+            continue
+        if offer.storage_mb < request.min_storage_mb:
+            continue
+        if request.architecture and offer.architecture != request.architecture:
+            continue
+        if request.runtime and offer.runtime != request.runtime:
+            continue
+        # Through the shared rule rather than a string compare, so an offer for a
+        # card the request would accept is not passed over for spelling it the
+        # way the provider does, and `any` means here what it means everywhere.
+        if request.gpu and not gpu_preference_accepts(request.gpu, offer.gpu or ""):
+            continue
+        if offer.gpu_count < request.min_gpu_count:
+            continue
+        if request.nodes > 0 and not request.gpu and offer.gpu_count > 0:
+            continue
+        if (
+            request.min_reliability > 0
+            and offer.reliability > 0
+            and offer.reliability < request.min_reliability
+        ):
+            continue
+        if offer.available <= 0:
+            continue
+        selected.append(offer)
+    return selected
 
 
 def choose_offer(offers: list[ComputeOffer], request: OfferRequest) -> ComputeOffer:
@@ -304,7 +295,5 @@ __all__ = [
     "ReservationStatus",
     "choose_offer",
     "filter_offers",
-    "offer_disk_capacity_bytes",
-    "offer_matches_request",
     "offer_selection_key",
 ]

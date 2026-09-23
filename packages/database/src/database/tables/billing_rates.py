@@ -44,6 +44,12 @@ _PLATFORM_RATE_WINDOW = ExcludeConstraint(
     using="gist",
 ).ddl_if(dialect="postgresql")
 
+_DISK_RATE_WINDOW = ExcludeConstraint(
+    (_VALIDITY_WINDOW, "&&"),
+    name="ex_billing_disk_rates_window",
+    using="gist",
+).ddl_if(dialect="postgresql")
+
 
 class ComputeRateTable(IdTable, DatabaseBase):
     """What a second of each resource a container holds costs, over one interval.
@@ -135,4 +141,35 @@ class PlatformRateTable(IdTable, DatabaseBase):
     nanos_per_volume_byte_second: Mapped[Decimal] = mapped_column(Numeric(30, 12), nullable=False)
 
 
-__all__ = ["ComputeRateTable", "PlatformRateTable"]
+class DiskRateTable(IdTable, DatabaseBase):
+    """What a byte of a disk costs a second, stored and attached, over one interval.
+
+    Its own table rather than two more platform columns: the platform rows
+    published before disks existed would have to hold a rate for them, and
+    neither a zero nor an absent figure is true there. Published like the others,
+    never edited.
+    """
+
+    __tablename__ = "billing_disk_rates"
+    __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("effective_at", name="uq_billing_disk_rates_start"),
+        CheckConstraint(
+            "valid_until IS NULL OR valid_until > effective_at",
+            name="ck_billing_disk_rates_window",
+        ),
+        CheckConstraint(
+            "nanos_per_stored_byte_second >= 0 AND nanos_per_attached_byte_second >= 0",
+            name="ck_billing_disk_rates_nonnegative",
+        ),
+        _DISK_RATE_WINDOW,
+        Index("ix_billing_disk_rates_lookup", "effective_at"),
+    )
+
+    pricing_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    nanos_per_stored_byte_second: Mapped[Decimal] = mapped_column(Numeric(30, 12), nullable=False)
+    nanos_per_attached_byte_second: Mapped[Decimal] = mapped_column(Numeric(30, 12), nullable=False)
+
+
+__all__ = ["ComputeRateTable", "DiskRateTable", "PlatformRateTable"]

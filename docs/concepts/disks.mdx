@@ -53,7 +53,15 @@ uv run lazycloud disk list
 uv run lazycloud disk delete box-root
 ```
 
-A disk bills per GiB-month for what it stores, which can be less than its
-size. Deleting a pod or its deployment never deletes the disk, and deleting
-the disk removes everything written to it. A disk in use can't be deleted. The
+Deleting a pod or its deployment never deletes the disk, and deleting the disk
+removes everything written to it. A disk in use can't be deleted. The
 [storage page](/platform/dashboard) lists disks as well.
+
+## Pricing
+
+Each disk is one line on the Usage page, priced from two rates on the
+[pricing page](https://lazycloud.dev/pricing). What the disk stores bills per
+GiB-month for as long as it exists, and that can be less than its size. Its
+declared size bills per GiB-month for the time a container holds it. Disks need
+a paid plan, which caps the declared size of all disks in a workspace, and a
+deploy past the cap fails with a message naming it.

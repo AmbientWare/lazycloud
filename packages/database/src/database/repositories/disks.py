@@ -4,14 +4,14 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from database.repositories.identity import WorkspaceRepository
-from database.tables.disks import DiskGenerationTable, DiskTable
+from database.tables.disks import DiskAttachmentTable, DiskGenerationTable, DiskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.orchestration import ContainerTable
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.disks import DiskRecord, DiskStatus
 from shared.errors import ConflictError
 from shared.timestamps import to_utc
-from sqlalchemy import Select, delete, func, select, update
+from sqlalchemy import Select, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,30 @@ class DiskMeteringCheckpoint:
     metered_bytes: int
     metered_at: datetime
     deleted_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class DiskPlacementHint:
+    last_worker_id: str
+    """The worker that last held the disk, which may still keep its layers."""
+
+    volume_zone: str
+    """The zone of the disk's volume while one exists; empty otherwise."""
+
+
+@dataclass(frozen=True, slots=True)
+class DiskAttachmentCheckpoint:
+    """One lease's billing position, read under its row lock."""
+
+    id: str
+    disk_id: str
+    workspace_id: str
+    container_id: str
+    size_bytes: int
+    metered_at: datetime
+    released_at: datetime | None
+    holder_finished_at: datetime | None
+    """When the holding container stopped running; it holds nothing billable after."""
 
 
 def disk_from_table(row: DiskTable, *, holder_live: bool = True) -> DiskRecord:
@@ -136,17 +160,44 @@ class DiskRepository:
         workspace_id, name = row
         return str(workspace_id), name
 
-    def last_worker_ids(self, names: list[str], *, workspace_id: str) -> dict[str, str]:
+    def declared_sizes(self, names: list[str], *, workspace_id: str) -> dict[str, int]:
+        """The recorded size of each named live disk that exists."""
         if not names:
             return {}
         rows = self.session.execute(
-            select(DiskTable.name, DiskTable.last_worker_id).where(
+            select(DiskTable.name, DiskTable.size_bytes).where(
                 DiskTable.workspace_id == workspace_id,
                 DiskTable.name.in_(names),
                 DiskTable.deleted_at.is_(None),
             )
         ).tuples()
         return dict(rows.all())
+
+    def placement_hints(
+        self, names: list[str], *, workspace_id: str
+    ) -> dict[str, DiskPlacementHint]:
+        """Where each disk was last held, for placing the container that mounts it next."""
+        if not names:
+            return {}
+        rows = self.session.execute(
+            select(
+                DiskTable.name,
+                DiskTable.last_worker_id,
+                DiskTable.volume_zone,
+                DiskTable.volume_state,
+            ).where(
+                DiskTable.workspace_id == workspace_id,
+                DiskTable.name.in_(names),
+                DiskTable.deleted_at.is_(None),
+            )
+        ).tuples()
+        return {
+            name: DiskPlacementHint(
+                last_worker_id=last_worker_id,
+                volume_zone=volume_zone if volume_state not in ("none", "deleting") else "",
+            )
+            for name, last_worker_id, volume_zone, volume_state in rows
+        }
 
     def list(self, *, workspace_id: str, after: str, limit: int) -> list[DiskRecord]:
         statement = _with_holder_liveness().where(
@@ -282,6 +333,15 @@ class DiskRepository:
             ).tuples()
         )
 
+    def workspace_disks(self, workspace_id: str) -> tuple[tuple[str, str, bool], ...]:
+        """Every disk of the workspace as (id, name, deleting), deleting ones included."""
+        rows = self.session.execute(
+            select(DiskTable.id, DiskTable.name, DiskTable.deleted_at.is_not(None))
+            .where(DiskTable.workspace_id == workspace_id)
+            .order_by(DiskTable.name, DiskTable.id)
+        ).tuples()
+        return tuple((str(disk_id), name, bool(deleting)) for disk_id, name, deleting in rows)
+
     def delete(self, disk_id: str) -> None:
         self.session.execute(delete(DiskTable).where(DiskTable.id == disk_id))
 
@@ -326,6 +386,155 @@ class DiskRepository:
             deleted_at=to_utc(deleted_at) if deleted_at is not None else None,
         )
 
+    def declared_bytes(self, workspace_id: str) -> int:
+        """The declared size of every live disk in the workspace, summed."""
+        total = self.session.scalar(
+            select(func.coalesce(func.sum(DiskTable.size_bytes), 0)).where(
+                DiskTable.workspace_id == workspace_id, DiskTable.deleted_at.is_(None)
+            )
+        )
+        return int(total or 0)
+
+    def largest_declared_bytes(self, workspace_ids: list[str]) -> int:
+        """The most declared disk size any one of these workspaces holds."""
+        if not workspace_ids:
+            return 0
+        per_workspace = (
+            select(func.sum(DiskTable.size_bytes).label("declared"))
+            .where(DiskTable.workspace_id.in_(workspace_ids), DiskTable.deleted_at.is_(None))
+            .group_by(DiskTable.workspace_id)
+            .subquery()
+        )
+        return int(
+            self.session.scalar(select(func.coalesce(func.max(per_workspace.c.declared), 0))) or 0
+        )
+
+    def open_attachment(
+        self,
+        disk_id: str,
+        *,
+        workspace_id: str,
+        container_id: str,
+        size_bytes: int,
+        at: datetime,
+    ) -> None:
+        """Start billing a lease at the size the disk has now, ending any lease before it.
+
+        A holder acquiring again keeps the lease it already has.
+        """
+        held_by = self.session.scalar(
+            select(DiskAttachmentTable.container_id).where(
+                DiskAttachmentTable.disk_id == disk_id,
+                DiskAttachmentTable.released_at.is_(None),
+            )
+        )
+        if held_by is not None and str(held_by) == container_id:
+            return
+        self.close_attachment(disk_id, at=at)
+        self.session.add(
+            DiskAttachmentTable(
+                disk_id=disk_id,
+                workspace_id=workspace_id,
+                container_id=container_id,
+                size_bytes=size_bytes,
+                acquired_at=at,
+                metered_at=at,
+            )
+        )
+        self.session.flush()
+
+    def close_attachment(self, disk_id: str, *, at: datetime) -> None:
+        self.session.execute(
+            update(DiskAttachmentTable)
+            .where(
+                DiskAttachmentTable.disk_id == disk_id,
+                DiskAttachmentTable.released_at.is_(None),
+            )
+            .values(released_at=func.greatest(DiskAttachmentTable.acquired_at, at))
+        )
+
+    def list_attachment_metering_targets(
+        self, *, metered_before: datetime, limit: int
+    ) -> tuple[tuple[str, str], ...]:
+        """Leases with a window due, as (lease, workspace): open ones past the interval,
+        released ones at once."""
+        rows = self.session.execute(
+            select(DiskAttachmentTable.id, DiskAttachmentTable.workspace_id)
+            .where(
+                DiskAttachmentTable.settled_at.is_(None),
+                or_(
+                    DiskAttachmentTable.metered_at <= metered_before,
+                    DiskAttachmentTable.released_at.is_not(None),
+                ),
+            )
+            .order_by(DiskAttachmentTable.metered_at, DiskAttachmentTable.id)
+            .limit(limit)
+        ).tuples()
+        return tuple(
+            (str(attachment_id), str(workspace_id)) for attachment_id, workspace_id in rows
+        )
+
+    def unsettled_attachment_ids(self, disk_id: str) -> tuple[str, ...]:
+        rows = self.session.scalars(
+            select(DiskAttachmentTable.id).where(
+                DiskAttachmentTable.disk_id == disk_id,
+                DiskAttachmentTable.settled_at.is_(None),
+            )
+        )
+        return tuple(str(attachment_id) for attachment_id in rows)
+
+    def lock_attachment_checkpoint(self, attachment_id: str) -> DiskAttachmentCheckpoint | None:
+        row = self.session.execute(
+            select(
+                DiskAttachmentTable.disk_id,
+                DiskAttachmentTable.workspace_id,
+                DiskAttachmentTable.container_id,
+                DiskAttachmentTable.size_bytes,
+                DiskAttachmentTable.metered_at,
+                DiskAttachmentTable.released_at,
+            )
+            .where(
+                DiskAttachmentTable.id == attachment_id,
+                DiskAttachmentTable.settled_at.is_(None),
+            )
+            .with_for_update()
+        ).first()
+        if row is None:
+            return None
+        disk_id, workspace_id, container_id, size_bytes, metered_at, released_at = row
+        finished_at = self.session.scalar(
+            select(ContainerTable.finished_at).where(ContainerTable.id == container_id)
+        )
+        return DiskAttachmentCheckpoint(
+            id=attachment_id,
+            disk_id=str(disk_id),
+            workspace_id=str(workspace_id),
+            container_id=str(container_id),
+            size_bytes=size_bytes,
+            metered_at=to_utc(metered_at),
+            released_at=to_utc(released_at) if released_at is not None else None,
+            holder_finished_at=to_utc(finished_at) if finished_at is not None else None,
+        )
+
+    def advance_attachment(self, attachment_id: str, *, metered_at: datetime) -> None:
+        self.session.execute(
+            update(DiskAttachmentTable)
+            .where(DiskAttachmentTable.id == attachment_id)
+            .values(metered_at=metered_at)
+        )
+
+    def settle_attachment(self, attachment_id: str, *, ended_at: datetime, at: datetime) -> None:
+        """Take a lease billed to its end out of every scan, closing it there if still open."""
+        self.session.execute(
+            update(DiskAttachmentTable)
+            .where(DiskAttachmentTable.id == attachment_id)
+            .values(
+                metered_at=ended_at,
+                released_at=func.coalesce(DiskAttachmentTable.released_at, ended_at),
+                settled_at=at,
+            )
+        )
+
     def advance_metering_checkpoint(
         self, disk_id: str, *, metered_bytes: int, metered_at: datetime
     ) -> None:
@@ -344,10 +553,12 @@ def _with_holder_liveness() -> Select[tuple[DiskTable, bool]]:
 
 
 __all__ = [
+    "DiskAttachmentCheckpoint",
     "DiskChainLink",
     "DiskHolder",
     "DiskMeteringCheckpoint",
     "DiskMeteringTarget",
+    "DiskPlacementHint",
     "DiskRepository",
     "disk_from_table",
 ]

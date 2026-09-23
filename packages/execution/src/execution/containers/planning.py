@@ -68,6 +68,7 @@ class ContainerSchedulingOptions(ContractModel):
     mounts: list[RequestMount] | None = None
     disks: list[RequestDisk] = Field(default_factory=list)
     preferred_worker_id: str = ""
+    preferred_availability_zone: str = ""
     secret_names: list[str] | None = None
     gateway_token_required: bool = False
     workspace_storage_required: bool = False

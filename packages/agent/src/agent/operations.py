@@ -1290,6 +1290,7 @@ def build_agent_worker_config(
     slot: AgentWorkerSlot,
     *,
     network: AgentWorkerNetwork | None = None,
+    disk_volume_slots: int | None = None,
 ) -> WorkerConfiguration:
     selected_network = network or AgentWorkerNetwork()
     return WorkerConfiguration(
@@ -1300,6 +1301,7 @@ def build_agent_worker_config(
                 memory_mib=slot.memory_mb,
                 gpu_type=slot.gpu,
                 gpu_count=slot.gpu_count,
+                disk_volume_slots=disk_volume_slots,
             ),
             pool_mode=WorkerPoolMode.Private,
             billing_owner=slot.billing_owner,
@@ -1336,6 +1338,7 @@ def plan_worker_container(
     platform: str = "",
     host_aliases: list[str] | None = None,
     network: AgentWorkerNetwork | None = None,
+    disk_volume_slots: int | None = None,
 ) -> AgentWorkerContainerPlan:
     selected_network = network or AgentWorkerNetwork()
     dirs = build_agent_worker_dirs(state_dir, slot.worker_id)
@@ -1411,7 +1414,9 @@ def plan_worker_container(
         env=env,
         volumes=volumes,
         docker_args=docker_args,
-        config=build_agent_worker_config(slot, network=selected_network),
+        config=build_agent_worker_config(
+            slot, network=selected_network, disk_volume_slots=disk_volume_slots
+        ),
     )
 
 

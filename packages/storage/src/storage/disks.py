@@ -23,12 +23,18 @@ from database.repositories.disks import DiskChainLink, DiskHolder, DiskRepositor
 from database.repositories.identity import WorkspaceRepository
 from database.tables.disks import DiskTable
 from database.types import DatabaseSession
-from shared.containers import LIVE_CONTAINER_STATUSES
-from shared.disks import DiskMount, DiskRecord, DiskStatus, disk_manifest_key
+from shared.disks import (
+    DiskMount,
+    DiskRecord,
+    DiskStatus,
+    disk_manifest_key,
+    disk_shrink_message,
+)
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.timestamps import to_utc, utc_now
 
 from database import DatabaseClient
+from storage.disk_volumes import DiskVolumeService, DiskWorkerAbsence, holder_keeps_disk
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,10 +43,6 @@ DISK_LIST_LIMIT = 100
 
 class DiskObjectStore(Protocol):
     def delete_disk_objects(self, *, workspace_id: str, disk_id: str) -> None: ...
-
-
-class DiskWorkerAbsence(Protocol):
-    def is_absent(self, worker_id: str) -> bool: ...
 
 
 class DiskDeletionMetering(Protocol):
@@ -80,6 +82,7 @@ class ResolvedDisk:
     record: DiskRecord
     mount: DiskMount
     last_worker_id: str
+    volume_zone: str
 
 
 def get_or_create_disks(
@@ -87,9 +90,10 @@ def get_or_create_disks(
 ) -> list[ResolvedDisk]:
     """The workload's disks by name, each created on its first use.
 
-    A declared size must match the recorded one. A smaller one would cut into a
-    filesystem that already fills the device, and a larger one is not yet
-    something a restore can grow into, so both are refused rather than ignored.
+    A larger declared size grows the disk: it is recorded here, and the next
+    container to acquire the disk gets a volume of the new size and grows the
+    filesystem into it. A smaller one would cut into a filesystem that may
+    already fill the device, so it is refused before anything changes.
     """
     if not mounts:
         return []
@@ -102,31 +106,37 @@ def get_or_create_disks(
                 mount.name, workspace_id=workspace_id, size_bytes=mount.size_bytes
             )
             created = created or inserted
-            resolved.append(ResolvedDisk(record=record, mount=mount, last_worker_id=""))
+            if mount.size_bytes < record.size_bytes:
+                raise InvalidInputError(disk_shrink_message(mount.name, record.size_bytes))
+            if mount.size_bytes > record.size_bytes:
+                row = repository.lock(record.id)
+                if row is None:
+                    raise ConflictError("disk changed during resolution; retry the request")
+                row.size_bytes = mount.size_bytes
+                row.updated_at = utc_now()
+                record = record.model_copy(update={"size_bytes": mount.size_bytes})
+            resolved.append(
+                ResolvedDisk(record=record, mount=mount, last_worker_id="", volume_zone="")
+            )
         if created:
             # Asked in the transaction that inserted, so a refusal leaves no disk behind.
             DatabaseBillingAdmission().assert_may_take_on_billed_work(
                 session, workspace_id=workspace_id
             )
-        last_workers = repository.last_worker_ids(
+        DatabaseBillingAdmission().assert_disk_allowance(
+            session,
+            workspace_id=workspace_id,
+            declared_bytes=repository.declared_bytes(workspace_id),
+        )
+        hints = repository.placement_hints(
             [mount.name for mount in mounts], workspace_id=workspace_id
         )
-    for item in resolved:
-        if item.mount.size_bytes < item.record.size_bytes:
-            raise InvalidInputError(
-                f"disk {item.mount.name} is {item.record.size_bytes} bytes and cannot shrink "
-                f"to {item.mount.size_bytes}"
-            )
-        if item.mount.size_bytes > item.record.size_bytes:
-            raise InvalidInputError(
-                f"disk {item.mount.name} is {item.record.size_bytes} bytes; growing a disk to "
-                f"{item.mount.size_bytes} is not supported yet"
-            )
     return [
         ResolvedDisk(
             record=item.record,
             mount=item.mount,
-            last_worker_id=last_workers.get(item.mount.name, ""),
+            last_worker_id=hint.last_worker_id if (hint := hints.get(item.mount.name)) else "",
+            volume_zone=hint.volume_zone if hint else "",
         )
         for item in resolved
     ]
@@ -178,6 +188,13 @@ class DiskService:
             row.last_worker_id = worker_id
             row.updated_at = utc_now()
             session.flush()
+            repository.open_attachment(
+                disk_id,
+                workspace_id=str(row.workspace_id),
+                container_id=container_id,
+                size_bytes=row.size_bytes,
+                at=row.updated_at,
+            )
             return DiskAcquisition(
                 disk_id=disk_id,
                 lease_token=token,
@@ -205,23 +222,24 @@ class DiskService:
                 if publication.final and self._lease_matches(
                     row, publication.container_id, publication.lease_token
                 ):
-                    self._release(row)
+                    self._release(repository, row)
                 return publication.generation
             self._require_lease(row, publication.container_id, publication.lease_token)
             self._record_generation(repository, row, publication)
             if publication.final:
-                self._release(row)
+                self._release(repository, row)
             return publication.generation
 
     def release(self, disk_id: str, *, container_id: str, lease_token: str) -> bool:
         """Give the lease back; a token that is no longer current releases nothing."""
         with self.database.session() as session:
-            row = DiskRepository(session).lock(disk_id)
+            repository = DiskRepository(session)
+            row = repository.lock(disk_id)
             if row is None or row.deleted_at is not None:
                 return False
             if not self._lease_matches(row, container_id, lease_token):
                 return False
-            self._release(row)
+            self._release(repository, row)
             return True
 
     def collect(
@@ -283,8 +301,10 @@ class DiskService:
         row.holder_container_id = None
         row.lease_token = ""
         row.status = DiskStatus.Deleting.value
-        row.deleted_at = to_utc(now or utc_now())
+        deleted_at = to_utc(now or utc_now())
+        row.deleted_at = deleted_at
         row.updated_at = utc_now()
+        repository.close_attachment(str(row.id), at=deleted_at)
         return str(row.id)
 
     @staticmethod
@@ -340,20 +360,15 @@ class DiskService:
         row.updated_at = utc_now()
 
     @staticmethod
-    def _release(row: DiskTable) -> None:
+    def _release(repository: DiskRepository, row: DiskTable) -> None:
         row.holder_container_id = None
         row.lease_token = ""
         row.status = DiskStatus.Detached.value
         row.updated_at = utc_now()
+        repository.close_attachment(str(row.id), at=row.updated_at)
 
     def _holds(self, holder: DiskHolder) -> bool:
-        if holder.status is None:
-            return False
-        if holder.status in LIVE_CONTAINER_STATUSES:
-            return True
-        if holder.storage_released or not holder.worker_id:
-            return False
-        return not self.worker_absence.is_absent(holder.worker_id)
+        return holder_keeps_disk(holder, self.worker_absence)
 
 
 @dataclass(slots=True)
@@ -362,6 +377,7 @@ class DiskDeletionService:
 
     database: DatabaseClient
     disks: DiskService
+    volumes: DiskVolumeService
     objects: DiskObjectStore
     metering: DiskDeletionMetering
 
@@ -378,8 +394,22 @@ class DiskDeletionService:
             return False
         return True
 
+    def delete_workspace_disks(self, workspace_id: str) -> None:
+        """Delete every disk of a workspace being deleted, volumes and objects included.
+
+        Raises while any is left, so the workspace deletion retries rather than
+        finishing over a disk whose volume still exists.
+        """
+        with self.database.session() as session:
+            disks = DiskRepository(session).workspace_disks(workspace_id)
+        for disk_id, name, deleting in disks:
+            if not deleting:
+                self.disks.request_deletion(name, workspace_id=workspace_id)
+            self.finish(disk_id, workspace_id=workspace_id)
+
     def finish(self, disk_id: str, *, workspace_id: str) -> None:
         self.metering.finalize_disk_deletion(disk_id, workspace_id=workspace_id)
+        self.volumes.remove(disk_id)
         self.objects.delete_disk_objects(workspace_id=workspace_id, disk_id=disk_id)
         with self.database.session() as session:
             DiskRepository(session).delete(disk_id)
@@ -407,7 +437,6 @@ __all__ = [
     "DiskPage",
     "DiskPublication",
     "DiskService",
-    "DiskWorkerAbsence",
     "ResolvedDisk",
     "get_or_create_disks",
 ]

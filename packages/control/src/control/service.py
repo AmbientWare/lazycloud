@@ -16,6 +16,7 @@ from database.records.apps import AutoscalingStubRecord, StubKind, StubRecord
 from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.cleanup import CleanupRepository
+from database.repositories.disks import DiskRepository
 from database.repositories.identity import (
     ConcurrencyLimitRepository,
     SecretRepository,
@@ -25,6 +26,7 @@ from database.repositories.identity import (
 )
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
+from database.types import DatabaseSession
 from foundation.ids import try_uuid
 from identity.auth import AuthService
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -35,6 +37,7 @@ from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPha
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import Deployment
+from shared.disks import disk_shrink_message
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.pods import (
     SandboxCreatedBucket,
@@ -184,6 +187,24 @@ def _stub_config_payload(config: StubConfig) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(
         config.model_dump_json(exclude_unset=True, by_alias=True)
     )
+
+
+def _assert_disks_keep_their_size(
+    session: DatabaseSession, config: StubConfig, *, workspace_id: str
+) -> None:
+    """Refuse a disk declared smaller than it is, before anything deploys or rolls.
+
+    A larger size is a change like any other: it is part of the stub's
+    fingerprint, so it makes a new stub and a new deployment version, and the
+    next container to acquire the disk grows it.
+    """
+    recorded = DiskRepository(session).declared_sizes(
+        [mount.name for mount in config.disks], workspace_id=workspace_id
+    )
+    for mount in config.disks:
+        size = recorded.get(mount.name)
+        if size is not None and mount.size_bytes < size:
+            raise InvalidInputError(disk_shrink_message(mount.name, size))
 
 
 def _stub_preparation_fingerprint(stub: StubRecord) -> str:
@@ -648,6 +669,9 @@ class ControlPlaneService:
                 requested.config,
                 workspace_id=workspace_record.id,
                 metadata=requested.metadata,
+            )
+            _assert_disks_keep_their_size(
+                session, requested.config, workspace_id=workspace_record.id
             )
             if existing is None:
                 record = repository.upsert(requested)

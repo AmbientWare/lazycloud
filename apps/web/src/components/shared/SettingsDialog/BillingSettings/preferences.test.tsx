@@ -70,6 +70,7 @@ it("saves preset and custom amounts without changing untouched settings or confu
       nanos_per_volume_gib_month: 0,
       storage_month_seconds: 2592000,
     },
+    disk_rate: null,
   });
   const month = {
     month_started_at: "2026-09-01T00:00:00Z",

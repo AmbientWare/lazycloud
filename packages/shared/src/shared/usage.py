@@ -44,6 +44,12 @@ class UsageMetric(StringEnum):
     TaskCount = "task_count"
     PersistentVolumeByteSeconds = "persistent_volume_byte_seconds"
     ArtifactStorageByteSeconds = "artifact_storage_byte_seconds"
+    DiskStoredByteSeconds = "disk_stored_byte_seconds"
+    """Bytes a disk keeps in object storage, over the time it keeps them."""
+
+    DiskAttachedByteSeconds = "disk_attached_byte_seconds"
+    """A disk's declared size, over the time a container holds its lease."""
+
     ContainerDurationMilliseconds = "container_duration_milliseconds"
     CpuUsedCoreSeconds = "cpu_used_core_seconds"
     MemoryRssByteSeconds = "memory_rss_byte_seconds"
@@ -127,9 +133,11 @@ class UsageRecord(ContractModel):
         if self.metric in {
             UsageMetric.PersistentVolumeByteSeconds,
             UsageMetric.ArtifactStorageByteSeconds,
+            UsageMetric.DiskStoredByteSeconds,
+            UsageMetric.DiskAttachedByteSeconds,
         }:
             if self.unit is not UsageUnit.ByteSeconds:
-                raise ValueError("persistent volume usage must use byte-seconds")
+                raise ValueError(f"{self.metric.value} usage must use byte-seconds")
             return self
         if self.metric is not UsageMetric.ContainerDurationMilliseconds:
             return self

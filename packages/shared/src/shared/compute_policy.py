@@ -53,9 +53,6 @@ class ComputeResourceRequirements(ContractModel):
     memory_mb: int = Field(default=0, ge=0)
     gpu: list[str] = Field(default_factory=list)
     gpu_count: int = Field(default=0, ge=0)
-    disk_bytes: int = Field(default=0, ge=0)
-    """Declared durable disk size the node must be able to hold."""
-
     architecture: str = Field(default="", max_length=64)
     preemptible: bool = False
     availability_zone: str = Field(default="", max_length=64)
@@ -115,10 +112,9 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
 
     A provider unit has identity `(workspace_id, provider_ref, region,
     capability_key, root_volume_gib)`. An AWS unit owns one Auto Scaling group
-    and launch template; a Hetzner unit owns a labeled group of servers. The
-    `agent` and `local` units own no provider resources but still carry a worker
-    shape and a scaling policy, because worker admission, sizing and drain all
-    key on the owning unit.
+    and launch template. The `agent` and `local` units own no provider resources
+    but still carry a worker shape and a scaling policy, because worker
+    admission, sizing and drain all key on the owning unit.
 
     `placement` is stamped on every machine this unit produces and on every
     worker they run: the platform fleet, the connected account that provisioned

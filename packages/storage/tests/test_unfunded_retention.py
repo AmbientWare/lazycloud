@@ -18,7 +18,7 @@ from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, select
 from storage.disks import get_or_create_disks
 from storage.unfunded_retention import UnfundedStorageRetentionService
-from tests.workspaces import connected_workspace
+from tests.workspaces import connected_workspace, on_team_plan
 
 from storage import unfunded_retention
 
@@ -106,6 +106,7 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
     current = utc_now() + timedelta(days=31)
     with services.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
+    on_team_plan(services.database, workspace_id)
     [disk] = get_or_create_disks(
         services.database,
         [DiskMount(name="managed-root", size_bytes=1024**3)],

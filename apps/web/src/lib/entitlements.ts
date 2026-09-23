@@ -46,6 +46,12 @@ export function memberLimitPhrase(limit: PlanEntitlements["max_members"]): strin
   return limit === 1 ? "Just you" : countLabel(limit, "member");
 }
 
+/** Declared disk size per workspace, in the largest unit that states it whole: `1 TiB`. */
+export function diskAllowanceFigure(gib: PlanEntitlements["max_workspace_disk_gib"]): string {
+  if (gib === 0) return "Not included";
+  return gib % 1024 === 0 ? `${(gib / 1024).toLocaleString()} TiB` : `${gib.toLocaleString()} GiB`;
+}
+
 /** The GPU models a plan may ask for, from the plan's own set rather than a list held here. */
 export function gpuModelsLabel(gpuTypes: GpuTypeEntitlement): string {
   return gpuTypes === "all" ? "All available models" : gpuTypes.join(", ");
