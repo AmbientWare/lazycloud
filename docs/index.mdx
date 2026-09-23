@@ -3,12 +3,10 @@ title: "Introduction"
 description: "Infrastructure for agentic engineering. Building with agents is fast, and deploying with LazyCloud is too."
 ---
 
-Your workloads are defined in Python next to the code they run. A decorator
-names the packages, CPU, memory, GPU, and storage a function needs, so the agent
-that writes the function also writes where and how it runs, in the same edit.
-LazyCloud builds the container, uploads the code, runs it on cloud CPUs and
-GPUs, and stops it when the work is done. Your machine only runs the client. You
-pay per second while a cloud container runs.
+A decorator on your Python function names the packages, CPU, memory, GPU, and
+storage it needs, so whoever writes the function, you or an agent, also writes
+where it runs. LazyCloud builds the container, runs it on cloud CPUs and GPUs,
+and stops it when the work is done. You pay per second while it runs.
 
 ```python
 from lazycloud import App, Image

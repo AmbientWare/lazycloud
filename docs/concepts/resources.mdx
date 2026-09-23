@@ -16,15 +16,12 @@ def render(scene: dict[str, float]) -> bytes:
     ...
 ```
 
-`cpu` and `memory` are reservations. The scheduler places a container on a
-machine with that much free, and under pressure the container keeps what it
-reserved. A pair also sets a ceiling. This function reserves 1 CPU and 2 GiB,
-is throttled at 4 CPUs, and is killed above 8 GiB. Smaller reservations place
-faster and pack more containers per machine. The ceiling protects the machine
-from a runaway process. One CPU is one vCPU.
+`cpu` and `memory` are reservations the container always keeps. A pair adds a
+ceiling, so this function reserves 1 CPU and 2 GiB, is throttled at 4 CPUs, and
+is killed above 8 GiB. Smaller reservations start faster. One CPU is one vCPU.
 
-`disk` is scratch space that disappears with the container, 100 GiB unless you
-set it. Files that must outlive it belong in a [volume](/concepts/volumes).
+`disk` is scratch space, 100 GiB by default, gone when the container stops.
+Files that must last go in a [volume](/concepts/volumes).
 
 ## Request a GPU
 
@@ -37,38 +34,33 @@ def embed(texts: list[str]) -> list[list[float]]:
     ...
 ```
 
-`GpuType` names the models: `T4`, `A10G`, `L4`, `L40S`, `A100_40`, `A100_80`,
-`H100`, and `H200`. A list sets a preference order, best first.
-`gpu=[GpuType.H100, GpuType.A100_80, GpuType.L4]` takes the first model with
-free capacity, and `GpuType.Any`, valid only at the end of a list, takes
-whatever is free. The two A100 sizes are not interchangeable, so each has its
-own member and plain `GpuType.A100` is rejected. `gpu_count` sets GPUs per
-container. GPU access and prices depend on your [plan](/platform/plans).
+Models are `GpuType.T4`, `A10G`, `L4`, `L40S`, `A100_40`, `A100_80`, `H100`, and
+`H200`. A list is a preference order:
+`gpu=[GpuType.H100, GpuType.A100_80, GpuType.Any]` takes the first model with
+free capacity, and `GpuType.Any` at the end takes whatever is left. Plain
+`GpuType.A100` is rejected because the two sizes aren't interchangeable.
+`gpu_count` sets GPUs per container, and your [plan](/platform/plans) sets
+which models you can use.
 
 ## Preemptible capacity
 
-Workloads run on preemptible capacity by default, which the cloud provider can
-reclaim, sometimes without notice. A preempted function call retries under
-its retry policy, and LazyCloud replaces a preempted endpoint container.
-Functions that are safe to repeat, and long jobs that checkpoint to a volume,
-lose little to a preemption.
-
-`preemptible=False` requires capacity that is not reclaimed. It adds the CPU
-and memory premium listed on the [pricing page](https://lazycloud.dev/pricing),
-and no GPU premium.
+Workloads run on cheaper preemptible capacity by default, which the provider
+can reclaim without notice. A preempted function call retries, and a preempted
+endpoint container is replaced, so functions that are safe to repeat lose
+little. `preemptible=False` keeps a workload on capacity that isn't reclaimed,
+at a CPU and memory [premium](/platform/plans#compute-pricing).
 
 ## Placement
 
-A workload runs where its workspace lives. See
-[Where a workload runs](/platform/compute#where-a-workload-runs). Two options
-narrow that:
+A workload runs where [its workspace lives](/platform/compute#where-a-workload-runs).
+Two options narrow that:
 
 - `machine="gpu-1"` pins the workload to a machine you
   [joined](/platform/compute#your-own-machines). It runs there or fails.
-- `region` and `availability_zone` pin placement inside the workspace's cloud
-  where that cloud supports it. Regions are `"us-east"`, `"us-west"`,
-  `"eu-central"`, `"eu-north"`, and `"ap-southeast"`. Pinning needs a plan that
-  allows it and adds a price multiplier. You cannot combine it with `machine`.
+- `region` and `availability_zone` pin placement within the workspace's cloud.
+  Regions are `"us-east"`, `"us-west"`, `"eu-central"`, `"eu-north"`, and
+  `"ap-southeast"`. Pinning costs more, needs a plan that allows it, and can't
+  combine with `machine`.
 
 ## Defaults
 
@@ -89,9 +81,9 @@ Scheduled functions default to `keep_warm=0`. Every workload defaults to
 
 ## Options
 
-These apply to functions, endpoints, ASGI apps, and realtime handlers except
-where a row says otherwise. Pods and sandboxes take the sizing, storage,
-network, and placement options. Their own pages list what else they accept.
+Options apply to functions, endpoints, ASGI apps, and realtime handlers unless
+a row says otherwise. Pods and sandboxes take the sizing, storage, and placement
+options, and their pages list the rest.
 
 | Option | Type | What it does |
 | --- | --- | --- |

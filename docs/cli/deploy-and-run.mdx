@@ -15,9 +15,8 @@ which comes only from its decorator or constructor.
 uv run lazycloud deploy HANDLER [HANDLER ...] [options]
 ```
 
-Deploys one workload or a whole app. See
-[handler references](/cli/overview#handler-references) for how `HANDLER`
-selects them:
+Deploys one workload or a whole app, chosen by
+[handler reference](/cli/overview#handler-references):
 
 ```bash
 uv run lazycloud deploy quickstart           # the module's only app
@@ -25,12 +24,9 @@ uv run lazycloud deploy myproject.api:app    # one app in a module
 uv run lazycloud deploy quickstart:hello     # one workload
 ```
 
-The deployment name is the workload's `name=` in code. `--source-root <dir>`
-packages a different directory as the code root.
-
-With `--json`, a successful app deployment returns one object with the app
-name and its resource results. If a deployment fails, the command stops and
-leaves already deployed resources in place.
+The deployment name comes from the workload's `name=`. `--source-root <dir>`
+uploads a different directory. A failure stops the command and leaves what
+already deployed in place.
 
 ```bash
 uv run lazycloud deploy page_stats.api --diff
@@ -38,24 +34,11 @@ uv run lazycloud deploy page_stats.api --diff --prune
 uv run lazycloud deploy page_stats.api -p
 ```
 
-Several references deploy their combined definitions, which suits separate
-apps deployed together. Each must select a complete app, and references to the
-same app object count once. The CLI rejects two definitions that share an app,
-workload kind, and name.
-
-`--diff` lists which workloads the deploy would add or redeploy, and marks
-deployed workloads the definitions omit as `retain`. It does not compare
-source or configuration. Existing workloads show `redeploy` because every
-deploy creates another version. `--diff` uploads no source,
-builds no images, and changes nothing remotely. It still imports your Python
-modules, so their module-level code runs.
-
-`--prune`, or `-p`, removes deployed workloads that the supplied app
-definitions omit, and `--diff` shows them as `remove` actions. See
-[Remove workloads](/concepts/apps#remove-workloads) for what pruning removes
-and keeps. `app.plan(prune=True)` and `app.deploy(prune=True)` are the SDK
-forms, and both accept `workspace`. `--json` returns the typed plan or
-deployment result, including the prune result when requested.
+`--diff` lists each workload as `add`, `redeploy`, `retain`, or, with `--prune`,
+`remove`, without uploading or changing anything. It doesn't compare source or
+configuration, and it still imports your modules. `--prune`, or `-p`,
+[removes workloads](/concepts/apps#remove-workloads) the code no longer
+declares. Several references deploy separate complete apps together.
 
 ## lazycloud run
 
@@ -63,27 +46,19 @@ deployment result, including the prune result when requested.
 uv run lazycloud run HANDLER [ARGS]... [options]
 ```
 
-Calls a decorated function remotely from your working tree, shows its progress
-and logs, and prints the result. It needs no deploy first. JSON arguments
-become Python values, and other arguments stay strings:
+Calls a function once in the cloud from your working tree, with no deploy, and
+prints the result. JSON arguments become Python values, and anything else stays
+a string:
 
 ```bash
 uv run lazycloud run quickstart:hello LazyCloud
 uv run lazycloud run reports:summarize_sales '[1200, 3500, 800]'
 ```
 
-Arguments are positional. Lists and objects need quoting so the shell passes
-each as one argument.
-
-Passing a pod starts an instance with a command. A plain Python callable runs
-locally, so an example can coordinate remote calls from it. For objects with
-`.run()` or `.remote()`, the CLI calls those methods.
-
-Progress and remote logs go to stderr, and the result goes to stdout. See
-[live progress](/concepts/tasks-and-logs#live-progress). Human output prints
-Python results directly, including NumPy arrays and custom objects. `--json`
-needs a JSON-compatible result and reports an output error for anything else.
-`--output result.pkl` saves a Python result to a file.
+Arguments are positional, so lists and objects need quotes. A pod handler
+starts an instance with the given command, and a plain Python callable runs
+locally. Logs go to stderr and the result to stdout. `--json` needs a
+JSON-compatible result, and `--output result.pkl` saves any result to a file.
 
 ## lazycloud serve
 
@@ -91,17 +66,10 @@ needs a JSON-compatible result and reports an output error for anything else.
 uv run lazycloud serve HANDLER [--timeout <seconds>] [--sync-dir <dir>]
 ```
 
-Runs a function, endpoint, or ASGI app as a [live preview](/concepts/workflow#live-preview)
-and streams its logs until Ctrl+C. `--sync-dir <dir>`, or `--sync`, syncs a
-directory other than the current one. `--timeout 0`, the default, serves until
-you interrupt it.
-
-After an edit, `serve` transfers only the changed files. A file becomes visible
-only after its checksum verifies. Large files transfer in chunks and need
-temporary disk space locally and on the worker. [What gets uploaded](/concepts/workflow#what-gets-uploaded)
-covers `.lazycloudignore`.
-
-From Python, `.serve()` takes the same `timeout` and `sync_dir`:
+Runs a function, endpoint, or ASGI app as a
+[live preview](/concepts/workflow#live-preview) until Ctrl+C, or until
+`--timeout` seconds pass. Each edit syncs only the changed files. `--sync-dir`
+syncs a directory other than the current one. The Python form:
 
 ```python
 from page_stats import analyze
@@ -109,8 +77,7 @@ from page_stats import analyze
 analyze.serve(sync_dir=".")
 ```
 
-Functions, endpoints, ASGI apps, and apps all have `.serve()`. ASGI previews
-run one HTTP worker so that source changes restart the application.
+Functions, endpoints, ASGI apps, and apps all have `.serve()`.
 
 ## lazycloud shell
 

@@ -62,13 +62,10 @@ if __name__ == "__main__":
 uv run python quickstart.py
 ```
 
-The script calls `hello` twice. `.local()` runs it in your own Python process,
-with no upload and no charge, and a plain `hello("LazyCloud")` call does the
-same. `.remote()` uploads your code to LazyCloud and runs
-the function on a cloud machine with 1 CPU and 256 MiB. Nothing runs in a
-container on your computer. The cloud container's logs stream back to your
-terminal, and the call returns `hello LazyCloud`. The first remote call takes
-longer while LazyCloud builds the image.
+`.local()`, like a plain `hello("LazyCloud")` call, runs in your own Python
+process for free. `.remote()` uploads your code and runs the same function on a
+cloud machine with 1 CPU and 256 MiB, then streams its logs back and returns
+`hello LazyCloud`. The first remote call waits for the image to build.
 
 The CLI makes the same cloud call without a `__main__` block:
 

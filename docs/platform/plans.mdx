@@ -3,137 +3,84 @@ title: "Plans and limits"
 description: "What your plan includes, what usage costs, and what happens when you reach a limit."
 ---
 
-Your plan belongs to your account and covers every workspace you own. See it,
-change it, and add a payment method in the dashboard under Settings > Billing.
-Current prices and per-plan limits are on the
-[pricing page](https://lazycloud.dev/pricing).
-
-Billing shows your balance and monthly usage limit, which are worth a look
-before a long job. A saved card unlocks your plan's GPU access but adds no
-credit.
+Your plan belongs to your account and covers every workspace you own. The
+dashboard manages it under Settings, then Billing, and the
+[pricing page](https://lazycloud.dev/pricing) lists current prices and limits.
 
 ## What you pay for
 
-Compute charges include a base rate per running container, plus CPU, memory,
-and GPU rates. Startup, model loading, and warm idle time count toward runtime.
-Volumes bill by the GiB-month stored. Compute, storage, and transfer charges
-all deduct from one prepaid credit balance. Trial credit, subscription credit,
-and purchased credit fund that same balance. Subscription fees are separate.
+Compute bills per second while a container runs, including startup, model
+loading, and warm idle time. Volumes bill per GiB-month, and API responses and
+internet egress are metered. Direct downloads through signed object-storage
+URLs are free.
 
-Direct downloads through signed object-storage URLs are free. LazyCloud meters
-responses served through the API and workload internet egress.
+Every charge comes out of one prepaid credit balance, funded by trial credit,
+subscription credit, and credit you buy. Purchased credit doesn't expire. Trial
+and subscription credit expire on their stated dates. Subscription fees bill
+separately. The Usage page breaks spend down by app and workload.
 
-The Usage page shows spend over time, broken down by app and workload. Add
-credit in Settings > Billing, or save an automatic reload threshold and amount.
-Purchased credit does not expire. Trial and subscription credit expire on their
-stated dates.
-
-Stopping pods you no longer need and shorter
-[`keep_warm`](/concepts/scaling#warm-containers) windows on functions and
-endpoints reduce idle charges. Downloading an output does not delete the
-stored copy, so unused files need removing separately.
+Idle charges come mostly from warm containers and running pods, so short
+[`keep_warm`](/concepts/scaling#warm-containers) windows and stopped pods keep
+them down. Stored files bill until you delete them.
 
 ## Automatic reload
 
-Automatic reload charges your saved card when your balance reaches the threshold
-you choose. Trial, subscription, and purchased credit all count toward that
-balance. Select a suggested amount or choose Custom amount to enter your own.
-The billing form shows the permitted credit purchase range.
-
-Buying credit, enabling automatic reload, and changing plans each need a
-payment method in Billing. Update payment method replaces a saved card.
-Invoices and the monthly usage limit remain available without a saved card.
-
-A declined payment or one that needs bank authentication pauses automatic
-reload. Reload resumes in Billing after you update the payment method, and
-checkout still adds credit meanwhile. Payments already processing may finish
-after you disable reload.
-
-The monthly usage limit applies to metered usage, not card payments. A reload
-can add credit beyond that limit. Unused purchased credit stays in your
-balance.
+Automatic reload charges your saved card when the balance drops to a threshold
+you choose. A declined payment, or one that needs bank authentication, pauses
+it until the payment method is updated. Buying credit, reloading, and changing
+plans all need a saved card. A card alone unlocks your plan's GPU access and
+concurrency, but adds no credit.
 
 ## Compute pricing
 
-The pricing page lists base rates for automatic placement. LazyCloud chooses
-where the workload runs, and workloads allow interruptions. These rates have
-no regional surcharge. LazyCloud meters compute per second, even when the
-pricing page shows hourly rates.
+The pricing page lists base rates for automatic placement on preemptible
+capacity, metered per second. One CPU is one vCPU. CPU and memory each bill at
+the greater of the reservation and measured use. GPUs bill per card, on top of
+the workload's CPU and memory.
 
-One CPU is one vCPU and matches `cpu=1` in a workload definition. CPU and memory
-each bill at the greater of the reserved amount and measured usage.
-
-GPU rates are per card. Add the CPU and memory charges for the same workload
-size to get the total compute cost. GPU availability depends on the model and
-whether the workload allows interruptions.
-
-Pinning a region or availability zone requires a plan that allows it. Placement
-choices apply the following multipliers to base compute prices:
+Placement choices multiply the base compute rate:
 
 | Workload setting | CPU and memory | GPU |
 | --- | --- | --- |
-| Non-preemptible execution | 3× | 1× |
+| `preemptible=False` | 3× | 1× |
 | Pinned region or availability zone | 1.5× | 1.5× |
 | Both | 4.5× | 1.5× |
 
-Storage and transfer rates do not change with these choices. Volume storage
-includes artifacts. The quoted rate uses a 30-day month, and charges prorate to
-the time stored.
+Pinning placement needs a plan that allows it. Storage and transfer rates never
+change with placement. Volume storage includes artifacts and prorates over a
+30-day month.
 
-For a connected cloud account, the management fee is a percentage of base
-compute rates. Your cloud provider bills the underlying machines separately.
-Storage and transfer keep their full published rates.
-
-The [pricing catalog](https://lazycloud.dev/api/v1/pricing) lists published
-rates, regional multipliers, and the date the rates take effect.
+On a connected AWS account, AWS bills the machines and LazyCloud charges a
+management fee as a percentage of base compute rates. The
+[pricing catalog](https://lazycloud.dev/api/v1/pricing) has every published
+rate and its effective date.
 
 ## Plans
 
-Free has no subscription fee or minimum term. New accounts receive a one-time
-trial credit, with no recurring Free allowance.
+Free has no fee and a one-time trial credit. Team adds monthly usage credit,
+higher concurrency, custom domains, and three members across the account's
+workspaces. Business adds unlimited members, more credit and concurrency,
+longer log and artifact retention, and a connected AWS account. Every plan can
+join its own machines and use every GPU model, given a saved card, credit, and
+availability.
 
-Every plan can use all offered GPU models with a saved payment method and a
-positive credit balance, subject to GPU availability.
-
-Team includes monthly usage credit, higher concurrency, custom domains, and
-three members total, including the owner. The member limit spans all
-workspaces the account owns, and each person counts once.
-
-Business adds unlimited members, more usage credit, higher concurrency, and
-longer log and artifact retention. It also lets you connect one AWS account
-and create workspaces that run inside it.
-Joining your own machines is available on every plan.
-
-Plan changes happen in Settings > Billing, under Change plan. You cannot move
-to a plan whose limits your account already exceeds. The dashboard names what
-has to go first. While a plan change is processing, you cannot add
-plan-limited resources.
-
-## Without a payment method
-
-An account with no card on file has lower concurrency limits and can use only
-the trial GPU models listed on the pricing page. Adding a card unlocks the
-plan's full concurrency and GPU selection, but adds no credit. Work still
-requires a positive credit balance.
+Without a saved card, an account has lower concurrency and only the trial GPU
+models. A plan change can't go below limits the account already exceeds, and
+the dashboard names what has to go first.
 
 ## When you reach a limit
 
-Starting a container past your concurrency limit fails with a message naming
-the limit. LazyCloud checks workspace and member limits when you create those
-resources. Reaching a concurrency limit does not stop existing work.
+A container past the concurrency limit fails to start with a message naming
+the limit, and existing work keeps running. Workspace and member limits apply
+when those are created.
 
-When your credit balance reaches zero, LazyCloud blocks new work and transfers,
-and the usage monitor stops running compute. Transfers already under way may
-finish. LazyCloud records usage periodically, so the balance can go negative
-before work stops. Added credit covers that negative balance first.
+At a zero balance, new work and transfers stop and running compute shuts down.
+Usage records periodically, so the balance can dip below zero first, and added
+credit covers that before anything else.
 
-You can also save a monthly usage limit across your workspaces. It counts usage
-paid with any credit and resets on the first of each month at midnight UTC.
-Reaching it stops compute and blocks new work and transfers in the same way.
-Subscription fees do not count toward this limit. No limit removes it, and $0
-stops new work and transfers. Running compute can exceed the limit between
-usage records and shutdown.
+A monthly usage limit, set in Billing, stops work the same way when reached and
+resets on the first of each month at midnight UTC. It counts all credit usage
+except subscription fees. Setting it to $0 blocks new work.
 
-If funds run out, LazyCloud keeps existing stored data for 30 days, then
-deletes it. Credit that restores a positive balance within that period keeps
-the data. Storage is free during this grace period.
+If funds run out, stored data stays for 30 days, free of storage charges, then
+is deleted. Credit that restores a positive balance in that window keeps it.

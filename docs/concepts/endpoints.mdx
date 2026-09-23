@@ -3,7 +3,7 @@ title: "Endpoints, ASGI, and realtime"
 description: "HTTPS and WebSocket services in Python, each with a stable URL and bearer-token auth by default."
 ---
 
-Which workload fits depends on what you already have:
+Pick by what you already have:
 
 | You have | Use |
 | --- | --- |
@@ -11,7 +11,7 @@ Which workload fits depends on what you already have:
 | A FastAPI or Starlette app with several routes | `app.asgi(...)` |
 | A WebSocket message handler | `@app.realtime` |
 
-Each gets a stable URL when you deploy it and previews with
+Each gets a stable HTTPS URL in the cloud when deployed, and previews with
 [`lazycloud serve`](/concepts/workflow#live-preview).
 
 ## Endpoints
@@ -39,7 +39,7 @@ returned model as JSON. The model also becomes the response schema that
 [typed client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
 use. `route` defaults to `/` and `methods` to `GET` and `POST`.
 
-Deploy it, then call the printed URL with an
+Deployed, it answers at the printed URL with an
 [access token](/platform/auth#ci-and-scripts):
 
 ```bash
@@ -52,8 +52,7 @@ curl --fail --show-error "<endpoint-url>" \
 
 The response is `{"words": 4}`.
 
-From Python, the decorated function is a client that uses your
-`lazycloud login` credentials:
+In Python, the decorated function is also the client:
 
 ```python
 from api_demo import count_words
@@ -62,13 +61,13 @@ response = count_words.request("Run Python on LazyCloud")
 print(response.status_code, response.json())
 ```
 
-`request()` goes to a running preview or the deployment. See
-[Where a call goes](/concepts/workflow#where-a-call-goes) for choosing one.
+`request()` uses your `lazycloud login` sign-in and goes to a running preview or
+the deployment. See [Where a call goes](/concepts/workflow#where-a-call-goes).
 
 ## ASGI applications
 
-`app.asgi(...)` wraps an existing FastAPI or Starlette app. Save this as
-`web_app.py`, and run `uv add fastapi` so the CLI can import it locally:
+`app.asgi(...)` wraps an existing FastAPI or Starlette app. FastAPI needs to be
+installed locally too, with `uv add fastapi`, because the CLI imports the file:
 
 ```python
 from fastapi import FastAPI
@@ -93,7 +92,7 @@ service = app.asgi(
 uv run lazycloud deploy web_app:service
 ```
 
-From Python, `request()` sends a full request to a route:
+`request()` sends a full request to a route:
 
 ```python
 from web_app import service
@@ -102,14 +101,11 @@ response = service.request(method="GET", path="/health", target="deployed")
 print(response.json())
 ```
 
-`request()` accepts `method`, `path`, `json`, `data`, `headers`, and `params`,
-plus the same target options as endpoints. An
-[exported client package](/concepts/apps#call-deployed-workloads-from-other-projects)
-gives each route a typed method from the app's OpenAPI schema.
-
-ASGI apps take the endpoint options, with `concurrent_requests` in place of
-`concurrency` and `keep_warm_seconds` in place of `keep_warm`. `name` defaults
-to `"asgi"`.
+It takes `method`, `path`, `json`, `data`, `headers`, and `params`. An
+[exported client](/concepts/apps#call-deployed-workloads-from-other-projects)
+gives each route a typed method instead. ASGI apps take the endpoint options,
+with `concurrent_requests` for `concurrency` and `keep_warm_seconds` for
+`keep_warm`.
 
 ## Realtime handlers
 
@@ -124,22 +120,19 @@ def echo(message: str) -> str:
 ```
 
 Realtime handlers take the ASGI options and deploy, preview, and scale the same
-way. `name` defaults to `"realtime"`.
+way.
 
 ## Authentication
 
-All three require a bearer token by default. Any
-[access token](/platform/auth#ci-and-scripts) with access to the workspace
-works, sent as `Authorization: Bearer <token>`. The Python clients send your
-`lazycloud login` credentials.
-
-`authorized=False` makes the URL public, so anyone who has it can call the
-workload, and your own code decides whom to serve.
+All three require `Authorization: Bearer <token>` with an
+[access token](/platform/auth#ci-and-scripts) for the workspace, and the Python
+clients send your sign-in. `authorized=False` makes the URL public, leaving
+access control to your code.
 
 ## Capacity
 
-By default an endpoint runs one server process in one container, and that
-process handles one request at a time. Three settings raise that:
+An endpoint starts as one process handling one request at a time. Three
+settings raise that:
 
 ```python
 from lazycloud import QueueDepthAutoscaler
@@ -156,16 +149,11 @@ def count_words_scaled(text: str) -> WordCount:
     return WordCount(words=len(text.split()))
 ```
 
-Each container runs `workers` processes, and each process takes `concurrency`
-requests. This endpoint handles 16 requests per container and adds a container
-for every 16 in flight, up to 8. When requests in flight exceed
-`max_pending_tasks`, 100 by default, the endpoint answers `429`. An async ASGI
-app can take a high `concurrent_requests` in one worker, and a blocking one
-needs more `workers`. [Scaling and concurrency](/concepts/scaling) explains how
-to choose these values.
-
-`checkpoint_enabled=True` snapshots a warmed worker so replacement containers
-restore from it instead of running `on_start` again.
+Two workers of eight requests make 16 per container, and the autoscaler adds a
+container per 16 in flight, up to 8. Past `max_pending_tasks`, 100 by default,
+requests get `429`. [Scaling](/concepts/scaling) covers choosing the numbers.
+`checkpoint_enabled=True` lets new containers restore a warmed worker instead
+of rerunning `on_start`.
 
 ## Custom domains
 
@@ -179,13 +167,10 @@ uv run lazycloud deployment stop count_words
 uv run lazycloud deployment delete count_words
 ```
 
-`stop` takes the endpoint offline and keeps its definition, and `delete`
-removes it. Deleting the workload from the code and deploying with
-[`--prune`](/concepts/apps#remove-workloads) also removes it.
+`stop` takes it offline and keeps the definition, and `delete` removes it, as
+does [`--prune`](/concepts/apps#remove-workloads) once it's gone from the code.
 
 ## Shared settings
 
-[Images](/concepts/images) set packages. [Resources and options](/concepts/resources)
-covers CPU, memory, GPUs, and every option and default.
-[Scaling and concurrency](/concepts/scaling) covers containers, idle windows,
-and their cost.
+[Images](/concepts/images), [resources](/concepts/resources), and
+[scaling](/concepts/scaling).

@@ -23,20 +23,14 @@ item = q.pop()
 print(item)
 ```
 
-`pop()` removes and returns the next item, or `None` when the queue is empty.
-Each item goes to exactly one caller, however many containers pop at once. If
-processing fails after the pop, your consumer decides what happens to the item.
-For work that needs task results and retries, submit a
-[function](/concepts/functions#submit-work-in-the-background) instead.
-`QueueDepthAutoscaler` scales on a function's pending calls, not on this named
-queue.
+`pop()` hands each item to exactly one caller, or returns `None` when empty.
+Work that needs results and retries fits a
+[function call](/concepts/functions#submit-work-in-the-background) better.
 
 ## Coordinate containers
 
-`.map()` fits when every input is known up front. A queue fits work discovered
-as you go, producers and consumers that run at different times, or a handful of
-long-lived workers draining a stream of small items without a task per item. A
-map records progress those workers can share:
+`.map()` fits inputs known up front. A queue fits work discovered along the way,
+drained by a few long-lived workers, with a map to share progress:
 
 ```python
 from lazycloud import App, Map, Queue, QueueDepthAutoscaler
@@ -71,17 +65,11 @@ if __name__ == "__main__":
     print(sum(call.get() for call in calls))
 ```
 
-Eight workers on eight containers pop from one queue and stop when it is
-empty. Without the autoscaler they would run one after another. The map's `in`
-check and `set` are separate calls, so two workers can both pass the check for
-the same URL and fetch it twice. A crawler can tolerate that. A payment cannot.
-An item that must be handled exactly once needs an idempotent handler, or a
-function call, which has a task record and retries.
-
-The queue has no acknowledgement, so a worker that crashes after a pop loses
-the item. Small, re-creatable items limit the loss. Otherwise a worker can
-write each item to a map before working on it, and a sweeper can requeue stale
-entries.
+Eight workers drain one queue in parallel. The `in` check and `set` are two
+calls, so two workers can occasionally fetch the same URL. A crawler shrugs
+that off, and a payment can't, so exactly-once work belongs in an idempotent
+handler or a function call. A worker that crashes after `pop()` loses the item,
+since the queue has no acknowledgement.
 
 ## Map
 
@@ -101,14 +89,13 @@ len(state)
 del state["cursor"]
 ```
 
-Keys expire after seven days unless `set(..., ttl=...)` says otherwise. Seven
-days is the maximum timed expiry. `ttl=0` keeps a key until you delete it.
+Keys expire after seven days, the longest timed expiry, and `ttl=0` keeps a key
+until deleted.
 
 ## Edit from the dashboard
 
-The dashboard's Storage section has Queues and Maps pages for inspecting and
-correcting data by hand. See
-[the dashboard guide](/platform/dashboard#edit-queues-and-maps).
+The [dashboard](/platform/dashboard#edit-queues-and-maps) inspects and edits
+both by hand.
 
 ## Delete a queue or map
 
