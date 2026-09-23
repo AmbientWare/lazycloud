@@ -13,14 +13,20 @@ Save this as `reports.py`:
 
 ```python
 from lazycloud import App
+from pydantic import BaseModel
 
 app = App("reports")
 
 
+class SalesSummary(BaseModel):
+    sales: int
+    total_cents: int
+
+
 @app.function(cpu=1, memory="256Mi", timeout_seconds=60, retries=0)
-def summarize_sales(amounts_cents: list[int]) -> dict[str, int]:
+def summarize_sales(amounts_cents: list[int]) -> SalesSummary:
     print(f"Summarizing {len(amounts_cents)} sales", flush=True)
-    return {"sales": len(amounts_cents), "total_cents": sum(amounts_cents)}
+    return SalesSummary(sales=len(amounts_cents), total_cents=sum(amounts_cents))
 ```
 
 ## Call it
@@ -134,7 +140,8 @@ code you trust.
 
 HTTP calls, the dashboard playground, `lazycloud run --json`, and
 [exported client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
-need JSON-compatible values. Each argument payload and result can be at most
+need JSON-compatible values, and Pydantic models and dataclasses convert to
+JSON. Each argument payload and result can be at most
 16 MiB. Larger output fits in a [volume](/concepts/volumes) or an
 [artifact](/concepts/artifacts), with the call returning its path.
 

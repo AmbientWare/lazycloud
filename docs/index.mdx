@@ -12,13 +12,19 @@ pay per second while a cloud container runs.
 
 ```python
 from lazycloud import App, Image
+from pydantic import BaseModel
 
 app = App("reports")
 
 
+class Summary(BaseModel):
+    total: float
+    mean: float
+
+
 @app.function(image=Image(python_version="3.12"), cpu=2, memory="4Gi")
-def summarize(amounts: list[float]) -> dict[str, float]:
-    return {"total": sum(amounts), "mean": sum(amounts) / len(amounts)}
+def summarize(amounts: list[float]) -> Summary:
+    return Summary(total=sum(amounts), mean=sum(amounts) / len(amounts))
 ```
 
 ## Develop locally, test in the cloud, deploy

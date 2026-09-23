@@ -23,21 +23,32 @@ the background:
 import urllib.request
 
 from lazycloud import App
+from pydantic import BaseModel
 
 app = App("page_stats")
 
 
+class PageStats(BaseModel):
+    bytes: int
+    words: int
+    links: int
+
+
+class AnalysisStarted(BaseModel):
+    task_id: str
+
+
 @app.function(cpu=1, memory="512Mi", timeout_seconds=120)
-def analyze_page(url: str) -> dict[str, int]:
+def analyze_page(url: str) -> PageStats:
     with urllib.request.urlopen(url, timeout=30) as response:
         html = response.read().decode("utf-8", errors="replace")
-    return {"bytes": len(html), "words": len(html.split()), "links": html.count("<a ")}
+    return PageStats(bytes=len(html), words=len(html.split()), links=html.count("<a "))
 
 
 @app.endpoint(name="analyze", methods=["POST"])
-def analyze(url: str) -> dict[str, str]:
+def analyze(url: str) -> AnalysisStarted:
     call = analyze_page.spawn(url)
-    return {"task_id": call.task_id}
+    return AnalysisStarted(task_id=call.task_id)
 ```
 
 ## Develop locally
@@ -48,7 +59,7 @@ from page_stats import analyze_page
 
 def test_analyze_page() -> None:
     stats = analyze_page.local("https://example.com")
-    assert stats["words"] > 0
+    assert stats.words > 0
 ```
 
 `.local()`, or a plain `analyze_page(...)` call, runs in your Python process,

@@ -1,3 +1,5 @@
+from pydantic import BaseModel
+
 from lazycloud import App, Image
 
 app = App("quickstart")
@@ -10,9 +12,13 @@ def hello(name: str = "world") -> str:
     return f"hello {name}"
 
 
+class Greeting(BaseModel):
+    greeting: str
+
+
 @app.endpoint(name="greet", route="/greet", methods=["POST"], image=image)
-def greet(name: str) -> dict[str, str]:
-    return {"greeting": hello.local(name)}
+def greet(name: str) -> Greeting:
+    return Greeting(greeting=hello.local(name))
 
 
 if __name__ == "__main__":
