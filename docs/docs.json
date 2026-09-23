@@ -45,39 +45,44 @@
         ]
       },
       {
-        "group": "Apps and workloads",
+        "group": "Core concepts",
         "pages": [
           "concepts/apps",
           "concepts/workflow",
-          "concepts/functions",
-          "concepts/schedules",
-          "concepts/endpoints",
-          "concepts/pods",
-          "concepts/sandboxes"
-        ]
-      },
-      {
-        "group": "Configure workloads",
-        "pages": [
-          "concepts/images",
-          "concepts/resources",
-          "concepts/scaling"
-        ]
-      },
-      {
-        "group": "Storage and secrets",
-        "pages": [
-          "concepts/volumes",
-          "concepts/secrets",
-          "concepts/queues-maps",
-          "concepts/artifacts"
-        ]
-      },
-      {
-        "group": "Observe",
-        "pages": [
-          "concepts/tasks-and-logs",
-          "platform/dashboard"
+          {
+            "group": "Workloads",
+            "pages": [
+              "concepts/functions",
+              "concepts/schedules",
+              "concepts/endpoints",
+              "concepts/pods",
+              "concepts/sandboxes"
+            ]
+          },
+          {
+            "group": "Configure workloads",
+            "pages": [
+              "concepts/images",
+              "concepts/resources",
+              "concepts/scaling"
+            ]
+          },
+          {
+            "group": "Storage and secrets",
+            "pages": [
+              "concepts/volumes",
+              "concepts/secrets",
+              "concepts/queues-maps",
+              "concepts/artifacts"
+            ]
+          },
+          {
+            "group": "Observe",
+            "pages": [
+              "concepts/tasks-and-logs",
+              "platform/dashboard"
+            ]
+          }
         ]
       },
       {
