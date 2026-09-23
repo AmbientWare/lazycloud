@@ -68,9 +68,6 @@ class DiskPublishPayload(ContractModel):
     stored_bytes_added: int = Field(ge=0)
     """Bytes of chunks this publish uploaded that the disk did not already store."""
 
-    final: bool = False
-    """Release the disk with this publish; the container is stopping."""
-
 
 class DiskPublishResult(ContractModel):
     generation: int = Field(gt=0)

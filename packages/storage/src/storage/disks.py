@@ -68,7 +68,6 @@ class DiskPublication:
     manifest_key: str
     manifest_sha256: str
     stored_bytes_added: int
-    final: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,8 +208,7 @@ class DiskService:
             row = self._lock_live(repository, publication.disk_id)
             if publication.generation <= row.generation:
                 # A retry of a publish whose answer was lost. The manifest digest
-                # names the layer, so a match is that same publish and changes
-                # nothing; the lease is only released while it is still current.
+                # names the layer, so a match is that same publish and changes nothing.
                 recorded = repository.published_manifest_sha256(
                     publication.disk_id, publication.generation
                 )
@@ -219,15 +217,9 @@ class DiskService:
                         f"disk {row.name} is at generation {row.generation}; generation "
                         f"{publication.generation} cannot be published again"
                     )
-                if publication.final and self._lease_matches(
-                    row, publication.container_id, publication.lease_token
-                ):
-                    self._release(repository, row)
                 return publication.generation
             self._require_lease(row, publication.container_id, publication.lease_token)
             self._record_generation(repository, row, publication)
-            if publication.final:
-                self._release(repository, row)
             return publication.generation
 
     def release(self, disk_id: str, *, container_id: str, lease_token: str) -> bool:

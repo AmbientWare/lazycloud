@@ -86,11 +86,8 @@ class WorkerDiskLeaseService:
                 manifest_key=payload.manifest_key,
                 manifest_sha256=payload.manifest_sha256,
                 stored_bytes_added=payload.stored_bytes_added,
-                final=payload.final,
             )
         )
-        if payload.final:
-            self.volumes.release(payload.disk_id)
         return DiskPublishResult(generation=generation)
 
     def release(self, payload: DiskReleasePayload, *, container: ContainerRecord) -> bool:
