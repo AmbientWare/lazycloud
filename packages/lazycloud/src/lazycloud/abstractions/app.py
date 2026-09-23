@@ -101,11 +101,11 @@ class App:
     """Owns the deployable resources registered under one application slug."""
 
     def __init__(self, slug: str) -> None:
-        """Create an app namespace for functions, endpoints, queues, pods, and sandboxes.
+        """Create an app namespace for functions, endpoints, pods, and sandboxes.
 
         The slug is the stable production identity used by deploy, serve, and
         generated client handles. Use a short lowercase slug such as
-        `"billing"` or `"reporting-api"`.
+        `"billing"` or `"reporting_api"`.
         """
         self.slug = validate_app_slug(slug)
         self._resources: dict[tuple[DeploymentKind, str], AppResource] = {}
@@ -944,6 +944,8 @@ class App:
         On failure, queued deployments are canceled; running deployments may finish.
 
         Args:
+            prune: Remove omitted workloads after all deployments register successfully.
+                Requires a complete app. An empty app removes every deployed workload.
             resource: Optional resource selector to deploy only one item.
             name: Deployment name override when deploying one resource.
             workspace: Workspace slug or name for the deployment.

@@ -210,12 +210,8 @@ class DeploymentService:
                     deployment,
                     workspace_id=workspace_record.id,
                 )
-            # Unconditional, because a spec without a schedule is stating that
-            # this resource has none — and the row a prior version wrote is
-            # named for the same subdomain. After the stub exists, because a
-            # schedule names the stub it fires, and inside this block so a
-            # failure here is compensated with the rest of the deploy rather
-            # than leaving a schedule for a deployment that was rolled back.
+            # Register the stub before its schedule can fire. Keep schedule writes
+            # inside the compensation block so a failed deploy leaves no schedule.
             self.schedules.set_for_deployment(
                 deployment,
                 cron=normalized_spec.cron,
@@ -459,25 +455,11 @@ def _release_superseded_warm_floors(
     *,
     workspace_id: str,
 ) -> None:
-    """Let prior versions of this function drain.
+    """Release prior versions' warm containers while keeping those versions invocable.
 
-    A warm floor is asked for on a resource, not on a version of it: an author
-    who wants two interpreters resident wants two, not two per deploy. It is
-    held per stub and every version keeps its own, so without this each deploy
-    pins another floor's worth of containers that no name resolves to — and a
-    floor makes the idle window infinite, so nothing else ever removes them.
-
-    The version stays active and invocable by number, which is the contract
-    prior versions have. It stops being warm, which costs it a cold start and
-    nothing else.
-
-    The window is deliberately left infinite while the floor goes to zero. A
-    container reads its keep-warm seconds from the environment it was started
-    with, so restoring a finite window here would reach the config and not the
-    containers already holding the old floor: they would retire on a window
-    nothing told them about, which is to say never. Zero floor with no window is
-    what puts them under the autoscaler, which stops the idle ones on the next
-    tick and leaves the busy ones alone.
+    Leave the idle window infinite. Running containers read it from their startup
+    environment and would not see a shorter window written here. A zero floor
+    lets the autoscaler stop idle containers without interrupting busy ones.
     """
 
     repository = StubRepository(session)
@@ -503,30 +485,15 @@ class CronJobService:
         cron: str | None,
         workspace: str,
     ) -> CronJobRecord | None:
-        """Make this deployment's schedule match what its spec declared.
+        """Replace or remove the workload's schedule under the app lock.
 
-        One call for both answers, because the absence of a schedule is a fact a
-        deploy states as deliberately as its presence. Called only where a spec
-        declares one, the row a previous version wrote would outlive the source
-        line that asked for it: the author deletes `cron=`, redeploys, and the
-        old version keeps firing on a schedule nothing in their code names.
-
-        Takes the deployment rather than an id because the caller has already
-        resolved it, and because looking it up here would mean depending on the
-        service that deploys — which depends on the registration that calls this.
-
-        Named for the deployment's subdomain, which is the one identity a
-        resource keeps across its versions and is already checked for collisions
-        when it is minted. So a redeploy addresses the previous version's row
-        without anything having to go looking for it.
+        The subdomain identifies the schedule across deployment versions. Check
+        that this deployment still exists before either write, so a registration
+        delayed past pruning cannot change a replacement workload's schedule.
         """
-
-        if not cron:
-            self.delete(deployment.subdomain, workspace=workspace)
-            return None
         try:
-            normalized_cron = normalize_cron_expression(cron)
-            next_run_at = next_cron_run(normalized_cron)
+            normalized_cron = normalize_cron_expression(cron) if cron else None
+            next_run_at = next_cron_run(normalized_cron) if normalized_cron else None
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
         with self.context.database.session() as session:
@@ -534,18 +501,28 @@ class CronJobService:
             if deployment.app_id is not None:
                 AppRepository(session).get_for_update(deployment.app_id, workspace_id=workspace_id)
             if DeploymentRepository(session).get(deployment.id, workspace_id=workspace_id) is None:
-                raise ConflictError("cannot schedule a deleted deployment")
+                raise ConflictError("cannot change the schedule of a deleted deployment")
             repository = CronJobRepository(session)
-            record = CronJobRecord(
-                workspace_id=workspace_id,
-                name=deployment.subdomain,
-                cron=normalized_cron,
-                deployment_id=deployment.id,
-                next_run_at=next_run_at,
+            if normalized_cron is None:
+                record = repository.get(deployment.subdomain, workspace_id=workspace_id)
+                repository.delete(deployment.subdomain, workspace_id=workspace_id)
+            else:
+                record = repository.upsert(
+                    CronJobRecord(
+                        workspace_id=workspace_id,
+                        name=deployment.subdomain,
+                        cron=normalized_cron,
+                        deployment_id=deployment.id,
+                        next_run_at=next_run_at,
+                    ),
+                    workspace_id=workspace_id,
+                )
+        if record is not None:
+            self.publish_change(
+                record,
+                WorkspaceChangeType.Created if normalized_cron else WorkspaceChangeType.Deleted,
             )
-            saved = repository.upsert(record, workspace_id=workspace_id)
-        self.publish_change(saved, WorkspaceChangeType.Created)
-        return saved
+        return record if normalized_cron else None
 
     def list(self, *, workspace: str = "default") -> list[CronJobRecord]:
         with self.context.database.session() as session:

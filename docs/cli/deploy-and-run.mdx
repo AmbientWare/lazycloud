@@ -42,9 +42,9 @@ contains no app, supply an explicit handler reference. A decorated handler such 
 returns one object containing the app name and its resource results. A deployment
 failure stops the command without undoing resources already deployed.
 
-Pass several app files to deploy their combined definitions. All files are imported
-before workloads are collected. References to the same app object count once;
-different definitions with the same app, workload kind, and name are rejected.
+Pass several app files to deploy their combined definitions. The CLI imports every
+file before collecting workloads. References to the same app object count once.
+The CLI rejects conflicting definitions with the same app, workload kind, and name.
 Multiple references must select complete apps and cannot use `--resource` or `--name`.
 
 ```bash
@@ -53,23 +53,25 @@ uv run lazycloud deploy api.py workers.py --diff --prune
 uv run lazycloud deploy api.py workers.py -p
 ```
 
-`--diff` previews `add`, `redeploy`, and `retain` actions without uploading source,
-building images, or changing remote resources. It imports your Python modules, so
-their module-level code still executes. This is a workload membership preview;
-existing workloads show `redeploy` because deploying creates another version.
+`--diff` lists which workloads the deploy would add, redeploy, or retain. It does
+not compare source or configuration. Existing workloads show `redeploy` because
+deploying creates another version. The command skips source uploads and image
+builds and makes no remote changes. It imports your Python modules, so their
+module-level code still executes.
 
 `--prune`, or `-p`, removes deployed workloads absent from the supplied app
 definitions. With `--diff`, these appear as `remove` actions. Pruning includes
 stopped workloads and all surviving versions of an omitted workload. It stops
-their containers and removes their schedules and routes; volumes, secrets, and
-stored data are retained. Workloads declared in the files keep their prior versions.
+their containers and removes their schedules and routes. It preserves volumes,
+secrets, and stored data. Workloads declared in the files keep their prior versions.
 
 Supply the complete definition of each app when pruning. An explicitly empty
 `App` removes all its deployed workloads while retaining the app. Handler selections
 and `--resource` cannot prune. Pruning starts only after every requested deployment
 has registered successfully. Registration does not guarantee application health.
-If the app changes concurrently, pruning fails without selecting new deletion targets.
-Interrupted cleanup resumes on the server for the versions already selected.
+If another operation changes the app during deployment, pruning refuses to delete
+workloads. Once pruning has started, the server retries interrupted cleanup for
+the same deployment versions.
 
 The SDK exposes the same operations through `app.plan(prune=True)` and
 `app.deploy(prune=True)`. Both accept `workspace`. `--json` returns the typed plan

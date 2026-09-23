@@ -363,25 +363,11 @@ class TaskRepository:
         error: str,
         deployment_ids: Collection[str] | None = None,
     ) -> list[Task]:
-        """Retire the work of an app that is going away.
+        """Cancel queued work for the app or its selected deployments.
 
-        Deleting an app stops its containers, and its queued invocations have to
-        go the same way. Left ready they are read by every scheduler pass for as
-        long as the rows exist, refused by app admission each time, and logged as
-        a task that failed to schedule rather than as the deletion that stranded
-        them.
-
-        Queued only, and the status says the whole of it. `Running` is settled
-        against the container holding it, which the same deletion is already
-        stopping, and a finished task is a record of what happened rather than
-        something a later deletion rewrites. Adding `container_id IS NULL`
-        beside this reads like a second way of saying unclaimed and is not: a
-        task in `retry` still names the container its failed attempt ran on, so
-        that predicate would silently spare the retries this exists to retire.
-
-        Cancelled, not failed: nothing went wrong with the invocation, and the
-        caller waiting on it is owed the difference. Cancelled carries no retry,
-        which is the point — a retry would put the row straight back.
+        Container shutdown settles running tasks. Keep terminal history unchanged,
+        and select queued work by status because a retry can still name its prior
+        container. Cancellation prevents another retry after deletion.
         """
 
         statement = (

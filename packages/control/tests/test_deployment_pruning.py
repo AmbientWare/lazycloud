@@ -17,6 +17,9 @@ from shared.http.deployment_plans import (
     WorkloadIdentity,
 )
 from shared.tasks import TaskStatus
+from shared.timestamps import utc_now
+
+from control import deployment_plans
 
 
 def test_prune_retires_all_omitted_versions_and_schedules_but_preserves_other_workloads(
@@ -185,7 +188,9 @@ def test_interrupted_prune_resumes_exact_targets_without_deleting_redeployment(
             str(request.operation_id), workspace_id=app.workspace_id
         )
         assert pending is not None and not pending.complete
-    replacement = services.deployments.deploy(old.spec)
+    replacement = services.deployments.deploy(old.spec.model_copy(update={"cron": "0 * * * *"}))
+    with pytest.raises(ConflictError, match="deleted deployment"):
+        services.cron_jobs.set_for_deployment(old, cron=None, workspace="default")
     services.deployment_plans.reconcile_pending()
     with services.context.database.session() as session:
         completed = DeploymentPlanRepository(session).operation(
@@ -194,3 +199,48 @@ def test_interrupted_prune_resumes_exact_targets_without_deleting_redeployment(
         assert completed is not None and completed.complete
     assert services.deployments.get(replacement.id).active
     assert services.apps.get(app.id).active
+    assert [job.deployment_id for job in services.cron_jobs.list()] == [replacement.id]
+
+
+def test_slow_prune_recovery_leaves_later_operations_available_to_other_schedulers(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    services = isolated_services
+    app = services.apps.create("prune_backlog")
+    manifest = DeploymentPlanRequest(app=app.name, workloads=[], prune=True)
+    elapsed = 0.0
+
+    class SlowUnavailableExecution:
+        def delete_deployment_execution(
+            self, *, workspace_id: str, deployment_ids: list[str]
+        ) -> None:
+            nonlocal elapsed
+            elapsed += 31
+            raise RuntimeError("worker shutdown unavailable")
+
+    service = replace(services.deployment_plans, execution=SlowUnavailableExecution())
+    operation_ids = [uuid4(), uuid4()]
+    for operation_id in operation_ids:
+        services.deployments.deploy(
+            DeploymentSpec(name="old", handler="pkg:old", metadata={"app_id": app.id})
+        )
+        plan = service.plan(manifest, workspace="default")
+        with pytest.raises(RuntimeError, match="shutdown unavailable"):
+            service.prune(
+                DeploymentPruneRequest(
+                    **manifest.model_dump(),
+                    operation_id=operation_id,
+                    app_id=app.id,
+                    snapshot=plan.snapshot,
+                    deployment_ids=[],
+                ),
+                workspace="default",
+            )
+    monkeypatch.setattr(deployment_plans, "monotonic", lambda: elapsed)
+    service.reconcile_pending()
+    with services.context.database.session() as session:
+        available = DeploymentPlanRepository(session).due(
+            now=utc_now(), retry_at=utc_now(), limit=25
+        )
+        assert [operation.id for operation in available] == [str(operation_ids[-1])]

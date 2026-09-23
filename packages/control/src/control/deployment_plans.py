@@ -5,6 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
+from time import monotonic
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
@@ -193,14 +194,21 @@ class DeploymentPlanService:
         )
 
     def reconcile_pending(self, *, limit: int = 25) -> None:
-        now = utc_now()
-        with self.context.database.session() as session:
-            pending = DeploymentPlanRepository(session).due(
-                now=now,
-                retry_at=now + timedelta(seconds=60),
-                limit=limit,
-            )
-        for operation in pending:
+        deadline = monotonic() + 30
+        for _ in range(limit):
+            if monotonic() >= deadline:
+                break
+            now = utc_now()
+            # Claim only the operation being processed; shutdowns can take 30 seconds.
+            with self.context.database.session() as session:
+                pending = DeploymentPlanRepository(session).due(
+                    now=now,
+                    retry_at=now + timedelta(seconds=60),
+                    limit=1,
+                )
+            if not pending:
+                break
+            operation = pending[0]
             try:
                 self._finish(operation)
             except Exception:

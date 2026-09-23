@@ -6,6 +6,7 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 
 import typer
 from pydantic import JsonValue
+from shared.app_slug import app_slug_or_default
 from shared.http.deployment_plans import (
     DeploymentPlanRequest,
     DeploymentPlanResponse,
@@ -188,7 +189,10 @@ def deploy(
             app_name = spec.metadata.get("app")
             plan = resource_client(workspace=selected_workspace).plan_deployment(
                 DeploymentPlanRequest(
-                    app=app_name if isinstance(app_name, str) and app_name else spec.name,
+                    app=app_slug_or_default(
+                        app_name if isinstance(app_name, str) else None,
+                        default=spec.name,
+                    ),
                     workloads=[WorkloadIdentity(kind=spec.kind, name=name or spec.name)],
                 )
             )
