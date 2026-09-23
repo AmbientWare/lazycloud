@@ -246,6 +246,17 @@ class PodControlService:
             if stub.deployment_id is not None and config.autoscaler.min_containers > 0
             else config.runtime.keep_warm
         )
+        # A deployed pod lives while it holds connections and for its keep-warm window
+        # after the last one closes; the autoscaler and the connection-held lock
+        # decide that. A hard expiry would stop it mid-connection, so only a
+        # standalone instance, which nothing else retires, gets one.
+        expiry_seconds = (
+            request.timeout_seconds
+            if request.timeout_seconds is not None
+            else 0
+            if stub.deployment_id is not None
+            else timeout_seconds
+        )
         created_at = utc_now()
         ports = config.exposed_ports
         plan = plan_pod_container_start(
@@ -311,10 +322,10 @@ class PodControlService:
                     network_allow_list=list(config.runtime.allow_list),
                     gpu=list(plan.gpu),
                     gpu_count=plan.gpu_count,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=expiry_seconds,
                     expires_at=(
-                        created_at + timedelta(seconds=timeout_seconds)
-                        if timeout_seconds > 0
+                        created_at + timedelta(seconds=expiry_seconds)
+                        if expiry_seconds > 0
                         else None
                     ),
                     created_at=created_at,
