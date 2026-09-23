@@ -18,9 +18,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from billing.admission import DatabaseBillingAdmission
 from database.repositories.disks import DiskChainLink, DiskHolder, DiskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.tables.disks import DiskTable
+from database.types import DatabaseSession
 from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.disks import DiskMount, DiskRecord, DiskStatus, disk_manifest_key
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
@@ -94,11 +96,18 @@ def get_or_create_disks(
     resolved: list[ResolvedDisk] = []
     with database.session() as session:
         repository = DiskRepository(session)
+        created = False
         for mount in mounts:
-            record, _ = repository.get_or_create(
+            record, inserted = repository.get_or_create(
                 mount.name, workspace_id=workspace_id, size_bytes=mount.size_bytes
             )
+            created = created or inserted
             resolved.append(ResolvedDisk(record=record, mount=mount, last_worker_id=""))
+        if created:
+            # Asked in the transaction that inserted, so a refusal leaves no disk behind.
+            DatabaseBillingAdmission().assert_may_take_on_billed_work(
+                session, workspace_id=workspace_id
+            )
         last_workers = repository.last_worker_ids(
             [mount.name for mount in mounts], workspace_id=workspace_id
         )
@@ -215,23 +224,68 @@ class DiskService:
             self._release(row)
             return True
 
+    def collect(
+        self,
+        disk_id: str,
+        *,
+        container_id: str,
+        lease_token: str,
+        generation: int,
+        stored_bytes_removed: int,
+    ) -> None:
+        """Record what the holder deleted once a self-contained generation superseded it.
+
+        Only the current holder, and only for the disk's newest generation when
+        that generation stands alone: anything older may still be restored from,
+        and a stale holder may be collecting under a disk someone else writes.
+        """
+        with self.database.session() as session:
+            repository = DiskRepository(session)
+            row = self._lock_live(repository, disk_id)
+            self._require_lease(row, container_id, lease_token)
+            if generation != row.generation:
+                raise ConflictError(
+                    f"disk {row.name} is at generation {row.generation}; only it can be "
+                    f"collected under, not {generation}"
+                )
+            if repository.parent_generation(disk_id, generation) != 0:
+                raise ConflictError(
+                    f"disk {row.name} generation {generation} builds on another layer; "
+                    "only a self-contained generation supersedes older ones"
+                )
+            row.stored_bytes = max(0, row.stored_bytes - stored_bytes_removed)
+            row.updated_at = utc_now()
+            repository.delete_generations_below(disk_id, generation)
+
     def request_deletion(self, name: str, *, workspace_id: str, now: datetime | None = None) -> str:
         """Record the intent to delete; the name is free and metering stops from here."""
         with self.database.session() as session:
-            WorkspaceRepository(session).lock_storage_accounting_owner(workspace_id)
-            repository = DiskRepository(session)
-            row = repository.lock_by_name(name, workspace_id=workspace_id)
-            if row is None:
-                raise NotFoundError(f"disk not found: {name}")
-            holder_id = str(row.holder_container_id or "")
-            if holder_id and self._holds(repository.holder(holder_id)):
-                raise ConflictError(f"stop container {holder_id} before deleting disk {name}")
-            row.holder_container_id = None
-            row.lease_token = ""
-            row.status = DiskStatus.Deleting.value
-            row.deleted_at = to_utc(now or utc_now())
-            row.updated_at = utc_now()
-            return str(row.id)
+            return self.request_deletion_in_session(
+                session, name, workspace_id=workspace_id, now=now
+            )
+
+    def request_deletion_in_session(
+        self,
+        session: DatabaseSession,
+        name: str,
+        *,
+        workspace_id: str,
+        now: datetime | None = None,
+    ) -> str:
+        WorkspaceRepository(session).lock_storage_accounting_owner(workspace_id)
+        repository = DiskRepository(session)
+        row = repository.lock_by_name(name, workspace_id=workspace_id)
+        if row is None:
+            raise NotFoundError(f"disk not found: {name}")
+        holder_id = str(row.holder_container_id or "")
+        if holder_id and self._holds(repository.holder(holder_id)):
+            raise ConflictError(f"stop container {holder_id} before deleting disk {name}")
+        row.holder_container_id = None
+        row.lease_token = ""
+        row.status = DiskStatus.Deleting.value
+        row.deleted_at = to_utc(now or utc_now())
+        row.updated_at = utc_now()
+        return str(row.id)
 
     @staticmethod
     def _lock_live(repository: DiskRepository, disk_id: str) -> DiskTable:

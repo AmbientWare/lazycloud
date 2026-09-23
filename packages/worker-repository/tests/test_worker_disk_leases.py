@@ -12,7 +12,7 @@ from shared.disks import DiskMount
 from shared.workload_config import StubConfig
 from storage.disks import get_or_create_disks
 from tests.workspaces import owned_workspace
-from worker.durable_disk_records import DiskAcquirePayload
+from worker.durable_disk_records import DiskAcquirePayload, DiskCollectPayload
 from worker.repository_payloads import WorkerRepositoryPrincipal
 
 _ROOT = DiskMount(name="box-root", size_bytes=1024**3)
@@ -70,4 +70,21 @@ def test_a_worker_leases_only_the_disks_its_assigned_container_declares(
         acquire(undeclared.record.id, assigned)
     with pytest.raises(AuthorizationDeniedError, match="workspace"):
         acquire(foreign.record.id, assigned)
-    assert acquire(declared.record.id, assigned)
+    token = acquire(declared.record.id, assigned)
+
+    def collect(disk_id: str, principal: WorkerRepositoryPrincipal) -> None:
+        service.collect_disk(
+            DiskCollectPayload(
+                container_id=container_id,
+                disk_id=disk_id,
+                lease_token=token,
+                generation=1,
+                stored_bytes_removed=0,
+            ),
+            principal=principal,
+        )
+
+    with pytest.raises(AuthorizationDeniedError, match="another worker"):
+        collect(declared.record.id, assigned.model_copy(update={"worker_id": "worker-2"}))
+    with pytest.raises(AuthorizationDeniedError, match="does not declare"):
+        collect(undeclared.record.id, assigned)

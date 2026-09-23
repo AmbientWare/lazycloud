@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -27,10 +28,14 @@ from pathlib import Path
 from typing import Protocol
 
 from foundation.process import ProcessResult, run_command_with_timeout
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 from shared.container_requests import RequestDisk
 from shared.contracts import ContractModel
-from shared.disks import DISK_FLATTEN_DEPTH, DISK_ROOT_MOUNT_PATH
+from shared.disks import (
+    DISK_FLATTEN_DEPTH,
+    DISK_PUBLISH_INTERVAL_SECONDS,
+    DISK_ROOT_MOUNT_PATH,
+)
 from shared.http.errors import HttpApiError
 from shared.identity import TokenKind
 
@@ -38,6 +43,7 @@ from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
+    DiskCollectPayload,
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
@@ -58,7 +64,15 @@ DEFAULT_DISK_RUN_ROOT = "/run/lazycloud/disks"
 DISK_LAYERS_DIR_NAME = "layers"
 DISK_LEASES_DIR_NAME = "leases"
 DISK_OVERLAY_DIR_NAME = "overlay"
-DISK_PUBLISH_INTERVAL_SECONDS = 300.0
+DISK_ATTACH_MIN_FREE_BYTES = 20 * 1024**3
+"""Free space an attach must leave on the layer filesystem.
+
+Below it the engine refuses, and the worker evicts cached disks nobody holds
+before trying once more, so a full node degrades into a named refusal rather
+than ENOSPC inside a running disk.
+"""
+DISK_COMPACT_AFTER_LAYERS = 8
+"""Committed layers above the base that make the next publish compact them in."""
 # The scheduler reclaims a container that has not started within its start
 # deadline, and the restore that follows the wait counts against it too. The
 # wait only has to outlast the previous holder's final publish.
@@ -66,16 +80,28 @@ DISK_ACQUIRE_DEADLINE_SECONDS = 180.0
 DISK_ACQUIRE_INITIAL_BACKOFF_SECONDS = 2.0
 DISK_ACQUIRE_MAX_BACKOFF_SECONDS = 30.0
 _CONFLICT_STATUS = 409
+_INSUFFICIENT_SPACE_EXIT_CODE = 3
 _ATTACH_TIMEOUT_SECONDS = 3600.0
 _PUBLISH_TIMEOUT_SECONDS = 3600.0
 _SEAL_TIMEOUT_SECONDS = 300.0
 _DETACH_TIMEOUT_SECONDS = 300.0
 _RECOVER_TIMEOUT_SECONDS = 600.0
 _COMMIT_TIMEOUT_SECONDS = 60.0
+_COMPACT_TIMEOUT_SECONDS = 3600.0
+_COLLECT_TIMEOUT_SECONDS = 3600.0
+_LIST_TIMEOUT_SECONDS = 60.0
+_EVICT_TIMEOUT_SECONDS = 600.0
 
 
 class DiskEngineError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, exit_code: int = 1, detail: str = "") -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.detail = detail
+
+    @property
+    def insufficient_space(self) -> bool:
+        return self.exit_code == _INSUFFICIENT_SPACE_EXIT_CODE
 
 
 class DiskLeaseClient(Protocol):
@@ -84,6 +110,8 @@ class DiskLeaseClient(Protocol):
     def publish_disk(self, payload: DiskPublishPayload) -> DiskPublishResult: ...
 
     def release_disk(self, payload: DiskReleasePayload) -> None: ...
+
+    def collect_disk(self, payload: DiskCollectPayload) -> None: ...
 
 
 class DiskCredentialVendor(Protocol):
@@ -116,6 +144,29 @@ class DiskEnginePublishResult(ContractModel):
     stored_bytes_added: int = Field(ge=0)
     generation: int = Field(gt=0)
     parent_generation: int = Field(ge=0)
+
+
+class DiskEngineCollectResult(ContractModel):
+    removed_bytes: int = Field(ge=0)
+    removed_chunks: int = Field(ge=0)
+    removed_manifests: int = Field(ge=0)
+
+
+class DiskEngineRecoverResult(ContractModel):
+    recovered: list[str] = Field(default_factory=list)
+    pending: dict[str, int] = Field(default_factory=dict)
+    """Sealed layers per disk awaiting publish, including heads recovery sealed."""
+
+
+class DiskEngineLocalDisk(ContractModel):
+    disk: str
+    attached: bool
+    local_bytes: int = Field(ge=0)
+    last_used_at: datetime
+    unpublished: bool
+
+
+_LOCAL_DISKS = TypeAdapter(list[DiskEngineLocalDisk])
 
 
 class DiskStoreFile(ContractModel):
@@ -154,6 +205,7 @@ class DiskEngine:
         mountpoint: Path,
         chain: list[DiskChainFileEntry],
         store: DiskStoreFile,
+        min_free_bytes: int,
     ) -> DiskEngineAttachResult:
         scratch = self._scratch_dir(disk.disk_id)
         chain_path = scratch / "chain.json"
@@ -173,6 +225,8 @@ class DiskEngine:
                 str(chain_path),
                 "--store",
                 str(store_path),
+                "--min-free-bytes",
+                str(min_free_bytes),
             )
         chain_path.unlink(missing_ok=True)
         return DiskEngineAttachResult.model_validate_json(output)
@@ -216,11 +270,38 @@ class DiskEngine:
             str(generation),
         )
 
+    def compact(self, disk_id: str) -> None:
+        self._run(_COMPACT_TIMEOUT_SECONDS, "compact", *self._disk_args(disk_id))
+
+    def collect(
+        self, disk_id: str, *, generation: int, store: DiskStoreFile
+    ) -> DiskEngineCollectResult:
+        with self._store_file(self._scratch_dir(disk_id), store) as store_path:
+            output = self._run(
+                _COLLECT_TIMEOUT_SECONDS,
+                "collect",
+                *self._disk_args(disk_id),
+                "--store",
+                str(store_path),
+                "--generation",
+                str(generation),
+            )
+        return DiskEngineCollectResult.model_validate_json(output)
+
     def detach(self, disk_id: str) -> None:
         self._run(_DETACH_TIMEOUT_SECONDS, "detach", *self._disk_args(disk_id))
 
-    def recover(self) -> None:
-        self._run(_RECOVER_TIMEOUT_SECONDS, "recover", "--root", str(self.layers_root))
+    def evict(self, disk_id: str) -> None:
+        self._run(_EVICT_TIMEOUT_SECONDS, "evict", *self._disk_args(disk_id))
+
+    def list_local(self) -> list[DiskEngineLocalDisk]:
+        output = self._run(_LIST_TIMEOUT_SECONDS, "list", "--root", str(self.layers_root))
+        return _LOCAL_DISKS.validate_json(output)
+
+    def recover(self) -> DiskEngineRecoverResult:
+        return DiskEngineRecoverResult.model_validate_json(
+            self._run(_RECOVER_TIMEOUT_SECONDS, "recover", "--root", str(self.layers_root))
+        )
 
     def _disk_args(self, disk_id: str) -> list[str]:
         return ["--root", str(self.layers_root), "--disk", disk_id]
@@ -239,7 +320,11 @@ class DiskEngine:
         result = self.run_command(timeout_seconds, command)
         if result.exit_code != 0:
             detail = (result.stderr or result.stdout).strip()
-            raise DiskEngineError(f"{self.binary} {argv[0]} failed: {detail}")
+            raise DiskEngineError(
+                f"{self.binary} {argv[0]} failed: {detail}",
+                exit_code=result.exit_code,
+                detail=detail,
+            )
         return result.stdout
 
 
@@ -272,6 +357,12 @@ class DiskLease(ContractModel):
 
     chain_depth: int = 0
     """Published layers since the newest self-contained one."""
+
+    layers_since_compaction: int = 0
+    """Layers committed above the local base since it was last compacted."""
+
+    unrecorded_removed_bytes: int = 0
+    """Bytes a collection deleted that the control plane has not yet subtracted."""
 
     mountpoint: str = ""
     released: bool = False
@@ -316,12 +407,19 @@ class WorkerDurableDiskService:
     monotonic: Callable[[], float] = time.monotonic
     _attached: dict[str, _Attached] = field(default_factory=dict)
     _attached_lock: threading.Lock = field(default_factory=threading.Lock)
+    _recovered_pending: dict[str, int] = field(default_factory=dict)
 
     def recover(self) -> None:
-        """Stop what a previous worker process left attached; run before any attach."""
+        """Stop what a previous worker process left attached; run before any attach.
+
+        Recovery seals whatever a dead attachment's head still held, and the
+        layers it reports pending are what the release of that container's lease
+        publishes before letting the disk go.
+        """
         self.lease_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.engine.layers_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.engine.recover()
+        recovered = self.engine.recover()
+        self._recovered_pending = dict(recovered.pending)
 
     def attach(self, request: ContainerRequestContext) -> DurableDiskAttachment:
         if not request.disks:
@@ -341,12 +439,7 @@ class WorkerDurableDiskService:
                 lease, chain = self._acquire(attached, disk)
                 mountpoint = self.mount_root / request.container_id / disk.disk_id
                 mountpoint.mkdir(parents=True, exist_ok=True)
-                result = self.engine.attach(
-                    disk,
-                    mountpoint=mountpoint,
-                    chain=chain,
-                    store=self._store(attached),
-                )
+                result = self._attach_with_space(attached, disk, mountpoint, chain)
                 lease.mountpoint = result.mountpoint
                 self._save(record)
                 LOGGER.info(
@@ -408,16 +501,15 @@ class WorkerDurableDiskService:
                     if live and lease.mountpoint:
                         self._publish_pending(attached, lease, final=True)
                     else:
-                        # A previous worker process attached this disk and its
-                        # daemon is gone, so nothing can be sealed. Sealed layers
-                        # and the head stay in the local cache for the next attach
-                        # on this node.
-                        self.leases.release_disk(
-                            DiskReleasePayload(
-                                container_id=container_id,
-                                disk_id=lease.disk_id,
-                                lease_token=lease.lease_token,
-                            )
+                        # A previous worker process attached this disk; recovery
+                        # already sealed its head, so only the pending layers are
+                        # left to publish. Nothing local releases without one.
+                        self._publish_layers(
+                            attached,
+                            lease,
+                            pending=self._recovered_pending.get(lease.disk_id, 0),
+                            final=True,
+                            live=False,
                         )
                     lease.released = True
                     self._save(attached.leases)
@@ -508,20 +600,94 @@ class WorkerDurableDiskService:
                             attached.leases.container_id,
                         )
 
+    def _attach_with_space(
+        self,
+        attached: _Attached,
+        disk: RequestDisk,
+        mountpoint: Path,
+        chain: list[DiskChainFileEntry],
+    ) -> DiskEngineAttachResult:
+        def attach() -> DiskEngineAttachResult:
+            return self.engine.attach(
+                disk,
+                mountpoint=mountpoint,
+                chain=chain,
+                store=self._store(attached),
+                min_free_bytes=DISK_ATTACH_MIN_FREE_BYTES,
+            )
+
+        try:
+            return attach()
+        except DiskEngineError as exc:
+            if not exc.insufficient_space:
+                raise
+            refusal = exc
+        freed, blocked = self._evict_for(disk, shortfall=_space_shortfall(refusal.detail))
+        LOGGER.warning(
+            "disk %s needed space on this node (%s); evicted %d cached bytes",
+            disk.name,
+            refusal.detail,
+            freed,
+        )
+        try:
+            return attach()
+        except DiskEngineError as exc:
+            if not exc.insufficient_space:
+                raise
+            raise DiskEngineError(
+                f"disk {disk.name} needs {disk.size_bytes} bytes plus a "
+                f"{DISK_ATTACH_MIN_FREE_BYTES}-byte reserve on this node and does not fit "
+                f"after evicting {freed} cached bytes; still held locally: "
+                f"{', '.join(blocked) or 'nothing'} ({exc.detail})",
+                exit_code=exc.exit_code,
+                detail=exc.detail,
+            ) from refusal
+
+    def _evict_for(self, disk: RequestDisk, *, shortfall: int) -> tuple[int, list[str]]:
+        """Evict cached disks nobody holds, oldest first, until the shortfall is covered.
+
+        An attached disk or one holding unpublished layers is never evicted: the
+        first is in use and the second is the only copy of what it holds.
+        """
+        freed = 0
+        blocked: list[str] = []
+        local = sorted(self.engine.list_local(), key=lambda item: item.last_used_at)
+        for item in local:
+            if item.disk == disk.disk_id:
+                continue
+            if item.attached or item.unpublished:
+                blocked.append(
+                    f"{item.disk} ({'attached' if item.attached else 'unpublished'}, "
+                    f"{item.local_bytes} bytes)"
+                )
+                continue
+            if freed >= shortfall:
+                break
+            self.engine.evict(item.disk)
+            freed += item.local_bytes
+            LOGGER.info("evicted cached disk %s (%d bytes)", item.disk, item.local_bytes)
+        return freed, blocked
+
     def _publish_pending(self, attached: _Attached, lease: DiskLease, *, final: bool) -> None:
         sealed = self.engine.seal(lease.disk_id)
-        pending = sealed.pending
+        self._publish_layers(attached, lease, pending=sealed.pending, final=final, live=True)
+
+    def _publish_layers(
+        self,
+        attached: _Attached,
+        lease: DiskLease,
+        *,
+        pending: int,
+        final: bool,
+        live: bool,
+    ) -> None:
+        """Publish, record, then commit each pending layer, oldest first."""
         if pending == 0:
             if final:
-                self.leases.release_disk(
-                    DiskReleasePayload(
-                        container_id=attached.leases.container_id,
-                        disk_id=lease.disk_id,
-                        lease_token=lease.lease_token,
-                    )
-                )
+                self._release_lease(attached, lease)
             return
         for index in range(pending):
+            last = index == pending - 1
             generation = lease.generation + 1
             flatten = lease.chain_depth >= DISK_FLATTEN_DEPTH
             uploaded = self.engine.publish(
@@ -541,12 +707,17 @@ class WorkerDurableDiskService:
                     manifest_key=uploaded.manifest_key,
                     manifest_sha256=uploaded.manifest_sha256,
                     stored_bytes_added=uploaded.stored_bytes_added,
-                    final=final and index == pending - 1,
+                    # A flattened layer is collected under before the lease goes,
+                    # since only the holder may record what collection deleted.
+                    final=final and last and uploaded.parent_generation != 0,
                 )
             )
             self.engine.commit_published(lease.disk_id, generation=uploaded.generation)
             lease.generation = uploaded.generation
             lease.chain_depth = 1 if uploaded.parent_generation == 0 else lease.chain_depth + 1
+            lease.layers_since_compaction += 1
+            if not live:
+                self._recovered_pending[lease.disk_id] = pending - index - 1
             self._save(attached.leases)
             LOGGER.info(
                 "disk %s published generation %d (%d new bytes%s)",
@@ -555,6 +726,69 @@ class WorkerDurableDiskService:
                 uploaded.stored_bytes_added,
                 ", flattened" if uploaded.parent_generation == 0 else "",
             )
+            if uploaded.parent_generation == 0:
+                self._collect(attached, lease)
+                if final and last:
+                    self._release_lease(attached, lease)
+        if live and not final and lease.layers_since_compaction >= DISK_COMPACT_AFTER_LAYERS:
+            try:
+                self.engine.compact(lease.disk_id)
+            except Exception:
+                LOGGER.exception("compacting disk %s failed; the next publish retries", lease.name)
+            else:
+                lease.layers_since_compaction = 0
+                self._save(attached.leases)
+
+    def _release_lease(self, attached: _Attached, lease: DiskLease) -> None:
+        self.leases.release_disk(
+            DiskReleasePayload(
+                container_id=attached.leases.container_id,
+                disk_id=lease.disk_id,
+                lease_token=lease.lease_token,
+            )
+        )
+
+    def _collect(self, attached: _Attached, lease: DiskLease) -> None:
+        """Delete what the self-contained generation just committed supersedes.
+
+        Never raised: a failure only delays reclaiming space until the next
+        flatten. Bytes deleted whose subtraction was not recorded are carried
+        into that next record so the stored total catches up.
+        """
+        try:
+            collected = self.engine.collect(
+                lease.disk_id, generation=lease.generation, store=self._store(attached)
+            )
+        except Exception:
+            LOGGER.exception("collecting disk %s failed; the next flatten retries", lease.name)
+            return
+        lease.unrecorded_removed_bytes += collected.removed_bytes
+        self._save(attached.leases)
+        try:
+            self.leases.collect_disk(
+                DiskCollectPayload(
+                    container_id=attached.leases.container_id,
+                    disk_id=lease.disk_id,
+                    lease_token=lease.lease_token,
+                    generation=lease.generation,
+                    stored_bytes_removed=lease.unrecorded_removed_bytes,
+                )
+            )
+        except Exception:
+            LOGGER.exception(
+                "recording the collection of disk %s failed; the next flatten retries",
+                lease.name,
+            )
+            return
+        lease.unrecorded_removed_bytes = 0
+        self._save(attached.leases)
+        LOGGER.info(
+            "disk %s collected %d bytes in %d chunks and %d manifests",
+            lease.name,
+            collected.removed_bytes,
+            collected.removed_chunks,
+            collected.removed_manifests,
+        )
 
     def _store(self, attached: _Attached) -> DiskStoreFile:
         """Workspace bucket credentials, vended fresh and kept for when vending fails.
@@ -630,6 +864,20 @@ def disk_store_file(credentials: WorkspaceStorageCredentials) -> DiskStoreFile:
         session_token=credentials.session_token,
         force_path_style=credentials.force_path_style,
     )
+
+
+_SPACE_REFUSAL = re.compile(r"need (\d+), have (\d+) free, reserve (\d+)")
+
+
+def _space_shortfall(detail: str) -> int:
+    """Bytes an attach refused for lack of space still needs freed, from the engine's refusal."""
+    match = _SPACE_REFUSAL.search(detail)
+    if match is None:
+        raise DiskEngineError(
+            f"disk engine refused an attach for space without a shortfall: {detail}"
+        )
+    need, have, reserve = (int(value) for value in match.groups())
+    return need + reserve - have
 
 
 def disk_layout(root: Path) -> tuple[Path, Path]:

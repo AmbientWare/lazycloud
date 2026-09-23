@@ -104,6 +104,7 @@ from storage_client.s3 import S3PresignedUpload
 from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
+    DiskCollectPayload,
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
@@ -2181,6 +2182,17 @@ class WorkerRepositoryService:
             payload.container_id, worker_id=principal.worker_id, operation="disk release"
         )
         self._disk_leases().release(payload, container=container)
+
+    def collect_disk(
+        self,
+        payload: DiskCollectPayload,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> None:
+        container = self._authorize_worker_container(
+            payload.container_id, worker_id=principal.worker_id, operation="disk collection"
+        )
+        self._disk_leases().collect(payload, container=container)
 
     def _disk_leases(self) -> WorkerDiskLeaseService:
         if self.services is None:

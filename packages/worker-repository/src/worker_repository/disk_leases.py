@@ -13,6 +13,7 @@ from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
     DiskChainLayer,
+    DiskCollectPayload,
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
@@ -79,6 +80,16 @@ class WorkerDiskLeaseService:
         self._authorize(payload.disk_id, container=container)
         return self.disks.release(
             payload.disk_id, container_id=container.id, lease_token=payload.lease_token
+        )
+
+    def collect(self, payload: DiskCollectPayload, *, container: ContainerRecord) -> None:
+        self._authorize(payload.disk_id, container=container)
+        self.disks.collect(
+            payload.disk_id,
+            container_id=container.id,
+            lease_token=payload.lease_token,
+            generation=payload.generation,
+            stored_bytes_removed=payload.stored_bytes_removed,
         )
 
     def _authorize(self, disk_id: str, *, container: ContainerRecord) -> None:

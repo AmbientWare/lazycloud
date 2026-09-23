@@ -17,6 +17,7 @@ from shared.identity import AuthScope
 from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
+    DiskCollectPayload,
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
@@ -740,6 +741,19 @@ def release_disk(
     principal: WorkerPrincipal,
 ) -> None:
     service.release_disk(request, principal=principal)
+
+
+@router.post(
+    "/worker-repository/collect-disk",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def collect_disk(
+    request: DiskCollectPayload,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> None:
+    service.collect_disk(request, principal=principal)
 
 
 @router.post(

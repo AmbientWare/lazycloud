@@ -51,6 +51,7 @@ from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
+    DiskCollectPayload,
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
@@ -728,6 +729,9 @@ class WorkerRepositoryHttpClient:
 
     def release_disk(self, payload: DiskReleasePayload) -> None:
         self.transport.post("/worker-repository/release-disk", _model_payload(payload))
+
+    def collect_disk(self, payload: DiskCollectPayload) -> None:
+        self.transport.post("/worker-repository/collect-disk", _model_payload(payload))
 
     def get_checkpoint_restore(
         self,

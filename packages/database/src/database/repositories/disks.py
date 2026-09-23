@@ -7,11 +7,11 @@ from database.repositories.identity import WorkspaceRepository
 from database.tables.disks import DiskGenerationTable, DiskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.orchestration import ContainerTable
-from shared.containers import ContainerStatus
+from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.disks import DiskRecord, DiskStatus
 from shared.errors import ConflictError
 from shared.timestamps import to_utc
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
@@ -53,15 +53,23 @@ class DiskMeteringCheckpoint:
     deleted_at: datetime | None
 
 
-def disk_from_table(row: DiskTable) -> DiskRecord:
+def disk_from_table(row: DiskTable, *, holder_live: bool = True) -> DiskRecord:
+    """The disk as a reader sees it; a holder that stopped no longer holds it.
+
+    The row keeps a terminal holder until the next acquire clears it, since
+    only acquisition decides when its final publish is past. A reader is told
+    the disk is detached from the moment the holder stops.
+    """
+    status = DiskStatus(row.status)
+    held = status is DiskStatus.Attached and holder_live
     return DiskRecord(
         id=str(row.id),
         name=row.name,
         size_bytes=row.size_bytes,
-        status=DiskStatus(row.status),
+        status=DiskStatus.Detached if status is DiskStatus.Attached and not held else status,
         generation=row.generation,
         stored_bytes=row.stored_bytes,
-        holder_container_id=str(row.holder_container_id or ""),
+        holder_container_id=str(row.holder_container_id or "") if held else "",
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
     )
@@ -103,14 +111,17 @@ class DiskRepository:
         return existing, False
 
     def get(self, name: str, *, workspace_id: str) -> DiskRecord | None:
-        row = self.session.scalar(
-            select(DiskTable).where(
+        result = self.session.execute(
+            _with_holder_liveness().where(
                 DiskTable.workspace_id == workspace_id,
                 DiskTable.name == name,
                 DiskTable.deleted_at.is_(None),
             )
-        )
-        return disk_from_table(row) if row is not None else None
+        ).first()
+        if result is None:
+            return None
+        row, holder_live = result
+        return disk_from_table(row, holder_live=bool(holder_live))
 
     def identity(self, disk_id: str) -> tuple[str, str] | None:
         """The live disk's workspace and name, resolved across workspaces."""
@@ -138,14 +149,14 @@ class DiskRepository:
         return dict(rows.all())
 
     def list(self, *, workspace_id: str, after: str, limit: int) -> list[DiskRecord]:
-        statement = select(DiskTable).where(
+        statement = _with_holder_liveness().where(
             DiskTable.workspace_id == workspace_id,
             DiskTable.deleted_at.is_(None),
         )
         if after:
             statement = statement.where(DiskTable.name > after)
-        rows = self.session.scalars(statement.order_by(DiskTable.name).limit(limit))
-        return [disk_from_table(row) for row in rows]
+        rows = self.session.execute(statement.order_by(DiskTable.name).limit(limit)).tuples()
+        return [disk_from_table(row, holder_live=bool(live)) for row, live in rows]
 
     def lock(self, disk_id: str) -> DiskTable | None:
         return self.session.scalar(
@@ -237,6 +248,22 @@ class DiskRepository:
         )
         self.session.flush()
 
+    def parent_generation(self, disk_id: str, generation: int) -> int | None:
+        return self.session.scalar(
+            select(DiskGenerationTable.parent_generation).where(
+                DiskGenerationTable.disk_id == disk_id,
+                DiskGenerationTable.generation == generation,
+            )
+        )
+
+    def delete_generations_below(self, disk_id: str, generation: int) -> None:
+        self.session.execute(
+            delete(DiskGenerationTable).where(
+                DiskGenerationTable.disk_id == disk_id,
+                DiskGenerationTable.generation < generation,
+            )
+        )
+
     def published_manifest_sha256(self, disk_id: str, generation: int) -> str | None:
         return self.session.scalar(
             select(DiskGenerationTable.manifest_sha256).where(
@@ -307,6 +334,13 @@ class DiskRepository:
             .where(DiskTable.id == disk_id)
             .values(metered_bytes=metered_bytes, metered_at=metered_at)
         )
+
+
+def _with_holder_liveness() -> Select[tuple[DiskTable, bool]]:
+    live = [status.value for status in LIVE_CONTAINER_STATUSES]
+    return select(DiskTable, ContainerTable.status.in_(live)).outerjoin(
+        ContainerTable, ContainerTable.id == DiskTable.holder_container_id
+    )
 
 
 __all__ = [

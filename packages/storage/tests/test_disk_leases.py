@@ -5,7 +5,7 @@ from api.server.services import ApiServices
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.disks import DiskMount, disk_manifest_key
+from shared.disks import DiskMount, DiskStatus, disk_manifest_key
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
 from storage.disks import DiskPublication, get_or_create_disks
@@ -81,6 +81,8 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
         row = session.get(ContainerTable, first)
         assert row is not None
         row.status = ContainerStatus.Stopped.value
+    shown = disks.get("box-root", workspace_id=workspace_id)
+    assert shown.status is DiskStatus.Detached and not shown.holder_container_id
     with pytest.raises(ConflictError, match="held by container"):
         disks.acquire(disk_id, container_id=second, worker_id="worker-b")
 
@@ -102,3 +104,45 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
     assert disks.release(disk_id, container_id=second, lease_token=taken.lease_token)
     assert isolated_services.disk_deletion.request("box-root", workspace_id=workspace_id)
     assert not disks.list(workspace_id=workspace_id).data
+
+
+def test_only_the_holder_collects_under_its_newest_self_contained_generation(
+    isolated_services: ApiServices,
+) -> None:
+    disks = isolated_services.disks
+    with isolated_services.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+    [resolved] = get_or_create_disks(
+        isolated_services.database,
+        [DiskMount(name="box-data", size_bytes=1024**3)],
+        workspace_id=workspace_id,
+    )
+    disk_id = resolved.record.id
+    holder = _container(isolated_services, workspace_id, "worker-a")
+    token = disks.acquire(disk_id, container_id=holder, worker_id="worker-a").lease_token
+    disks.publish(_publication(disk_id, holder, token, 1, 0))
+    disks.publish(_publication(disk_id, holder, token, 2, 1))
+
+    def collect(generation: int, *, lease_token: str = token, removed: int = 25) -> None:
+        disks.collect(
+            disk_id,
+            container_id=holder,
+            lease_token=lease_token,
+            generation=generation,
+            stored_bytes_removed=removed,
+        )
+
+    with pytest.raises(ConflictError, match="builds on another layer"):
+        collect(2)
+    with pytest.raises(ConflictError, match="at generation 2"):
+        collect(1)
+    disks.publish(_publication(disk_id, holder, token, 3, 0))
+    with pytest.raises(ConflictError, match="no longer holds"):
+        collect(3, lease_token="f" * 64)
+
+    collect(3)
+    assert disks.get("box-data", workspace_id=workspace_id).stored_bytes == 5
+    reacquired = disks.acquire(disk_id, container_id=holder, worker_id="worker-a")
+    assert [link.generation for link in reacquired.chain] == [3]
+    collect(3, lease_token=reacquired.lease_token, removed=100)
+    assert disks.get("box-data", workspace_id=workspace_id).stored_bytes == 0
