@@ -277,6 +277,10 @@ class SchedulerAppServices:
             DatabaseDurableWorkerAbsence(context, worker_repository),
             workspace_changes,
         )
+        disks = DiskService(
+            context.database,
+            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
         retention = scheduler_retention(
             context=context,
             object_storage=object_storage,
@@ -284,6 +288,7 @@ class SchedulerAppServices:
             settings=storage.retention,
             image_archive_settings=image_archive_config,
             volume_deletion=volume_deletion,
+            disks=disks,
             workload_image_registry_repository=storage.workload_image_registry_repository,
         )
         # See the API composition: the resolver exists only where connected AWS is
@@ -489,10 +494,7 @@ class SchedulerAppServices:
             volume_deletion=volume_deletion,
             disk_deletion=DiskDeletionService(
                 context.database,
-                disks=DiskService(
-                    context.database,
-                    worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
-                ),
+                disks=disks,
                 objects=volume_filesystem,
                 metering=volume_metering,
             ),
@@ -568,6 +570,7 @@ def scheduler_retention(
     settings: RetentionSettings,
     image_archive_settings: ImageArchiveSettings,
     volume_deletion: VolumeDeletionService,
+    disks: DiskService,
     workload_image_registry_repository: str = "",
 ) -> SchedulerRetention | None:
     if not settings.enabled:
@@ -594,6 +597,7 @@ def scheduler_retention(
         unfunded_storage=UnfundedStorageRetentionService(
             context=context,
             volume_deletion=volume_deletion,
+            disks=disks,
             max_items_per_workspace=settings.max_items_per_cycle,
         ),
     )

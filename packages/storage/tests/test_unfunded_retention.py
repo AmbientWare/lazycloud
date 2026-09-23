@@ -6,14 +6,17 @@ from api.server.services import ApiServices
 from database.repositories import billing_credits
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
+from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.storage import VolumeRepository
 from database.repositories.storage_retention import StorageRetentionRepository
 from database.tables.email_outbox import EmailOutboxTable
 from database.tables.identity import UserTable
 from shared.billing_credits import CreditGrant, CreditKind
+from shared.disks import DiskMount
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import func, select
+from storage.disks import get_or_create_disks
 from storage.unfunded_retention import UnfundedStorageRetentionService
 from tests.workspaces import connected_workspace
 
@@ -45,7 +48,9 @@ def test_only_positive_balance_ends_retention_and_prevents_a_concurrent_claim(
             amount_nanos=-2 * 10**9,
             effective_at=current,
         )
-    retention = UnfundedStorageRetentionService(services.context, services.volume_service.deletion)
+    retention = UnfundedStorageRetentionService(
+        services.context, services.volume_service.deletion, services.disks
+    )
     retention.reconcile(now=current)
     partial_topup_at = current + timedelta(days=10)
     with services.database.session() as session:
@@ -101,6 +106,12 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
     current = utc_now() + timedelta(days=31)
     with services.database.session() as session:
         workspace_id = services.context.default_workspace_id(session)
+    [disk] = get_or_create_disks(
+        services.database,
+        [DiskMount(name="managed-root", size_bytes=1024**3)],
+        workspace_id=workspace_id,
+    )
+    with services.database.session() as session:
         user_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)
         user = session.get(UserTable, user_id)
         assert user is not None
@@ -110,7 +121,9 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
     )
     with services.database.session() as session:
         VolumeRepository(session).create("customer-data", workspace_id=external.id)
-    retention = UnfundedStorageRetentionService(services.context, services.volume_service.deletion)
+    retention = UnfundedStorageRetentionService(
+        services.context, services.volume_service.deletion, services.disks
+    )
     retention.reconcile(now=current)
     restored_at = current + timedelta(days=20)
     with services.database.session() as session:
@@ -143,6 +156,7 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
         assert period is not None and to_utc(period.started_at) == restarted_at
         kept = VolumeRepository(session).get(volume.name, workspace_id=workspace_id)
         assert kept is not None and kept.deletion_requested_at is None
+        assert DiskRepository(session).get(disk.record.name, workspace_id=workspace_id)
     with ThreadPoolExecutor(max_workers=1) as executor, services.database.session() as session:
         busy = VolumeRepository(session).lock(volume.name, workspace_id=workspace_id)
         executor.submit(retention.reconcile, now=restarted_at + timedelta(days=30)).result(
@@ -153,6 +167,11 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
     with services.database.session() as session:
         claimed = VolumeRepository(session).get(volume.name, workspace_id=workspace_id)
         assert claimed is not None and claimed.deletion_requested_at is not None
+        assert DiskRepository(session).get(disk.record.name, workspace_id=workspace_id) is None
+        assert [
+            (str(owner), str(disk_id))
+            for owner, disk_id in DiskRepository(session).list_deletions(limit=10)
+        ] == [(workspace_id, disk.record.id)]
         customer = VolumeRepository(session).get("customer-data", workspace_id=external.id)
         assert customer is not None and customer.deletion_requested_at is None
         assert WorkspaceRepository(session).get(workspace_id) is not None

@@ -16,6 +16,7 @@ from database.repositories.identity import (
     WorkspaceRepository,
 )
 from database.repositories.orchestration import ContainerRepository
+from database.tables.disks import DiskTable
 from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
@@ -25,11 +26,13 @@ from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
 from shared.billing_rate_card import NO_CARD_GPU_TYPES
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.custom_domains import CustomDomain
+from shared.disks import DiskMount
 from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequiredError
 from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
 from sqlalchemy import func, select
+from storage.disks import get_or_create_disks
 from tests.workspaces import (
     unbilled_account,
     unfunded_billing_account,
@@ -332,6 +335,28 @@ def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has
     )
     assert resolved.volume is not None
     assert resolved.volume.id == existing.volume.id
+
+
+def test_an_unfunded_account_gets_no_new_disk(isolated_services: ApiServices) -> None:
+    now = utc_now()
+    _, workspace_id = unfunded_billing_account(
+        isolated_services.context,
+        period_started_at=now,
+        period_ended_at=now + timedelta(days=30),
+    )
+
+    with pytest.raises(PaymentRequiredError, match="add credit"):
+        get_or_create_disks(
+            isolated_services.database,
+            [DiskMount(name="box-root", size_bytes=1024**3)],
+            workspace_id=workspace_id,
+        )
+    with isolated_services.context.database.session() as session:
+        assert not session.scalar(
+            select(func.count())
+            .select_from(DiskTable)
+            .where(DiskTable.workspace_id == workspace_id)
+        )
 
 
 def _volume_names(services: ApiServices, workspace_id: str) -> list[str]:

@@ -11,6 +11,7 @@ from database.repositories.cleanup import (
     CleanupRepository,
     object_location_lock_key,
 )
+from database.repositories.disks import DiskRepository
 from database.repositories.email_outbox import EmailOutboxRepository
 from database.repositories.identity import UserRepository
 from database.repositories.orchestration import ContainerRepository
@@ -22,6 +23,7 @@ from shared.errors import ConflictError, NotFoundError
 from shared.timestamps import to_utc, utc_now
 
 from storage.context import StorageContext
+from storage.disks import DiskService
 from storage.volume_deletion import VolumeDeletionService
 
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ UNFUNDED_STORAGE_RETENTION = timedelta(days=30)
 class UnfundedStorageRetentionService:
     context: StorageContext
     volume_deletion: VolumeDeletionService
+    disks: DiskService
     max_items_per_workspace: int = 100
 
     def reconcile(self, *, now: datetime | None = None) -> None:
@@ -74,6 +77,9 @@ class UnfundedStorageRetentionService:
                     and (
                         ObjectRepository(session).workspace_has_objects(workspace_id)
                         or VolumeRepository(session).list(workspace_id=workspace_id)
+                        or DiskRepository(session).list(
+                            workspace_id=workspace_id, after="", limit=1
+                        )
                     )
                 ):
                     managed.append(workspace_id)
@@ -88,8 +94,8 @@ class UnfundedStorageRetentionService:
                 body = (
                     "Your credit balance is empty. Your stored files will be retained "
                     f"at no charge until {deadline}. Restore a positive credit balance "
-                    "before that date to keep your data. Otherwise, platform-managed files "
-                    "and volumes will be permanently deleted. Workspaces in your connected "
+                    "before that date to keep your data. Otherwise, platform-managed files, "
+                    "volumes and disks will be permanently deleted. Workspaces in your connected "
                     "AWS account are unaffected."
                 )
                 period.notification_message_id = EmailOutboxRepository(session).enqueue(
@@ -149,5 +155,17 @@ class UnfundedStorageRetentionService:
                     session, volume.name, workspace_id=workspace_id, now=now
                 )
                 claimed += 1
+            except (ConflictError, NotFoundError):
+                continue
+        disks = DiskRepository(session).list(
+            workspace_id=workspace_id, after="", limit=self.max_items_per_workspace
+        )
+        for disk in disks:
+            if not repository.lock_disk(disk.id, workspace_id=workspace_id):
+                continue
+            try:
+                self.disks.request_deletion_in_session(
+                    session, disk.name, workspace_id=workspace_id, now=now
+                )
             except (ConflictError, NotFoundError):
                 continue
