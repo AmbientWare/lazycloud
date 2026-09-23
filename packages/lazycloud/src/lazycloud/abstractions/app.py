@@ -27,6 +27,14 @@ from shared.deployment_records import (
 )
 from shared.deployments import DeploymentKind
 from shared.gpu import GpuInput
+from shared.http.deployment_plans import (
+    DeploymentPlanRequest,
+    DeploymentPlanResponse,
+    DeploymentPruneResponse,
+    WorkloadIdentity,
+)
+from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
+from shared.http.gateway import DeployStubResponse
 from shared.serialization import to_json_value
 from shared.tasks import TaskPolicy
 
@@ -52,7 +60,10 @@ from lazycloud.abstractions.pod import Pod, PodOptions
 from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
 from lazycloud.abstractions.serve import ServeOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
+from lazycloud.control import resolve_control_client_config
+from lazycloud.control_clients import resource_control_client
 from lazycloud.json_contracts import resource_payload
+from lazycloud.session.app_deployment import AppDeploymentSession, AppDeploymentTarget
 from lazycloud.session.preparation import MAX_DEPLOYMENT_PREPARATIONS, DeploymentPreparation
 
 
@@ -72,25 +83,29 @@ R = TypeVar("R")
 @dataclass(frozen=True, slots=True)
 class AppDeployResult:
     app: str
-    resources: tuple[object, ...]
+    resources: tuple[DeployStubResponse, ...]
+    pruning: DeploymentPruneResponse | None = None
 
     def model_dump(self, *, mode: str = "python") -> dict[str, JsonValue]:
         _ = mode
-        return {
+        payload: dict[str, JsonValue] = {
             "app": self.app,
             "resources": [to_json_value(resource_payload(item)) for item in self.resources],
         }
+        if self.pruning is not None:
+            payload["pruning"] = self.pruning.model_dump(mode="json")
+        return payload
 
 
 class App:
     """Owns the deployable resources registered under one application slug."""
 
     def __init__(self, slug: str) -> None:
-        """Create an app namespace for functions, endpoints, queues, pods, and sandboxes.
+        """Create an app namespace for functions, endpoints, pods, and sandboxes.
 
         The slug is the stable production identity used by deploy, serve, and
         generated client handles. Use a short lowercase slug such as
-        `"billing"` or `"reporting-api"`.
+        `"billing"` or `"reporting_api"`.
         """
         self.slug = validate_app_slug(slug)
         self._resources: dict[tuple[DeploymentKind, str], AppResource] = {}
@@ -98,6 +113,43 @@ class App:
     @property
     def resources(self) -> tuple[AppResource, ...]:
         return tuple(self._resources.values())
+
+    @classmethod
+    def combine(cls, apps: Iterable[App]) -> tuple[App, ...]:
+        combined: dict[str, App] = {}
+        for app in apps:
+            target = combined.setdefault(app.slug, cls(app.slug))
+            for item in app.resources:
+                target._register(item)
+        return tuple(combined.values())
+
+    def deployment_manifest(
+        self, *, prune: bool = False, resource: str | None = None, name: str | None = None
+    ) -> DeploymentPlanRequest:
+        if prune and (resource is not None or name is not None):
+            raise AppOperationError("pruning requires the complete app without a name override")
+        selected = (
+            self._select_many(resource=resource, method="deploy") if resource else self.resources
+        )
+        return DeploymentPlanRequest(
+            app=self.slug,
+            prune=prune,
+            workloads=[
+                WorkloadIdentity(kind=spec.kind, name=name or spec.name)
+                for item in selected
+                if callable(getattr(item, "deploy", None))
+                for spec in [item.spec()]
+            ],
+        )
+
+    def plan(self, *, prune: bool = False, workspace: str | None = None) -> DeploymentPlanResponse:
+        config = resolve_control_client_config(workspace=workspace)
+        try:
+            return resource_control_client(config).plan_deployment(
+                self.deployment_manifest(prune=prune)
+            )
+        except (HttpApiError, HttpTransportError, HttpResponseDecodeError) as exc:
+            raise AppOperationError(str(exc)) from exc
 
     @overload
     def function(
@@ -858,6 +910,7 @@ class App:
     def deploy(
         self,
         *,
+        prune: bool = False,
         resource: str | None = None,
         name: str | None = None,
         workspace: str | None = None,
@@ -891,6 +944,8 @@ class App:
         On failure, queued deployments are canceled; running deployments may finish.
 
         Args:
+            prune: Remove omitted workloads after all deployments register successfully.
+                Requires a complete app. An empty app removes every deployed workload.
             resource: Optional resource selector to deploy only one item.
             name: Deployment name override when deploying one resource.
             workspace: Workspace slug or name for the deployment.
@@ -900,7 +955,15 @@ class App:
             env, secrets, ports, keep_warm, tcp, machine, entrypoint: Additional runtime
                 overrides. Target-specific options fail explicitly when unsupported.
         """
-        deployable = self._select_many(resource=resource, method="deploy")
+        if prune and resource is not None:
+            raise AppOperationError("pruning requires the complete app; remove --resource")
+        if prune and name is not None:
+            raise AppOperationError("pruning does not support a deployment name override")
+        deployable = (
+            self._select_many(resource=resource, method="deploy")
+            if not prune or resource is not None or self.deployment_manifest().workloads
+            else ()
+        )
         for item in deployable:
             _configure_deployable_resource(
                 item,
@@ -921,6 +984,42 @@ class App:
                 preemptible=preemptible,
                 entrypoint=entrypoint,
             )
+
+        def submit() -> tuple[DeployStubResponse, ...]:
+            return self._submit_deployments(
+                deployable,
+                resource=resource,
+                name=name,
+                workspace=workspace,
+                external_url=external_url,
+                source_root=source_root,
+            )
+
+        if not prune:
+            return AppDeployResult(app=self.slug, resources=submit())
+        control = resource_control_client(
+            resolve_control_client_config(workspace=workspace, timeout_seconds=60)
+        )
+        try:
+            outcome = AppDeploymentSession(control).deploy(
+                [
+                    AppDeploymentTarget(self.deployment_manifest(prune=True), submit),
+                ]
+            )[0]
+        except (HttpApiError, HttpTransportError, HttpResponseDecodeError) as exc:
+            raise AppOperationError(str(exc)) from exc
+        return AppDeployResult(app=self.slug, resources=outcome.resources, pruning=outcome.pruning)
+
+    def _submit_deployments(
+        self,
+        deployable: tuple[Function[..., Any] | Endpoint[..., Any] | ASGI | Pod, ...],
+        *,
+        resource: str | None,
+        name: str | None,
+        workspace: str | None,
+        external_url: str | None,
+        source_root: str | Path | None,
+    ) -> tuple[DeployStubResponse, ...]:
         with (
             DeploymentPreparation() as preparation,
             ThreadPoolExecutor(
@@ -950,7 +1049,7 @@ class App:
                 for future in submitted:
                     future.cancel()
                 raise
-        return AppDeployResult(app=self.slug, resources=results)
+        return results
 
     def serve(
         self,
@@ -1223,9 +1322,12 @@ def _is_serveable(resource: AppResource) -> bool:
 def _deploy_app_resource(
     item: Function[..., Any] | Endpoint[..., Any] | ASGI | Pod,
     kwargs: Mapping[str, object],
-) -> object:
+) -> DeployStubResponse:
     try:
-        return _invoke_method(item.deploy, kwargs)
+        result = _invoke_method(item.deploy, kwargs)
+        if not isinstance(result, DeployStubResponse):
+            raise AppOperationError("deployment did not return its registered deployment")
+        return result
     except RuntimeError as exc:
         spec = item.spec()
         raise AppOperationError(f"failed to deploy {spec.kind.value}:{spec.name}: {exc}") from exc

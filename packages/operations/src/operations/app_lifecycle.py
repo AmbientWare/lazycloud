@@ -7,6 +7,7 @@ from coordination.redis_client import RedisClient
 from database.context import ServiceContext
 from database.records.apps import StubRecord
 from database.repositories.apps import StubRepository
+from database.repositories.deployment_plans import DeploymentPlanRepository
 from database.repositories.execution import TaskRepository
 from execution.containers.service import ContainerService
 from execution.pods.planning import pod_instance_lock_key
@@ -27,6 +28,29 @@ class ProductionAppExecutionLifecycleEffects:
     redis: RedisClient
     shutdowns: ContainerShutdownService
     shutdown_timeout_seconds: float = 30.0
+
+    def delete_deployment_execution(self, *, workspace_id: str, deployment_ids: list[str]) -> None:
+        with self.context.database.session() as session:
+            targets = DeploymentPlanRepository(session).container_targets(
+                workspace_id=workspace_id,
+                deployment_ids=deployment_ids,
+            )
+            stubs = StubRepository(session).list_for_deployments(
+                deployment_ids,
+                workspace_id=workspace_id,
+            )
+        for target in targets:
+            self.containers.stop(target.container_id)
+        self.shutdowns.confirm(targets, timeout_seconds=self.shutdown_timeout_seconds)
+        with self.context.database.session() as session:
+            for app_id in {stub.app_id for stub in stubs if stub.app_id is not None}:
+                TaskRepository(session).cancel_queued_for_app(
+                    workspace_id=workspace_id,
+                    app_id=app_id,
+                    deployment_ids=deployment_ids,
+                    error="the workload this task belongs to was pruned",
+                )
+        self._delete_app_ephemeral_state(workspace_id=workspace_id, stubs=stubs)
 
     def stop_app_containers(
         self,

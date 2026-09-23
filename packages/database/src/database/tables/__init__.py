@@ -47,6 +47,7 @@ from database.tables.compute import (
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.credit_purchases import CreditPurchaseTable
 from database.tables.custom_domains import CustomDomainTable
+from database.tables.deployment_prunes import DeploymentPruneTable, DeploymentPruneTargetTable
 from database.tables.email_outbox import EmailOutboxTable
 from database.tables.endpoint_dispatch import EndpointDispatchTable
 from database.tables.execution import (
@@ -141,6 +142,8 @@ __all__ = [
     "CronJobTable",
     "CustomDomainTable",
     "DatabaseBase",
+    "DeploymentPruneTable",
+    "DeploymentPruneTargetTable",
     "DeploymentTable",
     "EmailOutboxTable",
     "EndpointDispatchTable",

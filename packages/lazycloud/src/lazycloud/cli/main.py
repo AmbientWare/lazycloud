@@ -223,7 +223,7 @@ def _register_public_commands(registry: PublicCliRegistry) -> None:
 
 
 def _register_deploy(application: typer.Typer) -> None:
-    application.command("deploy", help="Deploy a handler, an app, or the single app in a file.")(
+    application.command("deploy", help="Deploy a handler or apps from Python files and modules.")(
         deploy
     )
 
