@@ -41,8 +41,7 @@
         "pages": [
           "index",
           "getting-started/quickstart",
-          "getting-started/installation",
-          "getting-started/agents"
+          "getting-started/installation"
         ]
       },
       {

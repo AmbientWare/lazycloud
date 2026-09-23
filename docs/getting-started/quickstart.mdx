@@ -1,6 +1,6 @@
 ---
 title: "Quickstart"
-description: "Test a function locally, run it in the cloud, then deploy an HTTP endpoint and call it."
+description: "Develop a function locally, test it in the cloud, then deploy an HTTP endpoint and call it."
 ---
 
 ## Install and sign in
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     print(hello.remote("LazyCloud"))
 ```
 
-## Test locally
+## Develop locally
 
 ```bash
 uv run python -c "from quickstart import hello; print(hello.local('LazyCloud'))"
@@ -53,7 +53,7 @@ uv run python -c "from quickstart import hello; print(hello.local('LazyCloud'))"
 `.local()` calls the function in your own Python process, with no upload and no
 charge.
 
-## Run in the cloud
+## Test in the cloud
 
 ```bash
 uv run lazycloud run quickstart:hello LazyCloud
@@ -106,6 +106,5 @@ uv run lazycloud app pause quickstart
 
 ## Next
 
-- [Develop with coding agents](/getting-started/agents) to hand this loop to an agent.
-- [Local, cloud, deploy](/concepts/workflow) for live previews and where each call goes.
+- [Develop, test, deploy](/concepts/workflow) for live previews and where each call goes.
 - [Apps and workloads](/concepts/apps) to lay out your own project.

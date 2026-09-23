@@ -1,24 +1,24 @@
 ---
-title: "Local, cloud, deploy"
-description: "Test locally, run in the cloud, preview, and deploy, and see where each call goes."
+title: "Develop, test, deploy"
+description: "Develop locally, test in the cloud, preview, and deploy, and see where each call goes."
 ---
 
 The same decorated function runs locally, in the cloud, or as a deployment,
 with no change to the code. Work through them in this order:
 
-1. Test the logic locally with `.local()`, in seconds and at no cost.
-2. Run it once in the cloud with `lazycloud run` to check the image, GPU, and
+1. Develop locally with `.local()`, in seconds and at no cost.
+2. Test once in the cloud with `lazycloud run` to check the image, GPU, and
    secrets.
-3. Deploy it with `lazycloud deploy` when something else needs to call it.
+3. Deploy with `lazycloud deploy` when something else needs to call it.
 
 `lazycloud serve` sits between steps 2 and 3 when you want to edit remote code
 and see each change without redeploying. Every step is one command with
-[machine-readable output](/cli/overview), so you or a
-[coding agent](/getting-started/agents) can run the loop from a script.
+[machine-readable output](/cli/overview), so an agent or a script can run the
+loop.
 
 The examples use `text_tools.py` from [Apps and workloads](/concepts/apps).
 
-## Test locally
+## Develop locally
 
 ```python
 from text_tools import count_words
@@ -31,7 +31,7 @@ Both run in your Python process, with no upload and no task. The decorator's
 image, volumes, secrets, GPU, retries, and lifecycle hooks do not apply, so use
 this for unit tests and for logic with no remote dependencies.
 
-## Run in the cloud
+## Test in the cloud
 
 ```bash
 uv run lazycloud run text_tools:count_words "one two three"

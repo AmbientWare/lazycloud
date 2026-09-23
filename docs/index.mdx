@@ -1,12 +1,16 @@
 ---
 title: "Introduction"
-description: "LazyCloud runs your Python on remote CPUs and GPUs. You describe the container in code, and LazyCloud builds it, runs it, scales it, and stops it."
+description: "Infrastructure for agentic engineering. Your agent writes the code and the infrastructure in the same Python file, then tests and deploys it with one command each."
 ---
 
-LazyCloud runs Python on remote CPUs and GPUs. A decorator on a function names
-the packages, CPU, memory, GPU, and storage it needs. LazyCloud builds the
-container, uploads your code, runs it, and stops it when the work is done. You
-pay per second while a container runs.
+LazyCloud is infrastructure for agentic engineering. Building with agents is
+fast, and deploying with LazyCloud is too.
+
+Your workloads are defined in Python next to the code they run. A decorator
+names the packages, CPU, memory, GPU, and storage a function needs, so the agent
+that writes the function also writes where and how it runs, in the same edit.
+LazyCloud builds the container, uploads the code, runs it, and stops it when the
+work is done. You pay per second while a container runs.
 
 ```python
 from lazycloud import App, Image
@@ -19,20 +23,42 @@ def summarize(amounts: list[float]) -> dict[str, float]:
     return {"total": sum(amounts), "mean": sum(amounts) / len(amounts)}
 ```
 
-The same file runs at every stage of development without code changes:
+## Develop locally, test in the cloud, deploy
+
+The same file runs at every stage, without code changes:
 
 ```bash
-uv run pytest                                           # test locally with summarize.local(...)
-uv run lazycloud run reports:summarize '[12.5, 30, 8]'   # run once in the cloud
-uv run lazycloud deploy reports                         # keep it available to other code
+uv run pytest                                           # develop locally with summarize.local(...)
+uv run lazycloud run reports:summarize '[12.5, 30, 8]'   # test once on cloud compute
+uv run lazycloud deploy reports                         # deploy for your app to call
 ```
 
-Each step is one non-interactive command with `--json` output and a nonzero exit
-on failure, so a coding agent can test, run, and deploy the same way you do.
+Each step is one command with no browser or prompt. Add `--json` and the result
+arrives on stdout as one JSON document, logs go to stderr, and a failure exits
+nonzero. An agent can run the whole loop and read the outcome the same way you
+do.
+
+## What you can ship
+
+- [APIs](/concepts/endpoints): a function as an HTTPS endpoint, or a full
+  FastAPI app.
+- [Jobs](/concepts/functions): tests, evals, data processing, and GPU work,
+  fanned out across containers.
+- [Background work and crons](/concepts/schedules): tasks with retries,
+  cancellation, and live logs.
+- [Agent sandboxes](/concepts/sandboxes): isolated containers for running your
+  agent's code and tests.
+
+## Point your agent at these docs
+
+`https://docs.lazycloud.dev/llms-full.txt` holds every page as one text file,
+any page URL with `.md` appended returns Markdown, and
+`https://docs.lazycloud.dev/mcp` is an MCP server that searches the docs.
 
 ## Next steps
 
-- [Quickstart](/getting-started/quickstart): run a function and deploy an endpoint.
-- [Develop with coding agents](/getting-started/agents): hand the loop to an agent.
+- [Quickstart](/getting-started/quickstart): develop, test, and deploy your
+  first workload.
 - [Apps and workloads](/concepts/apps): lay out your own project.
-- [Examples](/examples/index): GPU inference, training, document processing, and more.
+- [Examples](/examples/index): GPU inference, training, document processing,
+  and a sandboxed coding agent.
