@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from lazycloud import App, Image
 
 app = App("quickstart")
