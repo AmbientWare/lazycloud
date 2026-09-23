@@ -35,6 +35,7 @@ from scheduler.containers import (
     SchedulerContainerSubmitResult,
     SchedulerContainerSubmitStatus,
 )
+from scheduler.disk_volume_attachments import DatabaseDiskVolumeAttachments
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
@@ -539,4 +540,5 @@ def _scheduler_request_service(
         dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
         lifecycle_events=RedisEventStreamRepository(redis),
         workspace_owners=DatabaseWorkspaceOwners(services.context),
+        disk_volume_attachments=DatabaseDiskVolumeAttachments(services.context),
     )

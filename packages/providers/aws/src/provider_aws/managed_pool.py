@@ -37,6 +37,7 @@ from shared.compute_policy import UnitName
 from shared.urls import normalize_http_origin
 
 from .account_connection import AwsAccountConnectionTarget, connection_profile_name
+from .block_volumes import is_disk_volume_device
 from .boto3_clients import has_operations, is_boto3_client_factory
 from .instance_catalog import aws_managed_capacity_resource_name
 from .network_egress import AwsNetworkEvidenceClient
@@ -521,6 +522,7 @@ class _InstanceEbs(_Response):
 
 
 class _InstanceBlockDevice(_Response):
+    device_name: str = Field(default="", alias="DeviceName")
     ebs: _InstanceEbs | None = Field(default=None, alias="Ebs")
 
 
@@ -1274,7 +1276,9 @@ class AwsManagedPoolProvisioner:
                 storage_volume_ids=tuple(
                     mapping.ebs.volume_id
                     for mapping in instance.block_devices
-                    if mapping.ebs is not None and mapping.ebs.volume_id
+                    if mapping.ebs is not None
+                    and mapping.ebs.volume_id
+                    and not is_disk_volume_device(mapping.device_name)
                 ),
             )
             for reservation in described.reservations

@@ -13,6 +13,20 @@ BUCKET_PREFIX = os.environ["LAZYCLOUD_E2E_BUCKET_PREFIX"]
 ACCESS_KEY_SECRET = os.environ["LAZYCLOUD_E2E_ACCESS_SECRET"]
 SECRET_KEY_SECRET = os.environ["LAZYCLOUD_E2E_SECRET_SECRET"]
 ROOT = Path("/mnt/e2e-cloud-bucket")
+# A deployed container imports this module again, so it needs the names the
+# caller generated or it would mint different ones.
+DEPLOYMENT_ENV = {
+    name: os.environ[name]
+    for name in (
+        "LAZYCLOUD_E2E_ACCESS_SECRET",
+        "LAZYCLOUD_E2E_APP",
+        "LAZYCLOUD_E2E_BUCKET",
+        "LAZYCLOUD_E2E_BUCKET_INTERNAL_ENDPOINT",
+        "LAZYCLOUD_E2E_BUCKET_PREFIX",
+        "LAZYCLOUD_E2E_BUCKET_REGION",
+        "LAZYCLOUD_E2E_SECRET_SECRET",
+    )
+}
 
 app = App(APP_NAME)
 bucket = CloudBucket(
@@ -38,6 +52,7 @@ bucket = CloudBucket(
     secrets=[ACCESS_KEY_SECRET, SECRET_KEY_SECRET],
     cpu=0.25,
     memory="128Mi",
+    env=DEPLOYMENT_ENV,
 )
 def cloud_bucket_probe(
     operation: Literal["read", "write"],

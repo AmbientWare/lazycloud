@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import pytest
-from scheduler.tools import SchedulingRequest, WorkerCapacity, select_worker_for_request
+from scheduler.tools import (
+    SchedulingDecision,
+    SchedulingRequest,
+    WorkerCapacity,
+    plan_scheduling_batch,
+    select_worker_for_request,
+)
+from shared.disks import DiskStorage
 from shared.placement import Placement, PlacementKind
 
 
@@ -226,3 +233,106 @@ def test_a_preference_falls_through_to_the_next_card_it_named() -> None:
     # And a card nobody named is still refused.
     t4 = fallback.model_copy(update={"worker_id": "t4", "gpu_type": "T4"})
     assert select_worker_for_request(request, [t4]) is None
+
+
+def test_disks_take_volume_attachments_on_provider_workers_and_bytes_on_joined_ones() -> None:
+    """Each disk on a provider machine gets its own volume, so what runs out there
+    is attachments; a joined machine's disks share its filesystem and reserve their
+    declared size on it."""
+    gib = 1024**3
+    volumes = WorkerCapacity(
+        worker_id="provider",
+        placement=Placement.platform(),
+        total_cpu=64,
+        free_cpu=64,
+        total_memory_mib=262144,
+        free_memory_mib=262144,
+        total_gpu=0,
+        disk_storage=DiskStorage.Volume,
+        total_disk_volumes=3,
+        free_disk_volumes=3,
+    )
+    two_disks, second_pair = (
+        SchedulingRequest(
+            placement=Placement.platform(),
+            id=f"pod-{index}",
+            cpu=1,
+            disk_count=2,
+            disk_bytes=2 * 500 * gib,
+        )
+        for index in (1, 2)
+    )
+
+    outcomes = plan_scheduling_batch(
+        [two_disks, second_pair], [volumes], queued_gpu_requests=[]
+    ).outcomes
+
+    assert [outcome.decision for outcome in outcomes] == [
+        SchedulingDecision.Dispatch,
+        SchedulingDecision.ProvisionWorker,
+    ]
+    assert volumes.reserve(two_disks).fit_rejection(second_pair) == (
+        "free disk volume attachments 1 < 2"
+    )
+
+    joined = volumes.model_copy(
+        update={
+            "worker_id": "joined",
+            "disk_storage": DiskStorage.Host,
+            "total_disk_volumes": 0,
+            "free_disk_volumes": 0,
+            "total_disk_bytes": 1500 * gib,
+            "free_disk_bytes": 1500 * gib,
+        }
+    )
+    assert joined.can_fit(two_disks)
+    assert joined.reserve(two_disks).fit_rejection(second_pair) == (
+        f"free disk {500 * gib} bytes < {1000 * gib} bytes"
+    )
+
+
+@pytest.mark.parametrize("storage", [DiskStorage.Volume, DiskStorage.Host])
+def test_workers_on_one_machine_share_its_disk_budget(storage: DiskStorage) -> None:
+    """Two worker slots on one machine each see the machine's whole disk budget, its
+    volume attachments or its one filesystem, and a disk placed on either takes it
+    from both."""
+    gib = 1024**3
+    budget = (
+        {"total_disk_volumes": 1, "free_disk_volumes": 1}
+        if storage is DiskStorage.Volume
+        else {"total_disk_bytes": 100 * gib, "free_disk_bytes": 100 * gib}
+    )
+    workers = [
+        WorkerCapacity.model_validate(
+            {
+                "worker_id": worker_id,
+                "machine_id": "machine-1",
+                "placement": Placement.platform(),
+                "total_cpu": 8,
+                "free_cpu": 8,
+                "total_memory_mib": 16384,
+                "free_memory_mib": 16384,
+                "total_gpu": 0,
+                "disk_storage": storage,
+                **budget,
+            }
+        )
+        for worker_id in ("slot-a", "slot-b")
+    ]
+    requests = [
+        SchedulingRequest(
+            placement=Placement.platform(),
+            id=f"pod-{index}",
+            cpu=1,
+            disk_count=1,
+            disk_bytes=60 * gib,
+        )
+        for index in (1, 2)
+    ]
+
+    outcomes = plan_scheduling_batch(requests, workers, queued_gpu_requests=[]).outcomes
+
+    assert [outcome.decision for outcome in outcomes] == [
+        SchedulingDecision.Dispatch,
+        SchedulingDecision.ProvisionWorker,
+    ]

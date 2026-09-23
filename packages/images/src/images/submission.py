@@ -52,6 +52,7 @@ class ImageBuildSubmissionService:
         registry_credential_payload: str | None = None,
         build_args: dict[str, str] | None = None,
         request_id: str | None = None,
+        machine: str = "",
     ) -> ImageBuildRecord:
         plan = build_image_plan(image)
         build_id = str(uuid4())
@@ -94,6 +95,7 @@ class ImageBuildSubmissionService:
                 credential_plan=credential_plan,
                 registry_credential_payload=registry_credential_payload or "",
                 build_args=build_args or {},
+                machine=machine,
             )
         )
         with self.database.session() as session:

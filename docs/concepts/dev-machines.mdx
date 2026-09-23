@@ -1,0 +1,90 @@
+---
+title: "Dev machines"
+description: "A pod you log into over SSH, with a disk that keeps its files, for coding agents and remote editors."
+---
+
+A dev machine is a [pod](/concepts/pods) with `ssh=True` and a
+[disk](/concepts/disks) at `/`. It runs while something is connected and stops
+after `keep_warm` seconds with nothing connected. Everything written to it,
+including installed packages, dotfiles, and working trees, is there on the
+next start.
+
+## Define one
+
+Save this as `dev.py`:
+
+```python
+from lazycloud import App, Disk, Image
+
+app = App("dev")
+
+image = Image(python_version="3.12").add_commands(
+    [
+        "apt-get update && apt-get install -y git curl nodejs npm",
+        "npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai",
+    ]
+)
+
+box = app.pod(
+    name="box",
+    image=image,
+    command=["sleep", "infinity"],
+    disks=[Disk("box-root", size="100Gi")],
+    ssh=True,
+    cpu=4,
+    memory="16Gi",
+    keep_warm=1800,
+    preemptible=False,
+)
+```
+
+```bash
+uv run lazycloud deploy dev:box
+uv run lazycloud ssh box
+```
+
+`lazycloud ssh` opens a shell as `root` on the running machine. The image
+supplies the tools; the command only has to keep the container alive, because
+LazyCloud serves SSH itself and the image needs no `sshd`.
+
+## Remote editors
+
+```bash
+uv run lazycloud ssh-config
+```
+
+This writes a host entry for each deployed pod that serves SSH, named
+`lazycloud-<workspace>-<app>-<pod>`, and adds one `Include` line to
+`~/.ssh/config`. VS Code and Cursor Remote-SSH then list
+`lazycloud-<workspace>-dev-box` beside your other hosts, and plain
+`ssh lazycloud-<workspace>-dev-box` works too. Port
+forwarding and SFTP work as they do on any SSH server.
+
+Connections go through the LazyCloud API with your `lazycloud login`, never to
+a public port on the machine. The SSH login uses a short-lived certificate
+signed for your workspace. The generated config refreshes it before each
+connection, so there are no keys to copy anywhere.
+
+## When it runs
+
+Connecting starts a stopped machine. The first connection waits while the
+container starts, which includes restoring the disk if it last ran on another
+host. An open SSH session keeps the machine up, whether or not anything is
+typed, and `keep_warm` counts from when the last session closes.
+`keep_warm=-1` keeps it running with nobody connected, which suits an agent
+left to work unattended.
+
+`preemptible=False` keeps the machine off Spot capacity, where a reclaim could
+stop it mid-session. A pod with a disk runs one container, so
+`lazycloud deployment scale` refuses more than one.
+
+## Stop and clean up
+
+```bash
+uv run lazycloud deployment stop box
+uv run lazycloud deployment delete box
+uv run lazycloud disk delete box-root
+```
+
+Stopping or deleting the deployment keeps the disk. Deleting the disk removes
+everything written to it.

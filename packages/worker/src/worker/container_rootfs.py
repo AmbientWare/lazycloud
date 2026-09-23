@@ -76,6 +76,9 @@ class ContainerRootfsSetupResult(ContractModel):
     upper_path: str = ""
     disk_limit_bytes: int = 0
     quota_project_id: int = 0
+    durable: bool = False
+    """The upper layer lives on a durable disk, so root writes must reach it."""
+
     reason: str = ""
 
     @property
@@ -174,11 +177,16 @@ def plan_container_rootfs_overlay(
     image_id: str,
     image_mount_root: Path,
     scratch_root: Path,
+    upper_root: Path | None = None,
 ) -> ContainerRootfsOverlayPlan | None:
     """Plan the overlay for one container, or None when there is no shared lower layer.
 
     A request without an image id gets a bundle-relative rootfs that is already
     private to the container, so it needs no overlay.
+
+    `upper_root` puts the upper and work directories on a durable disk instead
+    of the scratch root, so the container's writes outlive it. The merged mount
+    point stays under the scratch root either way.
     """
     if not container_id:
         msg = "container rootfs overlay requires a container id"
@@ -189,11 +197,12 @@ def plan_container_rootfs_overlay(
     _validate_path_segment(image_id, field="image_id")
 
     container_root = scratch_root / container_id
+    writable_root = upper_root if upper_root is not None else container_root
     return ContainerRootfsOverlayPlan(
         container_id=container_id,
         lower_dir=str(image_mount_root / image_id),
-        upper_dir=str(container_root / CONTAINER_ROOTFS_UPPER_DIR_NAME),
-        work_dir=str(container_root / CONTAINER_ROOTFS_WORK_DIR_NAME),
+        upper_dir=str(writable_root / CONTAINER_ROOTFS_UPPER_DIR_NAME),
+        work_dir=str(writable_root / CONTAINER_ROOTFS_WORK_DIR_NAME),
         merged_dir=str(container_root / CONTAINER_ROOTFS_MERGED_DIR_NAME),
     )
 
@@ -370,12 +379,14 @@ class ContainerRootfsOverlayManager:
         container_id: str,
         image_id: str,
         disk_limit_bytes: int = 0,
+        upper_root: Path | None = None,
     ) -> ContainerRootfsSetupResult:
         plan = plan_container_rootfs_overlay(
             container_id=container_id,
             image_id=image_id,
             image_mount_root=self.image_mount_root,
             scratch_root=self.scratch_root,
+            upper_root=upper_root,
         )
         if plan is None:
             return ContainerRootfsSetupResult(
@@ -402,6 +413,7 @@ class ContainerRootfsOverlayManager:
                 status=ContainerRootfsStatus.AlreadyMounted,
                 root_path=plan.merged_dir,
                 upper_path=plan.upper_dir,
+                durable=upper_root is not None,
             )
 
         floor = self._free_space_rejection()
@@ -416,7 +428,13 @@ class ContainerRootfsOverlayManager:
             directory.mkdir(parents=True, exist_ok=True)
 
         limit = disk_limit_bytes if disk_limit_bytes > 0 else self.default_disk_limit_bytes
-        quota = self._apply_disk_quota(plan, limit_bytes=limit)
+        # A durable disk is its own filesystem sized to the disk, which bounds the
+        # writes; it carries no XFS project to attach a quota to.
+        quota = (
+            _AppliedDiskQuota()
+            if upper_root is not None
+            else self._apply_disk_quota(plan, limit_bytes=limit)
+        )
         if quota.reason:
             return ContainerRootfsSetupResult(
                 container_id=container_id,
@@ -441,6 +459,7 @@ class ContainerRootfsOverlayManager:
             upper_path=plan.upper_dir,
             disk_limit_bytes=quota.limit_bytes,
             quota_project_id=quota.project_id,
+            durable=upper_root is not None,
         )
 
     def used_bytes(self, container_id: str) -> int:

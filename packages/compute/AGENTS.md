@@ -13,13 +13,10 @@ coordination package.
 - Preserve retries, billing attribution, and resource cleanup on every path that
   can create something billable. A leaked machine is a bug with a running meter.
 - A credential never travels in machine configuration that provisioning can read
-  back. Prefer a single-use credential vended at the moment of use over a
+  back. A node proves who it is with signed instance identity, so user-data,
+  images and launch templates carry no token, provider API key or join
+  credential. Prefer a single-use credential vended at the moment of use over a
   reusable one embedded where every instance from that configuration can read it.
-  Hetzner enrollment has one owner-approved exception: a unique, short-lived
-  bootstrap token may travel in one node's user-data. Bind it to that launch,
-  consume it atomically before tenant work starts, and reject reuse or expiry.
-  Keep tokens out of source, images, logs, and shared launch templates. This does
-  not permit a provider API key or reusable join credential on a node.
 - A bootstrap script owns provider identity and nothing else. Everything it
   installs belongs to the artifact it downloads, so a version or a policy is
   pinned in one place instead of drifting between two.

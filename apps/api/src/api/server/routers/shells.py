@@ -44,6 +44,7 @@ from api.server.dependencies import (
     websocket_authorization_header,
     websocket_workspace,
 )
+from api.server.http import bridge_websocket_to_socket
 from api.server.service_dependencies import (
     backend_route_dialer,
     shell_service,
@@ -226,9 +227,14 @@ async def shell_connect_websocket(
         return
     try:
         await websocket.send_text("OK")
-        await _proxy_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
+        await bridge_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
     except (WebSocketDisconnect, asyncio.CancelledError):
         return
+    except OSError as exc:
+        await websocket.close(
+            code=status.WS_1011_INTERNAL_ERROR,
+            reason=f"connection to the container shell failed: {exc}"[:120],
+        )
     finally:
         backend.close()
 
@@ -270,59 +276,6 @@ async def _request_body_to_socket(
         raise
     except OSError:
         return
-
-
-async def _proxy_websocket_to_socket(
-    websocket: WebSocket,
-    backend: socket.socket,
-    buffer_size_bytes: int,
-) -> None:
-    backend.setblocking(False)
-    loop = asyncio.get_running_loop()
-    reader = asyncio.create_task(
-        _socket_to_websocket(websocket, backend, max(buffer_size_bytes, 1))
-    )
-    writer = asyncio.create_task(_websocket_to_socket(websocket, backend, loop))
-    done, pending = await asyncio.wait(
-        {reader, writer},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*done, *pending, return_exceptions=True)
-
-
-async def _socket_to_websocket(
-    websocket: WebSocket,
-    backend: socket.socket,
-    buffer_size_bytes: int,
-) -> None:
-    loop = asyncio.get_running_loop()
-    while True:
-        data = await loop.sock_recv(backend, buffer_size_bytes)
-        if not data:
-            return
-        await websocket.send_bytes(data)
-
-
-async def _websocket_to_socket(
-    websocket: WebSocket,
-    backend: socket.socket,
-    loop: asyncio.AbstractEventLoop,
-) -> None:
-    while True:
-        try:
-            message = await websocket.receive()
-        except WebSocketDisconnect:
-            return
-        if message["type"] == "websocket.disconnect":
-            return
-        data: bytes | None = message.get("bytes")
-        if data is None:
-            text: str | None = message.get("text")
-            data = text.encode() if text is not None else b""
-        if data:
-            await loop.sock_sendall(backend, data)
 
 
 def _mint_shell_ticket(

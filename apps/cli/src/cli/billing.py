@@ -14,6 +14,7 @@ from rich.console import Group
 from shared.billing_rate_card import (
     METERED_RATE_VERSION,
     METERED_RATES_EFFECTIVE_AT,
+    PUBLISHED_DISK_RATE,
     PUBLISHED_PLANS,
     PUBLISHED_PLATFORM_RATE,
 )
@@ -81,6 +82,14 @@ def publish_rates(
             PUBLISHED_PLATFORM_RATE.nanos_per_volume_byte_second, "f"
         ),
         "nanos_per_volume_gib_month": PUBLISHED_PLATFORM_RATE.nanos_per_volume_gib_month,
+        "nanos_per_disk_stored_byte_second": format(
+            PUBLISHED_DISK_RATE.nanos_per_stored_byte_second, "f"
+        ),
+        "nanos_per_disk_stored_gib_month": PUBLISHED_DISK_RATE.nanos_per_stored_gib_month,
+        "nanos_per_disk_attached_byte_second": format(
+            PUBLISHED_DISK_RATE.nanos_per_attached_byte_second, "f"
+        ),
+        "nanos_per_disk_attached_gib_month": PUBLISHED_DISK_RATE.nanos_per_attached_gib_month,
         "written": confirm,
     }
     try:
@@ -121,6 +130,9 @@ def publish_rates(
             payload["platform_rate_state"] = next(
                 card.platform.value for card in reversed(history) if card.platform is not None
             )
+            payload["disk_rate_state"] = next(
+                card.disk.value for card in reversed(history) if card.disk is not None
+            )
             payload["history_boundaries"] = [card.effective_at.isoformat() for card in history]
             if confirm:
                 session.commit()
@@ -138,6 +150,7 @@ def publish_rates(
                     "pricing version": METERED_RATE_VERSION,
                     "compute rates": len(compute_rates),
                     "platform rate": str(payload["platform_rate_state"]),
+                    "disk rate": str(payload["disk_rate_state"]),
                 },
                 title="Rates published" if confirm else "Rate preview",
                 tone="success" if confirm else "info",
@@ -176,6 +189,8 @@ def publish_rates(
                 [
                     ["egress/GiB", payload["nanos_per_egress_gib"]],
                     ["volume/GiB-month", payload["nanos_per_volume_gib_month"]],
+                    ["disk stored/GiB-month", payload["nanos_per_disk_stored_gib_month"]],
+                    ["disk attached/GiB-month", payload["nanos_per_disk_attached_gib_month"]],
                 ],
                 title="Platform rates",
             ),

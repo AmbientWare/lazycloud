@@ -192,6 +192,7 @@ const STOP_REASONS: Record<string, string | undefined> = {
   UNFUNDED: "The account has no payment method on file",
   MEMORY_EVICTED:
     "The machine ran out of memory and this container was using the most above its request",
+  DISK_FULL: "One of its disks ran out of space to save its changes",
 };
 
 /**

@@ -104,7 +104,7 @@ from observability.metrics import MetricsService
 from observability.stream_state import AsyncRedisEventStreamRepository
 from observability.usage import UsageService
 from operations.management import ManagementService
-from pydantic import JsonValue, SecretStr
+from pydantic import JsonValue
 from scheduler.preemption import (
     SchedulerWorkerMaintenance,
     WorkerPlannedDrainOperation,
@@ -1701,61 +1701,9 @@ class GatewayControlService:
             with suppress(NotFoundError):
                 admin.delete_worker(worker_id)
 
-    def resume_provider_agent_in_transaction(
-        self,
-        session: DatabaseSession,
-        *,
-        node_agent_token: SecretStr,
-        pool: ComputeUnitRecord,
-        machine_fingerprint: str,
-    ) -> AgentJoinResult | None:
-        raw_token = node_agent_token.get_secret_value()
-        enrollment = ComputeMachineEnrollmentRepository(session).by_credential_hash(
-            hash_compute_token(raw_token), for_update=True
-        )
-        if enrollment is None:
-            return None
-        if (
-            enrollment.status is not ComputeMachineEnrollmentStatus.Active
-            or enrollment.capacity_owner_id != pool.capacity_owner_id
-            or enrollment.workspace_id != pool.workspace_id
-            or enrollment.machine_fingerprint_hash != hash_machine_fingerprint(machine_fingerprint)
-        ):
-            raise InvalidInputError("provider node enrollment does not match this launch")
-        state = _agent_state_from_enrollment(enrollment)
-        if state is None:
-            raise InvalidInputError("provider node enrollment is unavailable")
-        bootstrap_pool = private_unit_for_enrollment(pool)
-        response = JoinAgentResponse(
-            workspace_id=state.workspace_id,
-            placement=state.placement,
-            machine_id=state.machine_id,
-            agent_token=raw_token,
-            credential_id=state.credential_id,
-            credential_generation=state.credential_generation,
-            capacity_state=state.capacity_state,
-            bootstrap=build_agent_bootstrap_config(
-                state.workspace_id,
-                bootstrap_pool,
-                self.gateway_endpoint,
-                self.agent_image,
-                executor=state.executor,
-            ),
-        )
-        return AgentJoinResult(
-            response=response,
-            agent_state=state,
-            unit=pool,
-            pool_state=bootstrap_pool,
-        )
-
-    def join_agent(
-        self, request: JoinAgentRequest, *, node_agent_token: SecretStr | None = None
-    ) -> JoinAgentResponse:
+    def join_agent(self, request: JoinAgentRequest) -> JoinAgentResponse:
         with self.services.context.database.session() as session:
-            result = self.join_agent_in_transaction(
-                session, request, node_agent_token=node_agent_token
-            )
+            result = self.join_agent_in_transaction(session, request)
         self.publish_agent_join(result)
         return result.response
 
@@ -1763,8 +1711,6 @@ class GatewayControlService:
         self,
         session: DatabaseSession,
         request: JoinAgentRequest,
-        *,
-        node_agent_token: SecretStr | None = None,
     ) -> AgentJoinResult:
         try:
             join_request = AgentJoinRequest(
@@ -1819,16 +1765,6 @@ class GatewayControlService:
                 else None
             )
             if (
-                node_agent_token is not None
-                and existing is not None
-                and (
-                    existing.status is not ComputeMachineEnrollmentStatus.Active
-                    or existing.credential_hash
-                    != hash_compute_token(node_agent_token.get_secret_value())
-                )
-            ):
-                raise InvalidInputError("provider node credential was revoked or replaced")
-            if (
                 existing is not None
                 and existing.status is not ComputeMachineEnrollmentStatus.Active
             ):
@@ -1866,9 +1802,6 @@ class GatewayControlService:
                 existing_machine_gpus=[agent.gpus for agent in existing_agents if agent],
                 existing_agent=existing_agent,
                 credential_id=existing.id if existing is not None else "",
-                agent_token=(
-                    node_agent_token.get_secret_value() if node_agent_token is not None else ""
-                ),
             )
             if (
                 not plan.accepted

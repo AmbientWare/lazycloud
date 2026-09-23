@@ -52,6 +52,7 @@ from worker.configuration import (
     WorkerNetworkConfiguration,
     WorkerPathConfiguration,
 )
+from worker.durable_disks import DEFAULT_DISK_ROOT
 from worker.events import WorkerPoolMode
 from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,
@@ -892,6 +893,7 @@ class AgentWorkerDirs(ContractModel):
     cache: str
     builds: str
     checkpoints: str
+    disks: str
     logs: str
 
     def all_paths(self) -> list[str]:
@@ -904,6 +906,7 @@ class AgentWorkerDirs(ContractModel):
             self.cache,
             self.builds,
             self.checkpoints,
+            self.disks,
             self.logs,
         ]
 
@@ -1251,6 +1254,9 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
         cache=posixpath.join(root, "cache"),
         builds=posixpath.join(root, "builds"),
         checkpoints=posixpath.join(root, "checkpoints"),
+        # One directory per slot. The engine's recover stops every daemon under
+        # its root, so two workers sharing a root would stop each other's disks.
+        disks=posixpath.join(root, "disks", slot_name),
         logs=posixpath.join(root, "logs", slot_name),
     )
 
@@ -1284,6 +1290,7 @@ def build_agent_worker_config(
     slot: AgentWorkerSlot,
     *,
     network: AgentWorkerNetwork | None = None,
+    disk_volume_slots: int | None = None,
 ) -> WorkerConfiguration:
     selected_network = network or AgentWorkerNetwork()
     return WorkerConfiguration(
@@ -1294,6 +1301,7 @@ def build_agent_worker_config(
                 memory_mib=slot.memory_mb,
                 gpu_type=slot.gpu,
                 gpu_count=slot.gpu_count,
+                disk_volume_slots=disk_volume_slots,
             ),
             pool_mode=WorkerPoolMode.Private,
             billing_owner=slot.billing_owner,
@@ -1330,6 +1338,7 @@ def plan_worker_container(
     platform: str = "",
     host_aliases: list[str] | None = None,
     network: AgentWorkerNetwork | None = None,
+    disk_volume_slots: int | None = None,
 ) -> AgentWorkerContainerPlan:
     selected_network = network or AgentWorkerNetwork()
     dirs = build_agent_worker_dirs(state_dir, slot.worker_id)
@@ -1379,6 +1388,7 @@ def plan_worker_container(
         f"{dirs.cache}:/cache",
         f"{dirs.builds}:/builds",
         f"{dirs.checkpoints}:/checkpoints",
+        f"{dirs.disks}:{DEFAULT_DISK_ROOT}",
         f"{dirs.logs}:{AGENT_CONTAINER_LOG_PATH}",
         f"{config_path}:{DEFAULT_WORKER_CONFIG_PATH}:ro",
     ]
@@ -1404,7 +1414,9 @@ def plan_worker_container(
         env=env,
         volumes=volumes,
         docker_args=docker_args,
-        config=build_agent_worker_config(slot, network=selected_network),
+        config=build_agent_worker_config(
+            slot, network=selected_network, disk_volume_slots=disk_volume_slots
+        ),
     )
 
 

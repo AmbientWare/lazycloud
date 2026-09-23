@@ -25,7 +25,6 @@ def test_gpu_normalization_keeps_unknown_provider_hardware_as_reported() -> None
 
 
 def test_every_supported_model_is_already_its_own_normalized_form() -> None:
-
     for gpu in SUPPORTED_GPU_TYPES:
         assert normalize_gpu_type(gpu.value) == gpu.value
 

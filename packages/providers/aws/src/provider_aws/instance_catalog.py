@@ -29,6 +29,16 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
     purchase_markets: tuple[bool, ...] = (False, True)
     gpu: GpuType | None = None
     gpu_count: int = Field(default=0, ge=0)
+    ebs_volume_limit: int = Field(gt=0)
+    """The "EBS volume limit" from Amazon EBS specifications in the EC2 instance types guide.
+
+    Each durable disk on the instance takes one volume. AWS states a shared
+    limit as "up to" a figure with the primary network interface and NVMe
+    instance store already deducted. Each further interface counts against it.
+    """
+
+    ebs_volume_limit_dedicated: bool = False
+    """Network interfaces and instance store do not count against a dedicated limit."""
 
     @model_validator(mode="after")
     def validate_accelerator(self) -> AwsInstanceCatalogEntry:
@@ -48,96 +58,117 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
 AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     AwsInstanceCatalogEntry(
         instance_type="c6i.8xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
         memory_mb=64 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="c6a.2xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
         memory_mb=16 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="c6a.4xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
         memory_mb=32 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="c6a.8xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
         memory_mb=64 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m6a.2xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m6a.4xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m6a.8xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="r6a.2xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
         memory_mb=64 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="r6a.4xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
         memory_mb=128 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="r6a.8xlarge",
+        ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
         memory_mb=256 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.2xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.4xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.8xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.12xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.16xlarge",
+        ebs_volume_limit=48,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
@@ -146,6 +177,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.2xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
@@ -154,6 +186,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.4xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
@@ -162,6 +195,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.8xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
@@ -170,6 +204,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.16xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
@@ -178,6 +213,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.12xlarge",
+        ebs_volume_limit=22,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
@@ -186,6 +222,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g4dn.metal",
+        ebs_volume_limit=31,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
@@ -194,6 +231,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
@@ -202,6 +240,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.2xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
@@ -210,6 +249,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.4xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
@@ -218,6 +258,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.8xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
@@ -226,6 +267,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.16xlarge",
+        ebs_volume_limit=25,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
@@ -234,6 +276,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.12xlarge",
+        ebs_volume_limit=22,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
@@ -242,6 +285,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.24xlarge",
+        ebs_volume_limit=22,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
@@ -250,6 +294,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g5.48xlarge",
+        ebs_volume_limit=9,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=768 * 1024,
@@ -258,6 +303,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=16 * 1024,
@@ -266,6 +313,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.2xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=32 * 1024,
@@ -274,6 +323,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.4xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=64 * 1024,
@@ -282,6 +333,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.8xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=128 * 1024,
@@ -290,6 +343,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.16xlarge",
+        ebs_volume_limit=48,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=256 * 1024,
@@ -298,6 +353,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.12xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=192 * 1024,
@@ -306,6 +363,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.24xlarge",
+        ebs_volume_limit=64,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=384 * 1024,
@@ -314,6 +373,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6.48xlarge",
+        ebs_volume_limit=128,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=768 * 1024,
@@ -322,6 +383,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=4_000,
         memory_mb=32 * 1024,
@@ -330,6 +393,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.2xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=8_000,
         memory_mb=64 * 1024,
@@ -338,6 +403,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.4xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=128 * 1024,
@@ -346,6 +413,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.8xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=32_000,
         memory_mb=256 * 1024,
@@ -354,6 +423,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.16xlarge",
+        ebs_volume_limit=48,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=64_000,
         memory_mb=512 * 1024,
@@ -362,6 +433,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.12xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=48_000,
         memory_mb=384 * 1024,
@@ -370,6 +443,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.24xlarge",
+        ebs_volume_limit=64,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=768 * 1024,
@@ -378,6 +453,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="g6e.48xlarge",
+        ebs_volume_limit=128,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=1536 * 1024,
@@ -386,6 +463,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="p4d.24xlarge",
+        ebs_volume_limit=28,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=1152 * 1024,
@@ -394,6 +473,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="p4de.24xlarge",
+        ebs_volume_limit=28,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=96_000,
         memory_mb=1152 * 1024,
@@ -402,6 +483,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="p5.4xlarge",
+        ebs_volume_limit=32,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=16_000,
         memory_mb=256 * 1024,
@@ -410,6 +493,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="p5.48xlarge",
+        ebs_volume_limit=64,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=2048 * 1024,
@@ -418,6 +503,8 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="p5en.48xlarge",
+        ebs_volume_limit=64,
+        ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.NvidiaGpu,
         cpu_millicores=192_000,
         memory_mb=2048 * 1024,

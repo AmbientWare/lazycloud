@@ -25,6 +25,7 @@ from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
     WORKER_USER_CODE_VOLUME,
+    RequestDisk,
     RuntimeContainerStatus,
     StopContainerReason,
     WorkerStartupKind,
@@ -92,6 +93,7 @@ from shared.tasks import TaskStatus
 from shared.timestamps import utc_now
 from shared.urls import pod_proxy_url
 from shared.workload_keys import pod_keep_warm_lock_key
+from storage.disks import get_or_create_disks
 
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
@@ -214,6 +216,10 @@ class PodControlService:
             raise InvalidInputError("memory checkpoints can only restore Sandbox workloads")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
+        if stub.config.ssh and stub.deployment_id is None:
+            raise InvalidInputError(
+                "SSH requires Pod.deploy(); standalone Pod.create() is not supported"
+            )
         if stub.config.tcp and stub.deployment_id is None:
             raise InvalidInputError(
                 "raw TCP ingress requires Pod.deploy(); standalone Pod.create() is not supported"
@@ -239,6 +245,17 @@ class PodControlService:
             else -1
             if stub.deployment_id is not None and config.autoscaler.min_containers > 0
             else config.runtime.keep_warm
+        )
+        # A deployed pod lives while it holds connections and for its keep-warm window
+        # after the last one closes; the autoscaler and the connection-held lock
+        # decide that. A hard expiry would stop it mid-connection, so only a
+        # standalone instance, which nothing else retires, gets one.
+        expiry_seconds = (
+            request.timeout_seconds
+            if request.timeout_seconds is not None
+            else 0
+            if stub.deployment_id is not None
+            else timeout_seconds
         )
         created_at = utc_now()
         ports = config.exposed_ports
@@ -275,6 +292,11 @@ class PodControlService:
         env = parse_environment(plan.env)
         if request.checkpoint_id:
             env["CHECKPOINT_ID"] = request.checkpoint_id
+        disks = get_or_create_disks(
+            self.services.context.database,
+            list(stub.config.disks),
+            workspace_id=stub.workspace_id,
+        )
         with self.services.context.database.session() as session:
             placement = workload_placement(
                 session,
@@ -300,10 +322,10 @@ class PodControlService:
                     network_allow_list=list(config.runtime.allow_list),
                     gpu=list(plan.gpu),
                     gpu_count=plan.gpu_count,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=expiry_seconds,
                     expires_at=(
-                        created_at + timedelta(seconds=timeout_seconds)
-                        if timeout_seconds > 0
+                        created_at + timedelta(seconds=expiry_seconds)
+                        if expiry_seconds > 0
                         else None
                     ),
                     created_at=created_at,
@@ -380,6 +402,7 @@ class PodControlService:
                     runtime=config.runtime.runtime,
                     runtime_class=config.runtime.runtime_class or "",
                     docker_enabled=config.runtime.docker_enabled,
+                    ssh_enabled=stub.config.ssh,
                     block_network=config.runtime.block_network,
                     allow_list=config.runtime.allow_list,
                     preemptible=config.runtime.preemptible,
@@ -395,6 +418,21 @@ class PodControlService:
                         )
                     ),
                     mounts=resource_mounts,
+                    disks=[
+                        RequestDisk(
+                            disk_id=disk.record.id,
+                            name=disk.record.name,
+                            mount_path=disk.mount.mount_path,
+                            size_bytes=disk.record.size_bytes,
+                        )
+                        for disk in disks
+                    ],
+                    preferred_worker_id=next(
+                        (disk.last_worker_id for disk in disks if disk.last_worker_id), ""
+                    ),
+                    preferred_availability_zone=next(
+                        (disk.volume_zone for disk in disks if disk.volume_zone), ""
+                    ),
                 ),
             )
         except Exception:

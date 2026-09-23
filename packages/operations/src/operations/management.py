@@ -1019,6 +1019,8 @@ class ManagementService:
             return []
         if containers == 0 and any(stub.config.runtime.keep_warm == -1 for stub in stubs):
             raise InvalidInputError("always-on pod deployments cannot be scaled to zero")
+        if containers > 1 and any(stub.config.disks for stub in stubs):
+            raise InvalidInputError("a pod with a disk runs one container; scale it to 0 or 1")
         if containers > 0:
             for stub in stubs:
                 validate_checkpoint_activation(

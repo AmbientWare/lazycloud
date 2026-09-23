@@ -276,6 +276,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
             "command": list(spec.command),
             "ports": {str(name): port for name, port in spec.ports.items()},
             "volumes": [_volume_mount_config(volume) for volume in spec.volumes],
+            "disks": [disk.model_dump(mode="json") for disk in spec.disks],
             "secrets": list(spec.secrets),
             "retry_policy": (
                 spec.retry_policy.model_dump(mode="json") if spec.retry_policy is not None else None
@@ -297,6 +298,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                 "outputs": {},
             },
             "tcp": _metadata_optional_bool(metadata, "tcp") or False,
+            "ssh": _metadata_optional_bool(metadata, "ssh") or False,
         }
     )
 

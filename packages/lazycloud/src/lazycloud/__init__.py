@@ -7,6 +7,7 @@ from shared.tasks import RetryBackoff, RetryPolicy, TaskPolicy
 from lazycloud import env, schema
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.artifact import Artifact
+from lazycloud.abstractions.disk import Disk
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.map import Map
 from lazycloud.abstractions.pod import Container
@@ -48,6 +49,7 @@ __all__ = [
     "CloudBucketConfig",
     "Container",
     "Deployment",
+    "Disk",
     "FunctionCall",
     "GpuType",
     "Image",

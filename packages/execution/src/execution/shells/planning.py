@@ -166,15 +166,15 @@ def shell_credentials(token_external_id: str, token_key: str) -> ShellCredential
 
 def existing_container_shell_credentials(
     *,
-    workspace_signing_key: str,
+    workspace_credential_secret: str,
     container_id: str,
     token_external_id: str,
 ) -> ShellCredentialPlan:
-    if not workspace_signing_key:
-        msg = "workspace signing key is required for existing-container shell credentials"
+    if not workspace_credential_secret:
+        msg = "workspace credential secret is required for existing-container shell credentials"
         raise ValueError(msg)
     digest = hmac.new(
-        workspace_signing_key.encode(),
+        workspace_credential_secret.encode(),
         f"shell:{container_id}".encode(),
         hashlib.sha256,
     ).digest()

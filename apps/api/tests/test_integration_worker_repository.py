@@ -89,6 +89,8 @@ from shared.compute_policy import (
 )
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
+from shared.deployment_records import DeploymentSpec
+from shared.deployments import DeploymentKind
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.compute import MachineJoinCommandRequest
 from shared.http.errors import ErrorResponse
@@ -156,6 +158,7 @@ from worker.repository_payloads import (
     WorkerRecordResponse,
     WorkerRepositoryPrincipal,
 )
+from worker.ssh_identity import ContainerSshIdentity
 from worker.tools import ContainerCredentialRequest
 from worker_repository.origin_credentials import (
     CacheOriginCredentialConfig,
@@ -1627,6 +1630,79 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
         env = payload.credentials.env
         assert "API_TOKEN=secret-value" in env
         assert any(item.startswith("GATEWAY_TOKEN=rt_") for item in env)
+
+
+def test_worker_repository_vends_ssh_identity_only_to_the_assigned_worker_of_an_ssh_pod(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    with ExitStack() as client_stack:
+        redis = real_redis_actors.client()
+        control = ControlPlaneService(isolated_services.context)
+        workspace = owned_workspace(control, "workspace-ssh")
+        for name, ssh in (("box", True), ("web", False)):
+            deployment = isolated_services.deployments.deploy(
+                DeploymentSpec(
+                    name=name, kind=DeploymentKind.Pod, metadata={"app": "dev", "ssh": ssh}
+                ),
+                workspace=workspace.id,
+            )
+            resource = isolated_services.deployment_resources.get_by_deployment_id(
+                deployment.id, workspace=workspace.id
+            )
+            assert resource is not None
+            RedisSchedulerContainerRepository(redis).set_container_state(
+                SchedulerContainerState(
+                    container_id=f"ctr-{name}",
+                    workspace_id=workspace.id,
+                    stub_id=resource.stub.id,
+                    worker_id="worker-1",
+                )
+            )
+        token = AuthService(isolated_services.context).create_token(
+            "worker-token",
+            kind=TokenKind.Worker,
+            workspace_id=workspace.id,
+            scopes=[AuthScope.Worker.value],
+        )[0]
+        client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+        sessions = {
+            worker_id: _register_worker_session(
+                isolated_services,
+                workspace.id,
+                client,
+                token,
+                SchedulerWorkerRecord(
+                    runtime_image="container-worker:local",
+                    capacity_owner_id="11111111-1111-4111-8111-111111111111",
+                    worker_id=worker_id,
+                    placement=Placement.platform(),
+                    status=SchedulerWorkerStatus.Available,
+                ),
+            )
+            for worker_id in ("worker-1", "worker-2")
+        }
+
+        wrong_worker, not_ssh, assigned = (
+            client.post(
+                "/worker-repository/get-container-ssh-identity",
+                json={"workspace_id": workspace.id, "container_id": container_id},
+                headers=sessions[worker_id],
+            )
+            for container_id, worker_id in (
+                ("ctr-box", "worker-2"),
+                ("ctr-web", "worker-1"),
+                ("ctr-box", "worker-1"),
+            )
+        )
+
+    assert wrong_worker.status_code == 403
+    assert "assigned worker" in ErrorResponse.model_validate_json(wrong_worker.content).detail
+    assert not_ssh.status_code == 409
+    assert assigned.status_code == 200
+    vended = ContainerSshIdentity.model_validate_json(assigned.content)
+    assert vended.host_private_key.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+    assert vended.user_ca_public_key.startswith("ssh-ed25519 ")
 
 
 def test_worker_repository_rotates_worker_session_on_reregistration(

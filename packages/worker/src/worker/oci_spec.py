@@ -17,4 +17,7 @@ class OciRuntimeContainerSpec(ContractModel):
     sandbox_supervisor_token_path: str = ""
     spec: dict[str, JsonValue]
     docker_enabled: bool = False
+    durable_root: bool = False
+    """The root filesystem's upper layer is a durable disk; see RuntimeCommandRequest."""
+
     image_env: list[str] = Field(default_factory=list, repr=False)

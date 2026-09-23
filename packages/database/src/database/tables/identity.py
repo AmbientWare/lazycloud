@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 
 from pydantic import JsonValue
@@ -281,6 +282,15 @@ class WorkspaceTable(IdTable, DatabaseBase):
 
     signing_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     signing_key_prefix: Mapped[str | None] = mapped_column(String(120))
+    credential_secret: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=lambda: secrets.token_hex(32)
+    )
+    """Seed for credentials the platform derives per workspace, such as the SSH
+    certificate authority, pod host keys, and shell passwords.
+
+    Separate from the signing key because that key is served to every workspace
+    member to verify callbacks, and anyone holding a seed can mint what it derives.
+    No API response carries this column."""
     primary_token_id: Mapped[str | None] = mapped_column(
         uuid_type, ForeignKey("tokens.id", ondelete="SET NULL", use_alter=True)
     )

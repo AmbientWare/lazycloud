@@ -26,6 +26,7 @@ from shared.app_identity import CONTAINER_HELPER_PATH, WORKER_BUNDLE_ROOT
 from shared.container_requests import WORKER_USER_CODE_VOLUME, StopContainerReason
 from shared.env import parse_environment
 from shared.image_building.authoring import LinuxArchitecture
+from shared.ssh import SSH_CONTAINER_HOST_KEY_PATH, SSH_CONTAINER_USER_CA_PATH
 
 import worker.oci_spec
 from worker.container_client.models import ContainerExecResponse
@@ -124,6 +125,10 @@ SANDBOX_SUPERVISOR_CONTAINER_PATH = CONTAINER_HELPER_PATH
 SANDBOX_SUPERVISOR_TOKEN_CONTAINER_PATH = "/run/lazycloud/sandbox-supervisor.token"
 SANDBOX_SUPERVISOR_CONTROL_DIR_NAME = "sandbox-supervisor"
 SANDBOX_SUPERVISOR_TOKEN_FILE_NAME = "token"
+SANDBOX_SUPERVISOR_SSH_FLAG = "--ssh"
+SANDBOX_SUPERVISOR_SSH_DIR_NAME = "ssh"
+SSH_HOST_KEY_FILE_NAME = "ssh_host_ed25519_key"
+SSH_USER_CA_FILE_NAME = "user_ca.pub"
 OCI_HOST_PREPARED_MOUNT_TYPES = {"bind", "none"}
 
 
@@ -363,6 +368,7 @@ class OciRuntimeSpecBuilder:
             sandbox_supervisor_token_path=supervisor_token_path,
             spec=spec,
             docker_enabled=context.docker_enabled or self.docker_enabled,
+            durable_root=rootfs_result is not None and rootfs_result.durable,
             image_env=image_result.env if image_result is not None else [],
         )
 
@@ -400,7 +406,7 @@ class OciRuntimeSpecBuilder:
         spec: dict[str, JsonValue],
         bundle_path: Path,
     ) -> str:
-        supervised = context.request.stub_type == "sandbox" or context.docker_enabled
+        supervised = context.supervised
         source = self.sandbox_supervisor_source
         if source is None or not source.is_file():
             if not supervised:
@@ -425,7 +431,8 @@ class OciRuntimeSpecBuilder:
         command = process.get("args")
         if not isinstance(command, list) or not command:
             raise RuntimeError("supervised workload command is missing")
-        process["args"] = [self.sandbox_supervisor_path, "--", *command]
+        ssh_args = self._apply_ssh_identity(context, spec, bundle_path)
+        process["args"] = [self.sandbox_supervisor_path, *ssh_args, "--", *command]
         token_path = (
             bundle_path / SANDBOX_SUPERVISOR_CONTROL_DIR_NAME / SANDBOX_SUPERVISOR_TOKEN_FILE_NAME
         )
@@ -444,6 +451,48 @@ class OciRuntimeSpecBuilder:
             ],
         )
         return str(token_path)
+
+    def _apply_ssh_identity(
+        self,
+        context: ContainerExecutionContext,
+        spec: dict[str, JsonValue],
+        bundle_path: Path,
+    ) -> list[str]:
+        if not context.ssh_enabled:
+            return []
+        identity = context.ssh_identity
+        if identity is None:
+            raise RuntimeError("SSH-enabled container has no SSH identity")
+        directory = (
+            bundle_path / SANDBOX_SUPERVISOR_CONTROL_DIR_NAME / SANDBOX_SUPERVISOR_SSH_DIR_NAME
+        )
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        host_key = directory / SSH_HOST_KEY_FILE_NAME
+        user_ca = directory / SSH_USER_CA_FILE_NAME
+        host_key.touch(mode=0o600)
+        host_key.chmod(0o600)
+        host_key.write_text(identity.host_private_key, encoding="utf-8")
+        user_ca.write_text(identity.user_ca_public_key + "\n", encoding="utf-8")
+        user_ca.chmod(0o644)
+        options = ["ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"]
+        self._extend_mounts(
+            spec,
+            [
+                OciMount(
+                    mount_type=OciMountType.Bind,
+                    source=str(host_key),
+                    destination=SSH_CONTAINER_HOST_KEY_PATH,
+                    options=options,
+                ),
+                OciMount(
+                    mount_type=OciMountType.Bind,
+                    source=str(user_ca),
+                    destination=SSH_CONTAINER_USER_CA_PATH,
+                    options=options,
+                ),
+            ],
+        )
+        return [SANDBOX_SUPERVISOR_SSH_FLAG]
 
     def _apply_sandbox_upload_mount(
         self,
@@ -864,6 +913,7 @@ class OciRuntimeCommandController:
                 bundle_path=spec.bundle_path,
                 docker_enabled=spec.docker_enabled,
                 nvproxy=spec_has_gpu(spec.spec),
+                durable_root=spec.durable_root,
             ),
         )
         command = self.start_command(plan.argv, output_sink=output_sink)
@@ -1085,6 +1135,7 @@ class OciRuntimeCommandController:
                 bundle_path=bundle_path,
                 tcp_close=tcp_close,
                 link_remap=link_remap,
+                durable_root=self._durable_root(container_id),
             ),
         )
         command = self.start_command(plan.argv, output_sink=output_sink)
@@ -1425,6 +1476,10 @@ class OciRuntimeCommandController:
             detail=detail,
             exit_code=result.exit_code,
         )
+
+    def _durable_root(self, container_id: str) -> bool:
+        prepared = self.prepared_specs.get(container_id)
+        return prepared is not None and prepared.durable_root
 
     def _runtime_config(self, container_id: str) -> RuntimeBinaryConfig:
         prepared = self.prepared_specs.get(container_id)

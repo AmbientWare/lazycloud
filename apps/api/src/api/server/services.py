@@ -14,8 +14,8 @@ from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.capacity_recovery import CAPACITY_RECOVERY_WAKE_SCOPE
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
-from compute.provider_launches import ProviderNodeLaunchService
 from compute.provider_state import ProviderUnitStateService
+from compute.providers import ResolvedBlockVolumes
 from compute.request_placement import ComputeCapacityPlacementService
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
@@ -41,7 +41,6 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
-from database.workspace_secrets import WorkspaceSecretCipher
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.containers.preemption import PreemptedContainerService
@@ -133,7 +132,6 @@ from provider_clients import (
     configured_aws_compute_catalog,
     workspace_compute_provider_resolver,
 )
-from provider_clients.provider_nodes import configured_provider_node_identity_registry
 from provider_clients.settings import (
     AwsAccountConnectionSettings,
     AwsCapacityReconciliationSettings,
@@ -168,6 +166,7 @@ from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
 )
+from scheduler.disk_volume_attachments import DatabaseDiskVolumeAttachments
 from scheduler.preemption import (
     CapacityInterruption,
     SchedulerCapacityInterruption,
@@ -213,6 +212,8 @@ from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
 from shared.tasks import Task
 from shared.workspace_storage import WorkspaceStorageIssuer
+from storage.disk_volumes import DiskVolumeService
+from storage.disks import DiskDeletionService, DiskService
 from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
@@ -233,6 +234,7 @@ from worker.origin_access import ImageRegistryCredentials
 from worker.settings import ContainerServiceSettings
 from worker_repository.checkpoint_records import CheckpointService
 from worker_repository.credentials import WorkerCredentialService
+from worker_repository.disk_leases import WorkerDiskLeaseService
 from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 from worker_repository.origin_credentials import (
     CacheOriginCredentialConfig,
@@ -467,7 +469,6 @@ class ApiServiceCore:
     secrets: SecretService
     volumes: VolumeService
     compute: ComputeService
-    provider_node_launches: ProviderNodeLaunchService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     scheduler_workers: RedisSchedulerWorkerRepository
@@ -487,6 +488,9 @@ class ApiServiceCore:
     autoscaler_states: AutoscalerStateService
     volume_metering: PersistentVolumeMeteringService
     volume_filesystem: VolumeFilesystem
+    disks: DiskService
+    disk_deletion: DiskDeletionService
+    disk_volumes: DiskVolumeService
     payment_admission: DatabaseBillingAdmission
     redis_client: RedisClient
     binary_redis_client: RedisClient
@@ -764,15 +768,6 @@ class ApiServices(ApiServiceCore):
         def platform_capacity_workspace() -> str:
             return platform_namespace_id
 
-        def provider_node_cipher(workspace_id: str) -> WorkspaceSecretCipher:
-            with context.database.session() as session:
-                workspace = context.workspace(session, workspace_id)
-            return WorkspaceSecretCipher.from_workspace(workspace)
-
-        provider_node_launches = ProviderNodeLaunchService(
-            database=context.database,
-            cipher_for_workspace=provider_node_cipher,
-        )
         # Connected AWS is an optional deployment shape. When it is unconfigured there is
         # no connection to resolve, and building the resolver would demand the remote
         # network configuration a local stack has no reason to hold. A half-configured
@@ -785,10 +780,8 @@ class ApiServices(ApiServiceCore):
                 capacity_workspace=aws_connection_directory.capacity_workspace,
                 platform_providers=configured_platform_compute_providers(
                     platform_capacity_config,
-                    launch_credentials=provider_node_launches,
                     provider_state=ProviderUnitStateService(context.database),
                     capacity_workspace=platform_capacity_workspace,
-                    redis=redis,
                     binaries_by_region=(
                         aws_capacity_config.binaries_by_region(agent_artifact_config)
                         if aws_capacity_config.configured
@@ -856,6 +849,7 @@ class ApiServices(ApiServiceCore):
             dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
+            disk_volume_attachments=DatabaseDiskVolumeAttachments(context),
         )
         payment_admission = DatabaseBillingAdmission()
         container_shutdowns = ContainerShutdownService(
@@ -864,6 +858,23 @@ class ApiServices(ApiServiceCore):
             redis,
             storage_release=DatabaseContainerStorageRelease(context),
             durable_worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
+        disks = DiskService(
+            context.database,
+            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
+        disk_volumes = DiskVolumeService(
+            context.database,
+            providers=ResolvedBlockVolumes(provider_resolver),
+            deployment=platform_namespace_id,
+            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
+        disk_deletion = DiskDeletionService(
+            context.database,
+            disks=disks,
+            volumes=disk_volumes,
+            objects=resolved_volume_filesystem,
+            metering=volume_metering_service,
         )
         containers = ContainerService(
             context,
@@ -1027,7 +1038,6 @@ class ApiServices(ApiServiceCore):
             secrets=secrets,
             volumes=volumes,
             compute=compute,
-            provider_node_launches=provider_node_launches,
             containers=containers,
             container_shutdowns=container_shutdowns,
             scheduler_workers=worker_repository,
@@ -1048,6 +1058,9 @@ class ApiServices(ApiServiceCore):
             volume_metering=volume_metering_service,
             payment_admission=payment_admission,
             volume_filesystem=resolved_volume_filesystem,
+            disks=disks,
+            disk_deletion=disk_deletion,
+            disk_volumes=disk_volumes,
             aws_connections=aws_composition.service if aws_composition is not None else None,
             redis_client=redis,
             binary_redis_client=binary_redis_client,
@@ -1218,15 +1231,9 @@ def _compose_api_services(
             events=core.events,
             rate_limiter=redis,
             proof_max_inflight=public_ingress_config.provider_node_proof_max_inflight,
-            client_ip_header=public_ingress_config.client_ip_header,
-            launches=core.provider_node_launches,
-            identity_verifier=configured_provider_node_identity_registry(
-                aws=AwsProviderNodeIdentityAdapter(
-                    http_client=BoundedProviderNodeIdentityHttpClient(),
-                    replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
-                ),
-                platform_settings=core.platform_capacity_settings,
-                redis=redis,
+            identity_verifier=AwsProviderNodeIdentityAdapter(
+                http_client=BoundedProviderNodeIdentityHttpClient(),
+                replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
             ),
         )
         if core.compute.provider_resolver is not None
@@ -1317,7 +1324,6 @@ def _compose_api_services(
         secrets=core.secrets,
         volumes=core.volumes,
         compute=core.compute,
-        provider_node_launches=core.provider_node_launches,
         containers=core.containers,
         container_shutdowns=core.container_shutdowns,
         scheduler_workers=core.scheduler_workers,
@@ -1338,6 +1344,9 @@ def _compose_api_services(
         volume_metering=core.volume_metering,
         payment_admission=core.payment_admission,
         volume_filesystem=core.volume_filesystem,
+        disks=core.disks,
+        disk_deletion=core.disk_deletion,
+        disk_volumes=core.disk_volumes,
         redis_client=core.redis_client,
         binary_redis_client=core.binary_redis_client,
         async_io=core.async_io,
@@ -1502,6 +1511,9 @@ def _worker_repository_service(
                 stubs=core.control_plane_service,
             ),
             tasks=core.tasks,
+            disk_leases=WorkerDiskLeaseService(
+                core.context.database, core.disks, core.disk_volumes
+            ),
         ),
         redis=redis,
     )

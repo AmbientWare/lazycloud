@@ -17,6 +17,7 @@ from lazycloud.cli.components.errors import (
 from lazycloud.cli.components.output import CliContextState
 from lazycloud.cli.components.runner import run_cli
 from lazycloud.cli.development import dev
+from lazycloud.cli.disks import disk_app
 from lazycloud.cli.domains import domain_app
 from lazycloud.cli.examples import example_app
 from lazycloud.cli.execution import deploy, deployment_app, run, shell
@@ -31,6 +32,7 @@ from lazycloud.cli.resources import (
 )
 from lazycloud.cli.secrets import secret_app
 from lazycloud.cli.serve import serve
+from lazycloud.cli.ssh import ssh, ssh_cert, ssh_config, ssh_proxy
 from lazycloud.cli.update import update
 from lazycloud.cli.volumes import volume_app, volume_cp, volume_ls, volume_mv, volume_rm
 from lazycloud.cli.workspaces import workspace_app
@@ -207,6 +209,10 @@ def _register_public_commands(registry: PublicCliRegistry) -> None:
     registry.add_root_command("deploy", _register_deploy)
     registry.add_root_command("run", _register_run)
     registry.add_root_command("shell", _register_shell)
+    registry.add_root_command("ssh", _register_ssh)
+    registry.add_root_command("ssh-proxy", _register_ssh_proxy)
+    registry.add_root_command("ssh-config", _register_ssh_config)
+    registry.add_root_command("ssh-cert", _register_ssh_cert)
     registry.add_root_command("serve", _register_serve)
     registry.add_root_command("login", _register_login)
     registry.add_root_command("dev", _register_dev)
@@ -238,6 +244,35 @@ def _register_shell(application: typer.Typer) -> None:
         help="Open an interactive shell for a handler or container.",
         context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
     )(shell)
+
+
+def _register_ssh(application: typer.Typer) -> None:
+    application.command(
+        "ssh",
+        help="Open an SSH session to a deployed pod.",
+        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    )(ssh)
+
+
+def _register_ssh_proxy(application: typer.Typer) -> None:
+    application.command(
+        "ssh-proxy",
+        help="Carry an SSH connection to a pod over stdin and stdout.",
+    )(ssh_proxy)
+
+
+def _register_ssh_config(application: typer.Typer) -> None:
+    application.command(
+        "ssh-config",
+        help="Write SSH config for deployed pods.",
+    )(ssh_config)
+
+
+def _register_ssh_cert(application: typer.Typer) -> None:
+    application.command(
+        "ssh-cert",
+        help="Refresh the SSH certificate for the workspace.",
+    )(ssh_cert)
 
 
 def _register_serve(application: typer.Typer) -> None:
@@ -286,6 +321,7 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("secret", secret_app)
     registry.add_group("domain", domain_app)
     registry.add_group("volume", volume_app)
+    registry.add_group("disk", disk_app)
     registry.add_group("artifact", artifact_app)
     registry.add_group("example", example_app)
     registry.add_group("workspace", workspace_app)

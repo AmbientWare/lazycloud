@@ -16,6 +16,7 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DeploymentKind
+from shared.disks import DiskMount
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.compute import ContainerResponse
 from shared.http.deployments import DeploymentResponse
@@ -27,6 +28,7 @@ from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.placement import ProductRegion
 
+from lazycloud.abstractions.disk import disk_mounts
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
 from lazycloud.abstractions.serve import ContainerWorkspaceSyncer
@@ -87,6 +89,7 @@ class PodOptions(TypedDict, total=False):
     keep_warm: int
     secrets: list[str]
     volumes: list[VolumeMount]
+    disks: list[DiskMount]
     authorized: bool
     checkpoint_enabled: bool
     checkpoint_readiness_path: str | None
@@ -96,6 +99,7 @@ class PodOptions(TypedDict, total=False):
     health_check_path: str | None
     health_check_port: int | None
     tcp: bool
+    ssh: bool
     block_network: bool
     allow_list: list[str] | None
     docker_enabled: bool
@@ -214,6 +218,7 @@ class Pod(ControlClientConfigMixin):
     keep_warm: int = 600
     secrets: list[str] = field(default_factory=list)
     volumes: list[VolumeMount] = field(default_factory=list)
+    disks: list[DiskMount] = field(default_factory=list)
     authorized: bool = False
     checkpoint_enabled: bool = False
     checkpoint_readiness_path: str | None = None
@@ -223,6 +228,7 @@ class Pod(ControlClientConfigMixin):
     health_check_path: str | None = None
     health_check_port: int | None = None
     tcp: bool = False
+    ssh: bool = False
     block_network: bool = False
     allow_list: list[str] | None = None
     docker_enabled: bool = False
@@ -255,6 +261,7 @@ class Pod(ControlClientConfigMixin):
 
     def __post_init__(self) -> None:
         self.volumes = volume_mounts(self.volumes)
+        self.disks = disk_mounts(self.disks)
         self.image.ignore_python = True
         if self.checkpoint_enabled and (
             not (self.checkpoint_readiness_path or "").startswith("/")
@@ -307,11 +314,13 @@ class Pod(ControlClientConfigMixin):
             env=self.env,
             secrets=self.secrets,
             volumes=self.volumes,
+            disks=self.disks,
             metadata=build_resource_metadata(
                 app=self._app_slug,
                 authorized=self.authorized,
                 checkpoint_enabled=self.checkpoint_enabled,
                 tcp=self.tcp,
+                ssh=self.ssh,
                 block_network=self.block_network,
                 allow_list=self.allow_list,
                 docker_enabled=self.docker_enabled,

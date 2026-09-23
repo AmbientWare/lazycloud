@@ -7,7 +7,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from database.tables.billing_ledger import BillingLedgerSegmentTable
-from database.tables.billing_rates import ComputeRateTable, PlatformRateTable
+from database.tables.billing_rates import ComputeRateTable, DiskRateTable, PlatformRateTable
 from shared.billing_quotes import BilledDimension, ContainerShape, LedgerComponent, Quote
 from shared.enums import StringEnum
 from shared.errors import ConflictError, InvalidInputError
@@ -254,7 +254,9 @@ class PlatformRateRepository:
             subject="platform rates",
             frozen=self.session.scalar(
                 select(func.max(BillingLedgerSegmentTable.segment_ended_at)).where(
-                    BillingLedgerSegmentTable.dimension != BilledDimension.ComputeRuntime.value,
+                    BillingLedgerSegmentTable.dimension.in_(
+                        [BilledDimension.NetworkEgress.value, BilledDimension.VolumeStorage.value]
+                    ),
                 )
             ),
         )
@@ -285,6 +287,99 @@ class PlatformRateRepository:
         return RatePublication.Published
 
 
+@dataclass(frozen=True, slots=True)
+class DiskRateRepository:
+    """The published rates for a disk's stored bytes and its attached capacity."""
+
+    session: Session
+
+    def quotes_for(
+        self,
+        *,
+        component: LedgerComponent,
+        started_at: datetime,
+        ended_at: datetime,
+    ) -> tuple[Quote, ...]:
+        rows = self.session.scalars(
+            select(DiskRateTable)
+            .where(
+                DiskRateTable.effective_at < ended_at,
+                or_(
+                    DiskRateTable.valid_until.is_(None),
+                    DiskRateTable.valid_until > started_at,
+                ),
+            )
+            .order_by(DiskRateTable.effective_at)
+        ).all()
+        return tuple(_disk_quote(row, component) for row in rows)
+
+    def publish(
+        self,
+        *,
+        pricing_version: str,
+        effective_at: datetime,
+        nanos_per_stored_byte_second: Decimal,
+        nanos_per_attached_byte_second: Decimal,
+    ) -> RatePublication:
+        """Close the rate in force and open its successor, as the platform rates do."""
+
+        moment = to_utc(effective_at)
+        published = self.session.scalars(
+            select(DiskRateTable).where(DiskRateTable.effective_at == moment)
+        ).first()
+        if published is not None:
+            _require_agreement(
+                subject="disk rates",
+                effective_at=moment,
+                published={
+                    "pricing_version": published.pricing_version,
+                    "nanos_per_stored_byte_second": published.nanos_per_stored_byte_second,
+                    "nanos_per_attached_byte_second": published.nanos_per_attached_byte_second,
+                },
+                stated={
+                    "pricing_version": pricing_version,
+                    "nanos_per_stored_byte_second": nanos_per_stored_byte_second,
+                    "nanos_per_attached_byte_second": nanos_per_attached_byte_second,
+                },
+            )
+            return RatePublication.AlreadyPublished
+        _require_unfrozen(
+            self.session,
+            moment,
+            subject="disk rates",
+            frozen=self.session.scalar(
+                select(func.max(BillingLedgerSegmentTable.segment_ended_at)).where(
+                    BillingLedgerSegmentTable.dimension == BilledDimension.Disk.value,
+                )
+            ),
+        )
+        predecessor = self.session.scalars(
+            select(DiskRateTable)
+            .where(
+                DiskRateTable.effective_at < moment,
+                or_(
+                    DiskRateTable.valid_until.is_(None),
+                    DiskRateTable.valid_until > moment,
+                ),
+            )
+            .with_for_update()
+        ).first()
+        if predecessor is not None:
+            predecessor.valid_until = moment
+        self.session.add(
+            DiskRateTable(
+                id=str(uuid4()),
+                pricing_version=pricing_version,
+                effective_at=moment,
+                valid_until=None,
+                nanos_per_stored_byte_second=nanos_per_stored_byte_second,
+                nanos_per_attached_byte_second=nanos_per_attached_byte_second,
+            )
+        )
+        _flush(self.session, f"disk rates at {moment.isoformat()}")
+        return RatePublication.Published
+
+
 def _compute_quote(row: ComputeRateTable, component: LedgerComponent) -> Quote:
     if component is LedgerComponent.ContainerTime:
         rate = row.nanos_per_container_second
@@ -312,6 +407,22 @@ def _platform_quote(row: PlatformRateTable, component: LedgerComponent) -> Quote
         rate = row.nanos_per_volume_byte_second
     else:
         raise ValueError(f"{component} is not a platform-rated component")
+    return Quote(
+        component=component,
+        rate_nanos_per_unit=rate,
+        pricing_version=row.pricing_version,
+        effective_at=to_utc(row.effective_at),
+        valid_until=to_utc_or_none(row.valid_until),
+    )
+
+
+def _disk_quote(row: DiskRateTable, component: LedgerComponent) -> Quote:
+    if component is LedgerComponent.DiskStorage:
+        rate = row.nanos_per_stored_byte_second
+    elif component is LedgerComponent.DiskAttached:
+        rate = row.nanos_per_attached_byte_second
+    else:
+        raise ValueError(f"{component} is not a disk-rated component")
     return Quote(
         component=component,
         rate_nanos_per_unit=rate,
@@ -377,4 +488,9 @@ def _flush(session: Session, subject: str) -> None:
         raise ConflictError(f"a published rate already covers {subject}") from exc
 
 
-__all__ = ["ComputeRateRepository", "PlatformRateRepository", "RatePublication"]
+__all__ = [
+    "ComputeRateRepository",
+    "DiskRateRepository",
+    "PlatformRateRepository",
+    "RatePublication",
+]

@@ -35,7 +35,7 @@ from shared.http.billing import (
     UsageBudgetResponse,
 )
 from shared.http.billing_preferences import AutomaticReloadStatus, BillingPreferences
-from shared.http.pricing import PlanEntitlementsResponse
+from shared.http.pricing import plan_entitlements_response
 from shared.http.usage import (
     UsageCostBucket,
     UsageCostBucketResponse,
@@ -443,22 +443,7 @@ def _summary(standing: BillingStanding) -> BillingSummaryResponse:
         portal_available=standing.portal_available,
         payment_method_on_file=standing.payment_method_on_file,
         entitlements=(
-            PlanEntitlementsResponse(
-                max_concurrent_cpu_containers=(standing.entitlements.max_concurrent_cpu_containers),
-                max_concurrent_gpus=standing.entitlements.max_concurrent_gpus,
-                gpu_types=(
-                    "all"
-                    if standing.entitlements.gpu_types == "all"
-                    else list(standing.entitlements.allowed_gpu_types)
-                ),
-                max_workspaces=standing.entitlements.max_workspaces,
-                max_members=standing.entitlements.max_members,
-                connected_cloud=standing.entitlements.connected_cloud,
-                custom_domains=standing.entitlements.custom_domains,
-                self_hosted=standing.entitlements.self_hosted,
-                retention_days=standing.entitlements.retention_days,
-                region_selection=standing.entitlements.region_selection,
-            )
+            plan_entitlements_response(standing.entitlements)
             if standing.entitlements is not None
             else None
         ),

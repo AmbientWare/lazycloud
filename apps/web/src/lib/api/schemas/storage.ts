@@ -29,6 +29,26 @@ export const volumeListSchema = z.object({
   volumes: z.array(volumeSchema).default([]),
 });
 
+export const diskStatuses = ["detached", "attached", "deleting"] as const;
+
+export const diskSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  size_bytes: z.number(),
+  status: z.enum(diskStatuses),
+  generation: z.number(),
+  stored_bytes: z.number(),
+  holder_container_id: z.string().default(""),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type Disk = z.infer<typeof diskSchema>;
+
+export const diskListSchema = z.object({
+  data: z.array(diskSchema),
+  next: z.string().default(""),
+});
+
 export const secretMaskedSchema = z.object({
   name: z.string(),
   value: z.string(),

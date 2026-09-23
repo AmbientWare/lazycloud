@@ -209,7 +209,7 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
             )
         )
         observed = repository.upsert(
-            _platform_unit(workspace.id, "hetzner").model_copy(update={"observed_machines": 4})
+            _platform_unit(workspace.id, "aws").model_copy(update={"observed_machines": 4})
         )
         gpu = repository.upsert(
             _platform_unit(workspace.id, "aws").model_copy(
@@ -344,14 +344,12 @@ def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
         assert units.platform_capacity_usage(gpu=False) == 1
 
 
-def test_fleet_capacity_lock_serializes_purchases_across_providers(
+def test_fleet_capacity_lock_serializes_purchases_across_units(
     database: DatabaseClient,
 ) -> None:
     with database.session() as session:
-        units = [
-            _platform_unit(PlatformNamespaceService(database).initialize().id, provider)
-            for provider in ("aws", "hetzner")
-        ]
+        workspace_id = PlatformNamespaceService(database).initialize().id
+        units = [_platform_unit(workspace_id, "aws") for _ in range(2)]
     ready = Barrier(2)
 
     def purchase(unit: ComputeUnitRecord) -> bool:

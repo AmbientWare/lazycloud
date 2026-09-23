@@ -13,7 +13,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { BillingSummary } from "@/lib/api/schemas";
-import { gpuModelsPhrase, limitPhrase, memberLimitPhrase } from "@/lib/entitlements";
+import {
+  diskAllowanceFigure,
+  gpuModelsPhrase,
+  limitPhrase,
+  memberLimitPhrase,
+} from "@/lib/entitlements";
 import { countLabel } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -153,6 +158,11 @@ function PlanCard({
         <PlanPoint>{memberLimitPhrase(offer.entitlements.max_members)}</PlanPoint>
         {offer.entitlements.connected_cloud ? (
           <PlanPoint>Connected cloud accounts</PlanPoint>
+        ) : null}
+        {offer.entitlements.max_workspace_disk_gib > 0 ? (
+          <PlanPoint>
+            {diskAllowanceFigure(offer.entitlements.max_workspace_disk_gib)} of disks per workspace
+          </PlanPoint>
         ) : null}
         {offer.entitlements.custom_domains ? <PlanPoint>Custom domains</PlanPoint> : null}
         {offer.entitlements.self_hosted ? <PlanPoint>Self-hosted compute</PlanPoint> : null}

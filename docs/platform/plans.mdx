@@ -11,7 +11,9 @@ dashboard manages it under Settings, then Billing, and the
 
 Compute bills per second while a container runs, including startup, model
 loading, and warm idle time. Volumes bill per GiB-month, and API responses and
-internet egress are metered. Direct downloads through signed object-storage
+internet egress are metered. A [disk](/concepts/disks#pricing) bills per
+GiB-month for what it stores, plus its declared size while a container holds
+it, and shows as one line. Direct downloads through signed object-storage
 URLs are free.
 
 Every charge comes out of one prepaid credit balance, funded by trial credit,
@@ -58,11 +60,11 @@ rate and its effective date.
 ## Plans
 
 Free has no fee and a one-time trial credit. Team adds monthly usage credit,
-higher concurrency, custom domains, and three members across the account's
-workspaces. Business adds unlimited members, more credit and concurrency,
-longer log and artifact retention, and a connected AWS account. Every plan can
-join its own machines and use every GPU model, given a saved card, credit, and
-availability.
+higher concurrency, custom domains, disks, and three members across the
+account's workspaces. Business adds unlimited members, more credit and
+concurrency, longer log and artifact retention, and a connected AWS account.
+Every plan can join its own machines and use every GPU model, given a saved
+card, credit, and availability.
 
 Without a saved card, an account has lower concurrency and only the trial GPU
 models. A plan change can't go below limits the account already exceeds, and
@@ -72,7 +74,8 @@ the dashboard names what has to go first.
 
 A container past the concurrency limit fails to start with a message naming
 the limit, and existing work keeps running. Workspace and member limits apply
-when those are created.
+when those are created, and the disk size limit applies to every deploy that
+names a disk.
 
 At a zero balance, new work and transfers stop and running compute shuts down.
 Usage records periodically, so the balance can dip below zero first, and added

@@ -68,12 +68,12 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
             )
         ],
     )
-    join = plan_agent_join(token, pool, request, agent_token="agent-token", now=now)
+    join = plan_agent_join(token, pool, request, now=now)
 
     assert join.accepted
     assert join.machine_id == "machine-fixed"
     assert join.agent_state is not None
-    assert join.agent_state.token_hash == hash_compute_token("agent-token")
+    assert join.agent_state.token_hash == hash_compute_token(join.agent_token)
     assert join.agent_state.cpu_millicores == 4000
     assert join.agent_state.preflight_passed
     assert not join.agent_state.heartbeat_confirmed
@@ -99,6 +99,6 @@ def test_join_token_binding_and_agent_join_gpu_locking() -> None:
     assert rtx_join.pool_config_update.gpu == ["RTX4090"]
 
     mismatch_pool = pool.model_copy(update={"config": PoolConfig(name="gpu-pool", gpu=["H100"])})
-    rejected = plan_agent_join(token, mismatch_pool, request, agent_token="agent-token", now=now)
+    rejected = plan_agent_join(token, mismatch_pool, request, now=now)
     assert not rejected.accepted
     assert "requires GPU type" in rejected.err_msg

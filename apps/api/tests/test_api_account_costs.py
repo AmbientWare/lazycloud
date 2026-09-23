@@ -8,10 +8,12 @@ from uuid import uuid4
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
-from database.repositories.billing_rates import PlatformRateRepository
+from database.repositories.billing_rates import DiskRateRepository, PlatformRateRepository
+from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
+from shared.disks import DISK_USAGE_SUBJECT
 from shared.identity import TokenKind, WorkspaceRole
 from shared.timestamps import utc_now
 from shared.usage import (
@@ -216,3 +218,80 @@ def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
         assert body["data"][1]["dimensions"] == [], (
             "an interval nothing was metered in reported a measurement"
         )
+
+
+def test_a_disk_is_one_charge_combining_its_stored_and_attached_parts(
+    unpriced_services: ApiServices,
+) -> None:
+    """Two ledger components per disk, one line and one component per disk on the page."""
+
+    now = utc_now()
+    started_at = now + _WINDOW_AT
+    ended_at = started_at + _WINDOW
+    with unpriced_services.context.database.session() as session:
+        DiskRateRepository(session).publish(
+            pricing_version="test.disk-costs",
+            effective_at=now + _RATE_AT,
+            nanos_per_stored_byte_second=Decimal(1),
+            nanos_per_attached_byte_second=Decimal(2),
+        )
+        workspace_id = unpriced_services.context.default_workspace_id(session)
+        disks = DiskRepository(session)
+        root, _ = disks.get_or_create("box-root", workspace_id=workspace_id, size_bytes=1024**3)
+        cache, _ = disks.get_or_create("box-cache", workspace_id=workspace_id, size_bytes=1024**3)
+    owner_user_id = workspace_owner_user_id(unpriced_services.context, workspace_id)
+    for disk_id, metric, quantity in (
+        (root.id, UsageMetric.DiskStoredByteSeconds, 100),
+        (root.id, UsageMetric.DiskAttachedByteSeconds, 50),
+        (cache.id, UsageMetric.DiskStoredByteSeconds, 10),
+    ):
+        unpriced_services.usage.append(
+            UsageRecord(
+                id=str(uuid4()),
+                workspace_id=workspace_id,
+                resource_type=DISK_USAGE_SUBJECT,
+                resource_id=disk_id,
+                metric=metric,
+                quantity=quantity,
+                unit=UsageUnit.ByteSeconds,
+                metadata={
+                    METERING_WINDOW_STARTED_AT_METADATA_KEY: started_at.isoformat(),
+                    METERING_WINDOW_ENDED_AT_METADATA_KEY: ended_at.isoformat(),
+                },
+            )
+        )
+    with unpriced_services.context.database.session() as session:
+        raw_token, _ = TokenIssuer(unpriced_services.context).issue_for_user(
+            session, "disk-costs-owner", user_id=owner_user_id, kind=TokenKind.User
+        )
+
+    with TestClient(create_app(unpriced_services)) as client:
+        response = client.get(
+            "/api/v1/billing/costs",
+            params={
+                "start": (started_at - _WINDOW).isoformat(),
+                "end": (ended_at + _WINDOW).isoformat(),
+                "group_by": "app",
+            },
+            headers={"Authorization": f"Bearer {raw_token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    rows = [
+        (row["category"], row["disk_name"], row["cost_nanos"], row["components"])
+        for row in response.json()["data"]
+    ]
+    assert rows == [
+        (
+            "disk",
+            "box-root",
+            200,
+            [{"dimension": "disk", "component": "disk", "quantity": 100.0, "cost_nanos": 200}],
+        ),
+        (
+            "disk",
+            "box-cache",
+            10,
+            [{"dimension": "disk", "component": "disk", "quantity": 10.0, "cost_nanos": 10}],
+        ),
+    ]

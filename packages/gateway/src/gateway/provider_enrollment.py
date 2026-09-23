@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -9,7 +8,6 @@ from secrets import token_urlsafe
 
 from compute.agent_control import ComputePrincipal, plan_join_token_creation
 from compute.offers import ReservationStatus
-from compute.provider_launches import ProviderNodeLaunchService
 from compute.provider_nodes import (
     ProviderNodeAdmission,
     ProviderNodeIdentityProof,
@@ -43,10 +41,10 @@ from shared.http.provider_nodes import (
     ProviderNodeBootstrapFailureResponse,
     ProviderNodeBootstrapPhaseRequest,
     ProviderNodeEnrollmentRequest,
+    ProviderNodeIdentityRequest,
 )
 from shared.identity import WorkspaceKind
 from shared.placement import Placement
-from shared.provider_config import ProviderKind
 from shared.timestamps import utc_now
 
 from gateway.agent_enrollment import AgentJoinResult
@@ -81,30 +79,16 @@ class ProviderNodeEnrollmentService:
     gateway: GatewayControlService
     compute: ComputeService
     identity_verifier: ProviderNodeIdentityVerifier
-    launches: ProviderNodeLaunchService | None = None
     events: GatewayEventSink | None = None
     rate_limiter: RedisClient | None = None
     proof_max_inflight: int = 8
-    client_ip_header: str = ""
 
     def enroll(
         self,
         request: ProviderNodeEnrollmentRequest,
-        *,
-        peer_address: str = "",
     ) -> JoinAgentResponse:
         pool, admission = self._enrollment_target(request)
-        self._authorize_launch(request, pool)
-        self._verify_active_node(
-            pool=pool,
-            admission=admission,
-            provider=request.provider,
-            region=request.region,
-            provider_instance_id=request.provider_instance_id,
-            identity_proof_url=request.identity_proof_url,
-            peer_address=peer_address,
-            launch_id=request.launch_id,
-        )
+        self._verify_active_node(pool=pool, admission=admission, request=request)
         with self.gateway.services.context.database.session() as session:
             current, current_admission = self._enrollment_target_in_transaction(session, request)
             if (
@@ -116,28 +100,8 @@ class ProviderNodeEnrollmentService:
             ):
                 raise ConflictError("provider node enrollment request changed")
             pool = current
-            lease = (
-                self._require_launches().lock_enrollment(
-                    session, request, pool, machine_fingerprint=request.machine_fingerprint
-                )
-                if request.provider is not ProviderKind.Aws
-                else None
-            )
-            result = None
-            if lease is not None:
-                result = self.gateway.resume_provider_agent_in_transaction(
-                    session,
-                    node_agent_token=SecretStr(request.node_agent_token),
-                    pool=pool,
-                    machine_fingerprint=request.machine_fingerprint,
-                )
-                if result is None and lease.enrolled:
-                    raise InvalidInputError("provider node enrollment is no longer active")
-            if result is None:
-                result = self._join_verified_node(session, request, pool)
+            result = self._join_verified_node(session, request, pool)
             self._finish_enrollment(session, request, pool, result.response)
-            if lease is not None:
-                lease.complete()
         self.gateway.publish_agent_join(result)
         return result.response
 
@@ -178,15 +142,7 @@ class ProviderNodeEnrollmentService:
             schedulable=request.requested_schedulable,
             executor=request.executor,
         )
-        return self.gateway.join_agent_in_transaction(
-            session,
-            join_request,
-            node_agent_token=(
-                SecretStr(request.node_agent_token)
-                if request.provider is not ProviderKind.Aws
-                else None
-            ),
-        )
+        return self.gateway.join_agent_in_transaction(session, join_request)
 
     def _finish_enrollment(
         self,
@@ -219,31 +175,10 @@ class ProviderNodeEnrollmentService:
     def report_failure(
         self,
         request: ProviderNodeBootstrapFailureRequest,
-        *,
-        peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
         pool, admission = self._enrollment_target(request)
-        self._authorize_launch(request, pool)
-        self._verify_active_node(
-            pool=pool,
-            admission=admission,
-            provider=request.provider,
-            region=request.region,
-            provider_instance_id=request.provider_instance_id,
-            identity_proof_url=request.identity_proof_url,
-            peer_address=peer_address,
-            launch_id=request.launch_id,
-        )
+        self._verify_active_node(pool=pool, admission=admission, request=request)
         excerpt = _sanitized_excerpt(request.diagnostic_excerpt)
-        if request.provider is not ProviderKind.Aws:
-            for credential in (request.bootstrap_token, request.node_agent_token):
-                if credential:
-                    excerpt = excerpt.replace(credential, "[redacted]")
-            excerpt = re.sub(
-                r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43,128}(?![A-Za-z0-9_-])",
-                "[redacted]",
-                excerpt,
-            )
         observed = self.compute.record_provider_node_lifecycle(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
@@ -278,21 +213,9 @@ class ProviderNodeEnrollmentService:
     def record_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
-        *,
-        peer_address: str = "",
     ) -> ProviderNodeBootstrapFailureResponse:
         pool, admission = self._enrollment_target(request)
-        self._authorize_launch(request, pool)
-        self._verify_active_node(
-            pool=pool,
-            admission=admission,
-            provider=request.provider,
-            region=request.region,
-            provider_instance_id=request.provider_instance_id,
-            identity_proof_url=request.identity_proof_url,
-            peer_address=peer_address,
-            launch_id=request.launch_id,
-        )
+        self._verify_active_node(pool=pool, admission=admission, request=request)
         observed = self.compute.record_provider_node_lifecycle(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
@@ -310,18 +233,13 @@ class ProviderNodeEnrollmentService:
         self,
         *,
         pool: ComputeUnitRecord,
-        admission: ProviderNodeAdmission | None,
-        provider: ProviderKind,
-        region: str,
-        provider_instance_id: str,
-        identity_proof_url: str,
-        peer_address: str,
-        launch_id: str = "",
+        admission: ProviderNodeAdmission,
+        request: ProviderNodeIdentityRequest,
     ) -> None:
         if not pool.provider_state.resource_id:
             raise UpstreamUnavailableError("provider pool identity is not established")
         known = self._known_instance_ids(pool)
-        if provider_instance_id not in known:
+        if request.provider_instance_id not in known:
             # An instance can report before the reconciler has observed it. Ask
             # for one refresh — rate limited per pool, because this route is
             # unauthenticated and the refresh calls the customer's AWS account.
@@ -335,34 +253,15 @@ class ProviderNodeEnrollmentService:
         with self._proof_capacity():
             self.identity_verifier.verify(
                 ProviderNodeIdentityProof(
-                    launch_id=launch_id,
-                    provider=provider,
-                    region=region,
-                    provider_instance_id=provider_instance_id,
-                    proof_url=SecretStr(identity_proof_url),
-                    peer_address=peer_address,
+                    provider=request.provider,
+                    region=request.region,
+                    provider_instance_id=request.provider_instance_id,
+                    proof_url=SecretStr(request.identity_proof_url),
                 ),
                 pool=pool,
                 admission=admission,
                 provider_instance_ids=known,
             )
-
-    def _require_launches(self) -> ProviderNodeLaunchService:
-        if self.launches is None:
-            raise UpstreamUnavailableError("provider launch authorization is not configured")
-        return self.launches
-
-    def _authorize_launch(
-        self,
-        request: (
-            ProviderNodeEnrollmentRequest
-            | ProviderNodeBootstrapFailureRequest
-            | ProviderNodeBootstrapPhaseRequest
-        ),
-        pool: ComputeUnitRecord,
-    ) -> None:
-        if request.provider is not ProviderKind.Aws:
-            self._require_launches().authorize(request, pool)
 
     @contextmanager
     def _proof_capacity(self) -> Iterator[None]:
@@ -414,26 +313,18 @@ class ProviderNodeEnrollmentService:
 
     def _enrollment_target(
         self,
-        request: (
-            ProviderNodeEnrollmentRequest
-            | ProviderNodeBootstrapFailureRequest
-            | ProviderNodeBootstrapPhaseRequest
-        ),
-    ) -> tuple[ComputeUnitRecord, ProviderNodeAdmission | None]:
+        request: ProviderNodeIdentityRequest,
+    ) -> tuple[ComputeUnitRecord, ProviderNodeAdmission]:
         with self.gateway.services.context.database.session() as session:
             return self._enrollment_target_in_transaction(session, request, for_update=False)
 
     def _enrollment_target_in_transaction(
         self,
         session: DatabaseSession,
-        request: (
-            ProviderNodeEnrollmentRequest
-            | ProviderNodeBootstrapFailureRequest
-            | ProviderNodeBootstrapPhaseRequest
-        ),
+        request: ProviderNodeIdentityRequest,
         *,
         for_update: bool = True,
-    ) -> tuple[ComputeUnitRecord, ProviderNodeAdmission | None]:
+    ) -> tuple[ComputeUnitRecord, ProviderNodeAdmission]:
         units = ComputeUnitRepository(session)
         pool = units.get(request.enrollment_request_id)
         if pool is not None and for_update:
@@ -450,7 +341,7 @@ class ProviderNodeEnrollmentService:
         ):
             raise InvalidInputError("provider node enrollment request is not active")
         if not pool.platform_fleet:
-            if request.provider is not ProviderKind.Aws or pool.provider_connection_id is None:
+            if pool.provider_connection_id is None:
                 raise InvalidInputError("customer provider connection is unavailable")
             connection = AwsAccountConnectionRepository(session).get(pool.provider_connection_id)
             owner = WorkspaceMemberRepository(session).owner(pool.workspace_id)
@@ -482,7 +373,7 @@ class ProviderNodeEnrollmentService:
             or provider.connection_id != pool.provider_connection_id
         ):
             raise InvalidInputError("provider node binding is not active")
-        if request.provider is ProviderKind.Aws and provider.node_admission is None:
+        if provider.node_admission is None:
             raise InvalidInputError("AWS node admission is unavailable")
         return pool, provider.node_admission
 

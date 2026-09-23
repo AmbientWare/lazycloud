@@ -25,6 +25,7 @@ class ImageBuildExecutionRequest(ContractModel):
     credential_plan: ImageBuildCredentialPlan | None = None
     registry_credential_payload: str = Field(default="", repr=False)
     build_args: dict[str, str] = Field(default_factory=dict, repr=False)
+    machine: str = ""
 
 
 class ImageBuildExecutionResult(ContractModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from lazycloud.clients.compute.control import ComputeClient
+from lazycloud.clients.disk.control import DiskControlClient
 from lazycloud.clients.domain.control import DomainControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.observability.control import ObservabilityControlClient
@@ -90,6 +91,20 @@ def secret_client(
 ) -> SecretControlClient:
     config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
     return SecretControlClient.from_endpoint(
+        config.endpoint,
+        token=config.token,
+        timeout_seconds=config.timeout_seconds,
+        workspace=config.workspace,
+    )
+
+
+def disk_client(
+    *,
+    workspace: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> DiskControlClient:
+    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
+    return DiskControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
         timeout_seconds=config.timeout_seconds,

@@ -88,6 +88,8 @@ instance has a `url` and `terminate()`, and lives for `keep_warm` seconds unless
 | `block_network`, `allow_list` | Cut outbound access, or limit it to CIDR ranges. |
 | `checkpoint_enabled` | Allow checkpoints, gated by `checkpoint_readiness_path` and `_port`. |
 | `docker_enabled` | Give the pod its own Docker daemon. |
+| `ssh` | Serve SSH through `lazycloud ssh`; see [Dev machines](/concepts/dev-machines). |
+| `disks` | Durable [disks](/concepts/disks); a pod with one runs one container. |
 
 `env`, `secrets`, `volumes`, and `machine` work as on every workload, and
 `web.shell()` opens a shell in a pod container.

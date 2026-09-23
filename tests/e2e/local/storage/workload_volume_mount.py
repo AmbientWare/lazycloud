@@ -11,6 +11,10 @@ APP_NAME = os.getenv("LAZYCLOUD_E2E_APP", f"volume_mount_{secrets.token_hex(6)}"
 VOLUME_NAME = os.getenv("LAZYCLOUD_E2E_VOLUME", f"volume-mount-{secrets.token_hex(6)}")
 ROOT = Path("/mnt/e2e-volume")
 
+# A deployed container imports this module again, so it needs the names the
+# caller generated or it would mint different ones.
+DEPLOYMENT_ENV = {"LAZYCLOUD_E2E_APP": APP_NAME, "LAZYCLOUD_E2E_VOLUME": VOLUME_NAME}
+
 app = App(APP_NAME)
 volume = Volume(VOLUME_NAME, str(ROOT))
 
@@ -21,6 +25,7 @@ volume = Volume(VOLUME_NAME, str(ROOT))
     volumes=[volume],
     cpu=0.25,
     memory="128Mi",
+    env=DEPLOYMENT_ENV,
 )
 def volume_probe(operation: Literal["read", "write"], relative_path: str, value: str = "") -> str:
     target = ROOT / relative_path

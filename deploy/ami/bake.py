@@ -860,6 +860,14 @@ rm -f /tmp/lazycloud-agent-install.sh
 
 __GPU_SETUP__
 __ZRAM_SETUP__
+# Durable disks reach their containers through kernel NBD devices. The image
+# loads the module at boot so the worker never loads modules itself, and the
+# checks below fail the bake without it, since every disk attach would fail.
+printf 'nbd\n' > /etc/modules-load.d/lazycloud-nbd.conf
+printf 'options nbd nbds_max=128\n' > /etc/modprobe.d/lazycloud-nbd.conf
+modprobe nbd
+test "$(cat /sys/module/nbd/parameters/nbds_max)" = 128
+test -b /dev/nbd127
 systemctl enable --now amazon-ssm-agent
 # A pool node produces no console output and reports nothing once its agent
 # cannot reach the control plane. Without SSM every failure in that window is

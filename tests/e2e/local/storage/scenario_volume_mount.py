@@ -53,10 +53,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         app.deploy(
             workspace=workspace,
             source_root=SOURCE_ROOT,
-            env={
-                "LAZYCLOUD_E2E_APP": APP_NAME,
-                "LAZYCLOUD_E2E_VOLUME": VOLUME_NAME,
-            },
         )
         written = volume_probe.remote("write", "worker/value.txt", marker)
         if written != marker or volume.read_text("worker/value.txt") != marker:

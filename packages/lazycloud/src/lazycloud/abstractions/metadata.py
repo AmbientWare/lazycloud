@@ -143,6 +143,7 @@ def build_resource_metadata(
     inputs: SchemaInput = None,
     outputs: SchemaInput = None,
     tcp: bool | None = None,
+    ssh: bool | None = None,
     block_network: bool | None = None,
     allow_list: list[str] | None = None,
     docker_enabled: bool | None = None,
@@ -158,6 +159,7 @@ def build_resource_metadata(
     _set_if_value(metadata, "checkpoint_enabled", checkpoint_enabled)
     _set_if_value(metadata, "in_process", in_process)
     _set_if_value(metadata, "tcp", tcp)
+    _set_if_value(metadata, "ssh", ssh)
     _set_if_value(metadata, "block_network", block_network)
     _set_if_value(metadata, "docker_enabled", docker_enabled)
     if allow_list is not None:

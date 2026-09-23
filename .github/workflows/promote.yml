@@ -24,12 +24,12 @@ permissions:
 jobs:
   staging:
     name: Read what staging runs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       release_manifest_url: ${{ steps.read.outputs.release_manifest_url }}
     steps:
       - name: Checkout the staging branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: staging
           fetch-depth: 2

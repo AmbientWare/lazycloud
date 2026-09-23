@@ -7,12 +7,10 @@ from urllib.parse import urlparse
 from agent.binary import AgentBinarySettings
 from provider_aws import AwsManagedPoolBinaries
 from provider_aws.platform import AwsPlatformBinding
-from provider_hetzner import HetznerNodeImage
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 
-from .provider_definitions import PROVIDER_DEFINITIONS
 from .release_manifest import WORKER_IMAGE_PATTERN
 
 _AMI_PATTERN = re.compile(r"ami-[0-9a-f]{8,17}")
@@ -216,8 +214,6 @@ class AwsCapacityReconciliationSettings(BaseSettings):
 
 class PlatformCapacitySettings(BaseSettings):
     aws: AwsPlatformBinding | None = None
-    hetzner_images: dict[str, HetznerNodeImage] = Field(default_factory=dict)
-    hetzner_tokens: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
 
     model_config = SettingsConfigDict(
         env_prefix=f"{ENV_PREFIX}_PLATFORM_CAPACITY_",
@@ -226,18 +222,9 @@ class PlatformCapacitySettings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    @model_validator(mode="after")
-    def validate_bindings(self) -> PlatformCapacitySettings:
-        if self.hetzner_images:
-            ref = PROVIDER_DEFINITIONS["hetzner"].platform_ref
-            token = self.hetzner_tokens.get(ref)
-            if token is None or not token.get_secret_value().strip():
-                raise ValueError(f"{ref} requires a provider token")
-        return self
-
     @property
     def configured(self) -> bool:
-        return bool(self.aws is not None or self.hetzner_images or self.hetzner_tokens)
+        return self.aws is not None
 
 
 __all__ = [

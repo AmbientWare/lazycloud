@@ -1,29 +1,35 @@
 import { z } from "zod";
 
 /** What a quote prices, at the granularity one invoice line covers. */
-export const billedDimensions = ["compute_runtime", "network_egress", "volume_storage"] as const;
+export const billedDimensions = [
+  "compute_runtime",
+  "network_egress",
+  "volume_storage",
+  "disk",
+] as const;
 export type BilledDimension = (typeof billedDimensions)[number];
 
-/** What a quote prices, at the granularity the rate card publishes. */
-export const ledgerComponents = [
+/** A resource as the customer is charged for it; a disk is one charge. */
+export const usageCostComponents = [
   "container_time",
   "cpu",
   "memory",
   "gpu",
   "egress",
   "volume_storage",
+  "disk",
 ] as const;
-export type LedgerComponent = (typeof ledgerComponents)[number];
+export type UsageCostComponentKind = (typeof usageCostComponents)[number];
 
 export const usageCostGroupKeys = ["app", "workload", "task"] as const;
 export type UsageCostGroupKey = (typeof usageCostGroupKeys)[number];
 
-export type UsageCostCategory = "image-build" | "unattributed";
+export type UsageCostCategory = "image-build" | "disk" | "unattributed";
 
 /** A zero cost can represent measured usage with no charge. */
 export const usageCostComponentSchema = z.object({
   dimension: z.enum(billedDimensions),
-  component: z.enum(ledgerComponents),
+  component: z.enum(usageCostComponents),
   quantity: z.number(),
   cost_nanos: z.number().int().nonnegative(),
 });
@@ -39,7 +45,10 @@ export const usageCostRowSchema = z.object({
   workload_name: z.string().default(""),
   workload_kind: z.string().default(""),
   task_id: z.string().default(""),
-  /** "image-build" for image builds, which reach no app; empty otherwise. */
+  disk_id: z.string().default(""),
+  /** Empty where the disk has since been deleted. */
+  disk_name: z.string().default(""),
+  /** "image-build" for image builds and "disk" for one disk, neither of which reaches an app. */
   category: z.string().default(""),
   cost_nanos: z.number().int().nonnegative().default(0),
   components: z.array(usageCostComponentSchema).default([]),

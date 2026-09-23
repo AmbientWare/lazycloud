@@ -32,6 +32,9 @@ class TunnelRouteClient:
     hostname: str
     _loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.new_event_loop, init=False)
     _channels: dict[tuple[str, bytes], grpc.aio.Channel] = field(default_factory=dict, init=False)
+    _channel_streams: dict[grpc.aio.Channel, set[asyncio.Task[None]]] = field(
+        default_factory=dict, init=False
+    )
     _channel_expirations: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _streams: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _pending: set[asyncio.Task[socket.socket]] = field(default_factory=set, init=False)
@@ -123,6 +126,9 @@ class TunnelRouteClient:
                 task = asyncio.create_task(self._bridge(call, incoming, reader, writer))
                 self._streams.add(task)
                 task.add_done_callback(self._streams.discard)
+                channel_streams = self._channel_streams.setdefault(channel, set())
+                channel_streams.add(task)
+                task.add_done_callback(channel_streams.discard)
                 return client
             except BaseException:
                 call.cancel()
@@ -165,6 +171,12 @@ class TunnelRouteClient:
     ) -> None:
         try:
             await asyncio.sleep(max(0, (expires_at - datetime.now(UTC)).total_seconds()))
+            # New dials open a channel with the renewed certificate; streams already
+            # on this one run to their own end rather than to the certificate's.
+            self._channels.pop(key, None)
+            while streams := self._channel_streams.get(channel):
+                await asyncio.gather(*streams, return_exceptions=True)
         finally:
             self._channels.pop(key, None)
+            self._channel_streams.pop(channel, None)
             await channel.close()

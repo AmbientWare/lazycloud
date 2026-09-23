@@ -507,7 +507,7 @@ authenticated operation before retiring the predecessor credential.
 
 ### Connecting the platform account to its own fleet
 
-See [Provider provisioning](PROVIDERS.md) for the common AWS/Hetzner flow and
+See [Provider provisioning](PROVIDERS.md) for the provisioning flow and
 capacity lifecycle. The AWS-specific account registration below remains part
 of normal deployment; it is not a separate scheduler path.
 

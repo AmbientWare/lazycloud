@@ -90,11 +90,12 @@ class BillingLedgerSegmentTable(TimestampMixin, DatabaseBase):
             name="uq_billing_ledger_segments_record",
         ),
         CheckConstraint(
-            "dimension IN ('compute_runtime', 'network_egress', 'volume_storage')",
+            "dimension IN ('compute_runtime', 'network_egress', 'volume_storage', 'disk')",
             name="ck_billing_ledger_segments_dimension",
         ),
         CheckConstraint(
-            "component IN ('container_time', 'cpu', 'memory', 'gpu', 'egress', 'volume_storage')",
+            "component IN ('container_time', 'cpu', 'memory', 'gpu', 'egress', "
+            "'volume_storage', 'disk_storage', 'disk_attached')",
             name="ck_billing_ledger_segments_component",
         ),
         CheckConstraint(

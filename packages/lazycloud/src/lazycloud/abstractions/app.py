@@ -26,6 +26,7 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DeploymentKind
+from shared.disks import DiskMount
 from shared.gpu import GpuInput
 from shared.http.deployment_plans import (
     DeploymentPlanRequest,
@@ -38,6 +39,7 @@ from shared.http.gateway import DeployStubResponse
 from shared.serialization import to_json_value
 from shared.tasks import TaskPolicy
 
+from lazycloud.abstractions.disk import Disk, disk_mounts
 from lazycloud.abstractions.endpoint import (
     ASGI,
     ASGIOptions,
@@ -754,6 +756,7 @@ class App:
         keep_warm: int = 600,
         secrets: Iterable[str] | None = None,
         volumes: Iterable[VolumeMount | VolumeExport] | None = None,
+        disks: Iterable[Disk | DiskMount] | None = None,
         authorized: bool = False,
         checkpoint_enabled: bool = False,
         checkpoint_readiness_path: str | None = None,
@@ -763,6 +766,7 @@ class App:
         health_check_path: str | None = None,
         health_check_port: int | None = None,
         tcp: bool = False,
+        ssh: bool = False,
         block_network: bool = False,
         allow_list: list[str] | None = None,
         docker_enabled: bool = False,
@@ -787,6 +791,8 @@ class App:
             keep_warm: Seconds to keep the pod alive when idle.
             secrets: Secret names mounted into the pod environment.
             volumes: Durable volumes mounted into the pod.
+            disks: Durable disks the pod keeps across restarts; one at ``/`` holds
+                the whole writable root. A pod with a disk runs one container.
             authorized: Whether ingress requires an authenticated client.
             checkpoint_enabled: Enable checkpoint support when available.
             checkpoint_readiness_path, checkpoint_readiness_port: HTTP readiness probe used
@@ -795,6 +801,8 @@ class App:
                 to a container. Unset, it connects to the port instead, which proves only
                 that something is listening.
             tcp, block_network, allow_list, docker_enabled: Network and Docker policy.
+            ssh: Serve SSH through ``lazycloud ssh`` and ``lazycloud ssh-config``;
+                an open SSH connection keeps the pod running.
             machine, metadata: A joined machine this workload must run on, by name
                 (unset runs in the workspace), and custom metadata.
         """
@@ -812,6 +820,7 @@ class App:
             keep_warm=keep_warm,
             secrets=[str(secret) for secret in (secrets or [])],
             volumes=volume_mounts(volumes or ()),
+            disks=disk_mounts(disks or ()),
             authorized=authorized,
             checkpoint_enabled=checkpoint_enabled,
             checkpoint_readiness_path=checkpoint_readiness_path,
@@ -821,6 +830,7 @@ class App:
             health_check_path=health_check_path,
             health_check_port=health_check_port,
             tcp=tcp,
+            ssh=ssh,
             block_network=block_network,
             allow_list=allow_list,
             docker_enabled=docker_enabled,

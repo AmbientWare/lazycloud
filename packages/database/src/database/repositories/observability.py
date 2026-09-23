@@ -115,6 +115,8 @@ class UsageRepository:
         if record.metric not in (
             UsageMetric.PersistentVolumeByteSeconds,
             UsageMetric.ArtifactStorageByteSeconds,
+            UsageMetric.DiskStoredByteSeconds,
+            UsageMetric.DiskAttachedByteSeconds,
         ):
             raise ConflictError("storage accounting requires a storage metric")
         WorkspaceRepository(self.session).lock_storage_accounting_owner(record.workspace_id)

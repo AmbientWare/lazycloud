@@ -2,16 +2,23 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
+from api.server.services import ApiServices
 from database.context import ServiceContext
 from database.repositories.billing_rates import PlatformRateRepository
 from database.repositories.observability import UsageRepository
+from database.repositories.orchestration import ContainerRepository
 from database.tables.billing_ledger import BillingLedgerSegmentTable
+from database.tables.disks import DiskAttachmentTable
+from database.tables.orchestration import ContainerTable
 from database.tables.storage import VolumeTable
 from execution.volumes.records import VolumeService
 from shared.billing_quotes import BilledDimension, LedgerComponent
-from shared.billing_rate_card import PUBLISHED_METERED_RATE_HISTORY
+from shared.billing_rate_card import PUBLISHED_DISK_RATE, PUBLISHED_METERED_RATE_HISTORY
+from shared.containers import ContainerRecord, ContainerStatus
+from shared.disks import DiskMount
 from shared.timestamps import utc_now
 from shared.usage import (
     METERING_OBSERVATION_ERROR_TYPE_METADATA_KEY,
@@ -21,6 +28,7 @@ from shared.usage import (
     UsageUnit,
 )
 from sqlalchemy import select
+from storage.disks import get_or_create_disks
 from storage.volume_filesystem import (
     VolumeNamespace,
     WorkspaceVolumeFilesystem,
@@ -28,6 +36,7 @@ from storage.volume_filesystem import (
 )
 from storage.volume_metering import PersistentVolumeMeteringService
 from tests.fakes import FakeObjectClient, FakeWorkspaceStorageIssuer
+from tests.workspaces import on_team_plan
 
 from storage import volume_metering
 
@@ -259,3 +268,138 @@ def _set_checkpoint(
         row.metered_at = metered_at
         workspace_id = str(row.workspace_id)
     return workspace_id
+
+
+def test_attached_capacity_bills_each_lease_once_up_to_its_end(
+    isolated_services: ApiServices,
+) -> None:
+    """Declared size times lease time, in windows that tile each lease and stop at its end.
+
+    A lease ends at its release, or when its holder stops without releasing, since
+    a stopped container holds nothing a customer can use.
+    """
+
+    services = isolated_services
+    size_bytes = 2 * 1024**3
+    with services.database.session() as session:
+        workspace_id = services.context.default_workspace_id(session)
+    on_team_plan(services.database, workspace_id)
+    [resolved] = get_or_create_disks(
+        services.database,
+        [DiskMount(name="box-root", size_bytes=size_bytes)],
+        workspace_id=workspace_id,
+    )
+    disk_id = resolved.record.id
+    metering = PersistentVolumeMeteringService(
+        services.context,
+        WorkspaceVolumeFilesystem(
+            workspace_volume_store_resolver(
+                services.database,
+                object_store=FakeObjectClient(),
+                storage_issuer=FakeWorkspaceStorageIssuer(),
+            )
+        ),
+    )
+
+    first = _running_container(services, workspace_id)
+    lease = services.disks.acquire(disk_id, container_id=first, worker_id="worker-a")
+    acquired_at = utc_now() - timedelta(minutes=10)
+    _backdate_open_attachment(services, disk_id, acquired_at)
+    checkpoint = acquired_at + timedelta(minutes=5)
+    metering.reconcile_due(now=checkpoint)
+    metering.reconcile_due(now=checkpoint)
+    services.disks.release(disk_id, container_id=first, lease_token=lease.lease_token)
+    released_at = _attachments(services, disk_id)[0][0]
+    assert released_at is not None
+    metering.reconcile_due(now=released_at + timedelta(minutes=5))
+    metering.reconcile_due(now=released_at + timedelta(minutes=10))
+
+    second = _running_container(services, workspace_id)
+    services.disks.acquire(disk_id, container_id=second, worker_id="worker-b")
+    reacquired_at = released_at + timedelta(minutes=1)
+    stopped_at = reacquired_at + timedelta(minutes=3)
+    _backdate_open_attachment(services, disk_id, reacquired_at)
+    with services.database.session() as session:
+        row = session.get(ContainerTable, second)
+        assert row is not None
+        row.status = ContainerStatus.Stopped.value
+        row.finished_at = stopped_at
+    metering.reconcile_due(now=stopped_at + timedelta(minutes=10))
+    metering.reconcile_due(now=stopped_at + timedelta(minutes=20))
+
+    with services.database.session() as session:
+        windows = sorted(
+            (
+                datetime.fromisoformat(str(record.metadata["metering_window_started_at"])),
+                datetime.fromisoformat(str(record.metadata["metering_window_ended_at"])),
+                record.quantity,
+                record.id,
+            )
+            for record in UsageRepository(session).list(workspace_id=workspace_id)
+            if record.metric is UsageMetric.DiskAttachedByteSeconds
+        )
+        segments = {
+            segment.usage_record_id: segment
+            for segment in session.scalars(
+                select(BillingLedgerSegmentTable).where(
+                    BillingLedgerSegmentTable.component == LedgerComponent.DiskAttached.value
+                )
+            )
+        }
+    assert [(started, ended) for started, ended, _, _ in windows] == [
+        (acquired_at, checkpoint),
+        (checkpoint, released_at),
+        (reacquired_at, stopped_at),
+    ]
+    for started, ended, quantity, record_id in windows:
+        assert quantity == size_bytes * ((ended - started) // timedelta(milliseconds=1)) / 1000
+        segment = segments[record_id]
+        assert segment.dimension == BilledDimension.Disk.value
+        assert segment.rate_nanos_per_unit == PUBLISHED_DISK_RATE.nanos_per_attached_byte_second
+    assert _attachments(services, disk_id) == [(released_at, True), (stopped_at, True)]
+
+
+def _running_container(services: ApiServices, workspace_id: str) -> str:
+    container_id = str(uuid4())
+    with services.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=container_id,
+                name="box",
+                image="image",
+                command=[],
+                workspace_id=workspace_id,
+                runtime_worker_id="worker",
+                status=ContainerStatus.Running,
+            )
+        )
+    return container_id
+
+
+def _backdate_open_attachment(services: ApiServices, disk_id: str, at: datetime) -> None:
+    with services.database.session() as session:
+        row = session.scalars(
+            select(DiskAttachmentTable).where(
+                DiskAttachmentTable.disk_id == disk_id,
+                DiskAttachmentTable.released_at.is_(None),
+            )
+        ).one()
+        row.acquired_at = at
+        row.metered_at = at
+
+
+def _attachments(services: ApiServices, disk_id: str) -> list[tuple[datetime | None, bool]]:
+    """Each lease's end and whether it is settled, oldest first."""
+    with services.database.session() as session:
+        rows = session.scalars(
+            select(DiskAttachmentTable)
+            .where(DiskAttachmentTable.disk_id == disk_id)
+            .order_by(DiskAttachmentTable.acquired_at)
+        ).all()
+        return [
+            (
+                row.released_at.astimezone(UTC) if row.released_at is not None else None,
+                row.settled_at is not None,
+            )
+            for row in rows
+        ]

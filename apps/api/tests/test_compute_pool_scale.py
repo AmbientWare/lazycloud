@@ -9,6 +9,7 @@ from uuid import uuid4
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
+from compute.block_volumes import BlockVolumeProvider
 from compute.offers import ComputeOffer
 from compute.policy import AwsDefaultCapacityBaseline
 from compute.providers import (
@@ -106,6 +107,9 @@ class _PooledProvider:
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
         raise AssertionError("capacity scaling must not request network billing evidence")
+
+    def block_volumes(self, region: str) -> BlockVolumeProvider:
+        raise AssertionError("capacity scaling must not manage disk volumes")
 
     desired_machines: int = 1
 

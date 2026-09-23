@@ -48,7 +48,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         app.deploy(
             workspace=workspace,
             source_root=SOURCE_ROOT,
-            env={"LAZYCLOUD_E2E_APP": APP_NAME},
         )
         call = artifact_owner.spawn(marker)
         if call.get(timeout_seconds=120, poll_interval_seconds=0.5) != marker:

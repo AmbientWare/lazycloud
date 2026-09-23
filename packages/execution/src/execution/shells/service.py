@@ -11,6 +11,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from control.service import ControlPlaneService, StubRecord
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
@@ -264,10 +265,12 @@ class ShellControlService:
     ) -> ExistingContainerShellSession:
         container = self._container(container_id)
         workspace = self.control_plane.get_workspace(workspace_id)
+        with self.services.context.database.session() as session:
+            credential_secret = WorkspaceRepository(session).credential_secret(workspace.id) or ""
         container_workspace_id = container.workspace_id if container is not None else ""
         container_stub_id = container.stub_id if container is not None and container.stub_id else ""
         credentials = existing_container_shell_credentials(
-            workspace_signing_key=workspace.signing_key,
+            workspace_credential_secret=credential_secret,
             container_id=container_id,
             token_external_id=container_stub_id or "shell",
         )

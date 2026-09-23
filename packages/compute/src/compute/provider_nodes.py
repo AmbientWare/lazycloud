@@ -10,12 +10,10 @@ from shared.provider_config import ProviderKind
 
 
 class ProviderNodeIdentityProof(ContractModel):
-    launch_id: str = ""
     provider: ProviderKind
     region: str
     provider_instance_id: str
     proof_url: SecretStr
-    peer_address: str = ""
 
 
 class VerifiedProviderNodeIdentity(ContractModel):
@@ -41,7 +39,7 @@ class ProviderNodeIdentityVerifier(Protocol):
         proof: ProviderNodeIdentityProof,
         *,
         pool: ComputeUnitRecord,
-        admission: ProviderNodeAdmission | None,
+        admission: ProviderNodeAdmission,
         provider_instance_ids: tuple[str, ...],
     ) -> VerifiedProviderNodeIdentity: ...
 

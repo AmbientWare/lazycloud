@@ -4,7 +4,12 @@ import { createLazyFileRoute } from "@tanstack/react-router";
 import { ArrowDown, CornerDownRight } from "lucide-react";
 
 import type { PricingCatalog, PublishedPlacementRate } from "@/lib/api/schemas";
-import { gpuModelsLabel, limitFigure, memberLimitFigure } from "@/lib/entitlements";
+import {
+  diskAllowanceFigure,
+  gpuModelsLabel,
+  limitFigure,
+  memberLimitFigure,
+} from "@/lib/entitlements";
 import { DOCS_URL } from "@/lib/env";
 import { countLabel } from "@/lib/format";
 import { formatCostNanos } from "@/lib/money";
@@ -103,6 +108,20 @@ function platformGroups(catalog: PricingCatalog): readonly RateGroup[] {
           figure: catalog.platform_rate.nanos_per_volume_gib_month,
           unit: "/ GiB / 30 days",
         },
+        ...(catalog.disk_rate
+          ? [
+              {
+                label: "Disk data",
+                figure: catalog.disk_rate.nanos_per_stored_gib_month,
+                unit: "/ GiB stored / 30 days",
+              },
+              {
+                label: "Disk attached",
+                figure: catalog.disk_rate.nanos_per_attached_gib_month,
+                unit: "/ GiB of size / 30 days attached",
+              },
+            ]
+          : []),
         {
           label: "Egress",
           figure: catalog.platform_rate.nanos_per_egress_gib,
@@ -255,6 +274,10 @@ function MarketingPricing() {
                             <PlanLimit
                               label="Members"
                               value={memberLimitFigure(plan.entitlements.max_members)}
+                            />
+                            <PlanLimit
+                              label="Disks per workspace"
+                              value={diskAllowanceFigure(plan.entitlements.max_workspace_disk_gib)}
                             />
                             <PlanLimit
                               label="Connected cloud"

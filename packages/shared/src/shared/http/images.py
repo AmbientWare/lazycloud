@@ -60,6 +60,9 @@ class BuildImageRequest(HttpModel):
     secrets: list[str] = Field(default_factory=list)
     gpu: str = ""
     ignore_python: bool = False
+    machine: str = Field(default="", max_length=63)
+    """The joined machine the workload needing this image runs on, empty to build
+    in the workspace. It chooses where the build runs, never what the image is."""
 
 
 class BuildImageResponse(HttpModel):

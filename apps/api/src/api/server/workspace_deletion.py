@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
 from database.repositories.compute import ComputeUnitRepository
+from database.repositories.disks import DiskRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.types import DatabaseSession
@@ -163,6 +164,7 @@ class WorkspaceDeletionService:
                 DeleteVolumeRequest(name=volume.name),
                 workspace_id=workspace.id,
             )
+        self.services.disk_deletion.delete_workspace_disks(workspace.id)
         self.services.object_storage.delete_workspace_objects_for_deletion(workspace.id)
 
         self.services.map_service.delete_workspace(workspace.id)
@@ -197,6 +199,8 @@ class WorkspaceDeletionService:
             raise UpstreamUnavailableError("workspace object deletion is incomplete")
         if VolumeRepository(session).list(workspace_id=workspace_id):
             raise UpstreamUnavailableError("workspace volume deletion is incomplete")
+        if DiskRepository(session).workspace_disks(workspace_id):
+            raise UpstreamUnavailableError("workspace disk deletion is incomplete")
 
 
 __all__ = ["WorkspaceDeletionService"]

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from database.mappers.identity import workspace_record_from_table
 from database.tables.billing import BillingAccountTable
+from database.tables.disks import DiskTable
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
 from database.tables.storage import ObjectTable, VolumeTable
 from database.tables.storage_retention import StorageRetentionPeriodTable
@@ -48,6 +49,16 @@ class StorageRetentionRepository:
             self.session.scalar(
                 select(VolumeTable.id)
                 .where(VolumeTable.id == volume_id, VolumeTable.workspace_id == workspace_id)
+                .with_for_update(skip_locked=True)
+            )
+            is not None
+        )
+
+    def lock_disk(self, disk_id: str, *, workspace_id: str) -> bool:
+        return (
+            self.session.scalar(
+                select(DiskTable.id)
+                .where(DiskTable.id == disk_id, DiskTable.workspace_id == workspace_id)
                 .with_for_update(skip_locked=True)
             )
             is not None

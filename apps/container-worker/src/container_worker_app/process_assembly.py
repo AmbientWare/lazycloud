@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from shared.app_identity import WORKER_BUNDLE_ROOT
+from shared.container_requests import StopContainerReason
 from shared.scheduling import (
     SchedulerWorkerRecord,
 )
@@ -57,6 +58,7 @@ from worker.container_service.protocols import (
 )
 from worker.container_service.service import WorkerContainerService
 from worker.container_service.transport import WorkerContainerServiceTransport
+from worker.durable_disks import WorkerDurableDiskService
 from worker.event_bridge import WorkerSourceCacheReconciler, WorkerStreamEventHandler
 from worker.events import WorkerBuildCancelRegistry, WorkerPoolMode, WorkerStreamEvent
 from worker.finalization import (
@@ -148,6 +150,7 @@ class WorkerProcessExecutionDependencies:
     checkpoint_restorer: ContainerCheckpointRestorer | None = None
     automatic_checkpoints: ContainerAutomaticCheckpointCoordinator | None = None
     container_logs: ContainerLogCaptureService | None = None
+    durable_disks: WorkerDurableDiskService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +246,12 @@ def assemble_worker_process_services(
         sandbox_docker=container_service_dependencies.sandbox_docker,
         worker_id=identity.worker_id,
     )
+    if dependencies.durable_disks is not None:
+        dependencies.durable_disks.stop_container = lambda container_id: (
+            runtime_stopper.stop_container(
+                container_id, force=False, reason=StopContainerReason.DiskFull
+            )
+        )
     address_publisher = SchedulerWorkerAddressPublisher(identity, container_repository)
     usage_supervisor = WorkerSupervisionService(
         worker_id=identity.worker_id,
@@ -266,6 +275,7 @@ def assemble_worker_process_services(
             source_workspaces=finalization_dependencies.source_workspaces,
             workspace_storage=dependencies.workspace_storage_mounter,
             container_rootfs=dependencies.rootfs_preparer,
+            durable_disks=dependencies.durable_disks,
             bundle_root=finalization_dependencies.bundle_root,
         ),
     )
@@ -319,6 +329,7 @@ def assemble_worker_process_services(
         checkpoint_restorer=dependencies.checkpoint_restorer,
         automatic_checkpoints=dependencies.automatic_checkpoints,
         container_logs=dependencies.container_logs,
+        durable_disks=dependencies.durable_disks,
     )
     transport = WorkerContainerServiceTransport(container_service)
 

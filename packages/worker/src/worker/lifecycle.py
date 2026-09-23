@@ -19,6 +19,7 @@ from shared.container_requests import (
     WorkerStartupKind,
 )
 from shared.contracts import ContractModel
+from shared.ssh import SSH_WORKER_PORT
 
 from worker.execution import (
     CONTAINER_INNER_PORT,
@@ -61,6 +62,7 @@ class ContainerStartupPortRequest(ContractModel):
     ports: list[int] = Field(default_factory=list)
     requested_ports: list[int] = Field(default_factory=list)
     checkpoint_exposed_ports: list[int] = Field(default_factory=list)
+    ssh_enabled: bool = False
 
     @field_validator("ports", "requested_ports", "checkpoint_exposed_ports")
     @classmethod
@@ -204,6 +206,8 @@ def startup_container_ports(request: ContainerStartupPortRequest) -> list[int]:
         return list(request.checkpoint_exposed_ports)
     ports = list(request.ports) or [CONTAINER_INNER_PORT]
     ports.append(WORKER_SHELL_PORT)
+    if request.ssh_enabled:
+        ports.append(SSH_WORKER_PORT)
     if request.kind is WorkerStartupKind.Sandbox:
         ports.append(WORKER_SANDBOX_PROCESS_MANAGER_PORT)
     return ports

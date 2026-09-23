@@ -6,6 +6,7 @@ from api.server.routers.resource_api import (
     billing,
     compute,
     deployments,
+    disks,
     observability,
     operations,
     pricing,
@@ -19,6 +20,7 @@ router.include_router(pricing.router)
 router.include_router(deployments.router)
 router.include_router(tasks.router)
 router.include_router(secrets.router)
+router.include_router(disks.router)
 router.include_router(observability.router)
 router.include_router(compute.router)
 router.include_router(operations.router)

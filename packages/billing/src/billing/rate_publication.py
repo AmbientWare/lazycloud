@@ -5,6 +5,7 @@ from datetime import datetime
 
 from database.repositories.billing_rates import (
     ComputeRateRepository,
+    DiskRateRepository,
     PlatformRateRepository,
     RatePublication,
 )
@@ -28,6 +29,7 @@ class MeteredRatePublication:
     pricing_version: str
     compute: tuple[ComputeRatePublication, ...]
     platform: RatePublication | None
+    disk: RatePublication | None
 
 
 def publish_metered_rate_history(session: Session) -> tuple[MeteredRatePublication, ...]:
@@ -68,4 +70,14 @@ def publish_metered_rate_change(
         if card.platform_rate is not None
         else None
     )
-    return MeteredRatePublication(card.effective_at, card.pricing_version, rates, state)
+    disk = (
+        DiskRateRepository(session).publish(
+            pricing_version=card.pricing_version,
+            effective_at=card.effective_at,
+            nanos_per_stored_byte_second=card.disk_rate.nanos_per_stored_byte_second,
+            nanos_per_attached_byte_second=card.disk_rate.nanos_per_attached_byte_second,
+        )
+        if card.disk_rate is not None
+        else None
+    )
+    return MeteredRatePublication(card.effective_at, card.pricing_version, rates, state, disk)

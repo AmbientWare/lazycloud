@@ -25,12 +25,9 @@ terraform -chdir=deploy/platform-deployment init -backend-config="$TF_VAR_terraf
   -backend-config="key=platform-deployment/lazycloud-prod.tfstate"
 ```
 
-[Provider provisioning](../PROVIDERS.md) covers worker capacity. `capacity.tf`
-declares verified image inputs. Provider definitions own node catalogs;
-`compute.fleet_policy` owns warm targets. Supply the
-`hetzner-images.tfvars.json` image-workflow artifact to Terraform and add
-`LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` to the existing operator secret.
-Only credentials are operator-owned; capacity policy is deployment-owned.
+[Provider provisioning](../PROVIDERS.md) covers worker capacity. Provider
+definitions own node catalogs; `compute.fleet_policy` owns warm targets. Only
+credentials are operator-owned; capacity policy is deployment-owned.
 
 AWS fleet workers can launch in `us-east-1`, `us-east-2`, `us-west-1` and
 `us-west-2`. The deployment owns a VPC in each region, one `fleet-network` module call per region in

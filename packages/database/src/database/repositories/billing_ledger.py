@@ -10,7 +10,11 @@ from database.mappers.observability import usage_record_from_table
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_credits import BillingCreditRepository
-from database.repositories.billing_rates import ComputeRateRepository, PlatformRateRepository
+from database.repositories.billing_rates import (
+    ComputeRateRepository,
+    DiskRateRepository,
+    PlatformRateRepository,
+)
 from database.repositories.identity import WorkspaceMemberRepository
 from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
@@ -277,7 +281,12 @@ class BillingLedgerRepository:
             )
         else:
             component = billed.components[0]
-            quotes = PlatformRateRepository(self.session).quotes_for(
+            rates = (
+                DiskRateRepository(self.session)
+                if billed.dimension is BilledDimension.Disk
+                else PlatformRateRepository(self.session)
+            )
+            quotes = rates.quotes_for(
                 component=component,
                 started_at=started_at,
                 ended_at=ended_at,
@@ -288,7 +297,13 @@ class BillingLedgerRepository:
                     basis=billed.basis,
                     started_at=started_at,
                     ended_at=ended_at,
-                    quantity=measured_quantity(component, quantity),
+                    # Capacity held without a placement is a declared size times
+                    # the time it was held, which the record already states.
+                    quantity=(
+                        quantity
+                        if billed.basis is LedgerBasis.Reserved
+                        else measured_quantity(component, quantity)
+                    ),
                 ),
             )
         priced: list[tuple[MeteredSpan, PricedSpan]] = []

@@ -8,6 +8,7 @@ from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_credits import BillingCreditRepository
 from database.repositories.billing_plan_changes import BillingPlanChangeIntentRepository
 from database.repositories.custom_domains import CustomDomainRepository
+from database.repositories.disks import DiskRepository
 from database.repositories.identity import (
     WorkspaceInvitationRepository,
     WorkspaceMemberRepository,
@@ -15,6 +16,7 @@ from database.repositories.identity import (
 from database.repositories.orchestration import ContainerRepository
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId
+from shared.billing_quotes import BYTES_PER_GIB
 from shared.billing_rate_card import (
     AccountTerms,
     PlanEntitlements,
@@ -107,6 +109,22 @@ class DatabaseBillingAdmission:
                 f"plan allows ({gpu_limit})"
             )
         return models
+
+    def assert_disk_allowance(
+        self, session: Session, *, workspace_id: str, declared_bytes: int
+    ) -> None:
+        """Refuse a workspace whose live disks declare more than its plan allows."""
+
+        resolved = self._billable_account(session, workspace_id=workspace_id)
+        if resolved is None:
+            raise PaymentRequiredError("billed work requires a workspace billing owner")
+        limit_gib = resolved[1].entitlements.max_workspace_disk_gib
+        if declared_bytes > limit_gib * BYTES_PER_GIB:
+            declared_gib = f"{declared_bytes / BYTES_PER_GIB:.1f}".removesuffix(".0")
+            raise CapacityLimitReachedError(
+                f"this workspace's disks would declare {declared_gib} GiB, "
+                f"more than its plan allows ({limit_gib} GiB)"
+            )
 
     def assert_may_create_workspace(self, session: Session, *, owner_user_id: str) -> None:
         """Allow the first workspace before sign-in provisions billing."""
@@ -229,6 +247,14 @@ class DatabaseBillingAdmission:
         connection = AwsAccountConnectionRepository(session).get_for_user(user_id)
         if connection is not None and not entitlements.connected_cloud:
             violations.append("a connected cloud account")
+        largest_disk_bytes = DiskRepository(session).largest_declared_bytes(
+            members.owned_workspace_ids(user_id)
+        )
+        if largest_disk_bytes > entitlements.max_workspace_disk_gib * BYTES_PER_GIB:
+            violations.append(
+                f"a workspace with {largest_disk_bytes / BYTES_PER_GIB:.1f} GiB of disks "
+                f"(limit {entitlements.max_workspace_disk_gib} GiB)"
+            )
         domain_count = CustomDomainRepository(session).count_for_user(user_id)
         if domain_count and not entitlements.custom_domains:
             violations.append(f"{domain_count} custom domains")

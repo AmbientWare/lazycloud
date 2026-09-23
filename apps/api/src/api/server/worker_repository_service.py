@@ -35,6 +35,7 @@ from execution.containers.runtime_state import (
     ContainerRuntimeStateRepository,
     release_container_runtime_state,
 )
+from execution.ssh.service import SshIdentityService
 from execution.task_claims import TaskClaimReleaseService
 from execution.tasks import TaskService
 from foundation.network import worker_network_prefix
@@ -100,6 +101,14 @@ from shared.usage import (
     UsageRecord,
 )
 from storage_client.s3 import S3PresignedUpload
+from worker.durable_disk_records import (
+    DiskAcquirePayload,
+    DiskAcquireResult,
+    DiskCollectPayload,
+    DiskPublishPayload,
+    DiskPublishResult,
+    DiskReleasePayload,
+)
 from worker.event_bridge import worker_stream_event_from_bus_event
 from worker.events import (
     WORKER_EVENT_HEARTBEAT_ID,
@@ -217,6 +226,7 @@ from worker.repository_payloads import (
     WorkerRepositoryPrincipal,
 )
 from worker.routes import backend_route_id
+from worker.ssh_identity import ContainerSshIdentity, ContainerSshIdentityRequest
 from worker.tools import ContainerCredentialRequest
 from worker_repository.admission import (
     WorkerRequestNotAdmissibleError,
@@ -229,6 +239,7 @@ from worker_repository.checkpoint_records import (
 from worker_repository.credentials import (
     WorkerCredentialService,
 )
+from worker_repository.disk_leases import WorkerDiskLeaseService
 from worker_repository.image_build_credentials import (
     RedisImageBuildUploadCapabilityGuard,
 )
@@ -354,6 +365,7 @@ class WorkerRepositoryDependencies:
     workspace_changes: WorkspaceChangeService
     preempted_containers: PreemptedContainerControl
     tasks: TaskService
+    disk_leases: WorkerDiskLeaseService
 
 
 FATAL_CONTAINER_STARTUP_PHASES = frozenset(
@@ -2038,6 +2050,37 @@ class WorkerRepositoryService:
             )
         )
 
+    def get_container_ssh_identity(
+        self,
+        request: ContainerSshIdentityRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> ContainerSshIdentity:
+        self._authorize_worker_tenancy(
+            principal,
+            request.workspace_id,
+            operation="container SSH identity",
+        )
+        state = self.containers.get_container_state(request.container_id)
+        if state is None:
+            raise AuthorizationDeniedError("container SSH identity requires an assigned container")
+        if state.workspace_id != request.workspace_id:
+            raise AuthorizationDeniedError(
+                "container SSH identity workspace does not match container"
+            )
+        if state.worker_id != principal.worker_id:
+            raise AuthorizationDeniedError("container SSH identity is bound to the assigned worker")
+        if self.services is None:
+            raise UpstreamUnavailableError("service dependencies are required for SSH identity")
+        identity = SshIdentityService(self.services.context.database).container_identity(
+            workspace_id=state.workspace_id,
+            stub_id=state.stub_id,
+        )
+        return ContainerSshIdentity(
+            host_private_key=identity.host_private_key,
+            user_ca_public_key=identity.user_ca_public_key,
+        )
+
     def save_checkpoint_state(
         self,
         request: SaveCheckpointStateRequest,
@@ -2104,6 +2147,57 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError(
                 "automatic checkpoint lease is bound to the assigned worker"
             )
+
+    def acquire_disk(
+        self,
+        payload: DiskAcquirePayload,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> DiskAcquireResult:
+        container = self._authorize_worker_container(
+            payload.container_id, worker_id=principal.worker_id, operation="disk acquisition"
+        )
+        return self._disk_leases().acquire(
+            payload, container=container, worker_id=principal.worker_id
+        )
+
+    def publish_disk(
+        self,
+        payload: DiskPublishPayload,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> DiskPublishResult:
+        container = self._authorize_worker_container(
+            payload.container_id, worker_id=principal.worker_id, operation="disk publish"
+        )
+        return self._disk_leases().publish(payload, container=container)
+
+    def release_disk(
+        self,
+        payload: DiskReleasePayload,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> None:
+        container = self._authorize_worker_container(
+            payload.container_id, worker_id=principal.worker_id, operation="disk release"
+        )
+        self._disk_leases().release(payload, container=container)
+
+    def collect_disk(
+        self,
+        payload: DiskCollectPayload,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> None:
+        container = self._authorize_worker_container(
+            payload.container_id, worker_id=principal.worker_id, operation="disk collection"
+        )
+        self._disk_leases().collect(payload, container=container)
+
+    def _disk_leases(self) -> WorkerDiskLeaseService:
+        if self.services is None:
+            raise UpstreamUnavailableError("service dependencies are required for disk leases")
+        return self.services.disk_leases
 
     def _automatic_checkpoint_lease_service(
         self,

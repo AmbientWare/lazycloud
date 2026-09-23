@@ -44,6 +44,8 @@ export const planEntitlementsSchema = z
     self_hosted: z.boolean(),
     retention_days: z.number().int().positive(),
     region_selection: z.boolean(),
+    /** Declared disk size one workspace may hold across its live disks; 0 is no disks. */
+    max_workspace_disk_gib: z.number().int().nonnegative(),
   })
   .strict();
 export type PlanEntitlements = z.infer<typeof planEntitlementsSchema>;
@@ -160,6 +162,14 @@ export const pricingCatalogSchema = z
         storage_month_seconds: z.number().int().positive(),
       })
       .strict(),
+    /** A disk's two parts, charged as one line; null before disks were first priced. */
+    disk_rate: z
+      .object({
+        nanos_per_stored_gib_month: z.number().int().nonnegative(),
+        nanos_per_attached_gib_month: z.number().int().nonnegative(),
+      })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type PricingCatalog = z.infer<typeof pricingCatalogSchema>;

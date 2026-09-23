@@ -55,7 +55,31 @@ class UsageCostGroupKey(StringEnum):
 
 class UsageCostCategory(StringEnum):
     ImageBuild = "image-build"
+    Disk = "disk"
     Unattributed = "unattributed"
+
+
+class UsageCostComponent(StringEnum):
+    """A resource as the customer is charged for it.
+
+    The ledger's components, except that a disk is one charge here. Its stored
+    bytes and its attached capacity are two components on the ledger because the
+    platform pays for them separately; a customer pays for a disk.
+    """
+
+    ContainerTime = "container_time"
+    Cpu = "cpu"
+    Memory = "memory"
+    Gpu = "gpu"
+    Egress = "egress"
+    VolumeStorage = "volume_storage"
+    Disk = "disk"
+
+
+def usage_cost_component(component: LedgerComponent) -> UsageCostComponent:
+    if component in (LedgerComponent.DiskStorage, LedgerComponent.DiskAttached):
+        return UsageCostComponent.Disk
+    return UsageCostComponent(component.value)
 
 
 class UsageCostBucket(StringEnum):
@@ -78,13 +102,15 @@ class UsageCostComponentResponse(HttpModel):
     their traffic is measured and free rather than unmeasured.
 
     `component` says which resource `quantity` counts and therefore which unit
-    it is in. `dimension` names the invoice line that component rolls up into,
+    it is in. A disk's quantity is the byte-seconds it stored; the capacity it
+    held attached is in its cost and not in that figure, since the two are
+    different units. `dimension` names the invoice line that component rolls up into,
     so a breakdown and a bill can be read against each other without the browser
     holding its own map of which resource is billed under what.
     """
 
     dimension: BilledDimension
-    component: LedgerComponent
+    component: UsageCostComponent
     quantity: float
     cost_nanos: int = Field(ge=0)
 
@@ -123,8 +149,12 @@ class UsageCostRowResponse(HttpModel):
     workload_name: str = ""
     workload_kind: str = ""
     task_id: str = ""
-    # "image-build" for the usage image builds incurred, which reach no app;
-    # empty for everything else.
+    disk_id: str = ""
+    disk_name: str = ""
+    """Empty where the disk has since been deleted, as a removed app's name is."""
+
+    # "image-build" for the usage image builds incurred and "disk" for one
+    # disk's charge, neither of which reaches an app; empty for everything else.
     category: str = ""
     cost_nanos: int = Field(default=0, ge=0)
     components: list[UsageCostComponentResponse] = Field(default_factory=list)
@@ -212,6 +242,7 @@ __all__ = [
     "UsageCostBucket",
     "UsageCostBucketResponse",
     "UsageCostCategory",
+    "UsageCostComponent",
     "UsageCostComponentResponse",
     "UsageCostDimensionTotalResponse",
     "UsageCostGroupKey",
@@ -221,4 +252,5 @@ __all__ = [
     "UsageRecordListResponse",
     "UsageRecordResponse",
     "UsageSummaryResponse",
+    "usage_cost_component",
 ]

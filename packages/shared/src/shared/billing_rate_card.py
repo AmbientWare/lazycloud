@@ -34,6 +34,9 @@ FREE_PLAN_MAX_MEMBERS = 1
 TEAM_PLAN_MAX_CPU_CONTAINERS = 1_000
 TEAM_PLAN_MAX_GPUS = 50
 
+PAID_PLAN_MAX_WORKSPACE_DISK_GIB = 1_024
+"""Declared disk size one workspace may hold in total, across its live disks."""
+
 UnlimitedEntitlement: TypeAlias = Literal["unlimited"]
 EntitlementLimit: TypeAlias = int | UnlimitedEntitlement
 
@@ -275,6 +278,35 @@ class PublishedPlatformRate:
 
 
 @dataclass(frozen=True, slots=True)
+class PublishedDiskRate:
+    """What a disk costs a GiB-month, as two parts the customer sees as one charge.
+
+    Stored bytes are object storage and cost what volume storage does, for as long
+    as the disk exists. Attached capacity is the block volume the declared size
+    reserves while a container holds the disk, priced against that volume rather
+    than against the bytes written to it.
+    """
+
+    nanos_per_stored_gib_month: int
+    nanos_per_attached_gib_month: int
+
+    def __post_init__(self) -> None:
+        _ = (self.nanos_per_stored_byte_second, self.nanos_per_attached_byte_second)
+
+    @property
+    def nanos_per_stored_byte_second(self) -> Decimal:
+        return _stored_rate(
+            Decimal(self.nanos_per_stored_gib_month) / (BYTES_PER_GIB * SECONDS_PER_30_DAY_MONTH)
+        )
+
+    @property
+    def nanos_per_attached_byte_second(self) -> Decimal:
+        return _stored_rate(
+            Decimal(self.nanos_per_attached_gib_month) / (BYTES_PER_GIB * SECONDS_PER_30_DAY_MONTH)
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PublishedPlan:
     """Canonical plan prices, entitlements and copy for public clients."""
 
@@ -318,9 +350,14 @@ class PlanEntitlements:
     custom_domains: bool
     self_hosted: bool
     retention_days: int
+    max_workspace_disk_gib: int
+    """Declared disk size one workspace may hold across its live disks; 0 is no disks."""
+
     region_selection: bool = False
 
     def __post_init__(self) -> None:
+        if self.max_workspace_disk_gib < 0:
+            raise ValueError("a disk allowance cannot be negative")
         if self.retention_days <= 0:
             raise ValueError("log retention must be positive")
         if self.max_concurrent_cpu_containers <= 0:
@@ -475,6 +512,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             custom_domains=False,
             self_hosted=True,
             retention_days=1,
+            max_workspace_disk_gib=0,
         ),
         terms=(
             "Every workload the platform runs: applications, APIs, functions, jobs, "
@@ -498,6 +536,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             custom_domains=True,
             self_hosted=True,
             retention_days=30,
+            max_workspace_disk_gib=PAID_PLAN_MAX_WORKSPACE_DISK_GIB,
         ),
         terms=(
             "The same workloads at the same metered rates, with higher account limits.",
@@ -522,6 +561,7 @@ PUBLISHED_PLANS: tuple[PublishedPlan, ...] = (
             custom_domains=True,
             self_hosted=True,
             retention_days=90,
+            max_workspace_disk_gib=PAID_PLAN_MAX_WORKSPACE_DISK_GIB,
         ),
         terms=(
             "Connect your own AWS account, with unlimited members.",
@@ -592,6 +632,7 @@ class MeteredRateChange:
     effective_at: datetime
     compute_rates: tuple[PublishedComputeRate, ...]
     platform_rate: PublishedPlatformRate | None
+    disk_rate: PublishedDiskRate | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,6 +641,8 @@ class PublishedMeteredRateCard:
     effective_at: datetime
     compute_rates: tuple[PublishedComputeRate, ...]
     platform_rate: PublishedPlatformRate
+    disk_rate: PublishedDiskRate | None
+    """None before the first disk rate was published, when no disk could be priced."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -670,6 +713,7 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
         effective_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         compute_rates=_published_compute_rates(_INITIAL_SHAPE_RATES, _INITIAL_GPU_RATES),
         platform_rate=_INITIAL_PLATFORM_RATE,
+        disk_rate=None,
     ),
     MeteredRateChange(
         pricing_version="2026-09-09.a",
@@ -683,6 +727,7 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
             for rate in placement.compute_rates
         ),
         platform_rate=None,
+        disk_rate=None,
     ),
     MeteredRateChange(
         pricing_version="2026-09-10.a",
@@ -698,6 +743,7 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
             nanos_per_egress_gib=130_000_000,
             nanos_per_volume_gib_month=50_000_000,
         ),
+        disk_rate=None,
     ),
     MeteredRateChange(
         pricing_version="2026-09-10.b",
@@ -711,6 +757,20 @@ PUBLISHED_METERED_RATE_HISTORY: tuple[MeteredRateChange, ...] = (
             if rate.gpu_type != NO_GPU
         ),
         platform_rate=None,
+        disk_rate=None,
+    ),
+    MeteredRateChange(
+        pricing_version="2026-09-23.a",
+        effective_at=datetime(2026, 9, 23, tzinfo=timezone.utc),
+        compute_rates=(),
+        platform_rate=None,
+        # Attached capacity is two and a half times what the gp3 volume it
+        # reserves lists at. The volume outlives a release by thirty minutes, and
+        # that margin pays for it rather than a charge after the lease ends.
+        disk_rate=PublishedDiskRate(
+            nanos_per_stored_gib_month=50_000_000,
+            nanos_per_attached_gib_month=200_000_000,
+        ),
     ),
 )
 """Reviewed price history. Existing cards retain their original figures and dates."""
@@ -736,6 +796,10 @@ def published_metered_rate_card(at: datetime) -> PublishedMeteredRateCard:
         platform_rate=next(
             card.platform_rate for card in reversed(applicable) if card.platform_rate is not None
         ),
+        disk_rate=next(
+            (card.disk_rate for card in reversed(applicable) if card.disk_rate is not None),
+            None,
+        ),
     )
 
 
@@ -744,6 +808,9 @@ METERED_RATES_EFFECTIVE_AT = PUBLISHED_METERED_RATE_HISTORY[-1].effective_at
 _LATEST_METERED_CARD = published_metered_rate_card(METERED_RATES_EFFECTIVE_AT)
 PUBLISHED_COMPUTE_RATES = _LATEST_METERED_CARD.compute_rates
 PUBLISHED_PLATFORM_RATE = _LATEST_METERED_CARD.platform_rate
+if _LATEST_METERED_CARD.disk_rate is None:
+    raise RuntimeError("the current rate card must price disks")
+PUBLISHED_DISK_RATE = _LATEST_METERED_CARD.disk_rate
 PUBLISHED_GPU_RATES = tuple(
     PublishedGpuRate(GpuType(rate.gpu_type), rate.nanos_per_gpu_card_hour)
     for rate in PUBLISHED_COMPUTE_RATES
@@ -790,7 +857,9 @@ __all__ = [
     "NO_CARD_MAX_CPU_CONTAINERS",
     "NO_CARD_MAX_GPUS",
     "ONE_TIME_TRIAL_NANOS",
+    "PAID_PLAN_MAX_WORKSPACE_DISK_GIB",
     "PUBLISHED_COMPUTE_RATES",
+    "PUBLISHED_DISK_RATE",
     "PUBLISHED_GPU_RATES",
     "PUBLISHED_METERED_RATE_HISTORY",
     "PUBLISHED_PLANS",
@@ -809,6 +878,7 @@ __all__ = [
     "GpuTypeEntitlement",
     "PlanEntitlements",
     "PublishedComputeRate",
+    "PublishedDiskRate",
     "PublishedGpuRate",
     "PublishedMeteredRateCard",
     "PublishedPlacementRate",

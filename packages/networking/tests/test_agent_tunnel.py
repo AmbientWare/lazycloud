@@ -5,6 +5,7 @@ import hashlib
 import logging
 import socket
 from contextlib import suppress
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -50,12 +51,15 @@ from shared.timestamps import utc_now
 from tests.real_redis import RealRedisActors
 from tests.workspaces import workspace_owner_user_id
 
+from identity import tunnel_certificates
+
 
 def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
     committed_service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = committed_service_context
     redis = real_redis_actors.client()
@@ -207,6 +211,10 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
         containers.set_worker_address(container_id, route.local_target, route=route)
         dialer = BackendRouteDialer(client, SchedulerBackendRouteResolver(containers))
         replacement: AgentTunnelClient | None = None
+        expiring: AgentTunnelClient | None = None
+        renewed: AgentTunnelClient | None = None
+        expiring_client: TunnelRouteClient | None = None
+        long_lived: socket.socket | None = None
         replacement_gateway: AgentTunnelGateway | None = None
         replacement_server = None
         listener: asyncio.Server | None = None
@@ -328,6 +336,75 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             finally:
                 old_connection.close()
 
+            # A stream outlives the agent and control plane certificates that admitted
+            # it once a renewal has replaced the session carrying it.
+            lifetime = timedelta(seconds=6)
+            monkeypatch.setattr(tunnel_certificates, "TUNNEL_CERTIFICATE_LIFETIME", lifetime)
+            expiring_agent = issuer.issue_agent(
+                agent_certificate_request(agent_credentials.key_path), identity
+            )
+            expiring_credentials = TunnelCredentials(
+                agent_credentials.key_path, tmp_path / "agent-expiring.json"
+            )
+            expiring_credentials.install(
+                certificate_pem=expiring_agent.certificate_pem,
+                trust_bundle_pem=issuer.trust_bundle_pem,
+            )
+            expiring_control = TunnelCredentials(
+                control_credentials.key_path, tmp_path / "control-expiring.json"
+            )
+            expiring_control.install(
+                certificate_pem=issuer.issue_service(
+                    agent_certificate_request(control_credentials.key_path),
+                    TunnelServiceRole.ControlPlane,
+                    str(uuid4()),
+                ).certificate_pem,
+                trust_bundle_pem=issuer.trust_bundle_pem,
+            )
+            assert replacement_gateway is not None and replacement is not None
+            expiring = AgentTunnelClient(
+                replacement.address,
+                expiring_credentials,
+                expiring_agent.expires_at,
+                agent.resolve_route,
+            )
+            await expiring.start()
+            async with asyncio.timeout(5):
+                await replacement.wait_disconnected()
+            await replacement.retire()
+            expiring_client = TunnelRouteClient(directory, expiring_control, "localhost")
+            long_lived = await asyncio.to_thread(expiring_client.connect, request, 5)
+            renewed = AgentTunnelClient(
+                replacement.address,
+                agent_credentials,
+                agent_certificate.expires_at,
+                agent.resolve_route,
+            )
+            await renewed.start()
+            async with asyncio.timeout(5):
+                await expiring.wait_disconnected()
+            retiring_expired = asyncio.create_task(expiring.retire())
+            while utc_now() < expiring_agent.expires_at + timedelta(seconds=2):
+                print(
+                    f"certificate expired={utc_now() >= expiring_agent.expires_at} "
+                    f"retiring={not retiring_expired.done()} "
+                    f"streams={len(expiring.streams)}"
+                )
+                await asyncio.sleep(1)
+            assert not retiring_expired.done()
+
+            def finish_long_lived_stream() -> None:
+                assert long_lived is not None
+                long_lived.settimeout(5)
+                long_lived.sendall(b"after-expiry")
+                long_lived.shutdown(socket.SHUT_WR)
+                with long_lived.makefile("rb") as response:
+                    assert response.read() == hashlib.sha256(b"after-expiry").hexdigest().encode()
+
+            await asyncio.to_thread(finish_long_lived_stream)
+            async with asyncio.timeout(5):
+                await retiring_expired
+
             connection = await asyncio.to_thread(client.connect, request, 5)
             try:
                 connection.settimeout(2)
@@ -347,7 +424,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     record = await asyncio.to_thread(directory.get, workspace, enrollment.id)
                     print(
                         f"revocation elapsed={asyncio.get_running_loop().time() - started:.2f}s "
-                        f"connection={record is not None} streams={len(replacement.streams)}"
+                        f"connection={record is not None} streams={len(renewed.streams)}"
                     )
                     if record is None:
                         break
@@ -369,10 +446,15 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             if listener is not None:
                 listener.close()
                 await listener.wait_closed()
+            if long_lived is not None:
+                long_lived.close()
             await asyncio.to_thread(client.close)
+            if expiring_client is not None:
+                await asyncio.to_thread(expiring_client.close)
             await agent.close()
-            if replacement is not None:
-                await replacement.close()
+            for session in (replacement, expiring, renewed):
+                if session is not None:
+                    await session.close()
             if replacement_server is not None:
                 await replacement_server.stop(0)
             if replacement_gateway is not None:

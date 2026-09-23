@@ -19,6 +19,8 @@ from scheduler.state import (
 )
 from shared.container_requests import WorkerContainerRequestPayload
 from shared.containers import ContainerStatus
+from shared.deployment_records import DeploymentSpec, Resources
+from shared.deployments import DeploymentKind
 from shared.http.pods import CreatePodRequest, PodSandboxUpdateTTLRequest
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from shared.timestamps import utc_now
@@ -83,6 +85,38 @@ def test_sandbox_create_refresh_and_terminate_own_the_durable_ttl_lock(
         assert response.status_code == 204
         assert services.containers.get(created.container_id).status is ContainerStatus.Stopped
         assert not redis.exists(lock_key)
+
+
+def test_deployed_pod_keeps_its_warm_lock_but_no_hard_expiry(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    scheduler = _Scheduler()
+    redis = real_redis_actors.client()
+    real_services = services_with_redis_container_control(isolated_services, redis)
+    services = replace(
+        real_services,
+        containers=replace(real_services.containers, scheduler=scheduler),
+    )
+    services.deployments.deploy(
+        DeploymentSpec(
+            name="box",
+            kind=DeploymentKind.Pod,
+            resources=Resources(keep_warm=60),
+            metadata={"app": "lifecycle"},
+        ),
+        workspace="default",
+    )
+    stub = services.deployment_resources.list(workspace="default", name="box")[0].stub
+    service = PodControlService(services, redis=redis)
+
+    created = service.create_pod(CreatePodRequest(stub_id=stub.id))
+
+    # An open connection holds a deployed pod past its keep-warm window, so its
+    # container must carry no deadline that stops it mid-connection.
+    assert services.containers.get(created.container_id).expires_at is None
+    lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, created.container_id))
+    assert 0 < redis.ttl(lock_key) <= 60
 
 
 def test_scheduler_expires_prepared_sandbox_without_a_deployment(

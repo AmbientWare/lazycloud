@@ -8,6 +8,7 @@ from shared.callbacks import normalize_callback_url
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.deployment_records import CpuRequest, MemoryRequest, request_and_limit
+from shared.disks import DiskMount, validate_disk_mounts
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
 from shared.lifecycle import LifecycleHooks
@@ -273,6 +274,10 @@ class StubConfig(ContractModel):
         serialization_alias="schema",
     )
     tcp: bool = False
+    ssh: bool = False
+    """Serve SSH through the API's authenticated tunnel; pods only."""
+
+    disks: list[DiskMount] = Field(default_factory=list)
     machine: str = ""
     """A joined machine this workload must run on, by name. Empty runs in the workspace."""
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
@@ -287,6 +292,18 @@ class StubConfig(ContractModel):
         if value is None or isinstance(value, str):
             return normalize_callback_url(value)
         return value
+
+    @field_validator("disks")
+    @classmethod
+    def disks_are_distinct(cls, value: list[DiskMount]) -> list[DiskMount]:
+        return validate_disk_mounts(value)
+
+    @model_validator(mode="after")
+    def disks_have_one_writer(self) -> StubConfig:
+        if self.disks and self.autoscaler.max_containers > 1:
+            msg = "a workload with a disk runs one container; set max_containers to 1"
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def always_on_requires_capacity(self) -> StubConfig:

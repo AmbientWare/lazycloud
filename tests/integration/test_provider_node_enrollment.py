@@ -1,30 +1,20 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from decimal import Decimal
-from functools import partial
 from itertools import count
-from pathlib import Path
-from secrets import token_urlsafe
-from threading import Barrier
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
-import httpx
 import pytest
-from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
-from apps.api.tests.runtime import service_graph
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
-from compute.agent_control import hash_compute_token
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
-from compute.offers import ComputeOffer, ReservationStatus
+from compute.block_volumes import BlockVolumeProvider
+from compute.offers import ComputeOffer
 from compute.provider_nodes import ProviderNodeAdmission
 from compute.providers import (
     ComputeProviderResolver,
@@ -40,7 +30,6 @@ from compute.providers import (
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisSettings
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
     ComputeProviderInstanceRecord,
@@ -48,20 +37,9 @@ from database.repositories.compute import (
     ComputeUnitRepository,
 )
 from database.repositories.orchestration import MachineRepository
-from database.tables.compute import ComputeJoinCredentialTable, ComputeMachineEnrollmentTable
-from database.tables.orchestration import MachineTable, WorkerTable
-from database.tables.provider_launches import ProviderNodeLaunchTable
-from gateway.http import JoinAgentResponse
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
-from identity.platform import PlatformNamespaceService
-from provider_aws import AWS_STS_PROOF_NONCE_KEY, Boto3AwsManagedPoolClientProvider
+from provider_aws import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
-from provider_clients.provider_nodes import ProviderNodeIdentityRegistry
-from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
-from provider_hetzner.client import HetznerClient
-from provider_hetzner.identity import provider_label, verify_node
-from provider_hetzner.pooled_provider import HetznerPooledProvider
-from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -96,13 +74,7 @@ from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
 from shared.provider_config import ProviderKind
 from shared.supplier_costs import SupplierCostTerms
-from sqlalchemy import func, select, text
-from sqlalchemy.engine import URL
-from sqlalchemy.exc import ProgrammingError
-from tests.real_redis import RealRedisActors
 from tests.workspaces import owned_workspace, workspace_owner_user_id
-
-from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 _ACCOUNT_ID = "123456789012"
 _CONNECTION_ID = "11111111-1111-4111-8111-111111111111"
@@ -177,6 +149,9 @@ class _PooledProvider:
         self, unit: ComputeUnitRecord, provider_instance_id: str
     ) -> NetworkEgressRouteEvidence:
         raise AssertionError("node enrollment must not request network billing evidence")
+
+    def block_volumes(self, region: str) -> BlockVolumeProvider:
+        raise AssertionError("node enrollment must not manage disk volumes")
 
     resource_id: str = _ASG_NAME
 
@@ -320,60 +295,6 @@ def test_provider_node_enrollment_rejects_an_instance_the_pool_does_not_own(
         enrollment.enroll(_request(pool.id, provider_instance_id="i-0fedcba987654321f"))
 
 
-@pytest.mark.parametrize(
-    "status", [ReservationStatus.Active, ReservationStatus.Preparing, ReservationStatus.Resuming]
-)
-def test_provider_enrollment_resume_preserves_existing_agent_authority(
-    isolated_services: ApiServices,
-    status: ReservationStatus,
-) -> None:
-    pool = _seed_connection_and_pool(isolated_services)
-    with isolated_services.context.database.session() as session:
-        instances = ComputeProviderInstanceRepository(session)
-        instance = instances.get_for_pool_instance(pool.id, _INSTANCE_ID)
-        assert instance is not None
-        instances.upsert(instance.model_copy(update={"status": status.value}))
-    service = _service(isolated_services, _PooledProvider())
-    request = _request(pool.id)
-    service.compute.record_provider_node_lifecycle(
-        pool_id=pool.id,
-        provider_instance_id=_INSTANCE_ID,
-        lifecycle=MachineLifecycle.Booting,
-        failure_reason=None,
-    )
-    joined = service.enroll(request)
-    with isolated_services.context.database.session() as session:
-        first_result = service.gateway.resume_provider_agent_in_transaction(
-            session,
-            node_agent_token=SecretStr(joined.agent_token),
-            pool=pool,
-            machine_fingerprint=request.machine_fingerprint,
-        )
-        second_result = service.gateway.resume_provider_agent_in_transaction(
-            session,
-            node_agent_token=SecretStr(joined.agent_token),
-            pool=pool,
-            machine_fingerprint=request.machine_fingerprint,
-        )
-    assert first_result is not None and second_result is not None
-    first, second = first_result.response, second_result.response
-    assert first.machine_id == second.machine_id == joined.machine_id
-    assert (
-        first.credential_generation == second.credential_generation == joined.credential_generation
-    )
-    assert first.credential_id == second.credential_id == joined.credential_id
-    with (
-        pytest.raises(InvalidInputError),
-        isolated_services.context.database.session() as session,
-    ):
-        service.gateway.resume_provider_agent_in_transaction(
-            session,
-            node_agent_token=SecretStr(joined.agent_token),
-            pool=pool,
-            machine_fingerprint="another-host",
-        )
-
-
 def test_provider_node_bootstrap_failure_is_durable_after_identity_verification(
     isolated_services: ApiServices,
 ) -> None:
@@ -461,325 +382,6 @@ def test_provider_node_bootstrap_phase_is_durable_after_identity_verification(
 
     assert observed.phase is MachineLifecycle.Booting
     assert observed.failure_reason is None
-
-
-def test_provider_enrollment_is_atomic_across_single_connection_replicas(
-    seeded_database_url: URL,
-    tmp_path: Path,
-    real_redis_actors: RealRedisActors,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = DatabaseSettings(
-        url=seeded_database_url.render_as_string(hide_password=False),
-        application_name=DatabaseApplicationName.Test,
-        pool_size=1,
-        max_overflow=0,
-        pool_timeout_seconds=1,
-    )
-    database = DatabaseClient.from_settings(settings)
-    async_io = ApiAsyncIo.from_settings(
-        settings,
-        RedisSettings(url=real_redis_actors.url, key_prefix=real_redis_actors.prefix),
-    )
-    try:
-        with service_graph(
-            database,
-            tmp_path,
-            redis_client=real_redis_actors.client(),
-            binary_redis_client=real_redis_actors.client(decode_responses=False),
-            async_io=async_io,
-        ) as services:
-            platform_workspace_id = PlatformNamespaceService(database).get().id
-            with database.session() as session:
-                unit_id = str(uuid4())
-                pool = ComputeUnitRepository(session).upsert(
-                    ComputeUnitRecord(
-                        id=unit_id,
-                        workspace_id=platform_workspace_id,
-                        name=UnitName("atomic-enrollment"),
-                        placement=Placement.platform(),
-                        provider="hetzner",
-                        provider_ref="hetzner:test",
-                        platform_fleet=True,
-                        capacity_mode=ComputeCapacityMode.Pooled,
-                        visibility=ComputeUnitVisibility.Internal,
-                        capacity_owner_id=unit_id,
-                        capacity_owner_kind=CapacityOwnerKind.PooledProvider,
-                        capacity_owner_source=CapacityOwnerSource.Provider,
-                        region="ash",
-                        offer_id="ash:ccx13",
-                        capability_key="hetzner:ash:ccx13:amd64:runsc",
-                        phase=ComputeUnitPhase.Ready,
-                        status="ready",
-                        provider_state=ComputeUnitProviderState(resource_id=unit_id),
-                        desired_machines=1,
-                        max_machines=1,
-                    )
-                )
-                ComputeProviderInstanceRepository(session).upsert(
-                    ComputeProviderInstanceRecord(
-                        id=str(uuid4()),
-                        provider=pool.provider_ref,
-                        offer_id=pool.offer_id,
-                        status="active",
-                        source="platform_policy",
-                        pool_id=pool.id,
-                        instance_type="ccx13",
-                        instance_id="123",
-                    ),
-                )
-            offer = ComputeOffer(
-                id=pool.offer_id,
-                provider=pool.provider_ref,
-                instance_type="ccx13",
-                region=pool.region,
-                capacity_mode=ComputeCapacityMode.Pooled,
-            )
-            launch = services.provider_node_launches.prepare(
-                ProviderUnitRequest(
-                    workspace_id=pool.workspace_id,
-                    unit_id=pool.id,
-                    unit_name=pool.name,
-                    provider_ref=pool.provider_ref,
-                    provider_connection_id=None,
-                    generation=pool.generation,
-                    desired_machines=1,
-                    max_machines=1,
-                    offer=offer,
-                    bootstrap=_bootstrap.bootstrap(pool, offer),
-                ),
-                "node-slot",
-            )
-            services.provider_node_launches.bind(
-                launch.launch_id,
-                provider_ref=pool.provider_ref,
-                provider_instance_id="123",
-                unit_id=pool.id,
-                server_name="node-slot",
-                region=pool.region,
-                generation=pool.generation,
-            )
-
-            def provider_response(
-                transport: httpx.HTTPTransport, request: httpx.Request
-            ) -> httpx.Response:
-                del transport
-                assert request.method == "GET"
-                assert str(request.url) == "https://api.hetzner.cloud/v1/servers/123"
-                return httpx.Response(
-                    200,
-                    json={
-                        "server": {
-                            "id": 123,
-                            "name": "node-slot",
-                            "status": "running",
-                            "created": datetime.now(UTC).isoformat(),
-                            "labels": {
-                                "lazycloud-managed": "true",
-                                "lazycloud-unit": pool.id,
-                                "lazycloud-provider": provider_label(pool.provider_ref),
-                                "lazycloud-launch": launch.launch_id,
-                            },
-                            "location": {
-                                "name": "ash",
-                                "description": "Ashburn",
-                                "network_zone": "us-east",
-                            },
-                            "server_type": {
-                                "id": 1,
-                                "name": "ccx13",
-                                "cores": 2,
-                                "memory": 8,
-                                "disk": 80,
-                                "architecture": "x86",
-                                "cpu_type": "dedicated",
-                                "prices": [],
-                            },
-                            "public_net": {},
-                            "volumes": [],
-                        }
-                    },
-                )
-
-            monkeypatch.setattr(httpx.HTTPTransport, "handle_request", provider_response)
-            resolver = WorkspaceComputeProviderResolver(
-                connections=lambda _: (),
-                capacity_workspace=lambda _: pool.workspace_id,
-                binaries_by_region={},
-                client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-                platform_providers=lambda: (
-                    ResolvedComputeProvider(
-                        ref=pool.provider_ref,
-                        capacity_mode=ComputeCapacityMode.Pooled,
-                        pooled=HetznerPooledProvider(
-                            provider_ref=pool.provider_ref,
-                            client=HetznerClient(SecretStr("test-token")),
-                            images_by_location={},
-                            launch_credentials=services.provider_node_launches,
-                            usd_per_currency_unit=Decimal("1"),
-                            primary_ipv4_hourly_micros=0,
-                        ),
-                        policy=ResolvedProviderPolicy(
-                            workspace_id=pool.workspace_id,
-                            placement=pool.placement,
-                            platform_fleet=True,
-                            default_region=pool.region,
-                            allowed_regions=(pool.region,),
-                        ),
-                    ),
-                ),
-            )
-            enrollment = ProviderNodeEnrollmentService(
-                gateway=services.gateway_service,
-                compute=ComputeService(services.context, provider_resolver=resolver),
-                identity_verifier=ProviderNodeIdentityRegistry(
-                    aws=AwsProviderNodeIdentityAdapter(
-                        http_client=_IdentityHttpClient(), replay_guard=_ReplayGuard()
-                    ),
-                    bootstrap_nodes={
-                        pool.provider_ref: partial(
-                            verify_node, HetznerClient(SecretStr("test-token"))
-                        )
-                    },
-                ),
-                launches=services.provider_node_launches,
-                rate_limiter=services.redis(),
-            )
-            request = ProviderNodeEnrollmentRequest(
-                enrollment_request_id=pool.id,
-                provider=ProviderKind.Hetzner,
-                region=pool.region,
-                provider_instance_id="123",
-                identity_proof_url="provider-bootstrap",
-                launch_id=launch.launch_id,
-                bootstrap_token=launch.bootstrap_token.get_secret_value(),
-                node_agent_token=token_urlsafe(32),
-                machine_fingerprint="provider-node-machine",
-                hostname="node-slot",
-                os="linux",
-                arch="amd64",
-                executor="runsc",
-                capacity=ProviderNodeCapacity(
-                    cpu_count=2, cpu_millicores=2_000, memory_mb=8 * 1024
-                ),
-                preflight=[
-                    ComputePreflightCheck(name="docker", ok=True, severity=PreflightSeverity.Error)
-                ],
-            )
-            with database.session() as session:
-                session.execute(
-                    text("""
-                    CREATE FUNCTION reject_machine_binding() RETURNS trigger
-                    LANGUAGE plpgsql AS $$ BEGIN
-                        RAISE EXCEPTION 'provider binding rejected';
-                    END $$
-                """)
-                )
-                session.execute(
-                    text("""
-                    CREATE TRIGGER reject_machine_binding
-                    BEFORE UPDATE ON compute_provider_instances
-                    FOR EACH ROW WHEN (NEW.machine_id IS NOT NULL)
-                    EXECUTE FUNCTION reject_machine_binding()
-                """)
-                )
-            with pytest.raises(ProgrammingError, match="provider binding rejected"):
-                enrollment.enroll(request)
-            with database.session() as session:
-                for table in (
-                    MachineTable,
-                    WorkerTable,
-                    ComputeMachineEnrollmentTable,
-                    ComputeJoinCredentialTable,
-                ):
-                    assert session.scalar(select(func.count()).select_from(table)) == 0
-                row = session.get(ProviderNodeLaunchTable, launch.launch_id)
-                assert row is not None and row.enrolled_at is None
-                assert row.fingerprint_hash is None
-                instance = ComputeProviderInstanceRepository(session).get_for_pool_instance(
-                    pool.id, "123"
-                )
-                assert instance is not None and instance.machine_id is None
-                session.execute(
-                    text("DROP TRIGGER reject_machine_binding ON compute_provider_instances")
-                )
-                session.execute(text("DROP FUNCTION reject_machine_binding()"))
-            assert (
-                enrollment.gateway.compute_states.get_agent_token_state(
-                    hash_compute_token(request.node_agent_token)
-                )
-                is None
-            )
-
-            retry = request.model_copy(update={"bootstrap_token": ""})
-            barrier = Barrier(2)
-
-            def enroll_concurrently(
-                service: ProviderNodeEnrollmentService,
-            ) -> JoinAgentResponse | UpstreamUnavailableError:
-                barrier.wait()
-                try:
-                    return service.enroll(retry)
-                except UpstreamUnavailableError as exc:
-                    return exc
-
-            replica_database = DatabaseClient.from_settings(settings)
-            replica_services = ApiServices.create(
-                replica_database,
-                root=tmp_path / "replica",
-                redis_client=real_redis_actors.client(),
-                binary_redis_client=real_redis_actors.client(decode_responses=False),
-                agent_binary_settings=services.agent_binary_settings,
-                workspace_storage_issuer=services.workspace_storage_issuer,
-            )
-            try:
-                replica_enrollment = ProviderNodeEnrollmentService(
-                    gateway=replica_services.gateway_service,
-                    compute=ComputeService(replica_services.context, provider_resolver=resolver),
-                    identity_verifier=enrollment.identity_verifier,
-                    launches=replica_services.provider_node_launches,
-                    rate_limiter=replica_services.redis(),
-                )
-                replicas = (enrollment, replica_enrollment)
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    results = tuple(executor.map(enroll_concurrently, replicas))
-                assert any(isinstance(result, JoinAgentResponse) for result in results)
-                first, second = (
-                    service.enroll(retry)
-                    if isinstance(result, UpstreamUnavailableError)
-                    else result
-                    for service, result in zip(replicas, results, strict=True)
-                )
-            finally:
-                replica_services.close()
-            assert first.machine_id == second.machine_id
-            assert first.credential_id == second.credential_id
-            assert first.credential_generation == second.credential_generation == 1
-            with database.session() as session:
-                for table in (
-                    MachineTable,
-                    WorkerTable,
-                    ComputeMachineEnrollmentTable,
-                    ComputeJoinCredentialTable,
-                ):
-                    assert session.scalar(select(func.count()).select_from(table)) == 1
-                credential = session.scalar(select(ComputeJoinCredentialTable))
-                assert credential is not None and credential.use_count == 1
-                row = session.get(ProviderNodeLaunchTable, launch.launch_id)
-                assert row is not None and row.enrolled_at is not None
-                instance = ComputeProviderInstanceRepository(session).get_for_pool_instance(
-                    pool.id, "123"
-                )
-                assert instance is not None and instance.machine_id == first.machine_id
-                machine = MachineRepository(session).get_across_workspaces(first.machine_id)
-                assert machine is not None and machine.lifecycle is MachineLifecycle.Joining
-            state = enrollment.gateway.compute_states.get_agent_token_state(
-                hash_compute_token(request.node_agent_token)
-            )
-            assert state is not None and state.machine_id == first.machine_id
-    finally:
-        asyncio.run(async_io.close())
-        database.dispose()
 
 
 def _service(

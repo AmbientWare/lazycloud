@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from billing.costs import UsageCostPage
 from control.service import StubKind
+from database.repositories.billing_costs import LedgerComponentTotal
 from operations.management import ManagementService
+from shared.billing_quotes import LedgerComponent
 from shared.errors import InvalidInputError
 from shared.http.usage import (
+    UsageCostComponent,
     UsageCostComponentResponse,
     UsageCostGroupKey,
     UsageCostListResponse,
     UsageCostRowResponse,
+    usage_cost_component,
 )
 from shared.payments import BILLING_CURRENCY
 
@@ -93,19 +98,32 @@ def usage_cost_list_response(
                 workload_name=row.workload_name,
                 workload_kind=row.workload_kind,
                 task_id=row.task_id,
+                disk_id=row.disk_id,
+                disk_name=row.disk_name,
                 category=row.category,
                 cost_nanos=row.cost_nanos,
-                components=[
-                    UsageCostComponentResponse(
-                        dimension=total.dimension,
-                        component=total.component,
-                        quantity=float(total.quantity),
-                        cost_nanos=total.cost_nanos,
-                    )
-                    for total in row.components
-                ],
+                components=_customer_components(row.components),
             )
             for row in page.rows
         ],
         next=page.next,
     )
+
+
+def _customer_components(
+    totals: Sequence[LedgerComponentTotal],
+) -> list[UsageCostComponentResponse]:
+    """The ledger's components as charged: a disk's two parts become its one charge."""
+
+    merged: dict[UsageCostComponent, UsageCostComponentResponse] = {}
+    for total in totals:
+        component = usage_cost_component(total.component)
+        quantity = 0.0 if total.component is LedgerComponent.DiskAttached else float(total.quantity)
+        existing = merged.get(component)
+        merged[component] = UsageCostComponentResponse(
+            dimension=total.dimension,
+            component=component,
+            quantity=quantity + (existing.quantity if existing is not None else 0.0),
+            cost_nanos=total.cost_nanos + (existing.cost_nanos if existing is not None else 0),
+        )
+    return list(merged.values())

@@ -1,6 +1,6 @@
 ---
-title: "volume, file commands, and secret"
-description: "Volumes, files, secrets, and artifacts from a terminal."
+title: "volume, disk, file commands, and secret"
+description: "Volumes, disks, files, secrets, and artifacts from a terminal."
 ---
 
 import WorkspaceFlag from '/snippets/workspace-flag.mdx';
@@ -20,6 +20,16 @@ uv run lazycloud volume list
 uv run lazycloud volume create NAME
 uv run lazycloud volume delete NAME [-y]     # deletes the files too; -y skips the prompt
 ```
+
+## lazycloud disk
+
+```bash
+uv run lazycloud disk list
+uv run lazycloud disk delete NAME [-y]       # deletes everything on the disk; -y skips the prompt
+```
+
+A deploy creates the [disks](/concepts/disks) its pods declare, so there is no
+`create`.
 
 ## Files
 

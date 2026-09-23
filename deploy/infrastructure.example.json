@@ -24,12 +24,6 @@
   "control_principal_arn": "arn:aws:iam::000000000000:role/control",
   "public_origin": "https://example.invalid",
   "redis_host": "redis.example.invalid",
-  "hetzner_node_images": {
-    "ash": {
-      "image_id": 1,
-      "recipe_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
-    }
-  },
   "fleet": {
     "provider_ref": "aws:00000000-0000-0000-0000-000000000001",
     "node_role_arn": "arn:aws:iam::000000000000:role/compute-node-example",

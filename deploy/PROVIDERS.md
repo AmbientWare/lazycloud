@@ -66,12 +66,8 @@ release, stop those processes, then sync the new deployment. Restore automatic
 sync after the migration and new application processes are healthy.
 
 `fleet-ensure` registers and validates the cloud account through the API.
-The values renderer supplies Hetzner's Terraform image catalog as
-`LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_IMAGES`. When images are present, it binds
-`LAZYCLOUD_PLATFORM_CAPACITY_HETZNER_TOKENS` from the operator secret to the API
-and scheduler. Helm renders these through its normal environment and secret
-bindings; it contains no provider registry. Application composition reads the
-Python registry and resolves the bootstrap workspace when capacity is used.
+Helm contains no provider registry. Application composition reads the Python
+registry and resolves the bootstrap workspace when capacity is used.
 
 AWS provider code defines instance rates and regional gp3 and public IPv4 prices.
 Each node quote includes its requested gp3 disk size and one public IPv4 address.
@@ -81,21 +77,8 @@ and round upward to whole hourly USD micros. The production us-east-1 inputs
 are $0.08/GiB-month and [$0.005/public-IP-hour](https://aws.amazon.com/vpc/pricing/),
 verified on 2026-09-09. Add reviewed supplier cost data before enabling another region.
 
-Enabled Hetzner purchases require verified images for approved locations and a
-`hetzner:platform` token. Missing images fail deployment validation; missing
-configured provider tokens fail application settings validation. A fresh
-deployment with Hetzner purchases disabled may omit both. Disabling purchases
-on an existing deployment retains its images and credentials for cleanup.
-
-For an existing deployment, add the token-map field to its operator secret
-before applying the new secret mapping. Preserve all other fields and check for
-concurrent operator changes before publication. Ship reads the non-secret
-infrastructure descriptor published by Terraform;
+Ship reads the non-secret infrastructure descriptor published by Terraform;
 it does not apply infrastructure changes for you.
-
-Hetzner uses the selected release's agent for `provider-bootstrap` enrollment.
-Ship selects that agent along with the worker and platform images. Host replacement
-uses the existing surge and drain controller.
 
 ## Scheduler and adapter boundary
 
@@ -132,17 +115,16 @@ and provisioning phases. They must not report a missing, never-created unit
 as a successfully deleted unit. Provider uncertainty remains observable and
 retryable; retries must not create duplicate billable resources.
 
-## Necessary provider differences
+## AWS resources
 
-AWS uses IAM roles, its VPC/subnets, AMIs, and Auto Scaling groups. Hetzner uses a
-project token, snapshots, and labeled server groups. AWS can verify signed
-instance identity; Hetzner uses launch-scoped single-use
-enrollment credentials verified against provider inventory and durable launches.
-These differences stay in adapters and composition. All enrolled nodes use the
-same agent, runtime, authenticated outbound tunnel, worker protocol, and metering.
+AWS capacity uses IAM roles, its VPC and subnets, AMIs, and Auto Scaling groups,
+buying Spot or On-Demand nodes per purchase market. A node proves its identity
+with a signed EC2 instance identity request. These details stay in the AWS
+adapter and composition. Every enrolled node runs the same agent, runtime,
+authenticated outbound tunnel, worker protocol, and metering.
 
 Details: [AWS infrastructure](platform-deployment/README.md),
-[AWS images](ami/README.md), [Hetzner images and credentials](hetzner/README.md).
+[AWS images](ami/README.md).
 
 ## Adding a provider
 

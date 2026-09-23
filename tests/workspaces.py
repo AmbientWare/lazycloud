@@ -205,6 +205,29 @@ def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
     return user_id
 
 
+def on_team_plan(database: DatabaseClient, workspace_id: str) -> None:
+    """Move a workspace's owner onto the Team plan, which disks require."""
+
+    with database.session() as session:
+        owner = WorkspaceMemberRepository(session).owner(workspace_id)
+        if owner is None:
+            raise LookupError(f"workspace {workspace_id} has no owner")
+        accounts = BillingAccountRepository(session)
+        account = accounts.get_by_user(owner.user_id)
+        if account is None:
+            raise LookupError(f"workspace {workspace_id} has no billing account")
+        accounts.upsert(
+            user_id=owner.user_id,
+            status=account.status,
+            provider_customer_id=account.provider_customer_id,
+            provider_subscription_id=account.provider_subscription_id,
+            plan=BillingPlanId.Team,
+            subscription_terms_version=SubscriptionTermsVersion.Team,
+            scheduled_terms_version=None,
+            scheduled_change_at=None,
+        )
+
+
 def administrator_credential(
     context: ServiceContext,
     name: str = "administrator",

@@ -99,6 +99,7 @@ class ImageBuildService:
         registry_credential_payload: str | None = None,
         build_args: dict[str, str] | None = None,
         request_id: str | None = None,
+        machine: str = "",
     ) -> ImageBuildRecord:
         return self.submission.submit(
             image,
@@ -108,6 +109,7 @@ class ImageBuildService:
             registry_credential_payload=registry_credential_payload,
             build_args=build_args,
             request_id=request_id,
+            machine=machine,
         )
 
     def _persist_execution_result(

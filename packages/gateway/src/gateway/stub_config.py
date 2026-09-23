@@ -181,6 +181,8 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             outputs=request.outputs.model_dump(mode="json"),
         ),
         tcp=request.tcp,
+        ssh=request.ssh,
+        disks=request.disks,
         machine=request.machine,
     )
 
@@ -257,6 +259,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             )
             for volume in config.volumes
         ],
+        disks=config.disks,
         route=config.route,
         methods=config.methods or ["GET", "POST"],
         cron=config.cron,
@@ -285,6 +288,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
             "stub_kind": stub.kind.value,
             "app_id": stub.app_id or "",
             "machine": config.machine,
+            "ssh": config.ssh,
         },
         retry_policy=config.retry_policy,
         lifecycle_hooks=config.lifecycle_hooks,

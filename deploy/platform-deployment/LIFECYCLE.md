@@ -67,7 +67,6 @@ terraform -chdir=deploy/platform-deployment init \
   -backend-config="key=platform-deployment/$DEPLOYMENT.tfstate"
 terraform -chdir=deploy/platform-deployment plan \
   -var-file=/absolute/path/to/deployment.tfvars \
-  -var-file=/absolute/path/to/hetzner-images.tfvars.json \
   -out=deployment.tfplan
 ```
 

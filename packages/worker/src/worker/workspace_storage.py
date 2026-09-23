@@ -31,7 +31,6 @@ from worker.cache_assets import (
     WorkspaceMountState,
     WorkspaceStorageConfig,
     WorkspaceStorageMountAction,
-    plan_workspace_mount_cleanup,
     plan_workspace_storage_mount,
     validate_workspace_storage,
 )
@@ -73,6 +72,11 @@ class _WorkspaceMountRecord:
     mount_path: str
     manager: StorageMountManager
     credential_window: WorkspaceCredentialWindow
+    # Containers that ensured this mount and have not been cleaned up. Registered
+    # instances cannot replace this set. A container registers only after its
+    # storage is ensured, and it needs the mount in between. The record and its
+    # holders both live in process memory and are lost together on restart.
+    holders: set[str] = field(default_factory=set)
 
 
 class WorkerWorkspaceStorageError(RuntimeError):
@@ -105,7 +109,8 @@ class WorkerWorkspaceStorageManager:
             raise WorkerWorkspaceStorageError(msg)
 
         with self._lock(workspace_name):
-            existing = self._mount_state(workspace_name)
+            previous = self._mounts.get(workspace_name)
+            existing = None if previous is None else self._state_from_record(previous)
             plan = plan_workspace_storage_mount(
                 workspace_name,
                 credentials=request.workspace_storage_credentials,
@@ -118,6 +123,7 @@ class WorkerWorkspaceStorageManager:
                 # alternative is leaving a fresher credential unused until the
                 # refresh loop asks for one that already exists.
                 self._adopt_credentials(workspace_name, request.workspace_storage_credentials)
+                self._mounts[workspace_name].holders.add(request.container_id)
                 return WorkspaceStorageEnsureResult(
                     workspace_name=workspace_name,
                     mount_path=plan.mount_path,
@@ -134,6 +140,7 @@ class WorkerWorkspaceStorageManager:
                 mount_path=plan.mount_path,
                 manager=manager,
                 credential_window=_credential_window(request.workspace_storage_credentials),
+                holders={request.container_id, *(previous.holders if previous else ())},
             )
             mounted = self._mount(manager, plan.mount_path)
             return WorkspaceStorageEnsureResult(
@@ -148,40 +155,30 @@ class WorkerWorkspaceStorageManager:
                 mount=mounted,
             )
 
-    def cleanup_unused(
-        self,
-        *,
-        active_workspace_names: set[str],
-    ) -> list[StorageMountResult]:
+    def release_workspace_storage(self, container_id: str) -> list[StorageMountResult]:
+        """Drop a container's holds and unmount every workspace nobody holds."""
         assert_no_untracked_storage_mounts(
             Path(self.config.base_mount_path),
             tracked_paths={record.mount_path for record in self._mounts.values()},
             binary=self.config.geesefs.binary,
         )
-        plan = plan_workspace_mount_cleanup(
-            [self._state_from_record(record) for record in self._mounts.values()],
-            active_workspace_names=active_workspace_names,
-        )
         results: list[StorageMountResult] = []
-        for state in plan.unmount:
-            with self._lock(state.workspace_name):
-                record = self._mounts.get(state.workspace_name)
+        for workspace_name in list(self._mounts):
+            with self._lock(workspace_name):
+                record = self._mounts.get(workspace_name)
                 if record is None:
+                    continue
+                record.holders.discard(container_id)
+                if record.holders:
                     continue
                 result = record.manager.unmount(record.mount_path)
                 results.append(result)
                 if not result.ok:
                     continue
-                self._mounts.pop(state.workspace_name, None)
+                self._mounts.pop(workspace_name, None)
                 shutil.rmtree(record.mount_path, ignore_errors=True)
-                self._remove_cache_dir(state.workspace_name)
+                self._remove_cache_dir(workspace_name)
         return results
-
-    def _mount_state(self, workspace_name: str) -> WorkspaceMountState | None:
-        record = self._mounts.get(workspace_name)
-        if record is None:
-            return None
-        return self._state_from_record(record)
 
     def _state_from_record(self, record: _WorkspaceMountRecord) -> WorkspaceMountState:
         return WorkspaceMountState(

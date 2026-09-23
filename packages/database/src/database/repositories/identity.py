@@ -996,6 +996,11 @@ class WorkspaceRepository:
         self.session.flush()
         return workspace_record_from_table(row)
 
+    def credential_secret(self, workspace_id: str) -> str | None:
+        return self.session.scalar(
+            select(WorkspaceTable.credential_secret).where(WorkspaceTable.id == workspace_id)
+        )
+
     def get(self, workspace_id: str) -> WorkspaceRecord | None:
         try:
             workspace_id = str(UUID(workspace_id))

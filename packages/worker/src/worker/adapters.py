@@ -394,6 +394,10 @@ class SchedulerSandboxPortPublisher(BridgeSandboxPortPublisher):
         )
 
 
+class WorkerDurableDiskReleaser(Protocol):
+    def release(self, container_id: str) -> None: ...
+
+
 @dataclass(slots=True)
 class WorkerFinalizationCleanup:
     runtime: WorkerContainerRuntimeController | None = None
@@ -407,6 +411,7 @@ class WorkerFinalizationCleanup:
     source_workspaces: SourceWorkspaceLifecycle | None = None
     workspace_storage: ContainerWorkspaceStorageMounter | None = None
     container_rootfs: ContainerRootfsReleaser | None = None
+    durable_disks: WorkerDurableDiskReleaser | None = None
     upload_root: Path = Path(DEFAULT_WORKER_UPLOAD_ROOT)
     bundle_root: Path = Path(WORKER_BUNDLE_ROOT)
 
@@ -458,6 +463,10 @@ class WorkerFinalizationCleanup:
             # mounted strands the upper layer and its disk on this worker.
             raise RuntimeError(result.reason)
 
+    def release_durable_disks(self, container_id: str) -> None:
+        if self.durable_disks is not None:
+            self.durable_disks.release(container_id)
+
     def delete_local_state(self, container_id: str) -> None:
         release_container_accounting_cgroup(container_id)
         if (
@@ -484,25 +493,15 @@ class WorkerFinalizationCleanup:
             bundle_path.unlink()
         elif bundle_path.exists():
             shutil.rmtree(bundle_path)
-        if self.workspace_storage is None or self.instances is None:
-            if isinstance(self.instances, WorkerContainerInstanceDeleter):
-                self.instances.delete_container_instance(container_id)
-            return
-        active_workspace_names = {
-            active.workspace_name
-            for active in self.instances.list_container_instances()
-            if active.workspace_name and active.container_id != container_id
-        }
-        results = self.workspace_storage.cleanup_unused(
-            active_workspace_names=active_workspace_names,
-        )
-        failures = [
-            result.output or result.reason or f"failed to unmount {result.local_path}"
-            for result in results
-            if not result.ok
-        ]
-        if failures:
-            raise RuntimeError("; ".join(failures))
+        if self.workspace_storage is not None:
+            results = self.workspace_storage.release_workspace_storage(container_id)
+            failures = [
+                result.output or result.reason or f"failed to unmount {result.local_path}"
+                for result in results
+                if not result.ok
+            ]
+            if failures:
+                raise RuntimeError("; ".join(failures))
         if isinstance(self.instances, WorkerContainerInstanceDeleter):
             self.instances.delete_container_instance(container_id)
 

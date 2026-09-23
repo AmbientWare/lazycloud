@@ -47,6 +47,7 @@ export function SpendChart({
       dimensions: interval.dimensions,
       compute_runtime: 0,
       volume_storage: 0,
+      disk: 0,
       network_egress: 0,
     };
     for (const total of interval.dimensions) row[total.dimension] = total.cost_nanos;

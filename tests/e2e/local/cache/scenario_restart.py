@@ -38,10 +38,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         app.deploy(
             workspace=workspace,
             source_root=SOURCE_ROOT,
-            env={
-                "LAZYCLOUD_E2E_APP": APP_NAME,
-                "LAZYCLOUD_E2E_CACHE_MARKER": BUILD_MARKER,
-            },
         )
         if cache_restart_probe.remote(BUILD_MARKER) != BUILD_MARKER:
             raise RuntimeError("cache restart probe failed before restart")

@@ -128,11 +128,16 @@ func main() {
 		connections:    make(map[net.Conn]struct{}),
 		tokenPath:      defaultTokenPath,
 	}
-	if len(os.Args) > 1 {
-		if os.Args[1] != "--" || len(os.Args) < 3 {
+	args := os.Args[1:]
+	sshEnabled := len(args) > 0 && args[0] == "--ssh"
+	if sshEnabled {
+		args = args[1:]
+	}
+	if len(args) > 0 {
+		if args[0] != "--" || len(args) < 2 {
 			fatal(errors.New("expected -- followed by a workload command"))
 		}
-		s.workload = exec.Command(os.Args[2], os.Args[3:]...)
+		s.workload = exec.Command(args[1], args[2:]...)
 		s.workload.Stdin = os.Stdin
 		s.workload.Stdout = os.Stdout
 		s.workload.Stderr = os.Stderr
@@ -143,6 +148,13 @@ func main() {
 		fatal(err)
 	}
 	go s.reapAdoptedChildren()
+	if sshEnabled {
+		sshListener, sshErr := startSSHServer(s)
+		if sshErr != nil {
+			fatal(sshErr)
+		}
+		defer sshListener.Close()
+	}
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		fatal(err)
@@ -461,6 +473,30 @@ func (s *supervisor) pruneExitedProcesses() {
 	for _, item := range exited[:len(exited)-maxRetainedExitedProcess] {
 		delete(s.processes, item.pid)
 	}
+}
+
+// startChild registers the process before the reaper can observe it, so its
+// exit status stays with the caller's Wait.
+func (s *supervisor) startChild(command *exec.Cmd) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := command.Start(); err != nil {
+		return err
+	}
+	s.directChildren[command.Process.Pid] = struct{}{}
+	return nil
+}
+
+// waitChild calls exited once the process has exited but before it is reaped,
+// while its pid cannot yet be reused, then reaps it.
+func (s *supervisor) waitChild(command *exec.Cmd, exited func()) error {
+	awaitExit(command.Process.Pid)
+	exited()
+	err := command.Wait()
+	s.mu.Lock()
+	delete(s.directChildren, command.Process.Pid)
+	s.mu.Unlock()
+	return err
 }
 
 func (s *supervisor) isDirectChild(pid int) bool {
