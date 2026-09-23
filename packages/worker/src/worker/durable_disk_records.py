@@ -59,6 +59,22 @@ class DiskPublishResult(ContractModel):
     generation: int = Field(gt=0)
 
 
+class DiskCollectPayload(ContractModel):
+    """Chunks and manifests a holder deleted after publishing a self-contained layer.
+
+    Only the lease holder collects, right after its parentless generation is
+    recorded, so no other writer can be uploading chunks the collection misses.
+    """
+
+    container_id: str = Field(min_length=1)
+    disk_id: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)
+    generation: int = Field(gt=0)
+    """The parentless generation every older generation is superseded by."""
+
+    stored_bytes_removed: int = Field(ge=0)
+
+
 class DiskReleasePayload(ContractModel):
     container_id: str = Field(min_length=1)
     disk_id: str = Field(min_length=1)
@@ -69,6 +85,7 @@ __all__ = [
     "DiskAcquirePayload",
     "DiskAcquireResult",
     "DiskChainLayer",
+    "DiskCollectPayload",
     "DiskPublishPayload",
     "DiskPublishResult",
     "DiskReleasePayload",

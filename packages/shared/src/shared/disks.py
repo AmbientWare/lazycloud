@@ -38,11 +38,20 @@ DEFAULT_DISK_FILESYSTEM = "ext4"
 DISK_OBJECT_PREFIX = "disks"
 """Workspace-bucket prefix under which each disk keeps its chunks and manifests."""
 
-DISK_FLATTEN_DEPTH = 16
+DISK_FLATTEN_DEPTH = 64
 """Published chain length at which the next publish is a parentless full layer.
 
-Keeps a restore to a bounded number of layers. Chunks are content addressed, so
-a flattened layer re-uploads only what the previous layers did not already hold.
+Keeps a restore to a bounded number of layers. A flattened layer reads and
+hashes the whole disk, so this is spaced out: at one publish every two minutes
+of writing, a busy disk flattens about every two hours. Chunks are content
+addressed, so a flattened layer uploads only what earlier layers did not hold,
+and it is the point after which older chunks can be collected.
+"""
+
+DISK_PUBLISH_INTERVAL_SECONDS = 120
+"""How often a running disk seals and publishes what changed.
+
+Bounds what a node failure loses. An idle disk seals nothing and publishes nothing.
 """
 
 
@@ -196,6 +205,7 @@ __all__ = [
     "DISK_FLATTEN_DEPTH",
     "DISK_NAME_PATTERN",
     "DISK_OBJECT_PREFIX",
+    "DISK_PUBLISH_INTERVAL_SECONDS",
     "DISK_ROOT_MOUNT_PATH",
     "MAX_DISK_SIZE_BYTES",
     "MIN_DISK_SIZE_BYTES",
