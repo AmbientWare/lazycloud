@@ -182,10 +182,10 @@ image = Image.from_registry(
 )
 ```
 
-A dict maps the same names to values you've already loaded, such as
-`{"GITHUB_USERNAME": "acme-bot", "GITHUB_TOKEN": os.environ["CI_GHCR_TOKEN"]}`. A listed variable
-that isn't set stops the build before it starts. The names are fixed per
-registry, and any other name is ignored:
+A dict maps the same names to values you've already loaded:
+`{"GITHUB_USERNAME": "acme-bot", "GITHUB_TOKEN": os.environ["CI_GHCR_TOKEN"]}`.
+A listed variable that isn't set stops the build before it starts. The names
+are fixed per registry, and any other name is ignored:
 
 | Registry | Names |
 | --- | --- |
