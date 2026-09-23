@@ -48,7 +48,8 @@ print(summarize_sales.remote([1200, 3500, 800]))
 Both run the function in a cloud container, stream its logs to your terminal,
 and return three sales totaling 5500 cents.
 `await summarize_sales.async_remote(...)` is the async form.
-`summarize_sales.local(...)` runs it in your own process.
+`summarize_sales(...)`, like `summarize_sales.local(...)`, runs it in your own
+process.
 [Develop, test, deploy](/concepts/workflow) covers when to use each and how
 `.remote()` chooses between a preview and a deployment.
 

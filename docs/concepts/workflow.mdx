@@ -5,7 +5,8 @@ description: "Three stages for the same code, what each one costs, and where a c
 
 Each stage suits a different point in the work:
 
-1. `.local()` runs in your own process, in seconds and at no cost.
+1. Calling the function, or `.local()`, runs it in your own process, in
+   seconds and at no cost.
 2. `lazycloud run` uploads your code and makes one call in a cloud container,
    which checks the image, GPU, and secrets.
 3. `lazycloud deploy` keeps the workload running in the cloud for anything else
