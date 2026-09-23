@@ -544,6 +544,7 @@ class ContainerService:
             memory_mib=options.memory_mib,
             gpu=list(options.gpu),
             gpu_count=options.gpu_count,
+            disk_bytes=sum(disk.size_bytes for disk in options.disks),
             placement=options.placement,
             region=options.region,
             availability_zone=options.availability_zone,

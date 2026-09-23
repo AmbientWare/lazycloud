@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import pytest
-from scheduler.tools import SchedulingRequest, WorkerCapacity, select_worker_for_request
+from scheduler.tools import (
+    SchedulingDecision,
+    SchedulingRequest,
+    WorkerCapacity,
+    plan_scheduling_batch,
+    select_worker_for_request,
+)
 from shared.placement import Placement, PlacementKind
 
 
@@ -226,3 +232,39 @@ def test_a_preference_falls_through_to_the_next_card_it_named() -> None:
     # And a card nobody named is still refused.
     t4 = fallback.model_copy(update={"worker_id": "t4", "gpu_type": "T4"})
     assert select_worker_for_request(request, [t4]) is None
+
+
+def test_declared_disk_size_is_reserved_until_the_worker_is_full() -> None:
+    """A disk can grow to its declared size, so placement holds all of it.
+
+    Counting only CPU and memory let several large disks land on one node and
+    fill its filesystem under running workloads.
+    """
+    gib = 1024**3
+    worker = WorkerCapacity(
+        worker_id="worker-1",
+        placement=Placement.platform(),
+        total_cpu=8,
+        free_cpu=8,
+        total_memory_mib=16384,
+        free_memory_mib=16384,
+        total_gpu=0,
+        total_disk_bytes=100 * gib,
+        free_disk_bytes=100 * gib,
+    )
+    first, second = (
+        SchedulingRequest(
+            placement=Placement.platform(), id=f"c-{index}", cpu=1, disk_bytes=60 * gib
+        )
+        for index in (1, 2)
+    )
+
+    outcomes = plan_scheduling_batch([first, second], [worker], queued_gpu_requests=[]).outcomes
+
+    assert [outcome.decision for outcome in outcomes] == [
+        SchedulingDecision.Dispatch,
+        SchedulingDecision.ProvisionWorker,
+    ]
+    assert worker.reserve(first).fit_rejection(second) == (
+        f"free disk {40 * gib} bytes < {60 * gib} bytes"
+    )

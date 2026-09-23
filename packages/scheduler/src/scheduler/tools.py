@@ -44,6 +44,9 @@ class SchedulingRequest(ContractModel):
     """Models this request accepts, best first; empty asks for no GPU."""
 
     gpu_count: int = 0
+    disk_bytes: int = 0
+    """Declared size of the request's durable disks, reserved whole on the worker."""
+
     placement: Placement
     required_worker_id: str = ""
     preferred_worker_id: str = ""
@@ -82,9 +85,11 @@ class WorkerCapacity(ContractModel):
     free_cpu: float = Field(default=0, ge=0)
     free_memory_mib: int = Field(default=0, ge=0)
     free_gpu: int = Field(default=0, ge=0)
+    free_disk_bytes: int = Field(default=0, ge=0)
     total_cpu: float = Field(ge=0)
     total_memory_mib: int = Field(ge=0)
     total_gpu: int = Field(ge=0)
+    total_disk_bytes: int = Field(default=0, ge=0)
     pending: bool = False
 
     @model_validator(mode="after")
@@ -95,6 +100,8 @@ class WorkerCapacity(ContractModel):
             raise ValueError("free memory cannot exceed total memory")
         if self.free_gpu > self.total_gpu:
             raise ValueError("free GPU count cannot exceed total GPU count")
+        if self.free_disk_bytes > self.total_disk_bytes:
+            raise ValueError("free disk bytes cannot exceed total disk bytes")
         return self
 
     def fit_rejection(self, request: SchedulingRequest) -> str:
@@ -128,6 +135,8 @@ class WorkerCapacity(ContractModel):
             return f"free memory {self.free_memory_mib}MiB < {request.memory_mib}MiB"
         if self.free_gpu < request.gpu_count:
             return f"free gpu {self.free_gpu} < {request.gpu_count}"
+        if self.free_disk_bytes < request.disk_bytes:
+            return f"free disk {self.free_disk_bytes} bytes < {request.disk_bytes} bytes"
         return ""
 
     def can_fit(self, request: SchedulingRequest) -> bool:
@@ -160,6 +169,7 @@ class WorkerCapacity(ContractModel):
             self.free_cpu >= request.cpu
             and self.free_memory_mib >= request.memory_mib
             and self.free_gpu >= request.gpu_count
+            and self.free_disk_bytes >= request.disk_bytes
         )
 
     def reserve(self, request: SchedulingRequest) -> WorkerCapacity:
@@ -168,6 +178,7 @@ class WorkerCapacity(ContractModel):
                 "free_cpu": self.free_cpu - request.cpu,
                 "free_memory_mib": self.free_memory_mib - request.memory_mib,
                 "free_gpu": self.free_gpu - request.gpu_count,
+                "free_disk_bytes": self.free_disk_bytes - request.disk_bytes,
             }
         )
 
@@ -205,6 +216,7 @@ def gpu_request_matches_worker(request: SchedulingRequest, worker: WorkerCapacit
             "free_cpu": worker.total_cpu,
             "free_memory_mib": worker.total_memory_mib,
             "free_gpu": worker.total_gpu,
+            "free_disk_bytes": worker.total_disk_bytes,
         }
     ).can_fit(request)
 
@@ -215,6 +227,7 @@ class WorkerCapacityReservation(ContractModel):
     cpu: float
     memory_mib: int
     gpu_count: int = 0
+    disk_bytes: int = 0
 
 
 class SchedulingOutcome(ContractModel):
@@ -296,6 +309,12 @@ def _post_placement_headroom(
             if worker.total_gpu > 0
             else 0.0
         )
+    if request.disk_bytes > 0:
+        headroom.append(
+            (worker.free_disk_bytes - request.disk_bytes) / worker.total_disk_bytes
+            if worker.total_disk_bytes > 0
+            else 0.0
+        )
     return tuple(sorted(headroom))
 
 
@@ -336,6 +355,7 @@ def plan_scheduling_batch(
                     cpu=request.cpu,
                     memory_mib=request.memory_mib,
                     gpu_count=request.gpu_count,
+                    disk_bytes=request.disk_bytes,
                 )
             )
             plan.outcomes.append(
@@ -363,6 +383,7 @@ def plan_scheduling_batch(
                     cpu=request.cpu,
                     memory_mib=request.memory_mib,
                     gpu_count=request.gpu_count,
+                    disk_bytes=request.disk_bytes,
                 )
             )
             plan.outcomes.append(

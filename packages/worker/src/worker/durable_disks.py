@@ -33,6 +33,7 @@ from shared.container_requests import RequestDisk
 from shared.contracts import ContractModel
 from shared.disks import (
     DISK_FLATTEN_DEPTH,
+    DISK_HOST_RESERVE_BYTES,
     DISK_PUBLISH_INTERVAL_SECONDS,
     DISK_ROOT_MOUNT_PATH,
 )
@@ -64,13 +65,6 @@ DEFAULT_DISK_RUN_ROOT = "/run/lazycloud/disks"
 DISK_LAYERS_DIR_NAME = "layers"
 DISK_LEASES_DIR_NAME = "leases"
 DISK_OVERLAY_DIR_NAME = "overlay"
-DISK_ATTACH_MIN_FREE_BYTES = 20 * 1024**3
-"""Free space an attach must leave on the layer filesystem.
-
-Below it the engine refuses, and the worker evicts cached disks nobody holds
-before trying once more, so a full node degrades into a named refusal rather
-than ENOSPC inside a running disk.
-"""
 DISK_COMPACT_AFTER_LAYERS = 8
 """Committed layers above the base that make the next publish compact them in."""
 # The scheduler reclaims a container that has not started within its start
@@ -613,7 +607,7 @@ class WorkerDurableDiskService:
                 mountpoint=mountpoint,
                 chain=chain,
                 store=self._store(attached),
-                min_free_bytes=DISK_ATTACH_MIN_FREE_BYTES,
+                min_free_bytes=DISK_HOST_RESERVE_BYTES,
             )
 
         try:
@@ -636,7 +630,7 @@ class WorkerDurableDiskService:
                 raise
             raise DiskEngineError(
                 f"disk {disk.name} needs {disk.size_bytes} bytes plus a "
-                f"{DISK_ATTACH_MIN_FREE_BYTES}-byte reserve on this node and does not fit "
+                f"{DISK_HOST_RESERVE_BYTES}-byte reserve on this node and does not fit "
                 f"after evicting {freed} cached bytes; still held locally: "
                 f"{', '.join(blocked) or 'nothing'} ({exc.detail})",
                 exit_code=exc.exit_code,

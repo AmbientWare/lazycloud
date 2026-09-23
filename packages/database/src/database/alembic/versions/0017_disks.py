@@ -1,4 +1,4 @@
-"""Add durable disks, their generations, a preferred scheduling worker, and credential seeds."""
+"""Add durable disks, their generations, disk scheduling, and credential seeds."""
 
 import secrets
 
@@ -129,12 +129,23 @@ def upgrade() -> None:
             server_default="",
         ),
     )
+    op.add_column(
+        "containers",
+        sa.Column("scheduling_disk_bytes", sa.BigInteger(), nullable=False, server_default="0"),
+    )
+    op.create_check_constraint(
+        "ck_containers_scheduling_disk_bytes",
+        "containers",
+        "scheduling_disk_bytes >= 0",
+    )
 
 
 def downgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM disks) THEN RAISE EXCEPTION 'delete every disk before downgrading'; END IF; END $$"
     )
+    op.drop_constraint("ck_containers_scheduling_disk_bytes", "containers", type_="check")
+    op.drop_column("containers", "scheduling_disk_bytes")
     op.drop_column("containers", "scheduling_preferred_worker_id")
     op.drop_table("disk_generations")
     op.drop_table("disks")

@@ -320,6 +320,10 @@ class ContainerTable(IdTable, DatabaseBase):
             "AND scheduling_workspace_cpu_quota_millicores >= 0 AND scheduling_retry_count >= 0",
             name="ck_containers_scheduling_quantities",
         ),
+        CheckConstraint(
+            "scheduling_disk_bytes >= 0",
+            name="ck_containers_scheduling_disk_bytes",
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -398,6 +402,9 @@ class ContainerTable(IdTable, DatabaseBase):
     scheduling_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     scheduling_gpu_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    scheduling_disk_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
     scheduling_placement: Mapped[str | None] = mapped_column(String(120), nullable=True)
     """Where the scheduling request lands; null until a request is recorded."""
     scheduling_architecture: Mapped[str] = mapped_column(Text, nullable=False, default="")

@@ -78,6 +78,13 @@ class WorkerExecutionRequest(ContractModel):
     """
 
     gpu_count: int = 0
+    disk_bytes: int = 0
+    """Declared size of every durable disk the container mounts, summed.
+
+    A disk can grow to its declared size, so placement reserves all of it on the
+    worker that will hold the disk rather than what the disk holds today.
+    """
+
     placement: Placement
     """Where this request must land, resolved from its stub when the stub was created.
 
@@ -100,6 +107,7 @@ class WorkerExecutionRequest(ContractModel):
         "cpu_millicores",
         "memory_mib",
         "gpu_count",
+        "disk_bytes",
         "workspace_gpu_quota",
         "workspace_cpu_quota_millicores",
         "retry_count",
@@ -207,9 +215,13 @@ class WorkerExecutionRecord(ContractModel):
     free_cpu_millicores: int = 0
     free_memory_mib: int = 0
     free_gpu_count: int = 0
+    free_disk_bytes: int = 0
     total_cpu_millicores: int = 0
     total_memory_mib: int = 0
     total_gpu_count: int = 0
+    total_disk_bytes: int = 0
+    """Declared disk size this worker's host can hold: its disk filesystem less the reserve."""
+
     resource_version: int = 0
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -218,9 +230,11 @@ class WorkerExecutionRecord(ContractModel):
         "free_cpu_millicores",
         "free_memory_mib",
         "free_gpu_count",
+        "free_disk_bytes",
         "total_cpu_millicores",
         "total_memory_mib",
         "total_gpu_count",
+        "total_disk_bytes",
         "resource_version",
     )
     @classmethod
@@ -282,12 +296,13 @@ class WorkerContainerState(ContractModel):
     gpu_count: int = 0
     cpu_millicores: int = 0
     memory_mib: int = 0
+    disk_bytes: int = 0
     image_build_id: str = ""
     image_id: str = ""
     image_build_upload_capability: str = ""
     failure_reason: str = ""
 
-    @field_validator("gpu_count", "cpu_millicores", "memory_mib")
+    @field_validator("gpu_count", "cpu_millicores", "memory_mib", "disk_bytes")
     @classmethod
     def container_numbers_cannot_be_negative(cls, value: int) -> int:
         if value < 0:

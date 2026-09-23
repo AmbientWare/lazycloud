@@ -620,6 +620,7 @@ class WorkerReservedCapacity:
     cpu_millicores: int = 0
     memory_mib: int = 0
     gpu_count: int = 0
+    disk_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1535,6 +1536,7 @@ class RedisSchedulerWorkerRepository:
                 cpu_millicores=request.cpu_millicores,
                 memory_mib=capacity_memory_mib(request.memory_mib),
                 gpu_count=gpu_count_for_capacity(request.gpu, request.gpu_count),
+                disk_bytes=request.disk_bytes,
             )
             self.redis.hash_set(
                 self.keys.worker_state(worker_id),
@@ -2333,6 +2335,8 @@ class RedisSchedulerWorkerRepository:
             updates["free_memory_mib"] = max(worker.total_memory_mib - reserved.memory_mib, 0)
         if worker.total_gpu_count > 0:
             updates["free_gpu_count"] = max(worker.total_gpu_count - reserved.gpu_count, 0)
+        if worker.total_disk_bytes > 0:
+            updates["free_disk_bytes"] = max(worker.total_disk_bytes - reserved.disk_bytes, 0)
         if not updates:
             return worker
         return worker.model_copy(update=updates)
@@ -2359,6 +2363,7 @@ class RedisSchedulerWorkerRepository:
             reserved.cpu_millicores += request.cpu_millicores
             reserved.memory_mib += capacity_memory_mib(request.memory_mib)
             reserved.gpu_count += gpu_count_for_capacity(request.gpu, request.gpu_count)
+            reserved.disk_bytes += request.disk_bytes
 
         index_key = self.keys.container_worker_index(worker_id)
         for state_key in sorted(
@@ -2383,6 +2388,7 @@ class RedisSchedulerWorkerRepository:
             # for any state whose card was not recorded, and a worker's reserved
             # GPUs were undercounted by exactly the ones nobody had named.
             reserved.gpu_count += state.gpu_count
+            reserved.disk_bytes += state.disk_bytes
         return reserved
 
     def _get_worker_from_key(self, key: str) -> SchedulerWorkerRecord | None:
@@ -3729,12 +3735,16 @@ def plan_worker_capacity_change(
         if reserved_capacity is not None
         else gpu_count_for_capacity(request.gpu, request.gpu_count)
     )
+    disk_bytes = (
+        reserved_capacity.disk_bytes if reserved_capacity is not None else request.disk_bytes
+    )
     if change is WorkerCapacityChange.Add:
         updated = _restored_worker_capacity(
             worker,
             cpu_millicores=cpu_millicores,
             memory_mib=memory_mib,
             gpu_count=gpu_count,
+            disk_bytes=disk_bytes,
         )
         return WorkerCapacityPlan(
             worker=updated,
@@ -3796,11 +3806,20 @@ def plan_worker_capacity_change(
             accepted=False,
             reason="worker out of cpu, memory, or gpu capacity",
         )
+    if worker.free_disk_bytes < disk_bytes:
+        return WorkerCapacityPlan(
+            worker=worker,
+            change=change,
+            request=request,
+            accepted=False,
+            reason="worker out of disk capacity",
+        )
     updated = worker.model_copy(
         update={
             "free_cpu_millicores": worker.free_cpu_millicores - cpu_millicores,
             "free_memory_mib": worker.free_memory_mib - memory_mib,
             "free_gpu_count": worker.free_gpu_count - gpu_count,
+            "free_disk_bytes": worker.free_disk_bytes - disk_bytes,
             "resource_version": worker.resource_version + 1,
             "updated_at": utc_now(),
         }
@@ -3814,6 +3833,7 @@ def _restored_worker_capacity(
     cpu_millicores: int,
     memory_mib: int,
     gpu_count: int,
+    disk_bytes: int,
 ) -> SchedulerWorkerRecord:
     return worker.model_copy(
         update={
@@ -3826,6 +3846,7 @@ def _restored_worker_capacity(
             "free_gpu_count": _cap_capacity(
                 worker.free_gpu_count + gpu_count, worker.total_gpu_count
             ),
+            "free_disk_bytes": min(worker.free_disk_bytes + disk_bytes, worker.total_disk_bytes),
             "resource_version": worker.resource_version + 1,
             "updated_at": utc_now(),
         }
@@ -3840,6 +3861,7 @@ def _worker_capacity_changed(
         worker.free_cpu_millicores != reconciled.free_cpu_millicores
         or worker.free_memory_mib != reconciled.free_memory_mib
         or worker.free_gpu_count != reconciled.free_gpu_count
+        or worker.free_disk_bytes != reconciled.free_disk_bytes
     )
 
 

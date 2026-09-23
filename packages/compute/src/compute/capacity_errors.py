@@ -1,4 +1,4 @@
-from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.errors import ConflictError, InvalidInputError, UpstreamUnavailableError
 
 
 class ProviderAuthorizationPendingError(UpstreamUnavailableError):
@@ -15,3 +15,10 @@ class CapacityReservationLockContendedError(CapacityReservationConflictError):
 
 class CapacityReservationLeaseLostError(CapacityReservationConflictError):
     """The capacity-owner lease could not be renewed or was replaced."""
+
+
+class CapacityUnsatisfiableError(InvalidInputError):
+    """No machine type the placement can buy could ever hold the request.
+
+    Purchasing cannot help, so the request fails rather than waiting on capacity.
+    """

@@ -53,6 +53,9 @@ class ComputeResourceRequirements(ContractModel):
     memory_mb: int = Field(default=0, ge=0)
     gpu: list[str] = Field(default_factory=list)
     gpu_count: int = Field(default=0, ge=0)
+    disk_bytes: int = Field(default=0, ge=0)
+    """Declared durable disk size the node must be able to hold."""
+
     architecture: str = Field(default="", max_length=64)
     preemptible: bool = False
     availability_zone: str = Field(default="", max_length=64)

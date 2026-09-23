@@ -54,6 +54,23 @@ DISK_PUBLISH_INTERVAL_SECONDS = 120
 Bounds what a node failure loses. An idle disk seals nothing and publishes nothing.
 """
 
+DISK_HOST_RESERVE_BYTES = 20 * 1024**3
+"""Space on a node's disk filesystem that no disk may be placed into.
+
+Placement subtracts it from the filesystem to find what disks may reserve, and
+an attach refuses to leave less than it free, so the two agree on where a node
+is full.
+"""
+
+
+def disk_capacity_bytes(filesystem_bytes: int) -> int:
+    """Bytes of declared disk size a filesystem of this size can hold.
+
+    A disk's declared size is the most it can grow to, so placement reserves
+    the whole of it against this figure.
+    """
+    return max(filesystem_bytes - DISK_HOST_RESERVE_BYTES, 0)
+
 
 def validate_disk_name(value: str) -> str:
     name = value.strip()
@@ -203,6 +220,7 @@ def disk_manifest_key(disk_id: str, generation: int) -> str:
 __all__ = [
     "DEFAULT_DISK_FILESYSTEM",
     "DISK_FLATTEN_DEPTH",
+    "DISK_HOST_RESERVE_BYTES",
     "DISK_NAME_PATTERN",
     "DISK_OBJECT_PREFIX",
     "DISK_PUBLISH_INTERVAL_SECONDS",
@@ -214,6 +232,7 @@ __all__ = [
     "DiskMount",
     "DiskRecord",
     "DiskStatus",
+    "disk_capacity_bytes",
     "disk_chunk_key",
     "disk_manifest_key",
     "disk_object_prefix",

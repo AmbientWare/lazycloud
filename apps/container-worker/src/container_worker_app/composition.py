@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from cache.server import (
@@ -10,6 +11,7 @@ from cache.server import (
 from foundation.process import ProcessTimeoutError, run_process
 from networking.internal_http import InternalHttpClient
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT, AGENT_TUNNEL_CONTROL_URL
+from shared.disks import disk_capacity_bytes
 from shared.identity import TokenKind
 from shared.placement import PlacementKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
@@ -595,6 +597,7 @@ def _scheduler_worker_record(
 ) -> SchedulerWorkerRecord:
     execution = config.configuration.execution
     capacity = execution.capacity
+    disk_bytes = _disk_capacity_bytes(config)
     return SchedulerWorkerRecord(
         worker_id=identity.worker_id,
         runtime_image=config.runtime_image,
@@ -611,10 +614,18 @@ def _scheduler_worker_record(
         free_cpu_millicores=capacity.cpu_millicores,
         free_memory_mib=capacity.memory_mib,
         free_gpu_count=capacity.gpu_count,
+        free_disk_bytes=disk_bytes,
         total_cpu_millicores=capacity.cpu_millicores,
         total_memory_mib=capacity.memory_mib,
         total_gpu_count=capacity.gpu_count,
+        total_disk_bytes=disk_bytes,
     )
+
+
+def _disk_capacity_bytes(config: WorkerSettings) -> int:
+    root = config.configuration.paths.disk_root.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return disk_capacity_bytes(shutil.disk_usage(root).total)
 
 
 def _required_capacity_owner_id(config: WorkerSettings) -> str:

@@ -24,6 +24,7 @@ def _request_statement(*, include_payload: bool = True) -> Select[tuple[Containe
         ContainerTable.scheduling_backfill,
         ContainerTable.scheduling_cpu_millicores,
         ContainerTable.scheduling_deployment_id,
+        ContainerTable.scheduling_disk_bytes,
         ContainerTable.scheduling_docker_enabled,
         ContainerTable.scheduling_gpu,
         ContainerTable.scheduling_gpu_count,
