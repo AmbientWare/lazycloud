@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, WebSocket, status
 from shared.errors import DomainError
 from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostKeyResponse
 from shared.identity import AuthTokenRecord
+from starlette.websockets import WebSocketState
 
 from api.server.auth import read_workspace, write_token, write_workspace
 from api.server.dependencies import (
@@ -81,9 +82,13 @@ async def pod_ssh_tunnel(
     service: Annotated[PodSshTunnelService, Depends(pod_ssh_tunnel_service)],
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
-    await websocket.accept()
+    # Accepted only once the pod's SSH server is connected. An open socket whose
+    # messages nobody reads while the pod wakes stops the server reading control
+    # frames too, so the client's pongs go unread and the connection is dropped
+    # as a keepalive timeout; the client waits in the handshake instead.
     try:
         async with service.open(workspace_id=workspace_id, app=app, pod=name) as tunnel:
+            await websocket.accept()
             attribute_public_transfer(
                 websocket,
                 workspace_id=workspace_id,
@@ -93,19 +98,27 @@ async def pod_ssh_tunnel(
             )
             await bridge_websocket_to_socket(websocket, tunnel.backend, SSH_TUNNEL_BUFFER_BYTES)
     except DomainError as exc:
-        await close_websocket(websocket, code=status.WS_1008_POLICY_VIOLATION, reason=exc.message)
+        await _refuse(websocket, code=status.WS_1008_POLICY_VIOLATION, reason=exc.message)
         return
     except PodProxyUnavailable as exc:
-        await close_websocket(websocket, code=status.WS_1013_TRY_AGAIN_LATER, reason=str(exc))
+        await _refuse(websocket, code=status.WS_1013_TRY_AGAIN_LATER, reason=str(exc))
         return
     except OSError as exc:
-        await close_websocket(
+        await _refuse(
             websocket,
             code=status.WS_1011_INTERNAL_ERROR,
             reason=f"connection to the pod's SSH server failed: {exc}"[:120],
         )
         return
     await close_websocket(websocket, code=status.WS_1000_NORMAL_CLOSURE, reason="")
+
+
+async def _refuse(websocket: WebSocket, *, code: int, reason: str) -> None:
+    # Accepted first so the client receives the close code and reason rather than
+    # a bare handshake rejection.
+    if websocket.client_state is WebSocketState.CONNECTING:
+        await websocket.accept()
+    await close_websocket(websocket, code=code, reason=reason)
 
 
 def _certificate_holder(token: AuthTokenRecord) -> str:

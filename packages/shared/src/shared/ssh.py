@@ -20,6 +20,13 @@ Next to the dashboard shell's 2222 and away from the ports a workload commonly
 binds, so neither can take the other's.
 """
 
+SSH_TUNNEL_OPEN_TIMEOUT_SECONDS = 200
+"""How long a client waits for the tunnel to open.
+
+The API accepts the tunnel only once the pod's SSH server answers, and it waits
+up to 175 seconds for a stopped pod to start or for a disk to be handed over.
+"""
+
 SSH_LOGIN_USER = "root"
 """The account every session logs in as; containers run as root."""
 
@@ -37,5 +44,6 @@ __all__ = [
     "SSH_CONTAINER_IDENTITY_DIR",
     "SSH_CONTAINER_USER_CA_PATH",
     "SSH_LOGIN_USER",
+    "SSH_TUNNEL_OPEN_TIMEOUT_SECONDS",
     "SSH_WORKER_PORT",
 ]

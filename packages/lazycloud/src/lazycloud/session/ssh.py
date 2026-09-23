@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_hex
 
-from shared.ssh import SSH_LOGIN_USER
+from shared.ssh import SSH_LOGIN_USER, SSH_TUNNEL_OPEN_TIMEOUT_SECONDS
 
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.config import settings
@@ -267,7 +267,7 @@ def bridge_stdio(url: str, *, token: str) -> int:
         websocket = connect(
             url,
             additional_headers={"Authorization": f"Bearer {token}"},
-            open_timeout=30,
+            open_timeout=SSH_TUNNEL_OPEN_TIMEOUT_SECONDS,
             close_timeout=5,
             max_size=None,
             compression=None,
