@@ -25,8 +25,9 @@ box = app.pod(
 
 The first deploy creates the disk, and every later deploy that names it gets
 the same files. A disk name means the same disk anywhere in the workspace.
-`size` takes the units memory does, from `1Gi` to `1Ti`, and can't change once
-the disk exists.
+`size` takes the units memory does, from `1Gi` to `1Ti`. Deploying a larger
+size restarts the pod with the disk grown to it. A smaller size is refused,
+since a disk never shrinks.
 
 `mount_path` defaults to `/`, which makes the disk hold the container's whole
 writable filesystem: packages installed with `apt-get`, files in `/root`, and
@@ -38,10 +39,10 @@ instead.
 ## How it persists
 
 While the pod runs, LazyCloud copies what changed to your workspace's storage
-every five minutes, and once more when the container stops. The next start
-restores that copy on whichever machine it lands on. Starting on the machine
-that last held the disk skips the download. After a machine failure, writes
-since the last copy can be lost.
+every two minutes, and once more when the container stops. The next start
+restores that copy on whichever machine it lands on, so a disk is never tied to
+one machine. A restart within 30 minutes in the same zone skips the download.
+A machine failure can lose up to the last two minutes of writes.
 
 One container writes a disk at a time. A pod with a disk runs one container,
 and a redeploy's new container waits for the old one to hand the disk over.

@@ -16,12 +16,12 @@ workloads want, and a shared volume mount is not. This package owns its record
 and its lease. A disk is named in its workspace and one container holds it at a
 time. Every publish carries the holder's lease token, so a container that lost
 the disk cannot publish over the one that holds it. The holder keeps the lease
-until its final publish or release lands, or until its worker is gone, because
+until its last publish and release land, or until its worker is gone, because
 releasing earlier lets the next container start from a generation the holder was
 about to replace. Chunks and manifests live under `disks/<id>/` in the workspace
-bucket, and deleting a disk removes that prefix and nothing beside it.
-Superseded chunks are not collected, so stored bytes grow until the disk is
-deleted.
+bucket, and deleting a disk removes that prefix and nothing beside it. After a
+self-contained generation is recorded, its holder deletes the chunks and
+manifests only older generations used.
 
 On a provider machine each disk gets its own block volume, created in the
 machine's zone at `disk_volume_size_bytes` of the declared size and attached for
