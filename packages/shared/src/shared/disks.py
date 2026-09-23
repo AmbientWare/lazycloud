@@ -32,16 +32,18 @@ packages it installs, dotfiles, and its working trees.
 
 DISK_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 MIN_DISK_SIZE_BYTES = 1024**3
-DISK_NODE_VOLUME_GIB = 500
-"""Size of the gp3 volume a disk-capable node mounts at its disk root.
+DISK_VOLUME_THROUGHPUT_MIBPS = 500
+"""Throughput provisioned on each disk's provider volume.
 
-Disks live on their own volume so they neither share space with images and
-container layers nor compete with them for throughput.
+Above gp3's 125 MiB/s baseline so a restore from object storage is bounded by
+the network rather than by the volume.
 """
 
-DISK_NODE_VOLUME_THROUGHPUT_MIBPS = 250
-MAX_DISK_SIZE_BYTES = 450 * 1024**3
-"""The largest disk one disk-capable node can hold after its reserve and filesystem overhead."""
+DISK_VOLUME_CACHE_SECONDS = 30 * 60
+"""How long a released disk's volume is kept for a restart on the same machine
+before the control plane deletes it; the object-storage copy is the durable one."""
+
+MAX_DISK_SIZE_BYTES = 1024**4
 DEFAULT_DISK_FILESYSTEM = "ext4"
 
 DISK_OBJECT_PREFIX = "disks"
@@ -109,7 +111,7 @@ def parse_disk_size_bytes(value: str | int) -> int:
         msg = "disk size must be at least 1Gi"
         raise ValueError(msg)
     if size > MAX_DISK_SIZE_BYTES:
-        msg = "disk size must be at most 450Gi, the most one machine holds"
+        msg = "disk size must be at most 1Ti"
         raise ValueError(msg)
     return size
 
@@ -234,8 +236,8 @@ __all__ = [
     "DISK_OBJECT_PREFIX",
     "DISK_PUBLISH_INTERVAL_SECONDS",
     "DISK_ROOT_MOUNT_PATH",
-    "DISK_NODE_VOLUME_GIB",
-    "DISK_NODE_VOLUME_THROUGHPUT_MIBPS",
+    "DISK_VOLUME_CACHE_SECONDS",
+    "DISK_VOLUME_THROUGHPUT_MIBPS",
     "MAX_DISK_SIZE_BYTES",
     "MIN_DISK_SIZE_BYTES",
     "DiskLayerChunk",

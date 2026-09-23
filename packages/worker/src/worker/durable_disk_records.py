@@ -25,6 +25,20 @@ class DiskAcquirePayload(ContractModel):
     disk_id: str = Field(min_length=1)
 
 
+class DiskBlockVolume(ContractModel):
+    """The provider volume attached to this worker's machine for one disk.
+
+    The worker finds the device by the volume's identifier, formats it on first
+    use, and keeps the disk's local layers on it. The object-storage chain stays
+    the durable copy; the volume is a cache that the control plane deletes a
+    while after the disk is released.
+    """
+
+    volume_id: str = Field(min_length=1)
+    formatted: bool
+    """Whether the volume already holds a filesystem from an earlier attach."""
+
+
 class DiskAcquireResult(ContractModel):
     disk_id: str
     lease_token: str = Field(min_length=1)
@@ -34,6 +48,9 @@ class DiskAcquireResult(ContractModel):
 
     chain: list[DiskChainLayer] = Field(default_factory=list)
     """Layers to restore, base first, ending at ``generation``."""
+
+    volume: DiskBlockVolume | None = None
+    """Set on provider machines; absent on joined machines, whose disks use host storage."""
 
 
 class DiskPublishPayload(ContractModel):
@@ -84,6 +101,7 @@ class DiskReleasePayload(ContractModel):
 __all__ = [
     "DiskAcquirePayload",
     "DiskAcquireResult",
+    "DiskBlockVolume",
     "DiskChainLayer",
     "DiskCollectPayload",
     "DiskPublishPayload",
