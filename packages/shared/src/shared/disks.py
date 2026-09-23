@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from enum import StrEnum
 
 from pydantic import Field, field_validator
 
 from shared.contracts import ContractModel
+from shared.enums import StringEnum
 from shared.resources import parse_memory_mib
 from shared.timestamps import utc_now
 
@@ -194,7 +194,7 @@ def validate_disk_mounts(disks: list[DiskMount]) -> list[DiskMount]:
     return disks
 
 
-class DiskStorage(StrEnum):
+class DiskStorage(StringEnum):
     """Where a machine keeps the disks it holds, and so what limits how many."""
 
     Host = "host"
@@ -204,7 +204,7 @@ class DiskStorage(StrEnum):
     """Each on a provider volume of its own; limited by the volumes the machine can attach."""
 
 
-class DiskLayerFormat(StrEnum):
+class DiskLayerFormat(StringEnum):
     Qcow2 = "qcow2"
     """A qcow2 file holding what the generation changed over its parent."""
 
@@ -212,7 +212,7 @@ class DiskLayerFormat(StrEnum):
     """A flattened generation: the disk's whole contents, with zero ranges left out."""
 
 
-class DiskStatus(StrEnum):
+class DiskStatus(StringEnum):
     Detached = "detached"
     Attached = "attached"
     Deleting = "deleting"
