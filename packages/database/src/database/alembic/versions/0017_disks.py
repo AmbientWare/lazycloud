@@ -74,6 +74,7 @@ def upgrade() -> None:
         sa.Column("volume_revision", sa.BigInteger(), nullable=False),
         sa.Column("volume_driver", sa.String(64), nullable=False),
         sa.Column("volume_changed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("volume_driven_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "volume_state IN ('none', 'creating', 'attaching', 'attached', 'releasing', "
             "'detaching', 'cached', 'deleting')",
@@ -144,6 +145,36 @@ def upgrade() -> None:
         "disks",
         ["volume_connection_id"],
         postgresql_where=sa.text("volume_connection_id IS NOT NULL"),
+    )
+    op.create_table(
+        "disk_volume_orphans",
+        sa.Column("id", sa.UUID(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+            nullable=False,
+        ),
+        sa.Column("disk_id", sa.UUID(), nullable=False),
+        sa.Column("workspace_id", sa.UUID(), nullable=False),
+        sa.Column("provider_ref", sa.String(160), nullable=False),
+        sa.Column("connection_id", sa.UUID(), nullable=True),
+        sa.Column("capacity_workspace_id", sa.Text(), nullable=False),
+        sa.Column("region", sa.Text(), nullable=False),
+        sa.Column("creation_token", sa.String(64), nullable=False),
+        sa.UniqueConstraint("creation_token", name="uq_disk_volume_orphans_creation_token"),
+    )
+    op.create_index(
+        "ix_disk_volume_orphans_connection",
+        "disk_volume_orphans",
+        ["connection_id"],
+        postgresql_where=sa.text("connection_id IS NOT NULL"),
     )
     op.create_table(
         "disk_generations",
@@ -336,6 +367,7 @@ def downgrade() -> None:
     )
     op.drop_table("billing_disk_rates")
     op.drop_table("disk_attachments")
+    op.drop_table("disk_volume_orphans")
     op.execute(
         "UPDATE containers SET termination_reason = 'UNKNOWN' "
         "WHERE termination_reason = 'DISK_FULL'"

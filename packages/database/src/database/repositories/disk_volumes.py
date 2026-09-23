@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from database.tables.compute import ComputeProviderInstanceTable, ComputeUnitTable
-from database.tables.disks import DiskTable
+from database.tables.disks import DiskTable, DiskVolumeOrphanTable
 from database.tables.orchestration import ContainerTable, WorkerTable
 from foundation.ids import try_uuid
 from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.timestamps import to_utc
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, union, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
 
@@ -50,6 +51,7 @@ class DiskVolumeSnapshot:
     revision: int
     driver: str
     changed_at: datetime | None
+    driven_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +82,7 @@ _COLUMNS = (
     DiskTable.volume_revision,
     DiskTable.volume_driver,
     DiskTable.volume_changed_at,
+    DiskTable.volume_driven_at,
 )
 
 
@@ -112,6 +115,7 @@ class DiskVolumeRepository:
             revision,
             driver,
             changed_at,
+            driven_at,
         ) = row
         return DiskVolumeSnapshot(
             disk_id=str(identity),
@@ -134,6 +138,7 @@ class DiskVolumeRepository:
             revision=revision,
             driver=driver,
             changed_at=to_utc(changed_at) if changed_at is not None else None,
+            driven_at=to_utc(driven_at) if driven_at is not None else None,
         )
 
     def transition(
@@ -153,17 +158,23 @@ class DiskVolumeRepository:
         volume_size_bytes: int | None = None,
         token: str | None = None,
         formatted: bool | None = None,
+        performed: bool = False,
     ) -> bool:
         """Move the volume on from exactly the state `snapshot` read.
 
-        Fenced on the revision and the lease: a writer that read an older state,
-        or read it under a lease that has since changed hands, changes nothing.
+        A decision is fenced on the revision and the lease: a writer that read an
+        older state, or read it under a lease that has since changed hands,
+        changes nothing. The result of a provider call the snapshot's driver
+        already made (`performed`) is fenced on the revision and that driver
+        instead, because the provider has changed whatever the lease says now,
+        and only a record of it lets the next holder continue from the truth.
         """
         values: dict[str, object] = {
             "volume_state": state,
             "volume_revision": snapshot.revision + 1,
             "volume_driver": driver,
             "volume_changed_at": at,
+            "volume_driven_at": at,
         }
         if state == "none":
             values |= {
@@ -194,7 +205,9 @@ class DiskVolumeRepository:
             .where(
                 DiskTable.id == snapshot.disk_id,
                 DiskTable.volume_revision == snapshot.revision,
-                DiskTable.lease_token == snapshot.lease_token,
+                DiskTable.volume_driver == snapshot.driver
+                if performed
+                else DiskTable.lease_token == snapshot.lease_token,
             )
             .values(values)
             .returning(DiskTable.id)
@@ -203,7 +216,11 @@ class DiskVolumeRepository:
         return moved is not None
 
     def defer(self, snapshot: DiskVolumeSnapshot, *, at: datetime) -> None:
-        """Push an unchanged volume to the back of the due order without moving it."""
+        """Push an unchanged volume to the back of the due order without moving it.
+
+        Only the due ordering moves; the driver's claim time does not, so a
+        deferred volume whose driver died is still taken over.
+        """
         self.session.execute(
             update(DiskTable)
             .where(
@@ -296,7 +313,7 @@ class DiskVolumeRepository:
                         DiskTable.volume_state.in_(
                             ("creating", "attaching", "detaching", "deleting")
                         ),
-                        DiskTable.volume_changed_at <= stuck_before,
+                        DiskTable.volume_driven_at <= stuck_before,
                     ),
                     and_(
                         DiskTable.volume_state.in_(("attaching", "attached")),
@@ -320,23 +337,72 @@ class DiskVolumeRepository:
         return tuple(str(disk_id) for disk_id in rows)
 
     def scopes(self) -> tuple[DiskVolumeScopeRow, ...]:
-        """Every account and region a disk volume was made in, with a workspace to resolve it."""
-        rows = self.session.execute(
+        """Every account and region a disk volume was made in, with a workspace to resolve it.
+
+        Abandoned creations count: their disk may be gone, but the volume they
+        may have made is still in that account until collection removes it.
+        """
+        disks = (
             select(
-                DiskTable.volume_provider_ref,
-                DiskTable.volume_region,
-                func.min(DiskTable.volume_capacity_workspace_id),
+                DiskTable.volume_provider_ref.label("provider_ref"),
+                DiskTable.volume_region.label("region"),
+                DiskTable.volume_capacity_workspace_id.label("workspace_id"),
             )
             .where(
                 DiskTable.volume_provider_ref != "",
                 DiskTable.volume_capacity_workspace_id != "",
             )
-            .group_by(DiskTable.volume_provider_ref, DiskTable.volume_region)
+            .distinct()
+        )
+        orphans = select(
+            DiskVolumeOrphanTable.provider_ref,
+            DiskVolumeOrphanTable.region,
+            DiskVolumeOrphanTable.capacity_workspace_id,
+        ).distinct()
+        every = union(disks, orphans).subquery()
+        rows = self.session.execute(
+            select(every.c.provider_ref, every.c.region, func.min(every.c.workspace_id)).group_by(
+                every.c.provider_ref, every.c.region
+            )
         ).tuples()
         return tuple(
             DiskVolumeScopeRow(workspace_id=workspace_id, provider_ref=provider_ref, region=region)
             for provider_ref, region, workspace_id in rows
         )
+
+    def record_orphan(self, snapshot: DiskVolumeSnapshot) -> None:
+        """Keep the creation `snapshot` names for collection, in case it made a volume."""
+        self.session.execute(
+            postgresql_insert(DiskVolumeOrphanTable)
+            .values(
+                disk_id=snapshot.disk_id,
+                workspace_id=snapshot.workspace_id,
+                provider_ref=snapshot.provider_ref,
+                connection_id=snapshot.connection_id,
+                capacity_workspace_id=snapshot.capacity_workspace_id,
+                region=snapshot.region,
+                creation_token=snapshot.token,
+            )
+            .on_conflict_do_nothing(index_elements=[DiskVolumeOrphanTable.creation_token])
+        )
+
+    def orphan_tokens(self, *, provider_ref: str, region: str) -> dict[str, datetime]:
+        """The abandoned creation tokens in one account and region, with when each was kept."""
+        rows = self.session.execute(
+            select(DiskVolumeOrphanTable.creation_token, DiskVolumeOrphanTable.created_at).where(
+                DiskVolumeOrphanTable.provider_ref == provider_ref,
+                DiskVolumeOrphanTable.region == region,
+            )
+        ).tuples()
+        return {token: to_utc(created_at) for token, created_at in rows}
+
+    def settle_orphans(self, tokens: Sequence[str]) -> None:
+        if tokens:
+            self.session.execute(
+                delete(DiskVolumeOrphanTable).where(
+                    DiskVolumeOrphanTable.creation_token.in_(list(tokens))
+                )
+            )
 
     def recorded(self, disk_ids: Sequence[str]) -> tuple[dict[str, str], frozenset[str]]:
         """For these disks: the volume each row names, and those creating one."""
@@ -356,12 +422,12 @@ class DiskVolumeRepository:
         return recorded, frozenset(creating)
 
     def connection_holds_volumes(self, connection_id: str) -> bool:
-        return (
-            self.session.scalar(
-                select(DiskTable.id).where(DiskTable.volume_connection_id == connection_id).limit(1)
-            )
-            is not None
+        """Whether a disk volume, or a creation that may have made one, is in this account."""
+        held = select(DiskTable.id).where(DiskTable.volume_connection_id == connection_id)
+        pending = select(DiskVolumeOrphanTable.id).where(
+            DiskVolumeOrphanTable.connection_id == connection_id
         )
+        return bool(self.session.scalar(select(or_(held.exists(), pending.exists()))))
 
 
 __all__ = [

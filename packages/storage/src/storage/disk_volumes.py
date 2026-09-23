@@ -170,7 +170,10 @@ class StepKind(StrEnum):
 
 
 _PROVIDER_STEPS = frozenset({StepKind.Create, StepKind.Attach, StepKind.Detach, StepKind.Delete})
-"""Steps that call the provider, which only the driver that entered the state may make."""
+_PROVIDER_STATES = frozenset(
+    {VolumeState.Creating, VolumeState.Attaching, VolumeState.Detaching, VolumeState.Deleting}
+)
+"""States whose provider call may be in flight; only the driver that entered one moves it on."""
 
 
 def next_step(snapshot: DiskVolumeSnapshot, goal: VolumeGoal) -> StepKind | None:
@@ -351,6 +354,7 @@ class DiskVolumeService:
         with self.database.session() as session:
             recorded, creating = DiskVolumeRepository(session).recorded(disk_ids)
         removed = 0
+        deleted: set[str] = set()
         for orphan in orphaned_volumes(
             settled, deployment=self.deployment, recorded=recorded, creating=creating
         ):
@@ -364,7 +368,25 @@ class DiskVolumeService:
                 },
             )
             provider.delete_volume(orphan.volume_id)
+            deleted.add(orphan.volume_id)
             removed += 1
+        # An abandoned creation is settled once its volume is deleted or plainly
+        # never existed; one younger than the listing can be trusted stays.
+        remaining = {
+            volume.creation_token
+            for volume in volumes
+            if volume.creation_token and volume.volume_id not in deleted
+        }
+        with self.database.session() as session:
+            repository = DiskVolumeRepository(session)
+            pending = repository.orphan_tokens(provider_ref=scope.provider_ref, region=scope.region)
+            repository.settle_orphans(
+                [
+                    token
+                    for token, kept_at in pending.items()
+                    if token not in remaining and kept_at <= cutoff
+                ]
+            )
         return removed
 
     def _collect_orphans_when_due(self, *, now: datetime) -> None:
@@ -413,21 +435,24 @@ class DiskVolumeService:
         """Step the volume toward the goal until it is there.
 
         Every step re-reads the row. A goal decided under one lease stops the
-        moment the lease changes, and a housekeeping goal also stops if anything
-        moved the volume after it decided, so a sweep never detaches or deletes a
-        volume a new holder has just taken. A step that calls the provider is made
-        only by the driver that moved the volume into its state, or by anyone once
+        moment another lease takes the disk, and a housekeeping goal also stops if
+        anything moved the volume after it decided, so a sweep never detaches or
+        deletes a volume a new holder has just taken. A state with provider work
+        in it is moved on only by the driver that entered it, or by anyone once
         that driver has plainly stopped, so two drivers never race one provider
-        operation.
+        operation. A sweep that loses the disk while it owns such a state hands
+        it to the new lease before its provider call rather than after, and a
+        provider call it did make is recorded whatever the lease is now.
         """
         first = True
         for _ in range(_MAX_STEPS):
             snapshot = self._snapshot(disk_id)
-            if snapshot.lease_token != goal.lease_token:
+            if snapshot.lease_token not in {goal.lease_token, ""}:
                 if isinstance(goal, AttachTo):
                     raise ConflictError(
                         f"disk {disk_id} changed hands while its volume was being attached"
                     )
+                self._hand_over(snapshot, driver=driver)
                 raise _Superseded(disk_id)
             if (
                 first
@@ -439,7 +464,7 @@ class DiskVolumeService:
             step = next_step(snapshot, goal)
             if step is None:
                 return snapshot
-            if step in _PROVIDER_STEPS and snapshot.driver != driver:
+            if snapshot.state in _PROVIDER_STATES and snapshot.driver != driver:
                 if not self._abandoned(snapshot):
                     raise DiskVolumePendingError(
                         f"disk {disk_id} volume is still {snapshot.state}; retry shortly"
@@ -463,8 +488,21 @@ class DiskVolumeService:
                 ) from exc
         raise DiskVolumePendingError(f"disk {disk_id} volume did not settle; retry shortly")
 
+    def _hand_over(self, snapshot: DiskVolumeSnapshot, *, driver: str) -> None:
+        """Give a state this driver owns to the lease that took the disk, so it need not wait."""
+        if snapshot.driver != driver or snapshot.state not in _PROVIDER_STATES:
+            return
+        self._record(
+            lambda volumes: volumes.transition(
+                snapshot,
+                at=self.clock(),
+                state=snapshot.state,
+                driver=_lease_driver(snapshot.lease_token),
+            )
+        )
+
     def _abandoned(self, snapshot: DiskVolumeSnapshot) -> bool:
-        return snapshot.changed_at is None or self.clock() - snapshot.changed_at >= timedelta(
+        return snapshot.driven_at is None or self.clock() - snapshot.driven_at >= timedelta(
             seconds=DISK_VOLUME_STUCK_SECONDS
         )
 
@@ -523,11 +561,11 @@ class DiskVolumeService:
                         state=VolumeState.Attaching,
                         driver=driver,
                         volume_id=volume.volume_id,
+                        performed=True,
                     )
                 )
             case StepKind.Forget:
-                # Whatever that creation made is found by the orphan collection.
-                self._move(snapshot, at=at, state=VolumeState.None_, driver=driver)
+                self._record(lambda volumes: _forget(volumes, snapshot, at=at, driver=driver))
             case StepKind.Attach:
                 try:
                     self._provider(snapshot).attach_volume(
@@ -536,9 +574,9 @@ class DiskVolumeService:
                         wait_seconds=wait_seconds,
                     )
                 except BlockVolumeMissingError:
-                    self._move(snapshot, at=at, state=VolumeState.None_, driver=driver)
+                    self._performed(snapshot, at=at, state=VolumeState.None_, driver=driver)
                     return
-                self._move(snapshot, at=at, state=VolumeState.Attached, driver=driver)
+                self._performed(snapshot, at=at, state=VolumeState.Attached, driver=driver)
             case StepKind.Reattach:
                 if not isinstance(goal, AttachTo):
                     raise AssertionError("only an attach takes a volume back")
@@ -578,20 +616,34 @@ class DiskVolumeService:
                 )
                 self._record(
                     lambda volumes: volumes.transition(
-                        snapshot, at=at, state=VolumeState.Cached, driver=driver, instance_id=""
+                        snapshot,
+                        at=at,
+                        state=VolumeState.Cached,
+                        driver=driver,
+                        instance_id="",
+                        performed=True,
                     )
                 )
             case StepKind.BeginDelete:
                 self._move(snapshot, at=at, state=VolumeState.Deleting, driver=driver)
             case StepKind.Delete:
                 self._provider(snapshot).delete_volume(snapshot.volume_id)
-                self._move(snapshot, at=at, state=VolumeState.None_, driver=driver)
+                self._performed(snapshot, at=at, state=VolumeState.None_, driver=driver)
 
     def _move(
         self, snapshot: DiskVolumeSnapshot, *, at: datetime, state: VolumeState, driver: str
     ) -> None:
         self._record(
             lambda volumes: volumes.transition(snapshot, at=at, state=state, driver=driver)
+        )
+
+    def _performed(
+        self, snapshot: DiskVolumeSnapshot, *, at: datetime, state: VolumeState, driver: str
+    ) -> None:
+        self._record(
+            lambda volumes: volumes.transition(
+                snapshot, at=at, state=state, driver=driver, performed=True
+            )
         )
 
     def _record(self, change: Callable[[DiskVolumeRepository], bool]) -> None:
@@ -617,6 +669,20 @@ class DiskVolumeService:
     def _snapshot_or_none(self, disk_id: str) -> DiskVolumeSnapshot | None:
         with self.database.session() as session:
             return DiskVolumeRepository(session).snapshot(disk_id)
+
+
+def _forget(
+    volumes: DiskVolumeRepository, snapshot: DiskVolumeSnapshot, *, at: datetime, driver: str
+) -> bool:
+    """Drop an abandoned creation from the row, keeping it for orphan collection.
+
+    The creation may have made a volume nobody will record, so its account,
+    region and token stay behind in the same transaction, outliving the disk.
+    """
+    if not volumes.transition(snapshot, at=at, state=VolumeState.None_, driver=driver):
+        return False
+    volumes.record_orphan(snapshot)
+    return True
 
 
 def _lease_driver(lease_token: str) -> str:

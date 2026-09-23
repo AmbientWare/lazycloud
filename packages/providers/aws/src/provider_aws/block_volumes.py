@@ -550,6 +550,7 @@ def _block_volume(volume: _Volume) -> BlockVolume:
         state=_STATES.get(volume.state, BlockVolumeState.Error),
         attached_instance_id=attachment.instance_id if attachment is not None else "",
         owner=owner,
+        creation_token=tags.get(VOLUME_TOKEN_TAG_KEY, ""),
         created_at=volume.created_at,
     )
 

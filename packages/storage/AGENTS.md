@@ -36,7 +36,12 @@ A housekeeping decision stops the moment the lease or revision it read changes,
 so a sweep never detaches a volume a new holder just took. Only the driver that
 moved a volume into a state makes that state's provider call, until it has
 plainly stopped; an acquire that finds the work unfinished answers
-`DiskVolumePendingError` and the worker asks again under the same lease.
+`DiskVolumePendingError` and the worker asks again under the same lease. A call
+the driver made is recorded whatever the lease is by then, and "plainly stopped"
+is measured from when the driver took the state, never from housekeeping that
+only looked. A creation abandoned part way leaves a record outside the disk row
+naming its account, region and token, so the volume it may have made is collected
+and holds its AWS connection even after the disk and its workspace are gone.
 Every volume carries the deployment's tags, and orphan collection deletes only
 detached volumes with this deployment's complete tag set that no disk row names.
 

@@ -64,6 +64,9 @@ class BlockVolume(ContractModel):
     owner: BlockVolumeOwner | None = None
     """None unless every ownership tag is present."""
 
+    creation_token: str = ""
+    """The token of the creation that made it, from its tags; empty when untagged."""
+
     created_at: datetime | None = None
 
 

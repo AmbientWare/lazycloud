@@ -8,7 +8,7 @@ from database.repositories.identity import WorkspaceRepository
 from database.tables.compute import ComputeProviderInstanceTable
 from database.tables.disks import DiskAttachmentTable, DiskGenerationTable, DiskTable
 from database.tables.identity import WorkspaceTable
-from database.tables.orchestration import ContainerTable
+from database.tables.orchestration import ContainerTable, WorkerTable
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.disks import DiskRecord, DiskStatus
 from shared.errors import ConflictError
@@ -202,20 +202,27 @@ class DiskRepository:
         }
 
     def unheld_volume_attachments(self, machine_ids: Sequence[str]) -> dict[str, int]:
-        """Disk volumes on each machine that no running container holds.
+        """Disk volumes on each machine that no container placed there reserves.
 
-        Volumes still attaching, attached, or on their way off once their
-        container stopped all take one of the machine's attachments. A live
-        holder's volume is left out: its container's placement already counts it.
+        A volume takes one of the attachments of the machine it is on, whatever
+        state its holder is in: attaching, attached, or still on its way off after
+        its holder stopped or moved to another machine. The one volume left out is
+        the one whose live holder runs on that same machine, because that
+        container's placement already reserved it.
         """
         if not machine_ids:
             return {}
         live = [status.value for status in LIVE_CONTAINER_STATUSES]
-        held = (
+        reserved_here = (
             select(ContainerTable.id)
+            .outerjoin(WorkerTable, WorkerTable.id == ContainerTable.worker_id)
             .where(
                 ContainerTable.id == DiskTable.holder_container_id,
                 ContainerTable.status.in_(live),
+                or_(
+                    ContainerTable.machine_id == ComputeProviderInstanceTable.machine_id,
+                    WorkerTable.machine_id == ComputeProviderInstanceTable.machine_id,
+                ),
             )
             .exists()
         )
@@ -229,7 +236,7 @@ class DiskRepository:
             .where(
                 ComputeProviderInstanceTable.machine_id.in_(list(machine_ids)),
                 DiskTable.volume_state.in_(_VOLUME_ATTACHED_STATES),
-                ~held,
+                ~reserved_here,
             )
             .group_by(ComputeProviderInstanceTable.machine_id)
         ).tuples()

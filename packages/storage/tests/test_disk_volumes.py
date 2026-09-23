@@ -36,6 +36,7 @@ GIB = 1024**3
 class _Volume:
     request: BlockVolumeRequest
     attached_to: str = ""
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass
@@ -46,6 +47,7 @@ class _Provider(BlockVolumeProvider):
     calls: list[str] = field(default_factory=list)
     lose_create_answer: bool = False
     attach_pending: bool = False
+    while_detaching: Callable[[], None] | None = None
 
     def create_volume(self, request: BlockVolumeRequest, *, wait_seconds: float) -> BlockVolume:
         self.calls.append("create")
@@ -70,6 +72,9 @@ class _Provider(BlockVolumeProvider):
 
     def detach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
         self.calls.append("detach")
+        if self.while_detaching is not None:
+            hook, self.while_detaching = self.while_detaching, None
+            hook()
         volume = self.volumes.get(volume_id)
         if volume is not None:
             assert volume.attached_to in {"", instance_id}
@@ -93,6 +98,8 @@ class _Provider(BlockVolumeProvider):
             state=BlockVolumeState.InUse if volume.attached_to else BlockVolumeState.Available,
             attached_instance_id=volume.attached_to,
             owner=volume.request.owner,
+            creation_token=volume.request.token,
+            created_at=volume.created_at,
         )
 
 
@@ -123,11 +130,13 @@ class _WorkerAbsence:
         return self.absent
 
 
-def _host(instance_id: str, zone: str = "use2-az1") -> DiskVolumeHost:
+def _host(
+    instance_id: str, zone: str = "use2-az1", connection_id: str | None = None
+) -> DiskVolumeHost:
     return DiskVolumeHost(
         workspace_id=str(uuid4()),
         provider_ref="aws:platform",
-        connection_id=None,
+        connection_id=connection_id,
         region="us-east-2",
         zone=zone,
         instance_id=instance_id,
@@ -317,3 +326,110 @@ def test_a_sweep_that_loses_the_disk_to_a_new_holder_leaves_its_volume_attached(
     assert "detach" not in provider.calls
     assert provider.volumes[grant.volume_id].attached_to == "i-a"
     assert _state(isolated_services, disk_id) == "attached"
+
+
+def _stop(services: ApiServices, container_id: str, *, storage_released: bool) -> None:
+    with services.database.session() as session:
+        row = session.get(ContainerTable, container_id)
+        assert row is not None
+        row.status = ContainerStatus.Stopped.value
+        if storage_released:
+            row.storage_released_at = utc_now()
+
+
+def test_a_new_holder_waits_out_a_sweeps_detach_and_then_takes_the_volume_back(
+    isolated_services: ApiServices,
+) -> None:
+    volumes, provider, clock, workspace_id, disk_id = _setup(isolated_services, "vol-handoff")
+    disks = isolated_services.disks
+    first = _container(isolated_services, workspace_id)
+    lease = disks.acquire(disk_id, container_id=first, worker_id="worker")
+    grant = volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
+    _stop(isolated_services, first, storage_released=True)
+
+    # The sweep's detach is under way when a new container takes the disk.
+    second = _container(isolated_services, workspace_id)
+    waited: list[str] = []
+
+    def take_the_disk() -> None:
+        lease = disks.acquire(disk_id, container_id=second, worker_id="worker")
+        with pytest.raises(DiskVolumePendingError):
+            volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
+        waited.append(lease.lease_token)
+
+    provider.while_detaching = take_the_disk
+    volumes.reconcile_due(now=clock.now)
+    assert len(waited) == 1
+
+    # The detach it made is recorded, so the holder continues at once.
+    assert _state(isolated_services, disk_id) == "cached"
+    back = volumes.attach(disk_id, host=_host("i-a"), lease_token=waited[0])
+    assert back.volume_id == grant.volume_id and back.formatted
+    assert provider.volumes[grant.volume_id].attached_to == "i-a"
+
+
+def test_housekeeping_that_leaves_a_volume_alone_does_not_keep_its_dead_driver_alive(
+    isolated_services: ApiServices,
+) -> None:
+    volumes, provider, clock, workspace_id, disk_id = _setup(isolated_services, "vol-dead")
+    disks = isolated_services.disks
+    first = _container(isolated_services, workspace_id)
+    lease = disks.acquire(disk_id, container_id=first, worker_id="worker")
+    provider.attach_pending = True
+    with pytest.raises(DiskVolumePendingError):
+        volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
+    _stop(isolated_services, first, storage_released=True)
+
+    # A new holder on the same machine finds the first lease's attach unfinished.
+    second = _container(isolated_services, workspace_id)
+    taken = disks.acquire(disk_id, container_id=second, worker_id="worker")
+    with pytest.raises(DiskVolumePendingError):
+        volumes.attach(disk_id, host=_host("i-a"), lease_token=taken.lease_token)
+
+    # Housekeeping sees a live holder and leaves the volume, pass after pass.
+    for _ in range(2):
+        clock.now += timedelta(seconds=DISK_VOLUME_STUCK_SECONDS + 1)
+        volumes.reconcile_due(now=clock.now)
+        assert _state(isolated_services, disk_id) == "attaching"
+
+    grant = volumes.attach(disk_id, host=_host("i-a"), lease_token=taken.lease_token)
+    assert provider.volumes[grant.volume_id].attached_to == "i-a"
+    assert _state(isolated_services, disk_id) == "attached"
+
+
+def test_an_abandoned_creation_outlives_its_disk_until_its_volume_is_collected(
+    isolated_services: ApiServices,
+) -> None:
+    volumes, provider, clock, workspace_id, disk_id = _setup(isolated_services, "vol-orphan")
+    disks = isolated_services.disks
+    connection_id = str(uuid4())
+    holder = _container(isolated_services, workspace_id)
+    lease = disks.acquire(disk_id, container_id=holder, worker_id="worker")
+    provider.lose_create_answer = True
+    with pytest.raises(TimeoutError):
+        volumes.attach(
+            disk_id, host=_host("i-a", connection_id=connection_id), lease_token=lease.lease_token
+        )
+    [made] = provider.volumes
+    _stop(isolated_services, holder, storage_released=True)
+
+    deletion = DiskDeletionService(
+        isolated_services.database,
+        disks=disks,
+        volumes=volumes,
+        objects=isolated_services.disk_deletion.objects,
+        metering=isolated_services.disk_deletion.metering,
+    )
+    assert not deletion.request("vol-orphan", workspace_id=workspace_id)
+    clock.now += timedelta(seconds=DISK_VOLUME_STUCK_SECONDS + 1)
+    deletion.reconcile_due(now=clock.now)
+    assert not disks.list(workspace_id=workspace_id).data
+
+    # The disk is gone, and so is the only row naming this account; the
+    # creation it abandoned still holds the connection and is still collected.
+    with isolated_services.database.session() as session:
+        assert DiskVolumeRepository(session).connection_holds_volumes(connection_id)
+    assert volumes.collect_orphans() == 1
+    assert made not in provider.volumes
+    with isolated_services.database.session() as session:
+        assert not DiskVolumeRepository(session).connection_holds_volumes(connection_id)

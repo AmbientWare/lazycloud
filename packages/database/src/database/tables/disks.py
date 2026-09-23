@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -151,6 +152,41 @@ class DiskTable(IdTable, DatabaseBase):
     volume_changed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    """When the volume last moved, or was last looked at by housekeeping that left it."""
+
+    volume_driven_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """When `volume_driver` took the current state; a driver silent for long enough is
+    taken over. Housekeeping that only looks at a volume leaves it alone."""
+
+
+class DiskVolumeOrphanTable(IdTable, DatabaseBase):
+    """A volume creation that was abandoned and may still have made a volume.
+
+    Kept apart from the disk row, with no foreign key, so deleting the disk or its
+    workspace leaves the record for orphan collection. It names the account and
+    region to look in and the creation token the volume would carry, and goes once
+    collection has deleted that volume or seen that it does not exist.
+    """
+
+    __tablename__ = "disk_volume_orphans"
+    __table_args__: tuple[SchemaItem, ...] = (
+        Index(
+            "ix_disk_volume_orphans_connection",
+            "connection_id",
+            postgresql_where=text("connection_id IS NOT NULL"),
+        ),
+        UniqueConstraint("creation_token", name="uq_disk_volume_orphans_creation_token"),
+    )
+
+    disk_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
+    provider_ref: Mapped[str] = mapped_column(String(160), nullable=False)
+    connection_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    capacity_workspace_id: Mapped[str] = mapped_column(Text, nullable=False)
+    region: Mapped[str] = mapped_column(Text, nullable=False)
+    creation_token: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class DiskAttachmentTable(IdTable, DatabaseBase):
