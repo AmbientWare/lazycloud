@@ -493,25 +493,15 @@ class WorkerFinalizationCleanup:
             bundle_path.unlink()
         elif bundle_path.exists():
             shutil.rmtree(bundle_path)
-        if self.workspace_storage is None or self.instances is None:
-            if isinstance(self.instances, WorkerContainerInstanceDeleter):
-                self.instances.delete_container_instance(container_id)
-            return
-        active_workspace_names = {
-            active.workspace_name
-            for active in self.instances.list_container_instances()
-            if active.workspace_name and active.container_id != container_id
-        }
-        results = self.workspace_storage.cleanup_unused(
-            active_workspace_names=active_workspace_names,
-        )
-        failures = [
-            result.output or result.reason or f"failed to unmount {result.local_path}"
-            for result in results
-            if not result.ok
-        ]
-        if failures:
-            raise RuntimeError("; ".join(failures))
+        if self.workspace_storage is not None:
+            results = self.workspace_storage.release_workspace_storage(container_id)
+            failures = [
+                result.output or result.reason or f"failed to unmount {result.local_path}"
+                for result in results
+                if not result.ok
+            ]
+            if failures:
+                raise RuntimeError("; ".join(failures))
         if isinstance(self.instances, WorkerContainerInstanceDeleter):
             self.instances.delete_container_instance(container_id)
 

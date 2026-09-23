@@ -159,11 +159,7 @@ class ContainerWorkspaceStorageMounter(Protocol):
         request: ContainerRequestContext,
     ) -> ContractModel | None: ...
 
-    def cleanup_unused(
-        self,
-        *,
-        active_workspace_names: set[str],
-    ) -> list[StorageMountResult]: ...
+    def release_workspace_storage(self, container_id: str) -> list[StorageMountResult]: ...
 
 
 class ContainerGpuAssigner(Protocol):

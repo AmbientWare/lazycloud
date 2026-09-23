@@ -210,12 +210,8 @@ class WorkspaceStorageMounter:
         if self.fail:
             raise RuntimeError("workspace storage mount failed")
 
-    def cleanup_unused(
-        self,
-        *,
-        active_workspace_names: set[str],
-    ) -> list[StorageMountResult]:
-        _ = active_workspace_names
+    def release_workspace_storage(self, container_id: str) -> list[StorageMountResult]:
+        _ = container_id
         return []
 
 
