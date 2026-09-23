@@ -5,14 +5,10 @@ from typing import Annotated
 import typer
 from shared.http.observability import LogObjectType, LogQueryRequest, LogRecord
 
-from lazycloud.cli.components.cards import empty_state
+from lazycloud._terminal.cards import empty_state
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.output import (
-    console,
-    json_output_enabled,
-    print_payload,
-    write_stream,
-)
+from lazycloud.cli.components.output import json_output_enabled, print_payload, write_stream
 from lazycloud.cli.control import observability_client
 from lazycloud.session.deployment import DeploymentClient
 

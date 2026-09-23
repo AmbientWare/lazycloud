@@ -166,6 +166,10 @@ source uploads, task status, and remote stdout and stderr. Use a separate
 [log command](/concepts/tasks-and-logs) when revisiting a run or following
 background work.
 
+Both use the same display. Interactive terminals show live steps with a short
+build-log preview, followed by a completion summary. A failed step keeps its
+recent logs visible. Redirected output prints the build logs without live redraws.
+
 Progress and remote logs go to stderr. The CLI prints the result to stdout;
 Python returns it to your caller. To suppress progress in a Python block:
 

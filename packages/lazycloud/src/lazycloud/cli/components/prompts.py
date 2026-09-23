@@ -6,9 +6,10 @@ import sys
 
 import typer
 
-from lazycloud.cli.components.cards import notice_card
+from lazycloud._terminal.cards import notice_card
+from lazycloud._terminal.streams import error_console
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import error_console, json_output_enabled
+from lazycloud.cli.components.output import json_output_enabled
 
 
 def confirm_destructive(

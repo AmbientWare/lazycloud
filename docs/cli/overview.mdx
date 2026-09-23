@@ -34,8 +34,8 @@ Use dots between directory names and omit `.py`. File references such as
 `quickstart.py:hello` are also supported; both forms resolve to the same handler.
 
 The object is one decorated resource or an `App`. Deploying an `App` deploys
-everything it registers; `--resource <name>` or `--resource <kind>:<name>`
-selects one.
+everything it registers. To deploy one workload, reference its Python object,
+for example `text_tools:count`.
 
 `deploy` also accepts a module without `:object`, such as
 `uv run lazycloud deploy quickstart`, when it contains exactly one app. This deploys

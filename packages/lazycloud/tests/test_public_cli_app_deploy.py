@@ -36,7 +36,7 @@ def test_file_deploy_selects_the_whole_app_and_deduplicates_aliases(
             build_public_cli(), ["deploy", "workloads.py", "--name", "collision"]
         )
         assert result.exit_code != 0
-        assert "--name requires a handler reference or --resource" in result.output
+        assert "--name requires a workload reference" in result.output
     finally:
         sys.modules.pop("workloads", None)
         sys.modules.pop("app_definition", None)

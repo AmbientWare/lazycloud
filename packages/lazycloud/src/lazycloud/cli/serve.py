@@ -22,7 +22,6 @@ def serve(
     ctx: typer.Context,
     handler: Annotated[str, typer.Argument()],
     timeout: Annotated[int, typer.Option("--timeout")] = 0,
-    resource: Annotated[str | None, typer.Option("--resource")] = None,
     cpu: Annotated[float | None, typer.Option("--cpu")] = None,
     memory: Annotated[str | None, typer.Option("--memory")] = None,
     gpu: Annotated[str | None, typer.Option("--gpu")] = None,
@@ -64,7 +63,6 @@ def serve(
     if unsupported:
         raise typer.BadParameter("serve previews do not support " + ", ".join(unsupported))
     overrides = build_deployment_overrides(
-        resource=resource,
         cpu=cpu,
         memory=memory,
         gpu=gpu,
@@ -90,8 +88,6 @@ def serve(
     attach_terminal(user_object)
     if not isinstance(user_object, (App, Function, Endpoint, ASGI)):
         raise typer.BadParameter("serve requires an App, Function, Endpoint, or ASGI handler")
-    if resource is not None and not isinstance(user_object, App):
-        raise typer.BadParameter("--resource requires an App handler")
     options = ServeOptions(
         image=deployment_image(overrides),
         cpu=overrides.cpu,
@@ -105,7 +101,4 @@ def serve(
         machine=overrides.machine,
         sync_dir=overrides.sync_dir,
     )
-    if isinstance(user_object, App):
-        user_object.serve(resource=resource, timeout=timeout, options=options)
-    else:
-        user_object.serve(timeout=timeout, options=options)
+    user_object.serve(timeout=timeout, options=options)

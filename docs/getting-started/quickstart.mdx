@@ -1,33 +1,22 @@
 ---
 title: "Run your first function"
-description: "Write a Python function, run it on LazyCloud, and see its result in your terminal."
+description: "Download the quickstart project and run its function from the CLI or Python."
 ---
 
-You'll run a Python function on remote compute and get `hello LazyCloud` back
-in your terminal. Start with the [client installed](/getting-started/installation).
+import QuickstartRun from '/snippets/quickstart-run.mdx';
 
-## Download the project
+This walkthrough uses the same `quickstart` project as the
+[introduction](/). If you've already run it, continue with the function below.
 
-With the CLI [installed through uv](/getting-started/installation):
+## Install and run
 
-```bash
-lazycloud example download quickstart
-cd quickstart
-uv sync
-```
+<QuickstartRun />
 
 This gives you `quickstart.py`, a README, and a project pinned to your SDK
 version. `uv sync` creates the environment and `uv.lock`. Keep the lockfile
 with your source so another machine can install the same dependencies.
 
-## Sign in
-
-```bash
-uv run lazycloud login
-```
-
-Open the link, check that the code matches your terminal, and approve the
-sign-in. If you belong to several workspaces, choose where to run:
+If you belong to several workspaces, choose where to run before the next call:
 
 ```bash
 uv run lazycloud workspace list
@@ -72,7 +61,7 @@ The command shows progress and the function's logs, then prints `hello LazyCloud
 The first run can take longer while the image builds.
 
 Run the command from the directory containing `quickstart.py`.
-`quickstart:hello` selects `hello` from that module; omit the `.py` extension.
+`quickstart:hello` selects `hello` from that module. `quickstart.py:hello` also works.
 Arguments follow it. Change `LazyCloud` to your name and run it again.
 
 You can also run `uv run python quickstart.py` when the SDK is installed in your Python

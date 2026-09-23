@@ -23,10 +23,10 @@ uv run lazycloud deploy quickstart:hello
 uv run lazycloud deploy quickstart
 uv run lazycloud deploy quickstart:app
 uv run lazycloud deploy myproject.api:app
-uv run lazycloud deploy myproject.api:app --resource endpoint:predict
+uv run lazycloud deploy myproject.api:predict
 ```
 
-`--name` overrides the deployment name when you select a handler or use `--resource`.
+`--name` overrides the deployment name when you select one workload.
 `--source-root <dir>` packages a different directory as the code root.
 
 `quickstart` and `quickstart:app` deploy the same app, including its functions,
@@ -36,16 +36,18 @@ selected app even when their definitions live in other files.
 
 If the module contains multiple apps, choose one with `module:app_name`. If it
 contains no app, supply an explicit handler reference. A decorated handler such as
-`quickstart:hello` deploys only that handler.
+`quickstart:hello` deploys only that handler. `quickstart.py:hello` is equivalent.
+The name after `:` is the Python object, which can differ from its configured
+workload name.
 
-`--resource` also works with a module name. With `--json`, a successful app deployment
+With `--json`, a successful app deployment
 returns one object containing the app name and its resource results. A deployment
 failure stops the command without undoing resources already deployed.
 
 Pass several app files to deploy their combined definitions. The CLI imports every
 file before collecting workloads. References to the same app object count once.
 The CLI rejects conflicting definitions with the same app, workload kind, and name.
-Multiple references must select complete apps and cannot use `--resource` or `--name`.
+Multiple references must select complete apps and cannot use `--name`.
 
 ```bash
 uv run lazycloud deploy api.py workers.py --diff
@@ -66,8 +68,8 @@ their containers and removes their schedules and routes. It preserves volumes,
 secrets, and stored data. Workloads declared in the files keep their prior versions.
 
 Supply the complete definition of each app when pruning. An explicitly empty
-`App` removes all its deployed workloads while retaining the app. Handler selections
-and `--resource` cannot prune. Pruning starts only after every requested deployment
+`App` removes all its deployed workloads while retaining the app. A single-workload
+reference cannot prune. Pruning starts only after every requested deployment
 has registered successfully. Registration does not guarantee application health.
 If another operation changes the app during deployment, pruning refuses to delete
 workloads. Once pruning has started, the server retries interrupted cleanup for
@@ -106,14 +108,14 @@ Human output displays Python results directly, including NumPy arrays and custom
 objects. `--json` requires a JSON-compatible result and reports an output error
 if the completed call returned a Python-only value. Use the Python SDK to work
 with the returned object and preserve its type. `--output result.pkl` saves it.
-Build logs remain in terminal history instead of disappearing from the live
-display. Local Python `.remote()` calls also show output by default; see
+Interactive terminals show live steps with a short build-log preview and keep
+failure details visible. Local Python `.remote()` calls use the same display; see
 [Progress and logs](/concepts/functions#progress-and-logs).
 
 ## lazycloud serve
 
 ```bash
-uv run lazycloud serve HANDLER [--timeout <seconds>] [--resource <selector>] [options]
+uv run lazycloud serve HANDLER [--timeout <seconds>] [options]
 ```
 
 Runs a function, endpoint, or ASGI app on LazyCloud with a temporary URL and streams
@@ -138,10 +140,9 @@ The SDK accepts the same preview configuration through `ServeOptions`:
 
 ```python
 from lazycloud import ServeOptions
-from text_tools import app
+from text_tools import count
 
-app.serve(
-    resource="endpoint:count",
+count.serve(
     options=ServeOptions(cpu=0.5, env={"MODE": "development"}, sync_dir="."),
 )
 ```
@@ -204,8 +205,8 @@ for the flags that command accepts. An omitted option keeps the definition's val
 | `--preemptible`, `--no-preemptible` | Allow reclaimable capacity or require non-preemptible capacity (`deploy` and `run`). Workloads are preemptible by default. |
 | `--entrypoint <cmd>` | Container entrypoint override. |
 
-A direct function target rejects port, keep-warm, TCP, entrypoint, and resource
-overrides. Set function keep-warm on its decorator. To select a resource, pass
-an app to `deploy --resource`.
+A direct function target rejects port, keep-warm, TCP, and entrypoint overrides.
+Set function keep-warm on its decorator. Select a workload with `module:object`,
+for example `text_tools:count`.
 
 <WorkspaceFlag />

@@ -3,32 +3,17 @@ title: "Run Python on LazyCloud"
 description: "Run Python functions, serve APIs, and execute code in remote containers."
 ---
 
-LazyCloud runs your code on remote CPUs and GPUs. Define the environment and
-resources in Python, then run your function from a terminal or another Python
-program. The client shows progress, logs, and the result.
+import QuickstartRun from '/snippets/quickstart-run.mdx';
 
-Save this as `hello.py`:
+LazyCloud runs your code on remote CPUs and GPUs. Download the quickstart
+project to run your first function. The client shows progress, logs, and the result.
 
-```python
-from lazycloud import App
+<QuickstartRun />
 
-app = App("hello")
-
-
-@app.function()
-def square(number: int) -> int:
-    return number * number
-```
-
-With the [client installed](/getting-started/installation), sign in and run it:
-
-```bash
-uv run lazycloud login
-uv run lazycloud run hello:square 12
-```
-
-The result is `144`. Follow the [quickstart](/getting-started/quickstart)
-for the full walkthrough.
+The project includes the source and its Python environment definition. The
+[quickstart walkthrough](/getting-started/quickstart) explains the function and
+how to call it from Python. See [Installation](/getting-started/installation)
+for adding LazyCloud to an existing project or upgrading the client.
 
 ## What do you want to build?
 

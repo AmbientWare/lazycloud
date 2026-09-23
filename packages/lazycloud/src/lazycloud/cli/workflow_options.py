@@ -24,7 +24,6 @@ WorkflowValue = (
 
 @dataclass(slots=True)
 class DeploymentOverrides:
-    resource: str | None = None
     cpu: CpuRequest | None = None
     memory: MemoryRequest | None = None
     gpu: GpuInput = None
@@ -48,7 +47,6 @@ class DeploymentOverrides:
     def has_values(self) -> bool:
         return any(
             (
-                self.resource,
                 self.cpu is not None,
                 self.memory,
                 self.gpu,
@@ -73,7 +71,6 @@ class DeploymentOverrides:
 
 def build_deployment_overrides(
     *,
-    resource: str | None = None,
     cpu: CpuRequest | None = None,
     memory: MemoryRequest | None = None,
     gpu: GpuInput = None,
@@ -95,7 +92,6 @@ def build_deployment_overrides(
     container_id: str | None = None,
 ) -> DeploymentOverrides:
     return DeploymentOverrides(
-        resource=resource,
         cpu=cpu,
         memory=memory,
         gpu=gpu,
@@ -134,7 +130,6 @@ def workflow_kwargs(
     overrides: DeploymentOverrides, **extra: WorkflowValue
 ) -> dict[str, WorkflowValue]:
     values: dict[str, WorkflowValue] = {
-        "resource": overrides.resource,
         "cpu": overrides.cpu,
         "memory": overrides.memory,
         "gpu": list(overrides.gpu) if overrides.gpu else None,

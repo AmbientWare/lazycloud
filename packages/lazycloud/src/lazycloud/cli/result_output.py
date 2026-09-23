@@ -23,8 +23,8 @@ from shared.function_payloads import (
 from shared.http.tasks import TaskResponse
 from shared.serialization import to_json_value
 
-from lazycloud.cli.components import theme
-from lazycloud.cli.components.cards import result_card
+from lazycloud._terminal import theme
+from lazycloud._terminal.cards import result_card
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import json_default
 from lazycloud.function_results import FunctionResultDecodeError, parse_function_result

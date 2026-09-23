@@ -6,9 +6,9 @@ import typer
 from shared.custom_domains import CustomDomainPhase
 from shared.http.custom_domains import CustomDomainResponse
 
-from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.output import (
-    console,
     emit,
     json_default,
     json_output_enabled,

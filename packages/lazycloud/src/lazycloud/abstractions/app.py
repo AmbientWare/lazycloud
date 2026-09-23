@@ -956,7 +956,7 @@ class App:
                 overrides. Target-specific options fail explicitly when unsupported.
         """
         if prune and resource is not None:
-            raise AppOperationError("pruning requires the complete app; remove --resource")
+            raise AppOperationError("pruning requires the complete app without a resource selector")
         if prune and name is not None:
             raise AppOperationError("pruning does not support a deployment name override")
         deployable = (
@@ -1111,7 +1111,7 @@ class App:
             msg = f"{target} has no resource that supports {method}"
             raise AppOperationError(msg)
         names = ", ".join(_resource_selector(item) for item in candidates)
-        msg = f"select one resource with --resource; candidates: {names}"
+        msg = f"select a workload directly; candidates: {names}"
         raise AppOperationError(msg)
 
     def _select_candidates(self, resource: str | None) -> Iterable[AppResource]:

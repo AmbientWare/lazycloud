@@ -2,8 +2,7 @@
 
 Deploy from the downloaded project directory. The pod creates or reuses its declared cache:
 
-    uv run lazycloud deploy app:app \
-        --resource pod:openai-server
+    uv run lazycloud deploy app:server
 
 Use the printed URL with a LazyCloud bearer token to call ``/v1/chat/completions``.
 Stop GPU charges with ``uv run lazycloud deployment stop openai-server`` when finished.

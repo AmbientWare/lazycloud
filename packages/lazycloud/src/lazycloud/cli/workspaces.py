@@ -7,15 +7,10 @@ from shared.aws_connections import AwsAccountConnectionPhase
 from shared.http.errors import HttpApiError, HttpTransportError
 from shared.identity import WorkspaceStatus
 
-from lazycloud.cli.components.cards import notice_card
+from lazycloud._terminal.cards import notice_card
+from lazycloud._terminal.streams import console
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import (
-    console,
-    emit,
-    json_output_enabled,
-    print_payload,
-    table,
-)
+from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
 from lazycloud.cli.control import compute_client, workspace_client
 from lazycloud.config import ClientProfile, ConfigError, get_profile, set_profile, settings

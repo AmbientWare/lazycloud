@@ -18,10 +18,11 @@ from shared.http.errors import HttpApiError
 from shared.tasks import TaskStatus
 from typer import _click as click
 
+from lazycloud._terminal import theme
+from lazycloud._terminal.cards import card
+from lazycloud._terminal.streams import error_console
 from lazycloud.abstractions.function import FunctionOperationError
-from lazycloud.cli.components import theme
-from lazycloud.cli.components.cards import card
-from lazycloud.cli.components.output import error_console, print_json_line
+from lazycloud.cli.components.output import print_json_line
 from lazycloud.json_contracts import parse_json_value
 from lazycloud.session.deployment import ImageBuildError
 from lazycloud.session.task import TaskOperationError

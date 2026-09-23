@@ -56,11 +56,11 @@ review and remove unused resources separately.
 ## Deploy or preview one workload
 
 ```bash
-uv run lazycloud deploy text_tools:app --resource endpoint:count
+uv run lazycloud deploy text_tools:count
 ```
 
-A selector is the resource name, or `kind:name` if the name is shared by
-several kinds. You can also pass the decorated object directly:
+`text_tools:count` selects the Python object `count` in `text_tools.py`.
+The `.py` form, `text_tools.py:count`, also works. Use the same reference to preview it:
 
 ```bash
 uv run lazycloud serve text_tools:count
@@ -68,7 +68,7 @@ uv run lazycloud serve text_tools:count
 
 The preview prints a temporary URL and logs. Ctrl+C ends it.
 
-From Python, use `app.deploy()` or `app.deploy(resource="endpoint:count")`.
+From Python, use `app.deploy()` for the whole app or `count.deploy()` for that endpoint.
 
 ## Export a typed Python package
 

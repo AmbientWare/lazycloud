@@ -15,16 +15,16 @@ from shared.http.deployment_plans import (
 from shared.http.gateway import DeployStubResponse
 
 from lazycloud._invocation import prepare_arguments
+from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.streams import console
 from lazycloud.abstractions.app import App, AppDeployResult
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.apps import resolve_app_id
-from lazycloud.cli.components.cards import notice_card, result_card
 from lazycloud.cli.components.context import current_workspace
 from lazycloud.cli.components.output import (
-    console,
     emit,
     json_default,
     json_output_enabled,
@@ -84,7 +84,6 @@ def deploy(
     name: Annotated[str | None, typer.Option("--name")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
     source_root: Annotated[str | None, typer.Option("--source-root")] = None,
-    resource: Annotated[str | None, typer.Option("--resource")] = None,
     cpu: Annotated[float | None, typer.Option("--cpu")] = None,
     memory: Annotated[str | None, typer.Option("--memory")] = None,
     gpu: Annotated[str | None, typer.Option("--gpu")] = None,
@@ -114,7 +113,6 @@ def deploy(
     entrypoint: Annotated[list[str] | None, typer.Option("--entrypoint")] = None,
 ) -> None:
     overrides = build_deployment_overrides(
-        resource=resource,
         cpu=cpu,
         memory=memory,
         gpu=gpu,
@@ -142,10 +140,10 @@ def deploy(
         apps = [item for item in loaded if isinstance(item, App)]
         if len(loaded) > 1 and len(apps) != len(loaded):
             raise typer.BadParameter("multiple references must select complete apps")
-        if prune and (len(apps) != len(loaded) or resource is not None):
-            raise typer.BadParameter("--prune requires complete apps without --resource")
-        if len(loaded) > 1 and (name is not None or resource is not None):
-            raise typer.BadParameter("--name and --resource require one reference")
+        if prune and len(apps) != len(loaded):
+            raise typer.BadParameter("--prune requires complete apps")
+        if len(loaded) > 1 and name is not None:
+            raise typer.BadParameter("--name requires one workload reference")
         if apps:
             _deploy_apps(
                 ctx,
@@ -160,7 +158,7 @@ def deploy(
             return
         user_object = loaded[0]
         selected_handler = handler[0]
-        _attach_workflow_terminal(user_object)
+        attach_terminal(user_object)
         selected_image = deployment_image(overrides)
         if isinstance(user_object, Pod):
             _configure_pod(user_object, overrides)
@@ -242,16 +240,15 @@ def _deploy_apps(
     prune: bool,
     diff: bool,
 ) -> None:
-    if name is not None and overrides.resource is None:
-        raise typer.BadParameter("--name requires a handler reference or --resource")
+    if name is not None:
+        raise typer.BadParameter("--name requires a workload reference")
     selected_image = deployment_image(overrides)
 
     def submit(app: App) -> tuple[DeployStubResponse, ...]:
         if prune and not app.deployment_manifest().workloads:
             return ()
-        _attach_workflow_terminal(app)
+        attach_terminal(app)
         return app.deploy(
-            resource=overrides.resource,
             name=name,
             workspace=workspace,
             source_root=source_root,
@@ -274,7 +271,7 @@ def _deploy_apps(
 
     targets: list[AppDeploymentTarget] = []
     for app in apps:
-        manifest = app.deployment_manifest(prune=prune, resource=overrides.resource, name=name)
+        manifest = app.deployment_manifest(prune=prune)
         targets.append(AppDeploymentTarget(manifest, partial(submit, app)))
     session = AppDeploymentSession(
         resource_client(workspace=workspace, timeout_seconds=60),
@@ -331,7 +328,6 @@ def run(
     ctx: typer.Context,
     command: Annotated[list[str] | None, typer.Argument()] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-    resource: Annotated[str | None, typer.Option("--resource")] = None,
     cpu: Annotated[float | None, typer.Option("--cpu")] = None,
     memory: Annotated[str | None, typer.Option("--memory")] = None,
     gpu: Annotated[str | None, typer.Option("--gpu")] = None,
@@ -373,7 +369,6 @@ def run(
     if not args:
         raise typer.BadParameter("handler is required")
     overrides = build_deployment_overrides(
-        resource=resource,
         cpu=cpu,
         memory=memory,
         gpu=gpu,
@@ -400,7 +395,7 @@ def run(
             raise typer.BadParameter(msg)
         payload_args = [parse_json_argument(item) for item in args[1:]]
         target = apply_handler_reference(user_object, args[0])
-        _attach_workflow_terminal(target)
+        attach_terminal(target)
         if isinstance(target, Pod):
             _configure_pod(target, overrides)
             response = target.run(*args[1:], workspace=selected_workspace)
@@ -441,7 +436,6 @@ def shell(
     container_id: Annotated[str | None, typer.Option("--container-id")] = None,
     sync_dir: Annotated[str | None, typer.Option("--sync-dir", "--sync")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-    resource: Annotated[str | None, typer.Option("--resource")] = None,
     cpu: Annotated[float | None, typer.Option("--cpu")] = None,
     memory: Annotated[str | None, typer.Option("--memory")] = None,
     gpu: Annotated[str | None, typer.Option("--gpu")] = None,
@@ -478,7 +472,6 @@ def shell(
         )
         return
     overrides = build_deployment_overrides(
-        resource=resource,
         cpu=cpu,
         memory=memory,
         gpu=gpu,
@@ -504,7 +497,7 @@ def shell(
         raise typer.BadParameter(str(exc)) from exc
     if isinstance(user_object, Pod):
         _configure_pod(user_object, overrides)
-    _attach_workflow_terminal(user_object)
+    attach_terminal(user_object)
     response = invoke_handler_method(
         apply_handler_reference(user_object, handler),
         "shell",
@@ -653,10 +646,6 @@ def deployment_delete(
     )
 
 
-def _attach_workflow_terminal(target: object) -> None:
-    attach_terminal(target)
-
-
 def _deployment_summary(
     response: object,
     *,
@@ -728,8 +717,6 @@ def _configure_pod(pod: Pod, overrides: DeploymentOverrides) -> None:
 
 def _validate_function_overrides(overrides: DeploymentOverrides) -> None:
     unsupported: list[str] = []
-    if overrides.resource:
-        unsupported.append("resource")
     if overrides.ports:
         unsupported.append("ports")
     if overrides.keep_warm is not None:

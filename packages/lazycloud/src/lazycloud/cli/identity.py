@@ -17,16 +17,10 @@ from shared.http.device_auth import (
 from shared.http_transport import HttpChannel
 from shared.identity import DeviceAuthorizationStatus
 
-from lazycloud.cli.components.cards import notice_card, result_card
+from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.streams import console, error_console
 from lazycloud.cli.components.errors import ClientError
-from lazycloud.cli.components.output import (
-    console,
-    emit,
-    error_console,
-    json_output_enabled,
-    print_payload,
-    table,
-)
+from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.clients.workspace import WorkspaceControlClient
 from lazycloud.config import (
     DEFAULT_PROFILE,

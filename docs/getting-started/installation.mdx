@@ -17,24 +17,8 @@ This installs the `lazycloud` command in an isolated environment. Use it to
 download an example or manage your account from any directory. It does not
 install the SDK into another project's Python environment.
 
-## Start from an example
-
-```bash
-lazycloud example download quickstart
-cd quickstart
-uv sync
-uv run lazycloud login
-uv run lazycloud run quickstart:hello LazyCloud
-```
-
-The download includes source, a README, `.python-version`, and
-`pyproject.toml`. The SDK dependency is pinned to the version that supplied the
-example. `uv sync` installs the project's dependencies and creates `uv.lock`.
-Run subsequent commands from this directory.
-
-Commit `pyproject.toml`, `uv.lock`, and the source. Keep `.venv` and
-credentials out of version control. In CI, use `uv sync --locked` to require
-the committed dependency versions.
+For a complete download-and-run example, follow the
+[quickstart](/getting-started/quickstart).
 
 ## Add LazyCloud to an existing project
 
@@ -48,6 +32,10 @@ uv run lazycloud login
 For a new project, run `uv init my-project` and `cd my-project` first.
 Use `uv run lazycloud` for CLI workflows and `uv run python` for scripts.
 The guides use this project environment by default.
+
+Commit `pyproject.toml`, `uv.lock`, and the source. Keep `.venv` and
+credentials out of version control. In CI, use `uv sync --locked` to require
+the committed dependency versions.
 
 The client supports Python 3.10 or newer. Downloaded examples select Python
 3.12; uv can install that interpreter when needed. Remote Python and GPU
