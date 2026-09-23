@@ -16,19 +16,6 @@ Your name, email, and avatar come from GitHub and refresh each time you sign
 in. A browser session lasts 12 hours. Signing out ends only that session. The
 CLI and other browsers stay signed in.
 
-## Sign in from the CLI
-
-```bash
-uv run lazycloud login
-```
-
-The CLI prints a link and a code. Open the link, confirm the code matches what
-your terminal shows, and approve. The code expires if you wait too long. Run
-`lazycloud login` again to get a new one.
-
-Approval signs the CLI in as you. It can reach every workspace your account
-belongs to, and it stores its credential in `~/.lazycloud/config.yaml`.
-
 ## Workspaces
 
 A workspace holds apps, deployments, tasks, secrets, volumes, and queues. It
