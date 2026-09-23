@@ -206,7 +206,7 @@ def workspace_owner_user_id(context: ServiceContext, workspace_id: str) -> str:
 
 
 def on_team_plan(database: DatabaseClient, workspace_id: str) -> None:
-    """Move a workspace's owner onto the Team plan, which is what disks need."""
+    """Move a workspace's owner onto the Team plan, which disks require."""
 
     with database.session() as session:
         owner = WorkspaceMemberRepository(session).owner(workspace_id)

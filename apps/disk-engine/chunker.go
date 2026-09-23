@@ -10,8 +10,8 @@ import (
 )
 
 // Content-defined chunk bounds. A boundary depends only on the 64 bytes before
-// it, so an insertion or deletion moves the boundaries near it and no others:
-// a flattened layer, or a layer whose clusters moved, re-finds the chunks the
+// it, so an insertion or deletion moves only the boundaries near it. A
+// flattened layer, or a layer whose clusters moved, re-finds the chunks the
 // disk already stores.
 const (
 	minChunkBytes = 1 << 20
@@ -22,14 +22,15 @@ const (
 
 // Below the average a boundary needs 22 zero bits, above it 21, which pulls
 // sizes towards the average and leaves few chunks at the maximum. Masks test
-// the high bits: with a shift-left hash they depend on all 64 window bytes.
+// the high bits, since a shift-left hash makes those depend on all 64 window
+// bytes.
 const (
 	strictMask = uint64(1<<22-1) << (64 - 22)
 	looseMask  = uint64(1<<21-1) << (64 - 21)
 )
 
-// gearTable must never change: it decides every boundary, and different
-// boundaries would stop new layers from matching stored chunks.
+// gearTable decides every boundary. Changing it stops new layers from
+// matching stored chunks, so the next publish re-uploads whole disks.
 var gearTable = func() [256]uint64 {
 	var table [256]uint64
 	for i := range table {

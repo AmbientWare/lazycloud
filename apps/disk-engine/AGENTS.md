@@ -19,7 +19,9 @@ QMP socket.
 The control plane owns generations. A layer counts as published only after
 `commit-published`, which the worker runs once the control plane has recorded
 the generation. An upload the control plane never recorded stays pending, and
-a retried publish of the same layer returns the same result. Attach reuses the
+a retried publish of the same layer returns the same result. The worker saves
+each generation after committing it, so a worker that restarts asks `published`
+where the chain stands rather than trusting its own record. Attach reuses the
 local chain only when its newest published generation and manifest digest
 match the newest one in the chain it is given. Anything else is wiped and
 restored, because another node may have published since.
@@ -32,9 +34,9 @@ is always sealed, because the daemon's statistics do not cover what it held
 before.
 
 Compaction deletes the committed layers' nodes from the daemon as well as their
-files. A seal adds each head through the monitor, which keeps it open after the
-commit drops it from the chain, so a compaction that only removed the files
-freed nothing until detach. `usage` reports the bytes above the base without
+files. The monitor keeps the daemon's startup node and every head a seal added
+open after a commit drops them from the chain, so deleting only the files would
+free nothing until detach. `usage` reports the bytes above the base without
 taking the disk lock, so the worker can watch a volume while a publish runs.
 
 Seal records the new head before switching the daemon to it. When the two
@@ -49,8 +51,8 @@ saved flag carries the resize across an attach that stops between the two
 steps. Each published layer records its own size, so a chain can mix sizes as
 long as none shrinks.
 
-A flattened layer is published as the disk's raw contents, read range by range
-from the layer files `qemu-img map` names. Writing a flattened copy first would
+`publish --flatten` uploads the disk's raw contents, read range by range from
+the layer files `qemu-img map` names. Writing a flattened copy first would
 need a second full disk of space. Restoring one produces a sparse raw base,
 which the chain above it backs onto like any other layer.
 
@@ -61,14 +63,17 @@ crash-consistent, which is all a killed daemon allows.
 Collect deletes only what a parentless generation makes unreachable. Chunks
 named by an upload still waiting for its commit survive, because a retried
 publish returns that upload's result without storing its chunks again. State
-keeps a record of every committed generation for exactly this decision.
+keeps a record of each committed generation for this decision.
 
 Attach exits with code 3 when a restore would leave the root filesystem below
 `--min-free-bytes`. On host storage that is the worker's cue to evict and
-retry; a volume has nothing to evict. Before refusing, attach checks whether
-the base plus its largest layer fits, and if so restores anyway, committing the
-layers it holds into the base whenever the next download would not fit. Space is counted from the chunks a restore writes,
-not from layer sizes, which include holes. Every other failure exits 1.
+retry; a volume has nothing to evict. Attach plans the restore before removing
+anything, committing the layers it holds into the base whenever the next
+download would not fit, and counting how much each commit grows the base. It
+refuses only when the plan runs out of room, so a restore never stops halfway
+for space. Space is counted from the chunks a restore writes, not from layer
+sizes, which include holes. A missing or unknown command exits 2 and every
+other failure exits 1.
 
 Chunk boundaries come from the gear table in `chunker.go`. Changing that table
 or the size bounds does not break old disks, but every chunk becomes new, so a

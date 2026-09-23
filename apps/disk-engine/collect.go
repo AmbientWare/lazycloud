@@ -101,8 +101,8 @@ func runCollect(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Manifests go first: a manifest whose chunks are gone is worse than a
-	// chunk nothing names, which the next collect removes.
+	// Delete manifests first. A manifest whose chunks are gone breaks a
+	// restore, while a chunk nothing names waits for the next collect.
 	if err := store.deleteKeys(ctx, manifests); err != nil {
 		return nil, err
 	}

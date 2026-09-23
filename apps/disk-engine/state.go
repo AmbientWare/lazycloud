@@ -53,8 +53,8 @@ func (p diskPaths) checkSocketPaths() error {
 	return nil
 }
 
-// layer is one qcow2 file in the local chain. The last layer is the writable
-// head; every layer below it is sealed and never written again, except by a
+// layer is one file in the local chain. The last layer is the writable head.
+// Every layer below it is sealed and never written again, except by a
 // compaction committing published layers into the base.
 type layer struct {
 	Seq int `json:"seq"`
@@ -112,8 +112,8 @@ type diskState struct {
 	SizeBytes int64   `json:"size_bytes"`
 	Layers    []layer `json:"layers"`
 	NextSeq   int     `json:"next_seq"`
-	// HeadFresh is true while the head is known to have been created empty
-	// under the running daemon, whose write statistics then cover all of it.
+	// HeadFresh is true while the engine created the head empty under the
+	// running daemon, so the daemon's write statistics cover all of it.
 	HeadFresh bool `json:"head_fresh"`
 	// GrowFilesystem is true while the disk has grown and its ext4 has not
 	// yet been resized to fill it.

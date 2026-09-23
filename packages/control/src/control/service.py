@@ -194,9 +194,9 @@ def _assert_disks_keep_their_size(
 ) -> None:
     """Refuse a disk declared smaller than it is, before anything deploys or rolls.
 
-    A larger size is a change like any other: it is part of the stub's
-    fingerprint, so it makes a new stub and a new deployment version, and the
-    next container to acquire the disk grows it.
+    A larger size needs no check. Size is part of the stub's fingerprint, so it
+    makes a new stub and deployment version, and the next container to acquire
+    the disk grows it.
     """
     recorded = DiskRepository(session).declared_sizes(
         [mount.name for mount in config.disks], workspace_id=workspace_id

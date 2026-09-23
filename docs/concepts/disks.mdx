@@ -26,8 +26,8 @@ box = app.pod(
 The first deploy creates the disk, and every later deploy that names it gets
 the same files. A disk name means the same disk anywhere in the workspace.
 `size` takes the units memory does, from `1Gi` to `1Ti`. Deploying a larger
-size restarts the pod with the disk grown to it. A smaller size is refused,
-since a disk never shrinks.
+size restarts the pod with the disk grown to it. A deploy with a smaller size
+fails, because a disk never shrinks.
 
 `mount_path` defaults to `/`, which makes the disk hold the container's whole
 writable filesystem: packages installed with `apt-get`, files in `/root`, and
@@ -63,6 +63,7 @@ removes everything written to it. A disk in use can't be deleted. The
 Each disk is one line on the Usage page, priced from two rates on the
 [pricing page](https://lazycloud.dev/pricing). What the disk stores bills per
 GiB-month for as long as it exists, and that can be less than its size. Its
-declared size bills per GiB-month for the time a container holds it. Disks need
-a paid plan, which caps the declared size of all disks in a workspace, and a
-deploy past the cap fails with a message naming it.
+declared size bills per GiB-month for the time a container holds it.
+
+Disks need a paid plan. The plan caps the total declared size of a workspace's
+disks, and a deploy past the cap fails with a message naming the cap.

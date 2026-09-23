@@ -119,7 +119,7 @@ class _BlockDevice(_Response):
 
     @property
     def machine_volume_id(self) -> str:
-        """The volume id when this is the machine's own storage, not a disk passing through."""
+        """The volume id when this is the machine's own storage, not an attached disk volume."""
         if self.ebs is None or is_disk_volume_device(self.name):
             return ""
         return self.ebs.id

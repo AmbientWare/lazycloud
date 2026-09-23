@@ -254,6 +254,42 @@ func runCommitPublished(ctx context.Context, args []string) (any, error) {
 	return generationResult{Generation: *generation}, nil
 }
 
+// publishedPosition is the newest committed generation and how many committed
+// generations lead to it from the newest parentless one.
+type publishedPosition struct {
+	Generation int64 `json:"generation"`
+	ChainDepth int   `json:"chain_depth"`
+}
+
+// runPublished reports where the committed chain stands. The worker saves each
+// generation only after committing it here, so after a crash between the two
+// this is the record to resume from, not the worker's own.
+func runPublished(ctx context.Context, args []string) (any, error) {
+	f := newFlags("published", true)
+	if err := f.parse(args); err != nil {
+		return nil, err
+	}
+	p := f.paths()
+	lock, err := lockDisk(p)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.release()
+	state, err := requireState(p)
+	if err != nil {
+		return nil, err
+	}
+	position := publishedPosition{Generation: state.PublishedGeneration}
+	for generation := state.PublishedGeneration; generation != 0; position.ChainDepth++ {
+		record, known := state.record(generation)
+		if !known {
+			return nil, fmt.Errorf("disk %s has no record of generation %d", p.id, generation)
+		}
+		generation = record.ParentGeneration
+	}
+	return position, nil
+}
+
 func commitPending(state *diskState) error {
 	pending := state.Pending
 	for i := range state.Layers {
@@ -375,10 +411,10 @@ func runCompact(ctx context.Context, args []string) (any, error) {
 }
 
 // releaseNodes deletes the committed layers' nodes the daemon still holds,
-// newest first. The daemon's top node at startup and every head a seal added
-// are held by the monitor, which keeps them, and the older layers they back,
-// open after the commit drops them from the chain. Without this a compaction
-// frees no space until the disk is detached.
+// newest first. The monitor holds the daemon's top node at startup and every
+// head a seal added, and keeps them and the older layers they back open after
+// the commit drops them from the chain. Without this a compaction frees no
+// space until the disk is detached.
 func releaseNodes(client *qmpClient, layers []layer) error {
 	for _, l := range slices.Backward(layers) {
 		var nodes []struct {
@@ -506,8 +542,8 @@ func recoverDisk(ctx context.Context, p diskPaths) (bool, int, error) {
 
 // sealOrphanedHead seals, with no daemon running, a head that holds writes
 // nobody sealed, so the next publish uploads them rather than leaving them to
-// whichever node next attaches here. The writes are crash-consistent: what
-// had reached the file when the daemon died.
+// whichever node next attaches here. The writes are crash-consistent, holding
+// whatever had reached the file when the daemon died.
 func sealOrphanedHead(ctx context.Context, p diskPaths, state *diskState) error {
 	head := state.head()
 	held, err := layerHoldsData(ctx, p.layerPath(head))

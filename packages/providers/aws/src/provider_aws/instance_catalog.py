@@ -32,9 +32,9 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
     ebs_volume_limit: int = Field(gt=0)
     """The "EBS volume limit" from Amazon EBS specifications in the EC2 instance types guide.
 
-    Each durable disk on the instance takes one volume. A shared limit is stated
-    as "up to" a figure that already assumes the primary network interface and
-    subtracts NVMe instance store; each further interface counts against it too.
+    Each durable disk on the instance takes one volume. AWS states a shared
+    limit as "up to" a figure with the primary network interface and NVMe
+    instance store already deducted. Each further interface counts against it.
     """
 
     ebs_volume_limit_dedicated: bool = False

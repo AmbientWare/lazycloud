@@ -311,8 +311,8 @@ class AgentTunnelGateway:
         try:
             # A certificate admits a connection; the enrollment keeps authorizing its
             # streams. A session the agent replaced while renewing keeps the streams
-            # it accepted for as long as they last, so a long SSH session survives
-            # the hourly certificate, and revocation still ends it at the next check.
+            # it accepted for as long as they last. A long SSH session survives the
+            # hourly certificate, and revocation still ends it at the next check.
             while session.connected or session.streams:
                 if session.connected and datetime.now(UTC) >= session.record.expires_at:
                     status = grpc.StatusCode.UNAUTHENTICATED

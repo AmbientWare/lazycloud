@@ -28,10 +28,10 @@ from database import DatabaseClient
 class WorkerDiskLeaseService:
     """Leases a disk only to a container that declares it, in the disk's own workspace.
 
-    The caller has already proven the worker was assigned the container. What is
-    left to prove is that the container may write this disk at all: the id in the
-    payload is the worker's claim, and a worker holding one tenant's container
-    must not reach another tenant's disk by naming it.
+    The caller has already proven the worker was assigned the container. This
+    service proves the container may write the disk. The payload's disk id is
+    only the worker's claim, and a worker holding one tenant's container must not
+    reach another tenant's disk by naming it.
     """
 
     database: DatabaseClient

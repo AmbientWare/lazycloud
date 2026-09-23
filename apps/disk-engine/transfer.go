@@ -216,9 +216,9 @@ func fetchManifest(ctx context.Context, store *objectStore, entry chainEntry) (l
 	return manifest, nil
 }
 
-// downloadLayer rebuilds a layer file byte for byte: a sparse file of the
-// layer's size with each stored chunk written at its offset. Zero regions were
-// never stored and stay holes.
+// downloadLayer rebuilds a layer file byte for byte as a sparse file of the
+// layer's size, with each stored chunk written at its offset. Zero regions
+// were never stored and stay holes.
 func downloadLayer(ctx context.Context, store *objectStore, manifest layerManifest, path string) (int64, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {

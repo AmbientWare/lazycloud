@@ -1,15 +1,15 @@
 """EBS volumes that back durable disks, one volume per disk.
 
-Every volume carries the managed tag the connection policy creates and mutates
-by, a resource tag naming it a disk volume, and the deployment, workspace and
-disk it belongs to. The policy lets the control plane create a volume only with
-those tags and attach, detach or delete only a volume that carries them, so a
-volume someone else made in the same account is out of reach by permission as
-well as by the listing filter.
+Every volume carries the managed tag the connection policy keys on, a resource
+tag marking it a disk volume, and tags naming its deployment, workspace and
+disk. The policy lets the control plane create a volume only with those tags,
+and attach, detach or delete only a volume that carries them. A volume someone
+else made in the same account is out of reach by permission as well as by the
+listing filter.
 
-A disk volume attaches at a device name no launch template uses, which is how a
-machine's own storage evidence tells its root volume from a disk that is merely
-passing through; see `is_disk_volume_device`.
+A disk volume attaches at a device name no launch template uses. That is how a
+machine's storage evidence tells its root volume from an attached disk volume;
+see `is_disk_volume_device`.
 """
 
 from __future__ import annotations
@@ -280,8 +280,8 @@ class AwsBlockVolumes(BlockVolumeProvider):
             device = attachment.device
         attached = self._await_attached(volume_id, instance_id=instance_id, deadline=deadline)
         if not attached.delete_on_termination:
-            # A machine that ends takes its disk volumes with it; the object
-            # store holds the durable copy, and nothing else would delete them.
+            # A terminated instance deletes its disk volumes. The object store
+            # holds the durable copy, and nothing else would delete them.
             self._call(
                 "delete disk volume with its instance",
                 lambda: self.ec2.modify_instance_attribute(

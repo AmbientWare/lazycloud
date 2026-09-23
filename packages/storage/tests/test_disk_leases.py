@@ -78,7 +78,7 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
         disks.publish(_publication(disk_id, first, lease.lease_token, 3, 1))
     disks.publish(_publication(disk_id, first, lease.lease_token, 3, 0))
 
-    # Stopped, but its worker has not released storage: a final publish is still possible.
+    # Stopped, but its worker has not released storage, so a final publish is still possible.
     with isolated_services.database.session() as session:
         row = session.get(ContainerTable, first)
         assert row is not None
@@ -102,9 +102,9 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
     assert disks.get("box-root", workspace_id=workspace_id).holder_container_id == second
 
     with pytest.raises(ConflictError, match="before deleting"):
-        isolated_services.disk_deletion.request("box-root", workspace_id=workspace_id)
+        disks.request_deletion("box-root", workspace_id=workspace_id)
     assert disks.release(disk_id, container_id=second, lease_token=taken.lease_token)
-    assert isolated_services.disk_deletion.request("box-root", workspace_id=workspace_id)
+    assert disks.request_deletion("box-root", workspace_id=workspace_id) == disk_id
     assert not disks.list(workspace_id=workspace_id).data
 
 

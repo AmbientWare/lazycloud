@@ -48,8 +48,8 @@ class EndpointReplicaLimitReachedError(CapacityLimitReachedError):
 class DiskVolumePendingError(ConflictError):
     """A disk's provider volume is still being created, attached or detached.
 
-    The work continues without the caller, and asking again picks it up, so the
-    right response is to retry shortly rather than to give up.
+    The work continues without the caller and a repeat request picks it up, so
+    callers should retry shortly rather than give up.
     """
 
 

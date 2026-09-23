@@ -15,11 +15,16 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from billing.admission import DatabaseBillingAdmission
-from database.repositories.disks import DiskChainLink, DiskHolder, DiskRepository
+from database.repositories.disks import (
+    DiskChainLink,
+    DiskDeletionTarget,
+    DiskHolder,
+    DiskRepository,
+)
 from database.repositories.identity import WorkspaceRepository
 from database.tables.disks import DiskTable
 from database.types import DatabaseSession
@@ -29,7 +34,12 @@ from shared.disks import (
     DiskStatus,
     disk_manifest_key,
 )
-from shared.errors import ConflictError, InvalidInputError, NotFoundError
+from shared.errors import (
+    ConflictError,
+    DiskVolumePendingError,
+    InvalidInputError,
+    NotFoundError,
+)
 from shared.timestamps import to_utc, utc_now
 
 from database import DatabaseClient
@@ -38,6 +48,8 @@ from storage.disk_volumes import DiskVolumeService, DiskWorkerAbsence, holder_ke
 LOGGER = logging.getLogger(__name__)
 
 DISK_LIST_LIMIT = 100
+DISK_DELETION_RETRY_MIN_SECONDS = 30
+DISK_DELETION_RETRY_MAX_SECONDS = 60 * 60
 
 
 class DiskObjectStore(Protocol):
@@ -88,7 +100,7 @@ def get_or_create_disks(
 ) -> list[ResolvedDisk]:
     """The workload's disks by name, each created on its first use.
 
-    A larger declared size grows the disk: it is recorded here, and the next
+    A larger declared size grows the disk. This records it, and the next
     container to acquire the disk gets a volume of the new size and grows the
     filesystem into it. A smaller one is not refused here. Stub creation refuses
     it before a deploy, and a container launched from an older stub, whether a
@@ -254,9 +266,10 @@ class DiskService:
     ) -> None:
         """Record what the holder deleted once a self-contained generation superseded it.
 
-        Only the current holder, and only for the disk's newest generation when
-        that generation stands alone: anything older may still be restored from,
-        and a stale holder may be collecting under a disk someone else writes.
+        Only the current holder may record it, and only for the disk's newest
+        generation when that generation stands alone. Anything older may still be
+        restored from, and a stale holder may be collecting under a disk someone
+        else writes.
         """
         with self.database.session() as session:
             repository = DiskRepository(session)
@@ -264,8 +277,8 @@ class DiskService:
             self._require_lease(row, container_id, lease_token)
             if generation != row.generation:
                 raise ConflictError(
-                    f"disk {row.name} is at generation {row.generation}; only it can be "
-                    f"collected under, not {generation}"
+                    f"disk {row.name} is at generation {row.generation}; collect under "
+                    f"that generation, not {generation}"
                 )
             if repository.parent_generation(disk_id, generation) != 0:
                 raise ConflictError(
@@ -304,6 +317,7 @@ class DiskService:
         row.status = DiskStatus.Deleting.value
         deleted_at = to_utc(now or utc_now())
         row.deleted_at = deleted_at
+        row.deletion_due_at = deleted_at
         row.updated_at = utc_now()
         repository.close_attachment(str(row.id), at=deleted_at)
         return str(row.id)
@@ -374,26 +388,17 @@ class DiskService:
 
 @dataclass(slots=True)
 class DiskDeletionService:
-    """Removes a deleting disk's objects and then its rows, retrying until both are gone."""
+    """Finishes deleting disks whose deletion was requested: volume, objects, then rows.
+
+    A request only records the intent, and the scheduler's sweep does the rest,
+    retrying a deletion that fails later and later so it never holds up the others.
+    """
 
     database: DatabaseClient
     disks: DiskService
     volumes: DiskVolumeService
     objects: DiskObjectStore
     metering: DiskDeletionMetering
-
-    def request(self, name: str, *, workspace_id: str) -> bool:
-        """Delete the disk now, or leave it deleting for the sweep; False when deferred."""
-        disk_id = self.disks.request_deletion(name, workspace_id=workspace_id)
-        try:
-            self.finish(disk_id, workspace_id=workspace_id)
-        except Exception:
-            LOGGER.exception(
-                "disk deletion queued for retry",
-                extra={"workspace_id": workspace_id, "disk_id": disk_id},
-            )
-            return False
-        return True
 
     def delete_workspace_disks(self, workspace_id: str) -> None:
         """Delete every disk of a workspace being deleted, volumes and objects included.
@@ -416,20 +421,39 @@ class DiskDeletionService:
             DiskRepository(session).delete(disk_id)
 
     def reconcile_due(self, *, now: datetime | None = None, limit: int = 100) -> None:
-        del now
+        current = to_utc(now or utc_now())
         with self.database.session() as session:
-            targets = DiskRepository(session).list_deletions(limit=limit)
-        for workspace_id, disk_id in targets:
-            try:
-                self.finish(str(disk_id), workspace_id=str(workspace_id))
-            except Exception:
-                LOGGER.exception(
-                    "disk deletion failed; it will be retried",
-                    extra={"workspace_id": str(workspace_id), "disk_id": str(disk_id)},
+            targets = DiskRepository(session).due_deletions(now=current, limit=limit)
+        for target in targets:
+            if self._attempt(target):
+                continue
+            with self.database.session() as session:
+                DiskRepository(session).defer_deletion(
+                    target.id,
+                    now=current,
+                    shortest=timedelta(seconds=DISK_DELETION_RETRY_MIN_SECONDS),
+                    longest=timedelta(seconds=DISK_DELETION_RETRY_MAX_SECONDS),
                 )
+
+    def _attempt(self, target: DiskDeletionTarget) -> bool:
+        context = {"workspace_id": target.workspace_id, "disk_id": target.id}
+        try:
+            self.finish(target.id, workspace_id=target.workspace_id)
+        except DiskVolumePendingError as exc:
+            LOGGER.info(
+                "disk deletion waits on its volume; it will be retried",
+                extra=context | {"reason": str(exc)},
+            )
+            return False
+        except Exception:
+            LOGGER.exception("disk deletion failed; it will be retried", extra=context)
+            return False
+        return True
 
 
 __all__ = [
+    "DISK_DELETION_RETRY_MAX_SECONDS",
+    "DISK_DELETION_RETRY_MIN_SECONDS",
     "DISK_LIST_LIMIT",
     "DiskAcquisition",
     "DiskDeletionMetering",

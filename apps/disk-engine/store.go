@@ -51,8 +51,8 @@ func openStore(path string) (*objectStore, error) {
 		Credentials: credentials.NewStaticCredentialsProvider(
 			config.AccessKey, config.SecretKey, config.SessionToken),
 		UsePathStyle: config.ForcePathStyle,
-		// Checksums only where S3 requires them: S3-compatible stores reject the
-		// streaming trailers the SDK otherwise adds to every upload.
+		// Compute checksums only where S3 requires them. S3-compatible stores
+		// reject the streaming trailers the SDK otherwise adds to every upload.
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 		RetryMaxAttempts:           5,

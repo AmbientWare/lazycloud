@@ -614,7 +614,7 @@ class SchedulerContainerRequestService:
             for worker in schedulable_workers
         ]
         if any(request.disk_count for request in requests):
-            worker_capacities = _share_machine_disk_volumes(
+            worker_capacities = _share_machine_disks(
                 worker_capacities, self.disk_volume_attachments
             )
         outcomes = {
@@ -1649,31 +1649,45 @@ def _worker_capacity(
     )
 
 
-def _share_machine_disk_volumes(
+def _share_machine_disks(
     workers: list[WorkerCapacity], attachments: SchedulerDiskVolumeAttachments
 ) -> list[WorkerCapacity]:
-    """Limit each volume-storage worker to the attachments its machine has left.
+    """Limit each worker to the disk budget its machine has left.
 
-    A machine's attachment limit is the machine's, however many workers run on
-    it, and volumes stay attached for a while after their container stops, so
-    each worker's own reservations are not the whole of what is used.
+    A machine's disk budget is the machine's, however many workers run on it.
+    Host-storage workers all keep disks on the machine's one filesystem and
+    volume-storage workers all draw on its attachment limit, yet each reports
+    the whole budget as its own total, so what its siblings reserved comes off
+    it too. Volumes also stay attached for a while after their container stops,
+    so for them the workers' reservations are not the whole of what is used.
     """
-    by_machine: dict[str, list[WorkerCapacity]] = {}
+    by_machine: dict[tuple[str, DiskStorage], list[WorkerCapacity]] = {}
     for worker in workers:
-        if worker.disk_storage is DiskStorage.Volume and worker.machine_id:
-            by_machine.setdefault(worker.machine_id, []).append(worker)
+        if worker.machine_id:
+            by_machine.setdefault((worker.machine_id, worker.disk_storage), []).append(worker)
     if not by_machine:
         return workers
-    unheld = attachments.unheld_attachments(sorted(by_machine))
+    volume_machines = sorted(
+        machine_id for machine_id, storage in by_machine if storage is DiskStorage.Volume
+    )
+    unheld = attachments.unheld_attachments(volume_machines) if volume_machines else {}
     limited: dict[str, WorkerCapacity] = {}
-    for machine_id, siblings in by_machine.items():
-        used = unheld.get(machine_id, 0) + sum(
-            worker.total_disk_volumes - worker.free_disk_volumes for worker in siblings
-        )
-        free = max(max(worker.total_disk_volumes for worker in siblings) - used, 0)
+    for (machine_id, storage), siblings in by_machine.items():
+        if storage is DiskStorage.Volume:
+            used = unheld.get(machine_id, 0) + sum(
+                worker.total_disk_volumes - worker.free_disk_volumes for worker in siblings
+            )
+            free = max(max(worker.total_disk_volumes for worker in siblings) - used, 0)
+            for worker in siblings:
+                limited[worker.worker_id] = worker.model_copy(
+                    update={"free_disk_volumes": min(worker.free_disk_volumes, free)}
+                )
+            continue
+        used = sum(worker.total_disk_bytes - worker.free_disk_bytes for worker in siblings)
+        free = max(max(worker.total_disk_bytes for worker in siblings) - used, 0)
         for worker in siblings:
             limited[worker.worker_id] = worker.model_copy(
-                update={"free_disk_volumes": min(worker.free_disk_volumes, free)}
+                update={"free_disk_bytes": min(worker.free_disk_bytes, free)}
             )
     return [limited.get(worker.worker_id, worker) for worker in workers]
 

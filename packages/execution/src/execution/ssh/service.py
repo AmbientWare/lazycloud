@@ -120,8 +120,8 @@ class PodSshTunnelService:
     async def open(self, *, workspace_id: str, app: str, pod: str) -> AsyncIterator[PodSshTunnel]:
         """Connect to the pod's SSH server and hold one proxy connection for the tunnel's life.
 
-        The held connection is what wakes a scaled-to-zero pod and keeps it past its
-        idle window while the tunnel is open.
+        The held connection wakes a scaled-to-zero pod and keeps it past its idle
+        window while the tunnel is open.
         """
         target = await self.async_database.run_transaction(
             lambda session: ssh_pod_target(session, workspace_id=workspace_id, app=app, pod=pod)

@@ -25,6 +25,7 @@ commands:
   seal              --root R --disk D
   publish           --root R --disk D --store STORE.json --generation G --parent P [--flatten]
   commit-published  --root R --disk D --generation G
+  published         --root R --disk D
   detach            --root R --disk D
   compact           --root R --disk D
   recover           --root R
@@ -44,6 +45,7 @@ var commands = map[string]command{
 	"seal":             runSeal,
 	"publish":          runPublish,
 	"commit-published": runCommitPublished,
+	"published":        runPublished,
 	"detach":           runDetach,
 	"compact":          runCompact,
 	"recover":          runRecover,

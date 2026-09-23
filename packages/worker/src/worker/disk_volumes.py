@@ -7,8 +7,8 @@ disk's own, which the disk engine then uses as that disk's root. A disk's files
 therefore live only on its volume, and the space it can use is the volume's.
 
 The worker container sees the host's sysfs but not devices that appear after it
-started, so the device is found through sysfs and given a node of its own here
-rather than looked up under ``/dev``.
+started, so the worker finds the device through sysfs and creates its own node
+for it rather than looking it up under ``/dev``.
 """
 
 from __future__ import annotations
@@ -117,8 +117,8 @@ class DiskVolumeMounts:
     def mount(self, disk_id: str, volume: DiskBlockVolume, *, min_size_bytes: int) -> Path:
         """Mount the disk's volume at its root, formatting it if it is new.
 
-        Idempotent: a volume already mounted there is only grown to fill a
-        device the provider enlarged.
+        Idempotent. A volume already mounted there only grows to fill a device
+        the provider enlarged.
         """
         root = self.root(disk_id)
         device = self._await_device(volume.volume_id)
@@ -129,10 +129,10 @@ class DiskVolumeMounts:
             )
         node = self._device_node(volume.volume_id, device)
         if root not in mounted_paths():
-            # The volume is a cache of the object-storage chain, so one that
-            # holds no filesystem is formatted whatever the control plane
-            # recorded, and the engine restores the disk onto it. A device
-            # that does hold ext4 is never formatted.
+            # The volume caches the object-storage chain, so a device with no
+            # filesystem gets formatted whatever the control plane recorded,
+            # and the engine restores the disk onto it. A device that holds
+            # ext4 is never formatted.
             if not _holds_ext4(node):
                 if volume.formatted:
                     LOGGER.warning(
@@ -141,9 +141,9 @@ class DiskVolumeMounts:
                         volume.volume_id,
                         disk_id,
                     )
-                # No reserved blocks and few inodes: only the engine writes
-                # here, a handful of large files, and the headroom is sized
-                # for layer data rather than filesystem overhead.
+                # No reserved blocks and few inodes. Only the engine writes
+                # here, and it writes a handful of large files. The headroom
+                # is sized for layer data, not filesystem overhead.
                 self._run(
                     _MKFS_TIMEOUT_SECONDS,
                     "mkfs.ext4",
@@ -160,8 +160,8 @@ class DiskVolumeMounts:
             self._run(
                 _MOUNT_TIMEOUT_SECONDS, "mount", "-t", "ext4", "-o", "noatime", str(node), str(root)
             )
-        # Online, so it needs no fsck; a filesystem that already fills its
-        # device is left as it is.
+        # An online resize needs no fsck, and it leaves a filesystem that
+        # already fills its device as it is.
         self._run(_RESIZE_TIMEOUT_SECONDS, "resize2fs", str(node))
         return root
 
@@ -193,10 +193,10 @@ class DiskVolumeMounts:
         """Unmount the disk's volume so the control plane can detach it.
 
         Raises while the volume stays mounted, since the lease must not be
-        released under it. The directory left behind is only this worker's: the
-        mount point, and whatever the engine created in it while nothing was
-        mounted there, such as its lock directory. Failing to remove it is
-        logged and does not hold up the release.
+        released under it. The directory left behind belongs only to this
+        worker. It holds the mount point and whatever the engine created there
+        while nothing was mounted, such as its lock directory. A failure to
+        remove it is logged and does not hold up the release.
         """
         root = self.root(disk_id)
         if root in mounted_paths():

@@ -1,15 +1,15 @@
 """SSH identities derived from a workspace's credential secret.
 
-Nothing here is stored. The workspace user certificate authority and every pod's
-host key are ed25519 keys whose seeds are an HMAC of the credential secret under
-a label naming what the key is for, so the control plane can recompute either one
-whenever it signs a certificate or hands a container its identity. The secret is
-never served, unlike the signing key members use to verify callbacks: a seed
-anyone can read would let them mint certificates.
+This module stores nothing. The workspace user certificate authority and every
+pod's host key are ed25519 keys seeded with an HMAC of the credential secret
+under a label naming the key's purpose, so the control plane can recompute either
+one whenever it signs a certificate or hands a container its identity. Unlike the
+signing key members use to verify callbacks, the API never serves this secret,
+because anyone who could read a seed could mint certificates.
 
-A host key is keyed on the app and the pod's name rather than on a stub or a
-container: both change on every redeploy, and a host key that changed with them
-would make each redeploy look like an impersonation to the client that pinned it.
+A host key derives from the app and the pod's name, not from a stub or container.
+Both of those change on every redeploy, and a host key that changed with them
+would make each redeploy look like an impersonation to a client that pinned it.
 """
 
 from __future__ import annotations

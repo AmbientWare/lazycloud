@@ -234,7 +234,11 @@ class WorkerExecutionRecord(ContractModel):
     total_memory_mib: int = 0
     total_gpu_count: int = 0
     total_disk_bytes: int = 0
-    """Declared disk size a host-storage worker can hold: its disk filesystem less the reserve."""
+    """Declared disk size a host-storage worker can hold: its disk filesystem less the reserve.
+
+    Every host-storage worker on a machine reports the same filesystem, so the
+    scheduler pools their reservations against one machine budget.
+    """
 
     total_disk_volumes: int = 0
     """Volumes a volume-storage worker's machine can still attach, one per disk."""

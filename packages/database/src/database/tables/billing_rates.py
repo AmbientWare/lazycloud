@@ -144,8 +144,8 @@ class PlatformRateTable(IdTable, DatabaseBase):
 class DiskRateTable(IdTable, DatabaseBase):
     """What a byte of a disk costs a second, stored and attached, over one interval.
 
-    Its own table rather than two more platform columns: the platform rows
-    published before disks existed would have to hold a rate for them, and
+    Its own table rather than two more platform columns, because the platform
+    rows published before disks existed would have to hold a rate for them, and
     neither a zero nor an absent figure is true there. Published like the others,
     never edited.
     """

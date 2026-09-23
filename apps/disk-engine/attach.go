@@ -118,9 +118,9 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			return nil, err
 		}
 	}
-	// Reusing the local copy downloads nothing, so it needs no reserve: room
-	// for the head's writes is the worker's to watch. A restore is planned
-	// before the stale local copy is removed, counting that copy as free.
+	// Reusing the local copy downloads nothing, so it needs no reserve. The
+	// worker watches the room left for the head's writes. A restore is planned
+	// before the stale local copy is removed and counts that copy as free.
 	var plan []bool
 	if !reuse {
 		have, err := freeBytes(p, true)
@@ -213,10 +213,10 @@ func connectAndMount(ctx context.Context, p diskPaths, state *diskState, format 
 }
 
 // growHead raises the disk's size to size before the daemon opens it. Only
-// the head changes: the sealed layers below keep their size, and reads past
-// the end of a smaller backing layer return zeroes. The filesystem is grown
-// once it is mounted, and the flag that asks for it is saved first, so an
-// attach that stops between the two still grows it next time.
+// the head changes. The sealed layers below keep their size, and reads past
+// the end of a smaller backing layer return zeroes. connectAndMount grows the
+// filesystem once it is mounted. The flag asking for that is saved first, so
+// an attach that stops between the two still grows it next time.
 func growHead(ctx context.Context, p diskPaths, state *diskState, size int64) error {
 	if _, err := runTool(ctx, toolImage, "resize", "-q", "-f", "qcow2", p.layerPath(state.head()), fmt.Sprint(size)); err != nil {
 		return err
@@ -317,7 +317,7 @@ func freeBytes(p diskPaths, countStale bool) (int64, error) {
 }
 
 // qcow2MetadataBytes bounds the tables a qcow2 image of virtual size virt
-// needs on top of its data: 8-byte L2 entries and 2-byte refcounts per 64 KiB
+// needs on top of its data. 8-byte L2 entries and 2-byte refcounts per 64 KiB
 // cluster come to under 1/4096 of the size, plus fixed headers.
 func qcow2MetadataBytes(virt int64) int64 { return virt/4096 + 1<<20 }
 
@@ -517,8 +517,8 @@ func daemonHeadWritten(ctx context.Context, p diskPaths, state *diskState) (bool
 // commitIntoBelow commits a restored layer into the layer below it. The layer
 // below is opened the way the daemon opens the base, detecting zeroes and
 // unmapping them, so ranges a later generation zeroed free their space there
-// rather than being written out as zeroes. -d: the layer is deleted afterwards
-// rather than emptied.
+// rather than being written out as zeroes. -d deletes the layer afterwards
+// instead of emptying it.
 func commitIntoBelow(ctx context.Context, path string, below layer, belowPath string) error {
 	escape := func(value string) string { return strings.ReplaceAll(value, ",", ",,") }
 	opts := strings.Join([]string{

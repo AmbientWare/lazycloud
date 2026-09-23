@@ -181,8 +181,9 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 	return pid, nil
 }
 
-// daemonAlive reports whether pid is this disk's daemon. A pid alone is not
-// enough after a restart: the kernel may have handed it to something else.
+// daemonAlive reports whether pid is this disk's daemon. After a restart the
+// kernel may have handed the pid to another process, so its command line must
+// name this disk's monitor socket.
 func daemonAlive(p diskPaths, pid int) bool {
 	if pid <= 0 {
 		return false

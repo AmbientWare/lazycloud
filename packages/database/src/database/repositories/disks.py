@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database.repositories.identity import WorkspaceRepository
 from database.tables.compute import ComputeProviderInstanceTable
@@ -35,6 +35,12 @@ class DiskChainLink:
     generation: int
     manifest_key: str
     manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DiskDeletionTarget:
+    id: str
+    workspace_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,14 +372,33 @@ class DiskRepository:
             )
         )
 
-    def list_deletions(self, *, limit: int) -> tuple[tuple[str, str], ...]:
+    def due_deletions(self, *, now: datetime, limit: int) -> tuple[DiskDeletionTarget, ...]:
+        """Deleting disks whose next attempt is due, the longest due first."""
+        rows = self.session.execute(
+            select(DiskTable.id, DiskTable.workspace_id)
+            .where(DiskTable.deletion_due_at <= now)
+            .order_by(DiskTable.deletion_due_at, DiskTable.id)
+            .limit(limit)
+        ).tuples()
         return tuple(
-            self.session.execute(
-                select(DiskTable.workspace_id, DiskTable.id)
-                .where(DiskTable.deleted_at.is_not(None))
-                .order_by(DiskTable.deleted_at, DiskTable.id)
-                .limit(limit)
-            ).tuples()
+            DiskDeletionTarget(id=str(disk_id), workspace_id=str(workspace_id))
+            for disk_id, workspace_id in rows
+        )
+
+    def defer_deletion(
+        self, disk_id: str, *, now: datetime, shortest: timedelta, longest: timedelta
+    ) -> None:
+        """Push a failed deletion's next attempt out by its age so far, within the bounds.
+
+        The wait roughly doubles with each failure, so a deletion that keeps
+        failing is tried less and less often and never starves newer ones.
+        """
+        age = now - DiskTable.deleted_at
+        self.session.execute(
+            update(DiskTable)
+            .where(DiskTable.id == disk_id, DiskTable.deleted_at.is_not(None))
+            .values(deletion_due_at=now + func.least(func.greatest(age, shortest), longest))
+            .execution_options(synchronize_session=False)
         )
 
     def workspace_disks(self, workspace_id: str) -> tuple[tuple[str, str, bool], ...]:
@@ -602,6 +627,7 @@ def _with_holder_liveness() -> Select[tuple[DiskTable, bool]]:
 __all__ = [
     "DiskAttachmentCheckpoint",
     "DiskChainLink",
+    "DiskDeletionTarget",
     "DiskHolder",
     "DiskMeteringCheckpoint",
     "DiskMeteringTarget",

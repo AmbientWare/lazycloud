@@ -9,7 +9,7 @@ A joined machine has no provider volume and keeps its disks in host storage.
 
 The disk row records the volume's state, and every provider call happens outside
 any transaction. A step reads the row, calls the provider, then records the
-result only if the row is still exactly as it read it: the revision fences
+result only if the row is still exactly as it read it. The revision fences
 concurrent drivers and the lease token fences a container that has lost the
 disk. Every provider call is idempotent against the provider's own record, so a
 driver that crashes between the call and the record is finished by the next one,
@@ -76,16 +76,30 @@ instead of abandoning a request the control plane is still serving.
 DISK_VOLUME_SWEEP_WAIT_SECONDS = 120.0
 """Longest housekeeping or deletion waits on one provider operation."""
 
-DISK_VOLUME_STUCK_SECONDS = 5 * 60
-"""Age at which a volume transition has plainly lost whoever was driving it.
+DISK_VOLUME_DRIVER_MARGIN_SECONDS = 60.0
+"""Slack past a driver's wait for the provider's own request latency and retries."""
 
-Longer than any provider call plus its bounded wait, so taking over a transition
-never races the driver that started it.
+DISK_VOLUME_LEASE_SILENCE_SECONDS = (
+    DISK_VOLUME_ACQUIRE_WAIT_SECONDS + DISK_VOLUME_DRIVER_MARGIN_SECONDS
+)
+"""How long an acquire's driver may go without starting a provider call before it is dead.
+
+Well inside the worker's acquire deadline, so a new holder that finds a dead
+lease's work unfinished takes it over and still answers in time.
 """
 
+DISK_VOLUME_SWEEP_SILENCE_SECONDS = (
+    DISK_VOLUME_SWEEP_WAIT_SECONDS + DISK_VOLUME_DRIVER_MARGIN_SECONDS
+)
+"""How long housekeeping or deletion may go without starting a provider call before it is dead."""
+
+DISK_VOLUME_RECHECK_SECONDS = 5 * 60
+"""How often a stopped holder that may still publish has its volume looked at again."""
+
 DISK_VOLUME_ORPHAN_INTERVAL_SECONDS = 60 * 60
-DISK_VOLUME_ORPHAN_MIN_AGE_SECONDS = DISK_VOLUME_STUCK_SECONDS
+DISK_VOLUME_ORPHAN_MIN_AGE_SECONDS = 5 * 60
 _MAX_STEPS = 16
+_LEASE_DRIVER_PREFIX = "lease:"
 
 
 class VolumeState(StrEnum):
@@ -300,8 +314,10 @@ class DiskVolumeService:
             due = DiskVolumeRepository(session).due(
                 cached_before=current - timedelta(seconds=DISK_VOLUME_CACHE_SECONDS),
                 released_before=current - timedelta(seconds=DISK_VOLUME_RELEASE_GRACE_SECONDS),
-                stuck_before=current - timedelta(seconds=DISK_VOLUME_STUCK_SECONDS),
-                recheck_before=current - timedelta(seconds=DISK_VOLUME_STUCK_SECONDS),
+                lease_driver_prefix=_LEASE_DRIVER_PREFIX,
+                lease_silent_before=current - timedelta(seconds=DISK_VOLUME_LEASE_SILENCE_SECONDS),
+                sweep_silent_before=current - timedelta(seconds=DISK_VOLUME_SWEEP_SILENCE_SECONDS),
+                recheck_before=current - timedelta(seconds=DISK_VOLUME_RECHECK_SECONDS),
                 limit=limit,
             )
         for disk_id in due:
@@ -439,10 +455,13 @@ class DiskVolumeService:
         anything moved the volume after it decided, so a sweep never detaches or
         deletes a volume a new holder has just taken. A state with provider work
         in it is moved on only by the driver that entered it, or by anyone once
-        that driver has plainly stopped, so two drivers never race one provider
-        operation. A sweep that loses the disk while it owns such a state hands
-        it to the new lease before its provider call rather than after, and a
-        provider call it did make is recorded whatever the lease is now.
+        that driver has been silent for longer than its wait allows. The driver
+        claims the state again before each provider call, and a takeover moves
+        the revision that claim is fenced on, so two drivers never race one
+        provider operation. A sweep that loses the disk while it owns such a
+        state hands it to the new lease before its provider call rather than
+        after, and a provider call it did make is recorded whatever the lease is
+        now.
         """
         first = True
         for _ in range(_MAX_STEPS):
@@ -476,10 +495,16 @@ class DiskVolumeService:
                 )
                 continue
             remaining = deadline - self.monotonic()
-            if step in _PROVIDER_STEPS and remaining <= 0:
-                raise DiskVolumePendingError(
-                    f"disk {disk_id} volume is still {snapshot.state}; retry shortly"
-                )
+            if step in _PROVIDER_STEPS:
+                if remaining <= 0:
+                    raise DiskVolumePendingError(
+                        f"disk {disk_id} volume is still {snapshot.state}; retry shortly"
+                    )
+                with self.database.session() as session:
+                    claimed = DiskVolumeRepository(session).claim(snapshot, at=self.clock())
+                if claimed is None:
+                    continue
+                snapshot = claimed
             try:
                 self._perform(snapshot, step, goal, driver=driver, wait_seconds=remaining)
             except BlockVolumePendingError as exc:
@@ -502,8 +527,14 @@ class DiskVolumeService:
         )
 
     def _abandoned(self, snapshot: DiskVolumeSnapshot) -> bool:
+        """Whether the state's driver has been silent past the longest call it could be making."""
+        silence = (
+            DISK_VOLUME_LEASE_SILENCE_SECONDS
+            if snapshot.driver.startswith(_LEASE_DRIVER_PREFIX)
+            else DISK_VOLUME_SWEEP_SILENCE_SECONDS
+        )
         return snapshot.driven_at is None or self.clock() - snapshot.driven_at >= timedelta(
-            seconds=DISK_VOLUME_STUCK_SECONDS
+            seconds=silence
         )
 
     def _perform(
@@ -687,7 +718,7 @@ def _forget(
 
 def _lease_driver(lease_token: str) -> str:
     """The driver every attach under one lease shares, so a retried acquire resumes its own work."""
-    return "lease:" + hashlib.sha256(lease_token.encode()).hexdigest()[:40]
+    return _LEASE_DRIVER_PREFIX + hashlib.sha256(lease_token.encode()).hexdigest()[:40]
 
 
 def _housekeeping_driver() -> str:
@@ -696,9 +727,12 @@ def _housekeeping_driver() -> str:
 
 __all__ = [
     "DISK_VOLUME_ACQUIRE_WAIT_SECONDS",
+    "DISK_VOLUME_LEASE_SILENCE_SECONDS",
     "DISK_VOLUME_ORPHAN_INTERVAL_SECONDS",
+    "DISK_VOLUME_ORPHAN_MIN_AGE_SECONDS",
+    "DISK_VOLUME_RECHECK_SECONDS",
     "DISK_VOLUME_RELEASE_GRACE_SECONDS",
-    "DISK_VOLUME_STUCK_SECONDS",
+    "DISK_VOLUME_SWEEP_SILENCE_SECONDS",
     "DISK_VOLUME_SWEEP_WAIT_SECONDS",
     "AttachTo",
     "Detach",

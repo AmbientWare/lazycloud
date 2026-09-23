@@ -170,8 +170,10 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
         assert claimed is not None and claimed.deletion_requested_at is not None
         assert DiskRepository(session).get(disk.record.name, workspace_id=workspace_id) is None
         assert [
-            (str(owner), str(disk_id))
-            for owner, disk_id in DiskRepository(session).list_deletions(limit=10)
+            (target.workspace_id, target.id)
+            for target in DiskRepository(session).due_deletions(
+                now=restarted_at + timedelta(days=30), limit=10
+            )
         ] == [(workspace_id, disk.record.id)]
         customer = VolumeRepository(session).get("customer-data", workspace_id=external.id)
         assert customer is not None and customer.deletion_requested_at is None

@@ -238,6 +238,6 @@ class AgentTunnelClient:
 
     async def _expire(self) -> None:
         await asyncio.sleep(max(0, (self.expires_at - utc_now()).total_seconds()))
-        # A retired session is closed by retire() once its streams end.
+        # retire() closes a retired session once its streams end.
         if self.accepting:
             await self.close()

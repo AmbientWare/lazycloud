@@ -6,9 +6,9 @@ filesystem on the node that holds it. Between containers it is a chain of sealed
 layers in the workspace bucket, so any node in the workspace's placement can
 restore it, and the node that last held it restarts it without a download.
 
-One container writes a disk at a time. That is enforced where the disk is
-acquired, with a fencing token every publish must carry, because two writers of
-one block device corrupt it rather than conflict.
+One container writes a disk at a time. Acquiring the disk enforces that with a
+fencing token every publish must carry, because two writers of one block device
+corrupt it rather than conflict.
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ the network rather than by the volume.
 """
 
 DISK_VOLUME_CACHE_SECONDS = 30 * 60
-"""How long a released disk's volume is kept for a restart on the same machine
-before the control plane deletes it; the object-storage copy is the durable one."""
+"""How long the control plane keeps a released disk's volume for a restart in the
+same zone before deleting it. The object-storage copy is the durable one."""
 
 DISK_VOLUME_MIN_HEADROOM_BYTES = 10 * 1024**3
 
@@ -51,7 +51,7 @@ def disk_volume_size_bytes(disk_size_bytes: int) -> int:
 
     The volume holds the disk's layer chain: the compacted base, which never
     exceeds the declared size, plus writes not yet sealed, published and
-    compacted into it. The headroom covers those, a quarter of the disk or 10 GiB
+    compacted into it. The headroom covers those, a quarter of the disk or 10 GiB,
     whichever is larger. Flattening streams the chain rather than copying it, so
     no second full copy ever needs room.
     """

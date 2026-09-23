@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from database.tables.compute import ComputeProviderInstanceTable, ComputeUnitTable
@@ -10,7 +10,7 @@ from database.tables.orchestration import ContainerTable, WorkerTable
 from foundation.ids import try_uuid
 from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.timestamps import to_utc
-from sqlalchemy import and_, delete, func, or_, select, union, update
+from sqlalchemy import and_, case, delete, func, or_, select, union, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
@@ -162,7 +162,7 @@ class DiskVolumeRepository:
     ) -> bool:
         """Move the volume on from exactly the state `snapshot` read.
 
-        A decision is fenced on the revision and the lease: a writer that read an
+        A decision is fenced on the revision and the lease. A writer that read an
         older state, or read it under a lease that has since changed hands,
         changes nothing. The result of a provider call the snapshot's driver
         already made (`performed`) is fenced on the revision and that driver
@@ -214,6 +214,30 @@ class DiskVolumeRepository:
             .execution_options(synchronize_session=False)
         )
         return moved is not None
+
+    def claim(self, snapshot: DiskVolumeSnapshot, *, at: datetime) -> DiskVolumeSnapshot | None:
+        """Renew the snapshot's driver's hold on its state just before a provider call.
+
+        Fenced on the revision, driver and lease the snapshot read, and moves the
+        revision, so a takeover that read the driver as silent changes nothing
+        once the driver has claimed again. None when the state is no longer the
+        driver's to call for.
+        """
+        moved = self.session.scalar(
+            update(DiskTable)
+            .where(
+                DiskTable.id == snapshot.disk_id,
+                DiskTable.volume_revision == snapshot.revision,
+                DiskTable.volume_driver == snapshot.driver,
+                DiskTable.lease_token == snapshot.lease_token,
+            )
+            .values(volume_revision=snapshot.revision + 1, volume_driven_at=at)
+            .returning(DiskTable.id)
+            .execution_options(synchronize_session=False)
+        )
+        if moved is None:
+            return None
+        return replace(snapshot, revision=snapshot.revision + 1, driven_at=at)
 
     def defer(self, snapshot: DiskVolumeSnapshot, *, at: datetime) -> None:
         """Push an unchanged volume to the back of the due order without moving it.
@@ -270,15 +294,19 @@ class DiskVolumeRepository:
         *,
         cached_before: datetime,
         released_before: datetime,
-        stuck_before: datetime,
+        lease_driver_prefix: str,
+        lease_silent_before: datetime,
+        sweep_silent_before: datetime,
         recheck_before: datetime,
         limit: int,
     ) -> tuple[str, ...]:
-        """Disks whose volume has work waiting: one indexed read, idle or not.
+        """Disks whose volume has work waiting, in one indexed read whether idle or not.
 
         A cached volume is due when its window has passed, a released one after
         the grace its worker has to unmount it, and one in any other transition
-        once whoever drove it has plainly stopped. An attached volume is due when
+        once whoever drove it has been silent too long: a driver named with
+        `lease_driver_prefix` since `lease_silent_before`, any other since
+        `sweep_silent_before`. An attached volume is due when
         its holder is gone, or finished with its storage released. A finished
         holder whose storage is not released may still publish, so its volume is
         only rechecked once `recheck_before` has passed since it was last looked
@@ -313,7 +341,14 @@ class DiskVolumeRepository:
                         DiskTable.volume_state.in_(
                             ("creating", "attaching", "detaching", "deleting")
                         ),
-                        DiskTable.volume_driven_at <= stuck_before,
+                        DiskTable.volume_driven_at
+                        <= case(
+                            (
+                                DiskTable.volume_driver.startswith(lease_driver_prefix),
+                                lease_silent_before,
+                            ),
+                            else_=sweep_silent_before,
+                        ),
                     ),
                     and_(
                         DiskTable.volume_state.in_(("attaching", "attached")),

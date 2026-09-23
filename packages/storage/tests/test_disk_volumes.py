@@ -22,8 +22,10 @@ from shared.disks import DISK_VOLUME_CACHE_SECONDS, DiskMount
 from shared.errors import DiskVolumePendingError
 from shared.timestamps import utc_now
 from storage.disk_volumes import (
+    DISK_VOLUME_LEASE_SILENCE_SECONDS,
+    DISK_VOLUME_ORPHAN_MIN_AGE_SECONDS,
+    DISK_VOLUME_RECHECK_SECONDS,
     DISK_VOLUME_RELEASE_GRACE_SECONDS,
-    DISK_VOLUME_STUCK_SECONDS,
     DiskVolumeService,
 )
 from storage.disks import DiskDeletionService, DiskService, get_or_create_disks
@@ -203,7 +205,7 @@ def test_a_released_volume_is_taken_back_in_place_moved_between_zones_and_expire
     assert provider.volumes[grant.volume_id].attached_to == "i-a"
     assert provider.volumes[grant.volume_id].request.size_bytes > GIB
 
-    # Released and restarted on the same machine inside the grace: no detach at all.
+    # Released and restarted on the same machine inside the grace, so nothing detaches.
     assert disks.release(disk_id, container_id=first, lease_token=lease.lease_token)
     volumes.release(disk_id)
     second = _container(isolated_services, workspace_id)
@@ -212,7 +214,7 @@ def test_a_released_volume_is_taken_back_in_place_moved_between_zones_and_expire
     assert taken.volume_id == grant.volume_id and taken.formatted
     assert "detach" not in provider.calls
 
-    # Released for good: the sweep waits out the grace, then detaches and caches it.
+    # Released for good. The sweep waits out the grace, then detaches and caches it.
     assert disks.release(disk_id, container_id=second, lease_token=lease.lease_token)
     volumes.release(disk_id)
     volumes.reconcile_due(now=clock.now)
@@ -222,7 +224,7 @@ def test_a_released_volume_is_taken_back_in_place_moved_between_zones_and_expire
     assert _state(isolated_services, disk_id) == "cached"
     assert provider.volumes[grant.volume_id].attached_to == ""
 
-    # A holder in another zone cannot use it: the stale one goes, a new one comes.
+    # A holder in another zone cannot use it, so the stale volume goes and a new one comes.
     third = _container(isolated_services, workspace_id)
     lease = disks.acquire(disk_id, container_id=third, worker_id="worker")
     moved = volumes.attach(
@@ -274,7 +276,7 @@ def test_a_lost_create_answer_and_a_dead_holder_recover_without_a_second_volume(
         row.status = ContainerStatus.Stopped.value
         row.storage_released_at = utc_now()
 
-    # Its holder stopped and released storage without releasing the lease: the
+    # Its holder stopped and released storage without releasing the lease. The
     # sweep detaches the volume and keeps it for the next holder.
     volumes.reconcile_due(now=clock.now)
     assert _state(isolated_services, disk_id) == "cached"
@@ -287,8 +289,59 @@ def test_a_lost_create_answer_and_a_dead_holder_recover_without_a_second_volume(
         objects=isolated_services.disk_deletion.objects,
         metering=isolated_services.disk_deletion.metering,
     )
-    assert deletion.request("vol-crash", workspace_id=workspace_id)
+    disks.request_deletion("vol-crash", workspace_id=workspace_id, now=clock.now)
+    assert list(provider.volumes) == [grant.volume_id]
+    deletion.reconcile_due(now=clock.now)
     assert provider.volumes == {}
+    assert not disks.list(workspace_id=workspace_id).data
+
+
+@dataclass
+class _Objects:
+    failing: str
+    attempts: list[str] = field(default_factory=list)
+
+    def delete_disk_objects(self, *, workspace_id: str, disk_id: str) -> None:
+        self.attempts.append(disk_id)
+        if disk_id == self.failing:
+            raise RuntimeError("the bucket refused the delete")
+
+
+def test_a_deletion_that_keeps_failing_backs_off_without_holding_up_newer_ones(
+    isolated_services: ApiServices,
+) -> None:
+    volumes, _, clock, workspace_id, failing = _setup(isolated_services, "del-failing")
+    disks = isolated_services.disks
+    [newer] = get_or_create_disks(
+        isolated_services.database,
+        [DiskMount(name="del-newer", size_bytes=GIB)],
+        workspace_id=workspace_id,
+    )
+    objects = _Objects(failing=failing)
+    deletion = DiskDeletionService(
+        isolated_services.database,
+        disks=disks,
+        volumes=volumes,
+        objects=objects,
+        metering=isolated_services.disk_deletion.metering,
+    )
+    requested = clock.now
+    disks.request_deletion("del-failing", workspace_id=workspace_id, now=requested)
+    disks.request_deletion(
+        "del-newer", workspace_id=workspace_id, now=requested + timedelta(seconds=1)
+    )
+
+    def attempts_at(seconds: int) -> list[str]:
+        deletion.reconcile_due(now=requested + timedelta(seconds=seconds), limit=1)
+        return objects.attempts
+
+    assert attempts_at(1) == [failing]
+    assert attempts_at(1) == [failing, newer.record.id]
+    # Retried after the shortest wait, then after a wait as long as its age.
+    assert attempts_at(30) == [failing, newer.record.id]
+    assert attempts_at(31) == [failing, newer.record.id, failing]
+    assert attempts_at(61) == [failing, newer.record.id, failing]
+    assert attempts_at(62) == [failing, newer.record.id, failing, failing]
 
 
 def test_a_sweep_that_loses_the_disk_to_a_new_holder_leaves_its_volume_attached(
@@ -319,7 +372,7 @@ def test_a_sweep_that_loses_the_disk_to_a_new_holder_leaves_its_volume_attached(
         )
 
     absence.when_asked = take_over
-    clock.now += timedelta(seconds=DISK_VOLUME_STUCK_SECONDS + 1)
+    clock.now += timedelta(seconds=DISK_VOLUME_RECHECK_SECONDS + 1)
     volumes.reconcile_due(now=clock.now)
 
     assert taken_over == [grant.volume_id]
@@ -386,12 +439,16 @@ def test_housekeeping_that_leaves_a_volume_alone_does_not_keep_its_dead_driver_a
     with pytest.raises(DiskVolumePendingError):
         volumes.attach(disk_id, host=_host("i-a"), lease_token=taken.lease_token)
 
-    # Housekeeping sees a live holder and leaves the volume, pass after pass.
-    for _ in range(2):
-        clock.now += timedelta(seconds=DISK_VOLUME_STUCK_SECONDS + 1)
-        volumes.reconcile_due(now=clock.now)
-        assert _state(isolated_services, disk_id) == "attaching"
+    # The dead lease's attach is left alone for as long as its own call could run.
+    clock.now += timedelta(seconds=DISK_VOLUME_LEASE_SILENCE_SECONDS - 1)
+    with pytest.raises(DiskVolumePendingError):
+        volumes.attach(disk_id, host=_host("i-a"), lease_token=taken.lease_token)
 
+    # Past that, housekeeping sees a live holder and leaves the volume; the
+    # holder's next ask takes the attach over, well inside its acquire deadline.
+    clock.now += timedelta(seconds=2)
+    volumes.reconcile_due(now=clock.now)
+    assert _state(isolated_services, disk_id) == "attaching"
     grant = volumes.attach(disk_id, host=_host("i-a"), lease_token=taken.lease_token)
     assert provider.volumes[grant.volume_id].attached_to == "i-a"
     assert _state(isolated_services, disk_id) == "attached"
@@ -420,8 +477,8 @@ def test_an_abandoned_creation_outlives_its_disk_until_its_volume_is_collected(
         objects=isolated_services.disk_deletion.objects,
         metering=isolated_services.disk_deletion.metering,
     )
-    assert not deletion.request("vol-orphan", workspace_id=workspace_id)
-    clock.now += timedelta(seconds=DISK_VOLUME_STUCK_SECONDS + 1)
+    disks.request_deletion("vol-orphan", workspace_id=workspace_id, now=clock.now)
+    clock.now += timedelta(seconds=DISK_VOLUME_LEASE_SILENCE_SECONDS + 1)
     deletion.reconcile_due(now=clock.now)
     assert not disks.list(workspace_id=workspace_id).data
 
@@ -429,6 +486,7 @@ def test_an_abandoned_creation_outlives_its_disk_until_its_volume_is_collected(
     # creation it abandoned still holds the connection and is still collected.
     with isolated_services.database.session() as session:
         assert DiskVolumeRepository(session).connection_holds_volumes(connection_id)
+    clock.now += timedelta(seconds=DISK_VOLUME_ORPHAN_MIN_AGE_SECONDS)
     assert volumes.collect_orphans() == 1
     assert made not in provider.volumes
     with isolated_services.database.session() as session:

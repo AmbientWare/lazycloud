@@ -291,27 +291,42 @@ def test_disks_take_volume_attachments_on_provider_workers_and_bytes_on_joined_o
     )
 
 
-def test_workers_on_one_machine_share_its_volume_attachments() -> None:
-    """Two worker slots on one machine each see the machine's free attachments, and a
-    disk placed on either takes one from both."""
+@pytest.mark.parametrize("storage", [DiskStorage.Volume, DiskStorage.Host])
+def test_workers_on_one_machine_share_its_disk_budget(storage: DiskStorage) -> None:
+    """Two worker slots on one machine each see the machine's whole disk budget, its
+    volume attachments or its one filesystem, and a disk placed on either takes it
+    from both."""
+    gib = 1024**3
+    budget = (
+        {"total_disk_volumes": 1, "free_disk_volumes": 1}
+        if storage is DiskStorage.Volume
+        else {"total_disk_bytes": 100 * gib, "free_disk_bytes": 100 * gib}
+    )
     workers = [
-        WorkerCapacity(
-            worker_id=worker_id,
-            machine_id="machine-1",
-            placement=Placement.platform(),
-            total_cpu=8,
-            free_cpu=8,
-            total_memory_mib=16384,
-            free_memory_mib=16384,
-            total_gpu=0,
-            disk_storage=DiskStorage.Volume,
-            total_disk_volumes=1,
-            free_disk_volumes=1,
+        WorkerCapacity.model_validate(
+            {
+                "worker_id": worker_id,
+                "machine_id": "machine-1",
+                "placement": Placement.platform(),
+                "total_cpu": 8,
+                "free_cpu": 8,
+                "total_memory_mib": 16384,
+                "free_memory_mib": 16384,
+                "total_gpu": 0,
+                "disk_storage": storage,
+                **budget,
+            }
         )
         for worker_id in ("slot-a", "slot-b")
     ]
     requests = [
-        SchedulingRequest(placement=Placement.platform(), id=f"pod-{index}", cpu=1, disk_count=1)
+        SchedulingRequest(
+            placement=Placement.platform(),
+            id=f"pod-{index}",
+            cpu=1,
+            disk_count=1,
+            disk_bytes=60 * gib,
+        )
         for index in (1, 2)
     ]
 

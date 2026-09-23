@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, Query, WebSocket, status
 from shared.errors import DomainError
 from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostKeyResponse
 from shared.identity import AuthTokenRecord
-from starlette.websockets import WebSocketState
 
 from api.server.auth import read_workspace, write_token, write_workspace
 from api.server.dependencies import (
@@ -16,11 +15,12 @@ from api.server.dependencies import (
     current_services,
     current_websocket_services,
 )
-from api.server.http import bridge_websocket_to_socket, close_websocket
+from api.server.http import WebSocketSocketBridge, close_websocket
 from api.server.public_transfers import attribute_public_transfer
 from api.server.services import ApiServices
 
 SSH_TUNNEL_BUFFER_BYTES = 64 * 1024
+SSH_TUNNEL_EARLY_BYTES = 1024 * 1024
 
 router = APIRouter(tags=["ssh"])
 AppQuery = Annotated[str, Query(min_length=1, description="Name of the app the pod belongs to.")]
@@ -82,13 +82,16 @@ async def pod_ssh_tunnel(
     service: Annotated[PodSshTunnelService, Depends(pod_ssh_tunnel_service)],
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
-    # Accepted only once the pod's SSH server is connected. An open socket whose
-    # messages nobody reads while the pod wakes stops the server reading control
-    # frames too, so the client's pongs go unread and the connection is dropped
-    # as a keepalive timeout; the client waits in the handshake instead.
+    # Accepted before the pod answers: the edge in front of the API drops a
+    # handshake left unanswered for about 100 seconds, and a stopped pod can take
+    # longer to start. The bridge reads the client meanwhile, so pongs keep
+    # arriving and the first SSH bytes wait for the pod.
+    await websocket.accept()
     try:
-        async with service.open(workspace_id=workspace_id, app=app, pod=name) as tunnel:
-            await websocket.accept()
+        async with (
+            WebSocketSocketBridge(websocket, early_limit_bytes=SSH_TUNNEL_EARLY_BYTES) as bridge,
+            service.open(workspace_id=workspace_id, app=app, pod=name) as tunnel,
+        ):
             attribute_public_transfer(
                 websocket,
                 workspace_id=workspace_id,
@@ -96,29 +99,21 @@ async def pod_ssh_tunnel(
                 resource_id=tunnel.target.stub.id,
                 stub_id=tunnel.target.stub.id,
             )
-            await bridge_websocket_to_socket(websocket, tunnel.backend, SSH_TUNNEL_BUFFER_BYTES)
+            await bridge.relay(tunnel.backend, SSH_TUNNEL_BUFFER_BYTES)
     except DomainError as exc:
-        await _refuse(websocket, code=status.WS_1008_POLICY_VIOLATION, reason=exc.message)
+        await close_websocket(websocket, code=status.WS_1008_POLICY_VIOLATION, reason=exc.message)
         return
     except PodProxyUnavailable as exc:
-        await _refuse(websocket, code=status.WS_1013_TRY_AGAIN_LATER, reason=str(exc))
+        await close_websocket(websocket, code=status.WS_1013_TRY_AGAIN_LATER, reason=str(exc))
         return
     except OSError as exc:
-        await _refuse(
+        await close_websocket(
             websocket,
             code=status.WS_1011_INTERNAL_ERROR,
             reason=f"connection to the pod's SSH server failed: {exc}"[:120],
         )
         return
     await close_websocket(websocket, code=status.WS_1000_NORMAL_CLOSURE, reason="")
-
-
-async def _refuse(websocket: WebSocket, *, code: int, reason: str) -> None:
-    # Accepted first so the client receives the close code and reason rather than
-    # a bare handshake rejection.
-    if websocket.client_state is WebSocketState.CONNECTING:
-        await websocket.accept()
-    await close_websocket(websocket, code=code, reason=reason)
 
 
 def _certificate_holder(token: AuthTokenRecord) -> str:

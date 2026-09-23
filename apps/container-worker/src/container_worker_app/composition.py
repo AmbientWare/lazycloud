@@ -244,8 +244,8 @@ def build_worker_process_services(
             else None
         ),
     )
-    # Before anything can attach: a previous process's daemons and devices are
-    # orphans now, and the leases they served are released through cleanup.
+    # Runs before anything attaches. Daemons and devices a previous process left
+    # are orphans, and cleanup releases the leases they served.
     durable_disks.recover()
     container_rootfs = ContainerRootfsOverlayManager(
         image_mount_root=Path(paths.image_mount_root),

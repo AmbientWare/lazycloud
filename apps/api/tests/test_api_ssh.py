@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
+import asyncio
+import socket
+import time
+from collections.abc import AsyncIterator
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
+from threading import Thread
 
 import pytest
+import uvicorn
 from api.fastapi_app import create_app
+from api.server.routers.ssh import pod_ssh_tunnel_service
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from database.repositories.identity import WorkspaceRepository
 from execution.ssh.keys import openssh_public_key, pod_host_key
+from execution.ssh.service import PodSshTunnel, SshPodTarget, ssh_pod_target
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
 from shared.deployment_records import DeploymentSpec
@@ -18,6 +26,7 @@ from shared.deployments import DeploymentKind
 from shared.http.ssh import SshCertificateResponse, SshHostKeyResponse
 from starlette.websockets import WebSocketDisconnect
 from tests.workspaces import owned_workspace, workspace_owner_user_id
+from websockets.sync.client import connect
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,3 +158,77 @@ def test_ssh_tunnel_refuses_outsiders_and_pods_without_ssh(
     assert outsider.value.code == 1008
     assert not_ssh.value.code == 1008
     assert "does not serve SSH" in not_ssh.value.reason
+
+
+@dataclass(frozen=True, slots=True)
+class _WakingPod:
+    target: SshPodTarget
+    backend: socket.socket
+    wake_seconds: float
+
+    @asynccontextmanager
+    async def open(self, *, workspace_id: str, app: str, pod: str) -> AsyncIterator[PodSshTunnel]:
+        await asyncio.sleep(self.wake_seconds)
+        yield PodSshTunnel(target=self.target, backend=self.backend)
+
+
+def test_ssh_tunnel_accepts_at_once_and_holds_early_bytes_while_the_pod_wakes(
+    isolated_services: ApiServices,
+) -> None:
+    fixture = _fixture(isolated_services)
+    with isolated_services.context.database.session() as session:
+        target = ssh_pod_target(session, workspace_id=fixture.workspace_id, app="dev", pod="box")
+    tunnel_end, pod_end = socket.socketpair()
+    pod_end.settimeout(5)
+    ping_seconds = 0.1
+    wake_seconds = 10 * ping_seconds
+    app = create_app(isolated_services)
+    app.dependency_overrides[pod_ssh_tunnel_service] = lambda: _WakingPod(
+        target=target, backend=tunnel_end, wake_seconds=wake_seconds
+    )
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            log_level="error",
+            ws_ping_interval=ping_seconds,
+            ws_ping_timeout=ping_seconds,
+        )
+    )
+    thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+    thread.start()
+    url = (
+        f"ws://127.0.0.1:{listener.getsockname()[1]}/api/v1/pods/box/ssh"
+        f"?workspace={fixture.workspace_id}&app=dev"
+    )
+    try:
+        started = time.monotonic()
+        with connect(
+            url,
+            additional_headers=fixture.member,
+            open_timeout=wake_seconds,
+            ping_interval=None,
+        ) as websocket:
+            accepted_after = time.monotonic() - started
+            websocket.send(b"SSH-2.0-client\r\n")
+            websocket.send(b"early-kexinit")
+            early = b""
+            while len(early) < len(b"SSH-2.0-client\r\nearly-kexinit") and (
+                chunk := pod_end.recv(1024)
+            ):
+                early += chunk
+            pod_end.sendall(b"SSH-2.0-pod\r\n")
+            reply = websocket.recv(timeout=5)
+        assert time.monotonic() - started >= wake_seconds
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        listener.close()
+        pod_end.close()
+        tunnel_end.close()
+
+    assert accepted_after < wake_seconds / 2
+    assert early == b"SSH-2.0-client\r\nearly-kexinit"
+    assert reply == b"SSH-2.0-pod\r\n"

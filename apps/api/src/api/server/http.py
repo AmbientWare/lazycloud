@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import socket
 from collections.abc import AsyncIterable, Mapping
+from types import TracebackType
+from typing import Self
 
-from fastapi import Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import Request, Response, WebSocket, WebSocketDisconnect, status
 from foundation.http import HOP_BY_HOP_REQUEST_HEADERS
 from starlette.requests import HTTPConnection
 from starlette.responses import StreamingResponse
@@ -92,25 +94,103 @@ async def bridge_websocket_to_socket(
 ) -> None:
     """Relay bytes both ways until either side closes, then stop the other direction.
 
-    A backend socket failure is raised once both directions have stopped, so the
+    Raises a backend socket failure once both directions have stopped, so the
     caller can close the client with the reason rather than as a normal close.
     """
-    backend.setblocking(False)
-    loop = asyncio.get_running_loop()
-    reader = asyncio.create_task(
-        _socket_to_websocket(websocket, backend, max(buffer_size_bytes, 1))
-    )
-    writer = asyncio.create_task(_websocket_to_socket(websocket, backend, loop))
-    done, pending = await asyncio.wait(
-        {reader, writer},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    for task in pending:
-        task.cancel()
-    results = await asyncio.gather(*done, *pending, return_exceptions=True)
-    for result in results:
-        if isinstance(result, OSError):
-            raise result
+    async with WebSocketSocketBridge(websocket, early_limit_bytes=0) as bridge:
+        await bridge.relay(backend, buffer_size_bytes)
+
+
+class WebSocketSocketBridge:
+    """Relays an accepted websocket to a backend socket that may connect later.
+
+    One task reads the client's messages from construction until the connection ends, so
+    the server keeps reading control frames, pongs included, while the backend
+    connects. Bytes that arrive before `relay` supplies the backend are held in
+    memory and sent first; a client that sends more than `early_limit_bytes`
+    meanwhile is closed.
+    """
+
+    def __init__(self, websocket: WebSocket, *, early_limit_bytes: int) -> None:
+        self._websocket = websocket
+        self._early_limit_bytes = early_limit_bytes
+        self._early = bytearray()
+        self._backend: socket.socket | None = None
+        self._reader = asyncio.create_task(self._read_client())
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._reader.cancel()
+        await asyncio.gather(self._reader, return_exceptions=True)
+
+    async def relay(self, backend: socket.socket, buffer_size_bytes: int) -> None:
+        """Send the held bytes to `backend`, then relay both ways until either side closes.
+
+        Raises a backend socket failure once both directions have stopped, so the
+        caller can close the client with the reason rather than as a normal close.
+        """
+        reader = self._reader
+        backend.setblocking(False)
+        loop = asyncio.get_running_loop()
+        # The reader keeps holding bytes while each flush is in flight; the
+        # backend is handed to it only once nothing is held, so bytes keep order.
+        while self._early and not reader.done():
+            early = bytes(self._early)
+            self._early.clear()
+            await loop.sock_sendall(backend, early)
+        if reader.done():
+            return
+        self._backend = backend
+        to_client = asyncio.create_task(
+            _socket_to_websocket(self._websocket, backend, max(buffer_size_bytes, 1))
+        )
+        done, pending = await asyncio.wait(
+            {reader, to_client},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        results = await asyncio.gather(*done, *pending, return_exceptions=True)
+        for result in results:
+            if isinstance(result, OSError):
+                raise result
+
+    async def _read_client(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                message = await self._websocket.receive()
+            except WebSocketDisconnect:
+                return
+            if message["type"] == "websocket.disconnect":
+                return
+            data: bytes | None = message.get("bytes")
+            if data is None:
+                text: str | None = message.get("text")
+                data = text.encode() if text is not None else b""
+            if not data:
+                continue
+            if self._backend is not None:
+                await loop.sock_sendall(self._backend, data)
+            elif len(self._early) + len(data) <= self._early_limit_bytes:
+                self._early += data
+            else:
+                await close_websocket(
+                    self._websocket,
+                    code=status.WS_1009_MESSAGE_TOO_BIG,
+                    reason=(
+                        f"sent more than {self._early_limit_bytes} bytes "
+                        "before the backend connected"
+                    ),
+                )
+                return
 
 
 async def _socket_to_websocket(
@@ -124,26 +204,6 @@ async def _socket_to_websocket(
         if not data:
             return
         await websocket.send_bytes(data)
-
-
-async def _websocket_to_socket(
-    websocket: WebSocket,
-    backend: socket.socket,
-    loop: asyncio.AbstractEventLoop,
-) -> None:
-    while True:
-        try:
-            message = await websocket.receive()
-        except WebSocketDisconnect:
-            return
-        if message["type"] == "websocket.disconnect":
-            return
-        data: bytes | None = message.get("bytes")
-        if data is None:
-            text: str | None = message.get("text")
-            data = text.encode() if text is not None else b""
-        if data:
-            await loop.sock_sendall(backend, data)
 
 
 def forwarded_response(

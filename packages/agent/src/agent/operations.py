@@ -1254,8 +1254,8 @@ def build_agent_worker_dirs(state_dir: str, worker_id: str) -> AgentWorkerDirs:
         cache=posixpath.join(root, "cache"),
         builds=posixpath.join(root, "builds"),
         checkpoints=posixpath.join(root, "checkpoints"),
-        # Per slot: the engine's recover stops every daemon under its root, so
-        # two workers sharing one would stop each other's disks.
+        # One directory per slot. The engine's recover stops every daemon under
+        # its root, so two workers sharing a root would stop each other's disks.
         disks=posixpath.join(root, "disks", slot_name),
         logs=posixpath.join(root, "logs", slot_name),
     )

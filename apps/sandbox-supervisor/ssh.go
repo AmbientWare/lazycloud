@@ -40,9 +40,8 @@ const (
 
 var sshEnvironmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// childProcesses starts processes the supervisor must not reap behind the
-// caller's back: an exit status taken by the adopted-child reaper is one the
-// session can never report.
+// childProcesses starts processes the adopted-child reaper must leave alone.
+// An exit status the reaper takes is one the session can never report.
 type childProcesses interface {
 	startChild(command *exec.Cmd) error
 	waitChild(command *exec.Cmd, exited func()) error
@@ -460,8 +459,8 @@ func (s *sshSession) signal(signal syscall.Signal) {
 	}
 }
 
-// forgetCommand runs before the session's process is reaped. Its group id is
-// free for reuse once it is, so a later signal request must not reach it.
+// forgetCommand runs before the session's process is reaped. The reap frees
+// its group id for reuse, so a later signal request must not use it.
 func (s *sshSession) forgetCommand() {
 	s.mu.Lock()
 	s.command = nil

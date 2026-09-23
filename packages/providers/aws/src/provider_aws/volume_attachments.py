@@ -1,12 +1,12 @@
 """How many EBS volumes this instance has for disks, before any disk is attached.
 
-Each durable disk on an EC2 worker gets an EBS volume of its own. The machine
-reports its instance type's EBS attachment limit, which the instance catalog
-records, less what the instance launched with: the root volume, any other
-volume in its launch mapping, and on a shared limit each network interface
-beyond the primary. Instance metadata describes the launch, not what is
-attached now, so this never counts disk volumes; the scheduler subtracts those
-per machine from the disks' volume records.
+Each durable disk on an EC2 worker gets its own EBS volume. The machine reports
+its instance type's EBS attachment limit from the instance catalog, less what
+the instance launched with: the root volume, any other volume in its launch
+mapping, and, on a shared limit, each network interface beyond the primary.
+Instance metadata describes the launch, not current attachments, so this count
+never includes disk volumes. The scheduler subtracts those per machine using
+the disks' volume records.
 """
 
 from __future__ import annotations

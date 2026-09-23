@@ -35,8 +35,8 @@ type layerManifest struct {
 	ParentGeneration int64  `json:"parent_generation"`
 	VirtualSizeBytes int64  `json:"virtual_size_bytes"`
 	LayerSizeBytes   int64  `json:"layer_size_bytes"`
-	// Format is how the layer's bytes are laid out: a qcow2 file over its
-	// parent, or a flattened generation's raw contents. Absent means qcow2.
+	// Format is qcow2 for a layer over its parent, or raw for a flattened
+	// generation's contents. Absent means qcow2.
 	Format     string          `json:"format,omitempty"`
 	Filesystem string          `json:"filesystem"`
 	Chunks     []manifestChunk `json:"chunks"`

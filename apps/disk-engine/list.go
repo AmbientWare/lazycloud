@@ -90,7 +90,7 @@ func headDirty(ctx context.Context, p diskPaths, state *diskState) (bool, error)
 		return true, err
 	}
 	defer lock.release()
-	// Reloaded under the lock: reading the daemon may correct the state.
+	// Reload under the lock, because reading the daemon may correct the state.
 	current, err := requireState(p)
 	if err != nil {
 		return false, err
@@ -105,8 +105,8 @@ func headDirty(ctx context.Context, p diskPaths, state *diskState) (bool, error)
 }
 
 type usageResult struct {
-	// UnmergedBytes is what the layers above the base occupy: writes not yet
-	// compacted into it, each of which a compaction needs room to copy.
+	// UnmergedBytes is the space the layers above the base occupy. A
+	// compaction needs room to copy each of them into the base.
 	UnmergedBytes int64 `json:"unmerged_bytes"`
 }
 

@@ -11,7 +11,7 @@ func layerOf(bytes, virt int64) layerManifest {
 }
 
 // A restore is planned before the local copy is wiped, so a chain the plan
-// admits must never run out of room halfway: every retry would wipe and fail
+// admits must never run out of room halfway. Every retry would wipe and fail
 // again.
 func TestPlanRestoreCountsBaseGrowthFromCommits(t *testing.T) {
 	const gib = int64(1) << 30
@@ -25,7 +25,7 @@ func TestPlanRestoreCountsBaseGrowthFromCommits(t *testing.T) {
 	}
 
 	// Base and largest layer (4 GiB) fit in 8 GiB less a 1 GiB reserve, but
-	// committing grows the base with each layer: after two commits the base
+	// committing grows the base with each layer. After two commits the base
 	// holds 7 GiB and the last layer does not fit beside it.
 	var space *insufficientSpaceError
 	if _, err := planRestore(p, 8*gib, gib, chain); !errors.As(err, &space) {

@@ -116,7 +116,7 @@ class WorkerPathConfiguration(ContractModel):
     checkpoint_root: str = WORKER_CHECKPOINT_ROOT
     container_rootfs_root: Path = Path(DEFAULT_CONTAINER_ROOTFS_ROOT)
     disk_root: Path = Path(DEFAULT_DISK_ROOT)
-    """Durable disk layers and leases; a host directory that outlives the worker."""
+    """Host directory for durable disk layers and leases. It outlives the worker."""
 
     @model_validator(mode="after")
     def image_build_root_is_dedicated_disk_storage(self) -> Self:

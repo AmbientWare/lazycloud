@@ -294,11 +294,11 @@ def connection_role_statements(
                     }
                 },
             },
-            # A durable disk's volume: created only carrying the managed and
-            # disk-volume tags, and attached, detached or deleted only while it
-            # still carries both. The instance side of an attach is limited to
-            # the managed instances the pools launched, and modifying one only
-            # sets the attached volume to go with the instance when it ends.
+            # Disk volumes. The role creates a volume only with the managed and
+            # disk-volume tags, and attaches, detaches or deletes one only while
+            # it carries both. Attach and detach reach only the managed
+            # instances the pools launched. The control plane modifies such an
+            # instance only to delete an attached volume when it terminates.
             {
                 "Sid": "CreateTaggedDiskVolumes",
                 "Effect": "Allow",

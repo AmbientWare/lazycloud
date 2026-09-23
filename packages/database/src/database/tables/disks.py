@@ -45,10 +45,10 @@ class DiskTable(IdTable, DatabaseBase):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
-            "ix_disks_deleting",
-            "deleted_at",
+            "ix_disks_deletion_due",
+            "deletion_due_at",
             "id",
-            postgresql_where=text("deleted_at IS NOT NULL"),
+            postgresql_where=text("deletion_due_at IS NOT NULL"),
         ),
         Index("ix_disks_holder", "holder_container_id"),
         Index(
@@ -79,6 +79,10 @@ class DiskTable(IdTable, DatabaseBase):
             "OR volume_instance_id <> ''",
             name="ck_disks_volume_instance",
         ),
+        CheckConstraint(
+            "(deleted_at IS NULL) = (deletion_due_at IS NULL)",
+            name="ck_disks_deletion_due",
+        ),
         CheckConstraint("size_bytes > 0", name="ck_disks_size_positive"),
         CheckConstraint("generation >= 0", name="ck_disks_generation_nonnegative"),
         CheckConstraint("stored_bytes >= 0", name="ck_disks_stored_bytes_nonnegative"),
@@ -104,7 +108,8 @@ class DiskTable(IdTable, DatabaseBase):
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     stored_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     holder_container_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
-    """The container writing the disk. No foreign key: a vanished row is a released holder."""
+    """The container writing the disk. It has no foreign key because a vanished row is a
+    released holder."""
 
     lease_token: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     last_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -116,6 +121,10 @@ class DiskTable(IdTable, DatabaseBase):
 
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     """When deletion was requested. The name is free and metering ends from here."""
+
+    deletion_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """When the deletion sweep next tries to finish a deleting disk; pushed back after each
+    failure so one that keeps failing does not crowd out the rest."""
 
     volume_state: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
     """Where the disk's provider volume is; see `storage.disk_volumes`."""
@@ -157,8 +166,9 @@ class DiskTable(IdTable, DatabaseBase):
     volume_driven_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    """When `volume_driver` took the current state; a driver silent for long enough is
-    taken over. Housekeeping that only looks at a volume leaves it alone."""
+    """When `volume_driver` took the current state or last claimed it before a provider
+    call; a driver silent for longer than its wait allows is taken over. Housekeeping
+    that only looks at a volume leaves it alone."""
 
 
 class DiskVolumeOrphanTable(IdTable, DatabaseBase):
@@ -192,8 +202,8 @@ class DiskVolumeOrphanTable(IdTable, DatabaseBase):
 class DiskAttachmentTable(IdTable, DatabaseBase):
     """One lease on a disk, from acquisition to release, and how much of it is billed.
 
-    A row per lease rather than a timestamp on the disk: the size can grow between
-    leases, and each lease is billed at the size it was acquired at. A lease that
+    A row per lease rather than a timestamp on the disk, because the size can grow
+    between leases and each lease bills at the size it was acquired at. A lease that
     ends is closed here and priced up to that instant by the next metering pass,
     whatever acquires the disk after it.
     """

@@ -340,7 +340,7 @@ WORKDIR /app
 
 COPY --from=container-worker-tools /out/usr/share/keyrings/ /usr/share/keyrings/
 COPY --from=container-worker-tools /out/etc/apt/sources.list.d/ /etc/apt/sources.list.d/
-# Durable disks: qemu-utils ships qemu-storage-daemon and qemu-img, nbd-client
+# Durable disks use qemu-storage-daemon and qemu-img from qemu-utils. nbd-client
 # negotiates the export and hands its socket to the kernel over netlink, and
 # e2fsprogs formats a new disk. The host must have loaded the nbd module.
 RUN apt-get update \

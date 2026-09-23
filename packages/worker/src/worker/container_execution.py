@@ -339,7 +339,7 @@ class ContainerExecutionContext(ContractModel):
     docker_enabled: bool = False
     ssh_enabled: bool = False
     ssh_identity: ContainerSshIdentity | None = None
-    """Filled by credential hydration for an SSH-enabled container."""
+    """Credential hydration fills this for an SSH-enabled container."""
 
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)

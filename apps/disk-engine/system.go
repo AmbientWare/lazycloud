@@ -49,7 +49,8 @@ func runTool(ctx context.Context, name string, args ...string) (string, error) {
 }
 
 func createOverlay(ctx context.Context, path string, backing layer, size int64) error {
-	// -u: the backing file is open read-write in the daemon, and its size is given.
+	// -u skips opening the backing file, which the daemon holds read-write, so
+	// the size is passed explicitly.
 	_, err := runTool(ctx, toolImage, "create", "-q", "-f", "qcow2", "-u",
 		"-b", backing.file(), "-F", backing.format(), path, fmt.Sprint(size))
 	return err

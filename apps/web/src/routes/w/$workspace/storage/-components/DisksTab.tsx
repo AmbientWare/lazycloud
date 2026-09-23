@@ -32,7 +32,7 @@ export function DisksTab({ workspaceId }: { workspaceId: string }) {
         <PanelError message={query.error.message} />
       ) : disks.length === 0 ? (
         <PanelEmpty
-          message="No disks. A pod declares one with disks=[Disk(...)] and creates it on deploy."
+          message="No disks. A deploy creates each disk a pod declares with disks=[Disk(...)]."
           className="p-6"
         />
       ) : (

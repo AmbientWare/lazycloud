@@ -78,8 +78,8 @@ func nbdDevices() ([]string, error) {
 
 // claimedDevices lists the devices other disks under root record, attached or
 // left behind by a worker that died, so none is handed out twice before
-// recover has released it. Claims under /run cover every root but not a
-// restart of the worker's container, which state under root outlives.
+// recover has released it. Claims under /run cover every root but do not
+// survive a restart of the worker's container. State under root does.
 func claimedDevices(root string) (map[string]bool, error) {
 	claimed := map[string]bool{}
 	entries, err := os.ReadDir(root)
@@ -109,7 +109,7 @@ const nbdLockPath = "/run/lazycloud-disk/nbd.lock"
 // so a device recorded under any root is taken for every other root. A claim
 // is dropped when its disk detaches, or found stale when that disk's state no
 // longer records the device. A disk whose state cannot be read keeps its
-// claim: its root may be a volume not yet mounted again.
+// claim, because its root may be a volume that is not mounted again yet.
 const nbdClaimDir = "/run/lazycloud-disk/claims"
 
 type deviceClaim struct {
@@ -209,10 +209,10 @@ func connectNBD(ctx context.Context, p diskPaths, sizeBytes int64, record func(d
 			continue
 		}
 		if _, err := os.Stat(device); err != nil {
-			return "", fmt.Errorf("%s exists in sysfs but not in /dev: the worker must see the host's /dev: %w", device, err)
+			return "", fmt.Errorf("%s exists in sysfs but not in /dev; mount the host's /dev into the worker: %w", device, err)
 		}
-		// Claimed and recorded before connecting, so a crash between the two
-		// leaves recover something to disconnect and no other root the device.
+		// Claim and record the device before connecting. After a crash between
+		// the two, recover finds it to disconnect and no other root can take it.
 		if err := writeClaim(device, p); err != nil {
 			return "", err
 		}

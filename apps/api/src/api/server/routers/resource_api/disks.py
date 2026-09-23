@@ -44,4 +44,4 @@ def delete_disk(
     workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
 ) -> None:
-    services.disk_deletion.request(name, workspace_id=workspace_id)
+    services.disks.request_deletion(name, workspace_id=workspace_id)

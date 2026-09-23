@@ -5,7 +5,7 @@ description: "A pod you log into over SSH, with a disk that keeps its files, for
 
 A dev machine is a [pod](/concepts/pods) with `ssh=True` and a
 [disk](/concepts/disks) at `/`. It runs while something is connected and stops
-once nothing has been for `keep_warm` seconds. Everything written to it,
+after `keep_warm` seconds with nothing connected. Everything written to it,
 including installed packages, dotfiles, and working trees, is there on the
 next start.
 

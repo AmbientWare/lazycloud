@@ -17,11 +17,11 @@ type mappedExtent struct {
 	Offset *int64 `json:"offset"`
 }
 
-// uploadFlattened publishes layers[0..top] as one parentless raw layer: the
-// disk's contents, with zero ranges left out. qemu-img map names the layer
-// file and offset that hold each range, and the ranges are read from there,
-// so no flattened copy is ever written and publishing needs no space beyond
-// the chain itself.
+// uploadFlattened publishes layers[0..top] as one parentless raw layer
+// holding the disk's contents without its zero ranges. qemu-img map names the
+// layer file and offset holding each range, and uploadFlattened reads the
+// range from there. It never writes a flattened copy, so publishing needs no
+// space beyond the chain itself.
 func uploadFlattened(ctx context.Context, store *objectStore, p diskPaths, layers []layer, generation int64) (publishResult, error) {
 	top := len(layers) - 1
 	path := p.layerPath(layers[top])
@@ -29,7 +29,7 @@ func uploadFlattened(ctx context.Context, store *objectStore, p diskPaths, layer
 	if err != nil {
 		return publishResult{}, err
 	}
-	// -U: the running daemon holds the chain open.
+	// -U because the running daemon holds the chain open.
 	out, err := runTool(ctx, toolImage, "map", "-U", "--output=json", "-f", layers[top].format(), path)
 	if err != nil {
 		return publishResult{}, err

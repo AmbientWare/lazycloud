@@ -221,9 +221,9 @@ class WorkerContainerFinalizationService:
                 ContainerFinalizationStep.ReleaseContainerRootfs,
                 lambda: self.cleanup.release_container_rootfs(container_id),
             ),
-            # After the overlay is gone, since a root disk holds its upper layer,
-            # and before storage is reported released: that report is what lets
-            # the control plane hand the disk to another container.
+            # After the overlay release, because a root disk holds the overlay's
+            # upper layer. Before the worker reports storage released, because
+            # that report lets the control plane hand the disk to another container.
             (
                 ContainerFinalizationStep.ReleaseDurableDisks,
                 lambda: self.cleanup.release_durable_disks(container_id),

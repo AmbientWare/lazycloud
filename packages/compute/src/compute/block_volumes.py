@@ -1,14 +1,14 @@
-"""Provider block volumes: the device a disk lives on while a container holds it.
+"""Provider block volumes, the devices disks live on while a container holds them.
 
 A provider volume is created in one zone and attaches to one machine in that
 zone at a time. Every operation here is idempotent against the provider's own
 record, because the control plane that drives a volume can crash between any
 two calls and the next caller has only the durable disk row to go on.
 
-Ownership travels in the volume's tags. A volume this platform did not tag, or
-tagged for another deployment, is never the subject of a cleanup: the listing
-only returns volumes carrying the deployment's own tags, and a caller deciding
-what to delete checks the owner again rather than trusting the filter.
+Ownership travels in the volume's tags. Cleanup never touches a volume this
+platform did not tag, or tagged for another deployment. The listing returns only
+volumes carrying the deployment's own tags, and a caller deciding what to delete
+checks the owner again rather than trusting the filter.
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ class BlockVolumeProvider(Protocol):
         ...
 
     def attach_volume(self, volume_id: str, *, instance_id: str, wait_seconds: float) -> None:
-        """Attach and wait until attached, deleting it with the instance if the instance ends.
+        """Attach, wait until attached, and set the volume to delete when the instance terminates.
 
         Succeeds when already attached there. Raises `BlockVolumeMissingError`
         when the volume is gone. Every wait raises `BlockVolumePendingError` once
@@ -137,10 +137,10 @@ def orphaned_volumes(
     names, empty when it names none; `creating` holds the disks whose row is
     part way through creating a volume it has not recorded yet. A volume is an
     orphan when its disk has no row, or when the row names a different volume
-    and is not creating one. An attached volume is never one: it is some
-    machine's live device, and whatever left it attached is cleaned up through
-    its disk. A volume without this deployment's complete ownership is never one
-    either, whatever the provider's listing returned.
+    and is not creating one. An attached volume is never an orphan. It is some
+    machine's live device, and its disk's cleanup handles whatever left it
+    attached. A volume without this deployment's complete ownership tags is never
+    an orphan either, whatever the provider's listing returned.
     """
     orphans: list[BlockVolume] = []
     for volume in volumes:

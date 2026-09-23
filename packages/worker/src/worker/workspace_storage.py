@@ -73,9 +73,9 @@ class _WorkspaceMountRecord:
     manager: StorageMountManager
     credential_window: WorkspaceCredentialWindow
     # Containers that ensured this mount and have not been cleaned up. Registered
-    # instances cannot stand in for this: a container is registered only after
-    # its storage is ensured, and it needs the mount through the whole gap. The
-    # record and its holders are both process memory, lost together on restart.
+    # instances cannot replace this set. A container registers only after its
+    # storage is ensured, and it needs the mount in between. The record and its
+    # holders both live in process memory and are lost together on restart.
     holders: set[str] = field(default_factory=set)
 
 

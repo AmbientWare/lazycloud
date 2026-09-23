@@ -1,9 +1,9 @@
 """Worker payloads for acquiring, publishing, and releasing a durable disk.
 
 The control plane is the only writer of a disk's generation chain. A worker
-acquires the disk for one container and receives a fencing token; every publish
-and the release carry it, and a token that is no longer current is refused, so a
-container that lost the disk cannot publish over the one that holds it.
+acquires the disk for one container and receives a fencing token. Every publish
+and the release carry it. The control plane refuses a token that is no longer
+current, so a container that lost the disk cannot publish over the one that holds it.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ class DiskBlockVolume(ContractModel):
 
     volume_id: str = Field(min_length=1)
     formatted: bool
-    """Whether an earlier lease held this volume. A hint only: the worker probes
-    the device, and formats one that holds no filesystem either way."""
+    """Whether an earlier lease held this volume. Only a hint. The worker probes
+    the device either way and formats one that holds no filesystem."""
 
 
 class DiskAcquireResult(ContractModel):
@@ -77,15 +77,16 @@ class DiskPublishResult(ContractModel):
 class DiskCollectPayload(ContractModel):
     """Chunks and manifests a holder deleted after publishing a self-contained layer.
 
-    Only the lease holder collects, right after its parentless generation is
-    recorded, so no other writer can be uploading chunks the collection misses.
+    Only the lease holder collects, right after the control plane records its
+    parentless generation, so no other writer can be uploading chunks the
+    collection misses.
     """
 
     container_id: str = Field(min_length=1)
     disk_id: str = Field(min_length=1)
     lease_token: str = Field(min_length=1)
     generation: int = Field(gt=0)
-    """The parentless generation every older generation is superseded by."""
+    """The parentless generation that supersedes every older generation."""
 
     stored_bytes_removed: int = Field(ge=0)
 

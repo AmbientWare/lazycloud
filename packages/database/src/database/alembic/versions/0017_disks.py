@@ -60,6 +60,7 @@ def upgrade() -> None:
         ),
         sa.Column("metered_bytes", sa.BigInteger(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deletion_due_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("volume_state", sa.String(16), nullable=False),
         sa.Column("volume_id", sa.String(64), nullable=False),
         sa.Column("volume_provider_ref", sa.String(160), nullable=False),
@@ -96,6 +97,10 @@ def upgrade() -> None:
             "OR volume_instance_id <> ''",
             name="ck_disks_volume_instance",
         ),
+        sa.CheckConstraint(
+            "(deleted_at IS NULL) = (deletion_due_at IS NULL)",
+            name="ck_disks_deletion_due",
+        ),
         sa.CheckConstraint("size_bytes > 0", name="ck_disks_size_positive"),
         sa.CheckConstraint("generation >= 0", name="ck_disks_generation_nonnegative"),
         sa.CheckConstraint("stored_bytes >= 0", name="ck_disks_stored_bytes_nonnegative"),
@@ -125,10 +130,10 @@ def upgrade() -> None:
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
     op.create_index(
-        "ix_disks_deleting",
+        "ix_disks_deletion_due",
         "disks",
-        ["deleted_at", "id"],
-        postgresql_where=sa.text("deleted_at IS NOT NULL"),
+        ["deletion_due_at", "id"],
+        postgresql_where=sa.text("deletion_due_at IS NOT NULL"),
     )
     op.create_index("ix_disks_holder", "disks", ["holder_container_id"])
     op.create_index(

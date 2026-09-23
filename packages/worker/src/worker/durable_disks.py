@@ -3,19 +3,20 @@
 The disk engine (`lazycloud-disk`) owns the block device, its layer chain and the
 object uploads. This module owns everything that involves the control plane:
 the lease that fences writers, recording each published generation, and the
-order that makes a publish safe to repeat. A generation is uploaded by the
-engine, recorded with the control plane, and only then committed locally, so a
-crash between any two steps is resumed rather than lost or doubled.
+order that makes a publish safe to repeat. The engine uploads a generation, the
+control plane records it, and only then does the engine commit it locally, so
+the worker resumes a crash between any two steps rather than losing or doubling
+the generation.
 
 The lease survives this process. It is written to a host directory that
 outlives the worker, so a restarted worker still knows which leases it holds
 and gives them back.
 
 On a joined machine every disk keeps its layers under one host directory, and
-cached disks nobody holds are evicted when a restore needs their space. On a
-provider machine each disk keeps them on its own volume, mounted at a root of
+the worker evicts cached disks nobody holds when a restore needs their space. On
+a provider machine each disk keeps them on its own volume, mounted at a root of
 its own, so its space is the volume's and nothing is ever evicted to make room.
-A disk is detached and its volume unmounted before its lease is released,
+The worker detaches a disk and unmounts its volume before releasing its lease,
 because the control plane detaches the volume as soon as the lease is gone.
 """
 
@@ -101,6 +102,7 @@ _SEAL_TIMEOUT_SECONDS = 300.0
 _DETACH_TIMEOUT_SECONDS = 300.0
 _RECOVER_TIMEOUT_SECONDS = 600.0
 _COMMIT_TIMEOUT_SECONDS = 60.0
+_PUBLISHED_TIMEOUT_SECONDS = 60.0
 _COMPACT_TIMEOUT_SECONDS = 3600.0
 _COLLECT_TIMEOUT_SECONDS = 3600.0
 _LIST_TIMEOUT_SECONDS = 60.0
@@ -159,6 +161,14 @@ class DiskEnginePublishResult(ContractModel):
     stored_bytes_added: int = Field(ge=0)
     generation: int = Field(gt=0)
     parent_generation: int = Field(ge=0)
+
+
+class DiskEnginePublishedPosition(ContractModel):
+    generation: int = Field(ge=0)
+    """Newest generation the engine committed."""
+
+    chain_depth: int = Field(ge=0)
+    """Committed generations from the newest parentless one to that one."""
 
 
 class DiskEngineCollectResult(ContractModel):
@@ -293,6 +303,11 @@ class DiskEngine:
             *self._disk_args(root, disk_id),
             "--generation",
             str(generation),
+        )
+
+    def published(self, root: Path, disk_id: str) -> DiskEnginePublishedPosition:
+        return DiskEnginePublishedPosition.model_validate_json(
+            self._run(_PUBLISHED_TIMEOUT_SECONDS, "published", *self._disk_args(root, disk_id))
         )
 
     def compact(self, root: Path, disk_id: str) -> None:
@@ -468,14 +483,14 @@ class WorkerDurableDiskService:
     def recover(self) -> None:
         """Stop what a previous worker process left attached; run before any attach.
 
-        Recovery seals whatever a dead attachment's head still held, and the
-        layers it reports pending are what the release of that container's lease
-        publishes before letting the disk go. A disk on a volume is recovered on
-        that volume, which is mounted again first.
+        Recovery seals whatever a dead attachment's head still held and reports
+        every sealed layer awaiting publish. Releasing that container's lease
+        publishes them before letting the disk go. A disk on a volume recovers
+        on that volume once the worker mounts it again.
 
-        Each root is recovered on its own. One that fails is logged and left for
-        its lease's release to recover again, which fails that release alone,
-        so the worker still starts and every other lease is still given back.
+        Each root recovers separately. A root that fails is logged and left for
+        its lease's release to retry, which fails only that release, so the
+        worker still starts and gives every other lease back.
         """
         self.lease_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.layers_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -582,9 +597,9 @@ class WorkerDurableDiskService:
     def release(self, container_id: str) -> None:
         """Publish what the container wrote and give every lease back.
 
-        Raises on any failure so finalization retries it: the lease holds the
+        Raises on any failure so finalization retries it. The lease holds the
         disk for this container until every write is published and the release
-        is recorded, which is what keeps the next container from starting on a
+        is recorded, which keeps the next container from starting on a
         generation this one was about to replace.
         """
         with self._attached_lock:
@@ -639,15 +654,13 @@ class WorkerDurableDiskService:
             if live and lease.mountpoint:
                 self._publish_pending(attached, lease)
             else:
-                # A previous worker process attached this disk; recovery
-                # already sealed its head, so only the pending layers are left
-                # to publish. Nothing local releases without one.
-                self._publish_layers(
-                    attached,
-                    lease,
-                    pending=self._recovered_pending.get(lease.disk_id, 0),
-                    live=False,
-                )
+                # A previous worker process attached this disk. Recovery, at
+                # startup or just above, already sealed its head, so only the
+                # pending layers remain to publish.
+                pending = self._recovered_pending.get(lease.disk_id, 0)
+                if pending:
+                    self._resume_published(attached, lease)
+                self._publish_layers(attached, lease, pending=pending, live=False)
             self.engine.detach(root, lease.disk_id)
             lease.detached = True
             self._save(attached.leases)
@@ -750,8 +763,8 @@ class WorkerDurableDiskService:
     def _publish_periodically(self, attached: _Attached) -> None:
         """Publish every interval, and at once when a volume's watcher asks for a drain.
 
-        The only thread that changes an attached disk, so a publish stalled on
-        object storage stalls nothing but itself.
+        This is the only thread that changes an attached disk, so a publish
+        stalled on object storage blocks nothing else.
         """
         while True:
             draining = attached.drain.wait(self.publish_interval_seconds)
@@ -797,11 +810,11 @@ class WorkerDurableDiskService:
 
         Sealing, publishing and compacting moves what the layers above the base
         hold into it. A compaction copies those layers before deleting them, so
-        it needs as much free space as they take: the drain is asked for once
-        they reach half the headroom, or once free space falls below half of it.
-        A volume under a quarter of its headroom is holding writes the drain
-        could not publish, and the container is stopped with the reason rather
-        than left to fail its writes.
+        it needs as much free space as they take. The watcher asks for a drain
+        once they reach half the headroom or free space falls below half of it.
+        A volume with under a quarter of its headroom free holds writes the drain
+        could not publish, so the watcher stops the container with the reason
+        rather than letting its writes fail.
         """
         if attached.stopping:
             return
@@ -853,8 +866,8 @@ class WorkerDurableDiskService:
         chain: list[DiskChainFileEntry],
     ) -> DiskEngineAttachResult:
         on_volume = root != self.layers_root
-        # On a volume, a restore must leave room for what the head takes before
-        # the watcher drains it: half the headroom. The other half covers the
+        # On a volume, a restore must leave half the headroom free for what the
+        # head takes before the watcher drains it. The other half covers the
         # volume's filesystem and the layers' own metadata, so a disk restored
         # full still fits the volume sized for it.
         reserve = (
@@ -910,8 +923,8 @@ class WorkerDurableDiskService:
     def _evict_for(self, disk: RequestDisk, *, shortfall: int) -> tuple[int, list[str]]:
         """Evict cached disks nobody holds, oldest first, until the shortfall is covered.
 
-        An attached disk or one holding unpublished layers is never evicted: the
-        first is in use and the second is the only copy of what it holds.
+        Never evicts an attached disk, which is in use, or one holding
+        unpublished layers, which are the only copy of those writes.
         """
         freed = 0
         blocked: list[str] = []
@@ -931,6 +944,30 @@ class WorkerDurableDiskService:
             freed += item.local_bytes
             LOGGER.info("evicted cached disk %s (%d bytes)", item.disk, item.local_bytes)
         return freed, blocked
+
+    def _resume_published(self, attached: _Attached, lease: DiskLease) -> None:
+        """Take the committed generation from the engine rather than the lease file.
+
+        The engine commits a generation before this worker saves it, so a worker
+        that died between the two left a file one generation behind, and a
+        publish built on it names a parent the engine has moved past. An upload
+        the control plane recorded but the engine never committed is still the
+        engine's oldest unpublished layer. Publishing the next generation returns
+        that upload unchanged and the control plane accepts the same digest again,
+        so the commit that follows completes it.
+        """
+        position = self.engine.published(self._root(lease), lease.disk_id)
+        if (position.generation, position.chain_depth) == (lease.generation, lease.chain_depth):
+            return
+        LOGGER.warning(
+            "disk %s lease record was at generation %d; the engine committed %d",
+            lease.name,
+            lease.generation,
+            position.generation,
+        )
+        lease.generation = position.generation
+        lease.chain_depth = position.chain_depth
+        self._save(attached.leases)
 
     def _publish_pending(self, attached: _Attached, lease: DiskLease) -> None:
         sealed = self.engine.seal(self._root(lease), lease.disk_id)
@@ -1007,9 +1044,9 @@ class WorkerDurableDiskService:
     def _collect(self, attached: _Attached, lease: DiskLease) -> None:
         """Delete what the self-contained generation just committed supersedes.
 
-        Never raised: a failure only delays reclaiming space until the next
-        flatten. Bytes deleted whose subtraction was not recorded are carried
-        into that next record so the stored total catches up.
+        Never raises. A failure only delays reclaiming space until the next
+        flatten. Deleted bytes the control plane has not subtracted carry into
+        that next record so the stored total catches up.
         """
         try:
             collected = self.engine.collect(

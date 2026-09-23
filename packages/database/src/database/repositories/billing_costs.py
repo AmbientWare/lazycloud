@@ -46,10 +46,10 @@ _DISK: ColumnElement[str] = case(
     ),
     else_="",
 ).label("disk_id")
-"""The disk a row is, so each disk is one charge whatever level is asked for.
+"""The row's disk, so each disk is one charge at every grouping level.
 
 Its stored bytes and attached capacity are separate segments and separate
-components; grouping on the disk rather than on them is what makes it one row."""
+components. Grouping on the disk folds them into one row."""
 
 _GROUP_COLUMNS: dict[UsageCostGroupKey, tuple[_GroupColumn, ...]] = {
     UsageCostGroupKey.App: (

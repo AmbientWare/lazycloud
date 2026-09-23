@@ -247,8 +247,8 @@ class StopContainerReason(StringEnum):
     DiskFull = "DISK_FULL"
     """A durable disk's volume ran short of space and publishing could not free it.
 
-    Stopped before the disk's writes start failing, which the filesystem inside
-    would otherwise meet as I/O errors rather than as a full disk.
+    The worker stops the container before the disk's writes start failing.
+    Otherwise the filesystem inside would see I/O errors rather than a full disk.
     """
 
     Unknown = "UNKNOWN"
@@ -283,9 +283,7 @@ _STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
     StopContainerReason.MemoryEvicted: (
         "the machine ran out of memory and this container was using the most above its request"
     ),
-    StopContainerReason.DiskFull: (
-        "one of its disks could not save its changes and ran out of space"
-    ),
+    StopContainerReason.DiskFull: "one of its disks ran out of space to save its changes",
     StopContainerReason.Unknown: "",
 }
 
