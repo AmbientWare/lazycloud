@@ -41,27 +41,28 @@ def hello(name: str = "world") -> str:
 
 
 if __name__ == "__main__":
+    print("running local")
+    print(hello.local("LazyCloud"))
+    print("running remote")
     print(hello.remote("LazyCloud"))
 ```
 
-## Develop locally
+## Run it
 
 ```bash
-uv run python -c "from quickstart import hello; print(hello.local('LazyCloud'))"
+uv run python quickstart.py
 ```
 
-`.local()` calls the function in your own Python process, with no upload and no
-charge.
+The script calls `hello` twice. `.local()` runs it in your own Python process,
+with no upload and no charge. `.remote()` runs the same function in a container
+with 1 CPU and 256 MiB, streams its logs back, and returns `hello LazyCloud`.
+The first remote call takes longer while the image builds.
 
-## Test in the cloud
+The CLI makes the remote call without a `__main__` block:
 
 ```bash
-uv run lazycloud run quickstart:hello LazyCloud
+uv run lazycloud run quickstart.py:hello LazyCloud
 ```
-
-LazyCloud builds the image, uploads your code, runs `hello` in a remote
-container with 1 CPU and 256 MiB, streams its logs, and prints
-`hello LazyCloud`. The first run takes longer while the image builds.
 
 ## Deploy an endpoint
 

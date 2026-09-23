@@ -13,4 +13,7 @@ def hello(name: str = "world") -> str:
 
 
 if __name__ == "__main__":
+    print("running local")
+    print(hello.local("LazyCloud"))
+    print("running remote")
     print(hello.remote("LazyCloud"))

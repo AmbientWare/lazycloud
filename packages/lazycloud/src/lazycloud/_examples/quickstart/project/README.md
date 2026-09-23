@@ -5,12 +5,14 @@ Run these commands from this downloaded project directory:
 ```bash
 uv sync
 uv run lazycloud login
-uv run lazycloud run quickstart:hello LazyCloud
+uv run python quickstart.py
+uv run lazycloud run quickstart.py:hello LazyCloud
 ```
 
-The terminal shows progress and logs, then prints `hello LazyCloud`.
-`uv run python quickstart.py` makes the same remote call. Use `hello.local(...)`
-for local execution. Edit the image and resource settings in `quickstart.py`.
+`python quickstart.py` calls `hello` locally, then remotely.
+`lazycloud run` makes only the remote call, showing progress and logs before
+it prints `hello LazyCloud`. The image and resource settings live in
+`quickstart.py`.
 
 [Full guide](https://docs.lazycloud.dev/getting-started/quickstart)
 
