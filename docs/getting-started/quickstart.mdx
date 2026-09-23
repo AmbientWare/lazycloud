@@ -81,21 +81,46 @@ uv run lazycloud deploy quickstart
 ```
 
 The app now runs on LazyCloud, not on your machine, and stays up after you
-close the terminal. The deploy output includes the endpoint's HTTPS URL. Endpoints require a bearer token
-by default. Create an access token in the
-[dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens, and
-call the endpoint with it:
+close the terminal. The deploy output includes the endpoint's HTTPS URL.
+
+## Call it
+
+Over HTTP, with an access token from the
+[dashboard](https://lazycloud.dev/dashboard) under Settings, then Tokens:
 
 ```bash
 read -rsp "LazyCloud token: " LAZYCLOUD_TOKEN; echo
-export LAZYCLOUD_TOKEN
 curl --fail --show-error "<endpoint-url>" \
   -H "Authorization: Bearer $LAZYCLOUD_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "LazyCloud"}'
 ```
 
-The response is `{"greeting": "hello LazyCloud"}`.
+From code in the same project, the decorated function is the client. It uses
+your `lazycloud login` sign-in:
+
+```python
+from quickstart import greet
+
+print(greet.request("LazyCloud").json())
+```
+
+From another project, a generated package gives typed calls without your
+source. Run the export there:
+
+```bash
+uv run lazycloud app export quickstart
+```
+
+```python
+from lazycloud_clients.quickstart import greet
+
+print(greet.request("LazyCloud"))
+```
+
+Each returns `{"greeting": "hello LazyCloud"}`.
+[Typed client packages](/concepts/apps#call-deployed-workloads-from-other-projects)
+covers regenerating the package after a deploy.
 
 ## Clean up
 
