@@ -9,6 +9,7 @@ import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Button } from "@/components/ui/button";
 import { CollectionAccordion } from "./-components/CollectionAccordion";
+import { DisksTab } from "./-components/DisksTab";
 import { SecretsTab } from "./-components/SecretsTab";
 import { VolumesTab } from "./-components/VolumesTab";
 import { Artifacts } from "@/components/shared/Artifacts";
@@ -20,6 +21,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 const STORAGE_TABS = [
   { key: "volumes", title: "Volumes" },
+  { key: "disks", title: "Disks" },
   { key: "artifacts", title: "Artifacts" },
   { key: "secrets", title: "Secrets" },
   { key: "queues", title: "Queues" },
@@ -48,8 +50,8 @@ function StoragePage() {
   const secrets = useQuery(secretsQueryOptions(workspace.id));
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const [creating, setCreating] = useState<Exclude<StorageTab, "artifacts"> | null>(null);
-  const createView = search.view === "artifacts" ? null : search.view;
+  const [creating, setCreating] = useState<Exclude<StorageTab, "artifacts" | "disks"> | null>(null);
+  const createView = search.view === "artifacts" || search.view === "disks" ? null : search.view;
   const createLabel =
     createView === "volumes"
       ? "New volume"
@@ -122,6 +124,9 @@ function StoragePage() {
               creating={creating === "volumes"}
               onCreatingChange={(open) => setCreating(open ? "volumes" : null)}
             />
+          </TabsContent>
+          <TabsContent value="disks" className="min-h-0 flex-1 overflow-hidden">
+            <DisksTab key={workspace.id} workspaceId={workspace.id} />
           </TabsContent>
           <TabsContent
             value="secrets"

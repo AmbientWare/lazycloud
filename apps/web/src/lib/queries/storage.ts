@@ -1,18 +1,25 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import { fileBase64 } from "@/lib/files";
 import {
+  diskListSchema,
   secretMaskedListSchema,
   secretMaskedSchema,
   secretRevealResponseSchema,
   volumePathListSchema,
   volumeListSchema,
   volumeSchema,
+  type Disk,
   type SecretMasked,
   type Volume,
 } from "@/lib/api/schemas";
+import {
+  nextListCursor,
+  selectInfiniteList,
+  type InfiniteListQueryData,
+} from "@/lib/queries/infinite-list";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -70,6 +77,42 @@ export function deleteSecret(workspaceId: string, name: string): Promise<unknown
   return apiRequest(
     withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
     emptyResponseSchema,
+    { method: "DELETE" },
+  );
+}
+
+// --- Disks (created by the workloads that declare them) ---
+
+const DISK_PAGE_SIZE = 50;
+
+export function disksQueryOptions(workspaceId: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.storage.disks(workspaceId),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: String(DISK_PAGE_SIZE) });
+      if (pageParam) params.set("cursor", pageParam);
+      return apiRequest(
+        withWorkspace(`/api/v1/disks?${params.toString()}`, workspaceId),
+        diskListSchema,
+      );
+    },
+    getNextPageParam: nextListCursor,
+    meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+export function selectDiskList(
+  data: InfiniteListQueryData<Disk> | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectInfiniteList(data, hasNextPage, (disk) => disk.id);
+}
+
+export function deleteDisk(workspaceId: string, name: string): Promise<null> {
+  return apiRequest(
+    withWorkspace(`/api/v1/disks/${encodeURIComponent(name)}`, workspaceId),
+    z.null(),
     { method: "DELETE" },
   );
 }
