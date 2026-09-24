@@ -20,6 +20,7 @@ from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
     declared_min_containers,
+    keeps_one_active_version,
     resolve_authorized,
     resolve_cpu,
     resolve_keep_warm_seconds,
@@ -245,6 +246,21 @@ class DeploymentService:
                     [deployment_failure, *compensation_failures],
                 ) from None
             raise
+        if deployment.active and keeps_one_active_version(deployment.kind, deployment.spec.role):
+            # Registered first, so a failed deploy leaves the prior version on.
+            with self.context.database.session() as session:
+                superseded = DeploymentRepository(session).deactivate_other_versions(
+                    deployment,
+                    workspace_id=workspace_record.id,
+                    older_only=True,
+                    now=utc_now(),
+                )
+            for previous in superseded:
+                self._publish_change(
+                    previous,
+                    workspace_id=workspace_record.id,
+                    change=WorkspaceChangeType.Updated,
+                )
         self.events.emit(
             "deployment.created",
             resource_type="deployment",

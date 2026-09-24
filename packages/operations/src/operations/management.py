@@ -61,7 +61,7 @@ from shared.container_requests import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.deployment_records import Deployment
+from shared.deployment_records import Deployment, keeps_one_active_version
 from shared.deployments import DeploymentKind
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.client_manifests import INVOKABLE_DEPLOYMENT_KINDS, ClientManifestResource
@@ -843,11 +843,19 @@ class ManagementService:
                 raise ConflictError(msg)
         deployment.active = active
         deployment.updated_at = utc_now()
+        superseded: list[Deployment] = []
         with self.services.context.database.session() as session:
             updated = DeploymentRepository(session).upsert(
                 deployment,
                 workspace_id=workspace_id,
             )
+            if active and keeps_one_active_version(updated.kind, updated.spec.role):
+                superseded = DeploymentRepository(session).deactivate_other_versions(
+                    updated,
+                    workspace_id=workspace_id,
+                    older_only=False,
+                    now=updated.updated_at,
+                )
             if active:
                 targets = AutoscalingTargetRepository(session)
                 for stub in StubRepository(session).list_for_deployments(
@@ -870,6 +878,9 @@ class ManagementService:
         )
         if not active:
             self.stop_deployment_containers(workspace, updated, reason=None)
+        for previous in superseded:
+            self._publish_deployment_change(previous, workspace_id=workspace_id)
+            self.stop_deployment_containers(workspace, previous, reason=None)
         self.services.events.emit(
             "deployment.started" if active else "deployment.stopped",
             resource_type="deployment",

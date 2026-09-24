@@ -1155,6 +1155,37 @@ class DeploymentRepository:
             )
         )
 
+    def deactivate_other_versions(
+        self,
+        deployment: Deployment,
+        *,
+        workspace_id: str,
+        older_only: bool,
+        now: datetime,
+    ) -> list[Deployment]:
+        """Switch off the workload's other active versions and return them.
+
+        `older_only` leaves newer versions alone, so two deploys that finish out
+        of order still leave the newest one on.
+        """
+        statement = update(DeploymentTable).where(
+            DeploymentTable.workspace_id == workspace_id,
+            DeploymentTable.app_id.is_not_distinct_from(deployment.app_id),
+            DeploymentTable.name == deployment.name,
+            DeploymentTable.kind == deployment.kind.value,
+            DeploymentTable.id != deployment.id,
+            DeploymentTable.deleted_at.is_(None),
+            DeploymentTable.active.is_(True),
+        )
+        if older_only:
+            statement = statement.where(DeploymentTable.version < deployment.version)
+        rows = self.session.scalars(
+            statement.values(active=False, updated_at=now)
+            .returning(DeploymentTable)
+            .execution_options(synchronize_session=False)
+        )
+        return [deployment_from_table(row) for row in rows]
+
     def assert_subdomain_unclaimed(
         self,
         subdomain: str,
