@@ -1,0 +1,155 @@
+.devbox-section {
+  border-bottom: 1px solid var(--input);
+  padding-block: 64px 80px;
+  overflow: clip;
+}
+
+.devbox-layout {
+  max-width: 1320px;
+  margin-left: max(var(--marketing-gutter), env(safe-area-inset-left), calc((100% - 1320px) / 2));
+  margin-right: max(var(--marketing-gutter), env(safe-area-inset-right), calc((100% - 1320px) / 2));
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  align-items: center;
+  gap: 56px;
+  pointer-events: none;
+}
+
+.devbox-art-space {
+  height: clamp(420px, 40vw, 560px);
+}
+
+.devbox-copy {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.devbox-copy h2 {
+  max-width: 480px;
+  margin: 0 0 26px;
+  font-size: clamp(38px, 4vw, 58px);
+  font-weight: 550;
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.devbox-copy h2 em {
+  color: var(--brand);
+  font-style: normal;
+}
+
+.devbox-copy p {
+  max-width: 460px;
+  margin: 0 0 20px;
+  color: var(--muted-foreground);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.devbox-copy .devbox-intro {
+  color: var(--foreground);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.devbox-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-top: 4px;
+  color: var(--brand);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--brand) 40%, transparent);
+  text-underline-offset: 6px;
+}
+
+.devbox-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.devbox-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 5px;
+}
+
+.devbox-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  height: 100%;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.devbox-stage:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: -5px;
+}
+
+.devbox-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  mask-image: linear-gradient(to right, #000 35%, #000b 49%, #0004 63%, #0003);
+}
+
+.devbox-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  backdrop-filter: blur(5px);
+  mask-image: linear-gradient(to right, transparent 40%, #000 62%);
+}
+
+.devbox-preview-error {
+  position: absolute;
+  inset: 40% 15% auto;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+@media (max-width: 1023px) {
+  .devbox-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .devbox-copy {
+    grid-row: 1;
+  }
+
+  .devbox-copy h2,
+  .devbox-copy p {
+    max-width: 560px;
+  }
+
+  .devbox-art-space {
+    height: clamp(300px, 65vw, 520px);
+  }
+
+  .devbox-stage canvas {
+    mask-image: linear-gradient(to bottom, #0002 25%, #0004 45%, #000 65%);
+  }
+
+  .devbox-stage::after {
+    mask-image: linear-gradient(to bottom, #000 40%, transparent 65%);
+  }
+}
+
+@media (max-width: 479px) {
+  .devbox-section {
+    padding-block: 56px 24px;
+  }
+
+  .devbox-copy h2 {
+    font-size: 38px;
+  }
+}
