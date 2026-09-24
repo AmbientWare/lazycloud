@@ -371,8 +371,8 @@ class SchedulerUsageRecorder(Protocol):
 @dataclass(frozen=True, slots=True)
 class CapacityAcquisitionSweep:
     acquired: int = 0
-    contended: int = 0
-    """Due demand left waiting because another holder had its capacity owner's lease."""
+    contended: tuple[str, ...] = ()
+    """Containers whose due demand waits because another holder had the capacity owner's lease."""
 
 
 @dataclass(slots=True)
@@ -922,20 +922,38 @@ class SchedulerContainerRequestService:
         )
 
     def acquire_capacity(
-        self, *, now: datetime | None = None, limit: int = 100
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+        container_ids: Sequence[str] | None = None,
     ) -> CapacityAcquisitionSweep:
+        """Act on due capacity demand: every due request, or only the named ones.
+
+        Naming them reads each request by its id and skips the due-demand scan,
+        which is how demand that met a held lease is retried.
+        """
         capacity = self.capacity_reservations
         if capacity is None:
             return CapacityAcquisitionSweep()
         current_time = now or utc_now()
         acquired = 0
-        contended = 0
-        for candidate in self.assignments.capacity_requests_due(now=current_time, limit=limit):
+        contended: list[str] = []
+        candidate_ids = (
+            list(container_ids)
+            if container_ids is not None
+            else [
+                candidate.container_id
+                for candidate in self.assignments.capacity_requests_due(
+                    now=current_time, limit=limit
+                )
+            ]
+        )
+        for container_id in candidate_ids:
+            request: SchedulerWorkerRequest | None = None
             try:
-                with capacity.mutation_lock(f"demand:{candidate.container_id}"):
-                    request = self.assignments.capacity_request_due(
-                        candidate.container_id, now=current_time
-                    )
+                with capacity.mutation_lock(f"demand:{container_id}"):
+                    request = self.assignments.capacity_request_due(container_id, now=current_time)
                     if request is None:
                         continue
                     began = monotonic()
@@ -973,12 +991,14 @@ class SchedulerContainerRequestService:
                     )
                     acquired += 1
             except CapacityReservationConflictError:
-                contended += 1
+                contended.append(container_id)
                 continue
             except NotFoundError as exc:
-                self._fail_request(candidate, str(exc), current_time)
+                if request is None:
+                    raise
+                self._fail_request(request, str(exc), current_time)
                 acquired += 1
-        return CapacityAcquisitionSweep(acquired=acquired, contended=contended)
+        return CapacityAcquisitionSweep(acquired=acquired, contended=tuple(contended))
 
     def _acquire_capacity_request(
         self, request: SchedulerWorkerRequest, current_time: datetime

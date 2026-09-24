@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from threading import Event
@@ -833,37 +833,46 @@ class Scheduler:
         now: datetime | None = None,
         include_containers: bool = True,
         container_limit: int = 100,
+        retry_container_ids: Sequence[str] = (),
     ) -> SchedulerRunResult:
         """Turn recorded capacity demand into a machine, and nothing else.
 
         A request that found no worker waits here for a reserve to resume or a
         machine to be bought. The pass runs on its own wake and makes no
         provider inventory reads, so that request never waits behind them.
+
+        Given `retry_container_ids`, it retries only that demand and skips the
+        recovery scan and the due-demand query.
         """
 
         if not include_containers:
             return SchedulerRunResult()
         timings = StepTimings()
-        with timings.step("recovery"):
-            try:
-                self.runtime_services.compute.reconcile_capacity_recovery(
-                    now=now or utc_now(),
-                    limit=container_limit,
-                )
-            except Exception:
-                LOGGER.exception("scheduler capacity recovery failed")
+        if not retry_container_ids:
+            with timings.step("recovery"):
+                try:
+                    self.runtime_services.compute.reconcile_capacity_recovery(
+                        now=now or utc_now(),
+                        limit=container_limit,
+                    )
+                except Exception:
+                    LOGGER.exception("scheduler capacity recovery failed")
         with timings.step("acquire"):
             # `now` stays None in the running process so each request's retry is
             # timed from its own attempt, not from the start of the pass.
-            sweep = self.container_scheduler.acquire_capacity(now=now, limit=container_limit)
+            sweep = self.container_scheduler.acquire_capacity(
+                now=now,
+                limit=container_limit,
+                container_ids=retry_container_ids or None,
+            )
         if sweep.acquired or sweep.contended:
             timings.log(
                 LOGGER,
                 "scheduler acquisition pass: %d request(s) served, %d contended",
                 sweep.acquired,
-                sweep.contended,
+                len(sweep.contended),
             )
-        return SchedulerRunResult(capacity_demand_contended=sweep.contended)
+        return SchedulerRunResult(capacity_demand_contended=list(sweep.contended))
 
     def run_capacity_pass(
         self,
@@ -1898,7 +1907,7 @@ class SchedulerRunResult(ContractModel):
     orphaned_containers_failed: list[str] = Field(default_factory=list)
     settled_preemptions: list[str] = Field(default_factory=list)
     worker_cleanups: list[WorkerRemovalResult] = Field(default_factory=list)
-    capacity_demand_contended: int = 0
+    capacity_demand_contended: list[str] = Field(default_factory=list)
     expired_tokens_pruned: int = 0
     events_pruned: int = 0
     volume_metering_count: int = 0

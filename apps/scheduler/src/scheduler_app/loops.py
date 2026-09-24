@@ -77,6 +77,30 @@ outbox is durable, so a slower drain delays delivery rather than losing it.
 LOOP_FAILURE_RETRY_MAX_SECONDS = 30.0
 
 
+@dataclass(slots=True)
+class _ContendedDemand:
+    """Demand the acquisition loop retries alone after it met a held lease."""
+
+    container_ids: tuple[str, ...] = ()
+    attempts: int = 0
+    full_sweep: bool = True
+
+    @property
+    def retrying(self) -> tuple[str, ...]:
+        return () if self.full_sweep else self.container_ids
+
+    def observe(self, contended: tuple[str, ...]) -> None:
+        self.attempts = self.attempts + 1 if contended and not self.full_sweep else 0
+        self.container_ids = contended
+        self.full_sweep = not contended
+
+    def delay_seconds(self) -> float:
+        return ACQUISITION_CONTENDED_RETRY_SECONDS * (1 << min(self.attempts, 3))
+
+    def sweep_next(self) -> None:
+        self.full_sweep = True
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulerLoop:
     """One running loop and the switch that stops it."""
@@ -172,21 +196,25 @@ def start_scheduler_loops(
     resolved_beats = beats or {}
     loops: list[SchedulerLoop] = []
 
-    def wait_for_demand(timeout: float) -> None:
+    def wait_for_demand(timeout: float) -> bool:
+        """Wait for the capacity wake or the timeout; True when the wake arrived."""
         wake = scheduler.workloads.capacity_wake
         if wake is None:
             resolved_stop.wait(timeout)
-            return
+            return False
         try:
             deadline = monotonic() + timeout
             while not resolved_stop.is_set():
                 remaining = deadline - monotonic()
+                if remaining <= 0:
+                    return False
                 # Stay below Redis's socket timeout and observe process shutdown between reads.
-                if remaining <= 0 or wake.wait(timeout_seconds=min(remaining, 1.0)):
-                    return
+                if wake.wait(timeout_seconds=min(remaining, 1.0)):
+                    return True
         except REDIS_UNAVAILABLE_ERRORS:
             LOGGER.warning("capacity wake unavailable; using the durable due-work sweep")
             resolved_stop.wait(timeout)
+        return False
 
     def spawn(
         name: SchedulerLoopName,
@@ -220,26 +248,26 @@ def start_scheduler_loops(
             autoscaling_limit=autoscaling_limit,
         ),
     )
-    contended_demand = threading.Event()
+    retry = _ContendedDemand()
 
     def acquire() -> SchedulerRunResult:
         result = scheduler.run_acquisition_pass(
             include_containers=include_containers,
             container_limit=container_limit,
+            retry_container_ids=retry.retrying,
         )
-        if result.capacity_demand_contended:
-            contended_demand.set()
-        else:
-            contended_demand.clear()
+        retry.observe(tuple(result.capacity_demand_contended))
         return result
 
     def wait_for_acquisition(timeout: float) -> None:
-        # A capacity owner's lease is held for one provider round trip, so demand
-        # that met it retries after a second instead of waiting out the sweep.
-        if contended_demand.is_set():
-            resolved_stop.wait(ACQUISITION_CONTENDED_RETRY_SECONDS)
+        if not retry.container_ids:
+            wait_for_demand(timeout)
             return
-        wait_for_demand(timeout)
+        # A capacity owner's lease is held for one provider round trip. Demand
+        # that met it retries alone, one second later and then doubling, unless
+        # new demand wakes a whole pass first.
+        if wait_for_demand(min(retry.delay_seconds(), timeout)):
+            retry.sweep_next()
 
     spawn(
         SchedulerLoopName.Acquisition,
