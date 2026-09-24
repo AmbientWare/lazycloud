@@ -73,7 +73,7 @@ def deploy(
         ),
     ] = False,
     diff: Annotated[
-        bool, typer.Option("--diff", help="Preview deployment actions without deploying.")
+        bool, typer.Option("--diff", "-d", help="Preview deployment actions without deploying.")
     ] = False,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
     source_root: Annotated[str | None, typer.Option("--source-root")] = None,

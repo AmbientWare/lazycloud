@@ -30,11 +30,11 @@ already deployed in place.
 
 ```bash
 uv run lazycloud deploy page_stats.api --diff
-uv run lazycloud deploy page_stats.api --diff --prune
+uv run lazycloud deploy page_stats.api -d -p
 uv run lazycloud deploy page_stats.api -p
 ```
 
-`--diff` lists each workload as `add`, `redeploy`, `retain`, or, with `--prune`,
+`--diff`, or `-d`, lists each workload as `add`, `redeploy`, `retain`, or, with `--prune`,
 `remove`, without uploading or changing anything. It doesn't compare source or
 configuration, and it still imports your modules. `--prune`, or `-p`,
 [removes workloads](/concepts/apps#remove-workloads) the code no longer
