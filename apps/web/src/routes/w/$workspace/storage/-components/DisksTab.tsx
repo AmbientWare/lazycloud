@@ -17,6 +17,7 @@ import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 const STATUS_LABELS: Record<Disk["status"], string> = {
   attached: "In use",
+  saving: "Saving",
   detached: "Idle",
   deleting: "Deleting",
 };

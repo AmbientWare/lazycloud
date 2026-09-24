@@ -2,6 +2,7 @@ import { z } from "zod";
 import { cpuRequestSchema, memoryRequestSchema } from "./resources";
 import { productRegionSchema } from "./placement";
 
+import { diskStatuses } from "./storage";
 import { stubSchema } from "./stubs";
 
 export const appSchema = z.object({
@@ -123,7 +124,7 @@ export const devboxSchema = z.object({
       size_bytes: z.number(),
       stored_bytes: z.number(),
       generation: z.number().int().nonnegative(),
-      status: z.enum(["detached", "attached", "deleting"]),
+      status: z.enum(diskStatuses),
     })
     .nullable(),
 });

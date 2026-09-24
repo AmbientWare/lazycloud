@@ -23,11 +23,14 @@ from database.repositories.disks import (
     DiskChainLink,
     DiskDeletionTarget,
     DiskHolder,
+    DiskReading,
     DiskRepository,
+    disk_from_table,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.tables.disks import DiskTable
 from database.types import DatabaseSession
+from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.disks import (
     DiskMount,
     DiskRecord,
@@ -158,6 +161,24 @@ def get_or_create_disks(
     ]
 
 
+def disk_record(reading: DiskReading, absence: DiskWorkerAbsence) -> DiskRecord:
+    """The disk as a reader sees it: held, still saving, or free.
+
+    A stopped container keeps its lease until its final publish lands, which
+    is the rule acquisition uses too, so a reader never sees a disk as free
+    while its last writes are still on the way.
+    """
+    raw = DiskStatus(reading.row.status)
+    if raw is not DiskStatus.Attached:
+        return disk_from_table(reading.row, status=raw)
+    holder = reading.holder
+    if holder is not None and holder.status in LIVE_CONTAINER_STATUSES:
+        return disk_from_table(reading.row, status=DiskStatus.Attached)
+    if holder is not None and holder_keeps_disk(holder, absence):
+        return disk_from_table(reading.row, status=DiskStatus.Saving)
+    return disk_from_table(reading.row, status=DiskStatus.Detached)
+
+
 @dataclass(slots=True)
 class DiskService:
     database: DatabaseClient
@@ -165,25 +186,27 @@ class DiskService:
 
     def get(self, name: str, *, workspace_id: str) -> DiskRecord:
         with self.database.session() as session:
-            record = DiskRepository(session).get(name, workspace_id=workspace_id)
-        if record is None:
+            reading = DiskRepository(session).get(name, workspace_id=workspace_id)
+        if reading is None:
             raise NotFoundError(f"disk not found: {name}")
-        return record
+        return disk_record(reading, self.worker_absence)
 
     def describe(self, name: str, *, workspace_id: str) -> tuple[DiskRecord, DiskWorkload | None]:
         with self.database.session() as session:
             repository = DiskRepository(session)
-            record = repository.get(name, workspace_id=workspace_id)
-            if record is None:
+            reading = repository.get(name, workspace_id=workspace_id)
+            if reading is None:
                 raise NotFoundError(f"disk not found: {name}")
-            return record, repository.workloads([record.id]).get(record.id)
+            workload = repository.workloads([str(reading.row.id)]).get(str(reading.row.id))
+        return disk_record(reading, self.worker_absence), workload
 
     def list(self, *, workspace_id: str, after: str = "", limit: int = DISK_LIST_LIMIT) -> DiskPage:
         bounded = max(1, min(limit, DISK_LIST_LIMIT))
         with self.database.session() as session:
             repository = DiskRepository(session)
-            records = repository.list(workspace_id=workspace_id, after=after, limit=bounded)
-            workloads = repository.workloads([record.id for record in records])
+            readings = repository.list(workspace_id=workspace_id, after=after, limit=bounded)
+            workloads = repository.workloads([str(reading.row.id) for reading in readings])
+        records = [disk_record(reading, self.worker_absence) for reading in readings]
         return DiskPage(
             data=tuple(records),
             next=records[-1].name if len(records) == bounded else "",
@@ -491,5 +514,6 @@ __all__ = [
     "DiskPublication",
     "DiskService",
     "ResolvedDisk",
+    "disk_record",
     "get_or_create_disks",
 ]

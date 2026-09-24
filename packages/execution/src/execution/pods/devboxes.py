@@ -17,13 +17,15 @@ from observability.stream_state import RedisEventStreamRepository
 from shared.containers import ContainerExecutionPhase, ContainerStatus
 from shared.deployment_records import resolve_pod_role
 from shared.deployments import DeploymentKind, DevboxPhase, DevboxState, PodRole
+from shared.disks import DiskStatus
 from shared.errors import NotFoundError
 from shared.http.deployments import DevboxDiskResponse, DevboxResponse
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery
 from shared.ssh import ssh_host_alias
 from shared.timestamps import to_utc, utc_now
-from storage.disk_volumes import DiskWorkerAbsence, holder_keeps_disk
+from storage.disk_volumes import DiskWorkerAbsence
+from storage.disks import disk_record
 
 from database import DatabaseClient
 from execution.containers.runtime_state import PodKeepAliveReader
@@ -124,15 +126,15 @@ class DevboxService:
             )
             containers = ContainerRepository(session)
             container = containers.newest_live_for_stub(stub.id) if deployment.active else None
-            disks = DiskRepository(session)
-            disk = disks.get(root.name, workspace_id=workspace_id) if root is not None else None
-            saving_disk = False
-            if disk is not None and container is None:
-                # The lease names its last holder until the next acquire, so
-                # the storage owner's rule says whether that holder still saves.
-                lease = disks.lease(disk.id)
-                if lease is not None and lease[0]:
-                    saving_disk = holder_keeps_disk(disks.holder(lease[0]), self.worker_absence)
+            reading = (
+                DiskRepository(session).get(root.name, workspace_id=workspace_id)
+                if root is not None
+                else None
+            )
+            disk = None if reading is None else disk_record(reading, self.worker_absence)
+            saving_disk = (
+                container is None and disk is not None and disk.status is DiskStatus.Saving
+            )
             recent_failure = (
                 containers.recent_startup_failure(
                     stub.id,
