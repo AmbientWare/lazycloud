@@ -685,6 +685,9 @@ class DockerAgentWorkerController:
         active_by_id = {slot.worker_id: slot for slot in self.active_slots()}
         applied: list[AgentWorkerReconcileAction] = []
         prepared: set[str] = set()
+        # One wait per call, shared by every action, so a slow pull holds the
+        # stream for at most WORKER_IMAGE_CHECK_WAIT_SECONDS however many slots it has.
+        wait_until = time.monotonic() + WORKER_IMAGE_CHECK_WAIT_SECONDS
         for action in plan.actions:
             if action.action not in {
                 WorkerSlotAction.Prepare,
@@ -698,7 +701,7 @@ class DockerAgentWorkerController:
             if not image:
                 raise ValueError(f"worker image is required for slot {action.worker_id}")
             if (
-                self._images.ensure(image, wait_seconds=WORKER_IMAGE_CHECK_WAIT_SECONDS)
+                self._images.ensure(image, wait_seconds=max(wait_until - time.monotonic(), 0.0))
                 and image in reported_images
             ):
                 prepared.add(action.worker_id)
