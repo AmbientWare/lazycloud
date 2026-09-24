@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import threading
-import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
@@ -51,10 +49,8 @@ from .managed_pool import (
 )
 from .network_egress import same_region_storage_destinations
 from .provider_control import AwsProviderControlError, AwsProviderControlErrorCode
-from .spot_prices import AwsSpotMarket, load_aws_spot_quotes
+from .spot_prices import AwsSpotMarket, AwsSpotQuoteCache, load_aws_spot_quotes
 from .supplier_prices import AwsRegionalPrices
-
-SPOT_QUOTE_REUSE_SECONDS = 60.0
 
 _PHASES = {
     AwsManagedPoolPhase.Provisioning: ProviderCapacityPhase.Provisioning,
@@ -79,12 +75,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
     regional_prices: Mapping[str, AwsRegionalPrices] = field(
         default_factory=lambda: dict[str, AwsRegionalPrices]()
     )
-    _spot_markets: dict[tuple[str, tuple[str, ...]], tuple[float, AwsSpotMarket]] = field(
-        default_factory=dict, init=False, repr=False, compare=False
-    )
-    _spot_markets_lock: threading.Lock = field(
-        default_factory=threading.Lock, init=False, repr=False, compare=False
-    )
+    spot_quotes: AwsSpotQuoteCache = field(kw_only=True)
 
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
@@ -385,23 +376,13 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
         return AwsManagedPoolProvisioner.assume(target, client_provider=self.client_provider)
 
     def _spot_market(self, region: str, instance_types: tuple[str, ...]) -> AwsSpotMarket:
-        """The region's zones and Spot quotes, read from EC2 at most once a minute.
+        def load() -> AwsSpotMarket:
+            clients = self.client_provider.assume(self._target(region))
+            return load_aws_spot_quotes(
+                clients.ec2, network=self._network(region), instance_types=instance_types
+            )
 
-        Listing offers reads every zone's Spot price history in every region,
-        which takes seconds, and a request waiting for a machine lists them.
-        """
-        now = time.monotonic()
-        with self._spot_markets_lock:
-            cached = self._spot_markets.get((region, instance_types))
-        if cached is not None and now < cached[0]:
-            return cached[1]
-        clients = self.client_provider.assume(self._target(region))
-        market = load_aws_spot_quotes(
-            clients.ec2, network=self._network(region), instance_types=instance_types
-        )
-        with self._spot_markets_lock:
-            self._spot_markets[(region, instance_types)] = (now + SPOT_QUOTE_REUSE_SECONDS, market)
-        return market
+        return self.spot_quotes.market((self.connection.account_id, region, instance_types), load)
 
     def _network(self, region: str) -> AwsAccountNetwork:
         network = self.networks.get(region)

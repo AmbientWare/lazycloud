@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+import threading
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal
 from typing import Protocol
@@ -73,6 +75,48 @@ class _SpotPrice(_Response):
 class _SpotPrices(_Response):
     values: tuple[_SpotPrice, ...] = Field(alias="SpotPriceHistory")
     next_token: str = Field(default="", alias="NextToken")
+
+
+SPOT_QUOTE_REUSE_SECONDS = 60.0
+SPOT_QUOTE_CACHE_ENTRIES = 256
+
+type AwsSpotQuoteKey = tuple[str, str, tuple[str, ...]]
+"""Account, region and the instance types quoted."""
+
+
+@dataclass(slots=True)
+class AwsSpotQuoteCache:
+    """Spot markets by account and region, each reused for a minute.
+
+    Listing offers reads every zone's Spot price history in every region, which
+    takes seconds, and a request waiting for a machine lists them. One cache
+    lives as long as the process's provider resolver, so providers rebuilt per
+    call share it. Entries past their minute are dropped before a new one is
+    added, and the oldest go first once it holds its limit.
+    """
+
+    reuse_seconds: float = SPOT_QUOTE_REUSE_SECONDS
+    max_entries: int = SPOT_QUOTE_CACHE_ENTRIES
+    clock: Callable[[], float] = time.monotonic
+    _entries: dict[AwsSpotQuoteKey, tuple[float, AwsSpotMarket]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def market(self, key: AwsSpotQuoteKey, load: Callable[[], AwsSpotMarket]) -> AwsSpotMarket:
+        now = self.clock()
+        with self._lock:
+            cached = self._entries.get(key)
+        if cached is not None and now < cached[0]:
+            return cached[1]
+        market = load()
+        with self._lock:
+            for stale in [item for item, entry in self._entries.items() if entry[0] <= now]:
+                del self._entries[stale]
+            while len(self._entries) >= self.max_entries:
+                del self._entries[min(self._entries, key=lambda item: self._entries[item][0])]
+            self._entries[key] = (now + self.reuse_seconds, market)
+        return market
 
 
 def load_aws_spot_quotes(

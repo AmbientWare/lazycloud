@@ -27,6 +27,7 @@ from provider_aws import (
     Boto3AwsManagedPoolClientProvider,
 )
 from provider_aws.platform_pool import AwsPlatformCapacityProvider
+from provider_aws.spot_prices import AwsSpotQuoteCache
 from provider_aws.supplier_prices import AWS_REGIONAL_PRICES
 from pydantic import SecretStr
 from shared.aws_connections import (
@@ -64,6 +65,7 @@ def configured_platform_compute_providers(
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
         regional_prices=AWS_REGIONAL_PRICES,
         checkpoints=provider_state,
+        spot_quotes=AwsSpotQuoteCache(),
     )
 
     def providers() -> tuple[ResolvedComputeProvider, ...]:
@@ -156,6 +158,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
     regional_prices: Mapping[str, AwsRegionalPrices] = field(
         default_factory=lambda: AWS_REGIONAL_PRICES
     )
+    spot_quotes: AwsSpotQuoteCache = field(default_factory=AwsSpotQuoteCache)
 
     def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
         providers = self.platform_providers()
@@ -253,6 +256,7 @@ class WorkspaceComputeProviderResolver(ComputeProviderResolver):
                 binaries_by_region=self.binaries_by_region,
                 regional_prices=self.regional_prices,
                 client_provider=self.client_provider,
+                spot_quotes=self.spot_quotes,
             ),
         )
 
