@@ -975,6 +975,7 @@ class AgentDaemonService:
     _capacity_shutdown: CapacityShutdown = field(init=False)
     _interruption_reported: bool = False
     _reported_worker_images: list[str] = field(default_factory=list)
+    _last_applied_actions: str = "nothing"
 
     def __post_init__(self) -> None:
         self._capacity_shutdown = CapacityShutdown(
@@ -1338,14 +1339,24 @@ class AgentDaemonService:
                     binary_sha256=updater.binary_sha256(),
                 )
             )
-        if applied or timings.total_seconds() >= SLOW_STREAM_ITERATION_SECONDS:
-            timings.log(
-                LOGGER,
-                "agent stream %d applied %s",
-                current_iterations,
-                ",".join(f"{action.action.value}:{action.worker_id}" for action in applied)
-                or "nothing",
-            )
+        actions = (
+            ",".join(f"{action.action.value}:{action.worker_id}" for action in applied) or "nothing"
+        )
+        # A draining machine repeats the same Prepare on every stream; only a
+        # change, or a slow iteration, is worth an INFO line.
+        changed = actions != self._last_applied_actions
+        self._last_applied_actions = actions
+        timings.log(
+            LOGGER,
+            "agent stream %d applied %s",
+            current_iterations,
+            actions,
+            level=(
+                logging.INFO
+                if changed or timings.total_seconds() >= SLOW_STREAM_ITERATION_SECONDS
+                else logging.DEBUG
+            ),
+        )
         if release.generation < state.release_generation:
             raise RuntimeError("agent release instruction is stale")
         state = state.model_copy(update={"release_generation": release.generation})
