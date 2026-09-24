@@ -18,7 +18,6 @@ def resource_table(
     *,
     title: str | None = None,
     empty: str | None = None,
-    expand: bool = False,
 ) -> RenderableType:
     if not rows and empty:
         return empty_state(empty)
@@ -31,7 +30,6 @@ def resource_table(
         row_styles=(theme.PLAIN, theme.ROW_ALT),
         collapse_padding=True,
         pad_edge=False,
-        expand=expand,
     )
     normalized_columns = [str(column) for column in columns]
     for column in normalized_columns:
