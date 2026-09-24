@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -24,8 +26,8 @@ const (
 	maxPendingLogBytes       = 1024 * 1024
 	maxRetainedOutputBytes   = 256 * 1024
 	maxRetainedExitedProcess = 64
-	// outputDrainGrace is how long a process's output pipe may sit empty after
-	// it exits before the pipe is taken to be held open by a descendant.
+	// outputDrainGrace is the longest an exec'd process's exit report waits,
+	// counted from the exit, for output a descendant is still writing.
 	outputDrainGrace = time.Second
 )
 
@@ -40,6 +42,8 @@ type request struct {
 	AckSeq  uint64   `json:"ack_seq,omitempty"`
 	OK      bool     `json:"ok,omitempty"`
 	Token   string   `json:"token,omitempty"`
+	// Payload is the file helper's request for the filesystem operation.
+	Payload string `json:"payload,omitempty"`
 }
 
 type response struct {
@@ -77,9 +81,7 @@ type processState struct {
 	command      string
 	cwd          string
 	running      bool
-	exited       bool
 	exitCode     int
-	watchers     int
 	nextSeq      uint64
 	ackSeq       uint64
 	logs         []logChunk
@@ -245,6 +247,8 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 		s.handleDrain(encoder, connection)
 	case "exec":
 		s.handleExec(decoder, encoder, command)
+	case "filesystem":
+		s.handleFilesystem(encoder, command.Payload)
 	case "watch":
 		s.handleWatch(decoder, encoder, command.PID, command.AckSeq)
 	case "status":
@@ -363,8 +367,9 @@ func (s *supervisor) handleExec(decoder *json.Decoder, encoder *json.Encoder, co
 	cmd.Dir = command.Cwd
 	cmd.Env = command.Env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// Pipes the supervisor owns, rather than StdoutPipe, whose read end Wait
-	// closes as soon as the process exits, with its last writes still unread.
+	// The supervisor owns these pipes. Wait closes a StdoutPipe as soon as the
+	// process exits, which loses whatever it wrote last and kills descendants
+	// still writing.
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		writeError(encoder, err)
@@ -405,39 +410,21 @@ func (s *supervisor) handleExec(decoder *json.Decoder, encoder *json.Encoder, co
 	outputReaders.Add(2)
 	go captureOutput(state, "stdout", stdout, &outputReaders)
 	go captureOutput(state, "stderr", stderr, &outputReaders)
-	go s.waitProcess(state, cmd, []*os.File{stdout, stderr}, &outputReaders)
+	go s.waitProcess(state, cmd, &outputReaders)
 	if err := encoder.Encode(response{Version: protocolVersion, Type: "started", PID: state.pid, Running: true}); err != nil {
 		return
 	}
 	s.streamProcess(decoder, encoder, state, 0)
 }
 
-// captureOutput reads one output pipe to its end. While a watcher is
-// attached, unacknowledged output holds the process back rather than being
-// dropped; with none attached the oldest output is dropped so the process
-// never stalls on a pipe nobody reads.
-func captureOutput(state *processState, stream string, reader *os.File, done *sync.WaitGroup) {
+func captureOutput(state *processState, stream string, reader io.ReadCloser, done *sync.WaitGroup) {
 	defer done.Done()
 	defer reader.Close()
 	buffer := make([]byte, 32*1024)
 	for {
-		state.mu.Lock()
-		exited := state.exited
-		state.mu.Unlock()
-		if exited {
-			// Everything the process wrote is already in the pipe, so a read
-			// that waits this long is waiting on a descendant.
-			_ = reader.SetReadDeadline(time.Now().Add(outputDrainGrace))
-		}
 		count, err := reader.Read(buffer)
 		if count > 0 {
 			state.mu.Lock()
-			for state.pendingBytes >= maxPendingLogBytes && state.watchers > 0 {
-				changed := state.changed
-				state.mu.Unlock()
-				<-changed
-				state.mu.Lock()
-			}
 			data := append([]byte(nil), buffer[:count]...)
 			state.logs = append(state.logs, logChunk{Seq: state.nextSeq, Stream: stream, Data: data})
 			state.pendingBytes += len(data)
@@ -461,33 +448,24 @@ func captureOutput(state *processState, stream string, reader *os.File, done *sy
 	}
 }
 
-// waitProcess reports the exit only once both pipes have been read to their
-// end, so a watcher that sees the exit has already seen all of the output.
-func (s *supervisor) waitProcess(state *processState, cmd *exec.Cmd, outputs []*os.File, outputReaders *sync.WaitGroup) {
-	err := cmd.Wait()
-	s.mu.Lock()
-	delete(s.directChildren, state.pid)
-	s.mu.Unlock()
-	state.mu.Lock()
-	state.exited = true
-	state.mu.Unlock()
-	for _, output := range outputs {
-		// Bounds a read that was already waiting on an empty pipe at exit.
-		_ = output.SetReadDeadline(time.Now().Add(outputDrainGrace))
+// waitProcess reports the exit once the output has ended, or once
+// outputDrainGrace has passed since the exit if a descendant still holds the
+// pipes. The pipes stay open and read after that, so the descendant keeps
+// running.
+func (s *supervisor) waitProcess(state *processState, cmd *exec.Cmd, outputReaders *sync.WaitGroup) {
+	err := s.waitChild(cmd, func() {})
+	drained := make(chan struct{})
+	go func() {
+		outputReaders.Wait()
+		close(drained)
+	}()
+	grace := time.NewTimer(outputDrainGrace)
+	select {
+	case <-drained:
+	case <-grace.C:
 	}
-	outputReaders.Wait()
-	exitCode := 0
-	if err != nil {
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) {
-			exitCode = exitError.ExitCode()
-			if status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-				exitCode = 128 + int(status.Signal())
-			}
-		} else {
-			exitCode = 1
-		}
-	}
+	grace.Stop()
+	exitCode := exitCodeOf(err)
 	state.mu.Lock()
 	state.running = false
 	state.exitCode = exitCode
@@ -495,6 +473,64 @@ func (s *supervisor) waitProcess(state *processState, cmd *exec.Cmd, outputs []*
 	state.notify()
 	state.mu.Unlock()
 	s.pruneExitedProcesses()
+}
+
+func exitCodeOf(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		return 1
+	}
+	if status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return 128 + int(status.Signal())
+	}
+	return exitError.ExitCode()
+}
+
+// handleFilesystem runs the file helper and streams all of its stdout, then
+// its exit status and stderr. Nothing is logged or replayed, so nothing is
+// dropped, and the connection's flow control paces the helper. The helper
+// starts no processes of its own, so its stdout ends when it does.
+func (s *supervisor) handleFilesystem(encoder *json.Encoder, payload string) {
+	executable, err := os.Executable()
+	if err != nil {
+		writeError(encoder, err)
+		return
+	}
+	cmd := exec.Command(executable, "filesystem", payload)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		writeError(encoder, err)
+		return
+	}
+	if err := s.startChild(cmd); err != nil {
+		writeError(encoder, err)
+		return
+	}
+	buffer := make([]byte, 32*1024)
+	var sendErr error
+	for {
+		count, readErr := stdout.Read(buffer)
+		if count > 0 && sendErr == nil {
+			sendErr = encoder.Encode(response{Version: protocolVersion, Type: "chunk", Stream: "stdout", Data: buffer[:count]})
+			if sendErr != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	err = s.waitChild(cmd, func() {})
+	if sendErr != nil {
+		return
+	}
+	_ = encoder.Encode(response{Version: protocolVersion, Type: "exited", ExitCode: exitCodeOf(err), Stderr: stderr.String()})
 }
 
 func (s *supervisor) pruneExitedProcesses() {
@@ -562,29 +598,15 @@ func (s *supervisor) handleWatch(decoder *json.Decoder, encoder *json.Encoder, p
 }
 
 func (s *supervisor) streamProcess(decoder *json.Decoder, encoder *json.Encoder, state *processState, ackSeq uint64) {
-	state.mu.Lock()
-	state.watchers++
-	state.mu.Unlock()
-	defer func() {
-		state.mu.Lock()
-		state.watchers--
-		state.notify()
-		state.mu.Unlock()
-	}()
 	for {
 		state.mu.Lock()
 		if ackSeq > state.ackSeq {
 			state.ackSeq = ackSeq
 		}
-		evicted := false
 		for len(state.logs) > 0 && state.logs[0].Seq <= state.ackSeq {
 			state.pendingBytes -= len(state.logs[0].Data)
 			state.logs[0] = logChunk{}
 			state.logs = state.logs[1:]
-			evicted = true
-		}
-		if evicted {
-			state.notify()
 		}
 		if len(state.logs) > 0 && state.ackSeq+1 < state.logs[0].Seq {
 			state.mu.Unlock()

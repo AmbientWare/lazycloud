@@ -35,6 +35,7 @@ from worker.container_client.models import (
     ContainerStreamLogsRequest,
 )
 from worker.container_service.models import (
+    SandboxFilesystemOutput,
     SandboxProcessEvent,
     SandboxProcessEventType,
     WorkerContainerServiceInstance,
@@ -70,6 +71,7 @@ class ProcessManager:
     stream_calls: list[tuple[list[str], str, list[str]]] = field(default_factory=list)
     processes: list[WorkerSandboxProcess] = field(default_factory=list)
     cleanup_event: Event = field(default_factory=Event)
+    filesystem_output: SandboxFilesystemOutput | None = None
 
     def ready(self) -> bool:
         self.ready_calls += 1
@@ -82,6 +84,10 @@ class ProcessManager:
 
     def ack(self, pid: int, seq: int, *, ok: bool) -> None:
         self.acknowledgements.append((pid, seq, ok))
+
+    def run_filesystem(self, payload: str) -> SandboxFilesystemOutput:
+        assert self.filesystem_output is not None, payload
+        return self.filesystem_output
 
     def stream_exec(
         self,
@@ -328,18 +334,10 @@ def test_worker_container_service_runtime_and_process_operations(tmp_path: Path)
 def test_a_download_returns_only_every_byte_the_supervisor_wrote(
     tmp_path: Path, received: int, ok: bool
 ) -> None:
-    def chunk(seq: int, stream: SandboxLogStream, data: bytes) -> SandboxProcessEvent:
-        return SandboxProcessEvent(
-            event_type=SandboxProcessEventType.Chunk, pid=9, seq=seq, stream=stream, data=data
-        )
-
     manager = ProcessManager(
-        events=[
-            SandboxProcessEvent(event_type=SandboxProcessEventType.Started, pid=9),
-            chunk(1, SandboxLogStream.Stdout, b"x" * received),
-            chunk(2, SandboxLogStream.Stderr, b'{"bytes":300000}\n'),
-            SandboxProcessEvent(event_type=SandboxProcessEventType.Exited, pid=9, exit_code=0),
-        ]
+        filesystem_output=SandboxFilesystemOutput(
+            stdout=b"x" * received, stderr=b'{"bytes":300000}\n', exit_code=0
+        )
     )
     service = WorkerContainerService(
         instances=_store(_instance(tmp_path, sandbox_process_manager_ready=True)),

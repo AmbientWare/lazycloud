@@ -44,7 +44,7 @@ from database.tables.apps import (
 from database.tables.execution import TaskTable
 from database.tables.images import CheckpointTable
 from database.tables.orchestration import ContainerTable
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue
 from shared.app_lifecycle import (
     UNFINISHED_APP_LIFECYCLE_STATES,
     AppDeploymentIntentTarget,
@@ -54,7 +54,7 @@ from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, PodRole, StubKind
-from shared.disks import DiskMount
+from shared.disks import DISK_ROOT_MOUNT_PATH
 from shared.enums import StringEnum
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
@@ -64,6 +64,7 @@ from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
 from sqlalchemy import (
     and_,
     case,
+    cast,
     delete,
     exists,
     func,
@@ -75,11 +76,11 @@ from sqlalchemy import (
     type_coerce,
     update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
 
-_DISK_MOUNTS = TypeAdapter(list[DiskMount])
+_ROOT_DISK_PATH = f'$[*] ? (!exists(@.mount_path) || @.mount_path == "{DISK_ROOT_MOUNT_PATH}")'
 
 
 @dataclass(frozen=True, slots=True)
@@ -668,18 +669,20 @@ class StubRepository:
         return stub_from_table(row) if row is not None else None
 
     def mounts_root_disk(self, stub_id: str, *, workspace_id: str) -> bool:
-        """Whether the stub mounts a disk at `/`, read from its disk list alone.
+        """Whether the stub mounts a disk at `/`, answered in SQL from its disk list alone.
 
-        A stored disk leaves `mount_path` out when it is the default `/`, so the
-        list is read through `DiskMount` rather than matched as JSON.
+        A stored disk leaves `mount_path` out when it is the default `/`, so a
+        disk without one is a root disk.
         """
-        disks = self.session.scalar(
-            select(type_coerce(StubTable.configuration, JSONB)["disks"]).where(
-                StubTable.id == stub_id,
-                StubTable.workspace_id == workspace_id,
+        disks = type_coerce(StubTable.configuration, JSONB)["disks"]
+        return bool(
+            self.session.scalar(
+                select(func.jsonb_path_exists(disks, cast(_ROOT_DISK_PATH, JSONPATH))).where(
+                    StubTable.id == stub_id,
+                    StubTable.workspace_id == workspace_id,
+                )
             )
         )
-        return any(disk.is_root for disk in _DISK_MOUNTS.validate_python(disks or []))
 
     def get_across_workspaces(self, stub_id: str) -> StubRecord | None:
         """System lookup for scheduler/worker/runner paths resolving placed work."""

@@ -6,6 +6,7 @@ from threading import Event, Thread
 
 from worker.container_service.models import (
     SandboxDockerDaemonStatus,
+    SandboxFilesystemOutput,
     SandboxProcessEvent,
     SandboxProcessEventType,
     WorkerContainerServiceInstance,
@@ -53,6 +54,9 @@ class ProcessManager:
 
     def ack(self, pid: int, seq: int, *, ok: bool) -> None:
         self.acknowledgements.append((pid, seq, ok))
+
+    def run_filesystem(self, payload: str) -> SandboxFilesystemOutput:
+        raise AssertionError(f"unexpected file operation: {payload}")
 
     def status(self, pid: int) -> int | None:
         _ = pid

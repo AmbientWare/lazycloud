@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -39,6 +40,15 @@ class SandboxFilesystemRequest(ContractModel):
 
     truncate: bool = Field(default=False, exclude_if=lambda value: not value)
     """Write the first `limit` bytes of a larger file instead of refusing it."""
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxFilesystemOutput:
+    """Everything the supervisor's file helper wrote, and how it exited."""
+
+    stdout: bytes
+    stderr: bytes
+    exit_code: int
 
 
 class SandboxDownloadReport(ContractModel):
