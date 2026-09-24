@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from time import monotonic, sleep
 
 import pytest
+from shared.errors import ContainerLifetimeEndedError, domain_error_code
+from shared.http.errors import ErrorResponse, HttpApiError
 from shared.realtime.contracts import ContainerMetricsPayload
 from shared.scheduling import (
     ContainerStatusUpdatePlan,
@@ -113,6 +115,9 @@ class UsageRecorder:
     refusals_left: int = 0
     """Raise on this many writes and then accept, as a restarting one does."""
 
+    ended: bool = False
+    """Refuse every write as past the end the platform recorded for the container."""
+
     offered: list[tuple[int, int]] = field(default_factory=list)
     durations: list[int] = field(default_factory=list)
     windows: list[tuple[int, int]] = field(default_factory=list)
@@ -137,6 +142,15 @@ class UsageRecorder:
                 window_start_ms + duration_ms if window_end_ms is None else window_end_ms,
             )
         )
+        if self.ended:
+            raise HttpApiError(
+                "container ended",
+                status_code=409,
+                error=ErrorResponse(
+                    detail="container ended",
+                    code=domain_error_code(ContainerLifetimeEndedError),
+                ),
+            )
         if self.refuse or self.refusals_left > 0:
             self.refusals_left -= 1
             raise RuntimeError("worker repository refused the usage record")
@@ -367,6 +381,36 @@ def test_a_refused_usage_write_is_retried_with_the_window_it_claimed() -> None:
     assert set(usage.offered) == {usage.offered[0]}
     assert usage.offered[0][0] == 0
     assert usage.windows == []
+
+
+def test_usage_refused_past_the_recorded_end_is_not_offered_again() -> None:
+    """A container the platform has ended stops being metered, not retried forever.
+
+    The refusal means the worker missed the stop. Every later window lies further
+    past the recorded end, so offering any of them again only repeats the refusal.
+    """
+
+    usage = UsageRecorder(ended=True)
+    monitor = WorkerContainerRuntimeMonitor(
+        usage_recorder=usage,
+        settings=ContainerRuntimeMonitorSettings(sample_interval_seconds=0.01),
+    )
+    request = ContainerRequestContext(
+        container_id="ctr-1",
+        workspace_id="workspace-1",
+        cpu_millicores=1000,
+        memory_mib=128,
+    )
+
+    handle = monitor.start_monitoring(request)
+    handle.runtime_started(123)
+    deadline = monotonic() + 10
+    while not usage.offered and monotonic() < deadline:
+        sleep(0.01)
+    sleep(0.1)
+    handle.stop()
+
+    assert len(usage.offered) == 1
 
 
 def test_windows_accepted_after_a_refusal_tile_the_whole_container() -> None:

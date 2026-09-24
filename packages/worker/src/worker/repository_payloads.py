@@ -277,8 +277,16 @@ class ListContainerCleanupRequest(ContractModel):
     pass
 
 
+class ContainerCleanupTarget(ContractModel):
+    """A container the platform recorded as ended whose storage a worker still holds."""
+
+    container_id: str
+    stop_reason: StopContainerReason
+    """How a worker that is still running the container stops it."""
+
+
 class ListContainerCleanupResponse(WorkerRepositoryResponse):
-    container_ids: list[str]
+    containers: list[ContainerCleanupTarget]
 
 
 class DeleteContainerStateRequest(ContractModel):

@@ -336,7 +336,9 @@ def assemble_worker_process_services(
     def validate_readiness() -> None:
         if readiness_validator is not None:
             readiness_validator()
-        execution.recover_cleanup(container_repository.list_pending_storage_cleanup())
+        execution.recover_cleanup(
+            [target.container_id for target in container_repository.list_pending_storage_cleanup()]
+        )
         if container_repository.list_pending_storage_cleanup():
             raise RuntimeError("container storage cleanup remains pending before worker readiness")
 
@@ -385,6 +387,7 @@ def assemble_worker_process_services(
         workers=worker_repository,
         containers=container_repository,
         execution=execution,
+        container_stopper=runtime_stopper,
         lifecycle=lifecycle,
         image_builds=image_builds,
         image_build_results=worker_repository,

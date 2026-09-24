@@ -19,6 +19,7 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskStorageRequest,
 )
 
 from database import DatabaseClient
@@ -107,6 +108,12 @@ class WorkerDiskLeaseService:
             lease_token=payload.lease_token,
             generation=payload.generation,
             stored_bytes_removed=payload.stored_bytes_removed,
+        )
+
+    def require_holder(self, payload: DiskStorageRequest, *, container: ContainerRecord) -> None:
+        """Prove the container still holds the disk, whatever its scheduler state says."""
+        self.disks.require_lease(
+            payload.disk_id, container_id=container.id, lease_token=payload.lease_token
         )
 
     def _authorize(self, disk_id: str, *, container: ContainerRecord) -> None:

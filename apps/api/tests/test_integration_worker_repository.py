@@ -91,7 +91,12 @@ from shared.container_requests import ContainerShutdownTarget, StopContainerReas
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
-from shared.errors import ConflictError, UpstreamUnavailableError
+from shared.errors import (
+    ConflictError,
+    ContainerLifetimeEndedError,
+    UpstreamUnavailableError,
+    domain_error_code,
+)
 from shared.http.compute import MachineJoinCommandRequest
 from shared.http.errors import ErrorResponse
 from shared.http.releases import AgentReleaseRequest
@@ -1904,7 +1909,7 @@ def test_container_shutdown_requires_assigned_worker_storage_release(
 
     with isolated_services.context.database.session() as session:
         pending = ContainerRepository(session).list_pending_storage_cleanup("worker-1")
-        assert pending == [container_id]
+        assert pending == {container_id: StopContainerReason.Unknown}
         assert (
             ContainerRepository(session).list_shutdown_targets(workspace_id=workspace.id) == targets
         )
@@ -3602,14 +3607,16 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
             ),
         )
 
-        def _record(window_started_at: datetime, window_ended_at: datetime) -> tuple[int, bytes]:
+        def _record(
+            window_started_at: datetime, window_ended_at: datetime, *, complete: bool = False
+        ) -> tuple[int, bytes]:
             response = client.post(
                 "/worker-repository/record-worker-usage-window",
                 json={
                     "container_id": container_id,
                     "started_at": window_started_at.isoformat(),
                     "ended_at": window_ended_at.isoformat(),
-                    "measurement_complete": False,
+                    "measurement_complete": complete,
                     "records": [
                         UsageRecord(
                             id=str(uuid4()),
@@ -3651,8 +3658,19 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
         assert window_start - claimed_start > timedelta(hours=5)
         assert claimed_end - window_end > timedelta(hours=5)
 
-        refused, _ = _record(finished_at + timedelta(days=1), finished_at + timedelta(days=2))
-        assert refused == 403
+        # Past a recorded finish the worker has missed the stop, and is told so in
+        # a form it can act on rather than a refusal it would retry forever.
+        for refused_window in (
+            _record(finished_at + timedelta(days=1), finished_at + timedelta(days=2)),
+            _record(
+                finished_at - timedelta(minutes=1), finished_at + timedelta(hours=1), complete=True
+            ),
+        ):
+            refused_status, refused_body = refused_window
+            assert refused_status == 409
+            assert ErrorResponse.model_validate_json(refused_body).code == domain_error_code(
+                ContainerLifetimeEndedError
+            )
 
 
 def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_lost(

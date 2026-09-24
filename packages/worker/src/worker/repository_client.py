@@ -55,6 +55,7 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskStorageRequest,
 )
 from worker.events import (
     ContainerExecutionPhase,
@@ -84,6 +85,7 @@ from worker.repository_payloads import (
     AppendSandboxProcessLogResponse,
     ClaimSourceCacheCleanupRequest,
     ClaimSourceCacheCleanupResponse,
+    ContainerCleanupTarget,
     ContainerLogBatchEntry,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
@@ -174,7 +176,11 @@ from worker.source_cache_cleanup import (
 )
 from worker.source_code import SourceCodePackageMaterializer
 from worker.ssh_identity import ContainerSshIdentity, ContainerSshIdentityRequest
-from worker.tools import ContainerCredentialRequest, ContainerCredentials
+from worker.tools import (
+    ContainerCredentialRequest,
+    ContainerCredentials,
+    WorkspaceStorageCredentials,
+)
 
 type JsonObject = dict[str, JsonValue]
 
@@ -733,6 +739,11 @@ class WorkerRepositoryHttpClient:
     def collect_disk(self, payload: DiskCollectPayload) -> None:
         self.transport.post("/worker-repository/collect-disk", _model_payload(payload))
 
+    def disk_storage(self, payload: DiskStorageRequest) -> WorkspaceStorageCredentials:
+        return self._post_model(
+            "/worker-repository/disk-storage", payload, WorkspaceStorageCredentials
+        )
+
     def get_checkpoint_restore(
         self,
         request: GetCheckpointRestoreRequest,
@@ -1183,8 +1194,8 @@ class RemoteSchedulerContainerRepository:
     client: WorkerRepositoryHttpClient
     state: RemoteWorkerRepositoryState
 
-    def list_pending_storage_cleanup(self) -> list[str]:
-        return self.client.list_container_cleanup().container_ids
+    def list_pending_storage_cleanup(self) -> list[ContainerCleanupTarget]:
+        return self.client.list_container_cleanup().containers
 
     def get_container_state(self, container_id: str) -> WorkerContainerState | None:
         response = self.client.get_container_state(
