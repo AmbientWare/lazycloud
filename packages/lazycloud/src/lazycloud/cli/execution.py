@@ -37,7 +37,6 @@ from lazycloud.cli.components.progress import ConnectingIndicator, attach_termin
 from lazycloud.cli.components.results import emit_python_result
 from lazycloud.cli.control import resource_client
 from lazycloud.cli.handler_workflows import (
-    HandlerLoadError,
     apply_handler_reference,
     call_handler,
     invoke_handler_method,
@@ -82,10 +81,7 @@ def deploy(
 ) -> None:
     selected_workspace = workspace or resolve_control_client_config().workspace
     with control_workspace_scope(selected_workspace):
-        try:
-            loaded = [load_deployment_object(reference) for reference in handler]
-        except HandlerLoadError as exc:
-            raise typer.BadParameter(str(exc)) from exc
+        loaded = [load_deployment_object(reference) for reference in handler]
         apps = [item for item in loaded if isinstance(item, App)]
         if len(loaded) > 1 and len(apps) != len(loaded):
             raise typer.BadParameter("multiple references must select complete apps")
@@ -160,7 +156,6 @@ def _deploy_apps(
     prune: bool,
     diff: bool,
 ) -> None:
-
     def submit(app: App) -> tuple[DeployStubResponse, ...]:
         if prune and not app.deployment_manifest().workloads:
             return ()
@@ -285,10 +280,7 @@ def shell(
             workspace=workspace,
         )
         return
-    try:
-        user_object = load_handler_object(handler)
-    except HandlerLoadError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    user_object = load_handler_object(handler)
     attach_terminal(user_object)
     target = apply_handler_reference(user_object, handler)
     indicator = ConnectingIndicator(str(getattr(target, "name", handler))).start()
@@ -504,16 +496,10 @@ def _deployment_summary(
 
 
 def _load_run_target(reference: str) -> object | None:
+    if ":" not in reference:
+        return None
     try:
         return load_handler_object(reference)
-    except (
-        HandlerLoadError,
-        ImportError,
-        AttributeError,
-        ModuleNotFoundError,
-        ValueError,
-    ) as exc:
-        if ":" in reference:
-            msg = f"could not load handler {reference!r}: {exc}"
-            raise typer.BadParameter(msg) from exc
-    return None
+    except (ImportError, AttributeError, ValueError) as exc:
+        msg = f"could not load handler {reference!r}: {exc}"
+        raise typer.BadParameter(msg) from exc
