@@ -92,11 +92,12 @@ running container.
 ## lazycloud ssh
 
 ```bash
-uv run lazycloud ssh POD [--app <app>]
+uv run lazycloud ssh POD [--app <app>] [-- <ssh options> <command>]
 uv run lazycloud ssh-config [POD...] [--app <app>]
 ```
 
-`ssh` opens a session on a deployed pod that sets `ssh=True`. `ssh-config`
+`ssh` opens a session on a deployed pod that sets `ssh=True`; anything after
+`--` goes to `ssh`, such as `-L 8080:localhost:8080` or a command to run. `ssh-config`
 writes host entries named `lazycloud-<workspace>-<app>-<pod>` for VS Code,
 Cursor, and plain `ssh`, one per pod, or one for every such pod when none is
 named. `--app` picks the app when several apps deploy a pod with the same

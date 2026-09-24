@@ -250,7 +250,9 @@ def run_ssh(config: Path, alias: str, arguments: list[str]) -> int:
     ssh = shutil.which("ssh")
     if ssh is None:
         raise SshSetupError("ssh is not installed; install an OpenSSH client")
-    return subprocess.call([ssh, "-F", str(config), *arguments, alias])
+    # ssh reads options after the destination too, so the arguments can hold
+    # both options and a remote command.
+    return subprocess.call([ssh, "-F", str(config), alias, *arguments])
 
 
 def bridge_stdio(url: str, *, token: str) -> int:
