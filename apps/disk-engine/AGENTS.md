@@ -79,6 +79,13 @@ Chunk boundaries come from the gear table in `chunker.go`. Changing that table
 or the size bounds does not break old disks, but every chunk becomes new, so a
 publish after the change re-uploads whole disks.
 
+A workspace storage grant can expire long before a restore, flatten or collect
+finishes. The engine reads `STORE.json` again once its credentials are within
+two minutes of their `expires_at`, and the worker replaces the file whole at
+half each grant's remaining life for as long as the call runs. A file that still
+holds expired credentials fails the call and names the expiry. Signing with them
+anyway would only fail later, partway through an upload.
+
 Nothing here falls back. A missing binary, a missing `nbd` module, a busy device
 or a mismatched manifest fails the command with the reason on stderr. Hosts load
 `nbd` with `nbds_max=128` at boot, and the worker image ships the tools.

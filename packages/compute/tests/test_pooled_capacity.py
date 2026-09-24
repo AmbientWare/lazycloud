@@ -4657,7 +4657,7 @@ def _seed_serving_machine(
     hooks.available_machines.add(machine_id)
 
 
-def test_worker_update_holds_fleet_maintenance_until_verified_intake_returns(
+def test_worker_update_holds_fleet_maintenance_until_intake_returns_or_its_machine_stops(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
 ) -> None:
@@ -4763,6 +4763,15 @@ def test_worker_update_holds_fleet_maintenance_until_verified_intake_returns(
         compute.worker_maintenance_admission(pool.workspace_id, sibling_id, other_machine_id),
     ):
         pass
+    with service_context.database.session() as session:
+        instances = ComputeProviderInstanceRepository(session)
+        updating = instances.get_by_machine(machine_id)
+        assert updating is not None
+        instances.upsert(updating.model_copy(update={"status": ReservationStatus.Stopped.value}))
+    with compute.worker_maintenance_admission(pool.workspace_id, sibling_id, other_machine_id):
+        pass
+    with service_context.database.session() as session:
+        ComputeProviderInstanceRepository(session).upsert(updating)
     updated = worker.model_copy(
         update={"runtime_image": "worker:v2", "agent_binary_sha256": "b" * 64}
     )
