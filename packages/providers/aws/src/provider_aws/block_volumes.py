@@ -235,12 +235,15 @@ class AwsBlockVolumes(BlockVolumeProvider):
                     detail=f"volume {existing.volume_id} from this creation is {existing.state}",
                 )
             volume_id = existing.volume_id
-        self._wait(
-            volume_id,
-            operation="wait for disk volume creation",
-            deadline=deadline,
-        )
-        described = self._describe(volume_id)
+        try:
+            self._wait(
+                volume_id,
+                operation="wait for disk volume creation",
+                deadline=deadline,
+            )
+            described = self._describe(volume_id)
+        except BlockVolumeMissingError:
+            described = None
         if described is None:
             raise AwsProviderControlError(
                 AwsProviderControlErrorCode.ResourceNotFound,
@@ -309,11 +312,14 @@ class AwsBlockVolumes(BlockVolumeProvider):
                 raise upstream_error(exc, operation="detach disk volume") from exc
         elif volume.state == "available":
             return
-        self._wait(
-            volume_id,
-            operation="wait for disk volume detach",
-            deadline=deadline,
-        )
+        try:
+            self._wait(
+                volume_id,
+                operation="wait for disk volume detach",
+                deadline=deadline,
+            )
+        except BlockVolumeMissingError:
+            return
 
     def delete_volume(self, volume_id: str) -> None:
         try:
@@ -460,19 +466,17 @@ class AwsBlockVolumes(BlockVolumeProvider):
         return volumes[0] if volumes else None
 
     def _wait(self, volume_id: str, *, operation: str, deadline: float) -> None:
-        """Wait until the volume is available: created, or detached from its last machine."""
+        """Wait until the volume is available: created, or detached from its last machine.
+
+        A volume that is gone or being deleted raises `BlockVolumeMissingError`,
+        as `_require` does, so a caller's missing-volume recovery applies.
+        """
         delay = _POLL_FIRST_SECONDS
         while True:
-            volume = self._describe(volume_id)
-            if volume is None:
-                raise AwsProviderControlError(
-                    AwsProviderControlErrorCode.ResourceNotFound,
-                    operation=operation,
-                    detail=f"volume {volume_id} does not exist",
-                )
+            volume = self._require(volume_id)
             if volume.state == "available":
                 return
-            if volume.state in {"deleting", "deleted", "error"}:
+            if volume.state == "error":
                 raise AwsProviderControlError(
                     AwsProviderControlErrorCode.UpstreamUnavailable,
                     operation=operation,
