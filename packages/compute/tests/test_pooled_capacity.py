@@ -5048,6 +5048,14 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
         )
     assert stopped is not None and stopped.machine_id is not None
     assert stopped.status == ReservationStatus.Stopped.value
+    with service_context.database.session() as session:
+        machines = MachineRepository(session)
+        machine = machines.get(stopped.machine_id, workspace_id=unit.workspace_id)
+        assert machine is not None
+        machines.upsert(
+            machine.model_copy(update={"lifecycle": MachineLifecycle.Stopped}),
+            workspace_id=unit.workspace_id,
+        )
     release = ReleaseTarget(
         version="2",
         source_revision="new",
@@ -5060,6 +5068,10 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
     assert compute.refresh_stale_reserve(release, now=now) is None
 
     with service_context.database.session() as session:
+        instances = ComputeProviderInstanceRepository(session)
+        refreshing = instances.get_by_machine(stopped.machine_id)
+        assert refreshing is not None
+        instances.upsert(refreshing.model_copy(update={"first_served_at": now}))
         enrollment = ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 user_id=None,

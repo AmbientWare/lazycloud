@@ -2867,10 +2867,15 @@ class ComputeService:
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if unit is None or machine is None:
                 raise ConflictError("reserve preparation lost its capacity owner")
+            # Only a used machine returning to reserve cleans tenant storage before
+            # it stops, and returning sets its row to stopping. A reserve being
+            # prepared again keeps its row at preparing until it finishes, even
+            # after it once served, so its stop goes through preparation.
             stop_request_id = (
                 machine.lifecycle_at.isoformat()
                 if machine.lifecycle is MachineLifecycle.Stopping
                 and record.first_served_at is not None
+                and record.status == ReservationStatus.Stopping.value
                 else ""
             )
             instruction = ReserveAgentPreparation(
@@ -2994,19 +2999,14 @@ class ComputeService:
                     self._provider_unit_request(current, offer), instance_id
                 )
             if prepared_release is not None:
+                agent_sha256, worker_image = prepared_release
                 with self.context.database.session() as session:
-                    instances = ComputeProviderInstanceRepository(session)
-                    record = instances.get_by_machine(machine_id)
-                    if record is not None and record.instance_id == instance_id:
-                        agent_sha256, worker_image = prepared_release
-                        instances.upsert(
-                            record.model_copy(
-                                update={
-                                    "prepared_agent_sha256": agent_sha256,
-                                    "prepared_worker_image": worker_image,
-                                }
-                            )
-                        )
+                    ComputeProviderInstanceRepository(session).record_prepared_release(
+                        machine_id=machine_id,
+                        instance_id=instance_id,
+                        agent_sha256=agent_sha256,
+                        worker_image=worker_image,
+                    )
 
     def release_internal_unit_machine(
         self,

@@ -1707,6 +1707,20 @@ class ComputeProviderInstanceRepository:
             if pool_id is not None and instance_id is not None and machine_id is not None
         ]
 
+    def record_prepared_release(
+        self, *, machine_id: str, instance_id: str, agent_sha256: str, worker_image: str
+    ) -> None:
+        table = ComputeProviderInstanceTable
+        self.session.execute(
+            update(table)
+            .where(table.machine_id == machine_id, table.instance_id == instance_id)
+            .values(
+                prepared_agent_sha256=agent_sha256,
+                prepared_worker_image=worker_image,
+                updated_at=utc_now(),
+            )
+        )
+
     def get_by_machine(self, machine_id: str) -> ComputeProviderInstanceRecord | None:
         row = self.session.scalars(
             select(ComputeProviderInstanceTable).where(
