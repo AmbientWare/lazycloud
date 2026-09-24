@@ -132,9 +132,9 @@ def build_public_cli(
     """Build an isolated public command tree and apply this build's extensions."""
     application = typer.Typer(
         help=help,
-        context_settings={"help_option_names": ["-h", "--help"]},
+        context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 100},
         no_args_is_help=True,
-        rich_markup_mode="rich",
+        rich_markup_mode=None,
     )
     application.callback()(_public_cli_callback)
     registry = PublicCliRegistry(application)

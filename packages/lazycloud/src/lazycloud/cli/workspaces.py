@@ -81,7 +81,7 @@ def workspace_list(ctx: typer.Context) -> None:
         [workspace.name, "yes" if workspace.id == current.id else ""]
         for workspace in sorted(response.workspaces, key=lambda item: item.name)
     ]
-    console.print(table("Workspaces", ["name", "current"], rows, expand=False))
+    console.print(table("Workspaces", ["name", "current"], rows))
 
 
 @workspace_app.command(

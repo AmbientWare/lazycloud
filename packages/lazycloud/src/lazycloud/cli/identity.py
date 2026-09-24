@@ -293,7 +293,6 @@ def profile_list(ctx: typer.Context) -> None:
             "Profiles",
             ["name", "endpoint", "active"],
             rows,
-            expand=False,
         )
     )
 

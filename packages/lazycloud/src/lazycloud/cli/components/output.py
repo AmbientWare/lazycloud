@@ -93,7 +93,6 @@ def table(
     rows: list[list[Any]],
     *,
     title: str | None = None,
-    expand: bool = False,
     empty: str | None = None,
 ) -> RenderableType:
     return resource_table(
@@ -101,7 +100,6 @@ def table(
         rows,
         title=title,
         empty=empty or f"No {resource.lower()} found.",
-        expand=expand,
     )
 
 
@@ -121,7 +119,6 @@ def event_table(events: Sequence[Event]) -> RenderableType:
         "events",
         ["time", "level", "action", "type", "resource", "message"],
         rows,
-        expand=True,
     )
 
 
