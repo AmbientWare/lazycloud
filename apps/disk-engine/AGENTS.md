@@ -86,6 +86,56 @@ half each grant's remaining life for as long as the call runs. A file that still
 holds expired credentials fails the call and names the expiry. Signing with them
 anyway would only fail later, partway through an upload.
 
+A restore does not download the chain before the disk starts. Attach creates
+each published layer as a sparse file of its manifest's size, keeps the manifest
+beside it and a bitmap with one bit per chunk, and marks the layer lazy. Only
+the chunks holding each qcow2 layer's header are fetched first, because the
+rebase writes there. `serve`, one process per disk started before the daemon,
+exports every lazy layer read-only over NBD on `run/layers.sock`, and the daemon
+opens those layers through it instead of as files. qemu keeps its own chain,
+qcow2 driver and head; only the bytes under a lazy layer come from somewhere
+else. The alternatives were worse fits: qemu's copy-on-read filter still needs
+something that can fetch a content-addressed chunk, and a FUSE file adds a
+kernel dependency the hosts do not have.
+
+A read through `serve` fetches every missing chunk it touches, once however many
+readers wait on it, checks its length and sha256 against the manifest, writes
+it into the layer file and marks it present. Later reads are local. The bitmap
+reaches the disk only after the layer file is flushed, so a crash can lose a bit
+but never leaves one naming bytes that were not written; the chunk is fetched
+again. A chunk that fails its check is fetched again, and one that keeps failing
+or cannot be fetched fails the read with EIO and is recorded in `run/serve.json`,
+which `usage` reports so the worker can stop the container with that reason.
+Nothing unverified is ever written into a layer. Credentials come from the
+STORE.json the worker keeps renewed for as long as the disk is attached.
+
+`serve` also hydrates in the background: first the chunks the heat map names,
+most recently used first, then everything else, newest layer first, at a
+bounded rate on a few connections. A workload read never waits behind it. A
+layer whose bitmap is full opens as a plain file at the next attach, and its
+bitmap and manifest go. A cached local chain whose layers are all complete
+attaches as it always has, with no `serve` at all.
+
+The heat map counts chunks, by the first bytes of their sha256, rather than
+offsets. Chunks are content-addressed, so a map taken over one chain still
+names the same data in the next restore's chain, however the layers were
+arranged. `serve` marks every chunk a read touches, ages the map one window
+every publish interval, and keeps at most 65536 entries. Publish uploads it to
+`disks/<id>/heat` and a restore reads it back; a flatten re-chunks the disk, so
+the map starts over after one. A session that never started `serve` leaves the
+map as it was.
+
+Compaction never writes a lazy layer. It commits published layers into the
+lowest complete layer above the lazy ones, and `usage` counts only what sits
+above that layer. Flattening reads layer files directly, so a publish asked to
+flatten while a lazy layer is incomplete publishes an ordinary layer, and the
+flatten comes with a later publish. A collect follows only a flatten, so it
+never deletes a chunk a lazy layer still needs.
+
+A lazy restore needs room for every layer's stored bytes plus the reserve when
+it starts, because it fills them in as it runs. A chain that does not fit
+restores eagerly as before, committing layers into the base to make room.
+
 Nothing here falls back. A missing binary, a missing `nbd` module, a busy device
 or a mismatched manifest fails the command with the reason on stderr. Hosts load
 `nbd` with `nbds_max=128` at boot, and the worker image ships the tools.

@@ -125,6 +125,13 @@ A disk's engine gets workspace storage on the disk's lease, not on the
 container's scheduler state. That state expires a while after a stop, and the
 release after it still has to publish the disk's last generation.
 
+A disk restored lazily keeps reading its chunks from the workspace bucket for
+as long as it is attached, so the worker keeps that disk's STORE.json on disk
+and renewed from attach to detach rather than for one engine call. When the
+engine reports a chunk it could not fetch, the workload has already seen an I/O
+error, so the worker stops the container with `DISK_UNAVAILABLE` instead of
+leaving it to run on a disk it cannot read.
+
 A container that outgrows its reservation is stopped here, not by the kernel.
 The worker holds the two readings the decision needs, its own memory pressure
 and what each container currently uses, and the kernel is seconds away once a
