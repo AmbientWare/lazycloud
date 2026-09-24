@@ -139,6 +139,15 @@ export const workspaceQueryKeys = {
         containerId,
         ...(path ? [path] : []),
       ] as const,
+    // Outside "containers" so container list refreshes never refetch a preview.
+    filePreview: (workspaceId: string, containerId: string, path: string, maxBytes: number) =>
+      [
+        ...workspaceRoot(workspaceId),
+        "container-file-previews",
+        containerId,
+        path,
+        maxBytes,
+      ] as const,
   },
   sandboxes: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "sandboxes"] as const,

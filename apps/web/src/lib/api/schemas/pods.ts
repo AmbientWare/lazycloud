@@ -6,6 +6,8 @@ const podFileInfoSchema = z.object({
   is_dir: z.boolean().default(false),
   mod_time: z.string().nullish(),
   mode: z.number().default(0),
+  owner: z.string().default(""),
+  group: z.string().default(""),
 });
 export type PodFileInfo = z.infer<typeof podFileInfoSchema>;
 

@@ -10,7 +10,6 @@ from lazycloud.cli.components.output import (
     print_events_table,
     print_payload,
 )
-from lazycloud.cli.handler_workflows import HandlerLoadError
 from lazycloud.json_contracts import resource_payload, validate_json_value
 from shared.http.observability import EventHistoryRequest
 
@@ -27,10 +26,7 @@ def invoke(
     handler: str,
     args: Annotated[list[str] | None, typer.Argument()] = None,
 ) -> None:
-    try:
-        user_object = load_cli_handler(handler)
-    except HandlerLoadError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    user_object = load_cli_handler(handler)
     parsed_args = [validate_json_value(parse_json_argument(item)) for item in args or []]
     if is_function_workload(user_object):
         response = user_object.remote(*parsed_args)

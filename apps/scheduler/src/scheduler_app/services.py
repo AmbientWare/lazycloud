@@ -459,6 +459,7 @@ class SchedulerAppServices:
             DeploymentRegistrationService(apps, control_plane),
             cron_jobs,
             DatabaseBillingAdmission(),
+            execution_lifecycle,
             workspace_changes=workspace_changes,
         )
         return cls(
