@@ -1,12 +1,11 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import { fileBase64 } from "@/lib/files";
+import { base64ToBytes, downloadBlob, fileBase64 } from "@/lib/files";
 import {
   podEmptyMutationSchema,
   podFileDownloadSchema,
   podFileListSchema,
-  type PodFileDownload,
 } from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";
@@ -36,24 +35,26 @@ export function containerFilesQueryOptions(workspaceId: string, containerId: str
   });
 }
 
-/** A whole file, up to the server's download limit. */
-export function downloadContainerFile(
+/** Save a whole container file, up to the server's download limit, to the person's machine. */
+export async function saveContainerFile(
   workspaceId: string,
   containerId: string,
   path: string,
-): Promise<PodFileDownload> {
+  filename: string,
+): Promise<void> {
   const params = new URLSearchParams({ container_path: path });
-  return apiRequest(
+  const download = await apiRequest(
     withWorkspace(`${filesPath(containerId)}/download?${params.toString()}`, workspaceId),
     podFileDownloadSchema,
   );
+  downloadBlob(filename, new Blob([base64ToBytes(download.value_base64)]));
 }
 
 /**
  * The first `maxBytes` of a file, with `truncated` set when there is more.
  *
- * Never cached past the dialog showing it: an opening remounts the dialog and
- * reads the file afresh, and the previous read is dropped.
+ * Read afresh whenever a preview mounts and dropped once it unmounts, so a
+ * reopened file shows its current bytes and a closed preview holds none.
  */
 export function containerFilePreviewQueryOptions(
   workspaceId: string,
@@ -74,8 +75,9 @@ export function containerFilePreviewQueryOptions(
         podFileDownloadSchema,
         { signal },
       ),
-    staleTime: Infinity,
+    staleTime: 0,
     gcTime: 0,
+    refetchOnWindowFocus: false,
     retry: false,
   });
 }

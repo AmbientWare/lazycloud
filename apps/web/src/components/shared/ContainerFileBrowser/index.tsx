@@ -18,13 +18,12 @@ import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PodFileInfo } from "@/lib/api/schemas";
-import { base64ToBytes, downloadBlob } from "@/lib/files";
 import { exactTime, formatBytes, relativeTime } from "@/lib/format";
 import {
   CONTAINER_FILE_LIST_LIMIT,
   containerFilesQueryOptions,
   deleteContainerFileMutationOptions,
-  downloadContainerFile,
+  saveContainerFile,
   uploadContainerFileMutationOptions,
 } from "@/lib/queries/container-files";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
@@ -49,9 +48,8 @@ export function ContainerFileBrowser({
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState(rootPath);
-  // Each opening gets its own key, so the dialog reads the file afresh.
-  const [preview, setPreview] = useState<(PreviewTarget & { opening: number }) | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
+  // Cleared on close, which unmounts the dialog and drops what it read.
+  const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const previewOpener = useRef<HTMLElement | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -85,20 +83,14 @@ export function ContainerFileBrowser({
 
   const openFile = (file: PodFileInfo, opener: HTMLElement) => {
     previewOpener.current = opener;
-    setPreview((current) => ({
-      path: joinPath(path, file.name),
-      file,
-      opening: (current?.opening ?? 0) + 1,
-    }));
-    setPreviewOpen(true);
+    setPreview({ path: joinPath(path, file.name), file });
   };
 
   const downloadFile = async (file: PodFileInfo) => {
     const target = joinPath(path, file.name);
     setDownloadError(null);
     try {
-      const download = await downloadContainerFile(workspace.id, containerId, target);
-      downloadBlob(file.name, new Blob([base64ToBytes(download.value_base64)]));
+      await saveContainerFile(workspace.id, containerId, target, file.name);
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : "Failed to download file");
     }
@@ -289,12 +281,11 @@ export function ContainerFileBrowser({
 
       {preview ? (
         <ContainerFilePreviewDialog
-          key={preview.opening}
+          key={preview.path}
           workspaceId={workspace.id}
           containerId={containerId}
           target={preview}
-          open={previewOpen}
-          onOpenChange={setPreviewOpen}
+          onClose={() => setPreview(null)}
           returnFocus={previewOpener}
         />
       ) : null}

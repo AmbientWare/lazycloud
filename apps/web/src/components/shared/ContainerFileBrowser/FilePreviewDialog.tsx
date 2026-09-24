@@ -12,13 +12,13 @@ import {
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import type { PodFileInfo } from "@/lib/api/schemas";
-import { base64ToBytes, downloadBlob } from "@/lib/files";
+import { base64ToBytes } from "@/lib/files";
 import { formatBytes, relativeTime } from "@/lib/format";
 import {
   CONTAINER_FILE_IMAGE_PREVIEW_BYTES,
   CONTAINER_FILE_PREVIEW_BYTES,
   containerFilePreviewQueryOptions,
-  downloadContainerFile,
+  saveContainerFile,
 } from "@/lib/queries/container-files";
 
 import {
@@ -39,15 +39,13 @@ export function ContainerFilePreviewDialog({
   workspaceId,
   containerId,
   target,
-  open,
-  onOpenChange,
+  onClose,
   returnFocus,
 }: {
   workspaceId: string;
   containerId: string;
   target: PreviewTarget;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onClose: () => void;
   returnFocus: RefObject<HTMLElement | null>;
 }) {
   const { path, file } = target;
@@ -74,10 +72,7 @@ export function ContainerFilePreviewDialog({
   const contents: FileContents | undefined =
     image.failed && read ? { kind: "binary", label: read.contents.label } : read?.contents;
   const download = useMutation({
-    mutationFn: async () => {
-      const whole = await downloadContainerFile(workspaceId, containerId, path);
-      downloadBlob(file.name, new Blob([base64ToBytes(whole.value_base64)]));
-    },
+    mutationFn: () => saveContainerFile(workspaceId, containerId, path, file.name),
   });
 
   const description = [
@@ -93,8 +88,10 @@ export function ContainerFilePreviewDialog({
 
   return (
     <FilePreviewDialog
-      open={open}
-      onOpenChange={onOpenChange}
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
       title={path}
       description={description}
       returnFocus={returnFocus}
