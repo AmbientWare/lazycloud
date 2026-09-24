@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from threading import Event
+from threading import Event, Timer
 from types import TracebackType
 from typing import Protocol
 
@@ -163,6 +163,7 @@ AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 AGENT_LAST_PREPARED_IMAGE_FILE = "last-prepared-worker-image.json"
 IMAGE_REPORT_WAIT_SECONDS = 1.0
+BOOT_IMAGE_LOOKUP_SECONDS = 3.0
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
@@ -625,12 +626,28 @@ class DockerAgentWorkerController:
         if self.worker_image_override:
             return self._images.start(self.worker_image_override)
         image = self._last_prepared_image()
-        if (
-            image
-            and self.runner.run([self.docker_binary, "image", "inspect", image]).returncode == 0
-        ):
+        if image and self._image_present(image):
             self._images.mark_prepared(image)
         return None
+
+    def _image_present(self, image: str) -> bool:
+        """Whether docker has the image, answered within a few seconds or taken as no.
+
+        A no costs one stream; the stream then names the image and prepares it.
+        """
+        expired = Event()
+        timer = Timer(BOOT_IMAGE_LOOKUP_SECONDS, expired.set)
+        timer.start()
+        try:
+            inspected = self.runner.run(
+                [self.docker_binary, "image", "inspect", image], stop=expired
+            )
+        except Exception:
+            LOGGER.warning("looking up worker image %s at boot failed", image, exc_info=True)
+            return False
+        finally:
+            timer.cancel()
+        return inspected.returncode == 0
 
     def prepared_worker_images(self) -> list[str]:
         prepared = self._images.prepared()
