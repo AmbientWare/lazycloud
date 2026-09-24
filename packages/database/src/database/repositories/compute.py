@@ -151,6 +151,11 @@ class ComputeProviderInstanceRecord(ContractModel):
     availability_zone: str = ""
     storage_volume_ids: tuple[str, ...] = ()
     booted_template_version: str = ""
+    # The agent binary and worker image a stopped reserve proved it holds when its
+    # preparation last completed. Empty until then, and for a used machine whose
+    # agent was not current when it stopped.
+    prepared_agent_sha256: str = ""
+    prepared_worker_image: str = ""
     missing_since: datetime | None = None
     provider_storage_destroyed_at: datetime | None = None
     terminating_reason: str = ""
@@ -159,6 +164,15 @@ class ComputeProviderInstanceRecord(ContractModel):
     last_error: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeReserveInstance:
+    """A stopped platform CPU reserve machine."""
+
+    pool_id: str
+    instance_id: str
+    machine_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +482,7 @@ class ComputeUnitRepository:
                 table.phase,
                 table.degraded_reason,
                 table.degraded_at,
+                table.last_capacity_failure_at,
                 table.registration_timeout_seconds,
             ).where(
                 tuple_(
@@ -489,6 +504,7 @@ class ComputeUnitRepository:
                 provider_state=ComputeUnitProviderState(
                     degraded_reason=reason,
                     degraded_at=to_utc_or_none(degraded_at),
+                    last_capacity_failure_at=to_utc_or_none(failed_at),
                 ),
             )
             for (
@@ -503,6 +519,7 @@ class ComputeUnitRepository:
                 phase,
                 reason,
                 degraded_at,
+                failed_at,
                 timeout,
             ) in rows
         }
@@ -1425,6 +1442,8 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
             "availability_zone": row.availability_zone,
             "storage_volume_ids": row.storage_volume_ids,
             "booted_template_version": row.booted_template_version,
+            "prepared_agent_sha256": row.prepared_agent_sha256,
+            "prepared_worker_image": row.prepared_worker_image,
             "missing_since": to_utc_or_none(row.missing_since),
             "provider_storage_destroyed_at": to_utc_or_none(row.provider_storage_destroyed_at),
             "terminating_reason": row.terminating_reason,
@@ -1484,6 +1503,8 @@ class ComputeProviderInstanceRepository:
         row.availability_zone = record.availability_zone
         row.storage_volume_ids = list(record.storage_volume_ids)
         row.booted_template_version = record.booted_template_version
+        row.prepared_agent_sha256 = record.prepared_agent_sha256
+        row.prepared_worker_image = record.prepared_worker_image
         row.missing_since = record.missing_since
         row.provider_storage_destroyed_at = record.provider_storage_destroyed_at
         row.terminating_reason = record.terminating_reason
@@ -1645,6 +1666,79 @@ class ComputeProviderInstanceRepository:
             for row in rows
             if row.machine_id is not None
         }
+
+    def stale_platform_reserves(
+        self, *, agent_sha256: str, worker_image: str
+    ) -> list[ComputeReserveInstance]:
+        """Stopped platform CPU reserves prepared with anything but this release."""
+        table = ComputeProviderInstanceTable
+        rows = self.session.execute(
+            select(table.pool_id, table.instance_id, table.machine_id)
+            .join(ComputeUnitTable, ComputeUnitTable.id == table.pool_id)
+            .where(
+                table.status == "stopped",
+                table.missing_since.is_(None),
+                table.instance_id.is_not(None),
+                table.machine_id.is_not(None),
+                or_(
+                    table.prepared_agent_sha256 != agent_sha256,
+                    table.prepared_worker_image != worker_image,
+                ),
+                ComputeUnitTable.platform_fleet.is_(True),
+                ComputeUnitTable.worker_gpu_count == 0,
+            )
+            .order_by(table.created_at.asc(), table.id.asc())
+        ).tuples()
+        return [
+            ComputeReserveInstance(pool_id=pool_id, instance_id=instance_id, machine_id=machine_id)
+            for pool_id, instance_id, machine_id in rows
+            if pool_id is not None and instance_id is not None and machine_id is not None
+        ]
+
+    def reserve_counts(self, pool_ids: Collection[str]) -> dict[str, int]:
+        if not pool_ids:
+            return {}
+        table = ComputeProviderInstanceTable
+        rows = self.session.execute(
+            select(table.pool_id, func.count())
+            .where(
+                table.pool_id.in_(pool_ids),
+                table.status.in_(("preparing", "stopping", "stopped")),
+                table.missing_since.is_(None),
+            )
+            .group_by(table.pool_id)
+        ).tuples()
+        return {pool_id: count for pool_id, count in rows if pool_id is not None}
+
+    def platform_reserve_in_preparation(self) -> bool:
+        table = ComputeProviderInstanceTable
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        table.pool_id == ComputeUnitTable.id,
+                        table.status.in_(("preparing", "stopping")),
+                        table.missing_since.is_(None),
+                        ComputeUnitTable.platform_fleet.is_(True),
+                        ComputeUnitTable.worker_gpu_count == 0,
+                    )
+                )
+            )
+        )
+
+    def record_prepared_release(
+        self, *, machine_id: str, instance_id: str, agent_sha256: str, worker_image: str
+    ) -> None:
+        table = ComputeProviderInstanceTable
+        self.session.execute(
+            update(table)
+            .where(table.machine_id == machine_id, table.instance_id == instance_id)
+            .values(
+                prepared_agent_sha256=agent_sha256,
+                prepared_worker_image=worker_image,
+                updated_at=utc_now(),
+            )
+        )
 
     def get_by_machine(self, machine_id: str) -> ComputeProviderInstanceRecord | None:
         row = self.session.scalars(
@@ -2059,7 +2153,6 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
                 ComputeMachineEnrollmentTable.capacity_state.in_(
                     (
-                        AgentCapacityState.AtRisk.value,
                         AgentCapacityState.Draining.value,
                         AgentCapacityState.Preempting.value,
                         AgentCapacityState.Cordoned.value,

@@ -1,13 +1,12 @@
 ---
-title: "Dev machines"
-description: "A devbox you log into over SSH, with a disk that keeps its files, for coding agents and remote editors."
+title: "Devboxes"
+description: "A container you log into over SSH, with a disk that keeps its files, for coding agents and remote editors."
 ---
 
-`app.devbox(...)` declares a dev machine, a container you reach over SSH whose
-root filesystem is a [disk](/concepts/disks). It runs while something is
-connected and stops after 30 idle minutes. Installed packages, dotfiles and
-working trees are all on the disk, so they are there on the next start, on
-whichever machine it lands.
+`app.devbox(...)` declares a container you reach over SSH whose root filesystem
+is a [disk](/concepts/disks). It runs while something is connected and stops
+after 30 idle minutes. Packages, dotfiles and code stay on the disk from one
+start to the next, on whichever machine it lands.
 
 ## Define one
 
@@ -33,19 +32,24 @@ uv run lazycloud deploy dev:box
 uv run lazycloud ssh box
 ```
 
-`lazycloud ssh` opens a shell as `root`. LazyCloud serves SSH itself, so the
-image needs no `sshd`, and the devbox needs no command: left unset, the
-container stays up doing nothing.
+`lazycloud ssh` opens a shell as `root` in `/root`. The app's source is not
+mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 
-`disk=` is the size of the root disk, which is named after the devbox. The
-image stays the base layer, and everything the devbox writes on top of it lands
-on the disk. [Disk pricing](/concepts/disks#pricing) covers how size and stored
-data bill.
+`disk=` sizes the root disk, which is named after the devbox.
+[Disk pricing](/concepts/disks#pricing) covers what it costs.
+
+## What persists
+
+Everything under `/` is on the disk, except:
+
+- `/dev/shm` and `/volumes`: memory, empty on each start
+- [Volumes](/concepts/volumes) you attach: kept in the volume
+- `/artifacts`: the app's artifacts, read-only
+- `/etc/hosts`, `/etc/resolv.conf`, `/run/lazycloud`: rewritten on each start
 
 ## What a devbox defaults to
 
-The control plane fills in whatever the devbox leaves unset, and `deploy`
-prints the result:
+`deploy` prints the resolved settings:
 
 | Setting | Default | Override |
 | --- | --- | --- |
@@ -54,8 +58,8 @@ prints the result:
 | Command | Keeps the container running | `command=[...]` |
 | Containers | One, since one container writes a disk at a time | none |
 
-`disks=` adds further disks at other paths. `env`, `secrets`, `volumes`,
-`ports`, `gpu`, and `machine` work as they do on a [pod](/concepts/pods).
+`disks=` adds more disks at other paths. Other options work as they do on a
+[pod](/concepts/pods).
 
 ## Remote editors
 
@@ -63,31 +67,16 @@ prints the result:
 uv run lazycloud ssh-config
 ```
 
-This writes a host entry for each devbox, and each pod that serves SSH, named
-`lazycloud-<workspace>-<app>-<name>`, and adds one `Include` line to
-`~/.ssh/config`. VS Code and Cursor Remote-SSH then list
-`lazycloud-<workspace>-dev-box` beside your other hosts, and plain
-`ssh lazycloud-<workspace>-dev-box` works too. Port forwarding and SFTP work as
-they do on any SSH server. The dashboard shows the same command and host name
-on the devbox's page, with its state, open connections and disk.
-
-Connections go through the LazyCloud API with your `lazycloud login`, never to
-a public port on the machine. The SSH login uses a short-lived certificate
-signed for your workspace. The generated config refreshes it before each
-connection, so there are no keys to copy anywhere.
+This adds a host named `lazycloud-<workspace>-<app>-<name>` for each devbox to
+`~/.ssh/config`, so VS Code and Cursor Remote-SSH list it and plain `ssh` works.
+Connections go through the LazyCloud API with a short-lived certificate the
+config refreshes, so there are no keys to copy.
 
 ## When it runs
 
-Connecting starts a stopped devbox. The first connection waits while it is
-placed, pulls its image and restores its disk, and in a terminal a spinner
-names each of those steps until the first byte arrives. An open SSH session
-keeps the devbox up whether or not anything is typed, and the idle time counts
-from when the last session closes. `keep_warm=-1` suits an agent left to work
-unattended.
-
-On the devbox's page in the dashboard, Start boots it without a connection and
-keeps it up for at least 30 idle minutes. Stop ends it now, and it stays stopped
-until the next Start or connection.
+Connecting starts a stopped devbox, and the terminal shows each step until it
+is up. An open SSH session keeps it running; the idle time counts from when the
+last one closes. On the devbox's dashboard page, Start boots it and Stop ends it.
 
 ## Stop and clean up
 
@@ -98,14 +87,12 @@ uv run lazycloud disk delete box
 uv run lazycloud ssh-config --prune
 ```
 
-Stopping or deleting the devbox keeps its disk. Deleting the disk removes
-everything written to it. `ssh-config --prune` drops its host from your SSH
-config and editors.
+Stopping or deleting the devbox keeps its disk; deleting the disk removes its
+files.
 
 ## The same thing as a pod
 
 A devbox is a [pod](/concepts/pods) with a role. `app.pod(ssh=True,
 disks=[Disk("box-root", size="100Gi")], command=["sleep", "infinity"])` builds
-the same machine by hand, and fits when a pod serves SSH beside its ports or
-needs several disks of its own naming. It takes the pod defaults, so
-`keep_warm` and `preemptible` are yours to set.
+the same machine with pod defaults, for when you need ports beside SSH or
+several named disks.

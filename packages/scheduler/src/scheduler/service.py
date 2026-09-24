@@ -13,6 +13,7 @@ from uuid import uuid4
 from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.projection import PrivateUnitState
 from compute.state import RedisComputeStateRepository
+from control.releases import DeploymentReleaseService
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
 from coordination.token_lock import release_token_lock, try_acquire_token_lock
 from coordination.wake_signal import WakeSignalWaiter
@@ -1584,6 +1585,12 @@ class Scheduler:
                     self.compute_states.delete_unit_state(unit.workspace_id, unit.capacity_owner_id)
                     self.pool_states.pool_states.delete_unit_state(unit.capacity_owner_id)
             self.runtime_services.compute.reconcile_pooled_capacity(now=current_time)
+            releases = DeploymentReleaseService()
+            release = releases.active()
+            if release is not None and releases.controls(release):
+                self.runtime_services.compute.refresh_stale_reserve(
+                    release.target, now=current_time
+                )
             return []
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")

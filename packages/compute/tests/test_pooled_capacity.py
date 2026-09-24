@@ -15,6 +15,7 @@ from compute.block_volumes import BlockVolumeProvider
 from compute.capacity_errors import (
     CapacityReservationConflictError,
     CapacityReservationLeaseLostError,
+    CapacityReservationLockContendedError,
 )
 from compute.capacity_recovery import record_capacity_risk
 from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
@@ -36,7 +37,7 @@ from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
 )
-from compute.service import ComputeService
+from compute.service import ComputeService, ReserveAgentPreparation
 from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
 from database.context import ServiceContext
@@ -144,6 +145,11 @@ class _PooledProvider:
     def complete_machine_preparation(
         self, request: ProviderUnitRequest, provider_instance_id: str
     ) -> None:
+        raise AssertionError("test provider has no stopped capacity")
+
+    def refresh_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
         raise AssertionError("test provider has no stopped capacity")
 
     def stop_machine(
@@ -648,7 +654,8 @@ def test_rejected_reserve_moves_to_another_offer_after_cleanup(
     with service_context.database.session() as session:
         failed = ComputeUnitRepository(session).get(first.id)
         assert failed is not None
-        assert failed.provider_state.degraded_reason == "provider_acquisition_rejected"
+        assert failed.provider_state.degraded_reason is None
+        assert failed.provider_state.last_capacity_failure_at == now
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
     compute.reconcile_unit_capacity(first.id, now=now + timedelta(seconds=301))
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=302))
@@ -4940,3 +4947,168 @@ def test_a_control_plane_that_just_started_reclaims_nothing(
     assert survived is not None
     assert survived.id == served.id
     assert provider.release_calls == []
+
+
+_RESERVE_INSTANCE = "i-reserve0000000000"
+
+
+@dataclass(slots=True)
+class _ReserveProvider(_PooledProvider):
+    reserve_status: str = "stopped"
+    refreshed: list[str] = field(default_factory=list)
+    prepared: list[str] = field(default_factory=list)
+
+    def refresh_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        self.refreshed.append(provider_instance_id)
+        self.reserve_status = "preparing"
+        return self._snapshot(request)
+
+    def complete_machine_preparation(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> None:
+        self.prepared.append(provider_instance_id)
+        self.reserve_status = "stopping"
+
+    def _snapshot(
+        self,
+        request: ProviderUnitRequest,
+        *,
+        phase: ProviderCapacityPhase = ProviderCapacityPhase.Ready,
+    ) -> ProviderUnitSnapshot:
+        snapshot = _PooledProvider._snapshot(self, request, phase=phase)
+        reserve = ProviderUnitInstance(
+            provider_instance_id=_RESERVE_INSTANCE,
+            status=self.reserve_status,
+            storage_volume_ids=("vol-reserve",),
+        )
+        return snapshot.model_copy(update={"instances": [*snapshot.instances, reserve]})
+
+
+@dataclass(slots=True)
+class _ContendedLeases(_MutationLeases):
+    contended: set[str] = field(default_factory=set)
+
+    @contextmanager
+    def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
+        if capacity_owner_id in self.contended:
+            raise CapacityReservationLockContendedError(f"{capacity_owner_id} is held")
+        with _MutationLeases.mutation_lock(self, capacity_owner_id):
+            yield
+
+
+def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the_release(
+    service_context: ServiceContext,
+) -> None:
+    provider = _ReserveProvider()
+    provider.reserve_offers = (provider.offer,)
+    resolved = _Resolver(
+        provider,
+        service_context,
+        allowed_offers=(
+            ProviderOfferEligibility(
+                region=provider.offer.region,
+                instance_type=provider.offer.instance_type,
+                preemptible=False,
+            ),
+        ),
+    )._resolved()
+    leases = _ContendedLeases()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=WorkspaceComputeProviderResolver(
+            connections=lambda _workspace: (),
+            capacity_workspace=lambda _connection: "",
+            binaries_by_region={},
+            client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+            platform_providers=lambda: (resolved,),
+        ),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=leases,
+        scheduler_hooks=_SchedulerHooks(),
+        fleet_policy=FleetCapacityPolicy(
+            warm_cpu_preemptible_min=0,
+            stopped_cpu_preemptible_target=0,
+            stopped_cpu_non_preemptible_target=1,
+        ),
+    )
+    now = datetime.now(UTC)
+    compute.reconcile_platform_warm_capacity(now=now)
+    with service_context.database.session() as session:
+        [unit] = ComputeUnitRepository(session).list_platform_internal()
+    compute.reconcile_unit_capacity(unit.id, now=now)
+    with service_context.database.session() as session:
+        stopped = ComputeProviderInstanceRepository(session).get_by_machine(
+            next(
+                record.machine_id
+                for record in ComputeProviderInstanceRepository(session).list_for_pool(unit.id)
+                if record.instance_id == _RESERVE_INSTANCE and record.machine_id is not None
+            )
+        )
+    assert stopped is not None and stopped.machine_id is not None
+    assert stopped.status == ReservationStatus.Stopped.value
+    with service_context.database.session() as session:
+        machines = MachineRepository(session)
+        machine = machines.get(stopped.machine_id, workspace_id=unit.workspace_id)
+        assert machine is not None
+        machines.upsert(
+            machine.model_copy(update={"lifecycle": MachineLifecycle.Stopped}),
+            workspace_id=unit.workspace_id,
+        )
+    release = ReleaseTarget(
+        version="2",
+        source_revision="new",
+        worker_image="registry.example/worker:new",
+        agent=AgentArtifact(url="https://example.test/agent", sha256="a" * 64, size_bytes=1),
+    )
+
+    assert compute.refresh_stale_reserve(release, now=now) == stopped.machine_id
+    assert provider.refreshed == [_RESERVE_INSTANCE]
+    assert compute.refresh_stale_reserve(release, now=now) is None
+
+    with service_context.database.session() as session:
+        instances = ComputeProviderInstanceRepository(session)
+        refreshing = instances.get_by_machine(stopped.machine_id)
+        assert refreshing is not None
+        instances.upsert(refreshing.model_copy(update={"first_served_at": now}))
+        enrollment = ComputeMachineEnrollmentRepository(session).create(
+            ComputeMachineEnrollmentCreate(
+                user_id=None,
+                workspace_id=unit.workspace_id,
+                capacity_owner_id=unit.capacity_owner_id,
+                placement=unit.placement,
+                machine_id=stopped.machine_id,
+                machine_fingerprint_hash="d" * 64,
+                credential_hash="e" * 64,
+                last_join_at=now,
+            )
+        )
+
+    def prepare() -> ReserveAgentPreparation:
+        assert stopped.machine_id is not None
+        return compute.prepare_reserved_machine(
+            workspace_id=unit.workspace_id,
+            machine_id=stopped.machine_id,
+            credential_id=enrollment.id,
+            credential_generation=enrollment.credential_generation,
+            release=release,
+            agent_binary_sha256="a" * 64,
+            prepared_worker_images=["registry.example/worker:new"],
+            has_active_workers=False,
+            prepared_stop=None,
+        )
+
+    leases.contended.add(unit.capacity_owner_id)
+    assert prepare().preparing
+    assert provider.prepared == []
+    leases.contended.clear()
+    assert prepare().preparing
+    assert provider.prepared == [_RESERVE_INSTANCE]
+    with service_context.database.session() as session:
+        prepared = ComputeProviderInstanceRepository(session).get_by_machine(stopped.machine_id)
+    assert prepared is not None
+    assert (prepared.prepared_agent_sha256, prepared.prepared_worker_image) == (
+        "a" * 64,
+        "registry.example/worker:new",
+    )

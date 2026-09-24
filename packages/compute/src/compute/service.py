@@ -18,6 +18,7 @@ from database.repositories.compute import (
     ComputeOfferState,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeReserveInstance,
     ComputeUnitRepository,
 )
 from database.repositories.identity import WorkspaceRepository
@@ -80,6 +81,7 @@ from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
 from shared.placement import Placement
+from shared.releases import ReleaseTarget
 from shared.routing import PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
@@ -134,6 +136,7 @@ from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
+_RESERVE_REFRESH_CANDIDATES = 4
 
 
 _UNCONFIRMED_OPERATION_STATUSES = frozenset(
@@ -2796,10 +2799,7 @@ class ComputeService:
             enrollment = enrollments.by_machine(workspace_id, machine_id, for_update=True)
             if enrollment is None:
                 raise KeyError(f"machine enrollment not found: {machine_id}")
-            if enrollment.capacity_state not in {
-                AgentCapacityState.Available,
-                AgentCapacityState.AtRisk,
-            }:
+            if enrollment.capacity_state is not AgentCapacityState.Available:
                 return False
             enrollments.save(
                 enrollment.model_copy(
@@ -2833,12 +2833,16 @@ class ComputeService:
         machine_id: str,
         credential_id: str,
         credential_generation: int,
-        worker_prepared: bool,
-        agent_current: bool,
+        release: ReleaseTarget,
+        agent_binary_sha256: str,
+        prepared_worker_images: Sequence[str],
         has_active_workers: bool,
         prepared_stop: MachineStopPreparationReceipt | None,
     ) -> ReserveAgentPreparation:
         """Authenticate preparation evidence and keep retained hosts out of intake."""
+        release_agent, release_image = reserve_release_artifacts(release)
+        agent_current = not release_agent or agent_binary_sha256 == release_agent
+        worker_prepared = release_image in prepared_worker_images
         with self.context.database.session() as session:
             record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             if record is None or record.pool_id is None or record.instance_id is None:
@@ -2865,10 +2869,15 @@ class ComputeService:
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if unit is None or machine is None:
                 raise ConflictError("reserve preparation lost its capacity owner")
+            # Only a used machine returning to reserve cleans tenant storage before
+            # it stops, and returning sets its row to stopping. A reserve being
+            # prepared again keeps its row at preparing until it finishes, even
+            # after it once served, so its stop goes through preparation.
             stop_request_id = (
                 machine.lifecycle_at.isoformat()
                 if machine.lifecycle is MachineLifecycle.Stopping
                 and record.first_served_at is not None
+                and record.status == ReservationStatus.Stopping.value
                 else ""
             )
             instruction = ReserveAgentPreparation(
@@ -2917,21 +2926,49 @@ class ComputeService:
                         }
                     )
                 )
-        with self._required_capacity_owner_mutations().mutation_lock(unit.capacity_owner_id):
-            current, provider, offer = self._internal_unit_provider(
-                workspace_id, unit.capacity_owner_id
+        try:
+            self._finish_reserved_machine_preparation(
+                workspace_id=workspace_id,
+                machine_id=machine_id,
+                capacity_owner_id=unit.capacity_owner_id,
+                instance_id=record.instance_id,
+                prepared_stop=prepared_stop if stopping_used_machine else None,
+                prepared_release=(
+                    (
+                        release_agent if agent_current else "",
+                        release_image if worker_prepared else "",
+                    )
+                    if preparing
+                    else None
+                ),
             )
+        except CapacityReservationLockContendedError as contended:
+            # Another pass holds the pool's lease for a few seconds of provider
+            # calls. A resuming machine takes its worker slot on this stream
+            # anyway, and the next stream finishes the bookkeeping.
+            LOGGER.info("reserve preparation for %s deferred: %s", machine_id, contended)
+        return instruction
+
+    def _finish_reserved_machine_preparation(
+        self,
+        *,
+        workspace_id: str,
+        machine_id: str,
+        capacity_owner_id: str,
+        instance_id: str,
+        prepared_stop: MachineStopPreparationReceipt | None,
+        prepared_release: tuple[str, str] | None,
+    ) -> None:
+        with self._required_capacity_owner_mutations().mutation_lock(capacity_owner_id):
+            current, provider, offer = self._internal_unit_provider(workspace_id, capacity_owner_id)
             if provider.pooled is None or current.phase in ENDED_UNIT_PHASES:
                 raise ConflictError("reserve preparation owner is no longer active")
-            if stopping_used_machine:
-                assert prepared_stop is not None
+            if prepared_stop is not None:
                 if self.scheduler_hooks is None:
                     raise UpstreamUnavailableError(
                         "stopping retained capacity requires scheduler worker state"
                     )
-                with self._required_capacity_owner_mutations().dispatch_lock(
-                    unit.capacity_owner_id
-                ):
+                with self._required_capacity_owner_mutations().dispatch_lock(capacity_owner_id):
                     with self.context.database.session() as session:
                         latest = MachineRepository(session).get(
                             machine_id, workspace_id=workspace_id
@@ -2954,16 +2991,24 @@ class ComputeService:
                         machine_id, "machine returning to stopped reserve"
                     )
                     snapshot = provider.pooled.stop_machine(
-                        self._provider_unit_request(current, offer), record.instance_id
+                        self._provider_unit_request(current, offer), instance_id
                     )
                     self.provider_machines._apply_pooled_snapshot(
                         current, offer, snapshot, provider=provider.pooled
                     )
             else:
                 provider.pooled.complete_machine_preparation(
-                    self._provider_unit_request(current, offer), record.instance_id
+                    self._provider_unit_request(current, offer), instance_id
                 )
-        return instruction
+            if prepared_release is not None:
+                agent_sha256, worker_image = prepared_release
+                with self.context.database.session() as session:
+                    ComputeProviderInstanceRepository(session).record_prepared_release(
+                        machine_id=machine_id,
+                        instance_id=instance_id,
+                        agent_sha256=agent_sha256,
+                        worker_image=worker_image,
+                    )
 
     def release_internal_unit_machine(
         self,
@@ -3310,6 +3355,99 @@ class ComputeService:
         except CapacityReservationLockContendedError:
             LOGGER.debug("platform warm reconciliation deferred: capacity lease is held")
 
+    def refresh_stale_reserve(self, release: ReleaseTarget, *, now: datetime) -> str | None:
+        """Prepare one stopped reserve again when it predates the active release.
+
+        A reserve resumed with an old agent or worker image updates itself before
+        it takes work, which costs a devbox start tens of seconds. Refreshing it
+        while nothing waits keeps that off the resume path. One machine at a time,
+        and only when no reserve is being prepared, so the fleet never loses more
+        than one reserve to the refresh. Returns the machine it started.
+        """
+        if self.provider_resolver is None:
+            return None
+        agent_sha256, worker_image = reserve_release_artifacts(release)
+        with self.context.database.session() as session:
+            candidates = ComputeProviderInstanceRepository(session).stale_platform_reserves(
+                agent_sha256=agent_sha256, worker_image=worker_image
+            )
+        if not candidates:
+            return None
+        warm_owner = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
+        try:
+            with self._required_capacity_owner_mutations().mutation_lock(warm_owner):
+                with self.context.database.session() as session:
+                    if (
+                        ComputeProviderInstanceRepository(session).platform_reserve_in_preparation()
+                        or ContainerRepository(session).has_unplaced_platform_cpu_work()
+                    ):
+                        return None
+                for candidate in candidates[:_RESERVE_REFRESH_CANDIDATES]:
+                    try:
+                        refreshed = self._refresh_reserve(candidate, now=now)
+                    except CapacityReservationLockContendedError:
+                        continue
+                    except CapacityReservationLeaseLostError:
+                        raise
+                    except Exception:
+                        LOGGER.exception(
+                            "stopped reserve %s (%s) could not be prepared again",
+                            candidate.machine_id,
+                            candidate.instance_id,
+                        )
+                        continue
+                    if refreshed:
+                        LOGGER.info(
+                            "refreshing stopped reserve %s (%s) for the active release",
+                            candidate.machine_id,
+                            candidate.instance_id,
+                        )
+                        return candidate.machine_id
+        except CapacityReservationLockContendedError:
+            return None
+        return None
+
+    def _refresh_reserve(self, candidate: ComputeReserveInstance, *, now: datetime) -> bool:
+        with self.context.database.session() as session:
+            unit = ComputeUnitRepository(session).get(candidate.pool_id)
+        if (
+            unit is None
+            or unit.phase in ENDED_UNIT_PHASES
+            or unit.provider_state.degraded_reason is not None
+        ):
+            return False
+        with self._required_capacity_owner_mutations().mutation_lock(unit.capacity_owner_id):
+            unit, provider, offer = self._internal_unit_provider(
+                unit.workspace_id, unit.capacity_owner_id
+            )
+            if provider.pooled is None or provider.policy is None:
+                return False
+            if not provider.policy.can_purchase:
+                return False
+            snapshot = provider.pooled.refresh_machine(
+                self._provider_unit_request(unit, offer), candidate.instance_id
+            )
+            with self.context.database.session() as session:
+                machine = MachineRepository(session).get(
+                    candidate.machine_id, workspace_id=unit.workspace_id
+                )
+                if machine is not None and machine_lifecycle_allowed(
+                    machine.lifecycle, MachineLifecycle.Resuming
+                ):
+                    write_machine_lifecycle(
+                        session,
+                        machine,
+                        MachineLifecycle.Resuming,
+                        workspace_changes=self.workspace_changes,
+                        workspace_id=unit.workspace_id,
+                        message="Preparing the stopped reserve for the current release",
+                        now=now,
+                    )
+            self.provider_machines._apply_pooled_snapshot(
+                unit, offer, snapshot, provider=provider.pooled, now=now
+            )
+        return True
+
     def _reconcile_platform_warm_markets(self, *, now: datetime) -> None:
         assert self.provider_resolver is not None
         providers = tuple(self.provider_resolver.list_platform_providers())
@@ -3387,6 +3525,16 @@ class ComputeService:
             units = ComputeUnitRepository(session)
             units.lock_platform_capacity()
             existing = units.list_platform_internal(preemptible=preemptible, gpu=False)
+            # A market that refused a launch keeps the reserves it already has and
+            # buys no more until its cooldown passes.
+            cooled = [
+                unit.id
+                for unit in existing
+                if unit.stopped_machines and self._capacity_rejected_recently(unit, now=now)
+            ]
+            held = dict.fromkeys(cooled, 0) | ComputeProviderInstanceRepository(
+                session
+            ).reserve_counts(cooled)
             remaining_target = self.fleet_policy.stopped_cpu_target(
                 preemptible=preemptible,
                 running_machines=sum(unit.desired_machines for unit in existing),
@@ -3395,8 +3543,9 @@ class ComputeService:
                 target = (
                     0
                     if unit.provider_state.degraded_reason or unit.provider_ref not in enabled
-                    else min(unit.stopped_machines, remaining_target)
+                    else min(unit.stopped_machines, held.get(unit.id, unit.stopped_machines))
                 )
+                target = min(target, remaining_target)
                 remaining_target -= target
                 if target != unit.stopped_machines:
                     existing[index] = units.upsert(
@@ -3458,6 +3607,7 @@ class ComputeService:
             unit.id
             for unit in states.values()
             if unit.phase is ComputeUnitPhase.Deleting
+            or self._capacity_rejected_recently(unit, now=now)
             or (
                 unit.provider_state.degraded_reason is not None
                 and not self._failed_market_retry_ready(unit, now=now)
@@ -3491,7 +3641,7 @@ class ComputeService:
             owner_id = owner_ids[(provider.ref, offer.id)]
             if owner_id in cooling:
                 continue
-            if retained and owner_id not in retained:
+            if retained - cooling and owner_id not in retained:
                 continue
             policy = provider.policy
             assert policy is not None
@@ -3685,6 +3835,20 @@ class ComputeService:
             return
         raise UpstreamUnavailableError(
             f"no approved capacity can supply the warm target for preemptible={preemptible}"
+        )
+
+    @staticmethod
+    def _capacity_rejected_recently(
+        unit: ComputeUnitRecord | ComputeOfferState, *, now: datetime
+    ) -> bool:
+        """Whether the provider refused a launch in this market within its cooldown.
+
+        A refused reserve launch does not degrade the pool, because its running
+        machines still serve; this is what keeps the reserve from retrying there.
+        """
+        failed_at = unit.provider_state.last_capacity_failure_at
+        return failed_at is not None and now < to_utc(failed_at) + timedelta(
+            seconds=unit.registration_timeout_seconds
         )
 
     @staticmethod
@@ -4704,6 +4868,11 @@ class ComputeService:
                     reason="provider instance storage destroyed",
                     now=now,
                 )
+
+
+def reserve_release_artifacts(release: ReleaseTarget) -> tuple[str, str]:
+    """The agent binary and worker image a reserve must hold to resume without updating."""
+    return (release.agent.sha256 if release.agent is not None else "", release.worker_image)
 
 
 def _retirable_platform_pool(

@@ -98,6 +98,11 @@ class _PooledProvider:
     ) -> None:
         raise AssertionError("explicit pool scaling must not prepare stopped capacity")
 
+    def refresh_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise AssertionError("explicit pool scaling must not stop an individual machine")
+
     def stop_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str
     ) -> ProviderUnitSnapshot:

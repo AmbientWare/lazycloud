@@ -298,17 +298,15 @@ class SchedulerCapacityInterruptionService:
         now: datetime | None = None,
     ) -> list[WorkerPreemptionResult]:
         if interruption.state not in {
-            AgentCapacityState.AtRisk,
             AgentCapacityState.Draining,
             AgentCapacityState.Preempting,
             AgentCapacityState.Cordoned,
         }:
             return []
         current_time = now or utc_now()
-        draining = interruption.state in {
-            AgentCapacityState.AtRisk,
-            AgentCapacityState.Draining,
-        } and (interruption.notice_at is None or current_time < interruption.notice_at)
+        draining = interruption.state is AgentCapacityState.Draining and (
+            interruption.notice_at is None or current_time < interruption.notice_at
+        )
         results: list[WorkerPreemptionResult] = []
         for worker in self.workers.list_workers_on_machine(interruption.machine_id):
             if worker.placement != interruption.placement:
@@ -336,10 +334,7 @@ class SchedulerCapacityInterruptionService:
                         now=current_time,
                     )
                 )
-                if (
-                    interruption.notice_at is not None
-                    or interruption.state is AgentCapacityState.AtRisk
-                ):
+                if interruption.notice_at is not None:
                     if self.workload_drains is None:
                         raise RuntimeError("capacity interruption workload drain is not configured")
                     self.workload_drains.prepare(

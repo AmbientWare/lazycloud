@@ -99,6 +99,15 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
                 request, provider_instance_id
             )
 
+    def refresh_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        if self._retained(request):
+            return self._pool(request).refresh(provider_instance_id)
+        return super(AwsPlatformCapacityProvider, self).refresh_machine(
+            request, provider_instance_id
+        )
+
     def stop_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str
     ) -> ProviderUnitSnapshot:

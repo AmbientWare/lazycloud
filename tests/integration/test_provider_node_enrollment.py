@@ -140,6 +140,11 @@ class _PooledProvider:
     ) -> None:
         raise AssertionError("enrollment must not complete reserve preparation")
 
+    def refresh_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise AssertionError("enrollment must not stop provider nodes")
+
     def stop_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str
     ) -> ProviderUnitSnapshot:

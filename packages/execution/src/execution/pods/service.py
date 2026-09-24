@@ -37,6 +37,7 @@ from shared.containers import (
     ContainerRecord,
     ContainerStatus,
 )
+from shared.deployments import PodRole
 from shared.env import parse_environment
 from shared.errors import ConflictError, InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -81,7 +82,7 @@ from shared.http.pods import (
     PodSandboxUploadFileResponse,
 )
 from shared.http.workspace_changes import WorkspaceChangeType
-from shared.paths import DEFAULT_SANDBOX_WORKDIR
+from shared.paths import DEFAULT_SANDBOX_WORKDIR, DEVBOX_WORKDIR
 from shared.routing import AgentBackendRoute, BackendRouteState, parse_backend_route_address
 from shared.scheduling import (
     ContainerSchedulingDirectory,
@@ -358,12 +359,15 @@ class PodControlService:
             container,
             WorkspaceChangeType.Created,
         )
+        # A devbox's work lives on its root disk. The uploaded source would be
+        # mounted fresh over it on every start, so a devbox gets none.
+        devbox = stub.config.role is PodRole.Devbox
         resource_mounts = container_resource_mounts(
             context=self.services.context,
             object_storage=self.services.object_storage,
             workspace_id=stub.workspace_id,
             workspace_name=workspace.name,
-            object_id=config.object_id,
+            object_id="" if devbox else config.object_id,
             stub_id=stub.id,
             container_id=container.id,
             volumes=config.volume_inputs,
@@ -388,6 +392,8 @@ class PodControlService:
                     cwd=(
                         DEFAULT_SANDBOX_WORKDIR
                         if stub.kind is StubKind.Sandbox
+                        else DEVBOX_WORKDIR
+                        if devbox
                         else WORKER_USER_CODE_VOLUME
                     ),
                     env=env,

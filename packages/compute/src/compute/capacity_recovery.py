@@ -73,6 +73,14 @@ def record_capacity_risk(
     machine = ComputeProviderInstanceRepository(session).get_by_machine(enrollment.machine_id)
     if machine is None or machine.pool_id != unit.id:
         return
+    if machine.status in {
+        ReservationStatus.Preparing.value,
+        ReservationStatus.Stopping.value,
+        ReservationStatus.Stopped.value,
+    }:
+        # A reserve holds no work and no running target. The provider replaces an
+        # interrupted one; recovering it would lower the pool's running target.
+        return
     CapacityRecoveryRepository(session).record_signal(
         workspace_id=unit.workspace_id,
         source_unit_id=unit.id,

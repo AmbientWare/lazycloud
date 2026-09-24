@@ -199,6 +199,11 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
     ) -> None:
         raise ValueError("Auto Scaling groups do not own stopped reserves")
 
+    def refresh_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise ValueError("Auto Scaling groups do not own stopped reserves")
+
     def stop_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str
     ) -> ProviderUnitSnapshot:
