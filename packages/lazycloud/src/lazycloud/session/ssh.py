@@ -248,14 +248,24 @@ def run_ssh(config: Path, alias: str, arguments: list[str]) -> int:
     return subprocess.call([ssh, "-F", str(config), alias, *arguments])
 
 
-def bridge_stdio(url: str, *, token: str) -> int:
+def bridge_stdio(
+    url: str,
+    *,
+    token: str,
+    on_first_byte: Callable[[], None] | None = None,
+    on_failure: Callable[[str], None] | None = None,
+) -> int:
     """Carry SSH bytes between stdin/stdout and the pod tunnel until either side ends.
 
-    Stdout carries the SSH stream and nothing else; every diagnostic goes to stderr.
+    Stdout carries the SSH stream and nothing else; every diagnostic goes to stderr,
+    through `on_failure` when given. `on_first_byte` runs once, before the pod's
+    first byte is written: the tunnel is accepted before the pod answers, so the
+    first byte is when the connection is really made.
     """
     from websockets.exceptions import ConnectionClosed, InvalidHandshake
     from websockets.sync.client import connect
 
+    report = on_failure or _report_failure
     stdin = sys.stdin.buffer.fileno()
     stdout = sys.stdout.buffer.fileno()
     try:
@@ -270,7 +280,7 @@ def bridge_stdio(url: str, *, token: str) -> int:
             ping_interval=None,
         )
     except (OSError, InvalidHandshake) as exc:
-        print(f"lazycloud: could not open the SSH tunnel: {exc}", file=sys.stderr)
+        report(f"could not open the SSH tunnel: {exc}")
         return 255
 
     def forward_input() -> None:
@@ -282,9 +292,13 @@ def bridge_stdio(url: str, *, token: str) -> int:
         websocket.close()
 
     threading.Thread(target=forward_input, daemon=True).start()
+    waiting = on_first_byte
     try:
         while True:
             message = websocket.recv()
+            if waiting is not None:
+                waiting()
+                waiting = None
             payload = message if isinstance(message, bytes) else message.encode("utf-8")
             view = memoryview(payload)
             while view:
@@ -292,14 +306,19 @@ def bridge_stdio(url: str, *, token: str) -> int:
     except ConnectionClosed as closed:
         received = closed.rcvd
         if received is not None and received.code != 1000:
-            print(
-                f"lazycloud: SSH tunnel closed: {received.reason or received.code}", file=sys.stderr
-            )
+            report(f"SSH tunnel closed: {received.reason or received.code}")
             return 255
         return 0
+    except KeyboardInterrupt:
+        websocket.close()
+        return 130
     except OSError:
         websocket.close()
         return 0
+
+
+def _report_failure(message: str) -> None:
+    print(f"lazycloud: {message}", file=sys.stderr)
 
 
 def current_cli_command() -> tuple[str, ...]:

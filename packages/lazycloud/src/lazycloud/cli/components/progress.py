@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from lazycloud.cli.components.errors import debug_errors_enabled
 from lazycloud.cli.components.output import write_stream
-from lazycloud.terminal import Terminal
+from lazycloud.terminal import Terminal, TerminalStep
+
+CONNECTING_POLL_SECONDS = 1.0
 
 
 @runtime_checkable
@@ -37,4 +43,53 @@ def print_stream_message(stream: str, message: str) -> None:
     )
 
 
-__all__ = ["attach_terminal", "print_stream_message"]
+@dataclass
+class ConnectingIndicator:
+    """A spinner on stderr while a connection waits for the machine behind it.
+
+    Shown only when stderr is a terminal: an editor running the SSH proxy gives
+    it none, and a line written there would reach nobody. `describe` is asked
+    about once a second for what the machine is doing; it returns None when it
+    has nothing to say, and anything it raises leaves the label as it was.
+    """
+
+    target: str
+    describe: Callable[[], str | None] | None = None
+    _step: TerminalStep | None = field(default=None, init=False)
+    _stopped: threading.Event = field(default_factory=threading.Event, init=False)
+
+    def start(self) -> ConnectingIndicator:
+        if not sys.stderr.isatty():
+            return self
+        self._step = Terminal().step("Connecting", self.target)
+        if self.describe is not None:
+            threading.Thread(target=self._follow, daemon=True).start()
+        return self
+
+    def connected(self) -> None:
+        """Erase the spinner, before the connection's first output reaches the terminal."""
+        self._stopped.set()
+        if self._step is not None:
+            self._step.dismiss()
+
+    def failed(self, reason: str) -> bool:
+        """Replace the spinner with the reason; False when there was no spinner to replace."""
+        self._stopped.set()
+        if self._step is None or self._step.finished:
+            return False
+        self._step.fail(f"{self.target} · {reason}")
+        return True
+
+    def _follow(self) -> None:
+        describe = self.describe
+        while describe is not None and not self._stopped.wait(CONNECTING_POLL_SECONDS):
+            try:
+                detail = describe()
+            except Exception:  # a status read must never end the connection it describes
+                continue
+            step = self._step
+            if detail and step is not None and not self._stopped.is_set():
+                step.update(f"{self.target} · {detail}")
+
+
+__all__ = ["ConnectingIndicator", "attach_terminal", "print_stream_message"]

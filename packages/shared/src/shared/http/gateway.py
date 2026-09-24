@@ -273,8 +273,15 @@ class DeployStubResponse(HttpModel):
     app_id: str | None = None
     version: int = 0
     invoke_url: str = ""
+    name: str = ""
     role: PodRole | None = None
     """The pod's resolved role; unset for every other kind."""
+
+    keep_warm_seconds: int | None = None
+    """The idle window the deployment resolved to; -1 keeps a container running."""
+
+    preemptible: bool | None = None
+    """Whether the deployment resolved to reclaimable capacity."""
 
 
 class GetUrlRequest(HttpModel):

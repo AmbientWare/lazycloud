@@ -830,7 +830,10 @@ class GatewayControlService:
             app_id=resource.app.id,
             version=deployment.version,
             invoke_url=invoke_url,
+            name=deployment.name,
             role=deployment.spec.role,
+            keep_warm_seconds=deployment.spec.resources.keep_warm,
+            preemptible=deployment.spec.resources.preemptible,
         )
 
     def get_url(self, request: GetUrlRequest) -> GetUrlResponse:

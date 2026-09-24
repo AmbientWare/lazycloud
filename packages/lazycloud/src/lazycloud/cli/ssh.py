@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Annotated
 
 import typer
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, DevboxPhase, PodRole
 from shared.http.errors import HttpApiError
 
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit
+from lazycloud.cli.components.progress import ConnectingIndicator
 from lazycloud.cli.control import control_config, resource_client, workspace_client
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.ssh.control import SshControlClient
@@ -35,11 +38,11 @@ WorkspaceOption = Annotated[str | None, typer.Option("--workspace")]
 
 def ssh(
     ctx: typer.Context,
-    pod: Annotated[str, typer.Argument(help="Deployed pod to connect to.")],
+    pod: Annotated[str, typer.Argument(help="Devbox or pod to connect to.")],
     app: AppOption = None,
     workspace: WorkspaceOption = None,
 ) -> None:
-    """Open an SSH session to a deployed pod. Arguments after `--` go to ssh."""
+    """Open an SSH session to a devbox or pod. Arguments after `--` go to ssh."""
     with _setup_errors():
         access = _access(workspace)
         host = _pod_host(access, pod, app=app, workspace=workspace)
@@ -59,7 +62,72 @@ def ssh_proxy(
     if not config.token:
         raise ClientError("not logged in; run `lazycloud login`", type="not_authenticated")
     client = SshControlClient.from_endpoint(config.endpoint, workspace=config.workspace)
-    raise typer.Exit(bridge_stdio(client.tunnel_url(pod, app=app), token=config.token))
+    indicator = ConnectingIndicator(
+        pod, describe=_DevboxPhase(resource_client(workspace=workspace), pod=pod, app=app)
+    ).start()
+
+    def report(message: str) -> None:
+        if not indicator.failed(message):
+            print(f"lazycloud: {message}", file=sys.stderr)
+
+    try:
+        status = bridge_stdio(
+            client.tunnel_url(pod, app=app),
+            token=config.token,
+            on_first_byte=indicator.connected,
+            on_failure=report,
+        )
+    finally:
+        indicator.connected()
+    raise typer.Exit(status)
+
+
+_PHASE_LABELS: dict[DevboxPhase, str] = {
+    DevboxPhase.Stopped: "waking up",
+    DevboxPhase.Queued: "waiting for a machine",
+    DevboxPhase.PullingImage: "pulling image",
+    DevboxPhase.RestoringDisk: "restoring disk",
+    DevboxPhase.Starting: "starting",
+    DevboxPhase.Running: "connecting",
+    DevboxPhase.Stopping: "saving disk",
+}
+
+
+@dataclass
+class _DevboxPhase:
+    """What a devbox reports doing, for the spinner; nothing for any other pod."""
+
+    resources: ResourceControlClient
+    pod: str
+    app: str
+    _deployment_id: str | None = None
+    _resolved: bool = False
+
+    def __call__(self) -> str | None:
+        if not self._resolved:
+            self._resolved = True
+            self._deployment_id = self._find()
+        if self._deployment_id is None:
+            return None
+        status = self.resources.devbox(self._deployment_id)
+        if status.phase is DevboxPhase.Failed:
+            return status.phase_reason
+        return _PHASE_LABELS[status.phase]
+
+    def _find(self) -> str | None:
+        app_ids = {item.id for item in self.resources.list_apps().data if item.name == self.app}
+        return next(
+            (
+                item.id
+                for item in self.resources.list_deployments(
+                    active=True, name=self.pod, latest=True
+                ).data
+                if item.kind is DeploymentKind.Pod
+                and item.app_id in app_ids
+                and item.role is PodRole.Devbox
+            ),
+            None,
+        )
 
 
 def ssh_cert(
@@ -86,12 +154,12 @@ def ssh_config(
     ctx: typer.Context,
     pods: Annotated[
         list[str] | None,
-        typer.Argument(help="Pods to configure; every SSH-enabled pod when omitted."),
+        typer.Argument(help="Devboxes and pods to configure; every one serving SSH when omitted."),
     ] = None,
     app: AppOption = None,
     workspace: WorkspaceOption = None,
 ) -> None:
-    """Write ~/.lazycloud/ssh/config so ssh and editors reach pods by name."""
+    """Write ~/.lazycloud/ssh/config so ssh and editors reach devboxes and pods by name."""
     with _setup_errors():
         access = _access(workspace)
         access.ensure_key()
@@ -103,7 +171,7 @@ def ssh_config(
             raise ClientError(
                 "no deployed pod serves SSH",
                 type="no_ssh_pods",
-                hint="Deploy a pod with ssh=True, then run this again.",
+                hint="Deploy a devbox, or a pod with ssh=True, then run this again.",
             )
         access.write_hosts(hosts)
         access.refresh_certificate()

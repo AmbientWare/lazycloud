@@ -26,6 +26,7 @@ from shared.http.deployments import (
     DeploymentListResponse,
     DeploymentResponse,
     DeploymentScaleRequest,
+    DevboxResponse,
 )
 from shared.http.errors import HttpResponseDecodeError
 from shared.http.tasks import TaskDetailResponse, TaskPageResponse, TaskStopResponse
@@ -197,6 +198,14 @@ class ResourceControlClient:
         return _validate_response(
             DeploymentDetailResponse,
             self.channel.get(self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}")),
+        )
+
+    def devbox(self, deployment_id: str) -> DevboxResponse:
+        return _validate_response(
+            DevboxResponse,
+            self.channel.get(
+                self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}/devbox")
+            ),
         )
 
     def stop_deployment(self, deployment_id: str) -> DeploymentResponse:
