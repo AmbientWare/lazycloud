@@ -5,10 +5,7 @@ block volume attached to that machine. Released, the volume stays detached for
 `DISK_VOLUME_CACHE_SECONDS` so a restart in the same zone attaches it again
 instead of restoring from object storage; after that it is deleted. The object
 store holds the durable copy throughout, so deleting a volume never loses data.
-A new volume starts from the disk's newest usable snapshot in the machine's
-account and region when there is one, and blank otherwise; see
-`storage.disk_snapshots`. A joined machine has no provider volume and keeps its
-disks in host storage.
+A joined machine has no provider volume and keeps its disks in host storage.
 
 The disk row records the volume's state, and every provider call happens outside
 any transaction. A step reads the row, calls the provider, then records the
@@ -37,7 +34,6 @@ from enum import StrEnum
 from typing import Protocol
 
 from compute.block_volumes import (
-    BlockSnapshotMissingError,
     BlockVolumeMissingError,
     BlockVolumeOwner,
     BlockVolumePendingError,
@@ -47,7 +43,6 @@ from compute.block_volumes import (
     BlockVolumeScope,
     orphaned_volumes,
 )
-from database.repositories.disk_snapshots import DiskSnapshotRepository
 from database.repositories.disk_volumes import (
     DiskVolumeHost,
     DiskVolumeRepository,
@@ -563,14 +558,6 @@ class DiskVolumeService:
                     raise AssertionError("only an attach creates a volume")
                 host = goal.host
                 size_bytes = goal.size_bytes
-                with self.database.session() as session:
-                    source = DiskSnapshotRepository(session).restore_source(
-                        snapshot.disk_id,
-                        provider_ref=host.provider_ref,
-                        region=host.region,
-                        connection_id=host.connection_id,
-                        max_volume_bytes=size_bytes,
-                    )
                 self._record(
                     lambda volumes: volumes.transition(
                         snapshot,
@@ -586,39 +573,23 @@ class DiskVolumeService:
                         volume_size_bytes=size_bytes,
                         token=secrets.token_hex(16),
                         formatted=False,
-                        source_snapshot_id=source,
                     )
                 )
             case StepKind.Create:
-                try:
-                    volume = self._provider(snapshot).create_volume(
-                        BlockVolumeRequest(
-                            owner=BlockVolumeOwner(
-                                deployment=self.deployment,
-                                workspace_id=snapshot.workspace_id,
-                                disk_id=snapshot.disk_id,
-                            ),
-                            zone=snapshot.zone,
-                            size_bytes=snapshot.volume_size_bytes,
-                            throughput_mibps=DISK_VOLUME_THROUGHPUT_MIBPS,
-                            token=snapshot.token,
-                            snapshot_id=snapshot.source_snapshot_id,
+                volume = self._provider(snapshot).create_volume(
+                    BlockVolumeRequest(
+                        owner=BlockVolumeOwner(
+                            deployment=self.deployment,
+                            workspace_id=snapshot.workspace_id,
+                            disk_id=snapshot.disk_id,
                         ),
-                        wait_seconds=wait_seconds,
-                    )
-                except BlockSnapshotMissingError:
-                    # The next creation picks another snapshot, or none.
-                    LOGGER.warning(
-                        "disk %s volume creation found snapshot %s gone; creating it again",
-                        snapshot.disk_id,
-                        snapshot.source_snapshot_id,
-                    )
-                    with self.database.session() as session:
-                        DiskSnapshotRepository(session).forget_source(
-                            snapshot.disk_id, snapshot.source_snapshot_id, due_at=at
-                        )
-                    self._record(lambda volumes: _forget(volumes, snapshot, at=at, driver=driver))
-                    return
+                        zone=snapshot.zone,
+                        size_bytes=snapshot.volume_size_bytes,
+                        throughput_mibps=DISK_VOLUME_THROUGHPUT_MIBPS,
+                        token=snapshot.token,
+                    ),
+                    wait_seconds=wait_seconds,
+                )
                 self._record(
                     lambda volumes: volumes.transition(
                         snapshot,

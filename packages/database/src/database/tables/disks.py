@@ -174,9 +174,6 @@ class DiskTable(IdTable, DatabaseBase):
     call; a driver silent for longer than its wait allows is taken over. Housekeeping
     that only looks at a volume leaves it alone."""
 
-    volume_source_snapshot_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    """The snapshot the volume is being created from, or was; empty for a blank one."""
-
 
 class DiskVolumeOrphanTable(IdTable, DatabaseBase):
     """A volume creation that was abandoned and may still have made a volume.
@@ -204,71 +201,6 @@ class DiskVolumeOrphanTable(IdTable, DatabaseBase):
     capacity_workspace_id: Mapped[str] = mapped_column(Text, nullable=False)
     region: Mapped[str] = mapped_column(Text, nullable=False)
     creation_token: Mapped[str] = mapped_column(String(64), nullable=False)
-
-
-_SNAPSHOT_STATES = "'creating', 'pending', 'completed', 'deleting'"
-
-
-class DiskSnapshotTable(IdTable, DatabaseBase):
-    """A provider snapshot of a disk's volume, taken at one published generation.
-
-    Written before the provider is asked, so a snapshot whose creation outlived
-    its caller is found again by `token`. `due_at` orders the sweep's next look at
-    a snapshot still being created, still pending, or being deleted; a completed
-    one has none.
-    """
-
-    __tablename__ = "disk_snapshots"
-    __table_args__: tuple[SchemaItem, ...] = (
-        UniqueConstraint(
-            "disk_id",
-            "generation",
-            "provider_ref",
-            "region",
-            name="uq_disk_snapshots_generation_scope",
-        ),
-        UniqueConstraint("token", name="uq_disk_snapshots_token"),
-        Index(
-            "ix_disk_snapshots_due",
-            "due_at",
-            "id",
-            postgresql_where=text("state IN ('creating', 'pending', 'deleting')"),
-        ),
-        Index(
-            "ix_disk_snapshots_connection",
-            "connection_id",
-            postgresql_where=text("connection_id IS NOT NULL"),
-        ),
-        CheckConstraint(f"state IN ({_SNAPSHOT_STATES})", name="ck_disk_snapshots_state"),
-        CheckConstraint("(state = 'completed') = (due_at IS NULL)", name="ck_disk_snapshots_due"),
-        CheckConstraint(
-            "state = 'creating' OR snapshot_id <> ''", name="ck_disk_snapshots_snapshot_id"
-        ),
-        CheckConstraint("generation > 0", name="ck_disk_snapshots_generation_positive"),
-        CheckConstraint("volume_size_bytes > 0", name="ck_disk_snapshots_volume_size_positive"),
-        CheckConstraint("stored_bytes >= 0", name="ck_disk_snapshots_stored_bytes_nonnegative"),
-    )
-
-    disk_id: Mapped[str] = mapped_column(
-        uuid_type, ForeignKey("disks.id", ondelete="CASCADE"), nullable=False
-    )
-    workspace_id: Mapped[str] = mapped_column(uuid_type, nullable=False)
-    generation: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    state: Mapped[str] = mapped_column(String(16), nullable=False)
-    snapshot_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    token: Mapped[str] = mapped_column(String(64), nullable=False)
-    provider_ref: Mapped[str] = mapped_column(String(160), nullable=False)
-    connection_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
-    capacity_workspace_id: Mapped[str] = mapped_column(Text, nullable=False)
-    """The workspace whose capacity resolves the provider account, as on the disk's volume."""
-
-    region: Mapped[str] = mapped_column(Text, nullable=False)
-    volume_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    stored_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    """What the provider stores for it, known once it completes; billed as the disk's."""
-
-    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DiskAttachmentTable(IdTable, DatabaseBase):

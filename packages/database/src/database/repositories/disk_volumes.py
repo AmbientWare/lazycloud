@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from database.tables.compute import ComputeProviderInstanceTable, ComputeUnitTable
-from database.tables.disks import DiskSnapshotTable, DiskTable, DiskVolumeOrphanTable
+from database.tables.disks import DiskTable, DiskVolumeOrphanTable
 from database.tables.orchestration import ContainerTable, WorkerTable
 from foundation.ids import try_uuid
 from shared.containers import LIVE_CONTAINER_STATUSES
@@ -52,7 +52,6 @@ class DiskVolumeSnapshot:
     driver: str
     changed_at: datetime | None
     driven_at: datetime | None
-    source_snapshot_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +83,6 @@ _COLUMNS = (
     DiskTable.volume_driver,
     DiskTable.volume_changed_at,
     DiskTable.volume_driven_at,
-    DiskTable.volume_source_snapshot_id,
 )
 
 
@@ -118,7 +116,6 @@ class DiskVolumeRepository:
             driver,
             changed_at,
             driven_at,
-            source_snapshot_id,
         ) = row
         return DiskVolumeSnapshot(
             disk_id=str(identity),
@@ -142,7 +139,6 @@ class DiskVolumeRepository:
             driver=driver,
             changed_at=to_utc(changed_at) if changed_at is not None else None,
             driven_at=to_utc(driven_at) if driven_at is not None else None,
-            source_snapshot_id=source_snapshot_id,
         )
 
     def transition(
@@ -162,7 +158,6 @@ class DiskVolumeRepository:
         volume_size_bytes: int | None = None,
         token: str | None = None,
         formatted: bool | None = None,
-        source_snapshot_id: str | None = None,
         performed: bool = False,
     ) -> bool:
         """Move the volume on from exactly the state `snapshot` read.
@@ -189,7 +184,6 @@ class DiskVolumeRepository:
                 "volume_size_bytes": 0,
                 "volume_token": "",
                 "volume_formatted": False,
-                "volume_source_snapshot_id": "",
             }
         for column, value in (
             ("volume_id", volume_id),
@@ -201,7 +195,6 @@ class DiskVolumeRepository:
             ("volume_size_bytes", volume_size_bytes),
             ("volume_token", token),
             ("volume_formatted", formatted),
-            ("volume_source_snapshot_id", source_snapshot_id),
         ):
             if value is not None:
                 values[column] = value
@@ -464,18 +457,12 @@ class DiskVolumeRepository:
         return recorded, frozenset(creating)
 
     def connection_holds_volumes(self, connection_id: str) -> bool:
-        """Whether a disk volume or snapshot, or a creation that may have made a volume, is in
-        this account."""
+        """Whether a disk volume, or a creation that may have made one, is in this account."""
         held = select(DiskTable.id).where(DiskTable.volume_connection_id == connection_id)
         pending = select(DiskVolumeOrphanTable.id).where(
             DiskVolumeOrphanTable.connection_id == connection_id
         )
-        snapshots = select(DiskSnapshotTable.id).where(
-            DiskSnapshotTable.connection_id == connection_id
-        )
-        return bool(
-            self.session.scalar(select(or_(held.exists(), pending.exists(), snapshots.exists())))
-        )
+        return bool(self.session.scalar(select(or_(held.exists(), pending.exists()))))
 
 
 __all__ = [

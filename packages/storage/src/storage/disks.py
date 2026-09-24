@@ -64,10 +64,6 @@ class DiskDeletionMetering(Protocol):
     def finalize_disk_deletion(self, disk_id: str, *, workspace_id: str) -> None: ...
 
 
-class DiskSnapshotRemoval(Protocol):
-    def remove_all(self, disk_id: str) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class DiskAcquisition:
     disk_id: str
@@ -165,21 +161,6 @@ def get_or_create_disks(
     ]
 
 
-def lease_matches(row: DiskTable, container_id: str, lease_token: str) -> bool:
-    return str(row.holder_container_id or "") == container_id and secrets.compare_digest(
-        row.lease_token, lease_token
-    )
-
-
-def refuse_stale_lease(row: DiskTable, container_id: str, lease_token: str) -> None:
-    """Refuse a container whose lease on the locked disk row is released or taken over."""
-    if not lease_matches(row, container_id, lease_token):
-        raise ConflictError(
-            f"container {container_id} no longer holds disk {row.name}; its lease was "
-            "released or taken over"
-        )
-
-
 def disk_record(reading: DiskReading, absence: DiskWorkerAbsence) -> DiskRecord:
     """The disk as a reader sees it: held, still saving, or free.
 
@@ -189,19 +170,13 @@ def disk_record(reading: DiskReading, absence: DiskWorkerAbsence) -> DiskRecord:
     """
     raw = DiskStatus(reading.row.status)
     if raw is not DiskStatus.Attached:
-        return disk_from_table(reading.row, snapshot_bytes=reading.snapshot_bytes, status=raw)
+        return disk_from_table(reading.row, status=raw)
     holder = reading.holder
     if holder is not None and holder.status in LIVE_CONTAINER_STATUSES:
-        return disk_from_table(
-            reading.row, snapshot_bytes=reading.snapshot_bytes, status=DiskStatus.Attached
-        )
+        return disk_from_table(reading.row, status=DiskStatus.Attached)
     if holder is not None and holder_keeps_disk(holder, absence):
-        return disk_from_table(
-            reading.row, snapshot_bytes=reading.snapshot_bytes, status=DiskStatus.Saving
-        )
-    return disk_from_table(
-        reading.row, snapshot_bytes=reading.snapshot_bytes, status=DiskStatus.Detached
-    )
+        return disk_from_table(reading.row, status=DiskStatus.Saving)
+    return disk_from_table(reading.row, status=DiskStatus.Detached)
 
 
 @dataclass(slots=True)
@@ -302,7 +277,7 @@ class DiskService:
                         f"{publication.generation} cannot be published again"
                     )
                 return publication.generation
-            refuse_stale_lease(row, publication.container_id, publication.lease_token)
+            self._require_lease(row, publication.container_id, publication.lease_token)
             self._record_generation(repository, row, publication)
             return publication.generation
 
@@ -313,7 +288,7 @@ class DiskService:
             row = repository.lock(disk_id)
             if row is None or row.deleted_at is not None:
                 return False
-            if not lease_matches(row, container_id, lease_token):
+            if not self._lease_matches(row, container_id, lease_token):
                 return False
             self._release(repository, row)
             return True
@@ -337,7 +312,7 @@ class DiskService:
         with self.database.session() as session:
             repository = DiskRepository(session)
             row = self._lock_live(repository, disk_id)
-            refuse_stale_lease(row, container_id, lease_token)
+            self._require_lease(row, container_id, lease_token)
             if generation != row.generation:
                 raise ConflictError(
                     f"disk {row.name} is at generation {row.generation}; collect under "
@@ -408,6 +383,20 @@ class DiskService:
         return row
 
     @staticmethod
+    def _lease_matches(row: DiskTable, container_id: str, lease_token: str) -> bool:
+        return str(row.holder_container_id or "") == container_id and secrets.compare_digest(
+            row.lease_token, lease_token
+        )
+
+    @classmethod
+    def _require_lease(cls, row: DiskTable, container_id: str, lease_token: str) -> None:
+        if not cls._lease_matches(row, container_id, lease_token):
+            raise ConflictError(
+                f"container {container_id} no longer holds disk {row.name}; its lease was "
+                "released or taken over"
+            )
+
+    @staticmethod
     def _record_generation(
         repository: DiskRepository, row: DiskTable, publication: DiskPublication
     ) -> None:
@@ -450,7 +439,7 @@ class DiskService:
 
 @dataclass(slots=True)
 class DiskDeletionService:
-    """Finishes deleting disks whose deletion was requested: volume, snapshots, objects, rows.
+    """Finishes deleting disks whose deletion was requested: volume, objects, then rows.
 
     A request only records the intent, and the scheduler's sweep does the rest,
     retrying a deletion that fails later and later so it never holds up the others.
@@ -459,7 +448,6 @@ class DiskDeletionService:
     database: DatabaseClient
     disks: DiskService
     volumes: DiskVolumeService
-    snapshots: DiskSnapshotRemoval
     objects: DiskObjectStore
     metering: DiskDeletionMetering
 
@@ -479,7 +467,6 @@ class DiskDeletionService:
     def finish(self, disk_id: str, *, workspace_id: str) -> None:
         self.metering.finalize_disk_deletion(disk_id, workspace_id=workspace_id)
         self.volumes.remove(disk_id)
-        self.snapshots.remove_all(disk_id)
         self.objects.delete_disk_objects(workspace_id=workspace_id, disk_id=disk_id)
         with self.database.session() as session:
             DiskRepository(session).delete(disk_id)
@@ -526,10 +513,7 @@ __all__ = [
     "DiskPage",
     "DiskPublication",
     "DiskService",
-    "DiskSnapshotRemoval",
     "ResolvedDisk",
     "disk_record",
     "get_or_create_disks",
-    "lease_matches",
-    "refuse_stale_lease",
 ]

@@ -114,8 +114,6 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
-    DiskSnapshotPayload,
-    DiskSnapshotResult,
     DiskStorageRequest,
 )
 from worker.event_bridge import worker_stream_event_from_bus_event
@@ -2191,17 +2189,6 @@ class WorkerRepositoryService:
             payload.container_id, worker_id=principal.worker_id, operation="disk publish"
         )
         return self._disk_leases().publish(payload, container=container)
-
-    def snapshot_disk(
-        self,
-        payload: DiskSnapshotPayload,
-        *,
-        principal: WorkerRepositoryPrincipal,
-    ) -> DiskSnapshotResult:
-        container = self._authorize_worker_container(
-            payload.container_id, worker_id=principal.worker_id, operation="disk snapshot"
-        )
-        return self._disk_leases().snapshot(payload, container=container)
 
     def release_disk(
         self,

@@ -20,9 +20,6 @@ type attachResult struct {
 	Generation    int64  `json:"generation"`
 	RestoredBytes int64  `json:"restored_bytes"`
 	ReusedLocal   bool   `json:"reused_local"`
-	// AdoptedSnapshot is true when the root was made from a snapshot of the
-	// disk's volume and this attach took its published chain as the disk's.
-	AdoptedSnapshot bool `json:"adopted_snapshot"`
 }
 
 func runAttach(ctx context.Context, args []string) (any, error) {
@@ -32,7 +29,6 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	chainPath := f.set.String("chain", "", "CHAIN.json: published generations to restore, base first")
 	storePath := f.set.String("store", "", "STORE.json: workspace bucket credentials")
 	minFree := f.set.Int64("min-free-bytes", 0, "free space the filesystem under --root must keep after a restore")
-	volume := f.set.String("volume", "", "provider volume the root lives on; empty on host storage")
 	f.require("size", "mountpoint", "chain", "store")
 	if err := f.parse(args); err != nil {
 		return nil, err
@@ -76,13 +72,6 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	adopted := false
-	if *volume != "" {
-		// Before anything reads the attachment: a snapshot's names another machine's devices.
-		if state, adopted, err = adoptSnapshot(ctx, p, state, *volume); err != nil {
-			return nil, err
-		}
-	}
 	if state != nil && state.Attachment != nil {
 		healthy, err := attachmentHealthy(p, state)
 		if err != nil {
@@ -115,7 +104,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 		}
 	}
 
-	result := attachResult{Mountpoint: target, Generation: newest.Generation, AdoptedSnapshot: adopted}
+	result := attachResult{Mountpoint: target, Generation: newest.Generation}
 	format := false
 	reuse, err := reusable(p, state, newest)
 	if err != nil {
@@ -125,15 +114,8 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 		return nil, fmt.Errorf("disk %s is %d bytes and cannot shrink to %d", p.id, state.SizeBytes, *size)
 	}
 	var manifests []layerManifest
-	from := -1
 	if !reuse {
-		if from, manifests, err = planExtension(ctx, p, state, store, chain, *size, *minFree); err != nil {
-			return nil, err
-		}
-	}
-	full := !reuse && from < 0
-	if full {
-		if manifests, err = fetchChain(ctx, store, p.id, chain, 0, 0, *size); err != nil {
+		if manifests, err = fetchChain(ctx, store, p.id, chain, *size); err != nil {
 			return nil, err
 		}
 	}
@@ -141,7 +123,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	// worker watches the room left for the head's writes. A restore is planned
 	// before the stale local copy is removed and counts that copy as free.
 	var plan []bool
-	if full {
+	if !reuse {
 		have, err := freeBytes(p, true)
 		if err != nil {
 			return nil, err
@@ -150,22 +132,14 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			return nil, err
 		}
 	}
-	switch {
-	case reuse:
+	if reuse {
 		result.ReusedLocal = true
 		if state.SizeBytes < *size {
 			if err := growHead(ctx, p, state, *size); err != nil {
 				return nil, err
 			}
 		}
-	case from >= 0:
-		result.ReusedLocal = true
-		restored, err := extendChain(ctx, p, state, store, chain[from+1:], manifests, *size)
-		if err != nil {
-			return nil, err
-		}
-		result.RestoredBytes = restored
-	default:
+	} else {
 		if err := os.RemoveAll(p.dir()); err != nil {
 			return nil, err
 		}
@@ -206,117 +180,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	if err := connectAndMount(ctx, p, state, format); err != nil {
 		return nil, errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
 	}
-	if state.Hydrating {
-		if err := startHydrator(p, state); err != nil {
-			return nil, errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
-		}
-	}
 	return result, nil
-}
-
-// planExtension decides whether attaching can keep the local chain and
-// download only the generations published after it, as it can on a volume
-// made from an older snapshot. The local chain must end at a generation the
-// chain names, hold nothing unpublished, and leave room for the rest;
-// otherwise it returns -1 and the attach restores the whole chain.
-func planExtension(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, size, minFree int64) (int, []layerManifest, error) {
-	if state == nil || state.Pending != nil || state.Attachment != nil || !state.HeadFresh ||
-		len(state.Layers) < 2 || state.unpublishedSealed() > 0 || state.SizeBytes > size ||
-		state.PublishedGeneration == 0 {
-		return -1, nil, nil
-	}
-	from := slices.IndexFunc(chain, func(entry chainEntry) bool {
-		return entry.Generation == state.PublishedGeneration && entry.ManifestSHA256 == state.PublishedManifestSHA256
-	})
-	if from < 0 || from == len(chain)-1 {
-		return -1, nil, nil
-	}
-	for _, l := range state.Layers {
-		present, err := pathExists(p.layerPath(l))
-		if err != nil || !present {
-			return -1, nil, err
-		}
-	}
-	top := state.Layers[len(state.Layers)-2]
-	floor, err := layerVirtualSize(p.layerPath(top), top)
-	if err != nil {
-		return -1, nil, err
-	}
-	manifests, err := fetchChain(ctx, store, p.id, chain[from+1:], chain[from].Generation, floor, size)
-	if err != nil {
-		return -1, nil, err
-	}
-	have, err := freeBytes(p, false)
-	if err != nil {
-		return -1, nil, err
-	}
-	need := qcow2MetadataBytes(size)
-	for _, manifest := range manifests {
-		need += storedBytes(manifest)
-	}
-	if have-need < minFree {
-		return -1, nil, nil
-	}
-	return from, manifests, nil
-}
-
-// extendChain downloads the generations after the local chain's newest and
-// stacks them on it under a fresh head. The old head goes first; it holds
-// nothing, which planExtension checked.
-func extendChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest, size int64) (int64, error) {
-	stale := state.head()
-	if err := os.Remove(p.layerPath(stale)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return 0, err
-	}
-	state.Layers = state.Layers[:len(state.Layers)-1]
-	layers := make([]layer, len(chain))
-	for i := range chain {
-		layers[i] = state.newLayer()
-	}
-	sizes := make([]int64, len(chain))
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(layerDownloadConcurrency)
-	for i, entry := range chain {
-		group.Go(func() error {
-			bytes, err := downloadLayer(groupCtx, store, manifests[i], p.layerPath(layers[i]))
-			if err != nil {
-				return fmt.Errorf("restore generation %d: %w", entry.Generation, err)
-			}
-			sizes[i] = bytes
-			return nil
-		})
-	}
-	if err := group.Wait(); err != nil {
-		return 0, err
-	}
-	var restored int64
-	for i, entry := range chain {
-		below := state.Layers[len(state.Layers)-1]
-		if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", below.format(), "-b", below.file(), p.layerPath(layers[i])); err != nil {
-			return 0, err
-		}
-		layers[i].Generation = entry.Generation
-		state.Layers = append(state.Layers, layers[i])
-		state.Published = append(state.Published, publishedRecord{
-			Generation:       entry.Generation,
-			ParentGeneration: manifests[i].ParentGeneration,
-			ManifestKey:      entry.ManifestKey,
-			ManifestSHA256:   entry.ManifestSHA256,
-		})
-		restored += sizes[i]
-	}
-	head := state.newLayer()
-	if err := createOverlay(ctx, p.layerPath(head), state.Layers[len(state.Layers)-1], size); err != nil {
-		return 0, err
-	}
-	state.Layers = append(state.Layers, head)
-	newest := chain[len(chain)-1]
-	state.PublishedGeneration = newest.Generation
-	state.PublishedManifestSHA256 = newest.ManifestSHA256
-	state.GrowFilesystem = state.GrowFilesystem || manifests[len(manifests)-1].VirtualSizeBytes < size
-	state.SizeBytes = size
-	state.HeadFresh = true
-	return restored, saveState(p, state)
 }
 
 func connectAndMount(ctx context.Context, p diskPaths, state *diskState, format bool) error {
@@ -385,9 +249,8 @@ func reusable(p diskPaths, state *diskState, newest chainEntry) (bool, error) {
 
 // fetchChain reads and checks every manifest in the chain before anything
 // local is removed or written. A disk only grows, so each generation is at
-// least as large as the one it builds on and no larger than size. The first
-// builds on parent, 0 for a whole chain, and is at least floor bytes.
-func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []chainEntry, parent, floor, size int64) ([]layerManifest, error) {
+// least as large as the one it builds on and no larger than size.
+func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []chainEntry, size int64) ([]layerManifest, error) {
 	manifests := make([]layerManifest, len(chain))
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(transferConcurrency)
@@ -406,9 +269,9 @@ func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []
 	}
 	for i, entry := range chain {
 		manifest := manifests[i]
-		wantParent, below := parent, floor
+		wantParent := int64(0)
 		if i > 0 {
-			wantParent, below = chain[i-1].Generation, manifests[i-1].VirtualSizeBytes
+			wantParent = chain[i-1].Generation
 		}
 		switch {
 		case manifest.DiskID != diskID:
@@ -419,8 +282,8 @@ func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []
 			return nil, fmt.Errorf("generation %d builds on %d, the chain puts it on %d", entry.Generation, manifest.ParentGeneration, wantParent)
 		case manifest.VirtualSizeBytes > size:
 			return nil, fmt.Errorf("generation %d is %d bytes and cannot shrink to %d", entry.Generation, manifest.VirtualSizeBytes, size)
-		case manifest.VirtualSizeBytes < below:
-			return nil, fmt.Errorf("generation %d is %d bytes, smaller than the %d bytes of the generation it builds on", entry.Generation, manifest.VirtualSizeBytes, below)
+		case i > 0 && manifest.VirtualSizeBytes < manifests[i-1].VirtualSizeBytes:
+			return nil, fmt.Errorf("generation %d is %d bytes, smaller than the %d bytes of the generation it builds on", entry.Generation, manifest.VirtualSizeBytes, manifests[i-1].VirtualSizeBytes)
 		case manifest.Filesystem != diskFilesystem:
 			return nil, fmt.Errorf("generation %d holds %s, not %s", entry.Generation, manifest.Filesystem, diskFilesystem)
 		}
@@ -612,12 +475,6 @@ func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *obj
 	newest := chain[len(chain)-1]
 	state.PublishedGeneration = newest.Generation
 	state.PublishedManifestSHA256 = newest.ManifestSHA256
-	// Commits during the restore wrote the base through the page cache.
-	for _, l := range state.Layers {
-		if err := dropCachePath(p.layerPath(l)); err != nil {
-			return 0, err
-		}
-	}
 	return restored, nil
 }
 
@@ -638,14 +495,6 @@ func attachmentHealthy(p diskPaths, state *diskState) (bool, error) {
 // the live system rather than the record, so it also finishes a teardown
 // that was interrupted or a worker that died mid-attach.
 func teardown(ctx context.Context, p diskPaths, state *diskState) error {
-	if state.HydratorPID != 0 {
-		if err := stopHydrator(ctx, p, state); err != nil {
-			return err
-		}
-		if state.Attachment == nil {
-			return saveState(p, state)
-		}
-	}
 	a := state.Attachment
 	if a == nil {
 		return nil

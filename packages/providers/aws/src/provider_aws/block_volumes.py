@@ -7,11 +7,6 @@ and attach, detach or delete only a volume that carries them. A volume someone
 else made in the same account is out of reach by permission as well as by the
 listing filter.
 
-Snapshots of disk volumes carry the same managed tag and a resource tag of their
-own, and the policy scopes creating, deleting and restoring them the same way.
-CreateSnapshot takes no client token, so the creation token rides in a tag and a
-retry looks for it before creating another.
-
 A disk volume attaches at a device name no launch template uses. That is how a
 machine's storage evidence tells its root volume from an attached disk volume;
 see `is_disk_volume_device`.
@@ -28,10 +23,6 @@ from typing import Protocol, TypedDict, TypeGuard
 
 from botocore.exceptions import BotoCoreError, ClientError
 from compute.block_volumes import (
-    BlockSnapshot,
-    BlockSnapshotMissingError,
-    BlockSnapshotRequest,
-    BlockSnapshotState,
     BlockVolume,
     BlockVolumeMissingError,
     BlockVolumeOwner,
@@ -45,7 +36,6 @@ from shared.errors import ConflictError
 
 from .boto3_clients import has_operations
 from .connection_policy import (
-    DISK_SNAPSHOT_TAG_VALUE,
     DISK_VOLUME_TAG_KEY,
     DISK_VOLUME_TAG_VALUE,
     MANAGED_TAG_KEY,
@@ -64,10 +54,6 @@ DEPLOYMENT_TAG_KEY = "cloud-pool:deployment"
 WORKSPACE_TAG_KEY = "cloud-pool:workspace"
 DISK_TAG_KEY = "cloud-pool:disk"
 VOLUME_TOKEN_TAG_KEY = "cloud-pool:volume-token"
-SNAPSHOT_TOKEN_TAG_KEY = "cloud-pool:snapshot-token"
-GENERATION_TAG_KEY = "cloud-pool:disk-generation"
-_OWN_SNAPSHOTS = ["self"]
-"""Without an owner, DescribeSnapshots lists every public snapshot in the region."""
 
 # Launch templates map only the root device, which is /dev/xvda or the AMI's own
 # /dev/sda1, so a disk volume taking a name from this range never collides with
@@ -123,20 +109,7 @@ class AwsBlockVolumeEc2Client(Protocol):
         Encrypted: bool,
         ClientToken: str,
         TagSpecifications: list[_TagSpecification],
-        SnapshotId: str = ...,
     ) -> Mapping[str, object]: ...
-    def create_snapshot(
-        self, *, VolumeId: str, Description: str, TagSpecifications: list[_TagSpecification]
-    ) -> Mapping[str, object]: ...
-    def describe_snapshots(
-        self,
-        *,
-        SnapshotIds: list[str] = ...,
-        OwnerIds: list[str] = ...,
-        Filters: list[_Filter] = ...,
-        NextToken: str = ...,
-    ) -> Mapping[str, object]: ...
-    def delete_snapshot(self, *, SnapshotId: str) -> Mapping[str, object]: ...
     def attach_volume(
         self, *, Device: str, InstanceId: str, VolumeId: str
     ) -> Mapping[str, object]: ...
@@ -161,13 +134,10 @@ def is_block_volume_client(value: object) -> TypeGuard[AwsBlockVolumeEc2Client]:
         value,
         (
             "attach_volume",
-            "create_snapshot",
             "create_volume",
-            "delete_snapshot",
             "delete_volume",
             "describe_availability_zones",
             "describe_instances",
-            "describe_snapshots",
             "describe_volumes",
             "detach_volume",
             "modify_instance_attribute",
@@ -203,20 +173,6 @@ class _Volume(_Response):
 
 class _Volumes(_Response):
     volumes: tuple[_Volume, ...] = Field(default=(), alias="Volumes")
-    next_token: str = Field(default="", alias="NextToken")
-
-
-class _Snapshot(_Response):
-    snapshot_id: str = Field(alias="SnapshotId")
-    state: str = Field(alias="State")
-    volume_size_gib: int = Field(default=0, alias="VolumeSize")
-    full_size_bytes: int | None = Field(default=None, alias="FullSnapshotSizeInBytes")
-    started_at: datetime | None = Field(default=None, alias="StartTime")
-    tags: tuple[_VolumeTag, ...] = Field(default=(), alias="Tags")
-
-
-class _Snapshots(_Response):
-    snapshots: tuple[_Snapshot, ...] = Field(default=(), alias="Snapshots")
     next_token: str = Field(default="", alias="NextToken")
 
 
@@ -258,37 +214,18 @@ class AwsBlockVolumes(BlockVolumeProvider):
         deadline = self.monotonic() + wait_seconds
         existing = self._by_token(request.token)
         if existing is None:
-            zone = self._zone_name(request.zone)
-            size_gib = max(1, math.ceil(request.size_bytes / _GIB))
-            tags: list[_TagSpecification] = [{"ResourceType": "volume", "Tags": _tags(request)}]
-            try:
-                if request.snapshot_id:
-                    response = self.ec2.create_volume(
-                        AvailabilityZone=zone,
-                        Size=size_gib,
-                        VolumeType="gp3",
-                        Throughput=request.throughput_mibps,
-                        Encrypted=True,
-                        ClientToken=request.token,
-                        TagSpecifications=tags,
-                        SnapshotId=request.snapshot_id,
-                    )
-                else:
-                    response = self.ec2.create_volume(
-                        AvailabilityZone=zone,
-                        Size=size_gib,
-                        VolumeType="gp3",
-                        Throughput=request.throughput_mibps,
-                        Encrypted=True,
-                        ClientToken=request.token,
-                        TagSpecifications=tags,
-                    )
-            except ClientError as exc:
-                if _error_code(exc) == "InvalidSnapshot.NotFound":
-                    raise BlockSnapshotMissingError(request.snapshot_id) from exc
-                raise _control_error(exc, operation="create disk volume") from exc
-            except BotoCoreError as exc:
-                raise upstream_error(exc, operation="create disk volume") from exc
+            response = self._call(
+                "create disk volume",
+                lambda: self.ec2.create_volume(
+                    AvailabilityZone=self._zone_name(request.zone),
+                    Size=max(1, math.ceil(request.size_bytes / _GIB)),
+                    VolumeType="gp3",
+                    Throughput=request.throughput_mibps,
+                    Encrypted=True,
+                    ClientToken=request.token,
+                    TagSpecifications=[{"ResourceType": "volume", "Tags": _tags(request)}],
+                ),
+            )
             volume_id = _parse(_Volume, response, operation="create disk volume").volume_id
         else:
             if existing.state in {"deleting", "deleted", "error"}:
@@ -416,97 +353,6 @@ class AwsBlockVolumes(BlockVolumeProvider):
             volumes.extend(_block_volume(volume) for volume in page.volumes)
             if not page.next_token:
                 return tuple(volumes)
-            token = page.next_token
-
-    def create_snapshot(self, request: BlockSnapshotRequest) -> BlockSnapshot:
-        existing = self.find_snapshot(token=request.token)
-        if existing is not None:
-            return existing
-        try:
-            response = self.ec2.create_snapshot(
-                VolumeId=request.volume_id,
-                Description=(
-                    f"LazyCloud disk {request.owner.disk_id} generation {request.generation}"
-                ),
-                TagSpecifications=[{"ResourceType": "snapshot", "Tags": _snapshot_tags(request)}],
-            )
-        except ClientError as exc:
-            code = _error_code(exc)
-            if code == "SnapshotCreationPerVolumeRateExceeded":
-                raise BlockVolumePendingError(
-                    f"volume {request.volume_id} was snapshotted moments ago"
-                ) from exc
-            if code == "InvalidVolume.NotFound":
-                raise BlockVolumeMissingError(request.volume_id) from exc
-            raise _control_error(exc, operation="snapshot disk volume") from exc
-        except BotoCoreError as exc:
-            raise upstream_error(exc, operation="snapshot disk volume") from exc
-        return _block_snapshot(_parse(_Snapshot, response, operation="snapshot disk volume"))
-
-    def find_snapshot(self, *, token: str) -> BlockSnapshot | None:
-        filters: list[_Filter] = [
-            {"Name": f"tag:{MANAGED_TAG_KEY}", "Values": [MANAGED_TAG_VALUE]},
-            {"Name": f"tag:{SNAPSHOT_TOKEN_TAG_KEY}", "Values": [token]},
-        ]
-        found = _parse(
-            _Snapshots,
-            self._call(
-                "find disk snapshot creation",
-                lambda: self.ec2.describe_snapshots(OwnerIds=_OWN_SNAPSHOTS, Filters=filters),
-            ),
-            operation="find disk snapshot creation",
-        ).snapshots
-        return _block_snapshot(found[0]) if found else None
-
-    def describe_snapshot(self, snapshot_id: str) -> BlockSnapshot | None:
-        try:
-            response = self.ec2.describe_snapshots(SnapshotIds=[snapshot_id])
-        except ClientError as exc:
-            if _error_code(exc) == "InvalidSnapshot.NotFound":
-                return None
-            raise _control_error(exc, operation="describe disk snapshot") from exc
-        except BotoCoreError as exc:
-            raise upstream_error(exc, operation="describe disk snapshot") from exc
-        found = _parse(_Snapshots, response, operation="describe disk snapshot").snapshots
-        return _block_snapshot(found[0]) if found else None
-
-    def delete_snapshot(self, snapshot_id: str) -> None:
-        try:
-            self.ec2.delete_snapshot(SnapshotId=snapshot_id)
-        except ClientError as exc:
-            code = _error_code(exc)
-            if code == "InvalidSnapshot.NotFound":
-                return
-            if code == "IncorrectState":
-                raise BlockVolumePendingError(
-                    f"snapshot {snapshot_id} cannot be deleted yet"
-                ) from exc
-            raise _control_error(exc, operation="delete disk snapshot") from exc
-        except BotoCoreError as exc:
-            raise upstream_error(exc, operation="delete disk snapshot") from exc
-
-    def describe_snapshots(self, *, deployment: str) -> tuple[BlockSnapshot, ...]:
-        filters: list[_Filter] = [
-            {"Name": f"tag:{MANAGED_TAG_KEY}", "Values": [MANAGED_TAG_VALUE]},
-            {"Name": f"tag:{RESOURCE_TAG_KEY}", "Values": [DISK_SNAPSHOT_TAG_VALUE]},
-            {"Name": f"tag:{DEPLOYMENT_TAG_KEY}", "Values": [deployment]},
-        ]
-        snapshots: list[BlockSnapshot] = []
-        token = ""
-        while True:
-            page = _parse(
-                _Snapshots,
-                self._call(
-                    "list disk snapshots",
-                    lambda page_token=token: self.ec2.describe_snapshots(
-                        OwnerIds=_OWN_SNAPSHOTS, Filters=filters, NextToken=page_token
-                    ),
-                ),
-                operation="list disk snapshots",
-            )
-            snapshots.extend(_block_snapshot(snapshot) for snapshot in page.snapshots)
-            if not page.next_token:
-                return tuple(snapshots)
             token = page.next_token
 
     def _attach(self, volume_id: str, *, instance_id: str) -> str:
@@ -661,56 +507,6 @@ def _tags(request: BlockVolumeRequest) -> list[_Tag]:
         {"Key": DISK_TAG_KEY, "Value": request.owner.disk_id},
         {"Key": VOLUME_TOKEN_TAG_KEY, "Value": request.token},
     ]
-
-
-def _snapshot_tags(request: BlockSnapshotRequest) -> list[_Tag]:
-    return [
-        {"Key": "Name", "Value": f"disk-{request.owner.disk_id}-{request.generation}"},
-        {"Key": MANAGED_TAG_KEY, "Value": MANAGED_TAG_VALUE},
-        {"Key": RESOURCE_TAG_KEY, "Value": DISK_SNAPSHOT_TAG_VALUE},
-        {"Key": DEPLOYMENT_TAG_KEY, "Value": request.owner.deployment},
-        {"Key": WORKSPACE_TAG_KEY, "Value": request.owner.workspace_id},
-        {"Key": DISK_TAG_KEY, "Value": request.owner.disk_id},
-        {"Key": GENERATION_TAG_KEY, "Value": str(request.generation)},
-        {"Key": SNAPSHOT_TOKEN_TAG_KEY, "Value": request.token},
-    ]
-
-
-_SNAPSHOT_STATES = {
-    "pending": BlockSnapshotState.Pending,
-    "recoverable": BlockSnapshotState.Pending,
-    "recovering": BlockSnapshotState.Pending,
-    "completed": BlockSnapshotState.Completed,
-}
-
-
-def _block_snapshot(snapshot: _Snapshot) -> BlockSnapshot:
-    tags = {tag.key: tag.value for tag in snapshot.tags}
-    owner: BlockVolumeOwner | None = None
-    if (
-        tags.get(MANAGED_TAG_KEY) == MANAGED_TAG_VALUE
-        and tags.get(RESOURCE_TAG_KEY) == DISK_SNAPSHOT_TAG_VALUE
-        and tags.get(DEPLOYMENT_TAG_KEY)
-        and tags.get(WORKSPACE_TAG_KEY)
-        and tags.get(DISK_TAG_KEY)
-    ):
-        owner = BlockVolumeOwner(
-            deployment=tags[DEPLOYMENT_TAG_KEY],
-            workspace_id=tags[WORKSPACE_TAG_KEY],
-            disk_id=tags[DISK_TAG_KEY],
-        )
-    volume_size_bytes = snapshot.volume_size_gib * _GIB
-    return BlockSnapshot(
-        snapshot_id=snapshot.snapshot_id,
-        state=_SNAPSHOT_STATES.get(snapshot.state, BlockSnapshotState.Error),
-        volume_size_bytes=volume_size_bytes,
-        stored_bytes=(
-            snapshot.full_size_bytes if snapshot.full_size_bytes is not None else volume_size_bytes
-        ),
-        owner=owner,
-        creation_token=tags.get(SNAPSHOT_TOKEN_TAG_KEY, ""),
-        created_at=snapshot.started_at,
-    )
 
 
 def _live_attachment(volume: _Volume) -> _Attachment | None:

@@ -4,7 +4,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from database.repositories.disk_snapshots import billed_snapshot_bytes
 from database.repositories.identity import WorkspaceRepository
 from database.tables.apps import AppTable, DeploymentTable, StubTable
 from database.tables.compute import ComputeProviderInstanceTable
@@ -99,13 +98,9 @@ class DiskReading:
 
     row: DiskTable
     holder: DiskHolder | None
-    snapshot_bytes: int
-    """What the disk's live volume snapshots store beside its chunks."""
 
 
-def disk_from_table(
-    row: DiskTable, *, snapshot_bytes: int, status: DiskStatus | None = None
-) -> DiskRecord:
+def disk_from_table(row: DiskTable, *, status: DiskStatus | None = None) -> DiskRecord:
     """The disk as a reader sees it, with the status its holder earns."""
     shown = status or DiskStatus(row.status)
     holding = shown in {DiskStatus.Attached, DiskStatus.Saving}
@@ -115,7 +110,7 @@ def disk_from_table(
         size_bytes=row.size_bytes,
         status=shown,
         generation=row.generation,
-        stored_bytes=row.stored_bytes + snapshot_bytes,
+        stored_bytes=row.stored_bytes,
         holder_container_id=str(row.holder_container_id or "") if holding else "",
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
@@ -155,7 +150,7 @@ class DiskRepository:
             .returning(DiskTable)
         )
         if created is not None:
-            return disk_from_table(created, snapshot_bytes=0), True
+            return disk_from_table(created), True
         self.session.execute(
             update(DiskTable)
             .where(
@@ -169,7 +164,7 @@ class DiskRepository:
         existing = self.get(name, workspace_id=workspace_id)
         if existing is None:
             raise ConflictError("disk changed during creation; retry the request")
-        return disk_from_table(existing.row, snapshot_bytes=existing.snapshot_bytes), False
+        return disk_from_table(existing.row), False
 
     def get(self, name: str, *, workspace_id: str) -> DiskReading | None:
         result = self.session.execute(
@@ -507,33 +502,26 @@ class DiskRepository:
         )
 
     def lock_metering_checkpoint(self, disk_id: str) -> DiskMeteringCheckpoint | None:
-        """The disk's billing position under its row lock.
-
-        Its stored bytes are its chunks and its live volume snapshots together.
-        """
         row = self.session.execute(
             select(
                 DiskTable.workspace_id,
                 DiskTable.name,
                 DiskTable.stored_bytes,
-                billed_snapshot_bytes().scalar_subquery(),
                 DiskTable.metered_bytes,
                 DiskTable.metered_at,
                 DiskTable.deleted_at,
             )
             .where(DiskTable.id == disk_id)
-            .with_for_update(of=DiskTable)
+            .with_for_update()
         ).first()
         if row is None:
             return None
-        workspace_id, name, stored_bytes, snapshot_bytes, metered_bytes, metered_at, deleted_at = (
-            row
-        )
+        workspace_id, name, stored_bytes, metered_bytes, metered_at, deleted_at = row
         return DiskMeteringCheckpoint(
             id=disk_id,
             workspace_id=str(workspace_id),
             name=name,
-            stored_bytes=stored_bytes + snapshot_bytes,
+            stored_bytes=stored_bytes,
             metered_bytes=metered_bytes,
             metered_at=to_utc(metered_at),
             deleted_at=to_utc(deleted_at) if deleted_at is not None else None,
@@ -702,7 +690,7 @@ _VOLUME_ATTACHED_STATES = ("attaching", "attached", "releasing", "detaching")
 """Volume states in which the volume holds one of its machine's attachments."""
 
 
-def _with_holder() -> Select[tuple[DiskTable, str, datetime | None, str, str | None, int]]:
+def _with_holder() -> Select[tuple[DiskTable, str, datetime | None, str, str | None]]:
     # An outer join: the container columns are None when the holder row is gone.
     return select(
         DiskTable,
@@ -710,7 +698,6 @@ def _with_holder() -> Select[tuple[DiskTable, str, datetime | None, str, str | N
         ContainerTable.storage_released_at,
         ContainerTable.runtime_worker_id,
         ContainerTable.worker_id,
-        billed_snapshot_bytes().scalar_subquery(),
     ).outerjoin(ContainerTable, ContainerTable.id == DiskTable.holder_container_id)
 
 
@@ -720,13 +707,11 @@ def _reading(
     storage_released_at: datetime | None,
     runtime_worker_id: str | None,
     worker_id: str | None,
-    snapshot_bytes: int,
 ) -> DiskReading:
     if not row.holder_container_id:
-        return DiskReading(row=row, holder=None, snapshot_bytes=snapshot_bytes)
+        return DiskReading(row=row, holder=None)
     return DiskReading(
         row=row,
-        snapshot_bytes=snapshot_bytes,
         holder=DiskHolder(
             container_id=str(row.holder_container_id),
             status=None if status is None else ContainerStatus(status),

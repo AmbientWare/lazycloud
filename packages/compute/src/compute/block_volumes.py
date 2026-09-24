@@ -5,10 +5,6 @@ zone at a time. Every operation here is idempotent against the provider's own
 record, because the control plane that drives a volume can crash between any
 two calls and the next caller has only the durable disk row to go on.
 
-A snapshot copies one volume whole and belongs to the region, so a volume made
-from it may be in any zone there. The provider loads its blocks as they are
-first read, which is what lets a large disk start without a download.
-
 Ownership travels in the volume's tags. Cleanup never touches a volume this
 platform did not tag, or tagged for another deployment. The listing returns only
 volumes carrying the deployment's own tags, and a caller deciding what to delete
@@ -58,10 +54,6 @@ class BlockVolumeRequest(ContractModel):
     token: str = Field(min_length=1, max_length=64)
     """Names this one creation: a retry with the same token returns the same volume."""
 
-    snapshot_id: str = ""
-    """The snapshot the volume starts as, which the provider loads as blocks are
-    first read; empty for a blank volume."""
-
 
 class BlockVolume(ContractModel):
     volume_id: str = Field(min_length=1)
@@ -78,45 +70,8 @@ class BlockVolume(ContractModel):
     created_at: datetime | None = None
 
 
-class BlockSnapshotState(StrEnum):
-    Pending = "pending"
-    Completed = "completed"
-    Error = "error"
-
-
-class BlockSnapshotRequest(ContractModel):
-    owner: BlockVolumeOwner
-    volume_id: str = Field(min_length=1)
-    generation: int = Field(gt=0)
-    """The disk generation the volume holds, recorded in the snapshot's tags."""
-
-    token: str = Field(min_length=1, max_length=64)
-    """Names this one creation, so a retry finds the snapshot an earlier try made."""
-
-
-class BlockSnapshot(ContractModel):
-    snapshot_id: str = Field(min_length=1)
-    state: BlockSnapshotState
-    volume_size_bytes: int = Field(ge=0)
-    """The size of the volume it was taken from; a volume made from it is at least this."""
-
-    stored_bytes: int = Field(ge=0)
-    """What the provider stores for it: its full size once the provider reports
-    one, and its volume's size until then."""
-
-    owner: BlockVolumeOwner | None = None
-    """None unless every ownership tag is present."""
-
-    creation_token: str = ""
-    created_at: datetime | None = None
-
-
 class BlockVolumeMissingError(Exception):
     """The provider has no such volume, or it is already being deleted."""
-
-
-class BlockSnapshotMissingError(Exception):
-    """A volume creation named a snapshot the provider no longer has."""
 
 
 class BlockVolumePendingError(Exception):
@@ -153,35 +108,6 @@ class BlockVolumeProvider(Protocol):
 
     def describe_volumes(self, *, deployment: str) -> tuple[BlockVolume, ...]:
         """Every disk volume this deployment tagged in this account and region."""
-        ...
-
-    def create_snapshot(self, request: BlockSnapshotRequest) -> BlockSnapshot:
-        """Start a snapshot of the volume as it is now, without waiting for it to finish.
-
-        A snapshot already carrying the request's token is returned instead of
-        starting another. Raises `BlockVolumePendingError` when the provider
-        refuses another snapshot of the volume this soon, and
-        `BlockVolumeMissingError` when the volume is gone.
-        """
-        ...
-
-    def find_snapshot(self, *, token: str) -> BlockSnapshot | None:
-        """The snapshot a creation with this token made, if it made one."""
-        ...
-
-    def describe_snapshot(self, snapshot_id: str) -> BlockSnapshot | None:
-        """The snapshot as the provider has it now; None once it is gone."""
-        ...
-
-    def delete_snapshot(self, snapshot_id: str) -> None:
-        """Delete a snapshot; a missing one is already deleted.
-
-        Raises `BlockVolumePendingError` while the provider cannot delete it yet.
-        """
-        ...
-
-    def describe_snapshots(self, *, deployment: str) -> tuple[BlockSnapshot, ...]:
-        """Every disk snapshot this deployment tagged in this account and region."""
         ...
 
 
@@ -231,36 +157,7 @@ def orphaned_volumes(
     return tuple(orphans)
 
 
-def orphaned_snapshots(
-    snapshots: tuple[BlockSnapshot, ...],
-    *,
-    deployment: str,
-    recorded_ids: frozenset[str],
-    recorded_tokens: frozenset[str],
-) -> tuple[BlockSnapshot, ...]:
-    """The snapshots of this deployment that no disk snapshot row records.
-
-    A row is written before its snapshot is created, so a snapshot whose id and
-    creation token are both unrecorded belongs to no disk. One still pending is
-    left for a later pass, and one without this deployment's complete ownership
-    tags is never an orphan.
-    """
-    return tuple(
-        snapshot
-        for snapshot in snapshots
-        if snapshot.owner is not None
-        and snapshot.owner.deployment == deployment
-        and snapshot.state is not BlockSnapshotState.Pending
-        and snapshot.snapshot_id not in recorded_ids
-        and snapshot.creation_token not in recorded_tokens
-    )
-
-
 __all__ = [
-    "BlockSnapshot",
-    "BlockSnapshotMissingError",
-    "BlockSnapshotRequest",
-    "BlockSnapshotState",
     "BlockVolume",
     "BlockVolumeMissingError",
     "BlockVolumeOwner",
@@ -270,6 +167,5 @@ __all__ = [
     "BlockVolumeRequest",
     "BlockVolumeScope",
     "BlockVolumeState",
-    "orphaned_snapshots",
     "orphaned_volumes",
 ]

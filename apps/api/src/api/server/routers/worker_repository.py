@@ -21,8 +21,6 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
-    DiskSnapshotPayload,
-    DiskSnapshotResult,
     DiskStorageRequest,
 )
 from worker.events import WorkerStreamEvent
@@ -731,15 +729,6 @@ def publish_disk(
     principal: WorkerPrincipal,
 ) -> DiskPublishResult:
     return service.publish_disk(request, principal=principal)
-
-
-@router.post("/worker-repository/snapshot-disk", response_model=DiskSnapshotResult)
-def snapshot_disk(
-    request: DiskSnapshotPayload,
-    service: WorkerRepo,
-    principal: WorkerPrincipal,
-) -> DiskSnapshotResult:
-    return service.snapshot_disk(request, principal=principal)
 
 
 @router.post(

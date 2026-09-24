@@ -61,8 +61,6 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
-    DiskSnapshotPayload,
-    DiskSnapshotResult,
     DiskStorageRequest,
 )
 from worker.events import (
@@ -764,9 +762,6 @@ class WorkerRepositoryHttpClient:
 
     def publish_disk(self, payload: DiskPublishPayload) -> DiskPublishResult:
         return self._post_model("/worker-repository/publish-disk", payload, DiskPublishResult)
-
-    def snapshot_disk(self, payload: DiskSnapshotPayload) -> DiskSnapshotResult:
-        return self._post_model("/worker-repository/snapshot-disk", payload, DiskSnapshotResult)
 
     def release_disk(self, payload: DiskReleasePayload) -> None:
         self.transport.post("/worker-repository/release-disk", _model_payload(payload))

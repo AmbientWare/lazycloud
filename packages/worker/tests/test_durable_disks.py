@@ -15,8 +15,6 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
-    DiskSnapshotPayload,
-    DiskSnapshotResult,
     DiskStorageRequest,
 )
 from worker.durable_disks import (
@@ -38,9 +36,6 @@ class _NoControlPlane:
 
     def release_disk(self, payload: DiskReleasePayload) -> None:
         raise AssertionError("recovery does not release")
-
-    def snapshot_disk(self, payload: DiskSnapshotPayload) -> DiskSnapshotResult:
-        raise AssertionError("recovery does not snapshot")
 
     def collect_disk(self, payload: DiskCollectPayload) -> None:
         raise AssertionError("recovery does not collect")
@@ -85,9 +80,6 @@ class _RecordingControlPlane:
 
     def release_disk(self, payload: DiskReleasePayload) -> None:
         self.released.append(payload)
-
-    def snapshot_disk(self, payload: DiskSnapshotPayload) -> DiskSnapshotResult:
-        raise AssertionError("a disk on host storage has no volume to snapshot")
 
     def collect_disk(self, payload: DiskCollectPayload) -> None:
         raise AssertionError("a layer building on a parent collects nothing")

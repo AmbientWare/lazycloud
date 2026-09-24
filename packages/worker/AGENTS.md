@@ -125,12 +125,6 @@ A disk's engine gets workspace storage on the disk's lease, not on the
 container's scheduler state. That state expires a while after a stop, and the
 release after it still has to publish the disk's last generation.
 
-On a provider machine every publish pass samples each disk's heat map, and a
-pass that committed a new generation asks the control plane to snapshot the
-disk's volume. Release asks once more after its final publish. A snapshot that
-fails is logged and never holds up a release, because the chunks already hold
-everything the snapshot would.
-
 A container that outgrows its reservation is stopped here, not by the kernel.
 The worker holds the two readings the decision needs, its own memory pressure
 and what each container currently uses, and the kernel is seconds away once a
