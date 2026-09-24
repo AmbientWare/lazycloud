@@ -25,6 +25,11 @@ from shared.deployment_records import (
     resolve_keep_warm_seconds,
     resolve_max_pending_tasks,
     resolve_memory,
+    resolve_pod_command,
+    resolve_pod_disks,
+    resolve_pod_role,
+    resolve_pod_ssh,
+    resolve_preemptible,
     resolve_retries,
     resolve_timeout_seconds,
 )
@@ -291,44 +296,53 @@ class DeploymentService:
             raise NotFoundError(msg)
         return max(matches, key=lambda item: item.version)
 
-    def delete(self, deployment_id_or_name: str) -> Deployment:
-        deployment = self.get(deployment_id_or_name)
+    def delete(self, deployment_id: str, *, workspace: str = "default") -> Deployment:
+        """Delete the workload this deployment is a version of, every version at once."""
         now = utc_now()
-        deployment.active = False
-        deployment.deleted_at = now
-        deployment.updated_at = now
         with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
             repository = DeploymentRepository(session)
-            workspace_id = repository.workspace_id(deployment.id)
-            if workspace_id is None:
-                msg = f"deployment workspace not found: {deployment.id}"
+            target = repository.get(deployment_id, workspace_id=workspace_id)
+            if target is None:
+                msg = f"deployment not found: {deployment_id}"
                 raise NotFoundError(msg)
-            updated = repository.upsert(
-                deployment,
+            deleted = repository.delete_versions(
                 workspace_id=workspace_id,
+                app_id=target.app_id,
+                name=target.name,
+                kind=target.kind,
+                now=now,
             )
+            deleted_target = next(
+                (deployment for deployment in deleted if deployment.id == target.id), None
+            )
+            if deleted_target is None:
+                # Another delete got there between the read and the update.
+                msg = f"deployment not found: {deployment_id}"
+                raise NotFoundError(msg)
             delete_deployment_cron_jobs(
                 session,
-                deployment_ids={deployment.id},
+                deployment_ids={deployment.id for deployment in deleted},
             )
-        self.events.emit(
-            "deployment.deleted",
-            resource_type="deployment",
-            resource_id=deployment.id,
-            message=f"deleted deployment {deployment.name}",
-            workspace_id=workspace_id,
-        )
-        self._publish_change(
-            updated,
-            workspace_id=workspace_id,
-            change=WorkspaceChangeType.Deleted,
-        )
+        for deployment in deleted:
+            self.events.emit(
+                "deployment.deleted",
+                resource_type="deployment",
+                resource_id=deployment.id,
+                message=f"deleted deployment {deployment.name} version {deployment.version}",
+                workspace_id=workspace_id,
+            )
+            self._publish_change(
+                deployment,
+                workspace_id=workspace_id,
+                change=WorkspaceChangeType.Deleted,
+            )
         if self.placement_resources is not None:
             self.placement_resources.reconcile_deployments(
                 workspace=workspace_id,
                 required=False,
             )
-        return updated
+        return deleted_target
 
     def _discard_failed_deployment(
         self,
@@ -404,6 +418,10 @@ def _claimed_hostname(
 def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
     default_retries = resolve_retries(spec.kind, None)
     metadata = dict(spec.metadata)
+    role = resolve_pod_role(spec.kind, spec.role)
+    if role is not None:
+        ssh = metadata.get("ssh")
+        metadata["ssh"] = resolve_pod_ssh(role, ssh if isinstance(ssh, bool) else None)
     if "authorized" not in metadata:
         metadata["authorized"] = resolve_authorized(spec.kind, None)
     if metadata.get("tcp") is True:
@@ -429,9 +447,20 @@ def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
                         spec.resources.keep_warm,
                         min_containers=declared_min_containers(spec.metadata),
                         scheduled=bool(spec.cron),
+                        role=role,
                     ),
+                    "preemptible": resolve_preemptible(role, spec.resources.preemptible),
                 }
             ),
+            "role": role,
+            "command": resolve_pod_command(role, spec.command),
+            "disks": resolve_pod_disks(
+                role,
+                name=spec.name,
+                disks=spec.disks,
+                root_disk_bytes=spec.root_disk_bytes,
+            ),
+            "root_disk_bytes": None,
             "retry_policy": (
                 spec.retry_policy
                 if spec.retry_policy is not None

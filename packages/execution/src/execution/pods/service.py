@@ -296,6 +296,7 @@ class PodControlService:
             self.services.context.database,
             list(stub.config.disks),
             workspace_id=stub.workspace_id,
+            stub_id=stub.id,
         )
         with self.services.context.database.session() as session:
             placement = workload_placement(

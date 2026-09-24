@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from scheduler.state import ContainerStatusUpdatePlan, SchedulerContainerStatus
+from shared.containers import ContainerExecutionPhase
 from worker.events import (
-    ContainerExecutionPhase,
     ContainerExitCode,
     ContainerRequestContext,
     StopContainerReason,

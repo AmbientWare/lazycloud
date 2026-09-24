@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 from shared.checkpoints import CheckpointRecord
 from shared.container_requests import StopContainerReason
+from shared.containers import ContainerExecutionPhase
 from shared.contracts import ContractModel
 from shared.identity import AuthTokenRecord, TokenKind
 from shared.image_building.credentials import normalize_registry_host
@@ -42,7 +43,6 @@ from worker.checkpoints import CheckpointStatePayload
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.events import (
     ContainerEventPayload,
-    ContainerExecutionPhase,
     ContainerLifecyclePayload,
 )
 from worker.origin_access import CacheOriginCredentials, ImageArchiveUploadCredentials

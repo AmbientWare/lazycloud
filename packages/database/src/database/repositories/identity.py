@@ -1009,6 +1009,16 @@ class WorkspaceRepository:
         row = self.session.get(WorkspaceTable, workspace_id)
         return workspace_record_from_table(row) if row is not None else None
 
+    def name_and_credential_secret(self, workspace_id: str) -> tuple[str, str] | None:
+        row = self.session.execute(
+            select(WorkspaceTable.name, WorkspaceTable.credential_secret).where(
+                WorkspaceTable.id == workspace_id
+            )
+        ).first()
+        if row is None or row[1] is None:
+            return None
+        return row[0], row[1]
+
     def names_for_ids(self, workspace_ids: Collection[str]) -> dict[str, str]:
         rows = self.session.execute(
             select(WorkspaceTable.id, WorkspaceTable.name).where(

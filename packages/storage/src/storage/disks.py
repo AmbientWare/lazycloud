@@ -32,6 +32,7 @@ from shared.disks import (
     DiskMount,
     DiskRecord,
     DiskStatus,
+    DiskWorkload,
     disk_manifest_key,
 )
 from shared.errors import (
@@ -85,6 +86,8 @@ class DiskPublication:
 class DiskPage:
     data: tuple[DiskRecord, ...]
     next: str
+    workloads: dict[str, DiskWorkload]
+    """By disk id, for the disks whose workload still exists."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +99,7 @@ class ResolvedDisk:
 
 
 def get_or_create_disks(
-    database: DatabaseClient, mounts: list[DiskMount], *, workspace_id: str
+    database: DatabaseClient, mounts: list[DiskMount], *, workspace_id: str, stub_id: str
 ) -> list[ResolvedDisk]:
     """The workload's disks by name, each created on its first use.
 
@@ -115,7 +118,10 @@ def get_or_create_disks(
         created = False
         for mount in mounts:
             record, inserted = repository.get_or_create(
-                mount.name, workspace_id=workspace_id, size_bytes=mount.size_bytes
+                mount.name,
+                workspace_id=workspace_id,
+                size_bytes=mount.size_bytes,
+                stub_id=stub_id,
             )
             created = created or inserted
             if mount.size_bytes > record.size_bytes:
@@ -164,15 +170,24 @@ class DiskService:
             raise NotFoundError(f"disk not found: {name}")
         return record
 
+    def describe(self, name: str, *, workspace_id: str) -> tuple[DiskRecord, DiskWorkload | None]:
+        with self.database.session() as session:
+            repository = DiskRepository(session)
+            record = repository.get(name, workspace_id=workspace_id)
+            if record is None:
+                raise NotFoundError(f"disk not found: {name}")
+            return record, repository.workloads([record.id]).get(record.id)
+
     def list(self, *, workspace_id: str, after: str = "", limit: int = DISK_LIST_LIMIT) -> DiskPage:
         bounded = max(1, min(limit, DISK_LIST_LIMIT))
         with self.database.session() as session:
-            records = DiskRepository(session).list(
-                workspace_id=workspace_id, after=after, limit=bounded
-            )
+            repository = DiskRepository(session)
+            records = repository.list(workspace_id=workspace_id, after=after, limit=bounded)
+            workloads = repository.workloads([record.id for record in records])
         return DiskPage(
             data=tuple(records),
             next=records[-1].name if len(records) == bounded else "",
+            workloads=workloads,
         )
 
     def identity(self, disk_id: str) -> tuple[str, str] | None:

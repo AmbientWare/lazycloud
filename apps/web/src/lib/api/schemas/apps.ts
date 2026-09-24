@@ -25,10 +25,15 @@ export const appSchema = z.object({
 });
 export type App = z.infer<typeof appSchema>;
 
+export const podRoles = ["service", "devbox"] as const;
+export type PodRole = (typeof podRoles)[number];
+
 export const deploymentSchema = z.object({
   id: z.string(),
   name: z.string(),
   kind: z.string(),
+  // Set for pods only; the server resolves it, so the browser never infers it.
+  role: z.enum(podRoles).nullish(),
   app_id: z.string().nullish(),
   stub_id: z.string().nullish(),
   version: z.number(),
@@ -89,6 +94,40 @@ export const deploymentSchema = z.object({
     .nullish(),
 });
 export type Deployment = z.infer<typeof deploymentSchema>;
+
+export const devboxStates = ["running", "starting", "stopped"] as const;
+export const devboxPhases = [
+  "stopped",
+  "queued",
+  "pulling_image",
+  "restoring_disk",
+  "starting",
+  "running",
+  "stopping",
+  "failed",
+] as const;
+export type DevboxPhase = (typeof devboxPhases)[number];
+
+// Synced to packages/shared/src/shared/http/deployments.py (DevboxResponse).
+export const devboxSchema = z.object({
+  ssh_command: z.string(),
+  ssh_host: z.string(),
+  state: z.enum(devboxStates),
+  phase: z.enum(devboxPhases),
+  phase_reason: z.string().default(""),
+  open_connections: z.number().int().nonnegative(),
+  idle_deadline: z.string().nullable(),
+  disk: z
+    .object({
+      name: z.string(),
+      size_bytes: z.number(),
+      stored_bytes: z.number(),
+      generation: z.number().int().nonnegative(),
+      status: z.enum(["detached", "attached", "deleting"]),
+    })
+    .nullable(),
+});
+export type Devbox = z.infer<typeof devboxSchema>;
 
 export const deploymentListSchema = z.object({
   data: z.array(deploymentSchema).default([]),

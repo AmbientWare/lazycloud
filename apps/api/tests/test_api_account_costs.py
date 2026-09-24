@@ -237,8 +237,12 @@ def test_a_disk_is_one_charge_combining_its_stored_and_attached_parts(
         )
         workspace_id = unpriced_services.context.default_workspace_id(session)
         disks = DiskRepository(session)
-        root, _ = disks.get_or_create("box-root", workspace_id=workspace_id, size_bytes=1024**3)
-        cache, _ = disks.get_or_create("box-cache", workspace_id=workspace_id, size_bytes=1024**3)
+        root, _ = disks.get_or_create(
+            "box-root", workspace_id=workspace_id, size_bytes=1024**3, stub_id=str(uuid4())
+        )
+        cache, _ = disks.get_or_create(
+            "box-cache", workspace_id=workspace_id, size_bytes=1024**3, stub_id=str(uuid4())
+        )
     owner_user_id = workspace_owner_user_id(unpriced_services.context, workspace_id)
     for disk_id, metric, quantity in (
         (root.id, UsageMetric.DiskStoredByteSeconds, 100),

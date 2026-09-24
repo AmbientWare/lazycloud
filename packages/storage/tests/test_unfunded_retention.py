@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
@@ -111,6 +112,7 @@ def test_retention_restarts_after_observed_recovery_and_claims_only_managed_data
         services.database,
         [DiskMount(name="managed-root", size_bytes=1024**3)],
         workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     with services.database.session() as session:
         user_id = WorkspaceMemberRepository(session).owner_user_id(workspace_id)

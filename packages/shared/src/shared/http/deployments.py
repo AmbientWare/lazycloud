@@ -5,7 +5,8 @@ from datetime import datetime
 from pydantic import Field
 
 from shared.deployment_records import CpuRequest, MemoryRequest
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, DevboxPhase, DevboxState, PodRole
+from shared.disks import DiskStatus
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
 from shared.placement import AvailabilityZone, ProductRegion
@@ -57,6 +58,9 @@ class DeploymentResponse(HttpModel):
     id: str
     name: str
     kind: DeploymentKind
+    role: PodRole | None = None
+    """What a pod is for; unset for every other kind."""
+
     app_id: str | None = None
     stub_id: str | None = None
     version: int = 1
@@ -69,6 +73,49 @@ class DeploymentResponse(HttpModel):
     actions: DeploymentActionCapabilitiesResponse = Field(
         default_factory=DeploymentActionCapabilitiesResponse
     )
+
+
+class DevboxDiskResponse(HttpModel):
+    name: str
+    size_bytes: int = Field(gt=0)
+    stored_bytes: int = Field(ge=0)
+    generation: int = Field(ge=0)
+    """Newest saved generation; 0 until the disk first publishes."""
+
+    status: DiskStatus
+
+
+class DevboxResponse(HttpModel):
+    """How to reach a devbox and what it is doing, as the control plane sees it."""
+
+    ssh_command: str
+    """The CLI command that opens a session."""
+
+    ssh_host: str
+    """The host name `lazycloud ssh-config` writes, for editors that connect over SSH."""
+
+    state: DevboxState
+    phase: DevboxPhase
+    phase_reason: str = ""
+    """Why the last start failed, when `phase` is `failed`."""
+
+    open_connections: int = Field(ge=0)
+    """Connections held open through the pod's proxy, SSH sessions included."""
+
+    idle_deadline: datetime | None = None
+    """When the running container stops unless something connects.
+
+    Null while a connection holds it open, while nothing runs, and once the
+    deadline has passed and the next autoscaler pass may stop it.
+    """
+
+    disk: DevboxDiskResponse | None = None
+    """The root disk; null until the devbox first starts and creates it."""
+
+
+class DeploymentDetailResponse(DeploymentResponse):
+    devbox: DevboxResponse | None = None
+    """Present exactly when the deployment is a devbox."""
 
 
 class DeploymentListResponse(HttpModel):
@@ -108,6 +155,7 @@ class DeploymentStopAllResponse(HttpModel):
 
 __all__ = [
     "DeploymentActionCapabilitiesResponse",
+    "DeploymentDetailResponse",
     "DeploymentListResponse",
     "DeploymentPackageObjectResponse",
     "DeploymentPackagePlanResponse",
@@ -118,4 +166,6 @@ __all__ = [
     "DeploymentSpecResponse",
     "DeploymentStopAllResponse",
     "DeploymentUrlResponse",
+    "DevboxDiskResponse",
+    "DevboxResponse",
 ]

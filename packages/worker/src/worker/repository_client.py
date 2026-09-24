@@ -17,6 +17,7 @@ from networking.internal_http import (
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
+from shared.containers import ContainerExecutionPhase
 from shared.contracts import ContractModel
 from shared.http.errors import http_api_error_from_body
 from shared.http.worker_network import WorkerEgressPolicy, WorkerEgressPolicyRequest
@@ -63,7 +64,6 @@ from worker.durable_disk_records import (
     DiskStorageRequest,
 )
 from worker.events import (
-    ContainerExecutionPhase,
     ContainerLifecyclePayload,
     WorkerStreamEvent,
 )

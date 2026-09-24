@@ -251,6 +251,10 @@ class StubTable(IdTable, DatabaseBase):
     runtime_block_network: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     runtime_allow_list: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     runtime_preemptible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ssh: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    """Whether a pod serves SSH; a column so the SSH host list filters on it in SQL."""
+
+    role: Mapped[str | None] = mapped_column(String(16), nullable=True)
     runtime_workspace_gpu_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
     runtime_workspace_cpu_quota_millicores: Mapped[int | None] = mapped_column(
         Integer, nullable=True

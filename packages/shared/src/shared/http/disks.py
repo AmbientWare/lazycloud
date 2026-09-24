@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 
-from shared.disks import DiskRecord, DiskStatus
+from shared.disks import DiskRecord, DiskStatus, DiskWorkload
 from shared.http.base import HttpModel
 
 
@@ -20,11 +20,14 @@ class DiskResponse(HttpModel):
     """Bytes the disk's layers occupy in the workspace bucket."""
 
     holder_container_id: str = ""
+    workload: DiskWorkload | None = None
+    """The workload whose container last asked for the disk; null once it is gone."""
+
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def from_record(cls, record: DiskRecord) -> DiskResponse:
+    def from_record(cls, record: DiskRecord, workload: DiskWorkload | None) -> DiskResponse:
         return cls(
             id=record.id,
             name=record.name,
@@ -33,6 +36,7 @@ class DiskResponse(HttpModel):
             generation=record.generation,
             stored_bytes=record.stored_bytes,
             holder_container_id=record.holder_container_id,
+            workload=workload,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

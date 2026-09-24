@@ -19,7 +19,9 @@ def list_disks(
 ) -> DiskListResponse:
     page = services.disks.list(workspace_id=workspace_id, after=cursor, limit=limit)
     return DiskListResponse(
-        data=[DiskResponse.from_record(record) for record in page.data],
+        data=[
+            DiskResponse.from_record(record, page.workloads.get(record.id)) for record in page.data
+        ],
         next=page.next,
     )
 
@@ -30,7 +32,8 @@ def get_disk(
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
 ) -> DiskResponse:
-    return DiskResponse.from_record(services.disks.get(name, workspace_id=workspace_id))
+    record, workload = services.disks.describe(name, workspace_id=workspace_id)
+    return DiskResponse.from_record(record, workload)
 
 
 @router.delete(

@@ -351,6 +351,7 @@ def test_an_unfunded_account_gets_no_new_disk(isolated_services: ApiServices) ->
             isolated_services.database,
             [DiskMount(name="box-root", size_bytes=1024**3)],
             workspace_id=workspace_id,
+            stub_id=str(uuid4()),
         )
     with isolated_services.context.database.session() as session:
         assert not session.scalar(
@@ -369,17 +370,26 @@ def test_disks_stay_within_the_plans_declared_size_per_workspace(
 
     with pytest.raises(CapacityLimitReachedError, match=r"plan allows \(0 GiB\)"):
         get_or_create_disks(
-            database, [DiskMount(name="box-root", size_bytes=1024**3)], workspace_id=workspace_id
+            database,
+            [DiskMount(name="box-root", size_bytes=1024**3)],
+            workspace_id=workspace_id,
+            stub_id=str(uuid4()),
         )
     assert _disk_names(isolated_services, workspace_id) == []
 
     on_team_plan(database, workspace_id)
     get_or_create_disks(
-        database, [DiskMount(name="box-root", size_bytes=1024**4)], workspace_id=workspace_id
+        database,
+        [DiskMount(name="box-root", size_bytes=1024**4)],
+        workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     with pytest.raises(CapacityLimitReachedError, match=r"1025 GiB.*\(1024 GiB\)"):
         get_or_create_disks(
-            database, [DiskMount(name="box-cache", size_bytes=1024**3)], workspace_id=workspace_id
+            database,
+            [DiskMount(name="box-cache", size_bytes=1024**3)],
+            workspace_id=workspace_id,
+            stub_id=str(uuid4()),
         )
     assert _disk_names(isolated_services, workspace_id) == ["box-root"]
 

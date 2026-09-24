@@ -125,6 +125,12 @@ class TerminalStep:
             _display.stop(self)
             self._print_final("✓", theme.SUCCESS)
 
+    def dismiss(self) -> None:
+        """Finish without leaving a line, for a wait whose end the next output shows."""
+        with _display.lock:
+            self.finished = True
+            _display.stop(self)
+
     def fail(self, summary: str = "") -> None:
         with _display.lock:
             self.finished = True

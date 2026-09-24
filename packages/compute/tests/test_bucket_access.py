@@ -95,7 +95,7 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
         ),
     )
 
-    deployments.delete(first.id)
+    deployments.delete(first.id, workspace=workspace.id)
 
     assert controller.grants == ()
 

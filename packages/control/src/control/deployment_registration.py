@@ -18,10 +18,11 @@ from shared.deployment_records import (
     resolve_keep_warm_seconds,
     resolve_max_pending_tasks,
     resolve_memory,
+    resolve_preemptible,
     resolve_retries,
     resolve_timeout_seconds,
 )
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, PodRole
 from shared.errors import InvalidInputError, NotFoundError
 from shared.workload_config import StubConfig
 
@@ -228,6 +229,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
                 "entrypoint": list(spec.command),
             },
             "runtime": {
+                "preemptible": resolve_preemptible(spec.role, resources.preemptible),
                 "cpu": resolve_cpu(spec.kind, resources.cpu),
                 "memory": resolve_memory(spec.kind, resources.memory),
                 "disk": resolve_disk(resources.disk),
@@ -299,6 +301,7 @@ def _stub_config_from_deployment_spec(spec: DeploymentSpec) -> StubConfig:
             },
             "tcp": _metadata_optional_bool(metadata, "tcp") or False,
             "ssh": _metadata_optional_bool(metadata, "ssh") or False,
+            "role": spec.role or PodRole.Service,
         }
     )
 

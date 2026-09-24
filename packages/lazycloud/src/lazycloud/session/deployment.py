@@ -875,8 +875,10 @@ def _stub_request_from_spec(
         inputs=_metadata_schema(metadata, "inputs"),
         outputs=_metadata_schema(metadata, "outputs"),
         tcp=_metadata_bool(metadata, "tcp"),
-        ssh=_metadata_bool(metadata, "ssh"),
+        ssh=_metadata_optional_bool(metadata, "ssh"),
         disks=list(spec.disks),
+        role=spec.role,
+        root_disk_bytes=spec.root_disk_bytes,
         block_network=_metadata_bool(metadata, "block_network"),
         allow_list=_metadata_str_list(metadata, "allow_list"),
         docker_enabled=_metadata_bool(metadata, "docker_enabled"),
@@ -945,8 +947,12 @@ def _metadata_str(metadata: Mapping[str, JsonValue], key: str) -> str:
 
 
 def _metadata_bool(metadata: Mapping[str, JsonValue], key: str) -> bool:
+    return _metadata_optional_bool(metadata, key) or False
+
+
+def _metadata_optional_bool(metadata: Mapping[str, JsonValue], key: str) -> bool | None:
     value = metadata.get(key)
-    return value if isinstance(value, bool) else False
+    return value if isinstance(value, bool) else None
 
 
 def _metadata_mapping(metadata: Mapping[str, JsonValue], key: str) -> dict[str, JsonValue]:

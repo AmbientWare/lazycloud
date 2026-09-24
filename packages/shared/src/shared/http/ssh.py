@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 
+from shared.deployments import PodRole
 from shared.http.base import HttpModel
 from shared.ssh import SSH_CERTIFICATE_PRINCIPAL
 
@@ -21,9 +22,34 @@ class SshCertificateResponse(HttpModel):
     expires_at: datetime
 
 
-class SshHostKeyResponse(HttpModel):
+class SshHostResponse(HttpModel):
+    """A devbox or pod that serves SSH, with what an SSH config needs to reach it."""
+
+    app: str
+    pod: str
+    role: PodRole
+    deployment_id: str
+    """The version an SSH connection reaches. A devbox's status is read by this id."""
+
+    alias: str
+    """The host name SSH config and editors use for it."""
+
     host_public_key: str
     """The pod's ``ssh-ed25519`` host key line, pinned in known_hosts."""
 
 
-__all__ = ["SshCertificateRequest", "SshCertificateResponse", "SshHostKeyResponse"]
+class SshHostListResponse(HttpModel):
+    data: list[SshHostResponse] = Field(default_factory=list)
+    next: str = ""
+    """Pass as `cursor` for the next page; empty on the last one."""
+
+    workspace: str
+    """The workspace's name, which every alias is built from."""
+
+
+__all__ = [
+    "SshCertificateRequest",
+    "SshCertificateResponse",
+    "SshHostListResponse",
+    "SshHostResponse",
+]

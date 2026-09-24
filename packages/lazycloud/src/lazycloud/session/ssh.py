@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import os
-import re
 import shlex
 import shutil
 import struct
@@ -23,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_hex
 
-from shared.ssh import SSH_LOGIN_USER
+from shared.ssh import SSH_LOGIN_USER, ssh_host_label
 
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.config import settings
@@ -32,7 +31,6 @@ SSH_KEEPALIVE_INTERVAL_SECONDS = 30
 _PRIVATE_FILE_MODE = 0o600
 _PUBLIC_FILE_MODE = 0o644
 _DIRECTORY_MODE = 0o700
-_ALIAS_UNSAFE = re.compile(r"[^a-z0-9-]+")
 _ED25519 = b"ssh-ed25519"
 
 
@@ -83,9 +81,34 @@ class SshPodHost:
     host_public_key: str
 
 
-def ssh_host_alias(workspace: str, app: str, pod: str) -> str:
-    """The host name a pod answers to in SSH config; pod names repeat across apps."""
-    return f"lazycloud-{_label(workspace)}-{_label(app)}-{_label(pod)}"
+@dataclass(frozen=True, slots=True)
+class SshHostList:
+    workspace: str
+    """The workspace's name, which the aliases, certificate and host files are keyed by."""
+
+    hosts: list[SshPodHost]
+
+
+def list_ssh_hosts(
+    client: SshControlClient, *, app: str | None = None, pod: str | None = None
+) -> SshHostList:
+    """The workspace's SSH hosts as the control plane lists them, every page."""
+    hosts: list[SshPodHost] = []
+    cursor = ""
+    while True:
+        page = client.hosts(app=app, pod=pod, cursor=cursor)
+        hosts.extend(
+            SshPodHost(
+                alias=item.alias,
+                pod=item.pod,
+                app=item.app,
+                host_public_key=item.host_public_key.strip(),
+            )
+            for item in page.data
+        )
+        if not page.next:
+            return SshHostList(workspace=page.workspace, hosts=hosts)
+        cursor = page.next
 
 
 @dataclass(slots=True)
@@ -127,15 +150,6 @@ class SshAccess:
         _write_atomic(certificate, response.certificate.strip() + "\n", _PUBLIC_FILE_MODE)
         return True
 
-    def pod_host(self, pod: str, *, app: str) -> SshPodHost:
-        response = self.client.host_key(pod, app=app)
-        return SshPodHost(
-            alias=ssh_host_alias(self.workspace, app, pod),
-            pod=pod,
-            app=app,
-            host_public_key=response.host_public_key.strip(),
-        )
-
     def write_hosts(self, hosts: list[SshPodHost]) -> None:
         self._refuse_alias_collisions(hosts)
         _private_directory(self.paths.root)
@@ -147,6 +161,41 @@ class SshAccess:
             )
         include = f"Include {_config_path(self.paths.hosts)}/*.conf\n"
         _write_atomic(self.paths.config, include, _PRIVATE_FILE_MODE)
+
+    def sync_hosts(self, hosts: list[SshPodHost], *, app: str | None = None) -> list[str]:
+        """Write these hosts and remove this workspace's others; returns the removed aliases.
+
+        A host file belongs to this workspace only when its owner header says so,
+        so files for other workspaces and files this CLI did not write stay. With
+        `app`, only that app's hosts are replaced.
+        """
+        self.write_hosts(hosts)
+        current = {host.alias for host in hosts}
+        removed = sorted(
+            path.stem
+            for path in self.paths.hosts.glob("*.conf")
+            if path.stem not in current and self._owned_here(path, app=app)
+        )
+        for alias in removed:
+            self.paths.host_config(alias).unlink(missing_ok=True)
+        if removed and self.paths.known_hosts.exists():
+            kept = [
+                line
+                for line in self.paths.known_hosts.read_text(encoding="utf-8").splitlines()
+                if line.split(" ", 1)[0] not in removed
+            ]
+            _write_atomic(
+                self.paths.known_hosts,
+                "\n".join(kept) + "\n" if kept else "",
+                _PUBLIC_FILE_MODE,
+            )
+        return removed
+
+    def _owned_here(self, path: Path, *, app: str | None) -> bool:
+        header = path.read_text(encoding="utf-8").split("\n", 1)[0].split()
+        return header[:3] == ["#", "lazycloud", f"workspace={self.workspace}"] and (
+            app is None or header[3:4] == [f"app={app}"]
+        )
 
     def _refuse_alias_collisions(self, hosts: list[SshPodHost]) -> None:
         # Labels are lowercased and hyphenated, so distinct app/pod names can
@@ -255,14 +304,24 @@ def run_ssh(config: Path, alias: str, arguments: list[str]) -> int:
     return subprocess.call([ssh, "-F", str(config), alias, *arguments])
 
 
-def bridge_stdio(url: str, *, token: str) -> int:
+def bridge_stdio(
+    url: str,
+    *,
+    token: str,
+    on_first_byte: Callable[[], None] | None = None,
+    on_failure: Callable[[str], None] | None = None,
+) -> int:
     """Carry SSH bytes between stdin/stdout and the pod tunnel until either side ends.
 
-    Stdout carries the SSH stream and nothing else; every diagnostic goes to stderr.
+    Stdout carries the SSH stream and nothing else; every diagnostic goes to stderr,
+    through `on_failure` when given. `on_first_byte` runs once, before the pod's
+    first byte is written: the tunnel is accepted before the pod answers, so the
+    first byte is when the connection is really made.
     """
     from websockets.exceptions import ConnectionClosed, InvalidHandshake
     from websockets.sync.client import connect
 
+    report = on_failure or _report_failure
     stdin = sys.stdin.buffer.fileno()
     stdout = sys.stdout.buffer.fileno()
     try:
@@ -277,7 +336,7 @@ def bridge_stdio(url: str, *, token: str) -> int:
             ping_interval=None,
         )
     except (OSError, InvalidHandshake) as exc:
-        print(f"lazycloud: could not open the SSH tunnel: {exc}", file=sys.stderr)
+        report(f"could not open the SSH tunnel: {exc}")
         return 255
 
     def forward_input() -> None:
@@ -289,9 +348,13 @@ def bridge_stdio(url: str, *, token: str) -> int:
         websocket.close()
 
     threading.Thread(target=forward_input, daemon=True).start()
+    waiting = on_first_byte
     try:
         while True:
             message = websocket.recv()
+            if waiting is not None:
+                waiting()
+                waiting = None
             payload = message if isinstance(message, bytes) else message.encode("utf-8")
             view = memoryview(payload)
             while view:
@@ -299,14 +362,19 @@ def bridge_stdio(url: str, *, token: str) -> int:
     except ConnectionClosed as closed:
         received = closed.rcvd
         if received is not None and received.code != 1000:
-            print(
-                f"lazycloud: SSH tunnel closed: {received.reason or received.code}", file=sys.stderr
-            )
+            report(f"SSH tunnel closed: {received.reason or received.code}")
             return 255
         return 0
+    except KeyboardInterrupt:
+        websocket.close()
+        return 130
     except OSError:
         websocket.close()
         return 0
+
+
+def _report_failure(message: str) -> None:
+    print(f"lazycloud: {message}", file=sys.stderr)
 
 
 def current_cli_command() -> tuple[str, ...]:
@@ -368,10 +436,10 @@ class _SshReader:
 
 
 def _label(value: str) -> str:
-    label = _ALIAS_UNSAFE.sub("-", value.strip().lower()).strip("-")
-    if not label:
-        raise SshSetupError(f"cannot build an SSH host name from {value!r}")
-    return label
+    try:
+        return ssh_host_label(value)
+    except ValueError as exc:
+        raise SshSetupError(str(exc)) from exc
 
 
 def _config_path(path: Path) -> str:
@@ -412,12 +480,13 @@ def _write_atomic(path: Path, content: str, mode: int) -> None:
 __all__ = [
     "SSH_KEEPALIVE_INTERVAL_SECONDS",
     "SshAccess",
+    "SshHostList",
     "SshPaths",
     "SshPodHost",
     "SshSetupError",
     "bridge_stdio",
     "current_cli_command",
     "install_ssh_include",
+    "list_ssh_hosts",
     "run_ssh",
-    "ssh_host_alias",
 ]

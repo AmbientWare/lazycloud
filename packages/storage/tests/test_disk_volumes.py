@@ -152,7 +152,10 @@ def _setup(
         workspace_id = services.context.default_workspace_id(session)
     on_team_plan(services.database, workspace_id)
     [resolved] = get_or_create_disks(
-        services.database, [DiskMount(name=name, size_bytes=GIB)], workspace_id=workspace_id
+        services.database,
+        [DiskMount(name=name, size_bytes=GIB)],
+        workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     provider = _Provider()
     clock = _Clock()
@@ -316,6 +319,7 @@ def test_a_deletion_that_keeps_failing_backs_off_without_holding_up_newer_ones(
         isolated_services.database,
         [DiskMount(name="del-newer", size_bytes=GIB)],
         workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     objects = _Objects(failing=failing)
     deletion = DiskDeletionService(

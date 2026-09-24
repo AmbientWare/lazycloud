@@ -288,6 +288,7 @@ def test_attached_capacity_bills_each_lease_once_up_to_its_end(
         services.database,
         [DiskMount(name="box-root", size_bytes=size_bytes)],
         workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     disk_id = resolved.record.id
     metering = PersistentVolumeMeteringService(

@@ -19,6 +19,7 @@ from datetime import datetime
 from pydantic import Field, field_validator
 
 from shared.contracts import ContractModel
+from shared.deployments import DeploymentKind, PodRole
 from shared.enums import StringEnum
 from shared.resources import parse_memory_mib
 from shared.timestamps import utc_now
@@ -182,6 +183,13 @@ class DiskMount(ContractModel):
         return self.mount_path == DISK_ROOT_MOUNT_PATH
 
 
+def require_one_writer(max_containers: int) -> None:
+    """Refuse more than one container for a workload with a disk; one writes it at a time."""
+    if max_containers > 1:
+        msg = "a workload with a disk runs one container; set max_containers to 1"
+        raise ValueError(msg)
+
+
 def validate_disk_mounts(disks: list[DiskMount]) -> list[DiskMount]:
     names = [disk.name for disk in disks]
     if len(names) != len(set(names)):
@@ -232,6 +240,16 @@ class DiskRecord(ContractModel):
     holder_container_id: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class DiskWorkload(ContractModel):
+    """The workload whose container last asked for a disk."""
+
+    app_id: str
+    app_name: str
+    kind: DeploymentKind = DeploymentKind.Pod
+    name: str
+    role: PodRole
 
 
 class DiskLayerChunk(ContractModel):
@@ -294,6 +312,7 @@ __all__ = [
     "DiskRecord",
     "DiskStatus",
     "DiskStorage",
+    "DiskWorkload",
     "disk_capacity_bytes",
     "disk_chunk_key",
     "disk_manifest_key",
@@ -301,6 +320,7 @@ __all__ = [
     "disk_shrink_message",
     "disk_volume_size_bytes",
     "parse_disk_size_bytes",
+    "require_one_writer",
     "validate_disk_mount_path",
     "validate_disk_mounts",
     "validate_disk_name",

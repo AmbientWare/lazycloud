@@ -126,7 +126,11 @@ function StoragePage() {
             />
           </TabsContent>
           <TabsContent value="disks" className="min-h-0 flex-1 overflow-hidden">
-            <DisksTab key={workspace.id} workspaceId={workspace.id} />
+            <DisksTab
+              key={workspace.id}
+              workspaceId={workspace.id}
+              workspaceName={workspace.name}
+            />
           </TabsContent>
           <TabsContent
             value="secrets"

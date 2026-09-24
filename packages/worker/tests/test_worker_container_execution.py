@@ -20,12 +20,12 @@ from scheduler.state import (
     SchedulerContainerStatus,
 )
 from shared.container_requests import StopContainerReason, WorkerStartupKind
+from shared.containers import ContainerExecutionPhase
 from shared.scheduling import SchedulerContainerState
 from shared.worker_events import WorkerEventRecord
 from storage_client.mounts import StorageMountResult
 from worker.container_execution import (
     ContainerExecutionContext,
-    ContainerExecutionPhase,
     ContainerImageLoadResult,
     ContainerMountSetupResult,
     ContainerNetworkSetupResult,

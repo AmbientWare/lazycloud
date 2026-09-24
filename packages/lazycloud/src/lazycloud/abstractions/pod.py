@@ -15,7 +15,7 @@ from shared.deployment_records import (
     Resources,
     VolumeMount,
 )
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, PodRole
 from shared.disks import DiskMount
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.compute import ContainerResponse
@@ -86,7 +86,7 @@ class PodOptions(TypedDict, total=False):
     disk: str | None
     gpu: GpuInput
     gpu_count: int
-    keep_warm: int
+    keep_warm: int | None
     secrets: list[str]
     volumes: list[VolumeMount]
     disks: list[DiskMount]
@@ -99,11 +99,13 @@ class PodOptions(TypedDict, total=False):
     health_check_path: str | None
     health_check_port: int | None
     tcp: bool
-    ssh: bool
+    ssh: bool | None
     block_network: bool
     allow_list: list[str] | None
     docker_enabled: bool
-    preemptible: bool
+    preemptible: bool | None
+    role: PodRole | None
+    root_disk_bytes: int | None
     region: str | None
     availability_zone: str
     machine: MachineInput
@@ -215,7 +217,7 @@ class Pod(ControlClientConfigMixin):
     disk: str | None = None
     gpu: GpuInput = None
     gpu_count: int = 0
-    keep_warm: int = 600
+    keep_warm: int | None = 600
     secrets: list[str] = field(default_factory=list)
     volumes: list[VolumeMount] = field(default_factory=list)
     disks: list[DiskMount] = field(default_factory=list)
@@ -228,11 +230,13 @@ class Pod(ControlClientConfigMixin):
     health_check_path: str | None = None
     health_check_port: int | None = None
     tcp: bool = False
-    ssh: bool = False
+    ssh: bool | None = False
     block_network: bool = False
     allow_list: list[str] | None = None
     docker_enabled: bool = False
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
+    preemptible: bool | None = DEFAULT_WORKLOAD_PREEMPTIBLE
+    role: PodRole | None = None
+    root_disk_bytes: int | None = None
     region: str | None = None
     availability_zone: str = ""
     machine: MachineInput = None
@@ -297,6 +301,8 @@ class Pod(ControlClientConfigMixin):
         return DeploymentSpec(
             name=self.name,
             kind=DeploymentKind.Pod,
+            role=self.role,
+            root_disk_bytes=self.root_disk_bytes,
             image=self.image.spec(),
             resources=Resources(
                 region=ProductRegion(self.region) if self.region is not None else None,
