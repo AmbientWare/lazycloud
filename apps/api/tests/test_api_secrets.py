@@ -7,7 +7,6 @@ from shared.http.secrets import GetSecretResponse, SecretMaskedListResponse
 def test_secret_routes_mask_lists_and_reveal_only_explicit_detail(
     api_client: TestClient,
 ) -> None:
-
     created = api_client.post(
         "/api/v1/secrets",
         json={"name": "API_KEY", "value": "secret-value"},
@@ -36,7 +35,6 @@ def test_secret_routes_mask_lists_and_reveal_only_explicit_detail(
 def test_secret_mutations_return_exact_conflict_and_not_found_outcomes(
     api_client: TestClient,
 ) -> None:
-
     created = api_client.post(
         "/api/v1/secrets",
         json={"name": "ATOMIC_SECRET", "value": "first"},
