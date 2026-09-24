@@ -25,6 +25,7 @@ from database.records.apps import (
     AutoscalingStubConfig,
     AutoscalingStubRecord,
     AutoscalingStubRuntimeConfig,
+    StubPower,
     StubRecord,
 )
 from database.repositories.common import (
@@ -56,7 +57,7 @@ from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, PodRole, StubKind
 from shared.disks import DISK_ROOT_MOUNT_PATH
 from shared.enums import StringEnum
-from shared.errors import ConflictError
+from shared.errors import ConflictError, NotFoundError
 from shared.identity import WorkspaceStatus
 from shared.placement import Placement
 from shared.tasks import TaskStatus
@@ -773,6 +774,38 @@ class StubRepository:
             .values(preparation_fingerprint=fingerprint)
         )
 
+    def power(self, stub_id: str, *, workspace_id: str) -> StubPower:
+        row = self.session.execute(
+            select(StubTable.parked, StubTable.woken_at).where(
+                StubTable.id == stub_id, StubTable.workspace_id == workspace_id
+            )
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError(f"stub not found: {stub_id}")
+        return StubPower(parked=row.parked, woken_at=row.woken_at)
+
+    def park(self, stub_id: str, *, workspace_id: str) -> None:
+        """Stop the autoscaler starting anything for the stub, and forget a pending start."""
+        self.session.execute(
+            update(StubTable)
+            .where(StubTable.id == stub_id, StubTable.workspace_id == workspace_id)
+            .values(parked=True, woken_at=None)
+        )
+
+    def wake(self, stub_id: str, *, workspace_id: str, woken_at: datetime | None) -> None:
+        """Let the autoscaler start the stub again; a start also asks for a container now.
+
+        A connection wakes with no `woken_at`, and only a parked stub has
+        anything to write, so the update costs no write on the proxy's path.
+        """
+        statement = update(StubTable).where(
+            StubTable.id == stub_id, StubTable.workspace_id == workspace_id
+        )
+        if woken_at is None:
+            self.session.execute(statement.where(StubTable.parked).values(parked=False))
+            return
+        self.session.execute(statement.values(parked=False, woken_at=woken_at))
+
     def list_autoscaling_across_workspaces(
         self,
         *,
@@ -786,6 +819,8 @@ class StubRepository:
                 StubTable.app_id,
                 StubTable.deployment_id,
                 StubTable.autoscaling_enabled,
+                StubTable.parked,
+                StubTable.woken_at,
                 StubTable.runtime_cpu,
                 StubTable.runtime_cpu_millicores,
                 StubTable.runtime_gpu,
@@ -878,6 +913,7 @@ class StubRepository:
                         if row.autoscaling_enabled is not None
                         else {},
                     ),
+                    power=StubPower(parked=row.parked, woken_at=row.woken_at),
                 )
             )
         return records

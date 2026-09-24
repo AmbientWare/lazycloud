@@ -46,26 +46,9 @@ class PodProxyTarget:
 
 @dataclass(slots=True)
 class PodProxySession:
-    workspace_id: str
-    stub_id: str
     target: PodProxyTarget
-    keep_warm_seconds: int | None
+    hold: PodConnectionHold
     pinned: bool = False
-    _finalization_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _finished: bool = field(default=False, init=False, repr=False)
-
-    @asynccontextmanager
-    async def finalization(self) -> AsyncIterator[bool]:
-        async with self._finalization_lock:
-            if self._finished:
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                # A release cancelled while it waits has still been sent, so a
-                # second finish would take back a connection it never held.
-                self._finished = True
 
 
 class PodProxySocketClient(Protocol):
@@ -108,34 +91,66 @@ class PodProxyConnectionRepository(Protocol):
     async def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
 
 
-async def release_pod_connection(
-    connections: PodProxyConnectionRepository,
-    *,
-    workspace_id: str,
-    stub_id: str,
-    container_id: str | None,
-    keep_warm_seconds: int | None,
-) -> None:
-    """Give back one connection, on the container too when it had reached one.
+@dataclass(slots=True)
+class PodConnectionHold:
+    """One connection's share of a pod's connection counts, taken once and given back once.
 
-    Every release goes through here because a client that goes away cancels
-    the task releasing for it, and a count left behind keeps the pod running
-    with nobody connected. The decrements are scheduled before the first await
-    and shielded from that cancellation, so they land whether or not the
-    caller is still there to see them.
+    The stub total rises first: it is what makes the autoscaler start a
+    container for a pod that has none, so a connection records it before it
+    waits. The container's own count rises once the connection reaches one,
+    and is what holds that container's idle stop off.
     """
-    total = connections.decrement_total_connections(workspace_id, stub_id)
-    if container_id is None:
-        await asyncio.shield(total)
-        return
-    await asyncio.shield(
-        asyncio.gather(
-            connections.decrement_container_connections(
-                workspace_id, stub_id, container_id, keep_warm_seconds=keep_warm_seconds
-            ),
-            total,
+
+    connections: PodProxyConnectionRepository
+    workspace_id: str
+    stub_id: str
+    keep_warm_seconds: int | None
+    _demanded: bool = field(default=False, init=False)
+    _container_id: str | None = field(default=None, init=False)
+    _released: bool = field(default=False, init=False)
+
+    async def demand(self) -> None:
+        if self._demanded:
+            return
+        await self.connections.increment_total_connections(self.workspace_id, self.stub_id)
+        self._demanded = True
+
+    async def attach(self, container_id: str) -> None:
+        await self.demand()
+        await self.connections.increment_container_connections(
+            self.workspace_id,
+            self.stub_id,
+            container_id,
+            keep_warm_seconds=self.keep_warm_seconds,
         )
-    )
+        self._container_id = container_id
+
+    async def release(self) -> None:
+        """Give back what was taken; later calls, and calls before anything was taken, do nothing.
+
+        A client that goes away cancels the task releasing for it, and a count
+        left behind keeps the pod running with nobody connected. The decrements
+        are scheduled before the first await and shielded from that
+        cancellation, so they land whether or not the caller is still there.
+        """
+        if self._released or not self._demanded:
+            return
+        self._released = True
+        total = self.connections.decrement_total_connections(self.workspace_id, self.stub_id)
+        if self._container_id is None:
+            await asyncio.shield(total)
+            return
+        await asyncio.shield(
+            asyncio.gather(
+                self.connections.decrement_container_connections(
+                    self.workspace_id,
+                    self.stub_id,
+                    self._container_id,
+                    keep_warm_seconds=self.keep_warm_seconds,
+                ),
+                total,
+            )
+        )
 
 
 @asynccontextmanager
@@ -147,35 +162,13 @@ async def held_container_connection(
     container_id: str,
     keep_warm_seconds: int | None,
 ) -> AsyncIterator[None]:
-    """Count one connection to a running container for as long as the block runs.
-
-    The same two counters a proxied connection moves, so the autoscaler keeps
-    the container while it is held and starts the idle window when it is let go.
-    """
-    await connections.increment_total_connections(workspace_id, stub_id)
+    """Count one connection to a running container for as long as the block runs."""
+    hold = PodConnectionHold(connections, workspace_id, stub_id, keep_warm_seconds)
     try:
-        await connections.increment_container_connections(
-            workspace_id, stub_id, container_id, keep_warm_seconds=keep_warm_seconds
-        )
-    except BaseException:
-        await release_pod_connection(
-            connections,
-            workspace_id=workspace_id,
-            stub_id=stub_id,
-            container_id=None,
-            keep_warm_seconds=keep_warm_seconds,
-        )
-        raise
-    try:
+        await hold.attach(container_id)
         yield
     finally:
-        await release_pod_connection(
-            connections,
-            workspace_id=workspace_id,
-            stub_id=stub_id,
-            container_id=container_id,
-            keep_warm_seconds=keep_warm_seconds,
-        )
+        await hold.release()
 
 
 class PodProxyResponseStream(Protocol):

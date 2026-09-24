@@ -4,6 +4,7 @@ import asyncio
 import logging
 import socket
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 
 from execution.shells.service import ShellControlService
 from fastapi import (
@@ -196,50 +197,52 @@ async def shell_connect_websocket(
     )
     await websocket.accept()
     target = None
-    try:
-        target = await service.shell_backend_target_async(
-            stub_id=stub_id,
-            container_id=container_id,
-            workspace_id=authorization.audience.workspace_id,
-        )
-        backend = await asyncio.to_thread(
-            connect_shell_backend,
-            target,
-            route_dialer=route_dialer,
-        )
-    except Exception as exc:
-        # Surface why the shell tunnel could not be established — without this
-        # the client just sees an immediate disconnect and the cause (backend
-        # dial failure, missing port publication) is invisible in the logs.
-        backend_address = getattr(target, "address", "") if target is not None else ""
-        logger.error(
-            "shell tunnel failed for stub=%s container=%s backend=%s: %s",
-            stub_id,
-            container_id,
-            backend_address or "<unresolved>",
-            exc,
-            exc_info=True,
-        )
-        await websocket.close(
-            code=status.WS_1011_INTERNAL_ERROR,
-            reason=str(exc)[:120],
-        )
-        return
-    try:
-        async with service.devbox_connection(
-            target, workspace_id=authorization.audience.workspace_id
-        ):
+    async with AsyncExitStack() as held:
+        try:
+            target = await service.shell_backend_target_async(
+                stub_id=stub_id,
+                container_id=container_id,
+                workspace_id=authorization.audience.workspace_id,
+            )
+            await held.enter_async_context(
+                service.devbox_connection(target, workspace_id=authorization.audience.workspace_id)
+            )
+            backend = await asyncio.to_thread(
+                connect_shell_backend,
+                target,
+                route_dialer=route_dialer,
+            )
+        except Exception as exc:
+            # Surface why the shell tunnel could not be established — without this
+            # the client just sees an immediate disconnect and the cause (backend
+            # dial failure, missing port publication, a connection count that
+            # could not be taken) is invisible in the logs.
+            backend_address = getattr(target, "address", "") if target is not None else ""
+            logger.error(
+                "shell tunnel failed for stub=%s container=%s backend=%s: %s",
+                stub_id,
+                container_id,
+                backend_address or "<unresolved>",
+                exc,
+                exc_info=True,
+            )
+            await websocket.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason=str(exc)[:120],
+            )
+            return
+        try:
             await websocket.send_text("OK")
             await bridge_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
-    except (WebSocketDisconnect, asyncio.CancelledError):
-        return
-    except OSError as exc:
-        await websocket.close(
-            code=status.WS_1011_INTERNAL_ERROR,
-            reason=f"connection to the container shell failed: {exc}"[:120],
-        )
-    finally:
-        backend.close()
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            return
+        except OSError as exc:
+            await websocket.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason=f"connection to the container shell failed: {exc}"[:120],
+            )
+        finally:
+            backend.close()
 
 
 async def _proxy_http_shell_stream(

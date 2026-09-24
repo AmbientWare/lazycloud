@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from control.deployment_resources import DeploymentResource
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse, RedirectResponse, Response
@@ -478,14 +476,16 @@ def get_devbox(
     response_model=DevboxResponse,
     operation_id="start_devbox",
 )
-async def start_devbox(
+def start_devbox(
     deployment_id: str,
     workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
 ) -> DevboxResponse:
-    """Boot a devbox now; answers once it has a container, before that container is running."""
-    resource = await asyncio.to_thread(_deployment_resource, services, deployment_id, workspace_id)
-    return await services.devboxes.start(resource, deployments=_management(services))
+    """Ask a devbox to start; answers at once, and the status shows it starting."""
+    return services.devboxes.start(
+        _deployment_resource(services, deployment_id, workspace_id),
+        deployments=_management(services),
+    )
 
 
 @router.post(
@@ -498,8 +498,11 @@ def stop_devbox(
     workspace_id: write_workspace,
     services: ApiServices = Depends(current_services),
 ) -> DevboxResponse:
-    """Stop a devbox's container now and leave its deployment on."""
-    return services.devboxes.stop(_deployment_resource(services, deployment_id, workspace_id))
+    """Stop a devbox until something starts it again; its deployment stays on."""
+    return services.devboxes.stop(
+        _deployment_resource(services, deployment_id, workspace_id),
+        deployments=_management(services),
+    )
 
 
 def _deployment_resource(

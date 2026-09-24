@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from coordination.redis_client import RedisClient
-from database.records.apps import AutoscalingStub, AutoscalingStubRuntimeConfig
+from database.records.apps import AutoscalingStubRecord, AutoscalingStubRuntimeConfig
 from pydantic import Field, JsonValue
 from shared.contracts import ContractModel
 from shared.deployment_records import request_and_limit
@@ -39,7 +39,7 @@ class AutoscalerGuardrailPlan(ContractModel):
 def plan_autoscaler_start_guardrails(
     redis: RedisClient,
     *,
-    stub: AutoscalingStub,
+    stub: AutoscalingStubRecord,
     current_count: int,
     desired_count: int,
 ) -> AutoscalerGuardrailPlan:

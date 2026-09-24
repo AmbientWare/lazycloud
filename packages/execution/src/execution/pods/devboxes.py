@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import shlex
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -12,22 +10,31 @@ from typing import Protocol
 
 from control.deployment_resources import DeploymentResource
 from control.service import StubRecord
-from database.repositories.apps import DeploymentRepository
+from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
-    AutoscalingTargetRepository,
+    AutoscalerStateRepository,
     ContainerRepository,
     LiveContainer,
 )
 from observability.stream_state import RedisEventStreamRepository
-from shared.autoscaler_state import AutoscalerTargetKind
+from shared.autoscaler_state import (
+    SCALE_UP_FAILED_ACTION,
+    AutoscalerStateRecord,
+    AutoscalerTargetKind,
+)
+from shared.autoscaling import POD_WAKE_START_SECONDS
 from shared.container_requests import StopContainerReason
-from shared.containers import ContainerExecutionPhase, ContainerRecord, ContainerStatus
-from shared.deployment_records import Deployment, resolve_pod_role
+from shared.containers import ContainerExecutionPhase, ContainerStatus
+from shared.deployment_records import (
+    DEFAULT_DEVBOX_KEEP_WARM_SECONDS,
+    Deployment,
+    resolve_pod_role,
+)
 from shared.deployments import DeploymentKind, DevboxPhase, DevboxState, PodRole
 from shared.disks import DiskStatus
-from shared.errors import InvalidInputError, NotFoundError, UpstreamTimeoutError
+from shared.errors import InvalidInputError, NotFoundError
 from shared.http.deployments import DevboxDiskResponse, DevboxResponse
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery
@@ -38,22 +45,19 @@ from storage.disks import disk_record
 
 from database import DatabaseClient
 from execution.containers.runtime_state import PodKeepAliveReader
-from execution.pods.proxy import PodProxyConnectionRepository, release_pod_connection
-
-DEVBOX_START_WAIT_SECONDS = 30.0
-"""How long a start holds its demand for the autoscaler to ask for a container."""
+from execution.pods.service import wake_pod
 
 
-class DeploymentSwitch(Protocol):
+class DevboxDeployments(Protocol):
+    """The deployment owner's switch and stop, which a devbox start and stop go through."""
+
     def set_deployment_active(
         self, workspace: str, deployment_id_or_name: str, *, active: bool
     ) -> Deployment: ...
 
-
-class DevboxContainers(Protocol):
-    def stop(
-        self, container_id: str, *, reason: StopContainerReason | None = None
-    ) -> ContainerRecord: ...
+    def stop_deployment_containers(
+        self, workspace: str, deployment: Deployment, *, reason: StopContainerReason | None
+    ) -> None: ...
 
 
 class ContainerStartupReader(Protocol):
@@ -96,6 +100,8 @@ def devbox_phase(
     *,
     finished_steps: frozenset[ContainerExecutionPhase],
     saving_disk: bool,
+    waking: bool,
+    refusal: str | None,
     recent_failure: str | None,
 ) -> tuple[DevboxPhase, str]:
     """What the devbox is doing, and why when its last start failed.
@@ -103,6 +109,8 @@ def devbox_phase(
     A live container answers first: a start in progress is what someone waiting
     wants to follow. The image and the root disk are prepared one after the
     other, so the first of the two steps not yet reported is the current one.
+    A start with no container yet waits for the autoscaler, unless the
+    autoscaler has said why it will not start one.
     """
     if container is not None:
         if container.status is ContainerStatus.Running:
@@ -116,6 +124,10 @@ def devbox_phase(
         return DevboxPhase.Starting, ""
     if saving_disk:
         return DevboxPhase.Stopping, ""
+    if waking and refusal is not None:
+        return DevboxPhase.Failed, refusal
+    if waking:
+        return DevboxPhase.Queued, ""
     if recent_failure is not None:
         return DevboxPhase.Failed, recent_failure
     return DevboxPhase.Stopped, ""
@@ -127,11 +139,7 @@ class DevboxService:
     keep_alive: PodKeepAliveReader
     startup: ContainerStartupReader
     worker_absence: DiskWorkerAbsence
-    containers: DevboxContainers
-    connections: PodProxyConnectionRepository | None
     clock: Callable[[], datetime] = field(default=utc_now)
-    start_wait_seconds: float = DEVBOX_START_WAIT_SECONDS
-    poll_interval_seconds: float = 0.5
 
     def describe(self, resource: DeploymentResource) -> DevboxResponse | None:
         """The devbox block for this deployment, or None when it is not a devbox."""
@@ -139,83 +147,45 @@ class DevboxService:
             return None
         return self._describe(resource)
 
-    async def start(
-        self, resource: DeploymentResource, *, deployments: DeploymentSwitch
+    def start(
+        self, resource: DeploymentResource, *, deployments: DevboxDeployments
     ) -> DevboxResponse:
-        """Boot a stopped devbox now, the way a connection would, and answer its status.
+        """Ask for the devbox to start and answer its status without waiting for it.
 
-        A deployment that is off is switched on first, since a connection
-        refuses one. The wake is the demand an SSH connection records: one on
-        the stub's connection total, held until the autoscaler has asked for a
-        container. The autoscaler never stops a pending container and spares a
-        running one for its first keep-warm window, so letting the demand go
-        leaves the devbox up for the idle time a connection that just closed
-        would have.
+        A start wakes the pod as a connection does and records when it asked,
+        which the autoscaler reads as a request for one container while nobody
+        is connected. A deployment that is off is switched on as well, and that
+        switch is what tells the autoscaler to look.
         """
         stub = _devbox_stub(resource)
+        now = self.clock()
+        with self.database.session() as session:
+            if resource.deployment.active:
+                wake_pod(session, stub_id=stub.id, workspace_id=stub.workspace_id, woken_at=now)
+            else:
+                StubRepository(session).wake(stub.id, workspace_id=stub.workspace_id, woken_at=now)
         if not resource.deployment.active:
-            deployment = await asyncio.to_thread(
-                deployments.set_deployment_active,
-                stub.workspace_id,
-                resource.deployment.id,
-                active=True,
+            deployment = deployments.set_deployment_active(
+                stub.workspace_id, resource.deployment.id, active=True
             )
             resource = replace(resource, deployment=deployment)
-        if await asyncio.to_thread(self._live_container_id, stub.id) is None:
-            await self._wake(stub, resource.deployment.name)
-        return await asyncio.to_thread(self._describe, resource)
+        return self._describe(resource)
 
-    def stop(self, resource: DeploymentResource) -> DevboxResponse:
-        """Stop the devbox's container now, as its idle time running out would.
+    def stop(
+        self, resource: DeploymentResource, *, deployments: DevboxDeployments
+    ) -> DevboxResponse:
+        """Park the devbox and stop its container; the deployment stays on.
 
-        The deployment stays on, so the next connection or start boots it again,
-        and the disk saves as it does after any stop.
+        Parked, the autoscaler starts nothing for it, whatever its warm floor or
+        open connections say, until a start or a new connection wakes it.
         """
         stub = _devbox_stub(resource)
         with self.database.session() as session:
-            container_ids = DeploymentRepository(session).live_container_ids(
-                workspace_id=stub.workspace_id, deployment_id=resource.deployment.id
-            )
-        for container_id in container_ids:
-            self.containers.stop(container_id, reason=StopContainerReason.Scheduler)
+            StubRepository(session).park(stub.id, workspace_id=stub.workspace_id)
+        deployments.stop_deployment_containers(
+            stub.workspace_id, resource.deployment, reason=StopContainerReason.User
+        )
         return self._describe(resource)
-
-    async def _wake(self, stub: StubRecord, name: str) -> None:
-        if self.connections is None:
-            raise RuntimeError("pod connection counters are not configured")
-        connections = self.connections
-        await connections.increment_total_connections(stub.workspace_id, stub.id)
-        try:
-            await asyncio.to_thread(self._activate_autoscaling, stub)
-            deadline = time.monotonic() + self.start_wait_seconds
-            while await asyncio.to_thread(self._live_container_id, stub.id) is None:
-                if time.monotonic() >= deadline:
-                    raise UpstreamTimeoutError(
-                        f"devbox {name} was not given a container within "
-                        f"{self.start_wait_seconds:g} seconds"
-                    )
-                await asyncio.sleep(self.poll_interval_seconds)
-        finally:
-            await release_pod_connection(
-                connections,
-                workspace_id=stub.workspace_id,
-                stub_id=stub.id,
-                container_id=None,
-                keep_warm_seconds=None,
-            )
-
-    def _activate_autoscaling(self, stub: StubRecord) -> None:
-        with self.database.session() as session:
-            AutoscalingTargetRepository(session).activate(
-                stub_id=stub.id,
-                workspace_id=stub.workspace_id,
-                target_kind=AutoscalerTargetKind.Pod,
-            )
-
-    def _live_container_id(self, stub_id: str) -> str | None:
-        with self.database.session() as session:
-            container = ContainerRepository(session).newest_live_for_stub(stub_id)
-        return container.id if container is not None else None
 
     def _describe(self, resource: DeploymentResource) -> DevboxResponse:
         deployment = resource.deployment
@@ -234,8 +204,29 @@ class DevboxService:
                 app_id=resource.app.id,
                 workspace_id=workspace_id,
             )
+            power = StubRepository(session).power(stub.id, workspace_id=workspace_id)
             containers = ContainerRepository(session)
             container = containers.newest_live_for_stub(stub.id) if deployment.active else None
+            now = self.clock()
+            woken_at = power.woken_at
+            waking = (
+                container is None
+                and deployment.active
+                and not power.parked
+                and woken_at is not None
+                and now < woken_at + timedelta(seconds=POD_WAKE_START_SECONDS)
+            )
+            refusal = (
+                _start_refusal(
+                    AutoscalerStateRepository(session).get(
+                        workspace_id=workspace_id,
+                        target_kind=AutoscalerTargetKind.Pod,
+                        target_id=stub.id,
+                    )
+                )
+                if waking
+                else None
+            )
             reading = (
                 DiskRepository(session).get(root.name, workspace_id=workspace_id)
                 if root is not None
@@ -248,10 +239,9 @@ class DevboxService:
             failure = (
                 containers.recent_startup_failure(
                     stub.id,
-                    since=self.clock()
-                    - timedelta(seconds=stub.config.autoscaler.failed_container_window),
+                    since=now - timedelta(seconds=stub.config.autoscaler.failed_container_window),
                 )
-                if container is None and not saving_disk
+                if container is None and not saving_disk and not waking
                 else None
             )
         command = ["lazycloud", "ssh", deployment.name]
@@ -269,6 +259,8 @@ class DevboxService:
                 else frozenset()
             ),
             saving_disk=saving_disk,
+            waking=waking,
+            refusal=refusal,
             recent_failure=failure.reason if failure is not None else None,
         )
         connections, idle_deadline = self._keep_alive(
@@ -276,11 +268,13 @@ class DevboxService:
             workspace_id=workspace_id,
             stub_id=stub.id,
             keep_warm_seconds=stub.config.runtime.keep_warm,
+            woken_at=woken_at,
+            now=now,
         )
         return DevboxResponse(
             ssh_command=shlex.join(command),
             ssh_host=ssh_host_alias(workspace_name, resource.app.name, deployment.name),
-            state=_state(container),
+            state=_state(container, starting=waking and refusal is None),
             phase=phase,
             phase_reason=reason,
             container_id=container.id if container is not None else None,
@@ -311,6 +305,8 @@ class DevboxService:
         workspace_id: str,
         stub_id: str,
         keep_warm_seconds: int,
+        woken_at: datetime | None,
+        now: datetime,
     ) -> tuple[int, datetime | None]:
         if container is None or container.status is not ContainerStatus.Running:
             return 0, None
@@ -319,13 +315,17 @@ class DevboxService:
         )
         if state.connections > 0 or keep_warm_seconds < 0:
             return state.connections, None
-        now = self.clock()
-        # The autoscaler spares a container for its first keep-warm window and
-        # for as long as the marker lives, so it stops at the later of the two.
+        # The autoscaler spares a container for its first keep-warm window, for
+        # as long as the marker lives, and, when a start asked for it, for at
+        # least the devbox idle default, so it stops at the latest of those.
         # A deadline already past says only that the next pass may stop it.
         candidates = [now + timedelta(seconds=state.idle_seconds)] if state.idle_seconds else []
         if container.started_at is not None:
-            candidates.append(to_utc(container.started_at) + timedelta(seconds=keep_warm_seconds))
+            started_at = to_utc(container.started_at)
+            window = keep_warm_seconds
+            if woken_at is not None and started_at >= woken_at:
+                window = max(window, DEFAULT_DEVBOX_KEEP_WARM_SECONDS)
+            candidates.append(started_at + timedelta(seconds=window))
         upcoming = [deadline for deadline in candidates if deadline > now]
         return 0, max(upcoming) if upcoming else None
 
@@ -341,19 +341,30 @@ def _devbox_stub(resource: DeploymentResource) -> StubRecord:
     return resource.stub
 
 
-def _state(container: LiveContainer | None) -> DevboxState:
+def _start_refusal(state: AutoscalerStateRecord | None) -> str | None:
+    """Why the autoscaler last declined to start a container, if that is what it said."""
+    if state is None:
+        return None
+    for action in state.last_actions:
+        if action.action == SCALE_UP_FAILED_ACTION and action.reason:
+            return action.reason
+    if state.guardrails.get("limited") is True:
+        reason = state.guardrails.get("reason")
+        return reason if isinstance(reason, str) and reason else None
+    return None
+
+
+def _state(container: LiveContainer | None, *, starting: bool) -> DevboxState:
     if container is None:
-        return DevboxState.Stopped
+        return DevboxState.Starting if starting else DevboxState.Stopped
     if container.status is ContainerStatus.Running:
         return DevboxState.Running
     return DevboxState.Starting
 
 
 __all__ = [
-    "DEVBOX_START_WAIT_SECONDS",
     "ContainerStartupReader",
-    "DeploymentSwitch",
-    "DevboxContainers",
+    "DevboxDeployments",
     "DevboxService",
     "StreamContainerStartupReader",
     "devbox_phase",

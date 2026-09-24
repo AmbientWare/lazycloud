@@ -6,13 +6,13 @@ from dataclasses import dataclass, replace
 import anyio
 import pytest
 from api.server.services import ApiServices
-from execution.pods.proxy import PodProxySession, PodProxyTarget
+from execution.pods.proxy import PodConnectionHold, PodProxySession, PodProxyTarget
 
 
 @dataclass
 class _Counters:
-    total: int = 1
-    container: int = 1
+    total: int = 0
+    container: int = 0
 
     async def container_connections(
         self, workspace_id: str, stub_id: str, container_id: str
@@ -48,11 +48,10 @@ async def test_a_dropped_client_still_releases_its_pod_connection(
 ) -> None:
     counters = _Counters()
     service = replace(async_services.pod_service, pod_proxy_connections=counters)
+    hold = PodConnectionHold(counters, "workspace", "stub", 60)
+    await hold.attach("container")
     session = PodProxySession(
-        workspace_id="workspace",
-        stub_id="stub",
-        target=PodProxyTarget(container_id="container", address=""),
-        keep_warm_seconds=60,
+        target=PodProxyTarget(container_id="container", address=""), hold=hold
     )
 
     # A client going away cancels the handler, and it finishes the session
