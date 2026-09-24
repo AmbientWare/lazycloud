@@ -58,16 +58,16 @@ export async function createDevboxScene(
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   const scene = new THREE.Scene();
   scene.add(new THREE.HemisphereLight("#e0e5e9", "#111519", 1.2));
-  const key = new THREE.DirectionalLight("#e2e8ed", 2);
+  const key = new THREE.DirectionalLight("#c2eaf8", 2);
   key.position.set(-3, 7, 4);
-  const rim = new THREE.DirectionalLight("#7cabc4", 1.2);
+  const rim = new THREE.DirectionalLight("#76d6f5", 1.6);
   rim.position.set(4, 2, -5);
   scene.add(key, rim);
   const studio = new RoomEnvironment();
   const reflection = new THREE.PMREMGenerator(renderer);
   const environment = reflection.fromScene(studio, 0.04);
   scene.environment = environment.texture;
-  scene.environmentIntensity = 0.35;
+  scene.environmentIntensity = 0.2;
   studio.dispose();
   reflection.dispose();
 
@@ -85,8 +85,21 @@ export async function createDevboxScene(
   grainBitmap.width = grainBitmap.height = 360;
   const grainContext = grainBitmap.getContext("2d");
   if (!grainContext) throw new Error("The surface texture canvas is unavailable");
-  grainContext.fillStyle = "#bdbdbd";
+  const face = grainContext.createLinearGradient(0, 0, 360, 360);
+  face.addColorStop(0, "#263c48");
+  face.addColorStop(0.45, "#141e26");
+  face.addColorStop(1, "#1a303b");
+  grainContext.fillStyle = face;
   grainContext.fillRect(0, 0, 360, 360);
+  grainContext.save();
+  grainContext.strokeStyle = "#76d6f5";
+  grainContext.shadowColor = "#76d6f5";
+  grainContext.shadowBlur = 24;
+  grainContext.globalAlpha = 0.45;
+  grainContext.lineWidth = 2;
+  grainContext.strokeRect(1, 1, 358, 358);
+  grainContext.restore();
+  grainContext.globalAlpha = 0.8;
   grainContext.drawImage(grainImage, 0, 0, 360, 360);
   const grain = new THREE.CanvasTexture(grainBitmap);
   grain.colorSpace = THREE.SRGBColorSpace;
@@ -96,18 +109,19 @@ export async function createDevboxScene(
   function surface(color: string) {
     const material = new THREE.MeshStandardMaterial({
       color,
-      roughness: 0.78,
-      metalness: 0.12,
+      roughness: 0.94,
+      metalness: 0.04,
       map: grain,
-      bumpMap: grain,
-      bumpScale: 0.016,
+      emissive: "#ffffff",
+      emissiveMap: grain,
+      emissiveIntensity: 0.18,
     });
     materials.push(material);
     return material;
   }
-  const bodyMaterial = surface("#30383e");
-  const capMaterial = surface("#20272c");
-  const seamMaterial = new THREE.MeshBasicMaterial({ color: "#527f96" });
+  const bodyMaterial = surface("#ffffff");
+  const capMaterial = surface("#b1c6d2");
+  const seamMaterial = new THREE.MeshBasicMaterial({ color: "#76d6f5" });
   materials.push(seamMaterial);
   const bodyGeometry = new RoundedBoxGeometry(0.94, 0.94, 0.94, 4, 0.055);
   const capGeometry = new RoundedBoxGeometry(0.86, 0.024, 0.86, 3, 0.01);
@@ -158,7 +172,7 @@ export async function createDevboxScene(
 
   const shellGeometry = new RoundedBoxGeometry(2.87, 2.87, 2.87, 5, 0.09);
   geometries.push(shellGeometry);
-  const shellMaterial = surface("#30383e");
+  const shellMaterial = surface("#ffffff");
   shellMaterial.transparent = true;
   const shell = new THREE.Mesh(shellGeometry, shellMaterial);
   scene.add(shell);
