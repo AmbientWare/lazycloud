@@ -61,7 +61,7 @@ export function createDevboxFocus(renderer: THREE.WebGLRenderer, camera: THREE.P
         for (int i = 0; i < 25; i++) {
           float radius = sqrt(float(i) / 24.0);
           float angle = float(i) * 2.399963;
-          vec2 offset = vec2(cos(angle), sin(angle)) * radius * blur * 5.0 / viewport;
+          vec2 offset = vec2(cos(angle), sin(angle)) * radius * blur * 3.0 / viewport;
           vec2 sampleUv = vUv + offset;
           float weight = exp(-2.0 * radius * radius);
           vec4 sampleColor = texture2D(colorMap, sampleUv);
@@ -70,6 +70,7 @@ export function createDevboxFocus(renderer: THREE.WebGLRenderer, camera: THREE.P
           totalWeight += weight;
         }
         color /= totalWeight;
+        color *= smoothstep(0.0, 32.0, min(vUv.y, 1.0 - vUv.y) * viewport.y);
         // The render target contains premultiplied alpha. Convert straight RGB
         // for tone mapping, then restore premultiplication for the page canvas.
         gl_FragColor = vec4(color.rgb / max(color.a, 0.0001), color.a);
@@ -83,11 +84,14 @@ export function createDevboxFocus(renderer: THREE.WebGLRenderer, camera: THREE.P
   const projectedFocus = new THREE.Vector3();
 
   return {
-    resize(width: number, height: number) {
+    resize(width: number, height: number, sectionHeight: number) {
       const pixelRatio = renderer.getPixelRatio();
       target.setSize(Math.round(width * pixelRatio), Math.round(height * pixelRatio));
       uniforms.viewport.value.set(width, height);
-      uniforms.focusScale.value.set(width < 1024 ? 1 : width / height, width < 1024 ? 2 : 1);
+      uniforms.focusScale.value.set(
+        width < 1024 ? 1 : width / sectionHeight,
+        (height / sectionHeight) * (width < 1024 ? 2 : 1),
+      );
     },
     render(scene: THREE.Scene, focus: THREE.Vector3, expansion: number) {
       camera.updateMatrixWorld();

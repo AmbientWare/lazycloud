@@ -384,10 +384,12 @@ export async function createDevboxScene(
     if (disposed || lost) return;
     const { width, height } = stage.getBoundingClientRect();
     if (!width || !height) return;
+    const renderHeight = canvas.getBoundingClientRect().height;
     camera.aspect = width / height;
     const distance = Math.max(13.5, 16.8 / camera.aspect);
     camera.position.copy(cameraDirection).multiplyScalar(distance);
-    camera.updateProjectionMatrix();
+    // Extend the view above and below the section without moving its composition.
+    camera.setViewOffset(width, height, 0, -(renderHeight - height) / 2, width, renderHeight);
     const mobile = width < 1024;
     const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance;
     const halfWidth = halfHeight * camera.aspect;
@@ -426,8 +428,8 @@ export async function createDevboxScene(
       if (cube.background) cube.origin.copy(cube.target);
       if (index < 3) cube.size = mobile ? 0.98 : 1.4;
     });
-    renderer.setSize(width, height, false);
-    focusEffect.resize(width, height);
+    renderer.setSize(width, renderHeight, false);
+    focusEffect.resize(width, renderHeight, height);
     requestDraw();
   }
   function transitionTo(target: 0 | 1) {

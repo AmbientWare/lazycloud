@@ -1,7 +1,11 @@
 .devbox-section {
+  --devbox-bleed: clamp(56px, 8vw, 112px);
   border-bottom: 1px solid var(--input);
   padding-block: 64px 80px;
-  overflow: clip;
+}
+
+.marketing-site main > .devbox-section > .devbox-layout {
+  z-index: 4;
 }
 
 .devbox-layout {
@@ -79,7 +83,7 @@
 .devbox-stage {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 3;
   height: 100%;
   width: 100%;
   padding: 0;
@@ -94,9 +98,13 @@
 }
 
 .devbox-stage canvas {
+  position: absolute;
+  top: calc(-1 * var(--devbox-bleed));
+  left: 0;
   display: block;
   width: 100%;
-  height: 100%;
+  height: calc(100% + 2 * var(--devbox-bleed));
+  pointer-events: none;
 }
 
 .devbox-preview-error {
