@@ -5,7 +5,7 @@ from datetime import datetime
 from pydantic import Field
 
 from shared.deployment_records import CpuRequest, MemoryRequest
-from shared.deployments import DeploymentKind, DevboxState, PodRole
+from shared.deployments import DeploymentKind, DevboxPhase, DevboxState, PodRole
 from shared.disks import DiskStatus
 from shared.http.base import HttpModel
 from shared.http.stubs import StubResponse
@@ -95,6 +95,10 @@ class DevboxResponse(HttpModel):
     """The host name `lazycloud ssh-config` writes, for editors that connect over SSH."""
 
     state: DevboxState
+    phase: DevboxPhase
+    phase_reason: str = ""
+    """Why the last start failed, when `phase` is `failed`."""
+
     open_connections: int = Field(ge=0)
     """Connections held open through the pod's proxy, SSH sessions included."""
 

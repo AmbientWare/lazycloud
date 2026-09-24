@@ -658,6 +658,8 @@ class LiveContainer:
     id: str
     status: ContainerStatus
     started_at: datetime | None
+    placed: bool
+    """A worker has taken the container."""
 
 
 @dataclass(slots=True)
@@ -1116,7 +1118,13 @@ class ContainerRepository:
     def newest_live_for_stub(self, stub_id: str) -> LiveContainer | None:
         """The stub's newest live container, a running one ahead of any still pending."""
         row = self.session.execute(
-            select(ContainerTable.id, ContainerTable.status, ContainerTable.started_at)
+            select(
+                ContainerTable.id,
+                ContainerTable.status,
+                ContainerTable.started_at,
+                ContainerTable.worker_id,
+                ContainerTable.runtime_worker_id,
+            )
             .where(
                 ContainerTable.stub_id == stub_id,
                 ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
@@ -1130,12 +1138,29 @@ class ContainerRepository:
         ).first()
         if row is None:
             return None
-        container_id, status, started_at = row
+        container_id, status, started_at, worker_id, runtime_worker_id = row
         return LiveContainer(
             id=str(container_id),
             status=ContainerStatus(status),
             started_at=started_at,
+            placed=worker_id is not None or bool(runtime_worker_id),
         )
+
+    def recent_startup_failure(self, stub_id: str, *, since: datetime) -> str | None:
+        """Why the stub's newest container that failed since `since` failed, if one did."""
+        row = self.session.execute(
+            select(ContainerTable.startup_error)
+            .where(
+                ContainerTable.stub_id == stub_id,
+                ContainerTable.status == ContainerStatus.Failed.value,
+                ContainerTable.finished_at >= since,
+            )
+            .order_by(ContainerTable.finished_at.desc(), ContainerTable.id.desc())
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        return row[0] or "the container failed to start"
 
     def count_live_for_stub(self, stub_id: str) -> int:
         """How many containers are already serving this stub, or about to.

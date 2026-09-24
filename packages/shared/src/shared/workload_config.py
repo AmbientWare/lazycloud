@@ -20,6 +20,8 @@ from shared.tasks import RetryPolicy
 
 _JSON_MAPPING_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
 
+DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS = 300
+
 
 def cpu_limit_at_or_above_request(value: CpuRequest | None) -> CpuRequest | None:
     # Compared as cores, not through the memory parser: that parser returns
@@ -167,6 +169,18 @@ class StubAutoscalerConfig(ContractModel):
     failure_threshold: int | None = Field(default=None, ge=0)
     failed_container_window_seconds: int | None = Field(default=None, ge=0)
     failure_window_seconds: int | None = Field(default=None, ge=0)
+
+    @property
+    def failed_container_window(self) -> int:
+        """Seconds a failed container still counts against the stub.
+
+        The autoscaler stops starting containers for a stub that failed often
+        enough inside it, and the devbox status reports the failure for as long.
+        """
+        for value in (self.failed_container_window_seconds, self.failure_window_seconds):
+            if value is not None:
+                return max(value, 0)
+        return DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS
 
     @model_validator(mode="after")
     def minimum_cannot_exceed_maximum(self) -> StubAutoscalerConfig:
@@ -330,6 +344,7 @@ class StubConfig(ContractModel):
 
 
 __all__ = [
+    "DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS",
     "StubAutoscalerConfig",
     "StubConfig",
     "StubImageConfig",

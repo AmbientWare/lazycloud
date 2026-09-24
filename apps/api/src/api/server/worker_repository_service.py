@@ -63,7 +63,12 @@ from scheduler.worker_inventory import WorkerCapacityRecovery
 from shared.compute_enrollment import AgentCapacityState, ComputeMachineEnrollmentStatus
 from shared.compute_policy import ComputeUnitRecord
 from shared.container_requests import StopContainerReason
-from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.containers import (
+    TERMINAL_CONTAINER_STATUSES,
+    ContainerExecutionPhase,
+    ContainerRecord,
+    ContainerStatus,
+)
 from shared.errors import (
     ConflictError,
     ContainerLifetimeEndedError,
@@ -114,7 +119,6 @@ from worker.durable_disk_records import (
 from worker.event_bridge import worker_stream_event_from_bus_event
 from worker.events import (
     WORKER_EVENT_HEARTBEAT_ID,
-    ContainerExecutionPhase,
     ContainerLifecyclePayload,
     WorkerStreamEvent,
     WorkerStreamEventKind,

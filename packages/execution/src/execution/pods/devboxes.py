@@ -6,17 +6,22 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Protocol
 
 from control.deployment_resources import DeploymentResource
 from database.repositories.apps import DeploymentRepository
 from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository, LiveContainer
-from shared.containers import ContainerStatus
+from observability.stream_state import RedisEventStreamRepository
+from shared.containers import ContainerExecutionPhase, ContainerStatus
 from shared.deployment_records import resolve_pod_role
-from shared.deployments import DeploymentKind, DevboxState, PodRole
+from shared.deployments import DeploymentKind, DevboxPhase, DevboxState, PodRole
+from shared.disks import DiskStatus
 from shared.errors import NotFoundError
 from shared.http.deployments import DevboxDiskResponse, DevboxResponse
+from shared.realtime.contracts import EventRecordType
+from shared.realtime.streams import EventHistoryQuery
 from shared.ssh import ssh_host_alias
 from shared.timestamps import to_utc, utc_now
 
@@ -24,10 +29,76 @@ from database import DatabaseClient
 from execution.containers.runtime_state import PodKeepAliveReader
 
 
+class ContainerStartupReader(Protocol):
+    def finished_steps(
+        self, *, workspace_id: str, stub_id: str, container_id: str
+    ) -> frozenset[ContainerExecutionPhase]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class StreamContainerStartupReader:
+    """The start steps a worker reported finishing, from the container's event stream."""
+
+    events: RedisEventStreamRepository
+
+    def finished_steps(
+        self, *, workspace_id: str, stub_id: str, container_id: str
+    ) -> frozenset[ContainerExecutionPhase]:
+        records = self.events.read_event_history(
+            EventHistoryQuery(
+                workspace_id=workspace_id,
+                stub_id=stub_id,
+                container_id=container_id,
+                event_types=(EventRecordType.ContainerLifecycle,),
+            )
+        )
+        steps: set[ContainerExecutionPhase] = set()
+        for record in records:
+            data = record.body.get("data")
+            if not isinstance(data, dict) or data.get("success") is not True:
+                continue
+            try:
+                steps.add(ContainerExecutionPhase(str(data.get("id"))))
+            except ValueError:
+                continue
+        return frozenset(steps)
+
+
+def devbox_phase(
+    container: LiveContainer | None,
+    *,
+    finished_steps: frozenset[ContainerExecutionPhase],
+    saving_disk: bool,
+    recent_failure: str | None,
+) -> tuple[DevboxPhase, str]:
+    """What the devbox is doing, and why when its last start failed.
+
+    A live container answers first: a start in progress is what someone waiting
+    wants to follow. The image and the root disk are prepared one after the
+    other, so the first of the two steps not yet reported is the current one.
+    """
+    if container is not None:
+        if container.status is ContainerStatus.Running:
+            return DevboxPhase.Running, ""
+        if not container.placed:
+            return DevboxPhase.Queued, ""
+        if ContainerExecutionPhase.LoadImage not in finished_steps:
+            return DevboxPhase.PullingImage, ""
+        if ContainerExecutionPhase.PrepareRootfs not in finished_steps:
+            return DevboxPhase.RestoringDisk, ""
+        return DevboxPhase.Starting, ""
+    if saving_disk:
+        return DevboxPhase.Stopping, ""
+    if recent_failure is not None:
+        return DevboxPhase.Failed, recent_failure
+    return DevboxPhase.Stopped, ""
+
+
 @dataclass(frozen=True, slots=True)
 class DevboxService:
     database: DatabaseClient
     keep_alive: PodKeepAliveReader
+    startup: ContainerStartupReader
     clock: Callable[[], datetime] = field(default=utc_now)
 
     def describe(self, resource: DeploymentResource) -> DevboxResponse | None:
@@ -50,19 +121,41 @@ class DevboxService:
                 app_id=resource.app.id,
                 workspace_id=workspace_id,
             )
-            container = (
-                ContainerRepository(session).newest_live_for_stub(stub.id)
-                if deployment.active
-                else None
-            )
-            disk = (
-                DiskRepository(session).get(root.name, workspace_id=workspace_id)
-                if root is not None
+            containers = ContainerRepository(session)
+            container = containers.newest_live_for_stub(stub.id) if deployment.active else None
+            disks = DiskRepository(session)
+            disk = disks.get(root.name, workspace_id=workspace_id) if root is not None else None
+            saving_disk = False
+            if disk is not None and container is None and disk.status is not DiskStatus.Attached:
+                # A holder that stopped keeps its lease until its last save lands.
+                lease = disks.lease(disk.id)
+                saving_disk = lease is not None and bool(lease[0])
+            recent_failure = (
+                containers.recent_startup_failure(
+                    stub.id,
+                    since=self.clock()
+                    - timedelta(seconds=stub.config.autoscaler.failed_container_window),
+                )
+                if container is None and not saving_disk
                 else None
             )
         command = ["lazycloud", "ssh", deployment.name]
         if ambiguous:
             command += ["--app", resource.app.name]
+        phase, reason = devbox_phase(
+            container,
+            finished_steps=(
+                self.startup.finished_steps(
+                    workspace_id=workspace_id, stub_id=stub.id, container_id=container.id
+                )
+                if container is not None
+                and container.placed
+                and container.status is ContainerStatus.Pending
+                else frozenset()
+            ),
+            saving_disk=saving_disk,
+            recent_failure=recent_failure,
+        )
         connections, idle_deadline = self._keep_alive(
             container,
             workspace_id=workspace_id,
@@ -73,6 +166,8 @@ class DevboxService:
             ssh_command=shlex.join(command),
             ssh_host=ssh_host_alias(workspace_name, resource.app.name, deployment.name),
             state=_state(container),
+            phase=phase,
+            phase_reason=reason,
             open_connections=connections,
             idle_deadline=idle_deadline,
             disk=(
@@ -120,4 +215,9 @@ def _state(container: LiveContainer | None) -> DevboxState:
     return DevboxState.Starting
 
 
-__all__ = ["DevboxService"]
+__all__ = [
+    "ContainerStartupReader",
+    "DevboxService",
+    "StreamContainerStartupReader",
+    "devbox_phase",
+]

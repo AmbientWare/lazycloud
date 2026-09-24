@@ -15,6 +15,7 @@ from shared.container_requests import (
     CONTAINER_INNER_PORT,
     WorkerStartupKind,
 )
+from shared.containers import ContainerExecutionPhase
 from shared.contracts import ContractModel
 from shared.env import GATEWAY_TOKEN_ENV
 from shared.http.errors import HttpApiError
@@ -38,7 +39,6 @@ from worker.container_rootfs import (
 from worker.durable_disks import DurableDiskAttachment
 from worker.events import (
     ContainerEventPayload,
-    ContainerExecutionPhase,
     ContainerLifecyclePayload,
     ContainerRequestContext,
     StopContainerReason,

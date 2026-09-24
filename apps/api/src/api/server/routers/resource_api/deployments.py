@@ -453,6 +453,26 @@ def _devbox(
     return services.devboxes.describe(resource) if resource is not None else None
 
 
+@router.get(
+    "/api/v1/deployments/{deployment_id}/devbox",
+    response_model=DevboxResponse,
+    operation_id="get_devbox",
+)
+def get_devbox(
+    deployment_id: str,
+    workspace_id: read_workspace,
+    services: ApiServices = Depends(current_services),
+) -> DevboxResponse:
+    """A devbox's status alone, cheap enough to poll while a connection waits for it."""
+    resource = services.deployment_resources.get_by_deployment_id(
+        deployment_id, workspace=workspace_id
+    )
+    devbox = services.devboxes.describe(resource) if resource is not None else None
+    if devbox is None:
+        raise NotFoundError(f"devbox not found: {deployment_id}")
+    return devbox
+
+
 @router.delete(
     "/api/v1/deployments/{deployment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
