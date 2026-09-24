@@ -50,7 +50,7 @@ from shared.app_lifecycle import (
     AppDeploymentIntentTarget,
     AppLifecycleState,
 )
-from shared.containers import ContainerStatus
+from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, StubKind
@@ -1108,6 +1108,69 @@ class DeploymentRepository:
                 f"subdomain {subdomain} already belongs to another resource; "
                 f"rename {name} to claim a different one"
             )
+
+    def live_container_ids(
+        self,
+        *,
+        workspace_id: str,
+        deployment_id: str | None = None,
+        workload: tuple[str | None, str, DeploymentKind] | None = None,
+    ) -> list[str]:
+        """Live containers of one deployment, or of every live version of a workload.
+
+        `workload` is `(app_id, name, kind)`.
+        """
+        statement = (
+            select(ContainerTable.id)
+            .join(StubTable, StubTable.id == ContainerTable.stub_id)
+            .join(DeploymentTable, DeploymentTable.id == StubTable.deployment_id)
+            .where(
+                ContainerTable.workspace_id == workspace_id,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                DeploymentTable.workspace_id == workspace_id,
+            )
+        )
+        if deployment_id is not None:
+            statement = statement.where(DeploymentTable.id == deployment_id)
+        if workload is not None:
+            app_id, name, kind = workload
+            statement = statement.where(
+                DeploymentTable.app_id.is_not_distinct_from(app_id),
+                DeploymentTable.name == name,
+                DeploymentTable.kind == kind.value,
+                DeploymentTable.deleted_at.is_(None),
+            )
+        return [str(container_id) for container_id in self.session.scalars(statement)]
+
+    def delete_versions(
+        self,
+        *,
+        workspace_id: str,
+        app_id: str | None,
+        name: str,
+        kind: DeploymentKind,
+        now: datetime,
+    ) -> list[Deployment]:
+        """Soft-delete every live version of one workload and return them.
+
+        A stopped older version is still listed as the workload, so deleting only
+        the newest leaves the workload standing.
+        """
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        rows = self.session.scalars(
+            update(DeploymentTable)
+            .where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.app_id.is_not_distinct_from(app_id),
+                DeploymentTable.name == name,
+                DeploymentTable.kind == kind.value,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .values(active=False, deleted_at=now, updated_at=now)
+            .returning(DeploymentTable)
+            .execution_options(synchronize_session=False)
+        )
+        return [deployment_from_table(row) for row in rows]
 
     def deactivate_for_workspace_deletion(
         self,

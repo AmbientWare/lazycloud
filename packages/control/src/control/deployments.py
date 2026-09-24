@@ -296,44 +296,46 @@ class DeploymentService:
             raise NotFoundError(msg)
         return max(matches, key=lambda item: item.version)
 
-    def delete(self, deployment_id_or_name: str) -> Deployment:
-        deployment = self.get(deployment_id_or_name)
+    def delete(self, deployment_id: str, *, workspace: str = "default") -> Deployment:
+        """Delete the workload this deployment is a version of, every version at once."""
         now = utc_now()
-        deployment.active = False
-        deployment.deleted_at = now
-        deployment.updated_at = now
         with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
             repository = DeploymentRepository(session)
-            workspace_id = repository.workspace_id(deployment.id)
-            if workspace_id is None:
-                msg = f"deployment workspace not found: {deployment.id}"
+            target = repository.get(deployment_id, workspace_id=workspace_id)
+            if target is None:
+                msg = f"deployment not found: {deployment_id}"
                 raise NotFoundError(msg)
-            updated = repository.upsert(
-                deployment,
+            deleted = repository.delete_versions(
                 workspace_id=workspace_id,
+                app_id=target.app_id,
+                name=target.name,
+                kind=target.kind,
+                now=now,
             )
             delete_deployment_cron_jobs(
                 session,
-                deployment_ids={deployment.id},
+                deployment_ids={deployment.id for deployment in deleted},
             )
-        self.events.emit(
-            "deployment.deleted",
-            resource_type="deployment",
-            resource_id=deployment.id,
-            message=f"deleted deployment {deployment.name}",
-            workspace_id=workspace_id,
-        )
-        self._publish_change(
-            updated,
-            workspace_id=workspace_id,
-            change=WorkspaceChangeType.Deleted,
-        )
+        for deployment in deleted:
+            self.events.emit(
+                "deployment.deleted",
+                resource_type="deployment",
+                resource_id=deployment.id,
+                message=f"deleted deployment {deployment.name} version {deployment.version}",
+                workspace_id=workspace_id,
+            )
+            self._publish_change(
+                deployment,
+                workspace_id=workspace_id,
+                change=WorkspaceChangeType.Deleted,
+            )
         if self.placement_resources is not None:
             self.placement_resources.reconcile_deployments(
                 workspace=workspace_id,
                 required=False,
             )
-        return updated
+        return next(deployment for deployment in deleted if deployment.id == target.id)
 
     def _discard_failed_deployment(
         self,

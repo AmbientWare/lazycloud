@@ -948,9 +948,17 @@ class ManagementService:
         return scaling
 
     def delete_deployment(self, workspace: str, deployment_id_or_name: str) -> Deployment:
+        """Delete the named workload; every version goes, not only the one named."""
         deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
-        self._stop_deployment_containers(workspace, deployment)
-        return self.services.deployments.delete(deployment.id)
+        workspace_id = self.control_plane.get_workspace(workspace).id
+        with self.services.context.database.session() as session:
+            container_ids = DeploymentRepository(session).live_container_ids(
+                workspace_id=workspace_id,
+                workload=(deployment.app_id, deployment.name, deployment.kind),
+            )
+        for container_id in container_ids:
+            self.services.containers.stop(container_id)
+        return self.services.deployments.delete(deployment.id, workspace=workspace_id)
 
     def stop_all_active_deployments(self, workspace: str) -> tuple[Deployment, ...]:
         active = [
@@ -986,22 +994,14 @@ class ManagementService:
         return tuple(stopped)
 
     def _stop_deployment_containers(self, workspace: str, deployment: Deployment) -> None:
-        workspace_record = self.control_plane.get_workspace(workspace)
-        stub_ids = {
-            stub.id
-            for stub in self.control_plane.list_stubs(workspace=workspace_record.id)
-            if stub.deployment_id == deployment.id
-        }
-        if not stub_ids:
-            return
-        active_statuses = {ContainerStatus.Pending, ContainerStatus.Running}
-        for container in self.services.containers.list():
-            if (
-                container.workspace_id == workspace_record.id
-                and container.stub_id in stub_ids
-                and container.status in active_statuses
-            ):
-                self.services.containers.stop(container.id)
+        workspace_id = self.control_plane.get_workspace(workspace).id
+        with self.services.context.database.session() as session:
+            container_ids = DeploymentRepository(session).live_container_ids(
+                workspace_id=workspace_id,
+                deployment_id=deployment.id,
+            )
+        for container_id in container_ids:
+            self.services.containers.stop(container_id)
 
     def _scale_pod_deployment_stubs(
         self,
