@@ -2612,6 +2612,13 @@ class ComputeService:
                 raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
             if unit.platform_fleet:
                 self._require_maintenance_available(session, unit, machine_id=machine_id)
+            machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
+            if machine is None or machine.lifecycle in {
+                MachineLifecycle.Stopping,
+                MachineLifecycle.Stopped,
+                MachineLifecycle.Terminating,
+            }:
+                raise ConflictError("machine lifecycle does not permit a worker update")
             enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id, machine_id, for_update=True
             )
@@ -2650,14 +2657,22 @@ class ComputeService:
         if self.scheduler_hooks is None:
             raise UpstreamUnavailableError("capacity maintenance requires scheduler worker state")
         for candidate in candidates:
+            # A machine that is stopping, stopped or terminating cannot finish an
+            # update, so an update it still records would hold maintenance for the
+            # whole fleet until someone removed the machine by hand.
             for record in ComputeProviderInstanceRepository(session).list_for_pool(
                 candidate.id,
-                excluded_statuses=(ReservationStatus.Deleted.value, ReservationStatus.Failed.value),
+                excluded_statuses=(
+                    ReservationStatus.Deleted.value,
+                    ReservationStatus.Failed.value,
+                    ReservationStatus.Terminating.value,
+                    ReservationStatus.Stopping.value,
+                    ReservationStatus.Stopped.value,
+                ),
             ):
                 if (
                     record.machine_id is not None
                     and record.machine_id != excluding_machine_id
-                    and _reservation_open(record.status)
                     and (
                         WorkerReleaseRepository(session).machine_has_update(record.machine_id)
                         or self.scheduler_hooks.machine_has_worker_update(
@@ -2878,6 +2893,11 @@ class ComputeService:
                 }
             ):
                 return instruction
+            if preparing:
+                # A stopped machine can never complete an update it began. Resuming
+                # registers a new worker, which must match the active release before
+                # it takes requests whether or not an update is recorded.
+                WorkerReleaseRepository(session).cancel_machine_update(machine_id)
             target = MachineLifecycle.Stopping if preparing else MachineLifecycle.Joining
             if machine_lifecycle_allowed(machine.lifecycle, target):
                 write_machine_lifecycle(
