@@ -45,6 +45,7 @@ def _capacity_request(request: SchedulerWorkerRequest) -> ComputeCapacityPlaceme
             availability_zone=request.availability_zone,
             runtime=request.provider_runtime,
         ),
+        preferred_availability_zone=request.preferred_availability_zone,
     )
 
 

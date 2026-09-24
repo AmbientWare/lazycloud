@@ -94,6 +94,9 @@ CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
 MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS = 60.0
 ORPHANED_CONTAINER_RECONCILE_INTERVAL_SECONDS = 30.0
 CAPACITY_PASS_SLOW_SECONDS = 2.0
+RELEASE_ACTIVATION_CLAIM_SECONDS = 3600
+"""How long one replica's claim on a release activation's reserve check lasts.
+Long enough that no replica seeing the generation late checks it again."""
 """A capacity pass at least this long logs the seconds each of its steps took."""
 ORPHANED_CONTAINER_CONFIRMATION_SECONDS = 60.0
 ORPHANED_CONTAINER_FAILURE_REASON = (
@@ -491,6 +494,8 @@ class Scheduler:
     reconcile_agent_pools_enabled: bool = True
     managed_compute_reconcile_interval_seconds: float = MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
+    last_reserve_refresh_at: datetime | None = field(default=None, init=False)
+    last_reserve_refresh_generation: int = field(default=0, init=False)
     worker_pool_drain_interval_seconds: float = 30.0
     last_worker_pool_drain_at: datetime | None = field(default=None, init=False)
     custom_domain_reconcile_interval_seconds: float = 60.0
@@ -923,6 +928,8 @@ class Scheduler:
             agent_pools = self._best_effort_reconcile_agent_pools(now=now)
         with timings.step("managed_compute"):
             managed_compute = self._best_effort_reconcile_managed_compute(now=now)
+        with timings.step("reserve_refresh"):
+            self._best_effort_refresh_stale_reserves(now=now)
         with timings.step("pool_states"):
             pool_states = self._best_effort_refresh_pool_states(now=now)
         with timings.step("capacity_reservations"):
@@ -1656,16 +1663,72 @@ class Scheduler:
                     self.compute_states.delete_unit_state(unit.workspace_id, unit.capacity_owner_id)
                     self.pool_states.pool_states.delete_unit_state(unit.capacity_owner_id)
             self.runtime_services.compute.reconcile_pooled_capacity(now=current_time)
-            releases = DeploymentReleaseService()
-            release = releases.active()
-            if release is not None and releases.controls(release):
-                self.runtime_services.compute.refresh_stale_reserve(
-                    release.target, now=current_time
-                )
             return []
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")
             return []
+
+    def _best_effort_refresh_stale_reserves(self, *, now: datetime | None) -> None:
+        """Prepare stopped reserves again for the active release.
+
+        Runs on the minute, and at once when a release activates: every stopped
+        reserve predates it then, and a devbox start that resumes one before it
+        is refreshed pays for the agent update and the worker image pull.
+        Reading the active release is a file read, so checking it each pass
+        costs nothing until the generation moves. The first generation a process
+        reads is its starting point, not an activation, and one replica claims
+        each activation so the others keep their minute.
+        """
+        if self.services is None:
+            return
+        try:
+            releases = DeploymentReleaseService()
+            release = releases.active()
+            controlled = release is not None and releases.controls(release)
+        except Exception:
+            LOGGER.exception("reading the active release failed; stopped reserves wait")
+            return
+        if release is None or not controlled:
+            return
+        current_time = now or utc_now()
+        activated = (
+            self.last_reserve_refresh_generation != 0
+            and release.generation != self.last_reserve_refresh_generation
+            and self._claim_release_activation(release.generation)
+        )
+        self.last_reserve_refresh_generation = release.generation
+        due = (
+            self.last_reserve_refresh_at is None
+            or (current_time - self.last_reserve_refresh_at).total_seconds()
+            >= self.managed_compute_reconcile_interval_seconds
+        )
+        if not activated and not due:
+            return
+        if activated:
+            LOGGER.info(
+                "release generation %d is active; checking stopped reserves", release.generation
+            )
+        self.last_reserve_refresh_at = current_time
+        try:
+            self.runtime_services.compute.refresh_stale_reserve(release.target, now=current_time)
+        except Exception:
+            LOGGER.exception("scheduler stopped reserve refresh failed")
+
+    def _claim_release_activation(self, generation: int) -> bool:
+        """Whether this replica is the one to check reserves for a newly active release."""
+        redis = self.states.cron_job_locks
+        if redis is None:
+            return True
+        try:
+            return try_acquire_token_lock(
+                redis,
+                redis.key("scheduler", "leases", "reserve-refresh", str(generation)),
+                uuid4().hex,
+                ttl_seconds=RELEASE_ACTIVATION_CLAIM_SECONDS,
+            )
+        except REDIS_UNAVAILABLE_ERRORS:
+            LOGGER.warning("claiming the release activation check failed; this replica checks")
+            return True
 
     def _best_effort_schedule_function_retries(
         self, *, now: datetime | None, limit: int

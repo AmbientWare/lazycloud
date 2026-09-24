@@ -42,6 +42,7 @@ from provider_aws.managed_pool import (
 )
 from provider_aws.network_egress import NetworkFilter
 from provider_aws.retained_pool import AwsRetainedPool, RetainedPoolState, RetainedSlot, SlotPhase
+from provider_aws.spot_prices import AwsSpotQuoteCache
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.capacity import CapacityFailureCode, CapacityOwnerKind, CapacityOwnerSource
@@ -956,6 +957,7 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
 
 def test_real_aws_offers_include_storage_and_ipv4_before_purchase() -> None:
     provider = AwsPooledCapacityProvider(
+        spot_quotes=AwsSpotQuoteCache(),
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
         networks={"us-east-1": _NETWORK},
@@ -993,6 +995,7 @@ def test_pooled_provider_preserves_capacity_across_namespace_adoption() -> None:
     ec2 = _Ec2()
     autoscaling = _AutoScaling()
     provider = AwsPooledCapacityProvider(
+        spot_quotes=AwsSpotQuoteCache(),
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         connection=_connection_target(),
         networks={"us-east-1": _NETWORK},
@@ -1136,6 +1139,7 @@ def test_pooled_provider_preserves_capacity_across_namespace_adoption() -> None:
 
 def test_pooled_provider_refuses_a_connection_with_no_network() -> None:
     provider = AwsPooledCapacityProvider(
+        spot_quotes=AwsSpotQuoteCache(),
         provider_ref="aws:12345678-1234-4123-8123-123456789abc",
         networks={},
         connection=AwsAccountConnectionTarget(
