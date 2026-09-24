@@ -13,12 +13,13 @@ from typing import TypeAlias, TypeGuard
 from shared.managed_runtime_integrity import (
     managed_package_source_digest,
     managed_runtime_artifact_digest,
+    managed_runtime_artifact_inventory_digest,
 )
 
 MANAGED_DISTRIBUTIONS = ("foundation", "runner", "lazycloud-client", "lazycloud-shared")
 SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 JsonScalar: TypeAlias = bool | int | float | str | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -109,6 +110,7 @@ def build_artifact(
             "python_major_minor": python_version,
             "architecture": architecture,
             "digest": digest,
+            "inventory_digest": managed_runtime_artifact_inventory_digest(destination),
             "relative_path": f"artifacts/{digest}",
             "source_digest": source_digest,
             "lock_digest": lock_digest,

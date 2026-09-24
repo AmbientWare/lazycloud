@@ -10,9 +10,12 @@ from pathlib import Path, PurePosixPath
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.image_building.authoring import LinuxArchitecture, PythonVersion
-from shared.managed_runtime_integrity import managed_package_source_digest
+from shared.managed_runtime_integrity import (
+    managed_package_source_digest,
+    managed_runtime_artifact_inventory_digest,
+)
 
-MANAGED_RUNTIME_SCHEMA_VERSION = 3
+MANAGED_RUNTIME_SCHEMA_VERSION = 4
 MANAGED_RUNTIME_PYTHON_VERSIONS = tuple(version.value for version in PythonVersion)
 MANAGED_RUNTIME_ARCHITECTURES = (
     LinuxArchitecture.Amd64,
@@ -27,6 +30,9 @@ class ManagedRuntimeManifest(ContractModel):
     python_major_minor: str
     architecture: LinuxArchitecture
     digest: str
+    inventory_digest: str
+    """Every path's type, size and mode as the build left them."""
+
     relative_path: str
     source_digest: str
     lock_digest: str
@@ -198,19 +204,28 @@ def _validate_artifact(
         )
     if artifact.source_digest != source_digest:
         raise RuntimeError(f"managed runtime artifact {version} has a stale source digest")
-    if len(artifact.digest) != 64 or len(artifact.lock_digest) != 64:
+    if (
+        len(artifact.digest) != 64
+        or len(artifact.lock_digest) != 64
+        or len(artifact.inventory_digest) != 64
+    ):
         raise RuntimeError(f"managed runtime artifact {version} has an invalid digest")
     relative_path = PurePosixPath(artifact.relative_path)
     if relative_path.is_absolute() or ".." in relative_path.parts:
         raise RuntimeError(f"managed runtime artifact {version} has an unsafe path")
     artifact_path = root.joinpath(*relative_path.parts)
-    # The artifact's content digest names the directory it was built into, and
-    # the build computed it from these bytes. The tree reaches this machine inside
-    # the worker image, whose layers the container engine verifies against their
-    # own digests, so hashing it again here re-proves the pull. It read about
-    # 360 MB and 18,000 files on every start, 16 s from a disk resumed cold.
+    # The tree arrives inside the worker image, whose layers the container
+    # engine verifies against their digests on pull. What can still go wrong on
+    # this machine is a file missing, added, truncated or re-permissioned, which
+    # the stat-only inventory catches without reading any file's contents.
     if artifact_path.name != artifact.digest or not artifact_path.is_dir():
         raise RuntimeError(f"managed runtime artifact {version} is missing: {artifact_path}")
+    inventory_digest = managed_runtime_artifact_inventory_digest(artifact_path)
+    if inventory_digest != artifact.inventory_digest:
+        raise RuntimeError(
+            f"managed runtime artifact {version} files differ from the build: "
+            f"inventory {inventory_digest or 'unavailable'}, expected {artifact.inventory_digest}"
+        )
     managed = _installed_distributions(artifact_path / "managed")
     locked = _installed_distributions(artifact_path / "dependencies")
     missing = sorted(set(MANAGED_RUNTIME_DISTRIBUTIONS) - managed.keys())
