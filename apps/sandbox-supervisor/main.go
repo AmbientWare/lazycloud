@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,9 @@ const (
 	maxPendingLogBytes       = 1024 * 1024
 	maxRetainedOutputBytes   = 256 * 1024
 	maxRetainedExitedProcess = 64
+	// outputDrainGrace is the longest an exec'd process's exit report waits,
+	// counted from the exit, for output a descendant is still writing.
+	outputDrainGrace = time.Second
 )
 
 type request struct {
@@ -38,6 +42,8 @@ type request struct {
 	AckSeq  uint64   `json:"ack_seq,omitempty"`
 	OK      bool     `json:"ok,omitempty"`
 	Token   string   `json:"token,omitempty"`
+	// Payload is the file helper's request for the filesystem operation.
+	Payload string `json:"payload,omitempty"`
 }
 
 type response struct {
@@ -241,6 +247,8 @@ func (s *supervisor) handleConnection(connection net.Conn) {
 		s.handleDrain(encoder, connection)
 	case "exec":
 		s.handleExec(decoder, encoder, command)
+	case "filesystem":
+		s.handleFilesystem(encoder, command.Payload)
 	case "watch":
 		s.handleWatch(decoder, encoder, command.PID, command.AckSeq)
 	case "status":
@@ -359,17 +367,29 @@ func (s *supervisor) handleExec(decoder *json.Decoder, encoder *json.Encoder, co
 	cmd.Dir = command.Cwd
 	cmd.Env = command.Env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdout, err := cmd.StdoutPipe()
+	// The supervisor owns these pipes. Wait closes a StdoutPipe as soon as the
+	// process exits, which loses whatever it wrote last and kills descendants
+	// still writing.
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		writeError(encoder, err)
 		return
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		writeError(encoder, err)
 		return
 	}
-	if err = cmd.Start(); err != nil {
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
+	err = s.startChild(cmd)
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	if err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
 		writeError(encoder, err)
 		return
 	}
@@ -385,7 +405,6 @@ func (s *supervisor) handleExec(decoder *json.Decoder, encoder *json.Encoder, co
 	}
 	s.mu.Lock()
 	s.processes[state.pid] = state
-	s.directChildren[state.pid] = struct{}{}
 	s.mu.Unlock()
 	var outputReaders sync.WaitGroup
 	outputReaders.Add(2)
@@ -398,8 +417,9 @@ func (s *supervisor) handleExec(decoder *json.Decoder, encoder *json.Encoder, co
 	s.streamProcess(decoder, encoder, state, 0)
 }
 
-func captureOutput(state *processState, stream string, reader io.Reader, done *sync.WaitGroup) {
+func captureOutput(state *processState, stream string, reader io.ReadCloser, done *sync.WaitGroup) {
 	defer done.Done()
+	defer reader.Close()
 	buffer := make([]byte, 32*1024)
 	for {
 		count, err := reader.Read(buffer)
@@ -428,24 +448,24 @@ func captureOutput(state *processState, stream string, reader io.Reader, done *s
 	}
 }
 
+// waitProcess reports the exit once the output has ended, or once
+// outputDrainGrace has passed since the exit if a descendant still holds the
+// pipes. The pipes stay open and read after that, so the descendant keeps
+// running.
 func (s *supervisor) waitProcess(state *processState, cmd *exec.Cmd, outputReaders *sync.WaitGroup) {
-	err := cmd.Wait()
-	s.mu.Lock()
-	delete(s.directChildren, state.pid)
-	s.mu.Unlock()
-	outputReaders.Wait()
-	exitCode := 0
-	if err != nil {
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) {
-			exitCode = exitError.ExitCode()
-			if status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-				exitCode = 128 + int(status.Signal())
-			}
-		} else {
-			exitCode = 1
-		}
+	err := s.waitChild(cmd, func() {})
+	drained := make(chan struct{})
+	go func() {
+		outputReaders.Wait()
+		close(drained)
+	}()
+	grace := time.NewTimer(outputDrainGrace)
+	select {
+	case <-drained:
+	case <-grace.C:
 	}
+	grace.Stop()
+	exitCode := exitCodeOf(err)
 	state.mu.Lock()
 	state.running = false
 	state.exitCode = exitCode
@@ -453,6 +473,64 @@ func (s *supervisor) waitProcess(state *processState, cmd *exec.Cmd, outputReade
 	state.notify()
 	state.mu.Unlock()
 	s.pruneExitedProcesses()
+}
+
+func exitCodeOf(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		return 1
+	}
+	if status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return 128 + int(status.Signal())
+	}
+	return exitError.ExitCode()
+}
+
+// handleFilesystem runs the file helper and streams all of its stdout, then
+// its exit status and stderr. Nothing is logged or replayed, so nothing is
+// dropped, and the connection's flow control paces the helper. The helper
+// starts no processes of its own, so its stdout ends when it does.
+func (s *supervisor) handleFilesystem(encoder *json.Encoder, payload string) {
+	executable, err := os.Executable()
+	if err != nil {
+		writeError(encoder, err)
+		return
+	}
+	cmd := exec.Command(executable, "filesystem", payload)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		writeError(encoder, err)
+		return
+	}
+	if err := s.startChild(cmd); err != nil {
+		writeError(encoder, err)
+		return
+	}
+	buffer := make([]byte, 32*1024)
+	var sendErr error
+	for {
+		count, readErr := stdout.Read(buffer)
+		if count > 0 && sendErr == nil {
+			sendErr = encoder.Encode(response{Version: protocolVersion, Type: "chunk", Stream: "stdout", Data: buffer[:count]})
+			if sendErr != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	err = s.waitChild(cmd, func() {})
+	if sendErr != nil {
+		return
+	}
+	_ = encoder.Encode(response{Version: protocolVersion, Type: "exited", ExitCode: exitCodeOf(err), Stderr: stderr.String()})
 }
 
 func (s *supervisor) pruneExitedProcesses() {

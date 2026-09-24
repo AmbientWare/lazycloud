@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Thread
 from uuid import uuid4
 
-from shared.app_identity import CONTAINER_HELPER_PATH
+from pydantic import ValidationError
 from shared.contracts import ContractModel
 from shared.deployments import StubKind
 from shared.http.workspace_sync import WorkspaceSyncBatch
@@ -70,6 +70,7 @@ from worker.container_service.models import (
     CONTAINER_NOT_FOUND_MESSAGE,
     SANDBOX_FILESYSTEM_OVER_LIMIT_EXIT,
     SANDBOX_PROCESS_MANAGER_NOT_READY_MESSAGE,
+    SandboxDownloadReport,
     SandboxFileOverLimitError,
     SandboxFilesystemRequest,
     SandboxProcessEvent,
@@ -98,7 +99,6 @@ from worker.sandbox_server import (
     WORKER_CONTAINER_UPLOADS_MOUNT_PATH,
     SandboxExposePortRequest,
     SandboxFileOperation,
-    SandboxLogStream,
     plan_sandbox_expose_port,
     plan_sandbox_list_exposed_ports,
     plan_sandbox_process_log_ack,
@@ -450,7 +450,7 @@ class WorkerContainerService:
     ) -> ContainerSandboxDownloadFileResponse:
         try:
             instance = self._required_instance(request.container_id)
-            data = self._filesystem_bytes(
+            data, report = self._filesystem_output(
                 instance,
                 SandboxFilesystemRequest(
                     operation=SandboxFileOperation.DownloadFile,
@@ -459,6 +459,17 @@ class WorkerContainerService:
                     truncate=request.truncate,
                 ),
             )
+            try:
+                written = SandboxDownloadReport.model_validate_json(report).bytes
+            except ValidationError as exc:
+                raise RuntimeError(
+                    f"the sandbox supervisor did not report the size of {request.container_path}"
+                ) from exc
+            if written != len(data):
+                raise RuntimeError(
+                    f"received {len(data)} of the {written} bytes the sandbox "
+                    f"supervisor wrote for {request.container_path}"
+                )
             return ContainerSandboxDownloadFileResponse(ok=True, data=data)
         except SandboxFileOverLimitError as exc:
             return ContainerSandboxDownloadFileResponse(
@@ -687,54 +698,30 @@ class WorkerContainerService:
     ) -> Response:
         try:
             instance = self._required_instance(container_id)
-            return response_type.model_validate_json(self._filesystem_bytes(instance, request))
+            stdout, _ = self._filesystem_output(instance, request)
+            return response_type.model_validate_json(stdout)
         except Exception as exc:
             return response_type.model_validate({"ok": False, "error_msg": str(exc)})
 
-    def _filesystem_bytes(
+    def _filesystem_output(
         self,
         instance: WorkerContainerServiceInstance,
         request: SandboxFilesystemRequest,
-    ) -> bytes:
+    ) -> tuple[bytes, bytes]:
         request.path = resolve_sandbox_container_path(request.path, cwd=instance.cwd)
-        stdout, stderr, exit_code = self._sandbox_control_exec(
-            instance, [CONTAINER_HELPER_PATH, "filesystem", request.model_dump_json()]
-        )
-        if exit_code == SANDBOX_FILESYSTEM_OVER_LIMIT_EXIT:
-            raise SandboxFileOverLimitError(stderr.decode("utf-8", errors="replace").strip())
-        if exit_code != 0:
-            raise RuntimeError(
-                stderr.decode("utf-8", errors="replace").strip()
-                or f"sandbox filesystem operation exited {exit_code}"
-            )
-        return stdout
-
-    def _sandbox_control_exec(
-        self,
-        instance: WorkerContainerServiceInstance,
-        argv: list[str],
-    ) -> tuple[bytes, bytes, int]:
         manager = self._ready_process_manager(instance)
         if isinstance(manager, str):
             raise RuntimeError(manager)
-        stdout = bytearray()
-        stderr = bytearray()
-        exit_code: int | None = None
         try:
-            for event in manager.stream_exec(argv, cwd=instance.cwd, env=instance.env):
-                if event.event_type is SandboxProcessEventType.Chunk:
-                    if event.stream is SandboxLogStream.Stderr:
-                        stderr.extend(event.data)
-                    else:
-                        stdout.extend(event.data)
-                    manager.ack(event.pid, event.seq, ok=True)
-                elif event.event_type is SandboxProcessEventType.Exited:
-                    exit_code = event.exit_code
+            output = manager.run_filesystem(request.model_dump_json())
         finally:
             manager.cleanup()
-        if exit_code is None:
-            raise RuntimeError("sandbox control command ended without an exit event")
-        return bytes(stdout), bytes(stderr), exit_code
+        stderr = output.stderr.decode("utf-8", errors="replace").strip()
+        if output.exit_code == SANDBOX_FILESYSTEM_OVER_LIMIT_EXIT:
+            raise SandboxFileOverLimitError(stderr)
+        if output.exit_code != 0:
+            raise RuntimeError(stderr or f"sandbox file operation exited {output.exit_code}")
+        return output.stdout, output.stderr
 
     def _append_process_log(
         self,

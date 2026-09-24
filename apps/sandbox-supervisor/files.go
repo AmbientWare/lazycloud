@@ -52,6 +52,12 @@ type filesystemInfo struct {
 	Permissions uint32 `json:"permissions"`
 }
 
+// downloadReport is what a download writes to stderr once its bytes are on
+// stdout.
+type downloadReport struct {
+	Bytes int64 `json:"bytes"`
+}
+
 type filesystemMatch struct {
 	Path   string `json:"path"`
 	Text   string `json:"text"`
@@ -78,17 +84,57 @@ func runFilesystem(payload string) error {
 	if request.Limit < 0 || request.Limit > maxFilesystemLimit {
 		return fmt.Errorf("limit %d is outside 0..%d", request.Limit, int64(maxFilesystemLimit))
 	}
+	if request.Operation == "download-file" {
+		written, err := downloadFile(request, os.Stdout)
+		if err != nil {
+			return filesystemError(request, err)
+		}
+		// The worker compares this count with the bytes it received, so a
+		// stream cut short fails instead of returning part of the file.
+		return json.NewEncoder(os.Stderr).Encode(downloadReport{Bytes: written})
+	}
 	response, err := filesystemOperation(request)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("path not found: %q", request.Path)
-		}
-		return err
-	}
-	if request.Operation == "download-file" {
-		return nil
+		return filesystemError(request, err)
 	}
 	return json.NewEncoder(os.Stdout).Encode(response)
+}
+
+func filesystemError(request filesystemRequest, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("path not found: %q", request.Path)
+	}
+	return err
+}
+
+// downloadFile writes the file to output and returns how many bytes it wrote.
+func downloadFile(request filesystemRequest, output io.Writer) (int64, error) {
+	input, err := os.Open(request.Path)
+	if err != nil {
+		return 0, err
+	}
+	defer input.Close()
+	if request.Limit == 0 {
+		return io.Copy(output, input)
+	}
+	if request.Truncate {
+		written, err := io.CopyN(output, input, request.Limit)
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+		return written, err
+	}
+	// The size is only known by reading: a file can grow while it is read,
+	// and /proc and device files report none. Reading one byte past the limit
+	// is what tells a file that fits exactly from a larger one.
+	written, err := io.CopyN(output, input, request.Limit+1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return written, err
+	}
+	if written > request.Limit {
+		return written, fmt.Errorf("%q is larger than %d bytes: %w", request.Path, request.Limit, errOverLimit)
+	}
+	return written, nil
 }
 
 func filesystemOperation(request filesystemRequest) (filesystemResponse, error) {
@@ -107,34 +153,6 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 	switch request.Operation {
 	case "upload-file":
 		return response, uploadFilesystemFile(request.Source, path, mode)
-	case "download-file":
-		input, err := os.Open(path)
-		if err != nil {
-			return response, err
-		}
-		defer input.Close()
-		if request.Limit == 0 {
-			_, err = io.Copy(os.Stdout, input)
-			return response, err
-		}
-		if request.Truncate {
-			_, err = io.CopyN(os.Stdout, input, request.Limit)
-			if errors.Is(err, io.EOF) {
-				err = nil
-			}
-			return response, err
-		}
-		// The size is only known by reading: a file can grow while it is
-		// read, and /proc and device files report none. Reading one byte past
-		// the limit is what tells a file that fits exactly from a larger one.
-		written, err := io.CopyN(os.Stdout, input, request.Limit+1)
-		if err != nil && !errors.Is(err, io.EOF) {
-			return response, err
-		}
-		if written > request.Limit {
-			return response, fmt.Errorf("%q is larger than %d bytes: %w", path, request.Limit, errOverLimit)
-		}
-		return response, nil
 	case "create-directory":
 		if err := os.MkdirAll(path, mode); err != nil {
 			return response, err

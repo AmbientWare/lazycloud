@@ -1,8 +1,8 @@
 package main
 
 import (
+	"bytes"
 	"errors"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -43,13 +43,13 @@ func TestDownloadRefusesOverItsLimitOrReturnsAPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if out, err := captureStdout(t, filesystemRequest{Operation: "download-file", Path: path, Limit: 5}); err != nil || out != "12345" {
+	if out, err := download(filesystemRequest{Operation: "download-file", Path: path, Limit: 5}); err != nil || out != "12345" {
 		t.Fatalf("a file at the limit returned %q, %v", out, err)
 	}
-	if _, err := captureStdout(t, filesystemRequest{Operation: "download-file", Path: path, Limit: 4}); !errors.Is(err, errOverLimit) {
+	if _, err := download(filesystemRequest{Operation: "download-file", Path: path, Limit: 4}); !errors.Is(err, errOverLimit) {
 		t.Fatalf("a file over the limit returned %v", err)
 	}
-	if out, err := captureStdout(t, filesystemRequest{Operation: "download-file", Path: path, Limit: 3, Truncate: true}); err != nil || out != "123" {
+	if out, err := download(filesystemRequest{Operation: "download-file", Path: path, Limit: 3, Truncate: true}); err != nil || out != "123" {
 		t.Fatalf("a prefix read returned %q, %v", out, err)
 	}
 	if err := runFilesystem(`{"operation":"download-file","path":"` + path + `","limit":` + "9223372036854775807" + `}`); err == nil || errors.Is(err, errOverLimit) {
@@ -57,20 +57,8 @@ func TestDownloadRefusesOverItsLimitOrReturnsAPrefix(t *testing.T) {
 	}
 }
 
-func captureStdout(t *testing.T, request filesystemRequest) (string, error) {
-	t.Helper()
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout := os.Stdout
-	os.Stdout = writer
-	_, opErr := filesystemOperation(request)
-	os.Stdout = stdout
-	writer.Close()
-	out, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(out), opErr
+func download(request filesystemRequest) (string, error) {
+	var output bytes.Buffer
+	_, err := downloadFile(request, &output)
+	return output.String(), err
 }

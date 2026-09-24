@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -106,6 +107,94 @@ func TestStreamAckEvictsPersistedChunks(t *testing.T) {
 	if len(state.logs) != 0 || state.pendingBytes != 0 || state.ackSeq != 1 {
 		t.Fatalf("acknowledged chunks retained: %#v", state)
 	}
+}
+
+// TestMain lets the test binary stand in for the file helper, which the
+// supervisor runs as its own executable.
+func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == "filesystem" {
+		main()
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestFilesystemDownloadReturnsEveryByteAndItsCount(t *testing.T) {
+	token, tokenPath := testControlToken(t)
+	path := filepath.Join(t.TempDir(), "blob")
+	want := bytes.Repeat([]byte("0123456789abcdef"), 300_000/16)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(filesystemRequest{Operation: "download-file", Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, decoder := openControl(t, tokenPath, request{Version: protocolVersion, Op: "filesystem", Payload: string(payload), Token: token})
+	var got []byte
+	for {
+		var event response
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatalf("stream ended after %d bytes: %v", len(got), err)
+		}
+		if event.Type != "chunk" {
+			var report downloadReport
+			if event.Type != "exited" || event.ExitCode != 0 || json.Unmarshal([]byte(event.Stderr), &report) != nil {
+				t.Fatalf("download ended with %#v", event)
+			}
+			if !bytes.Equal(got, want) || report.Bytes != int64(len(want)) {
+				t.Fatalf("received %d bytes, reported %d, of %d", len(got), report.Bytes, len(want))
+			}
+			return
+		}
+		got = append(got, event.Data...)
+	}
+}
+
+func TestExecReportsExitWhileADescendantKeepsWriting(t *testing.T) {
+	token, tokenPath := testControlToken(t)
+	script := "echo done; (while :; do echo tick; sleep 0.2; done) &"
+	client, decoder := openControl(t, tokenPath, request{Version: protocolVersion, Op: "exec", Argv: []string{"sh", "-c", script}, Token: token})
+	if err := client.SetReadDeadline(time.Now().Add(outputDrainGrace + 2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	encoder := json.NewEncoder(client)
+	for {
+		var event response
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatalf("the exit was not reported while a descendant kept writing: %v", err)
+		}
+		switch event.Type {
+		case "started":
+			pid := event.PID
+			t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+		case "chunk":
+			if err := encoder.Encode(request{Version: protocolVersion, Op: "ack", PID: event.PID, AckSeq: event.Seq, OK: true}); err != nil {
+				t.Fatal(err)
+			}
+		case "exited":
+			return
+		}
+	}
+}
+
+// openControl sends one request to a fresh supervisor and returns the
+// connection it answers on.
+func openControl(t *testing.T, tokenPath string, command request) (net.Conn, *json.Decoder) {
+	t.Helper()
+	s := &supervisor{
+		processes:      make(map[int]*processState),
+		directChildren: make(map[int]struct{}),
+		connections:    make(map[net.Conn]struct{}),
+		tokenPath:      tokenPath,
+	}
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	go s.handleConnection(server)
+	if err := json.NewEncoder(client).Encode(command); err != nil {
+		t.Fatal(err)
+	}
+	return client, json.NewDecoder(bufio.NewReader(client))
 }
 
 func TestExitedProcessRetentionIsBounded(t *testing.T) {

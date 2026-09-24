@@ -5,12 +5,14 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.apps import StubRepository
 from fastapi.testclient import TestClient
+from gateway.stub_config import stub_config
 from identity.auth import TokenIssuer
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind, DevboxState, PodRole
 from shared.disks import DiskStatus
 from shared.http.deployments import DeploymentDetailResponse, DeploymentListResponse
 from shared.http.disks import DiskListResponse
+from shared.http.gateway import GetOrCreateStubRequest
 from shared.ssh import ssh_host_alias
 from storage.disks import get_or_create_disks
 from tests.workspaces import on_team_plan, owned_workspace, workspace_owner_user_id
@@ -86,6 +88,19 @@ def test_a_devbox_detail_carries_its_role_connection_and_disk(
     assert service.stub_id is not None
     with isolated_services.context.database.session() as session:
         stubs = StubRepository(session)
+        stored = stubs.get(devbox.stub_id, workspace_id=workspace.id)
+        assert stored is not None
+        # An SDK deploy goes through the gateway, which stores the root disk
+        # without its default mount path.
+        gateway_config = stub_config(
+            GetOrCreateStubRequest(
+                name="box",
+                stub_type=DeploymentKind.Pod.value,
+                role=PodRole.Devbox,
+                root_disk_bytes=20 * GIB,
+            )
+        )
+        stubs.upsert(stored.model_copy(update={"config": gateway_config}))
         assert stubs.mounts_root_disk(devbox.stub_id, workspace_id=workspace.id)
         assert not stubs.mounts_root_disk(service.stub_id, workspace_id=workspace.id)
 
