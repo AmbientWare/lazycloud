@@ -17,13 +17,13 @@ from observability.stream_state import RedisEventStreamRepository
 from shared.containers import ContainerExecutionPhase, ContainerStatus
 from shared.deployment_records import resolve_pod_role
 from shared.deployments import DeploymentKind, DevboxPhase, DevboxState, PodRole
-from shared.disks import DiskStatus
 from shared.errors import NotFoundError
 from shared.http.deployments import DevboxDiskResponse, DevboxResponse
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery
 from shared.ssh import ssh_host_alias
 from shared.timestamps import to_utc, utc_now
+from storage.disk_volumes import DiskWorkerAbsence, holder_keeps_disk
 
 from database import DatabaseClient
 from execution.containers.runtime_state import PodKeepAliveReader
@@ -99,6 +99,7 @@ class DevboxService:
     database: DatabaseClient
     keep_alive: PodKeepAliveReader
     startup: ContainerStartupReader
+    worker_absence: DiskWorkerAbsence
     clock: Callable[[], datetime] = field(default=utc_now)
 
     def describe(self, resource: DeploymentResource) -> DevboxResponse | None:
@@ -126,10 +127,12 @@ class DevboxService:
             disks = DiskRepository(session)
             disk = disks.get(root.name, workspace_id=workspace_id) if root is not None else None
             saving_disk = False
-            if disk is not None and container is None and disk.status is not DiskStatus.Attached:
-                # A holder that stopped keeps its lease until its last save lands.
+            if disk is not None and container is None:
+                # The lease names its last holder until the next acquire, so
+                # the storage owner's rule says whether that holder still saves.
                 lease = disks.lease(disk.id)
-                saving_disk = lease is not None and bool(lease[0])
+                if lease is not None and lease[0]:
+                    saving_disk = holder_keeps_disk(disks.holder(lease[0]), self.worker_absence)
             recent_failure = (
                 containers.recent_startup_failure(
                     stub.id,
@@ -201,10 +204,12 @@ class DevboxService:
         now = self.clock()
         # The autoscaler spares a container for its first keep-warm window and
         # for as long as the marker lives, so it stops at the later of the two.
+        # A deadline already past says only that the next pass may stop it.
         candidates = [now + timedelta(seconds=state.idle_seconds)] if state.idle_seconds else []
         if container.started_at is not None:
             candidates.append(to_utc(container.started_at) + timedelta(seconds=keep_warm_seconds))
-        return 0, max(candidates) if candidates else None
+        upcoming = [deadline for deadline in candidates if deadline > now]
+        return 0, max(upcoming) if upcoming else None
 
 
 def _state(container: LiveContainer | None) -> DevboxState:

@@ -63,6 +63,8 @@ def test_a_devbox_detail_carries_its_role_connection_and_disk(
         )
         listed = client.get("/api/v1/deployments", params=params, headers=headers)
         disks = client.get("/api/v1/disks", params=params, headers=headers)
+        isolated_services.deployments.delete(devbox.id, workspace=workspace.id)
+        after_delete = client.get("/api/v1/disks", params=params, headers=headers)
 
     detail = DeploymentDetailResponse.model_validate_json(devbox_detail.content)
     assert detail.role is PodRole.Devbox
@@ -94,3 +96,4 @@ def test_a_devbox_detail_carries_its_role_connection_and_disk(
         "box",
         PodRole.Devbox,
     )
+    assert DiskListResponse.model_validate_json(after_delete.content).data[0].workload is None

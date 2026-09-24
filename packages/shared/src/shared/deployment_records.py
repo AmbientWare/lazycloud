@@ -13,6 +13,7 @@ from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind, PodRole
 from shared.disks import (
     DiskMount,
     parse_disk_size_bytes,
+    require_one_writer,
     validate_disk_mounts,
     validate_disk_name,
 )
@@ -243,8 +244,9 @@ def validate_pod_role(
         return
     if ssh is False:
         raise ValueError("a devbox is reached over SSH and cannot turn ssh off")
-    if max_containers is not None and max_containers > 1:
-        raise ValueError("a devbox runs one container; set max_containers to 1")
+    if max_containers is not None:
+        # Checked before the root disk exists, so a spec fails where it is written.
+        require_one_writer(max_containers)
     has_root = any(disk.is_root for disk in disks)
     if has_root and root_disk_bytes is not None:
         raise ValueError("a devbox has one root disk: size it or declare a disk at /, not both")

@@ -13,13 +13,14 @@ from database.repositories.apps import (
     DeploymentRepository,
     DeploymentResourceRepository,
     DeploymentResourceRow,
+    SshPodRow,
     StubRepository,
 )
 from database.repositories.identity import WorkspaceRepository
 from database.types import DatabaseSession
 from shared.deployment_subdomains import deployment_subdomain
 from shared.deployments import DeploymentKind, StubKind
-from shared.errors import ConflictError, NotFoundError
+from shared.errors import ConflictError, DomainError, NotFoundError
 from shared.http.ssh import SshCertificateResponse, SshHostListResponse, SshHostResponse
 from shared.ssh import SSH_CERTIFICATE_PRINCIPAL, SSH_WORKER_PORT, ssh_host_alias
 from shared.timestamps import utc_now
@@ -118,19 +119,23 @@ class SshIdentityService:
                 limit=bounded,
             )
         workspace_name, secret = identity
+        available = [row for row in rows if row.active and row.ssh]
+        if pod is not None and not available:
+            raise _unreachable(pod, rows)
         return SshHostListResponse(
             data=[
                 SshHostResponse(
                     app=row.app_name,
                     pod=row.pod,
                     role=row.role,
+                    deployment_id=row.deployment_id,
                     alias=ssh_host_alias(workspace_name, row.app_name, row.pod),
                     host_public_key=openssh_public_key(
                         pod_host_key(secret, app_id=row.app_id, pod_name=row.pod),
                         comment=f"{row.app_name}-{row.pod}",
                     ),
                 )
-                for row in rows
+                for row in available
             ],
             next=f"{rows[-1].app_name}/{rows[-1].pod}" if len(rows) == bounded else "",
             workspace=workspace_name,
@@ -252,6 +257,22 @@ def _stub(session: DatabaseSession, *, workspace_id: str, stub_id: str) -> StubR
 def _require_ssh(stub: StubRecord, label: str) -> None:
     if stub.kind is not StubKind.Pod or not stub.config.ssh:
         raise ConflictError(f"pod {label} does not serve SSH; deploy it with ssh=True")
+
+
+def _unreachable(pod: str, rows: list[SshPodRow]) -> DomainError:
+    """Why no deployed pod by this name can be reached over SSH."""
+    if not rows:
+        return NotFoundError(f"no devbox or pod named {pod!r}", code="pod_not_found")
+    if all(not row.active for row in rows):
+        return ConflictError(
+            f"{pod!r} is stopped; start it with `lazycloud deployment start {pod}` "
+            "or deploy it again",
+            code="pod_stopped",
+        )
+    return ConflictError(
+        f"{pod!r} does not serve SSH; deploy it as a devbox or with ssh=True",
+        code="pod_without_ssh",
+    )
 
 
 def _credential_secret(session: DatabaseSession, workspace_id: str) -> str:

@@ -1147,12 +1147,17 @@ class ContainerRepository:
         )
 
     def recent_startup_failure(self, stub_id: str, *, since: datetime) -> str | None:
-        """Why the stub's newest container that failed since `since` failed, if one did."""
+        """Why the stub's newest container that failed to start since `since` failed.
+
+        Only a container that never ran counts: one that ran and then exited
+        failed for some other reason, which a start did not cause.
+        """
         row = self.session.execute(
             select(ContainerTable.startup_error)
             .where(
                 ContainerTable.stub_id == stub_id,
                 ContainerTable.status == ContainerStatus.Failed.value,
+                ContainerTable.started_at.is_(None),
                 ContainerTable.finished_at >= since,
             )
             .order_by(ContainerTable.finished_at.desc(), ContainerTable.id.desc())

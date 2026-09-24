@@ -1,7 +1,12 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { deploymentDetailSchema, deploymentListSchema, type Deployment } from "@/lib/api/schemas";
+import {
+  deploymentListSchema,
+  devboxSchema,
+  type Deployment,
+  type DevboxPhase,
+} from "@/lib/api/schemas";
 
 import {
   LIVE_LIST_MAX_PAGES,
@@ -44,25 +49,34 @@ export function deploymentsInfiniteQueryOptions(
 }
 
 /**
- * A deployment with what only its detail carries, such as a devbox's status.
+ * A devbox's status, from the endpoint cheap enough to poll.
  *
- * Connections and the idle deadline change without a workspace event, so a
- * devbox's detail refreshes on an interval while it is on screen.
+ * Connections and the idle deadline change without a workspace event, so it
+ * refreshes on an interval: quickly while the devbox is changing state, slowly
+ * once it has settled, and not at all while the tab is hidden.
  */
-export function deploymentDetailQueryOptions(workspaceId: string, deploymentId: string) {
+export function devboxQueryOptions(workspaceId: string, deploymentId: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.deployments.detail(workspaceId, deploymentId),
+    queryKey: workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId),
     queryFn: () =>
       apiRequest(
-        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, workspaceId),
-        deploymentDetailSchema,
+        withWorkspace(
+          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/devbox`,
+          workspaceId,
+        ),
+        devboxSchema,
       ),
-    refetchInterval: DEVBOX_REFRESH_MS,
+    refetchInterval: (query) =>
+      query.state.data && SETTLED_PHASES.has(query.state.data.phase)
+        ? SETTLED_REFRESH_MS
+        : CHANGING_REFRESH_MS,
     meta: workspaceLiveQueryMeta(false),
   });
 }
 
-const DEVBOX_REFRESH_MS = 5_000;
+const SETTLED_PHASES = new Set<DevboxPhase>(["running", "stopped", "failed"]);
+const SETTLED_REFRESH_MS = 15_000;
+const CHANGING_REFRESH_MS = 3_000;
 
 export function selectDeploymentList(
   data: InfiniteListQueryData<Deployment> | undefined,

@@ -83,6 +83,9 @@ class SshPodRow:
     app_name: str
     pod: str
     role: PodRole
+    deployment_id: str
+    active: bool
+    ssh: bool
 
 
 class DeploymentResourceRow(BaseModel):
@@ -1138,16 +1141,19 @@ class DeploymentRepository:
         after: tuple[str, str] | None = None,
         limit: int,
     ) -> list[SshPodRow]:
-        """Active pods whose newest active version serves SSH, ordered by app and name.
+        """Pods whose newest version is active and serves SSH, ordered by app and name.
 
         The newest version decides, because it is the one an SSH connection
-        reaches; an older version that served SSH does not make the pod serve it.
+        reaches. Filtered by `pod`, stopped pods and pods without SSH come back
+        too, marked as such, so a caller can say why it cannot connect.
         """
         newest = (
             select(
                 AppTable.id.label("app_id"),
                 AppTable.name.label("app_name"),
                 DeploymentTable.name.label("pod"),
+                DeploymentTable.id.label("deployment_id"),
+                DeploymentTable.active.label("active"),
                 StubTable.ssh.label("ssh"),
                 StubTable.role.label("role"),
             )
@@ -1156,7 +1162,6 @@ class DeploymentRepository:
             .where(
                 DeploymentTable.workspace_id == workspace_id,
                 DeploymentTable.kind == DeploymentKind.Pod.value,
-                DeploymentTable.active.is_(True),
                 DeploymentTable.deleted_at.is_(None),
                 AppTable.deleted_at.is_(None),
             )
@@ -1169,8 +1174,16 @@ class DeploymentRepository:
             newest = newest.where(DeploymentTable.name == pod)
         candidates = newest.subquery()
         statement = select(
-            candidates.c.app_id, candidates.c.app_name, candidates.c.pod, candidates.c.role
-        ).where(candidates.c.ssh.is_(True))
+            candidates.c.app_id,
+            candidates.c.app_name,
+            candidates.c.pod,
+            candidates.c.role,
+            candidates.c.deployment_id,
+            candidates.c.active,
+            candidates.c.ssh,
+        )
+        if pod is None:
+            statement = statement.where(candidates.c.ssh.is_(True), candidates.c.active.is_(True))
         if after is not None:
             statement = statement.where(
                 tuple_(candidates.c.app_name, candidates.c.pod)
@@ -1185,8 +1198,11 @@ class DeploymentRepository:
                 app_name=app_name,
                 pod=pod_name,
                 role=PodRole(role) if role else PodRole.Service,
+                deployment_id=str(deployment_id),
+                active=bool(active),
+                ssh=bool(ssh),
             )
-            for app_id, app_name, pod_name, role in rows
+            for app_id, app_name, pod_name, role, deployment_id, active, ssh in rows
         ]
 
     def live_container_ids(

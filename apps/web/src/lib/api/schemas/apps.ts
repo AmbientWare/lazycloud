@@ -129,11 +129,6 @@ export const devboxSchema = z.object({
 });
 export type Devbox = z.infer<typeof devboxSchema>;
 
-export const deploymentDetailSchema = deploymentSchema.extend({
-  devbox: devboxSchema.nullable(),
-});
-export type DeploymentDetail = z.infer<typeof deploymentDetailSchema>;
-
 export const deploymentListSchema = z.object({
   data: z.array(deploymentSchema).default([]),
   next: z.string().default(""),

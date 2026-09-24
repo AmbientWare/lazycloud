@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from database.repositories.identity import WorkspaceRepository
-from database.tables.apps import AppTable, StubTable
+from database.tables.apps import AppTable, DeploymentTable, StubTable
 from database.tables.compute import ComputeProviderInstanceTable
 from database.tables.disks import DiskAttachmentTable, DiskGenerationTable, DiskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.orchestration import ContainerTable, WorkerTable
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
-from shared.deployments import PodRole, StubKind
+from shared.deployments import DeploymentKind, PodRole, StubKind
 from shared.disks import DiskRecord, DiskStatus, DiskWorkload
 from shared.errors import ConflictError
 from shared.timestamps import to_utc
@@ -275,9 +275,23 @@ class DiskRepository:
         return [disk_from_table(row, holder_live=bool(live)) for row, live in rows]
 
     def workloads(self, disk_ids: Sequence[str]) -> dict[str, DiskWorkload]:
-        """The workload each disk was last asked for by, for the disks that have one."""
+        """The workload each disk was last asked for by, while that workload is deployed.
+
+        The stub outlives its deployment, so the workload counts only while a
+        live deployment of that app and name exists.
+        """
         if not disk_ids:
             return {}
+        deployed = (
+            select(DeploymentTable.id)
+            .where(
+                DeploymentTable.app_id == StubTable.app_id,
+                DeploymentTable.name == StubTable.name,
+                DeploymentTable.kind == DeploymentKind.Pod.value,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .exists()
+        )
         rows = self.session.execute(
             select(DiskTable.id, AppTable.id, AppTable.name, StubTable.name, StubTable.role)
             .join(StubTable, StubTable.id == DiskTable.last_stub_id)
@@ -286,6 +300,7 @@ class DiskRepository:
                 DiskTable.id.in_(list(disk_ids)),
                 StubTable.type == StubKind.Pod.value,
                 AppTable.deleted_at.is_(None),
+                deployed,
             )
         ).tuples()
         return {

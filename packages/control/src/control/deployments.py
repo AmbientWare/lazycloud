@@ -313,6 +313,13 @@ class DeploymentService:
                 kind=target.kind,
                 now=now,
             )
+            deleted_target = next(
+                (deployment for deployment in deleted if deployment.id == target.id), None
+            )
+            if deleted_target is None:
+                # Another delete got there between the read and the update.
+                msg = f"deployment not found: {deployment_id}"
+                raise NotFoundError(msg)
             delete_deployment_cron_jobs(
                 session,
                 deployment_ids={deployment.id for deployment in deleted},
@@ -335,7 +342,7 @@ class DeploymentService:
                 workspace=workspace_id,
                 required=False,
             )
-        return next(deployment for deployment in deleted if deployment.id == target.id)
+        return deleted_target
 
     def _discard_failed_deployment(
         self,

@@ -6,7 +6,7 @@ import { Panel } from "@/components/shared/Panel";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Devbox, DevboxPhase } from "@/lib/api/schemas";
 import { countLabel, formatBytes } from "@/lib/format";
-import { deploymentDetailQueryOptions } from "@/lib/queries/deployments";
+import { devboxQueryOptions } from "@/lib/queries/deployments";
 
 const PHASE_LABELS: Record<DevboxPhase, string> = {
   stopped: "Stopped",
@@ -27,13 +27,13 @@ export function DevboxPanel({
   workspaceId: string;
   deploymentId: string;
 }) {
-  const detail = useQuery(deploymentDetailQueryOptions(workspaceId, deploymentId));
-  const devbox = detail.data?.devbox;
+  const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
+  const devbox = status.data;
 
   return (
     <Panel title="Connect" className="mb-3 shrink-0" contentClassName="space-y-2 p-3">
-      {detail.isError ? (
-        <p className="text-xs text-destructive">{detail.error.message}</p>
+      {status.isError ? (
+        <p className="text-xs text-destructive">{status.error.message}</p>
       ) : !devbox ? (
         <div className="space-y-2" aria-hidden="true">
           <Skeleton className="h-8 w-full" />

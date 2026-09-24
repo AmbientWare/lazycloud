@@ -9,7 +9,7 @@ from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.deployment_records import CpuRequest, MemoryRequest, request_and_limit
 from shared.deployments import PodRole
-from shared.disks import DiskMount, validate_disk_mounts
+from shared.disks import DiskMount, require_one_writer, validate_disk_mounts
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
 from shared.lifecycle import LifecycleHooks
@@ -318,9 +318,8 @@ class StubConfig(ContractModel):
 
     @model_validator(mode="after")
     def disks_have_one_writer(self) -> StubConfig:
-        if self.disks and self.autoscaler.max_containers > 1:
-            msg = "a workload with a disk runs one container; set max_containers to 1"
-            raise ValueError(msg)
+        if self.disks:
+            require_one_writer(self.autoscaler.max_containers)
         return self
 
     @model_validator(mode="after")
@@ -329,8 +328,6 @@ class StubConfig(ContractModel):
             return self
         if not self.ssh:
             raise ValueError("a devbox is reached over SSH and cannot turn ssh off")
-        if self.autoscaler.max_containers > 1:
-            raise ValueError("a devbox runs one container; set max_containers to 1")
         if not any(disk.is_root for disk in self.disks):
             raise ValueError("a devbox needs a disk at /")
         return self

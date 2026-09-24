@@ -183,6 +183,13 @@ class DiskMount(ContractModel):
         return self.mount_path == DISK_ROOT_MOUNT_PATH
 
 
+def require_one_writer(max_containers: int) -> None:
+    """Refuse more than one container for a workload with a disk; one writes it at a time."""
+    if max_containers > 1:
+        msg = "a workload with a disk runs one container; set max_containers to 1"
+        raise ValueError(msg)
+
+
 def validate_disk_mounts(disks: list[DiskMount]) -> list[DiskMount]:
     names = [disk.name for disk in disks]
     if len(names) != len(set(names)):
@@ -313,6 +320,7 @@ __all__ = [
     "disk_shrink_message",
     "disk_volume_size_bytes",
     "parse_disk_size_bytes",
+    "require_one_writer",
     "validate_disk_mount_path",
     "validate_disk_mounts",
     "validate_disk_name",

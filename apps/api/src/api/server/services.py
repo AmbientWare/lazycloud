@@ -1065,6 +1065,7 @@ class ApiServices(ApiServiceCore):
                 context.database,
                 keep_alive=container_runtime_state,
                 startup=StreamContainerStartupReader(stream_events),
+                worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
             ),
             disk_deletion=disk_deletion,
             disk_volumes=disk_volumes,

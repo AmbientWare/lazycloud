@@ -127,6 +127,12 @@ def test_ssh_hosts_list_only_the_workspaces_ssh_pods_and_filter_by_app_and_pod(
             headers=fixture.member,
         )
         refused = client.get("/api/v1/ssh/hosts", params=workspace, headers=fixture.outsider)
+        without_ssh = client.get(
+            "/api/v1/ssh/hosts", params={**workspace, "pod": "web"}, headers=fixture.member
+        )
+        missing = client.get(
+            "/api/v1/ssh/hosts", params={**workspace, "pod": "nope"}, headers=fixture.member
+        )
 
     assert certificate.status_code == 200
     assert SshCertificateResponse.model_validate_json(certificate.content).certificate.startswith(
@@ -152,6 +158,8 @@ def test_ssh_hosts_list_only_the_workspaces_ssh_pods_and_filter_by_app_and_pod(
         for host in SshHostListResponse.model_validate_json(page.content).data
     ] == ["ci", "dev"]
     assert refused.status_code == 403
+    assert (without_ssh.status_code, without_ssh.json()["code"]) == (409, "pod_without_ssh")
+    assert (missing.status_code, missing.json()["code"]) == (404, "pod_not_found")
 
 
 def test_ssh_tunnel_refuses_outsiders_and_pods_without_ssh(
