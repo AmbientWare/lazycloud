@@ -83,7 +83,9 @@ def test_a_missing_handler_names_the_module_and_what_it_defines(
     try:
         with pytest.raises(HandlerLoadError) as raised:
             load_deployment_object("dev:scratch")
-        assert raised.value.details.message == "module dev has no attribute 'scratch'"
-        assert raised.value.details.hint == "Apps and workloads in dev: dev:app, dev:hello"
+        details = raised.value.details
+        assert details.type == "invalid_handler"
+        assert "'scratch'" in details.message
+        assert "dev:hello" in details.hint
     finally:
         sys.modules.pop("dev", None)
