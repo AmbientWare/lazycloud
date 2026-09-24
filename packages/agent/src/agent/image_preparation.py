@@ -25,6 +25,10 @@ class WorkerImagePreparation:
             self.latest = pending[0]
         return sorted(self._prepared)
 
+    def known(self) -> frozenset[str]:
+        """Images already found prepared, without collecting a pending result or its error."""
+        return frozenset(self._prepared)
+
     def mark_prepared(self, image: str) -> None:
         """Record an image found on the host without preparing it again."""
         self._prepared.add(image)

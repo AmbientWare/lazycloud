@@ -695,8 +695,9 @@ class DockerAgentWorkerController:
         worker image downloads while the update installs, and the updated agent's
         own pull joins it.
         """
-        prepared = set(self._images.prepared())
-        for image in sorted(set(images) - prepared):
+        # A failed pull in progress is the updated agent's to report; it must not
+        # stop this update, so the pending result is left uncollected here.
+        for image in sorted(set(images) - self._images.known()):
             try:
                 self.runner.run(
                     [
