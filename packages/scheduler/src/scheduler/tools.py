@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field, JsonValue, model_validator
+from shared.container_requests import capacity_memory_mib, fits_reservation
 from shared.contracts import ContractModel
 from shared.disks import DiskStorage
 from shared.gpu import gpu_preference_accepts
@@ -41,6 +42,8 @@ class SchedulingRequest(ContractModel):
     payload: JsonValue = None
     cpu: float = 1
     memory_mib: int = 512
+    """The memory request; the container reserves `capacity_memory_mib` of it."""
+
     gpu: list[str] = Field(default_factory=list)
     """Models this request accepts, best first; empty asks for no GPU."""
 
@@ -171,8 +174,9 @@ class WorkerCapacity(ContractModel):
             return "worker is GPU-only"
         if self.free_cpu < request.cpu:
             return f"free cpu {self.free_cpu} < {request.cpu}"
-        if self.free_memory_mib < request.memory_mib:
-            return f"free memory {self.free_memory_mib}MiB < {request.memory_mib}MiB"
+        if not self.fits_resources(request):
+            reserved = capacity_memory_mib(request.memory_mib)
+            return f"free memory {self.free_memory_mib}MiB < {reserved}MiB reserved"
         if self.free_gpu < request.gpu_count:
             return f"free gpu {self.free_gpu} < {request.gpu_count}"
         return self.disk_rejection(request)
@@ -204,10 +208,17 @@ class WorkerCapacity(ContractModel):
         ):
             return False
         return (
-            self.free_cpu >= request.cpu
-            and self.free_memory_mib >= request.memory_mib
+            self.fits_resources(request)
             and self.free_gpu >= request.gpu_count
             and not self.disk_rejection(request)
+        )
+
+    def fits_resources(self, request: SchedulingRequest) -> bool:
+        return fits_reservation(
+            _millicores(self.free_cpu),
+            self.free_memory_mib,
+            cpu_millicores=_millicores(request.cpu),
+            memory_mib=request.memory_mib,
         )
 
     def reserve(self, request: SchedulingRequest) -> WorkerCapacity:
@@ -215,12 +226,16 @@ class WorkerCapacity(ContractModel):
         return self.model_copy(
             update={
                 "free_cpu": self.free_cpu - request.cpu,
-                "free_memory_mib": self.free_memory_mib - request.memory_mib,
+                "free_memory_mib": self.free_memory_mib - capacity_memory_mib(request.memory_mib),
                 "free_gpu": self.free_gpu - request.gpu_count,
                 "free_disk_bytes": self.free_disk_bytes - disk_bytes,
                 "free_disk_volumes": self.free_disk_volumes - disk_volumes,
             }
         )
+
+
+def _millicores(cores: float) -> int:
+    return round(cores * 1000)
 
 
 class PlannedDispatch(ContractModel):
@@ -344,7 +359,7 @@ def _post_placement_headroom(
 ) -> tuple[float, ...]:
     headroom = [
         (worker.free_cpu - request.cpu) / worker.total_cpu if worker.total_cpu > 0 else 0.0,
-        (worker.free_memory_mib - request.memory_mib) / worker.total_memory_mib
+        (worker.free_memory_mib - capacity_memory_mib(request.memory_mib)) / worker.total_memory_mib
         if worker.total_memory_mib > 0
         else 0.0,
     ]
@@ -427,7 +442,7 @@ def plan_scheduling_batch(
                     worker_id=worker.worker_id,
                     request_id=request.id,
                     cpu=request.cpu,
-                    memory_mib=request.memory_mib,
+                    memory_mib=capacity_memory_mib(request.memory_mib),
                     gpu_count=request.gpu_count,
                     disk_bytes=disk_bytes,
                     disk_volumes=disk_volumes,
@@ -460,7 +475,7 @@ def plan_scheduling_batch(
                     worker_id=pending_worker.worker_id,
                     request_id=request.id,
                     cpu=request.cpu,
-                    memory_mib=request.memory_mib,
+                    memory_mib=capacity_memory_mib(request.memory_mib),
                     gpu_count=request.gpu_count,
                     disk_bytes=disk_bytes,
                     disk_volumes=disk_volumes,

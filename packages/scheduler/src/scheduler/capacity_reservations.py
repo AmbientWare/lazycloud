@@ -37,7 +37,13 @@ from shared.capacity import (
 )
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
 from shared.compute_policy import ComputeUnitRecord, UnitName
-from shared.container_requests import OciRuntimeName, capacity_memory_mib
+from shared.container_requests import (
+    OciRuntimeName,
+    capacity_memory_mib,
+    fits_reservation,
+    node_fits_request,
+    schedulable_capacity,
+)
 from shared.contracts import ContractModel
 from shared.errors import CapacityLimitReachedError, UpstreamUnavailableError
 from shared.gpu import gpu_preference_accepts
@@ -174,15 +180,21 @@ class CapacityRequestShape(ContractModel):
         return self
 
     def can_host(self, request: SchedulerWorkerRequest) -> bool:
+        """Whether an empty machine of this nominal shape takes the request."""
+        return self.serves(request) and node_fits_request(
+            self.cpu_millicores,
+            self.memory_mib,
+            cpu_millicores=request.cpu_millicores,
+            memory_mib=request.memory_mib,
+        )
+
+    def serves(self, request: SchedulerWorkerRequest) -> bool:
+        """Everything about the request but its CPU and memory amounts."""
         if request.region is not None and self.region != request.region:
             return False
         if request.availability_zone and self.availability_zone != request.availability_zone:
             return False
         requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
-        if self.cpu_millicores < request.cpu_millicores:
-            return False
-        if self.memory_mib < capacity_memory_mib(request.memory_mib):
-            return False
         if self.gpu_count < requested_gpu:
             return False
         if requested_gpu <= 0 and self.gpu_count > 0:
@@ -252,6 +264,20 @@ class CapacityProvisioningReservation(ContractModel):
     @property
     def allocation_shape(self) -> CapacityRequestShape:
         return self.schedulable_shape or self.acquisition_shape
+
+    @property
+    def allocatable_capacity(self) -> tuple[int, int]:
+        """CPU millicores and memory MiB its allocations may reserve in total.
+
+        A registered worker states its schedulable totals; until then they are
+        derived from the nominal machine shape the way the worker will derive them.
+        """
+        if self.schedulable_shape is not None:
+            return self.schedulable_shape.cpu_millicores, self.schedulable_shape.memory_mib
+        return (
+            schedulable_capacity(self.acquisition_shape.cpu_millicores),
+            schedulable_capacity(self.acquisition_shape.memory_mib),
+        )
 
 
 class CapacityAcquisitionResult(ContractModel):
@@ -600,8 +626,8 @@ class ComputeUnitCapacityController:
                     or worker.machine_id == reservation.target_machine_id
                 )
                 and reservation.acquisition_shape.worker_capabilities_match(worker)
-                and worker.total_cpu_millicores >= reservation.acquisition_shape.cpu_millicores
-                and worker.total_memory_mib >= reservation.acquisition_shape.memory_mib
+                and worker.total_cpu_millicores >= reservation.allocatable_capacity[0]
+                and worker.total_memory_mib >= reservation.allocatable_capacity[1]
             ):
                 return CapacityAcquisitionResult(
                     status=CapacityAcquisitionStatus.ExistingPending,
@@ -1166,7 +1192,7 @@ class RedisCapacityReservationRepository:
             self.list_for_owner(capacity_owner_id),
             key=lambda item: not (item.acquisition_created or item.desired_unit > 0),
         ):
-            if not reservation.accepting_allocations or not reservation.allocation_shape.can_host(
+            if not reservation.accepting_allocations or not reservation.allocation_shape.serves(
                 request
             ):
                 continue
@@ -1175,10 +1201,14 @@ class RedisCapacityReservationRepository:
             used_memory = sum(item.memory_mib for item in allocations)
             used_gpu = sum(item.gpu_count for item in allocations)
             requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
+            cpu_millicores, memory_mib = reservation.allocatable_capacity
             if (
-                used_cpu + request.cpu_millicores <= reservation.allocation_shape.cpu_millicores
-                and used_memory + capacity_memory_mib(request.memory_mib)
-                <= reservation.allocation_shape.memory_mib
+                fits_reservation(
+                    cpu_millicores - used_cpu,
+                    memory_mib - used_memory,
+                    cpu_millicores=request.cpu_millicores,
+                    memory_mib=request.memory_mib,
+                )
                 and used_gpu + requested_gpu <= reservation.allocation_shape.gpu_count
             ):
                 return reservation

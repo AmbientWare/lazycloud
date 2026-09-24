@@ -1623,7 +1623,6 @@ def _scheduling_request(
     owner_user_id: str,
     provisionable: bool = True,
 ) -> SchedulingRequest:
-    memory_mib = capacity_memory_mib(request.memory_mib)
     cpu = request.cpu_millicores / 1000
     gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
     return SchedulingRequest(
@@ -1635,7 +1634,7 @@ def _scheduling_request(
         queue=request.stub_id or "containers",
         payload=request.payload,
         cpu=cpu,
-        memory_mib=memory_mib,
+        memory_mib=request.memory_mib,
         gpu_count=gpu_count,
         gpu=list(request.gpu),
         disk_bytes=request.disk_bytes,

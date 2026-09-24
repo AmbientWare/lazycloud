@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode, ComputeUnitRecord
-from shared.container_requests import OciRuntimeName, capacity_with_overhead
+from shared.container_requests import OciRuntimeName, node_fits_request
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts, gpu_preference_rank
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
@@ -212,8 +212,6 @@ def record_purchase_terms(unit: ComputeUnitRecord, offer: ComputeOffer) -> Compu
 
 
 def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[ComputeOffer]:
-    required_cpu = capacity_with_overhead(request.min_cpu_millicores)
-    required_memory = capacity_with_overhead(request.min_memory_mb)
     selected: list[ComputeOffer] = []
     for offer in offers:
         if request.offer_id and offer.id != request.offer_id:
@@ -226,9 +224,12 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
             continue
         if offer.preemptible and not request.preemptible:
             continue
-        if offer.cpu_millicores < required_cpu:
-            continue
-        if offer.memory_mb < required_memory:
+        if not node_fits_request(
+            offer.cpu_millicores,
+            offer.memory_mb,
+            cpu_millicores=request.min_cpu_millicores,
+            memory_mib=request.min_memory_mb,
+        ):
             continue
         if offer.storage_mb < request.min_storage_mb:
             continue
