@@ -103,8 +103,11 @@ class DevboxResponse(HttpModel):
     """Connections held open through the pod's proxy, SSH sessions included."""
 
     idle_deadline: datetime | None = None
-    """When the running container stops unless something connects; null while a
-    connection holds it open or while nothing runs."""
+    """When the running container stops unless something connects.
+
+    Null while a connection holds it open, while nothing runs, and once the
+    deadline has passed and the next autoscaler pass may stop it.
+    """
 
     disk: DevboxDiskResponse | None = None
     """The root disk; null until the devbox first starts and creates it."""

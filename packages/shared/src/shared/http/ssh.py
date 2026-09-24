@@ -29,7 +29,7 @@ class SshHostResponse(HttpModel):
     pod: str
     role: PodRole
     deployment_id: str
-    """The version an SSH connection reaches; its devbox status is polled by this id."""
+    """The version an SSH connection reaches. A devbox's status is read by this id."""
 
     alias: str
     """The host name SSH config and editors use for it."""

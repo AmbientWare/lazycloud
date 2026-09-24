@@ -1,4 +1,4 @@
-"""What the dashboard shows about a devbox: how to connect and whether it is running."""
+"""How to connect to a devbox and whether it is running, as the dashboard shows it."""
 
 from __future__ import annotations
 

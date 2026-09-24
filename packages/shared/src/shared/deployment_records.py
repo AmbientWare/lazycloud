@@ -63,7 +63,7 @@ DEFAULT_DEVBOX_PREEMPTIBLE = False
 """A reclaimed node would cut an SSH session off mid-command."""
 
 DEVBOX_COMMAND = ("sleep", "infinity")
-"""What a devbox runs when it names no command: nothing, for as long as it is kept."""
+"""The command a devbox runs when it names none. It does nothing and keeps the container up."""
 
 
 class Resources(ContractModel):
@@ -249,7 +249,7 @@ def validate_pod_role(
         require_one_writer(max_containers)
     has_root = any(disk.is_root for disk in disks)
     if has_root and root_disk_bytes is not None:
-        raise ValueError("a devbox has one root disk: size it or declare a disk at /, not both")
+        raise ValueError("a devbox has one root disk; size it or declare a disk at /, not both")
     if not has_root and root_disk_bytes is None:
         raise ValueError("a devbox needs a root disk; give its size")
     if root_disk_bytes is not None:

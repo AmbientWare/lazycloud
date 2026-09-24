@@ -243,7 +243,7 @@ def _one_host(hosts: list[SshPodHost], pod: str) -> SshPodHost:
 
 _UNREACHABLE_HINTS = {
     "pod_not_found": "Check the name, or pass --app or --workspace.",
-    "pod_stopped": "Start it, then connect again.",
+    "pod_stopped": "Connect again once it is running.",
     "pod_without_ssh": "Redeploy it as a devbox, or as a pod with ssh=True.",
 }
 
