@@ -17,6 +17,10 @@ class InternalHttpError(RuntimeError):
     """An internal hop could not be completed."""
 
 
+class InternalHttpConnectError(InternalHttpError):
+    """No connection was made, so the request never left this process."""
+
+
 @dataclass(slots=True)
 class InternalHttpClient:
     """The single pooled client for platform-internal HTTP."""
@@ -51,6 +55,8 @@ class InternalHttpClient:
                 content=content,
                 timeout=timeout,
             )
+        except httpx.ConnectError as exc:
+            raise InternalHttpConnectError(f"{method} {_safe_target(url)} failed: {exc}") from exc
         except httpx.HTTPError as exc:
             raise InternalHttpError(f"{method} {_safe_target(url)} failed: {exc}") from exc
 
@@ -97,5 +103,6 @@ def _safe_target(url: str) -> str:
 __all__ = [
     "DEFAULT_INTERNAL_HTTP_TIMEOUT_SECONDS",
     "InternalHttpClient",
+    "InternalHttpConnectError",
     "InternalHttpError",
 ]

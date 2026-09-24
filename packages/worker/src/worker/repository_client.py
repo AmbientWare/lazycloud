@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -8,7 +9,11 @@ from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from networking.internal_http import InternalHttpClient, InternalHttpError
+from networking.internal_http import (
+    InternalHttpClient,
+    InternalHttpConnectError,
+    InternalHttpError,
+)
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.checkpoints import AutomaticCheckpointCreationLease, CheckpointRecord
 from shared.container_requests import StopContainerReason
@@ -194,6 +199,10 @@ def _bounded_image_build_log(value: str) -> str:
     return encoded[: 8 * 1024].decode("utf-8", errors="ignore")
 
 
+_CONNECT_RETRY_FIRST_DELAY_SECONDS = 0.25
+_CONNECT_RETRY_MAX_DELAY_SECONDS = 4.0
+
+
 class WorkerSourceCacheNotAvailableError(WorkerRepositoryClientError):
     """The repository withheld the worker because its cache is not available.
 
@@ -213,6 +222,15 @@ class WorkerRepositoryHttpTransport:
     endpoint: str
     token: str
     timeout_seconds: float = 30.0
+    connect_retry_seconds: float = 60.0
+    """How long a refused connection is retried before the call fails.
+
+    The endpoint is the node agent, which restarts when it updates itself,
+    usually within seconds of a new node joining. A refused connection sent
+    nothing, so retrying it cannot repeat a request, and riding out the restart
+    keeps a container that was starting from failing with it.
+    """
+
     http: InternalHttpClient = field(default_factory=InternalHttpClient)
 
     def set_bearer_token(self, token: str) -> None:
@@ -220,22 +238,34 @@ class WorkerRepositoryHttpTransport:
 
     def prepare_shutdown(self, *, timeout_seconds: float) -> None:
         self.timeout_seconds = min(self.timeout_seconds, max(timeout_seconds, 0.1))
+        self.connect_retry_seconds = min(self.connect_retry_seconds, self.timeout_seconds)
 
     def post(
         self,
         path: str,
         payload: Mapping[str, JsonValue],
     ) -> JsonObject:
-        try:
-            response = self.http.request(
-                "POST",
-                self._url(path),
-                headers=self._headers(),
-                content=_encoded(payload),
-                timeout_seconds=self.timeout_seconds,
-            )
-        except InternalHttpError as exc:
-            raise WorkerRepositoryClientError(str(exc)) from exc
+        content = _encoded(payload)
+        deadline = time.monotonic() + self.connect_retry_seconds
+        delay = _CONNECT_RETRY_FIRST_DELAY_SECONDS
+        while True:
+            try:
+                response = self.http.request(
+                    "POST",
+                    self._url(path),
+                    headers=self._headers(),
+                    content=content,
+                    timeout_seconds=self.timeout_seconds,
+                )
+            except InternalHttpConnectError as exc:
+                if time.monotonic() + delay >= deadline:
+                    raise WorkerRepositoryClientError(str(exc)) from exc
+                time.sleep(delay)
+                delay = min(delay * 2, _CONNECT_RETRY_MAX_DELAY_SECONDS)
+                continue
+            except InternalHttpError as exc:
+                raise WorkerRepositoryClientError(str(exc)) from exc
+            break
         raw = response.text
         if response.status_code < 200 or response.status_code >= 300:
             raise http_api_error_from_body(response.status_code, raw)
