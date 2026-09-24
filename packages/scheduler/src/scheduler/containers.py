@@ -78,6 +78,13 @@ from scheduler.tools import (
 )
 
 DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS = 1.0
+PROVISIONING_RECHECK_SECONDS = 5.0
+"""How often demand whose machine is already starting is looked at again.
+
+Dispatch places the request the moment the machine's worker registers, so the
+recheck only follows the provisioning operation; each one reads the request,
+its reservation and the pool.
+"""
 CONTAINER_DISPATCH_WAKE_SCOPE = "scheduler-container-dispatch"
 LOGGER = logging.getLogger(__name__)
 
@@ -972,8 +979,16 @@ class SchedulerContainerRequestService:
                                 "status": result.status.value,
                             },
                         )
+                    waiting = result.status in {
+                        CapacityAcquisitionStatus.ExistingPending,
+                        CapacityAcquisitionStatus.Requested,
+                    }
                     retry_at = (now or utc_now()) + timedelta(
-                        seconds=max(result.retry_delay_seconds, self.requeue_delay_seconds)
+                        seconds=max(
+                            result.retry_delay_seconds,
+                            self.requeue_delay_seconds,
+                            PROVISIONING_RECHECK_SECONDS if waiting else 0.0,
+                        )
                     )
                     rejected = result.status in {
                         CapacityAcquisitionStatus.Rejected,
