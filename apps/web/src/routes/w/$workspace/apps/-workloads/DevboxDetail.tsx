@@ -17,11 +17,14 @@ import { ShellButton } from "@/components/shared/ShellDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import type { Deployment, Devbox, DevboxPhase } from "@/lib/api/schemas";
+import type { Devbox, DevboxPhase } from "@/lib/api/schemas";
 import { formatBytes } from "@/lib/format";
-import { startDeploymentMutationOptions, stopDeploymentMutationOptions } from "@/lib/queries/apps";
 import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
-import { devboxQueryOptions } from "@/lib/queries/deployments";
+import {
+  devboxQueryOptions,
+  startDevboxMutationOptions,
+  stopDevboxMutationOptions,
+} from "@/lib/queries/deployments";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import type { WorkloadGroup } from "./grouping";
@@ -39,48 +42,36 @@ const PHASE_LABELS: Record<DevboxPhase, string> = {
   failed: "Start failed",
 };
 
-/**
- * Shell, Start and Stop for the devbox header.
- *
- * Start and Stop switch the deployment on and off. Stop also stops the
- * container; a started devbox still boots on its first connection, so Start is
- * offered only while the deployment is off.
- */
+/** Shell, Start and Stop for the devbox header. */
 export function DevboxActions({
   workspaceId,
-  appId,
-  deployment,
+  deploymentId,
 }: {
   workspaceId: string;
-  appId: string;
-  deployment: Deployment;
+  deploymentId: string;
 }) {
   const queryClient = useQueryClient();
-  const status = useQuery(devboxQueryOptions(workspaceId, deployment.id));
+  const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
   const devbox = status.data;
-  const refresh = async () => {
+  const settle = async (next: Devbox | undefined) => {
+    const key = workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId);
+    if (next) queryClient.setQueryData(key, next);
     await Promise.all([
-      queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.deployments.devbox(workspaceId, deployment.id),
-      }),
+      queryClient.invalidateQueries({ queryKey: key }),
+      // A start switches a stopped deployment back on.
       queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
-      queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
-      }),
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
     ]);
   };
   const start = useMutation({
-    ...startDeploymentMutationOptions(workspaceId, deployment.id),
-    onSettled: refresh,
+    ...startDevboxMutationOptions(workspaceId, deploymentId),
+    onSettled: settle,
   });
   const stop = useMutation({
-    ...stopDeploymentMutationOptions(workspaceId, deployment.id),
-    onSettled: refresh,
+    ...stopDevboxMutationOptions(workspaceId, deploymentId),
+    onSettled: settle,
   });
   if (!devbox) return null;
 
-  const running = devbox.state === "running";
   const busy = start.isPending || stop.isPending || devbox.phase === "stopping";
   const error = start.error ?? stop.error;
 
@@ -93,21 +84,10 @@ export function DevboxActions({
       ) : null}
       <ShellButton
         containerId={devbox.container_id}
-        running={running}
+        running={devbox.state === "running"}
         disabledReason="Devbox is not running"
       />
-      {devbox.state !== "stopped" && deployment.actions.can_stop ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => stop.mutate()}
-        >
-          <Square className="fill-current" />
-          {stop.isPending ? "Stopping" : "Stop"}
-        </Button>
-      ) : deployment.actions.can_start ? (
+      {devbox.state === "stopped" ? (
         <Button
           type="button"
           variant="outline"
@@ -118,7 +98,18 @@ export function DevboxActions({
           <Play />
           {start.isPending ? "Starting" : "Start"}
         </Button>
-      ) : null}
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => stop.mutate()}
+        >
+          <Square className="fill-current" />
+          {stop.isPending ? "Stopping" : "Stop"}
+        </Button>
+      )}
     </>
   );
 }

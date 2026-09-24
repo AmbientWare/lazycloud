@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+
+from control.deployment_resources import DeploymentResource
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from identity.authz import token_has_scope
@@ -464,13 +467,50 @@ def get_devbox(
     services: ApiServices = Depends(current_services),
 ) -> DevboxResponse:
     """A devbox's status alone, cheap enough to poll while a connection waits for it."""
-    resource = services.deployment_resources.get_by_deployment_id(
-        deployment_id, workspace=workspace_id
-    )
-    devbox = services.devboxes.describe(resource) if resource is not None else None
+    devbox = services.devboxes.describe(_deployment_resource(services, deployment_id, workspace_id))
     if devbox is None:
         raise NotFoundError(f"devbox not found: {deployment_id}")
     return devbox
+
+
+@router.post(
+    "/api/v1/deployments/{deployment_id}/devbox/start",
+    response_model=DevboxResponse,
+    operation_id="start_devbox",
+)
+async def start_devbox(
+    deployment_id: str,
+    workspace_id: write_workspace,
+    services: ApiServices = Depends(current_services),
+) -> DevboxResponse:
+    """Boot a devbox now; answers once it has a container, before that container is running."""
+    resource = await asyncio.to_thread(_deployment_resource, services, deployment_id, workspace_id)
+    return await services.devboxes.start(resource, deployments=_management(services))
+
+
+@router.post(
+    "/api/v1/deployments/{deployment_id}/devbox/stop",
+    response_model=DevboxResponse,
+    operation_id="stop_devbox",
+)
+def stop_devbox(
+    deployment_id: str,
+    workspace_id: write_workspace,
+    services: ApiServices = Depends(current_services),
+) -> DevboxResponse:
+    """Stop a devbox's container now and leave its deployment on."""
+    return services.devboxes.stop(_deployment_resource(services, deployment_id, workspace_id))
+
+
+def _deployment_resource(
+    services: ApiServices, deployment_id: str, workspace_id: str
+) -> DeploymentResource:
+    resource = services.deployment_resources.get_by_deployment_id(
+        deployment_id, workspace=workspace_id
+    )
+    if resource is None:
+        raise NotFoundError(f"deployment not found: {deployment_id}")
+    return resource
 
 
 @router.delete(

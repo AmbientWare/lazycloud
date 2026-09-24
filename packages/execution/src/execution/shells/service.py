@@ -4,7 +4,8 @@ import logging
 import secrets
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
@@ -17,6 +18,7 @@ from database.types import DatabaseSession
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
 from shared.container_requests import WorkerStartupKind
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.deployments import PodRole
 from shared.env import parse_environment
 from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -53,6 +55,7 @@ from execution.mounts import (
 )
 from execution.placement import workload_placement
 from execution.pods.config import PodStubConfig
+from execution.pods.proxy import PodProxyConnectionRepository, held_container_connection
 from execution.services import ExecutionServices
 from execution.shells.planning import (
     SHELL_SERVER_PROBE_TIMEOUT_SECONDS,
@@ -116,6 +119,7 @@ class ShellControlService:
         backend_connector: Callable[[ShellBackendTarget], socket.socket],
         async_database: AsyncDatabaseClient | None = None,
         async_scheduler_containers: AsyncShellContainerDirectory | None = None,
+        connections: PodProxyConnectionRepository | None = None,
         poll_interval_seconds: float = 1.0,
     ) -> None:
         self.services = services
@@ -128,6 +132,7 @@ class ShellControlService:
         self.backend_connector = backend_connector
         self.async_database = async_database
         self.async_scheduler_containers = async_scheduler_containers
+        self.connections = connections
         self.poll_interval_seconds = poll_interval_seconds
 
     def create_standalone_shell(
@@ -575,6 +580,35 @@ class ShellControlService:
         )
         address_map = await self.async_scheduler_containers.get_container_address_map(container_id)
         return self._shell_backend_target(container, address_map, stub_id=stub_id)
+
+    @asynccontextmanager
+    async def devbox_connection(
+        self, target: ShellBackendTarget, *, workspace_id: str
+    ) -> AsyncIterator[None]:
+        """Hold a devbox's connection count while a shell into it is open.
+
+        An open shell is someone at the devbox as much as an SSH session is, so
+        it holds off the idle stop the same way. A shell into any other
+        container holds nothing.
+        """
+        if self.async_database is None or self.connections is None:
+            raise RuntimeError("asynchronous shell routing is not configured")
+        stub = await self.async_database.run_transaction(
+            lambda session: self.control_plane.get_stub_in_session(
+                session, target.stub_id, workspace=workspace_id
+            )
+        )
+        if stub.config.role is not PodRole.Devbox:
+            yield
+            return
+        async with held_container_connection(
+            self.connections,
+            workspace_id=stub.workspace_id,
+            stub_id=stub.id,
+            container_id=target.container_id,
+            keep_warm_seconds=stub.config.runtime.keep_warm,
+        ):
+            yield
 
     @staticmethod
     def _shell_backend_target(

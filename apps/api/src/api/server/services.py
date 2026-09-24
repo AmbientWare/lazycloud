@@ -1066,6 +1066,12 @@ class ApiServices(ApiServiceCore):
                 keep_alive=container_runtime_state,
                 startup=StreamContainerStartupReader(stream_events),
                 worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+                containers=containers,
+                connections=(
+                    AsyncRedisPodProxyConnectionRepository(async_io.redis)
+                    if async_io is not None
+                    else None
+                ),
             ),
             disk_deletion=disk_deletion,
             disk_volumes=disk_volumes,
@@ -1225,6 +1231,9 @@ def _compose_api_services(
         ),
         async_database=async_database,
         async_scheduler_containers=async_scheduler_containers,
+        connections=(
+            AsyncRedisPodProxyConnectionRepository(async_io.redis) if async_io is not None else None
+        ),
     )
     worker_repository = worker_repository_service or _worker_repository_service(
         core,

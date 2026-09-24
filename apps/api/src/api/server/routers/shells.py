@@ -226,8 +226,11 @@ async def shell_connect_websocket(
         )
         return
     try:
-        await websocket.send_text("OK")
-        await bridge_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
+        async with service.devbox_connection(
+            target, workspace_id=authorization.audience.workspace_id
+        ):
+            await websocket.send_text("OK")
+            await bridge_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
     except (WebSocketDisconnect, asyncio.CancelledError):
         return
     except OSError as exc:

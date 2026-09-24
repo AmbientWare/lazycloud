@@ -140,7 +140,7 @@ function WorkloadDetailPage() {
         }
         actions={
           <>
-            <DevboxActions workspaceId={workspace.id} appId={appId} deployment={current} />
+            <DevboxActions workspaceId={workspace.id} deploymentId={current.id} />
             {backLink}
           </>
         }

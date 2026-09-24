@@ -104,6 +104,43 @@ class PodProxyConnectionRepository(Protocol):
     async def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
 
 
+@asynccontextmanager
+async def held_container_connection(
+    connections: PodProxyConnectionRepository,
+    *,
+    workspace_id: str,
+    stub_id: str,
+    container_id: str,
+    keep_warm_seconds: int | None,
+) -> AsyncIterator[None]:
+    """Count one connection to a running container for as long as the block runs.
+
+    The same two counters a proxied connection moves, so the autoscaler keeps
+    the container while it is held and starts the idle window when it is let go.
+    """
+    await connections.increment_total_connections(workspace_id, stub_id)
+    try:
+        await connections.increment_container_connections(
+            workspace_id, stub_id, container_id, keep_warm_seconds=keep_warm_seconds
+        )
+    except BaseException:
+        await asyncio.shield(connections.decrement_total_connections(workspace_id, stub_id))
+        raise
+    try:
+        yield
+    finally:
+        # Shielded because a client going away cancels the holder, and a count
+        # left behind would keep the container up with nobody connected.
+        await asyncio.shield(
+            asyncio.gather(
+                connections.decrement_container_connections(
+                    workspace_id, stub_id, container_id, keep_warm_seconds=keep_warm_seconds
+                ),
+                connections.decrement_total_connections(workspace_id, stub_id),
+            )
+        )
+
+
 class PodProxyResponseStream(Protocol):
     status_code: int
     headers: dict[str, list[str]]

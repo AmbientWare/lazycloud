@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+import time
+from threading import Thread
+from uuid import uuid4
+
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from database.repositories.apps import StubRepository
+from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
 from gateway.stub_config import stub_config
 from identity.auth import TokenIssuer
+from shared.container_requests import StopContainerReason
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind, DevboxState, PodRole
 from shared.disks import DiskStatus
-from shared.http.deployments import DeploymentDetailResponse, DeploymentListResponse
+from shared.http.deployments import (
+    DeploymentDetailResponse,
+    DeploymentListResponse,
+    DevboxResponse,
+)
 from shared.http.disks import DiskListResponse
 from shared.http.gateway import GetOrCreateStubRequest
 from shared.ssh import ssh_host_alias
+from shared.workload_keys import pod_total_connections_key
 from storage.disks import get_or_create_disks
 from tests.workspaces import on_team_plan, owned_workspace, workspace_owner_user_id
 
@@ -118,3 +130,84 @@ def test_a_devbox_detail_carries_its_role_connection_and_disk(
         PodRole.Devbox,
     )
     assert DiskListResponse.model_validate_json(after_delete.content).data[0].workload is None
+
+
+def test_start_wakes_a_devbox_through_connection_demand_and_stop_keeps_it_deployed(
+    isolated_services: ApiServices,
+) -> None:
+    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "devbox-starter")
+    devbox = isolated_services.deployments.deploy(
+        DeploymentSpec(
+            name="box",
+            kind=DeploymentKind.Pod,
+            role=PodRole.Devbox,
+            root_disk_bytes=20 * GIB,
+            metadata={"app": "dev"},
+        ),
+        workspace=workspace.id,
+    )
+    stub_id = devbox.stub_id
+    assert stub_id is not None
+    on_team_plan(isolated_services.database, workspace.id)
+    issuer = TokenIssuer(isolated_services.context)
+    with isolated_services.context.database.session() as session:
+        token, _ = issuer.issue_for_user(
+            session,
+            "cli",
+            user_id=workspace_owner_user_id(isolated_services.context, workspace.id),
+        )
+    issuer.committed()
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"workspace": workspace.id}
+    redis = isolated_services.redis()
+    demand_key = redis.key(pod_total_connections_key(workspace.id, stub_id))
+    container_id = str(uuid4())
+
+    def autoscaler_pass() -> None:
+        # Stands in for the scheduler: a container appears only once the start
+        # has recorded the demand a connection would.
+        deadline = time.monotonic() + 10
+        while redis.get(demand_key) is None:
+            assert time.monotonic() < deadline, "start recorded no connection demand"
+            time.sleep(0.05)
+        with isolated_services.context.database.session() as session:
+            ContainerRepository(session).upsert(
+                ContainerRecord(
+                    id=container_id,
+                    name="box",
+                    image="devbox",
+                    command=["sleep", "infinity"],
+                    workspace_id=workspace.id,
+                    stub_id=stub_id,
+                    status=ContainerStatus.Running,
+                )
+            )
+
+    with TestClient(create_app(isolated_services)) as client:
+        client.post(f"/api/v1/deployments/{devbox.id}/stop", params=params, headers=headers)
+        scheduler = Thread(target=autoscaler_pass)
+        scheduler.start()
+        started = client.post(
+            f"/api/v1/deployments/{devbox.id}/devbox/start", params=params, headers=headers
+        )
+        scheduler.join()
+        again = client.post(
+            f"/api/v1/deployments/{devbox.id}/devbox/start", params=params, headers=headers
+        )
+        stopped = client.post(
+            f"/api/v1/deployments/{devbox.id}/devbox/stop", params=params, headers=headers
+        )
+        detail = client.get(f"/api/v1/deployments/{devbox.id}", params=params, headers=headers)
+
+    assert started.status_code == 200, started.text
+    running = DevboxResponse.model_validate_json(started.content)
+    assert (running.state, running.container_id) == (DevboxState.Running, container_id)
+    assert redis.get(demand_key) is None
+    assert DevboxResponse.model_validate_json(again.content).container_id == container_id
+
+    assert stopped.status_code == 200, stopped.text
+    assert DevboxResponse.model_validate_json(stopped.content).state is DevboxState.Stopped
+    record = isolated_services.containers.get(container_id)
+    assert record.status is ContainerStatus.Stopped
+    assert record.termination_reason is StopContainerReason.Scheduler
+    assert DeploymentDetailResponse.model_validate_json(detail.content).active
