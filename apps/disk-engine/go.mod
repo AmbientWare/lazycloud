@@ -4,7 +4,6 @@ go 1.25.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.2
 	github.com/aws/smithy-go v1.28.1
 	golang.org/x/sync v0.22.0

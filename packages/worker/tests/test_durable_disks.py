@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import stat
+import time
+from datetime import timedelta
 from pathlib import Path
 
 from foundation.process import ProcessResult
+from shared.timestamps import utc_now
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.durable_disk_records import (
     DiskAcquirePayload,
@@ -17,6 +21,7 @@ from worker.durable_disks import (
     ContainerDiskLeases,
     DiskEngine,
     DiskLease,
+    DiskStoreFile,
     WorkerDurableDiskService,
 )
 from worker.tools import (
@@ -169,3 +174,46 @@ def test_a_release_resumes_from_the_generation_the_engine_committed(tmp_path: Pa
         "5",
     ] in commands
     assert [item.disk_id for item in control_plane.released] == ["disk-1"]
+
+
+def test_an_engine_call_that_outlives_its_grant_reads_a_renewed_one(tmp_path: Path) -> None:
+    """A workspace storage grant can run out long before a restore or flatten does.
+    The engine re-reads its credentials file near expiry, so the worker must have
+    replaced it by then, or the call fails partway with an expired token."""
+    grants: list[DiskStoreFile] = []
+
+    def vend() -> DiskStoreFile:
+        grants.append(
+            DiskStoreFile(
+                endpoint_url="http://store",
+                region="region",
+                bucket="b",
+                access_key=f"key-{len(grants)}",
+                secret_key="secret",
+                session_token="token",
+                force_path_style=True,
+                expires_at=utc_now() + timedelta(seconds=2),
+            )
+        )
+        return grants[-1]
+
+    seen: list[tuple[str, int, bool]] = []
+
+    def engine(timeout: float, argv: list[str]) -> ProcessResult:
+        path = Path(argv[argv.index("--store") + 1])
+        deadline = time.monotonic() + 10
+        store = DiskStoreFile.model_validate_json(path.read_text(encoding="utf-8"))
+        while store.access_key == "key-0" and time.monotonic() < deadline:
+            time.sleep(0.05)
+            store = DiskStoreFile.model_validate_json(path.read_text(encoding="utf-8"))
+        before_expiry = grants[0].expires_at is not None and utc_now() < grants[0].expires_at
+        seen.append((store.access_key, stat.S_IMODE(path.stat().st_mode), before_expiry))
+        stdout = '{"removed_bytes": 0, "removed_chunks": 0, "removed_manifests": 0}'
+        return ProcessResult(args=argv, exit_code=0, stdout=stdout, stderr="")
+
+    DiskEngine(run_root=tmp_path / "run", run_command=engine).collect(
+        tmp_path / "layers", "disk-1", generation=1, store=vend
+    )
+
+    assert seen == [("key-1", 0o600, True)]
+    assert list((tmp_path / "run" / "disk-1").iterdir()) == []
