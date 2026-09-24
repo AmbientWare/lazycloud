@@ -932,6 +932,7 @@ class ApiServices(ApiServiceCore):
             DeploymentRegistrationService(apps, control_plane),
             cron_jobs,
             payment_admission,
+            execution_lifecycle,
             workspace_changes=workspace_changes,
             placement_resources=placement_resources,
         )

@@ -9,13 +9,7 @@ import { exactTime, formatBytes } from "@/lib/format";
 import { downloadBlob } from "@/lib/files";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { useLiveNow } from "@/hooks/use-live-now";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { FilePreviewDialog } from "@/components/shared/FilePreview";
 import { fetchArtifactBlob } from "@/lib/queries/artifacts";
 import { ArtifactPreview, type PreviewKind } from "./ArtifactPreview";
 import type { ArtifactSummary } from "@/lib/api/schemas";
@@ -79,7 +73,6 @@ export function ArtifactRow({
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const previewButton = useRef<HTMLButtonElement>(null);
-  const previewTitle = useRef<HTMLHeadingElement>(null);
   const [downloading, setDownloading] = useState(false);
   const now = useLiveNow(true);
   const kind = previewKind(artifact.content_type);
@@ -214,40 +207,22 @@ export function ArtifactRow({
           <TableCell className="w-20 pl-0">{actions}</TableCell>
         </TableRow>
       )}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
-          className="flex h-[min(40rem,80svh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            previewTitle.current?.focus();
-          }}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            previewButton.current?.focus();
-          }}
-        >
-          <DialogHeader className="shrink-0 gap-1 border-b px-4 py-3 text-left">
-            <DialogTitle
-              ref={previewTitle}
-              tabIndex={-1}
-              className="mono truncate pr-6 text-sm outline-none"
-            >
-              {artifact.filename}
-            </DialogTitle>
-            <DialogDescription className="text-xs">
-              {artifact.content_type} · {formatBytes(artifact.size)}
-            </DialogDescription>
-          </DialogHeader>
-          {kind !== "none" && (
-            <ArtifactPreview
-              key={artifact.id}
-              artifact={artifact}
-              workspaceId={workspaceId}
-              kind={kind}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <FilePreviewDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={artifact.filename}
+        description={`${artifact.content_type} · ${formatBytes(artifact.size)}`}
+        returnFocus={previewButton}
+      >
+        {kind !== "none" && (
+          <ArtifactPreview
+            key={artifact.id}
+            artifact={artifact}
+            workspaceId={workspaceId}
+            kind={kind}
+          />
+        )}
+      </FilePreviewDialog>
     </>
   );
 }

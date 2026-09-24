@@ -11,7 +11,6 @@ from lazycloud.cli.components.output import json_output_enabled, print_payload
 from lazycloud.cli.components.progress import attach_terminal
 from lazycloud.cli.execution import open_shell_session
 from lazycloud.cli.handler_workflows import (
-    HandlerLoadError,
     apply_handler_reference,
     invoke_handler_method,
     load_handler_object,
@@ -27,10 +26,7 @@ def dev(
     if json_output_enabled(ctx):
         raise typer.BadParameter("--json cannot be used with an interactive development session")
     if handler is not None:
-        try:
-            user_object = apply_handler_reference(load_handler_object(handler), handler)
-        except HandlerLoadError as exc:
-            raise typer.BadParameter(str(exc)) from exc
+        user_object = apply_handler_reference(load_handler_object(handler), handler)
         attach_terminal(user_object)
         response = invoke_handler_method(
             user_object,

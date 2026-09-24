@@ -52,10 +52,15 @@ export function deploymentsInfiniteQueryOptions(
  * A devbox's status, from the endpoint cheap enough to poll.
  *
  * Connections and the idle deadline change without a workspace event, so it
- * refreshes on an interval: quickly while the devbox is changing state, slowly
- * once it has settled, and not at all while the tab is hidden.
+ * refreshes on an interval: quickly while the devbox is changing state or the
+ * caller is waiting for a change it asked for, slowly once it has settled, and
+ * not at all while the tab is hidden.
  */
-export function devboxQueryOptions(workspaceId: string, deploymentId: string) {
+export function devboxQueryOptions(
+  workspaceId: string,
+  deploymentId: string,
+  { awaitingChange = false }: { awaitingChange?: boolean } = {},
+) {
   return queryOptions({
     queryKey: workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId),
     queryFn: () =>
@@ -67,14 +72,14 @@ export function devboxQueryOptions(workspaceId: string, deploymentId: string) {
         devboxSchema,
       ),
     refetchInterval: (query) =>
-      query.state.data && SETTLED_PHASES.has(query.state.data.phase)
+      !awaitingChange && query.state.data && SETTLED_PHASES.has(query.state.data.phase)
         ? SETTLED_REFRESH_MS
         : CHANGING_REFRESH_MS,
     meta: workspaceLiveQueryMeta(false),
   });
 }
 
-/** Boot a stopped devbox; the server answers once it has a container. */
+/** Ask a stopped devbox to start; the server answers with its status without waiting. */
 export function startDevboxMutationOptions(workspaceId: string, deploymentId: string) {
   return {
     mutationFn: () =>

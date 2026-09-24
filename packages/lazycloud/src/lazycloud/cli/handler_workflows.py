@@ -12,10 +12,23 @@ import typer
 from shared.env import importing_user_code
 
 from lazycloud.abstractions.app import App
+from lazycloud.abstractions.endpoint import ASGI, Endpoint
+from lazycloud.abstractions.function import Function
+from lazycloud.abstractions.pod import Pod
+from lazycloud.cli.components.errors import ClientError
+
+_MISSING = object()
 
 
-class HandlerLoadError(ValueError):
-    pass
+class HandlerLoadError(ClientError):
+    def __init__(self, message: str, *, hint: str = "") -> None:
+        super().__init__(
+            message,
+            type="invalid_handler",
+            title="Handler not loaded",
+            hint=hint,
+            exit_code=2,
+        )
 
 
 @runtime_checkable
@@ -33,8 +46,18 @@ def load_handler_object(reference: str) -> object:
         raise HandlerLoadError(msg)
     module = _load_module(module_ref)
     target: object = module
+    owner = module.__name__
     for part in object_path.split("."):
-        target = getattr(target, part)
+        found = getattr(target, part, _MISSING)
+        if found is _MISSING:
+            if target is module:
+                raise HandlerLoadError(
+                    f"module {owner} has no attribute {part!r}",
+                    hint=_defined_handlers_hint(module_ref, module),
+                )
+            raise HandlerLoadError(f"{owner} has no attribute {part!r}")
+        target = found
+        owner = f"{owner}.{part}"
     return target
 
 
@@ -89,6 +112,19 @@ def call_handler(
         msg = "handler is not callable"
         raise typer.BadParameter(msg)
     return user_object(*(args or []), **(kwargs or {}))
+
+
+def _defined_handlers_hint(module_ref: str, module: ModuleType) -> str:
+    names = sorted(
+        name
+        for name, value in vars(module).items()
+        if isinstance(value, (App, Function, Endpoint, ASGI, Pod))
+    )
+    if not names:
+        return f"{module_ref} defines no app or workload."
+    return f"Apps and workloads in {module_ref}: " + ", ".join(
+        f"{module_ref}:{name}" for name in names
+    )
 
 
 def _load_module(module_ref: str) -> ModuleType:

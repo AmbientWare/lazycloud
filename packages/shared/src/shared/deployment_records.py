@@ -221,6 +221,16 @@ def resolve_pod_role(kind: DeploymentKind | str, role: PodRole | None) -> PodRol
     return role or PodRole.Service
 
 
+def keeps_one_active_version(kind: DeploymentKind | str, role: PodRole | None) -> bool:
+    """Whether turning one version of this workload on turns its other versions off.
+
+    Every version of a devbox mounts the same root disk, and one container holds
+    a disk at a time, so a second active version could only wait for the disk
+    or fail to start.
+    """
+    return resolve_pod_role(kind, role) is PodRole.Devbox
+
+
 def validate_pod_role(
     kind: DeploymentKind | str,
     role: PodRole | None,
@@ -592,6 +602,7 @@ __all__ = [
     "VolumeMount",
     "declared_min_containers",
     "default_keep_warm_seconds",
+    "keeps_one_active_version",
     "request_and_limit",
     "resolve_authorized",
     "resolve_cpu",

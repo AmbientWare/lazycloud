@@ -61,7 +61,7 @@ from shared.container_requests import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.deployment_records import Deployment
+from shared.deployment_records import Deployment, keeps_one_active_version
 from shared.deployments import DeploymentKind
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.client_manifests import INVOKABLE_DEPLOYMENT_KINDS, ClientManifestResource
@@ -841,6 +841,8 @@ class ManagementService:
             if not app.active:
                 msg = f"cannot start deployment while app is paused: {app.name}"
                 raise ConflictError(msg)
+        if active and keeps_one_active_version(deployment.kind, deployment.spec.role):
+            self._refuse_superseded_start(deployment, workspace_id=workspace_id)
         deployment.active = active
         deployment.updated_at = utc_now()
         with self.services.context.database.session() as session:
@@ -870,6 +872,8 @@ class ManagementService:
         )
         if not active:
             self.stop_deployment_containers(workspace, updated, reason=None)
+        else:
+            self.services.deployments.stop_superseded_versions(updated, workspace_id=workspace_id)
         self.services.events.emit(
             "deployment.started" if active else "deployment.stopped",
             resource_type="deployment",
@@ -878,6 +882,22 @@ class ManagementService:
             workspace_id=workspace_id,
         )
         return updated
+
+    def _refuse_superseded_start(self, deployment: Deployment, *, workspace_id: str) -> None:
+        """A workload that keeps one version on cannot start one older than the one it runs."""
+        with self.services.context.database.session() as session:
+            newest = DeploymentRepository(session).newest_active_version(
+                workspace_id=workspace_id,
+                app_id=deployment.app_id,
+                name=deployment.name,
+                kind=deployment.kind,
+            )
+        if newest is not None and newest > deployment.version:
+            msg = (
+                f"{deployment.name} v{deployment.version} is replaced by v{newest}; "
+                f"stop v{newest} before starting an older version"
+            )
+            raise ConflictError(msg)
 
     def scale_deployment(
         self,

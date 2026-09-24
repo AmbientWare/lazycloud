@@ -48,10 +48,10 @@ def test_file_deploy_requires_a_selection_when_several_apps_are_present(
     )
     try:
         result = CliRunner().invoke(build_public_cli(), ["deploy", "several_apps.py"])
-        assert result.exit_code != 0
-        assert "multiple apps found" in result.output
-        assert "several_apps.py:first" in result.output
-        assert "several_apps.py:second" in result.output
+        assert isinstance(result.exception, HandlerLoadError)
+        assert "multiple apps found" in str(result.exception)
+        assert "several_apps.py:first" in str(result.exception)
+        assert "several_apps.py:second" in str(result.exception)
         app = load_deployment_object("several_apps.py:second")
         assert isinstance(app, App) and app.slug == "second"
     finally:
@@ -69,3 +69,23 @@ def test_file_deploy_rejects_a_module_without_an_app(
             load_deployment_object("empty_app.py")
     finally:
         sys.modules.pop("empty_app", None)
+
+
+def test_a_missing_handler_names_the_module_and_what_it_defines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+    (tmp_path / "dev.py").write_text(
+        'from lazycloud import App\napp = App("dev")\n@app.function()\ndef hello(): return 1\n',
+        encoding="utf-8",
+    )
+    try:
+        with pytest.raises(HandlerLoadError) as raised:
+            load_deployment_object("dev:scratch")
+        details = raised.value.details
+        assert details.type == "invalid_handler"
+        assert "'scratch'" in details.message
+        assert "dev:hello" in details.hint
+    finally:
+        sys.modules.pop("dev", None)
