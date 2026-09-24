@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from api.server.services import ApiServices
+from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from observability.stream_state import RedisEventStreamRepository
@@ -35,6 +36,7 @@ def scheduler_request_service_for_redis(
         workers=workers or RedisSchedulerWorkerRepository(redis),
         containers=containers or RedisSchedulerContainerRepository(redis),
         dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
+        capacity_wake=RedisWakeSignal(redis, CAPACITY_WAKE_SCOPE),
         lifecycle_events=RedisEventStreamRepository(redis),
         capacity_reservations=CapacityReservationService(
             RedisCapacityReservationRepository(redis),

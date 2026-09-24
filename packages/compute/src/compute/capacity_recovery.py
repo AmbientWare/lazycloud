@@ -55,7 +55,8 @@ if TYPE_CHECKING:
     from compute.service import ComputeService
 
 LOGGER = logging.getLogger(__name__)
-CAPACITY_RECOVERY_WAKE_SCOPE = "scheduler-capacity-recovery"
+CAPACITY_WAKE_SCOPE = "scheduler-capacity-acquisition"
+"""Wakes the scheduler's acquisition loop: a machine is threatened or a request needs one."""
 MAX_RECOVERY_ATTEMPTS = 3
 
 

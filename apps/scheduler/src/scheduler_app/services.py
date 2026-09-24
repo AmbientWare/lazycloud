@@ -7,6 +7,7 @@ from agent.binary import AgentBinarySettings
 from billing.payment_maintenance import BillingPaymentMaintenance
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.bucket_access import AwsDeploymentBucketAccessService
+from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import ResolvedBlockVolumes
@@ -375,6 +376,7 @@ class SchedulerAppServices:
             assignments=scheduling_persistence,
             usage=usage,
             dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
+            capacity_wake=RedisWakeSignal(redis, CAPACITY_WAKE_SCOPE),
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
             disk_volume_attachments=DatabaseDiskVolumeAttachments(context),

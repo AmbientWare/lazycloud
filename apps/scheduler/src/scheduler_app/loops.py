@@ -1,7 +1,8 @@
 """The scheduler's loops, and the supervisor that owns their lifetime.
 
 One process, several cadences. Placement answers in milliseconds because a
-caller is waiting for it; capacity keeps the fleet and its records agreeing;
+caller is waiting for it; acquisition starts or buys the machine a waiting
+request needs; capacity keeps the fleet and its records agreeing;
 housekeeping waits on Stripe, S3, and Cloudflare, which answer on
 their own schedule. Running all of it on one thread meant placement waited for
 the slowest of them, and a task took fifty-five seconds to start behind a
@@ -47,6 +48,16 @@ help. Placement would need a scope of its own, published from wherever a stub's
 backlog grows. A one-second fallback bounds wake-free placement latency without
 running four full placement snapshots per second while the system is idle.
 """
+
+ACQUISITION_SWEEP_INTERVAL_SECONDS = 5.0
+"""How often acquisition looks for capacity demand nobody woke it for.
+
+Demand is normally announced on the capacity wake the moment a request finds
+no worker, so this sweep only bounds a lost wake, a retry that came due, or
+a capacity owner whose lease another replica held.
+"""
+
+ACQUISITION_CONTENDED_RETRY_SECONDS = 1.0
 
 CAPACITY_INTERVAL_SECONDS = 5.0
 """Cadence for the pass that decides what capacity exists.
@@ -161,7 +172,7 @@ def start_scheduler_loops(
     resolved_beats = beats or {}
     loops: list[SchedulerLoop] = []
 
-    def wait_for_capacity(timeout: float) -> None:
+    def wait_for_demand(timeout: float) -> None:
         wake = scheduler.workloads.capacity_wake
         if wake is None:
             resolved_stop.wait(timeout)
@@ -209,6 +220,33 @@ def start_scheduler_loops(
             autoscaling_limit=autoscaling_limit,
         ),
     )
+    contended_demand = threading.Event()
+
+    def acquire() -> SchedulerRunResult:
+        result = scheduler.run_acquisition_pass(
+            include_containers=include_containers,
+            container_limit=container_limit,
+        )
+        if result.capacity_demand_contended:
+            contended_demand.set()
+        else:
+            contended_demand.clear()
+        return result
+
+    def wait_for_acquisition(timeout: float) -> None:
+        # A capacity owner's lease is held for one provider round trip, so demand
+        # that met it retries after a second instead of waiting out the sweep.
+        if contended_demand.is_set():
+            resolved_stop.wait(ACQUISITION_CONTENDED_RETRY_SECONDS)
+            return
+        wait_for_demand(timeout)
+
+    spawn(
+        SchedulerLoopName.Acquisition,
+        ACQUISITION_SWEEP_INTERVAL_SECONDS,
+        acquire,
+        wait=wait_for_acquisition,
+    )
     spawn(
         SchedulerLoopName.Capacity,
         capacity_interval_seconds,
@@ -217,7 +255,6 @@ def start_scheduler_loops(
             include_containers=include_containers,
             container_limit=container_limit,
         ),
-        wait=wait_for_capacity,
     )
     spawn(
         SchedulerLoopName.Housekeeping,
@@ -280,6 +317,7 @@ def scheduler_shutdown_handlers(
 
 
 __all__ = [
+    "ACQUISITION_SWEEP_INTERVAL_SECONDS",
     "CAPACITY_INTERVAL_SECONDS",
     "HOUSEKEEPING_INTERVAL_SECONDS",
     "PLACEMENT_SWEEP_INTERVAL_SECONDS",

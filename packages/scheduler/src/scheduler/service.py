@@ -37,6 +37,7 @@ from shared.function_payloads import FunctionJsonInvocation, FunctionPayloadEnco
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.scheduling import SchedulerWorkerStatus, WorkerRemovalResult
+from shared.step_timings import StepTimings
 from shared.tasks import Task
 from shared.timestamps import utc_now
 from shared.worker_events import (
@@ -92,6 +93,8 @@ DEFAULT_AUTOSCALING_RECONCILE_LIMIT = 500
 CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
 MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS = 60.0
 ORPHANED_CONTAINER_RECONCILE_INTERVAL_SECONDS = 30.0
+CAPACITY_PASS_SLOW_SECONDS = 2.0
+"""A capacity pass at least this long logs the seconds each of its steps took."""
 ORPHANED_CONTAINER_CONFIRMATION_SECONDS = 60.0
 ORPHANED_CONTAINER_FAILURE_REASON = (
     "container execution state was lost before the workload reached a recoverable runtime"
@@ -824,6 +827,46 @@ class Scheduler:
             ),
         )
 
+    def run_acquisition_pass(
+        self,
+        *,
+        now: datetime | None = None,
+        include_containers: bool = True,
+        container_limit: int = 100,
+    ) -> SchedulerRunResult:
+        """Turn recorded capacity demand into a machine, and nothing else.
+
+        A request that found no worker waits here for a reserve to resume or a
+        machine to be bought, so this pass runs on its own wake. Sharing the
+        capacity pass made that request wait behind a minute of provider
+        inventory reads before anyone started the stopped reserve it needed.
+        """
+
+        if not include_containers:
+            return SchedulerRunResult()
+        current_time = now or utc_now()
+        timings = StepTimings()
+        with timings.step("recovery"):
+            try:
+                self.runtime_services.compute.reconcile_capacity_recovery(
+                    now=current_time,
+                    limit=container_limit,
+                )
+            except Exception:
+                LOGGER.exception("scheduler capacity recovery failed")
+        with timings.step("acquire"):
+            sweep = self.container_scheduler.acquire_capacity(
+                now=current_time, limit=container_limit
+            )
+        if sweep.acquired or sweep.contended:
+            timings.log(
+                LOGGER,
+                "scheduler acquisition pass: %d request(s) served, %d contended",
+                sweep.acquired,
+                sweep.contended,
+            )
+        return SchedulerRunResult(capacity_demand_contended=sweep.contended)
+
     def run_capacity_pass(
         self,
         *,
@@ -844,10 +887,14 @@ class Scheduler:
         than the shortest schedule a caller can write.
         """
 
-        billing_enforcement = self._best_effort_enforce_billing(now=now)
+        timings = StepTimings()
+        with timings.step("billing_enforcement"):
+            billing_enforcement = self._best_effort_enforce_billing(now=now)
         if include_containers and self.workloads.image_builds is not None:
-            self.workloads.image_builds.recover(limit=container_limit)
-        cron_job_runs = self.tick(now=now, limit=container_limit) if include_cron_jobs else []
+            with timings.step("image_build_recovery"):
+                self.workloads.image_builds.recover(limit=container_limit)
+        with timings.step("cron"):
+            cron_job_runs = self.tick(now=now, limit=container_limit) if include_cron_jobs else []
         if not include_containers:
             return SchedulerRunResult(
                 cron_job_runs=cron_job_runs,
@@ -855,31 +902,43 @@ class Scheduler:
                 billing_enforcement_stopped_count=billing_enforcement.stopped_count,
                 billing_enforcement_failure_count=billing_enforcement.failed_count,
             )
-        try:
-            self.runtime_services.compute.reconcile_capacity_recovery(
-                now=now or utc_now(),
-                limit=container_limit,
-            )
-        except Exception:
-            LOGGER.exception("scheduler capacity recovery failed")
-        self.container_scheduler.acquire_capacity(now=now, limit=container_limit)
+        with timings.step("app_lifecycle"):
+            app_lifecycle = self._best_effort_reconcile_app_lifecycle(limit=container_limit)
+        with timings.step("capacity_interruptions"):
+            interruptions = self._best_effort_reconcile_capacity_interruptions(now=now)
+        with timings.step("expire_containers"):
+            expired = self._best_effort_expire_containers(now=now)
+        with timings.step("worker_cleanup"):
+            worker_cleanups = self._best_effort_cleanup_workers(now=now)
+        with timings.step("preemptions"):
+            preemptions = self._best_effort_recover_unsettled_preemptions(limit=container_limit)
+        with timings.step("agent_pools"):
+            agent_pools = self._best_effort_reconcile_agent_pools(now=now)
+        with timings.step("managed_compute"):
+            managed_compute = self._best_effort_reconcile_managed_compute(now=now)
+        with timings.step("pool_states"):
+            pool_states = self._best_effort_refresh_pool_states(now=now)
+        with timings.step("capacity_reservations"):
+            reservations = self._best_effort_reconcile_capacity_reservations(now=now)
+        with timings.step("orphaned_containers"):
+            orphaned = self._best_effort_reconcile_orphaned_containers(now=now)
+        with timings.step("worker_pool_drains"):
+            drains = self._best_effort_drain_worker_pools(now=now, limit=container_limit)
+        if timings.total_seconds() >= CAPACITY_PASS_SLOW_SECONDS:
+            timings.log(LOGGER, "scheduler capacity pass was slow")
         return SchedulerRunResult(
             cron_job_runs=cron_job_runs,
-            app_lifecycle_reconciliations=self._best_effort_reconcile_app_lifecycle(
-                limit=container_limit
-            ),
-            capacity_interruptions=self._best_effort_reconcile_capacity_interruptions(now=now),
-            expired_containers=self._best_effort_expire_containers(now=now),
-            worker_cleanups=self._best_effort_cleanup_workers(now=now),
-            settled_preemptions=self._best_effort_recover_unsettled_preemptions(
-                limit=container_limit
-            ),
-            agent_pool_reconciliations=self._best_effort_reconcile_agent_pools(now=now),
-            managed_compute_reconciliations=self._best_effort_reconcile_managed_compute(now=now),
-            pool_states=self._best_effort_refresh_pool_states(now=now),
-            capacity_reservations=self._best_effort_reconcile_capacity_reservations(now=now),
-            orphaned_containers_failed=self._best_effort_reconcile_orphaned_containers(now=now),
-            worker_pool_drains=self._best_effort_drain_worker_pools(now=now, limit=container_limit),
+            app_lifecycle_reconciliations=app_lifecycle,
+            capacity_interruptions=interruptions,
+            expired_containers=expired,
+            worker_cleanups=worker_cleanups,
+            settled_preemptions=preemptions,
+            agent_pool_reconciliations=agent_pools,
+            managed_compute_reconciliations=managed_compute,
+            pool_states=pool_states,
+            capacity_reservations=reservations,
+            orphaned_containers_failed=orphaned,
+            worker_pool_drains=drains,
             billing_enforcement_unfunded_count=billing_enforcement.unfunded_count,
             billing_enforcement_stopped_count=billing_enforcement.stopped_count,
             billing_enforcement_failure_count=billing_enforcement.failed_count,
@@ -980,10 +1039,15 @@ class Scheduler:
         The running process does not use this. It runs each pass on its own
         cadence, which is the point of their being separate. This is what
         `--once` means, and it is how a test asks for the whole of the
-        scheduler's work without waiting for four loops to coincide.
+        scheduler's work without waiting for five loops to coincide.
         """
 
         return _merge_run_results(
+            self.run_acquisition_pass(
+                now=now,
+                include_containers=include_containers,
+                container_limit=container_limit,
+            ),
             self.run_capacity_pass(
                 now=now,
                 include_cron_jobs=include_cron_jobs,
@@ -1836,6 +1900,7 @@ class SchedulerRunResult(ContractModel):
     orphaned_containers_failed: list[str] = Field(default_factory=list)
     settled_preemptions: list[str] = Field(default_factory=list)
     worker_cleanups: list[WorkerRemovalResult] = Field(default_factory=list)
+    capacity_demand_contended: int = 0
     expired_tokens_pruned: int = 0
     events_pruned: int = 0
     volume_metering_count: int = 0

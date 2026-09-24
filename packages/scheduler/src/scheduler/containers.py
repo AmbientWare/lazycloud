@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import partial
+from time import monotonic
 from typing import Protocol
 
 from compute.capacity_errors import CapacityReservationConflictError
@@ -367,6 +368,13 @@ class SchedulerUsageRecorder(Protocol):
     ) -> UsageRecord: ...
 
 
+@dataclass(frozen=True, slots=True)
+class CapacityAcquisitionSweep:
+    acquired: int = 0
+    contended: int = 0
+    """Due demand left waiting because another holder had its capacity owner's lease."""
+
+
 @dataclass(slots=True)
 class SchedulerContainerRequestService:
     workers: SchedulerContainerWorkerRepository
@@ -375,6 +383,8 @@ class SchedulerContainerRequestService:
     failure_handler: SchedulerContainerFailureHandler
     assignments: SchedulerContainerAssignmentRecorder
     dispatch_wake: WakeSignalPublisher
+    capacity_wake: WakeSignalPublisher
+    """Wakes the acquisition loop when a request records demand for a machine."""
     lifecycle_events: SchedulerContainerLifecycleEvents
     workspace_owners: SchedulerWorkspaceOwners
     disk_volume_attachments: SchedulerDiskVolumeAttachments
@@ -462,6 +472,16 @@ class SchedulerContainerRequestService:
         except Exception:
             LOGGER.warning(
                 "scheduler dispatch wake failed; periodic sweep will recover the request",
+                exc_info=True,
+                extra={"container_id": container_id},
+            )
+
+    def _signal_capacity(self, container_id: str) -> None:
+        try:
+            self.capacity_wake.signal()
+        except Exception:
+            LOGGER.warning(
+                "scheduler capacity wake failed; the acquisition sweep will find the demand",
                 exc_info=True,
                 extra={"container_id": container_id},
             )
@@ -874,6 +894,8 @@ class SchedulerContainerRequestService:
                 container_id=request.container_id,
                 reason=str(exc),
             )
+        if demand.capacity_retry_at is None or demand.capacity_retry_at <= current_time:
+            self._signal_capacity(request.container_id)
         retry = self._plan_requeue(
             request.model_copy(update={"retry_count": demand.retry_count}),
             SchedulingOutcome(
@@ -899,12 +921,15 @@ class SchedulerContainerRequestService:
             reason="capacity demand recorded; ready workers remain eligible",
         )
 
-    def acquire_capacity(self, *, now: datetime | None = None, limit: int = 100) -> int:
+    def acquire_capacity(
+        self, *, now: datetime | None = None, limit: int = 100
+    ) -> CapacityAcquisitionSweep:
         capacity = self.capacity_reservations
         if capacity is None:
-            return 0
+            return CapacityAcquisitionSweep()
         current_time = now or utc_now()
         acquired = 0
+        contended = 0
         for candidate in self.assignments.capacity_requests_due(now=current_time, limit=limit):
             try:
                 with capacity.mutation_lock(f"demand:{candidate.container_id}"):
@@ -913,7 +938,22 @@ class SchedulerContainerRequestService:
                     )
                     if request is None:
                         continue
+                    began = monotonic()
                     result = self._acquire_capacity_request(request, current_time)
+                    if result.status is not CapacityAcquisitionStatus.ExistingPending:
+                        LOGGER.info(
+                            "capacity for container %s: %s in %.3fs, %.3fs after its request%s",
+                            request.container_id,
+                            result.status.value,
+                            monotonic() - began,
+                            (utc_now() - request.timestamp).total_seconds(),
+                            f" ({result.reason})" if result.reason else "",
+                            extra={
+                                "container_id": request.container_id,
+                                "capacity_owner_id": result.capacity_owner_id,
+                                "status": result.status.value,
+                            },
+                        )
                     retry_at = (now or utc_now()) + timedelta(
                         seconds=max(result.retry_delay_seconds, self.requeue_delay_seconds)
                     )
@@ -933,11 +973,12 @@ class SchedulerContainerRequestService:
                     )
                     acquired += 1
             except CapacityReservationConflictError:
+                contended += 1
                 continue
             except NotFoundError as exc:
                 self._fail_request(candidate, str(exc), current_time)
                 acquired += 1
-        return acquired
+        return CapacityAcquisitionSweep(acquired=acquired, contended=contended)
 
     def _acquire_capacity_request(
         self, request: SchedulerWorkerRequest, current_time: datetime
