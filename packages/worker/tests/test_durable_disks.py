@@ -7,6 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from foundation.process import ProcessResult
+from shared.container_requests import StopContainerReason
 from shared.timestamps import utc_now
 from worker.durable_disk_records import (
     DiskAcquirePayload,
@@ -23,6 +24,7 @@ from worker.durable_disks import (
     DiskLease,
     DiskStoreFile,
     WorkerDurableDiskService,
+    _Attached,
 )
 from worker.tools import WorkspaceStorageCredentials
 
@@ -209,3 +211,39 @@ def test_an_engine_call_that_outlives_its_grant_reads_a_renewed_one(tmp_path: Pa
 
     assert seen == [("key-1", 0o600, True)]
     assert list((tmp_path / "run" / "disk-1").iterdir()) == []
+
+
+def test_a_disk_that_failed_a_read_stops_its_container_with_that_reason(
+    tmp_path: Path,
+) -> None:
+    """A lazily restored disk that could not fetch a chunk has already handed the
+    workload an I/O error. Leaving the container running hides the cause behind
+    whatever the workload does next; stopping it names the disk."""
+
+    def engine(timeout: float, argv: list[str]) -> ProcessResult:
+        assert argv[1] == "usage"
+        stdout = json.dumps({"unmerged_bytes": 0, "unreadable": "1 reads failed"})
+        return ProcessResult(args=argv, exit_code=0, stdout=stdout, stderr="")
+
+    stopped: list[tuple[str, StopContainerReason]] = []
+    service = WorkerDurableDiskService(
+        engine=DiskEngine(run_root=tmp_path / "run", run_command=engine),
+        leases=_NoControlPlane(),
+        layers_root=tmp_path / "layers",
+        lease_root=tmp_path / "leases",
+        mount_root=tmp_path / "mounts",
+        stop_container=lambda container_id, reason: stopped.append((container_id, reason)),
+    )
+    lease = DiskLease(
+        disk_id="disk-1", name="data", mount_path="/data", size_bytes=1, lease_token="token"
+    )
+    attached = _Attached(
+        leases=ContainerDiskLeases(
+            container_id="container-1", workspace_id="w", stub_id="s", disks=[lease]
+        )
+    )
+
+    service._check_disk(attached, lease)
+
+    assert stopped == [("container-1", StopContainerReason.DiskUnavailable)]
+    assert attached.stopping

@@ -69,6 +69,7 @@ class ContainerExitCode(IntEnum):
     """
 
     DiskFull = 564
+    DiskUnavailable = 565
 
 
 class WorkerPoolMode(StrEnum):
@@ -414,6 +415,8 @@ def normalize_container_exit_code(
         return int(ContainerExitCode.MemoryEvicted)
     if reason is StopContainerReason.DiskFull:
         return int(ContainerExitCode.DiskFull)
+    if reason is StopContainerReason.DiskUnavailable:
+        return int(ContainerExitCode.DiskUnavailable)
     if oom_killed:
         return int(ContainerExitCode.OomKill)
     if exit_code < 0:
