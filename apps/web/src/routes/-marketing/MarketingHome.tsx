@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
 import { CloudHero } from "./CloudHero";
+import { DevelopmentSection } from "./DevelopmentSection";
 import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
 import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimitives";
@@ -76,7 +77,7 @@ const parityModes = [
 function ParitySection() {
   const [example, setExample] = useState(runModeExamples[0]);
   return (
-    <section className="marketing-parity py-18 sm:py-22 lg:py-28">
+    <section id="workloads" className="marketing-parity scroll-mt-24 py-18 sm:py-22 lg:py-28">
       <div className={shell}>
         <div className="flex flex-col items-center gap-8 sm:gap-10">
           <div className="text-center">
@@ -138,6 +139,8 @@ export function MarketingHome() {
     <MarketingLayout>
       <main className="marketing-hero-page" id="marketing-main">
         <CloudHero />
+
+        <DevelopmentSection />
 
         <ParitySection />
 
