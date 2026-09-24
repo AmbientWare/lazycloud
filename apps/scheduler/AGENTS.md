@@ -14,9 +14,9 @@ their cadences differ, not because their work is unrelated:
 - **placement**, every 1s, decides what needs to run. Autoscalers and
   function retries, and nothing that calls a service outside the cluster.
 - **acquisition** starts or buys the machine a waiting request needs, woken the
-  moment dispatch records demand and swept every 5s. It was part of the capacity
-  pass, and a devbox start waited up to twenty seconds of provider inventory
-  reads before its stopped reserve was started.
+  moment dispatch records demand and swept every 5s. It makes no provider
+  inventory reads, so a request that needs a stopped reserve started never
+  waits behind the capacity pass's.
 - **capacity**, every 5s, keeps the fleet and its records agreeing. Also billing
   enforcement, which touches only Postgres and whose interval is money, and cron
   firing, because a schedule that fires late was wrong.

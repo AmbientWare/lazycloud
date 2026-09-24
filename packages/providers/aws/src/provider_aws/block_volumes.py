@@ -63,9 +63,9 @@ _DISK_DEVICE_NAMES = tuple(f"/dev/sd{letter}" for letter in "fghijklmnopqrstuvwx
 _GIB = 1024**3
 _POLL_FIRST_SECONDS = 0.25
 _POLL_MAX_SECONDS = 2.0
-"""A new gp3 volume is available, and an attachment attached, in about a second.
-Polling from a quarter second and doubling answers then, where a fixed two
-seconds held the container start for the rest of the interval."""
+"""A new gp3 volume is available, and an attachment attached, in about a second,
+and a container start waits on both. Polls start at a quarter second and double
+to the maximum."""
 
 
 def is_disk_volume_device(device_name: str) -> bool:

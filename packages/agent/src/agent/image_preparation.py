@@ -26,9 +26,8 @@ class WorkerImagePreparation:
         """Whether `image` is ready, starting its preparation and waiting briefly if not.
 
         An image already on the host answers `docker image inspect` in well under
-        a second, so waiting that long here lets a resumed machine start its
-        worker on the stream that asked for it rather than one interval later.
-        A pull outlasts the wait and is reported on a later stream.
+        a second, inside the wait, so a resumed machine reports it on its next
+        stream. A pull outlasts the wait and is reported on a later stream.
         """
         if image in self.prepared():
             return True

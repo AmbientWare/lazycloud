@@ -1158,8 +1158,8 @@ class AgentDaemonService:
     def _pause_between_streams(self, seconds: float) -> None:
         """Sleep until the next stream, or until a worker image being prepared is ready.
 
-        A slot whose image was not yet reported was deferred, and the stream
-        that reports the image prepared is the one that starts it.
+        A slot waits until a stream has reported its image prepared, so an image
+        that becomes ready ends the pause and the next stream reports it.
         """
         if self.worker_controller.has_unreported_image(self._reported_worker_images):
             return
