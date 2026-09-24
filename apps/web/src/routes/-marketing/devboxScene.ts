@@ -60,7 +60,7 @@ export async function createDevboxScene(
   scene.add(new THREE.HemisphereLight("#e0e5e9", "#111519", 1.2));
   const key = new THREE.DirectionalLight("#c2eaf8", 2);
   key.position.set(-3, 7, 4);
-  const rim = new THREE.DirectionalLight("#76d6f5", 1.6);
+  const rim = new THREE.DirectionalLight("#76d6f5", 0.8);
   rim.position.set(4, 2, -5);
   scene.add(key, rim);
   const studio = new RoomEnvironment();
@@ -91,14 +91,12 @@ export async function createDevboxScene(
   face.addColorStop(1, "#1a303b");
   grainContext.fillStyle = face;
   grainContext.fillRect(0, 0, 360, 360);
-  grainContext.save();
-  grainContext.strokeStyle = "#76d6f5";
-  grainContext.shadowColor = "#76d6f5";
-  grainContext.shadowBlur = 24;
-  grainContext.globalAlpha = 0.45;
-  grainContext.lineWidth = 2;
-  grainContext.strokeRect(1, 1, 358, 358);
-  grainContext.restore();
+  const highlight = grainContext.createRadialGradient(40, 0, 0, 40, 0, 340);
+  highlight.addColorStop(0, "rgb(118 214 245 / 12%)");
+  highlight.addColorStop(0.5, "rgb(118 214 245 / 3%)");
+  highlight.addColorStop(1, "rgb(118 214 245 / 0%)");
+  grainContext.fillStyle = highlight;
+  grainContext.fillRect(0, 0, 360, 360);
   grainContext.globalAlpha = 0.8;
   grainContext.drawImage(grainImage, 0, 0, 360, 360);
   const grain = new THREE.CanvasTexture(grainBitmap);
@@ -121,7 +119,7 @@ export async function createDevboxScene(
   }
   const bodyMaterial = surface("#ffffff");
   const capMaterial = surface("#b1c6d2");
-  const seamMaterial = new THREE.MeshBasicMaterial({ color: "#76d6f5" });
+  const seamMaterial = new THREE.MeshBasicMaterial({ color: "#456b7b" });
   materials.push(seamMaterial);
   const bodyGeometry = new RoundedBoxGeometry(0.94, 0.94, 0.94, 4, 0.055);
   const capGeometry = new RoundedBoxGeometry(0.86, 0.024, 0.86, 3, 0.01);
