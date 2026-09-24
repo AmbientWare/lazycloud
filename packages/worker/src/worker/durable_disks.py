@@ -114,6 +114,7 @@ _USAGE_TIMEOUT_SECONDS = 30.0
 _EVICT_TIMEOUT_SECONDS = 600.0
 _STORE_RENEW_RETRY_SECONDS = 15.0
 _STORE_RENEW_MIN_SECONDS = 1.0
+_STORE_REUSE_MIN_SECONDS = 300.0
 
 
 class DiskEngineError(RuntimeError):
@@ -523,6 +524,9 @@ class _Attached:
 
     stopping: bool = False
     """A volume ran out of space and the container was asked to stop."""
+
+    store: DiskStoreFile | None = None
+    """The last grant vended for this disk's container."""
 
 
 @dataclass(slots=True)
@@ -1164,10 +1168,11 @@ class WorkerDurableDiskService:
     def _store(self, attached: _Attached) -> DiskStoreSource:
         """Vends workspace bucket credentials for one engine call, and again as they age.
 
-        Nothing falls back to an earlier grant when vending fails. A grant lasts
-        less than one engine call may take, so an earlier one would fail partway
-        through; the call fails at once with the vending error instead, and the
-        next publish pass or release retry vends again.
+        The control plane stops vending once a stopped container's state expires,
+        and a release can still be publishing then. A failed vend falls back to the
+        last grant while it has at least five minutes left, which the renewal
+        thread keeps trying to extend; with less, the call fails with the vending
+        error and the next publish pass or release retry vends again.
         """
         record = attached.leases
 
@@ -1187,7 +1192,29 @@ class WorkerDurableDiskService:
                 raise DiskEngineError("workspace storage credentials were not vended for the disk")
             return disk_store_file(vended.workspace_storage)
 
-        return vend
+        def vend_or_reuse() -> DiskStoreFile:
+            try:
+                store = vend()
+            except Exception:
+                cached = attached.store
+                if (
+                    cached is None
+                    or cached.expires_at is None
+                    or (cached.expires_at - utc_now()).total_seconds() < _STORE_REUSE_MIN_SECONDS
+                ):
+                    raise
+                LOGGER.warning(
+                    "vending workspace storage for disk container %s failed; "
+                    "using the grant that expires at %s",
+                    record.container_id,
+                    cached.expires_at.isoformat(),
+                    exc_info=True,
+                )
+                return cached
+            attached.store = store
+            return store
+
+        return vend_or_reuse
 
     def _lease_path(self, container_id: str) -> Path:
         _require_path_segment(container_id, field="container id")
