@@ -29,13 +29,17 @@ type diskPaths struct {
 	id   string
 }
 
-func (p diskPaths) dir() string       { return filepath.Join(p.root, p.id) }
-func (p diskPaths) statePath() string { return filepath.Join(p.dir(), "state.json") }
-func (p diskPaths) layerDir() string  { return filepath.Join(p.dir(), "layers") }
-func (p diskPaths) runDir() string    { return filepath.Join(p.dir(), "run") }
-func (p diskPaths) qmpSocket() string { return filepath.Join(p.runDir(), "qmp.sock") }
-func (p diskPaths) nbdSocket() string { return filepath.Join(p.runDir(), "nbd.sock") }
-func (p diskPaths) pidFile() string   { return filepath.Join(p.runDir(), "qsd.pid") }
+func (p diskPaths) dir() string           { return filepath.Join(p.root, p.id) }
+func (p diskPaths) statePath() string     { return filepath.Join(p.dir(), "state.json") }
+func (p diskPaths) layerDir() string      { return filepath.Join(p.dir(), "layers") }
+func (p diskPaths) runDir() string        { return filepath.Join(p.dir(), "run") }
+func (p diskPaths) qmpSocket() string     { return filepath.Join(p.runDir(), "qmp.sock") }
+func (p diskPaths) nbdSocket() string     { return filepath.Join(p.runDir(), "nbd.sock") }
+func (p diskPaths) pidFile() string       { return filepath.Join(p.runDir(), "qsd.pid") }
+func (p diskPaths) pointPath() string     { return filepath.Join(p.dir(), "snapshot.json") }
+func (p diskPaths) heatPath() string      { return filepath.Join(p.dir(), "heat") }
+func (p diskPaths) hydrateLog() string    { return filepath.Join(p.runDir(), "hydrate.log") }
+func (p diskPaths) hydrateStatus() string { return filepath.Join(p.runDir(), "hydrate.json") }
 func (p diskPaths) layerPath(l layer) string {
 	return filepath.Join(p.layerDir(), l.file())
 }
@@ -124,6 +128,13 @@ type diskState struct {
 	Pending                 *pendingPublish   `json:"pending_publish,omitempty"`
 	Attachment              *attachment       `json:"attachment,omitempty"`
 	LastUsedAt              time.Time         `json:"last_used_at"`
+	// AdoptedPoint is the snapshot point this state was taken from, so an
+	// attach retried on a volume made from a snapshot does not adopt it twice.
+	AdoptedPoint string `json:"adopted_point,omitempty"`
+	// Hydrating is true from adopting a snapshot until a hydrator has read
+	// every block of the published layers once.
+	Hydrating   bool `json:"hydrating,omitempty"`
+	HydratorPID int  `json:"hydrator_pid,omitempty"`
 }
 
 func (s *diskState) record(generation int64) (publishedRecord, bool) {
@@ -140,6 +151,15 @@ func (s *diskState) head() layer { return s.Layers[len(s.Layers)-1] }
 func (s *diskState) newLayer() layer {
 	s.NextSeq++
 	return layer{Seq: s.NextSeq}
+}
+
+// publishedPrefix is how many layers from the base hold published generations.
+func (s *diskState) publishedPrefix() int {
+	count := 0
+	for count < len(s.Layers)-1 && s.Layers[count].Generation > 0 {
+		count++
+	}
+	return count
 }
 
 func (s *diskState) oldestUnpublished() int {

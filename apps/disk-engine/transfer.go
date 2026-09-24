@@ -259,5 +259,6 @@ func downloadLayer(ctx context.Context, store *objectStore, manifest layerManife
 	if err := file.Sync(); err != nil {
 		return 0, err
 	}
+	dropCache(file)
 	return restored.Load(), nil
 }

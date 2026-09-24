@@ -21,7 +21,7 @@ import (
 const usage = `usage: lazycloud-disk <command> [flags]
 
 commands:
-  attach            --root R --disk D --size BYTES --mountpoint M --chain CHAIN.json --store STORE.json [--min-free-bytes N]
+  attach            --root R --disk D --size BYTES --mountpoint M --chain CHAIN.json --store STORE.json [--min-free-bytes N] [--volume V]
   seal              --root R --disk D
   publish           --root R --disk D --store STORE.json --generation G --parent P [--flatten]
   commit-published  --root R --disk D --generation G
@@ -33,6 +33,9 @@ commands:
   list              --root R
   collect           --root R --disk D --store STORE.json --generation G
   usage             --root R --disk D
+  heat              --root R --disk D
+  snapshot-point    --root R --disk D --volume V
+  hydrate           --root R --disk D
 `
 
 // exitInsufficientSpace tells the worker to evict cached disks and retry.
@@ -53,6 +56,9 @@ var commands = map[string]command{
 	"list":             runList,
 	"collect":          runCollect,
 	"usage":            runUsage,
+	"heat":             runHeat,
+	"snapshot-point":   runSnapshotPoint,
+	"hydrate":          runHydrate,
 }
 
 func main() {

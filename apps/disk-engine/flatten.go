@@ -41,6 +41,8 @@ func uploadFlattened(ctx context.Context, store *objectStore, p diskPaths, layer
 	files := map[int]*os.File{}
 	defer func() {
 		for _, file := range files {
+			// Reading the whole chain would otherwise mark every region hot.
+			dropCache(file)
 			file.Close()
 		}
 	}()
