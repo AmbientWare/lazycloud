@@ -3391,7 +3391,9 @@ class ComputeService:
             for index, unit in enumerate(existing):
                 target = (
                     0
-                    if unit.provider_state.degraded_reason or unit.provider_ref not in enabled
+                    if unit.provider_state.degraded_reason
+                    or unit.provider_ref not in enabled
+                    or self._capacity_rejected_recently(unit, now=now)
                     else min(unit.stopped_machines, remaining_target)
                 )
                 remaining_target -= target
@@ -3455,6 +3457,7 @@ class ComputeService:
             unit.id
             for unit in states.values()
             if unit.phase is ComputeUnitPhase.Deleting
+            or self._capacity_rejected_recently(unit, now=now)
             or (
                 unit.provider_state.degraded_reason is not None
                 and not self._failed_market_retry_ready(unit, now=now)
@@ -3682,6 +3685,20 @@ class ComputeService:
             return
         raise UpstreamUnavailableError(
             f"no approved capacity can supply the warm target for preemptible={preemptible}"
+        )
+
+    @staticmethod
+    def _capacity_rejected_recently(
+        unit: ComputeUnitRecord | ComputeOfferState, *, now: datetime
+    ) -> bool:
+        """Whether the provider refused a launch in this market within its cooldown.
+
+        A refused reserve launch does not degrade the pool, because its running
+        machines still serve; this is what keeps the reserve from retrying there.
+        """
+        failed_at = unit.provider_state.last_capacity_failure_at
+        return failed_at is not None and now < to_utc(failed_at) + timedelta(
+            seconds=unit.registration_timeout_seconds
         )
 
     @staticmethod

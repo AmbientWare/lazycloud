@@ -648,7 +648,8 @@ def test_rejected_reserve_moves_to_another_offer_after_cleanup(
     with service_context.database.session() as session:
         failed = ComputeUnitRepository(session).get(first.id)
         assert failed is not None
-        assert failed.provider_state.degraded_reason == "provider_acquisition_rejected"
+        assert failed.provider_state.degraded_reason is None
+        assert failed.provider_state.last_capacity_failure_at == now
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
     compute.reconcile_unit_capacity(first.id, now=now + timedelta(seconds=301))
     compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=302))

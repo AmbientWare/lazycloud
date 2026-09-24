@@ -468,6 +468,7 @@ class ComputeUnitRepository:
                 table.phase,
                 table.degraded_reason,
                 table.degraded_at,
+                table.last_capacity_failure_at,
                 table.registration_timeout_seconds,
             ).where(
                 tuple_(
@@ -489,6 +490,7 @@ class ComputeUnitRepository:
                 provider_state=ComputeUnitProviderState(
                     degraded_reason=reason,
                     degraded_at=to_utc_or_none(degraded_at),
+                    last_capacity_failure_at=to_utc_or_none(failed_at),
                 ),
             )
             for (
@@ -503,6 +505,7 @@ class ComputeUnitRepository:
                 phase,
                 reason,
                 degraded_at,
+                failed_at,
                 timeout,
             ) in rows
         }

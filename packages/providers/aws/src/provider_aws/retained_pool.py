@@ -277,11 +277,14 @@ class AwsRetainedPool:
                             if device.machine_volume_id
                         )
                         or slot.storage_volume_ids,
+                        # Only EC2 stops a running or preparing instance; this
+                        # pool stops one only after moving it to Stopping. A
+                        # reserve holds no work, so an interrupted one is replaced.
                         "phase": (
                             SlotPhase.Retiring
                             if instance.state.name in {"terminated", "shutting-down"}
                             or (
-                                slot.phase is SlotPhase.Active
+                                slot.phase in {SlotPhase.Active, SlotPhase.Preparing}
                                 and instance.state.name in {"stopping", "stopped"}
                             )
                             else SlotPhase.Stopped
@@ -378,6 +381,17 @@ class AwsRetainedPool:
             )
         )
         return True
+
+    def _start(self, slot: RetainedSlot, instance: _Instance) -> None:
+        try:
+            self.clients.ec2.start_instances(InstanceIds=[instance.id])
+        except ClientError as exc:
+            if _client_error_code(exc) not in _REJECTED_LAUNCH_CODES:
+                raise _client_error(exc, operation="start retained CPU instance") from exc
+            # A stopped Spot instance starts only when the market has room again.
+            # The next pass launches in its place, and that launch is what records
+            # a rejection if the market is still full.
+            self._update(slot.model_copy(update={"phase": SlotPhase.Retiring}))
 
     def _retire(self, slot: RetainedSlot, instance: _Instance | None) -> bool:
         if not slot.instance_id:
@@ -483,7 +497,7 @@ class AwsRetainedPool:
                     and instance.state.name == "stopped"
                     and self.request.purchases_enabled
                 ):
-                    self.clients.ec2.start_instances(InstanceIds=[instance.id])
+                    self._start(slot, instance)
         if retired:
             self._save(
                 self.state.model_copy(
