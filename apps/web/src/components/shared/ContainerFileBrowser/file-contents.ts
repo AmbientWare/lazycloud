@@ -183,7 +183,13 @@ function looksBinary(bytes: Uint8Array): boolean {
   return bytes.subarray(0, 8192).includes(0);
 }
 
-/** Minified JSON, indented. JSON its author already laid out is shown as written. */
+/**
+ * Minified JSON, indented. JSON its author already laid out is shown as written.
+ *
+ * Parsing only confirms the text is JSON; the output re-spaces the original
+ * characters, because a parse and re-serialize would round large numbers and
+ * drop duplicate keys, and the preview would no longer be the file.
+ */
 function prettyJson(name: string, text: string): string | undefined {
   const trimmed = text.trim();
   if (trimmed.includes("\n")) return undefined;
@@ -195,10 +201,60 @@ function prettyJson(name: string, text: string): string | undefined {
     return undefined;
   }
   try {
-    return JSON.stringify(JSON.parse(text), null, 2);
+    JSON.parse(trimmed);
   } catch {
     return undefined;
   }
+  return indentJson(trimmed);
+}
+
+/** Valid JSON with two-space indentation, changing only the whitespace between tokens. */
+function indentJson(json: string): string {
+  let result = "";
+  let depth = 0;
+  let inString = false;
+  const newline = () => `\n${"  ".repeat(depth)}`;
+  for (let index = 0; index < json.length; index += 1) {
+    const character = json[index];
+    if (inString) {
+      result += character;
+      if (character === "\\") {
+        index += 1;
+        result += json[index] ?? "";
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === " " || character === "\t" || character === "\n" || character === "\r") {
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      result += character;
+    } else if (character === "{" || character === "[") {
+      const close = character === "{" ? "}" : "]";
+      let next = index + 1;
+      while (next < json.length && " \t\n\r".includes(json[next])) next += 1;
+      if (json[next] === close) {
+        result += character + close;
+        index = next;
+      } else {
+        depth += 1;
+        result += character + newline();
+      }
+    } else if (character === "}" || character === "]") {
+      depth -= 1;
+      result += newline() + character;
+    } else if (character === ",") {
+      result += character + newline();
+    } else if (character === ":") {
+      result += ": ";
+    } else {
+      result += character;
+    }
+  }
+  return result;
 }
 
 function startsWith(prefix: readonly number[], offset = 0): (bytes: Uint8Array) => boolean {
