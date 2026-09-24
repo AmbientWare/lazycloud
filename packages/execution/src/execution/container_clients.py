@@ -88,6 +88,8 @@ class ContainerStderrResponse(ContainerOperationResponse, Protocol):
 class ContainerDownloadResponse(ContainerOperationResponse, Protocol):
     @property
     def data(self) -> bytes: ...
+    @property
+    def over_limit(self) -> bool: ...
 
 
 class ContainerStatResponse(ContainerOperationResponse, Protocol):
@@ -98,6 +100,8 @@ class ContainerStatResponse(ContainerOperationResponse, Protocol):
 class ContainerFilesResponse(ContainerOperationResponse, Protocol):
     @property
     def files(self) -> Sequence[ContainerSandboxFileInfo]: ...
+    @property
+    def truncated(self) -> bool: ...
 
 
 class ContainerSearchResponse(ContainerOperationResponse, Protocol):
@@ -152,13 +156,18 @@ class PodContainerControlClient(Protocol):
         self, container_id: str, container_path: str, data: bytes, *, mode: int = 0o644
     ) -> ContainerOperationResponse: ...
     def sandbox_download_file(
-        self, container_id: str, container_path: str
+        self,
+        container_id: str,
+        container_path: str,
+        *,
+        max_bytes: int = 0,
+        truncate: bool = False,
     ) -> ContainerDownloadResponse: ...
     def sandbox_stat_file(
         self, container_id: str, container_path: str
     ) -> ContainerStatResponse: ...
     def sandbox_list_files(
-        self, container_id: str, container_path: str = "."
+        self, container_id: str, container_path: str = ".", *, limit: int = 0
     ) -> ContainerFilesResponse: ...
     def sandbox_delete_file(
         self, container_id: str, container_path: str

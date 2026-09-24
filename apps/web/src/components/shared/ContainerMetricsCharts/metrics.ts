@@ -12,6 +12,9 @@ export type MetricDatum = {
   memoryTotal: number;
   gpuMemoryUsed: number;
   gpuMemoryTotal: number;
+  /** Null where the sample has no reading, drawn as a gap. */
+  diskUsed: number | null;
+  diskTotal: number | null;
   /** Bytes per second over the sample interval; null for samples without one. */
   networkRecvRate: number | null;
   networkSentRate: number | null;
@@ -39,6 +42,8 @@ export function buildMetricData(points: ContainerMetricsPoint[]): MetricDatum[] 
         memoryTotal: point.memory_total_bytes,
         gpuMemoryUsed: point.gpu_memory_used_bytes,
         gpuMemoryTotal: point.gpu_memory_total_bytes,
+        diskUsed: point.disk_used_bytes,
+        diskTotal: point.disk_total_bytes,
         networkRecvRate: perSecond(point.network_recv_bytes, intervalSeconds),
         networkSentRate: perSecond(point.network_sent_bytes, intervalSeconds),
         diskReadRate: perSecond(point.disk_read_bytes, intervalSeconds),

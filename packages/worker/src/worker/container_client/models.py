@@ -204,12 +204,22 @@ class ContainerSandboxUploadFileResponse(ContractModel):
 class ContainerSandboxDownloadFileRequest(ContractModel):
     container_id: str
     container_path: str
+    # New fields stay off the wire at their defaults, so during a rolling
+    # release a peer from before them still reads every message that leaves
+    # them unset.
+    max_bytes: int = Field(default=0, ge=0, exclude_if=lambda value: value == 0)
+    """The largest file the download returns; 0 is unbounded."""
+
+    truncate: bool = Field(default=False, exclude_if=lambda value: not value)
+    """Return the first `max_bytes` bytes of a larger file instead of refusing it."""
 
 
 class ContainerSandboxDownloadFileResponse(ContractModel):
     ok: bool = True
     error_msg: str = ""
     data: bytes = b""
+    over_limit: bool = Field(default=False, exclude_if=lambda value: not value)
+    """The file is larger than `max_bytes`; set only with `ok` false."""
 
 
 class ContainerSandboxDeleteFileRequest(ContractModel):
@@ -268,12 +278,15 @@ class ContainerSandboxStatFileResponse(ContractModel):
 class ContainerSandboxListFilesRequest(ContractModel):
     container_id: str
     container_path: str = "."
+    limit: int = Field(default=0, ge=0, exclude_if=lambda value: value == 0)
+    """The most entries the listing returns; 0 is unbounded."""
 
 
 class ContainerSandboxListFilesResponse(ContractModel):
     ok: bool = True
     error_msg: str = ""
     files: tuple[ContainerSandboxFileInfo, ...] = Field(default_factory=tuple)
+    truncated: bool = Field(default=False, exclude_if=lambda value: not value)
 
 
 class ContainerSandboxReplaceInFilesRequest(ContractModel):

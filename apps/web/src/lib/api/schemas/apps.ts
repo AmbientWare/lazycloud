@@ -116,6 +116,8 @@ export const devboxSchema = z.object({
   state: z.enum(devboxStates),
   phase: z.enum(devboxPhases),
   phase_reason: z.string().default(""),
+  container_id: z.string().nullable(),
+  failed_container_id: z.string().nullable(),
   open_connections: z.number().int().nonnegative(),
   idle_deadline: z.string().nullable(),
   disk: z

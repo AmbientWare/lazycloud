@@ -32,14 +32,17 @@ type RateKey = keyof Pick<
 >;
 type BytesKey = keyof Pick<
   MetricDatum,
-  "memoryUsed" | "memoryTotal" | "gpuMemoryUsed" | "gpuMemoryTotal"
+  "memoryUsed" | "memoryTotal" | "gpuMemoryUsed" | "gpuMemoryTotal" | "diskUsed" | "diskTotal"
 >;
 
 export function ContainerMetricsCharts({
   points,
+  showIo = true,
   className,
 }: {
   points: ContainerMetricsPoint[] | undefined;
+  /** Network and disk throughput; off where a panel shows only what the container holds. */
+  showIo?: boolean;
   className?: string;
 }) {
   const samples = points ?? [];
@@ -50,10 +53,13 @@ export function ContainerMetricsCharts({
   }
 
   const hasGpu = data.some((point) => point.gpuMemoryTotal > 0);
-  const hasIo = hasIoSamples(samples);
+  const hasDisk = data.some((point) => (point.diskTotal ?? 0) > 0);
+  const hasIo = showIo && hasIoSamples(samples);
   const readout = latestComputeReadout(data);
   const latest = data[data.length - 1];
   const gpuReadout = latest?.gpuMemoryTotal ? formatBytes(latest.gpuMemoryUsed) : undefined;
+  const diskUsageReadout =
+    latest?.diskTotal && latest.diskUsed !== null ? formatBytes(latest.diskUsed) : undefined;
   const diskReadout =
     latest && latest.diskReadRate !== null && latest.diskWriteRate !== null
       ? `Read ${formatBytesPerSecond(latest.diskReadRate)} · write ${formatBytesPerSecond(latest.diskWriteRate)}`
@@ -76,6 +82,17 @@ export function ContainerMetricsCharts({
         color="var(--chart-2)"
         readout={readout?.memory}
       />
+      {hasDisk ? (
+        <MemoryChart
+          title="Disk"
+          data={data}
+          usedKey="diskUsed"
+          totalKey="diskTotal"
+          usedLabel="Used"
+          color="var(--chart-4)"
+          readout={diskUsageReadout}
+        />
+      ) : null}
       {hasGpu ? (
         <MemoryChart
           title="GPU memory"

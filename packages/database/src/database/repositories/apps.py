@@ -54,6 +54,7 @@ from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, PodRole, StubKind
+from shared.disks import DISK_ROOT_MOUNT_PATH
 from shared.enums import StringEnum
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
@@ -71,8 +72,10 @@ from sqlalchemy import (
     select,
     text,
     tuple_,
+    type_coerce,
     update,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -661,6 +664,18 @@ class StubRepository:
             )
         )
         return stub_from_table(row) if row is not None else None
+
+    def mounts_root_disk(self, stub_id: str, *, workspace_id: str) -> bool:
+        """Whether the stub mounts a disk at `/`, answered in SQL from its disk list alone."""
+        disks = type_coerce(StubTable.configuration, JSONB)["disks"]
+        return bool(
+            self.session.scalar(
+                select(disks.contains([{"mount_path": DISK_ROOT_MOUNT_PATH}])).where(
+                    StubTable.id == stub_id,
+                    StubTable.workspace_id == workspace_id,
+                )
+            )
+        )
 
     def get_across_workspaces(self, stub_id: str) -> StubRecord | None:
         """System lookup for scheduler/worker/runner paths resolving placed work."""
