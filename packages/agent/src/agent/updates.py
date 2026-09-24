@@ -64,7 +64,6 @@ class AgentUpdateRestartError(RuntimeError):
     pass
 
 
-@lru_cache(maxsize=1)
 def running_binary_sha256(binary: Path) -> str:
     """The binary's digest, hashed again only when the file on disk changes.
 
