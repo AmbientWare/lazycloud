@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import signal
 import sys
 import threading
@@ -14,6 +13,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Protocol, runtime_checkable
 
+from foundation.process_logs import configure_process_logging
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
 from shared.container_requests import StopContainerReason
@@ -640,24 +640,8 @@ def _raise_container_worker_shutdown(signum: int, _frame: FrameType | None) -> N
     raise ContainerWorkerShutdownRequested(signum)
 
 
-def _configure_logging() -> None:
-    """Send the worker's own INFO records to stderr, which the host keeps.
-
-    Without a handler Python drops everything below WARNING, so how long a
-    disk took to attach never left the process. Libraries stay at WARNING;
-    the HTTP client alone would log every request.
-    """
-    logging.basicConfig(
-        level=logging.WARNING,
-        stream=sys.stderr,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    for name in ("worker", "container_worker_app"):
-        logging.getLogger(name).setLevel(logging.INFO)
-
-
 def main(argv: list[str] | None = None) -> None:
-    _configure_logging()
+    configure_process_logging()
     args = _parse_arguments(argv)
     result = run_container_worker(
         once=args.once,

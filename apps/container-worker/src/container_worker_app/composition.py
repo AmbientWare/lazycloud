@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import logging
 import shutil
-import sys
 from pathlib import Path
 
 from cache.server import (
@@ -151,6 +151,7 @@ from .process_assembly import (
 )
 from .settings import WorkerSettings
 
+LOGGER = logging.getLogger(__name__)
 RUNTIME_VERSION_PROBE_TIMEOUT_SECONDS = 5.0
 
 
@@ -532,8 +533,7 @@ def _validate_worker_readiness(
         with timings.step("network"):
             network_backend.initialize()
     finally:
-        # The worker has no log handler of its own; stderr is what the host keeps.
-        print(f"container worker readiness checks: {timings.summary()}", file=sys.stderr)
+        timings.log(LOGGER, "container worker readiness checks")
 
 
 def planned_scheduler_worker_record_from_settings(

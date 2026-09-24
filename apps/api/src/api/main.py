@@ -4,7 +4,7 @@ import argparse
 
 import uvicorn
 from foundation.environment_file import load_environment_file
-from observability.process_logs import configure_process_logging
+from foundation.process_logs import configure_process_logging
 from shared.app_identity import CONTROL_PLANE_SERVICE_NAME
 
 
