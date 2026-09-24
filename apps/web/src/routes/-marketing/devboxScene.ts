@@ -8,7 +8,6 @@ const COUNT = ASSEMBLED_COUNT + 36;
 const EXPANSION_DURATION = 800;
 const ROTATION_SETTLE_DURATION = 1100;
 const RECOMBINE_DURATION = 850;
-const JOIN_ROTATION = -Math.PI / 6;
 const foregroundRotations = [
   new THREE.Euler(-0.18, 0.5, -0.14),
   new THREE.Euler(0.1, 0.05, 0.16),
@@ -200,10 +199,7 @@ export async function createDevboxScene(
     agentMarks[index % AGENTS.length].mesh.setColorAt(Math.floor(index / AGENTS.length), shade);
     return {
       packed,
-      joined: packed
-        .clone()
-        .multiplyScalar(0.55)
-        .applyAxisAngle(new THREE.Vector3(0, 1, 0), JOIN_ROTATION),
+      joined: packed.clone(),
       origin: packed.clone(),
       target: new THREE.Vector3(),
       size,
@@ -242,15 +238,29 @@ export async function createDevboxScene(
   let animation = 0;
   let previousTime = 0;
   let ambientTime = 0;
+  const joinRotation = new THREE.Euler();
+  const joinFrequency = new THREE.Vector3();
+  let joinDamping = 0.78;
 
   function draw() {
     const recombining =
       targetExpansion === 0 && fromExpansion > 0.04 && transitionElapsed < transitionDuration;
     const gather = easeOut(transitionElapsed / 400);
     const reveal = easeOut((transitionElapsed - 300) / 300);
-    shell.rotation.y = recombining
-      ? JOIN_ROTATION * (1 - spring(Math.max(0, transitionElapsed - 350) / 1000, 0.78, 15))
-      : 0;
+    shell.rotation.set(
+      recombining
+        ? joinRotation.x *
+            (1 - spring(Math.max(0, transitionElapsed - 340) / 1000, joinDamping, joinFrequency.x))
+        : 0,
+      recombining
+        ? joinRotation.y *
+            (1 - spring(Math.max(0, transitionElapsed - 375) / 1000, joinDamping, joinFrequency.y))
+        : 0,
+      recombining
+        ? joinRotation.z *
+            (1 - spring(Math.max(0, transitionElapsed - 320) / 1000, joinDamping, joinFrequency.z))
+        : 0,
+    );
     shell.scale.setScalar(recombining ? reveal : 1);
     shellMaterial.opacity = recombining ? 1 : 1 - ease(expansion / 0.15);
     sharedMaterial.opacity = shellMaterial.opacity;
@@ -276,17 +286,17 @@ export async function createDevboxScene(
       cube.orientation.set(
         THREE.MathUtils.lerp(
           cube.fromRotation.x,
-          cube.rotation.x * targetExpansion,
+          recombining ? joinRotation.x : cube.rotation.x * targetExpansion,
           rotationProgress,
         ),
         THREE.MathUtils.lerp(
           cube.fromRotation.y,
-          recombining ? JOIN_ROTATION : cube.rotation.y * targetExpansion,
+          recombining ? joinRotation.y : cube.rotation.y * targetExpansion,
           rotationProgress,
         ),
         THREE.MathUtils.lerp(
           cube.fromRotation.z,
-          cube.rotation.z * targetExpansion,
+          recombining ? joinRotation.z : cube.rotation.z * targetExpansion,
           rotationProgress,
         ),
       );
@@ -418,6 +428,21 @@ export async function createDevboxScene(
     requestDraw();
   }
   function transitionTo(target: 0 | 1) {
+    if (target === 0) {
+      joinRotation.set(
+        THREE.MathUtils.randFloatSpread(0.5),
+        THREE.MathUtils.randFloat(0.35, 0.55) * (Math.random() < 0.5 ? -1 : 1),
+        THREE.MathUtils.randFloatSpread(0.36),
+      );
+      joinFrequency.set(
+        THREE.MathUtils.randFloat(14, 18),
+        THREE.MathUtils.randFloat(13, 17),
+        THREE.MathUtils.randFloat(15, 19),
+      );
+      joinDamping = THREE.MathUtils.randFloat(0.74, 0.82);
+      for (const cube of cubes)
+        cube.joined.copy(cube.packed).multiplyScalar(0.55).applyEuler(joinRotation);
+    }
     for (const cube of cubes) cube.fromRotation.copy(cube.orientation);
     fromExpansion = expansion;
     targetExpansion = target;
