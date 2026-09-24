@@ -28,6 +28,7 @@ from .managed_pool import (
     AwsManagedPoolSpec,
     _client_error,
     _client_error_code,
+    _Filter,
     _host_configuration_revision,
     _LaunchTemplateVersions,
 )
@@ -127,7 +128,7 @@ class _BlockDevice(_Response):
 
 class _Instance(_Response):
     id: str = Field(alias="InstanceId")
-    token: str = Field(alias="ClientToken")
+    token: str = Field(default="", alias="ClientToken")
     state: _State = Field(alias="State")
     placement: _Placement = Field(default_factory=_Placement, alias="Placement")
     tags: tuple[_Tag, ...] = Field(default=(), alias="Tags")
@@ -142,6 +143,10 @@ class _Reservation(_Response):
 class _Instances(_Response):
     reservations: tuple[_Reservation, ...] = Field(default=(), alias="Reservations")
     next_token: str = Field(default="", alias="NextToken")
+
+    @property
+    def instances(self) -> tuple[_Instance, ...]:
+        return tuple(i for reservation in self.reservations for i in reservation.instances)
 
 
 class _Launched(_Response):
@@ -232,31 +237,29 @@ class AwsRetainedPool:
         slots = {slot.token: slot for slot in self.state.slots}
         if not slots:
             return found
+        for instance in self._describe([{"Name": "client-token", "Values": list(slots)}]):
+            slot = slots.get(instance.token)
+            if slot is None:
+                raise ValueError("EC2 returned an instance outside the requested launches")
+            self._owned(instance, slot)
+            if slot.token in found:
+                raise ValueError("EC2 returned multiple instances for one launch slot")
+            found[slot.token] = instance
+        return found
+
+    def _describe(self, filters: list[_Filter]) -> list[_Instance]:
+        described: list[_Instance] = []
         token = ""
         while True:
             response = _Instances.model_validate(
-                self.clients.ec2.describe_instances(
-                    Filters=[{"Name": "client-token", "Values": list(slots)}],
-                    NextToken=token,
-                )
+                self.clients.ec2.describe_instances(Filters=filters, NextToken=token)
                 if token
-                else self.clients.ec2.describe_instances(
-                    Filters=[{"Name": "client-token", "Values": list(slots)}],
-                )
+                else self.clients.ec2.describe_instances(Filters=filters)
             )
-            for reservation in response.reservations:
-                for instance in reservation.instances:
-                    slot = slots.get(instance.token)
-                    if slot is None:
-                        raise ValueError("EC2 returned an instance outside the requested launches")
-                    self._owned(instance, slot)
-                    if slot.token in found:
-                        raise ValueError("EC2 returned multiple instances for one launch slot")
-                    found[slot.token] = instance
+            described += response.instances
             token = response.next_token
             if not token:
-                break
-        return found
+                return described
 
     def _record_instances(self, inventory: dict[str, _Instance]) -> None:
         slots: list[RetainedSlot] = []
@@ -383,30 +386,80 @@ class AwsRetainedPool:
             self._launch(slot)
             return False
         if slot.spot_request_id:
-            try:
-                response = self.clients.ec2.describe_spot_instance_requests(
-                    SpotInstanceRequestIds=[slot.spot_request_id]
-                )
-            except ClientError as exc:
-                if _client_error_code(exc) != "InvalidSpotInstanceRequestID.NotFound":
-                    raise
-                return self.provisioner.machine_storage_destroyed(
-                    self.spec, slot.instance_id, slot.storage_volume_ids
-                )
+            return self._retire_spot_request(slot, instance)
+        if instance is not None and instance.state.name != "terminated":
+            if instance.state.name != "shutting-down":
+                self.clients.ec2.terminate_instances(InstanceIds=[slot.instance_id])
+            return False
+        return self.provisioner.machine_storage_destroyed(
+            self.spec, slot.instance_id, slot.storage_volume_ids
+        )
+
+    def _retire_spot_request(self, slot: RetainedSlot, instance: _Instance | None) -> bool:
+        # A persistent request relaunches an untagged instance from its original
+        # launch specification whenever its instance is terminated, so the request
+        # is cancelled before anything it launched is terminated.
+        try:
+            response = self.clients.ec2.describe_spot_instance_requests(
+                SpotInstanceRequestIds=[slot.spot_request_id]
+            )
+        except ClientError as exc:
+            if _client_error_code(exc) != "InvalidSpotInstanceRequestID.NotFound":
+                raise
+            named = ""
+        else:
             requests = _SpotRequests.model_validate(response).requests
             if len(requests) != 1 or requests[0].id != slot.spot_request_id:
                 raise ValueError("Spot request ownership evidence is incomplete")
-            spot = requests[0]
-            if spot.instance_id and spot.instance_id != slot.instance_id:
-                raise ValueError("Spot request names an unexpected replacement instance")
-            if spot.state not in {"cancelled", "closed", "failed"}:
+            if requests[0].state not in {"cancelled", "closed", "failed"}:
                 self.clients.ec2.cancel_spot_instance_requests(
                     SpotInstanceRequestIds=[slot.spot_request_id]
                 )
                 return False
-        if instance is not None and instance.state.name != "terminated":
-            if instance.state.name != "shutting-down":
-                self.clients.ec2.terminate_instances(InstanceIds=[slot.instance_id])
+            named = requests[0].instance_id
+        launched = {
+            i.id: i
+            for i in self._describe(
+                [{"Name": "spot-instance-request-id", "Values": [slot.spot_request_id]}]
+            )
+        }
+        if instance is not None:
+            launched.setdefault(instance.id, instance)
+        if named and named not in launched and named != slot.instance_id:
+            try:
+                launched |= {
+                    i.id: i
+                    for i in _Instances.model_validate(
+                        self.clients.ec2.describe_instances(InstanceIds=[named])
+                    ).instances
+                }
+            except ClientError as exc:
+                if _client_error_code(exc) != "InvalidInstanceID.NotFound":
+                    raise
+        if any(i.spot_request_id != slot.spot_request_id for i in launched.values()):
+            raise ValueError("instance was not launched by the slot's Spot request")
+        volumes = tuple(
+            dict.fromkeys(
+                (
+                    *slot.storage_volume_ids,
+                    *(
+                        device.machine_volume_id
+                        for i in launched.values()
+                        if i.id != slot.instance_id
+                        for device in i.devices
+                        if device.machine_volume_id
+                    ),
+                )
+            )
+        )
+        if volumes != slot.storage_volume_ids:
+            slot = slot.model_copy(update={"storage_volume_ids": volumes})
+            self._update(slot)
+        live = [i for i in launched.values() if i.state.name != "terminated"]
+        if live:
+            terminate = [i.id for i in live if i.state.name != "shutting-down"]
+            if terminate:
+                self.clients.ec2.terminate_instances(InstanceIds=terminate)
             return False
         return self.provisioner.machine_storage_destroyed(
             self.spec, slot.instance_id, slot.storage_volume_ids

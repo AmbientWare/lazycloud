@@ -35,7 +35,11 @@ from provider_aws import (
     AwsProviderControlErrorCode,
     AwsRegionalPrices,
 )
-from provider_aws.managed_pool import _ScalingActivity
+from provider_aws.managed_pool import (
+    AWS_MANAGED_POOL_TAG,
+    AWS_MANAGED_POOL_TAG_VALUE,
+    _ScalingActivity,
+)
 from provider_aws.network_egress import NetworkFilter
 from provider_aws.retained_pool import AwsRetainedPool, RetainedPoolState, RetainedSlot, SlotPhase
 from pydantic import SecretStr, TypeAdapter, ValidationError
@@ -441,6 +445,12 @@ def _spec(*, desired_nodes: int = 1, max_nodes: int = 2) -> AwsManagedPoolSpec:
 class _RetainedEc2(_Ec2):
     retry_attempts: int = 0
     spot_request_state: str = "active"
+    spot_instance_id: str = ""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.instances: dict[str, dict[str, object]] = {}
+        self.terminated: list[str] = []
 
     def run_instances(self, **kwargs: object) -> Mapping[str, object]:
         raise ClientError(
@@ -468,11 +478,35 @@ class _RetainedEc2(_Ec2):
         NextToken: str = "",
     ) -> Mapping[str, object]:
         if InstanceIds:
-            raise ClientError(
-                {"Error": {"Code": "InvalidInstanceID.NotFound", "Message": "missing"}},
-                "DescribeInstances",
-            )
-        return {"Reservations": []}
+            if not set(InstanceIds) <= self.instances.keys():
+                raise ClientError(
+                    {"Error": {"Code": "InvalidInstanceID.NotFound", "Message": "missing"}},
+                    "DescribeInstances",
+                )
+            found = [self.instances[instance_id] for instance_id in InstanceIds]
+        else:
+            assert Filters is not None
+            [query] = Filters
+            field = {
+                "client-token": "ClientToken",
+                "spot-instance-request-id": "SpotInstanceRequestId",
+            }
+            found = [
+                instance
+                for instance in self.instances.values()
+                if instance.get(field[query["Name"]]) in query["Values"]
+            ]
+        return {"Reservations": [{"Instances": found}] if found else []}
+
+    def terminate_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+        assert self.spot_request_state == "cancelled"
+        for instance_id in InstanceIds:
+            self.instances[instance_id] |= {
+                "State": {"Name": "terminated"},
+                "BlockDeviceMappings": [],
+            }
+        self.terminated += InstanceIds
+        return {}
 
     def describe_spot_instance_requests(
         self, *, SpotInstanceRequestIds: list[str]
@@ -482,6 +516,7 @@ class _RetainedEc2(_Ec2):
                 {
                     "SpotInstanceRequestId": SpotInstanceRequestIds[0],
                     "State": self.spot_request_state,
+                    "InstanceId": self.spot_instance_id,
                 }
             ]
         }
@@ -632,6 +667,79 @@ def test_missing_stopped_instance_releases_slot_after_storage_and_request_cleanu
     held.ensure()
     assert not held.state.slots
     assert not RetainedPoolState.model_validate(pool.checkpoints.load(request).attributes).slots
+
+
+def test_retiring_slot_cancels_its_persistent_request_and_terminates_its_relaunch(
+    retained_pool: tuple[AwsRetainedPool, _RetainedEc2],
+) -> None:
+    pool, ec2 = retained_pool
+    now = utc_now()
+    slot = RetainedSlot(
+        token=uuid4().hex,
+        created_at=now - timedelta(hours=2),
+        launch_started_at=now - timedelta(hours=2),
+        launch_template_id="lt-retained",
+        launch_template_version=1,
+        host_revision="host",
+        subnet_id=_SUBNET_IDS[0],
+        serving=True,
+        phase=SlotPhase.Active,
+        instance_id="i-00000000000000001",
+        spot_request_id="sir-retained",
+        storage_volume_ids=("vol-00000000000000001",),
+    )
+    ec2.instances = {
+        "i-00000000000000001": {
+            "InstanceId": "i-00000000000000001",
+            "ClientToken": slot.token,
+            "State": {"Name": "terminated"},
+            "SpotInstanceRequestId": "sir-retained",
+            "Tags": [
+                {"Key": AWS_MANAGED_POOL_TAG, "Value": AWS_MANAGED_POOL_TAG_VALUE},
+                {"Key": "cloud-pool:key", "Value": pool.spec.resource_key},
+                {"Key": "cloud-pool:workspace", "Value": pool.spec.workspace_id},
+            ],
+        },
+        "i-00000000000000002": {
+            "InstanceId": "i-00000000000000002",
+            "State": {"Name": "running"},
+            "SpotInstanceRequestId": "sir-retained",
+            "BlockDeviceMappings": [
+                {"DeviceName": "/dev/xvda", "Ebs": {"VolumeId": "vol-00000000000000002"}}
+            ],
+        },
+    }
+    ec2.spot_instance_id = "i-00000000000000002"
+    state = pool.checkpoints.load(pool.request)
+    pool.checkpoints.save(
+        pool.request,
+        expected=state,
+        state=state.model_copy(
+            update={
+                "revision": state.revision + 1,
+                "attributes": RetainedPoolState(
+                    namespace_id=pool.spec.workspace_id, slots=(slot,)
+                ).model_dump(mode="json"),
+            }
+        ),
+    )
+    request = pool.request.model_copy(update={"purchases_enabled": False})
+    held = AwsRetainedPool(request, pool.spec, pool.clients, pool.checkpoints)
+    held.ensure()
+    assert held.state.slots[0].phase is SlotPhase.Retiring
+    assert ec2.spot_request_state == "cancelled"
+    assert not ec2.terminated
+    held.ensure()
+    held.ensure()
+    assert ec2.terminated == ["i-00000000000000002"]
+    assert held.state.slots[0].storage_volume_ids == (
+        "vol-00000000000000001",
+        "vol-00000000000000002",
+    )
+    ec2.volume_missing = True
+    held.ensure()
+    assert not held.state.slots
+    assert held.checkpoints.load(request).committed_machines == 0
 
 
 def test_managed_pool_rejects_desired_capacity_above_its_allocation() -> None:
