@@ -16,7 +16,7 @@ from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
-from shared.container_requests import WorkerStartupKind
+from shared.container_requests import WORKER_USER_CODE_VOLUME, WorkerStartupKind
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.deployments import PodRole
 from shared.env import parse_environment
@@ -179,6 +179,11 @@ class ShellControlService:
             preemptible=runtime.preemptible,
             startup_kind=WorkerStartupKind.Pod,
             entrypoint=list(plan.entrypoint),
+            cwd=(
+                WORKER_USER_CODE_VOLUME
+                if any(mount.mount_path == WORKER_USER_CODE_VOLUME for mount in mounts)
+                else None
+            ),
             env=env,
             image_id=request.image_id or SHELL_IMAGE,
             app_id=stub.app_id or "",

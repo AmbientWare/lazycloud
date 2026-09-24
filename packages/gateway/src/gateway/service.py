@@ -2256,11 +2256,9 @@ class GatewayControlService:
                     machine_id=response_state.machine_id,
                     credential_id=response_state.credential_id,
                     credential_generation=response_state.credential_generation,
-                    worker_prepared=release.target.worker_image in request.prepared_worker_images,
-                    agent_current=(
-                        release.target.agent is None
-                        or request.binary_sha256 == release.target.agent.sha256
-                    ),
+                    release=release.target,
+                    agent_binary_sha256=request.binary_sha256,
+                    prepared_worker_images=request.prepared_worker_images,
                     has_active_workers=bool(request.active_worker_images),
                     prepared_stop=request.prepared_stop,
                 )
@@ -2331,15 +2329,7 @@ class GatewayControlService:
             if current_observed_at is not None and request.observed_at < current_observed_at:
                 raise ConflictError("agent capacity interruption observation is stale")
             lifecycle = tuple(AgentCapacityState)
-            supersedes_planned_drain = (
-                enrollment.capacity_state is AgentCapacityState.Draining
-                and enrollment.capacity_notice_at is None
-                and request.state is AgentCapacityState.AtRisk
-            )
-            if (
-                lifecycle.index(request.state) < lifecycle.index(enrollment.capacity_state)
-                and not supersedes_planned_drain
-            ):
+            if lifecycle.index(request.state) < lifecycle.index(enrollment.capacity_state):
                 raise ConflictError("agent capacity interruption cannot reopen admission")
             if enrollment.capacity_notice_at is not None and (
                 request.notice_at is None or request.notice_at > enrollment.capacity_notice_at

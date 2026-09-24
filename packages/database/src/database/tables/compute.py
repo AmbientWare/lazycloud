@@ -396,6 +396,12 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     availability_zone: Mapped[str] = mapped_column(Text, nullable=False)
     storage_volume_ids: Mapped[list[str]] = mapped_column(ARRAY(String(255)), nullable=False)
     booted_template_version: Mapped[str] = mapped_column(Text, nullable=False)
+    prepared_agent_sha256: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("''")
+    )
+    prepared_worker_image: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("''")
+    )
     missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provider_storage_destroyed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -501,7 +507,7 @@ class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
             name="ck_compute_machine_enrollments_tunnel_key",
         ),
         CheckConstraint(
-            "capacity_state IN ('available', 'at_risk', 'draining', 'preempting', 'cordoned')",
+            "capacity_state IN ('available', 'draining', 'preempting', 'cordoned')",
             name="ck_compute_machine_enrollments_capacity_state",
         ),
         Index(

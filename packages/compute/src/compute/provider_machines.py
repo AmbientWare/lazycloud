@@ -418,6 +418,12 @@ class ProviderMachineReconciler:
                 "availability_zone": instance.availability_zone,
                 "storage_volume_ids": list(storage_volume_ids),
                 "booted_template_version": instance.booted_template_version,
+                "prepared_agent_sha256": (
+                    settled_existing.prepared_agent_sha256 if settled_existing else ""
+                ),
+                "prepared_worker_image": (
+                    settled_existing.prepared_worker_image if settled_existing else ""
+                ),
                 "missing_since": None,
                 "provider_storage_destroyed_at": settled_existing.provider_storage_destroyed_at
                 if settled_existing
@@ -704,20 +710,11 @@ class ProviderMachineReconciler:
             provider_state = provider_state.model_copy(
                 update={"last_capacity_failure_at": to_utc(failure_at)}
             )
+            # A rejected reserve launch leaves the running machines serving. The
+            # stopped reserve moves to another market on the recorded failure time
+            # instead, so degrading here would only retire healthy machines.
             if (
-                (
-                    snapshot.observed_machines < snapshot.desired_machines
-                    or sum(
-                        instance.status
-                        in {
-                            ProviderMachineStatus.Preparing,
-                            ProviderMachineStatus.Stopping,
-                            ProviderMachineStatus.Stopped,
-                        }
-                        for instance in snapshot.instances
-                    )
-                    < snapshot.stopped_machines
-                )
+                snapshot.observed_machines < snapshot.desired_machines
                 and pool.phase not in ENDED_UNIT_PHASES
                 and provider_state.degraded_reason is None
             ):

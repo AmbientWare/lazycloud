@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -550,7 +551,17 @@ func shellChildEnvironment(term string) []string {
 	return append(environment, "TERM="+term)
 }
 
+// The worker starts a container in the directory its role works from. A devbox
+// starts at the root, and its shells open in the login user's home instead.
 func shellWorkingDirectory() string {
+	if current, err := os.Getwd(); err == nil && current != "/" {
+		return current
+	}
+	if login, err := user.Current(); err == nil && login.HomeDir != "" {
+		if home := workingDirectory(login.HomeDir); home != "/" {
+			return home
+		}
+	}
 	for _, candidate := range []string{"/mnt/code", "/workspace", os.Getenv("HOME"), "/"} {
 		if candidate == "" {
 			continue

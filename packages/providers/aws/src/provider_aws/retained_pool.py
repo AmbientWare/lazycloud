@@ -37,6 +37,7 @@ from .provider_control import upstream_error
 
 class SlotPhase(StrEnum):
     Preparing = "preparing"
+    Refreshing = "refreshing"
     Stopping = "stopping"
     Stopped = "stopped"
     Resuming = "resuming"
@@ -277,11 +278,17 @@ class AwsRetainedPool:
                             if device.machine_volume_id
                         )
                         or slot.storage_volume_ids,
+                        # Only EC2 stops a running, preparing or refreshing
+                        # instance; this pool stops one only after moving it to
+                        # Stopping. A reserve holds no work, so an interrupted
+                        # one is replaced. A refresh starts its instance in the
+                        # same call that records it, so no pass sees it unstarted.
                         "phase": (
                             SlotPhase.Retiring
                             if instance.state.name in {"terminated", "shutting-down"}
                             or (
-                                slot.phase is SlotPhase.Active
+                                slot.phase
+                                in {SlotPhase.Active, SlotPhase.Preparing, SlotPhase.Refreshing}
                                 and instance.state.name in {"stopping", "stopped"}
                             )
                             else SlotPhase.Stopped
@@ -378,6 +385,39 @@ class AwsRetainedPool:
             )
         )
         return True
+
+    def _start(self, slot: RetainedSlot, instance: _Instance) -> None:
+        operation = "start retained CPU instance"
+        try:
+            self.clients.ec2.start_instances(InstanceIds=[instance.id])
+        except BotoCoreError as exc:
+            self._keep_unrefreshed(slot)
+            raise upstream_error(exc, operation=operation) from exc
+        except ClientError as exc:
+            if _client_error_code(exc) != "InsufficientInstanceCapacity":
+                self._keep_unrefreshed(slot)
+                raise _client_error(exc, operation=operation) from exc
+            # A stopped Spot instance starts only when its market has room again.
+            # The recorded failure cools the market; a fresh launch replaces it.
+            self._save(
+                self.state.model_copy(
+                    update={
+                        "slots": tuple(
+                            slot.model_copy(update={"phase": SlotPhase.Retiring})
+                            if item.token == slot.token
+                            else item
+                            for item in self.state.slots
+                        ),
+                        "last_capacity_failure_at": utc_now(),
+                        "last_capacity_failure_code": CapacityFailureCode.CapacityUnavailable,
+                    }
+                )
+            )
+
+    def _keep_unrefreshed(self, slot: RetainedSlot) -> None:
+        # A reserve whose refresh could not start is still usable as it was.
+        if slot.phase is SlotPhase.Refreshing:
+            self._update(slot.model_copy(update={"phase": SlotPhase.Stopped}))
 
     def _retire(self, slot: RetainedSlot, instance: _Instance | None) -> bool:
         if not slot.instance_id:
@@ -479,11 +519,11 @@ class AwsRetainedPool:
                 if slot.phase is SlotPhase.Stopping and instance.state.name == "running":
                     self.clients.ec2.stop_instances(InstanceIds=[instance.id])
                 elif (
-                    slot.phase is SlotPhase.Resuming
+                    slot.phase in {SlotPhase.Resuming, SlotPhase.Refreshing}
                     and instance.state.name == "stopped"
                     and self.request.purchases_enabled
                 ):
-                    self.clients.ec2.start_instances(InstanceIds=[instance.id])
+                    self._start(slot, instance)
         if retired:
             self._save(
                 self.state.model_copy(
@@ -589,7 +629,7 @@ class AwsRetainedPool:
                     if instance.state.name == "running"
                     else ProviderMachineStatus.Unhealthy
                 )
-            elif slot.phase is SlotPhase.Preparing:
+            elif slot.phase in {SlotPhase.Preparing, SlotPhase.Refreshing}:
                 status = ProviderMachineStatus.Preparing
             else:
                 status = ProviderMachineStatus.Resuming
@@ -639,11 +679,20 @@ class AwsRetainedPool:
 
     def complete_preparation(self, instance_id: str) -> None:
         slot = self._slot(instance_id)
-        if slot.phase is SlotPhase.Preparing:
+        if slot.phase in {SlotPhase.Preparing, SlotPhase.Refreshing}:
             self._update(slot.model_copy(update={"phase": SlotPhase.Stopping}))
         elif slot.phase is SlotPhase.Resuming:
             self._update(slot.model_copy(update={"phase": SlotPhase.Active}))
         self._actions(self._inventory())
+
+    def refresh(self, instance_id: str) -> ProviderUnitSnapshot:
+        """Start a stopped reserve so its agent prepares it again, then stop it."""
+        slot = self._slot(instance_id)
+        if slot.phase is not SlotPhase.Stopped or slot.serving:
+            raise ValueError("only a stopped reserve can be prepared again")
+        self._update(slot.model_copy(update={"phase": SlotPhase.Refreshing}))
+        self._actions(self._inventory())
+        return self.describe()
 
     def stop(self, instance_id: str) -> ProviderUnitSnapshot:
         slot = self._slot(instance_id)
