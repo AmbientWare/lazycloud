@@ -502,7 +502,9 @@ class DeploymentSpec(ContractModel):
             msg = "keep_warm=-1 is only supported for pod workloads and functions with a warm floor"
             raise ValueError(msg)
         autoscaler = self.metadata.get("autoscaler")
-        autoscaler_config = Autoscaler.model_validate(autoscaler) if autoscaler is not None else None
+        autoscaler_config = (
+            Autoscaler.model_validate(autoscaler) if autoscaler is not None else None
+        )
         if (
             autoscaler_config is not None
             and self.resources.keep_warm == -1

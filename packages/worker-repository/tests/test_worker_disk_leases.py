@@ -64,8 +64,9 @@ def test_a_worker_leases_only_the_disks_its_assigned_container_declares(
         database,
         [_ROOT, DiskMount(name="scratch", size_bytes=1024**3)],
         workspace_id=workspace.id,
+        stub_id=str(uuid4()),
     )
-    [foreign] = get_or_create_disks(database, [_ROOT], workspace_id=other.id)
+    [foreign] = get_or_create_disks(database, [_ROOT], workspace_id=other.id, stub_id=str(uuid4()))
     service = isolated_services.worker_repository_service
     assigned = WorkerRepositoryPrincipal(workspace_id=workspace.id, worker_id="worker-1")
 

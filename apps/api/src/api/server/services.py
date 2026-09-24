@@ -56,6 +56,7 @@ from execution.endpoints.service import (
     EndpointIngressDispatchSession,
 )
 from execution.functions.service import FunctionControlService
+from execution.pods.devboxes import DevboxService
 from execution.pods.service import PodControlService
 from execution.secrets.service import SecretService
 from execution.shells.service import ShellControlService
@@ -489,6 +490,7 @@ class ApiServiceCore:
     volume_metering: PersistentVolumeMeteringService
     volume_filesystem: VolumeFilesystem
     disks: DiskService
+    devboxes: DevboxService
     disk_deletion: DiskDeletionService
     disk_volumes: DiskVolumeService
     payment_admission: DatabaseBillingAdmission
@@ -1059,6 +1061,7 @@ class ApiServices(ApiServiceCore):
             payment_admission=payment_admission,
             volume_filesystem=resolved_volume_filesystem,
             disks=disks,
+            devboxes=DevboxService(context.database, keep_alive=container_runtime_state),
             disk_deletion=disk_deletion,
             disk_volumes=disk_volumes,
             aws_connections=aws_composition.service if aws_composition is not None else None,
@@ -1345,6 +1348,7 @@ def _compose_api_services(
         payment_admission=core.payment_admission,
         volume_filesystem=core.volume_filesystem,
         disks=core.disks,
+        devboxes=core.devboxes,
         disk_deletion=core.disk_deletion,
         disk_volumes=core.disk_volumes,
         redis_client=core.redis_client,

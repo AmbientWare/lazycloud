@@ -5,12 +5,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from database.repositories.identity import WorkspaceRepository
+from database.tables.apps import AppTable, StubTable
 from database.tables.compute import ComputeProviderInstanceTable
 from database.tables.disks import DiskAttachmentTable, DiskGenerationTable, DiskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.orchestration import ContainerTable, WorkerTable
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
-from shared.disks import DiskRecord, DiskStatus
+from shared.deployments import PodRole, StubKind
+from shared.disks import DiskRecord, DiskStatus, DiskWorkload
 from shared.errors import ConflictError
 from shared.timestamps import to_utc
 from sqlalchemy import Select, delete, func, or_, select, update
@@ -112,9 +114,12 @@ class DiskRepository:
     session: Session
 
     def get_or_create(
-        self, name: str, *, workspace_id: str, size_bytes: int
+        self, name: str, *, workspace_id: str, size_bytes: int, stub_id: str
     ) -> tuple[DiskRecord, bool]:
-        """Return the named live disk and whether this transaction created it."""
+        """Return the named live disk and whether this transaction created it.
+
+        Either way the disk records `stub_id` as the workload asking for it.
+        """
         WorkspaceRepository(self.session).lock_active_owner(workspace_id)
         created = self.session.scalar(
             postgresql_insert(DiskTable)
@@ -127,6 +132,7 @@ class DiskRepository:
                 stored_bytes=0,
                 lease_token="",
                 last_worker_id="",
+                last_stub_id=stub_id,
                 metered_bytes=0,
             )
             .on_conflict_do_nothing(
@@ -137,6 +143,16 @@ class DiskRepository:
         )
         if created is not None:
             return disk_from_table(created), True
+        self.session.execute(
+            update(DiskTable)
+            .where(
+                DiskTable.workspace_id == workspace_id,
+                DiskTable.name == name,
+                DiskTable.deleted_at.is_(None),
+                DiskTable.last_stub_id.is_distinct_from(stub_id),
+            )
+            .values(last_stub_id=stub_id)
+        )
         existing = self.get(name, workspace_id=workspace_id)
         if existing is None:
             raise ConflictError("disk changed during creation; retry the request")
@@ -257,6 +273,31 @@ class DiskRepository:
             statement = statement.where(DiskTable.name > after)
         rows = self.session.execute(statement.order_by(DiskTable.name).limit(limit)).tuples()
         return [disk_from_table(row, holder_live=bool(live)) for row, live in rows]
+
+    def workloads(self, disk_ids: Sequence[str]) -> dict[str, DiskWorkload]:
+        """The workload each disk was last asked for by, for the disks that have one."""
+        if not disk_ids:
+            return {}
+        role = StubTable.configuration["role"].astext
+        rows = self.session.execute(
+            select(DiskTable.id, AppTable.id, AppTable.name, StubTable.name, role)
+            .join(StubTable, StubTable.id == DiskTable.last_stub_id)
+            .join(AppTable, AppTable.id == StubTable.app_id)
+            .where(
+                DiskTable.id.in_(list(disk_ids)),
+                StubTable.type == StubKind.Pod.value,
+                AppTable.deleted_at.is_(None),
+            )
+        ).tuples()
+        return {
+            str(disk_id): DiskWorkload(
+                app_id=str(app_id),
+                app_name=app_name,
+                name=name,
+                role=PodRole(stored_role) if stored_role else PodRole.Service,
+            )
+            for disk_id, app_id, app_name, name, stored_role in rows
+        }
 
     def lease(self, disk_id: str) -> tuple[str, str] | None:
         """The live disk's holding container and lease token, empty when unheld."""

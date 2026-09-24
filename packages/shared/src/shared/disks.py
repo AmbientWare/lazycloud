@@ -19,6 +19,7 @@ from datetime import datetime
 from pydantic import Field, field_validator
 
 from shared.contracts import ContractModel
+from shared.deployments import DeploymentKind, PodRole
 from shared.enums import StringEnum
 from shared.resources import parse_memory_mib
 from shared.timestamps import utc_now
@@ -234,6 +235,16 @@ class DiskRecord(ContractModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class DiskWorkload(ContractModel):
+    """The workload whose container last asked for a disk."""
+
+    app_id: str
+    app_name: str
+    kind: DeploymentKind = DeploymentKind.Pod
+    name: str
+    role: PodRole
+
+
 class DiskLayerChunk(ContractModel):
     """One content-addressed chunk of a sealed layer file.
 
@@ -294,6 +305,7 @@ __all__ = [
     "DiskRecord",
     "DiskStatus",
     "DiskStorage",
+    "DiskWorkload",
     "disk_capacity_bytes",
     "disk_chunk_key",
     "disk_manifest_key",

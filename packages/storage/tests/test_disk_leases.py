@@ -55,12 +55,14 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
         isolated_services.database,
         [DiskMount(name="box-root", size_bytes=1024**3)],
         workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     disk_id = resolved.record.id
     [again] = get_or_create_disks(
         isolated_services.database,
         [DiskMount(name="box-root", size_bytes=1024**3, mount_path="/data")],
         workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     assert again.record.id == disk_id
     first = _container(isolated_services, workspace_id, "worker-a")
@@ -119,6 +121,7 @@ def test_only_the_holder_collects_under_its_newest_self_contained_generation(
         isolated_services.database,
         [DiskMount(name="box-data", size_bytes=1024**3)],
         workspace_id=workspace_id,
+        stub_id=str(uuid4()),
     )
     disk_id = resolved.record.id
     holder = _container(isolated_services, workspace_id, "worker-a")

@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from identity.authz import token_has_scope
-from shared.deployment_records import Deployment, DeploymentSpec
-from shared.deployments import DeploymentKind
+from shared.deployment_records import Deployment, DeploymentSpec, resolve_pod_role
+from shared.deployments import DeploymentKind, PodRole
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.client_manifests import ClientManifestResource
 from shared.http.deployment_plans import (
@@ -14,6 +14,7 @@ from shared.http.deployment_plans import (
     DeploymentPruneResponse,
 )
 from shared.http.deployments import (
+    DeploymentDetailResponse,
     DeploymentListResponse,
     DeploymentPackagePlanResponse,
     DeploymentResponse,
@@ -21,6 +22,7 @@ from shared.http.deployments import (
     DeploymentScalingResponse,
     DeploymentStopAllResponse,
     DeploymentUrlResponse,
+    DevboxResponse,
 )
 from shared.http.stubs import StubResponse
 from shared.identity import AuthScope
@@ -417,7 +419,7 @@ def scale_deployment(
 
 @router.get(
     "/api/v1/deployments/{deployment_id}",
-    response_model=DeploymentResponse,
+    response_model=DeploymentDetailResponse,
     operation_id="get_deployment",
 )
 def get_deployment(
@@ -425,9 +427,9 @@ def get_deployment(
     workspace_id: read_workspace,
     token: read_token,
     services: ApiServices = Depends(current_services),
-) -> DeploymentResponse:
+) -> DeploymentDetailResponse:
     deployment = _management(services).retrieve_deployment(workspace_id, deployment_id)
-    return actionable_deployment_response(
+    response = actionable_deployment_response(
         deployment,
         can_write=token_has_scope(token, AuthScope.Write),
         app_active=_deployment_app_active(deployment, workspace_id, services),
@@ -435,6 +437,20 @@ def get_deployment(
             [deployment], workspace=workspace_id, services=services
         ).get(deployment.id),
     )
+    return DeploymentDetailResponse(
+        **dict(response), devbox=_devbox(deployment, workspace_id, services)
+    )
+
+
+def _devbox(
+    deployment: Deployment, workspace_id: str, services: ApiServices
+) -> DevboxResponse | None:
+    if resolve_pod_role(deployment.kind, deployment.spec.role) is not PodRole.Devbox:
+        return None
+    resource = services.deployment_resources.get_by_deployment_id(
+        deployment.id, workspace=workspace_id
+    )
+    return services.devboxes.describe(resource) if resource is not None else None
 
 
 @router.delete(
