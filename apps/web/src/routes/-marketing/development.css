@@ -1,0 +1,111 @@
+.development-section {
+  padding-block: 48px 104px;
+}
+
+.development-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(40px, 7vw, 100px);
+}
+
+.development-feature {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.development-art {
+  height: clamp(280px, 29vw, 380px);
+  margin-inline: -24px;
+  overflow: hidden;
+  mask-image:
+    linear-gradient(transparent, #000 12%, #000 85%, transparent),
+    linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-composite: intersect;
+}
+
+.development-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: grayscale(0.25) brightness(1.15);
+}
+
+.development-art-workspace img {
+  object-position: center 57%;
+}
+
+.development-art-workloads img {
+  object-position: center 64%;
+}
+
+.development-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-top: 28px;
+}
+
+.development-copy h2 {
+  margin: 0 0 24px;
+  font-size: clamp(36px, 3.7vw, 52px);
+  font-weight: 550;
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+
+.development-copy p {
+  max-width: 510px;
+  margin: 0 0 16px;
+  color: var(--muted-foreground);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.development-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 8px;
+  color: var(--brand);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--brand) 40%, transparent);
+  text-underline-offset: 6px;
+}
+
+.development-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.development-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 6px;
+}
+
+@media (max-width: 767px) {
+  .development-section {
+    padding-block: 24px 64px;
+  }
+
+  .development-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 48px;
+  }
+
+  .development-art {
+    height: clamp(240px, 68vw, 380px);
+    margin-inline: -12px;
+  }
+
+  .development-copy {
+    padding-top: 16px;
+  }
+
+  .development-copy h2 {
+    margin-bottom: 20px;
+  }
+}
