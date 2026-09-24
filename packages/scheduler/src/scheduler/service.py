@@ -837,27 +837,25 @@ class Scheduler:
         """Turn recorded capacity demand into a machine, and nothing else.
 
         A request that found no worker waits here for a reserve to resume or a
-        machine to be bought, so this pass runs on its own wake. Sharing the
-        capacity pass made that request wait behind a minute of provider
-        inventory reads before anyone started the stopped reserve it needed.
+        machine to be bought. The pass runs on its own wake and makes no
+        provider inventory reads, so that request never waits behind them.
         """
 
         if not include_containers:
             return SchedulerRunResult()
-        current_time = now or utc_now()
         timings = StepTimings()
         with timings.step("recovery"):
             try:
                 self.runtime_services.compute.reconcile_capacity_recovery(
-                    now=current_time,
+                    now=now or utc_now(),
                     limit=container_limit,
                 )
             except Exception:
                 LOGGER.exception("scheduler capacity recovery failed")
         with timings.step("acquire"):
-            sweep = self.container_scheduler.acquire_capacity(
-                now=current_time, limit=container_limit
-            )
+            # `now` stays None in the running process so each request's retry is
+            # timed from its own attempt, not from the start of the pass.
+            sweep = self.container_scheduler.acquire_capacity(now=now, limit=container_limit)
         if sweep.acquired or sweep.contended:
             timings.log(
                 LOGGER,
