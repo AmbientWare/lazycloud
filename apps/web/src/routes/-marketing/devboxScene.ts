@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
+import { createDevboxFocus } from "./devboxFocus";
+
 const AGENTS = ["codex", "claude-code", "opencode", "pi"];
 const ASSEMBLED_COUNT = 27;
 const COUNT = ASSEMBLED_COUNT + 36;
@@ -72,6 +74,7 @@ export async function createDevboxScene(
   reflection.dispose();
 
   const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 60);
+  const focusEffect = createDevboxFocus(renderer, camera);
   const cameraDirection = new THREE.Vector3(6, 5, 12).normalize();
   camera.position.copy(cameraDirection).multiplyScalar(15);
   camera.lookAt(0, 0, 0);
@@ -343,7 +346,7 @@ export async function createDevboxScene(
       agentMarks[index % AGENTS.length].mesh.setMatrixAt(Math.floor(index / AGENTS.length), matrix);
     });
     for (const mesh of instances) mesh.instanceMatrix.needsUpdate = true;
-    renderer.render(scene, camera);
+    focusEffect.render(scene, shell.position, ease(expansion));
   }
   function tick(now: number) {
     animation = 0;
@@ -424,6 +427,7 @@ export async function createDevboxScene(
       if (index < 3) cube.size = mobile ? 0.98 : 1.4;
     });
     renderer.setSize(width, height, false);
+    focusEffect.resize(width, height);
     requestDraw();
   }
   function transitionTo(target: 0 | 1) {
@@ -509,6 +513,7 @@ export async function createDevboxScene(
       for (const material of materials) material.dispose();
       for (const texture of textures) texture.dispose();
       environment.dispose();
+      focusEffect.dispose();
       renderer.dispose();
     },
   };
