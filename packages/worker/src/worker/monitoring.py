@@ -533,7 +533,7 @@ class _ThreadedContainerRuntimeMonitorHandle:
             )
         except HttpApiError as exc:
             if exc.code != domain_error_code(ContainerLifetimeEndedError):
-                self._hold_failed_usage_window(window, evidence)
+                self._hold_failed_usage_window(window, evidence, exc)
                 return None
             # Every later window lies further past the recorded end, so none would
             # be accepted either. The cleanup pass stops the container itself.
@@ -549,18 +549,19 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 },
             )
             return None
-        except Exception:  # pragma: no cover - defensive worker boundary
-            self._hold_failed_usage_window(window, evidence)
+        except Exception as exc:  # pragma: no cover - defensive worker boundary
+            self._hold_failed_usage_window(window, evidence, exc)
             return None
 
     def _hold_failed_usage_window(
         self,
         window: _UsageWindow,
         evidence: WorkerUsageEvidence,
+        error: Exception,
     ) -> None:
         LOGGER.warning(
             "container usage window was not recorded",
-            exc_info=True,
+            exc_info=error,
             extra={
                 "container_id": self.request.container_id,
                 "window_start_ms": window.start_ms,
