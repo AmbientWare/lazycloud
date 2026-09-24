@@ -43,6 +43,19 @@ image stays the base layer, and everything the devbox writes on top of it lands
 on the disk. [Disk pricing](/concepts/disks#pricing) covers how size and stored
 data bill.
 
+## What persists
+
+Everything under `/` is on the disk and survives stops, restarts and moves to
+another machine, `/tmp` included. The exceptions are the paths LazyCloud mounts
+over the disk on each start:
+
+- `/dev/shm` and `/volumes` are memory, empty on every start.
+- [Volumes](/concepts/volumes) you attach keep their data in the volume, not on
+  the disk. They appear under `/volumes`, and at their own path when they name one.
+- `/artifacts` holds the app's artifacts, read-only.
+- `/etc/hosts`, `/etc/resolv.conf` and everything under `/run/lazycloud` are
+  rewritten on each start.
+
 ## What a devbox defaults to
 
 The control plane fills in whatever the devbox leaves unset, and `deploy`
