@@ -6,6 +6,11 @@ const AGENTS = ["codex", "claude-code", "opencode"];
 const ASSEMBLED_COUNT = 27;
 const COUNT = ASSEMBLED_COUNT + 36;
 const EXPANSION_DURATION = 800;
+const foregroundRotations = [
+  new THREE.Euler(-0.18, 0.5, -0.14),
+  new THREE.Euler(0.1, 0.05, 0.16),
+  new THREE.Euler(-0.12, 0.85, 0.08),
+];
 
 function ease(value: number) {
   const t = THREE.MathUtils.clamp(value, 0, 1);
@@ -170,11 +175,14 @@ export async function createDevboxScene(
       Math.floor(index / 9) - 1,
     ).multiplyScalar(0.96);
     const size = index < 3 ? 1.4 : 0.65 + (index % 5) * 0.11;
-    const rotation = new THREE.Euler(
-      ((index % 3) - 1) * 0.07,
-      ((index % 5) - 2) * 0.16,
-      ((index % 3) - 1) * 0.06,
-    );
+    const rotation =
+      index < 3
+        ? foregroundRotations[index]
+        : new THREE.Euler(
+            Math.sin(index * 2.7) * 0.45,
+            0.45 + Math.cos(index * 2.4) * 1.05,
+            Math.sin(index * 1.7) * 0.4,
+          );
     const shade = new THREE.Color().setScalar(background ? 0.65 : 1);
     bodies.setColorAt(index, shade);
     caps.setColorAt(index, shade);
