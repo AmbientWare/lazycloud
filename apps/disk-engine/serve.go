@@ -235,13 +235,13 @@ func fetchAll(ctx context.Context, layers []*lazyLayer, refs []chunkRef, fetches
 }
 
 type rateLimit struct {
-	mu      sync.Mutex
-	perByte time.Duration
-	next    time.Time
+	mu             sync.Mutex
+	bytesPerSecond int64
+	next           time.Time
 }
 
 func newRateLimit(bytesPerSecond int64) *rateLimit {
-	return &rateLimit{perByte: time.Second / time.Duration(bytesPerSecond)}
+	return &rateLimit{bytesPerSecond: bytesPerSecond}
 }
 
 // wait blocks until length more bytes fit the rate. A nil limit never waits.
@@ -255,7 +255,7 @@ func (r *rateLimit) wait(ctx context.Context, length int64) error {
 	if start.Before(now) {
 		start = now
 	}
-	r.next = start.Add(time.Duration(length) * r.perByte)
+	r.next = start.Add(time.Duration(length * int64(time.Second) / r.bytesPerSecond))
 	r.mu.Unlock()
 	select {
 	case <-time.After(start.Sub(now)):
