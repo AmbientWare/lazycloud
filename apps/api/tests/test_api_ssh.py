@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
-from threading import Thread
+from threading import Event, Thread
 
 import pytest
 import uvicorn
@@ -184,13 +184,16 @@ def test_ssh_tunnel_refuses_outsiders_and_pods_without_ssh(
 
 @dataclass(frozen=True, slots=True)
 class _WakingPod:
+    """A pod that answers only once the test says it has woken."""
+
     target: SshPodTarget
     backend: socket.socket
-    wake_seconds: float
+    awake: Event
 
     @asynccontextmanager
     async def open(self, *, workspace_id: str, app: str, pod: str) -> AsyncIterator[PodSshTunnel]:
-        await asyncio.sleep(self.wake_seconds)
+        while not self.awake.is_set():
+            await asyncio.sleep(0.01)
         yield PodSshTunnel(target=self.target, backend=self.backend)
 
 
@@ -201,12 +204,11 @@ def test_ssh_tunnel_accepts_at_once_and_holds_early_bytes_while_the_pod_wakes(
     with isolated_services.context.database.session() as session:
         target = ssh_pod_target(session, workspace_id=fixture.workspace_id, app="dev", pod="box")
     tunnel_end, pod_end = socket.socketpair()
-    pod_end.settimeout(5)
     ping_seconds = 0.1
-    wake_seconds = 20 * ping_seconds
+    awake = Event()
     app = create_app(isolated_services)
     app.dependency_overrides[pod_ssh_tunnel_service] = lambda: _WakingPod(
-        target=target, backend=tunnel_end, wake_seconds=wake_seconds
+        target=target, backend=tunnel_end, awake=awake
     )
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
@@ -230,16 +232,25 @@ def test_ssh_tunnel_accepts_at_once_and_holds_early_bytes_while_the_pod_wakes(
         f"?workspace={fixture.workspace_id}&app=dev"
     )
     try:
-        started = time.monotonic()
+        # The pod stays asleep until awake is set, so a completed handshake means
+        # the tunnel was accepted before the pod answered.
         with connect(
             url,
             additional_headers=fixture.member,
-            open_timeout=wake_seconds,
+            open_timeout=10,
             ping_interval=None,
         ) as websocket:
-            accepted_after = time.monotonic() - started
             websocket.send(b"SSH-2.0-client\r\n")
             websocket.send(b"early-kexinit")
+            # Several ping intervals pass with the pod still asleep; the client
+            # answers pings only if the server keeps reading its frames.
+            time.sleep(5 * ping_seconds)
+            pod_end.setblocking(False)
+            with pytest.raises(BlockingIOError):
+                pod_end.recv(1024)
+            pod_end.setblocking(True)
+            pod_end.settimeout(5)
+            awake.set()
             early = b""
             while len(early) < len(b"SSH-2.0-client\r\nearly-kexinit") and (
                 chunk := pod_end.recv(1024)
@@ -247,14 +258,13 @@ def test_ssh_tunnel_accepts_at_once_and_holds_early_bytes_while_the_pod_wakes(
                 early += chunk
             pod_end.sendall(b"SSH-2.0-pod\r\n")
             reply = websocket.recv(timeout=5)
-        assert time.monotonic() - started >= wake_seconds
     finally:
+        awake.set()
         server.should_exit = True
         thread.join(timeout=5)
         listener.close()
         pod_end.close()
         tunnel_end.close()
 
-    assert accepted_after < wake_seconds / 2
     assert early == b"SSH-2.0-client\r\nearly-kexinit"
     assert reply == b"SSH-2.0-pod\r\n"
