@@ -151,6 +151,11 @@ class ComputeProviderInstanceRecord(ContractModel):
     availability_zone: str = ""
     storage_volume_ids: tuple[str, ...] = ()
     booted_template_version: str = ""
+    # The agent binary and worker image a stopped reserve proved it holds when its
+    # preparation last completed. Empty until then, and for a used machine whose
+    # agent was not current when it stopped.
+    prepared_agent_sha256: str = ""
+    prepared_worker_image: str = ""
     missing_since: datetime | None = None
     provider_storage_destroyed_at: datetime | None = None
     terminating_reason: str = ""
@@ -159,6 +164,18 @@ class ComputeProviderInstanceRecord(ContractModel):
     last_error: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeReserveInstance:
+    """A platform CPU reserve machine and the release it was prepared with."""
+
+    pool_id: str
+    instance_id: str
+    machine_id: str
+    status: str
+    prepared_agent_sha256: str
+    prepared_worker_image: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1428,6 +1445,8 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
             "availability_zone": row.availability_zone,
             "storage_volume_ids": row.storage_volume_ids,
             "booted_template_version": row.booted_template_version,
+            "prepared_agent_sha256": row.prepared_agent_sha256,
+            "prepared_worker_image": row.prepared_worker_image,
             "missing_since": to_utc_or_none(row.missing_since),
             "provider_storage_destroyed_at": to_utc_or_none(row.provider_storage_destroyed_at),
             "terminating_reason": row.terminating_reason,
@@ -1487,6 +1506,8 @@ class ComputeProviderInstanceRepository:
         row.availability_zone = record.availability_zone
         row.storage_volume_ids = list(record.storage_volume_ids)
         row.booted_template_version = record.booted_template_version
+        row.prepared_agent_sha256 = record.prepared_agent_sha256
+        row.prepared_worker_image = record.prepared_worker_image
         row.missing_since = record.missing_since
         row.provider_storage_destroyed_at = record.provider_storage_destroyed_at
         row.terminating_reason = record.terminating_reason
@@ -1648,6 +1669,43 @@ class ComputeProviderInstanceRepository:
             for row in rows
             if row.machine_id is not None
         }
+
+    def platform_reserve_instances(
+        self, *, statuses: Collection[str]
+    ) -> list[ComputeReserveInstance]:
+        table = ComputeProviderInstanceTable
+        rows = self.session.execute(
+            select(
+                table.pool_id,
+                table.instance_id,
+                table.machine_id,
+                table.status,
+                table.prepared_agent_sha256,
+                table.prepared_worker_image,
+            )
+            .join(ComputeUnitTable, ComputeUnitTable.id == table.pool_id)
+            .where(
+                ComputeUnitTable.platform_fleet.is_(True),
+                ComputeUnitTable.worker_gpu_count == 0,
+                table.status.in_(statuses),
+                table.missing_since.is_(None),
+                table.instance_id.is_not(None),
+                table.machine_id.is_not(None),
+            )
+            .order_by(table.created_at.asc(), table.id.asc())
+        ).tuples()
+        return [
+            ComputeReserveInstance(
+                pool_id=pool_id,
+                instance_id=instance_id,
+                machine_id=machine_id,
+                status=status,
+                prepared_agent_sha256=agent_sha256,
+                prepared_worker_image=worker_image,
+            )
+            for pool_id, instance_id, machine_id, status, agent_sha256, worker_image in rows
+            if pool_id is not None and instance_id is not None and machine_id is not None
+        ]
 
     def get_by_machine(self, machine_id: str) -> ComputeProviderInstanceRecord | None:
         row = self.session.scalars(

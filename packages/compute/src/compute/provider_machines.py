@@ -418,6 +418,12 @@ class ProviderMachineReconciler:
                 "availability_zone": instance.availability_zone,
                 "storage_volume_ids": list(storage_volume_ids),
                 "booted_template_version": instance.booted_template_version,
+                "prepared_agent_sha256": (
+                    settled_existing.prepared_agent_sha256 if settled_existing else ""
+                ),
+                "prepared_worker_image": (
+                    settled_existing.prepared_worker_image if settled_existing else ""
+                ),
                 "missing_since": None,
                 "provider_storage_destroyed_at": settled_existing.provider_storage_destroyed_at
                 if settled_existing

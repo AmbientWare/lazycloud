@@ -249,6 +249,12 @@ class PooledCapacityProvider(Protocol):
         self, request: ProviderUnitRequest, provider_instance_id: str
     ) -> None: ...
 
+    def refresh_machine(
+        self, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        """Start one stopped reserve so its agent prepares it for the current release."""
+        ...
+
     def stop_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str
     ) -> ProviderUnitSnapshot:

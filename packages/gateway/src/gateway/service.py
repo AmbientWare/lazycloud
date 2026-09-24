@@ -2256,11 +2256,9 @@ class GatewayControlService:
                     machine_id=response_state.machine_id,
                     credential_id=response_state.credential_id,
                     credential_generation=response_state.credential_generation,
-                    worker_prepared=release.target.worker_image in request.prepared_worker_images,
-                    agent_current=(
-                        release.target.agent is None
-                        or request.binary_sha256 == release.target.agent.sha256
-                    ),
+                    release=release.target,
+                    agent_binary_sha256=request.binary_sha256,
+                    prepared_worker_images=request.prepared_worker_images,
                     has_active_workers=bool(request.active_worker_images),
                     prepared_stop=request.prepared_stop,
                 )

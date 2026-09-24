@@ -37,6 +37,7 @@ from .provider_control import upstream_error
 
 class SlotPhase(StrEnum):
     Preparing = "preparing"
+    Refreshing = "refreshing"
     Stopping = "stopping"
     Stopped = "stopped"
     Resuming = "resuming"
@@ -493,7 +494,7 @@ class AwsRetainedPool:
                 if slot.phase is SlotPhase.Stopping and instance.state.name == "running":
                     self.clients.ec2.stop_instances(InstanceIds=[instance.id])
                 elif (
-                    slot.phase is SlotPhase.Resuming
+                    slot.phase in {SlotPhase.Resuming, SlotPhase.Refreshing}
                     and instance.state.name == "stopped"
                     and self.request.purchases_enabled
                 ):
@@ -603,7 +604,7 @@ class AwsRetainedPool:
                     if instance.state.name == "running"
                     else ProviderMachineStatus.Unhealthy
                 )
-            elif slot.phase is SlotPhase.Preparing:
+            elif slot.phase in {SlotPhase.Preparing, SlotPhase.Refreshing}:
                 status = ProviderMachineStatus.Preparing
             else:
                 status = ProviderMachineStatus.Resuming
@@ -653,11 +654,20 @@ class AwsRetainedPool:
 
     def complete_preparation(self, instance_id: str) -> None:
         slot = self._slot(instance_id)
-        if slot.phase is SlotPhase.Preparing:
+        if slot.phase in {SlotPhase.Preparing, SlotPhase.Refreshing}:
             self._update(slot.model_copy(update={"phase": SlotPhase.Stopping}))
         elif slot.phase is SlotPhase.Resuming:
             self._update(slot.model_copy(update={"phase": SlotPhase.Active}))
         self._actions(self._inventory())
+
+    def refresh(self, instance_id: str) -> ProviderUnitSnapshot:
+        """Start a stopped reserve so its agent prepares it again, then stop it."""
+        slot = self._slot(instance_id)
+        if slot.phase is not SlotPhase.Stopped or slot.serving:
+            raise ValueError("only a stopped reserve can be prepared again")
+        self._update(slot.model_copy(update={"phase": SlotPhase.Refreshing}))
+        self._actions(self._inventory())
+        return self.describe()
 
     def stop(self, instance_id: str) -> ProviderUnitSnapshot:
         slot = self._slot(instance_id)
