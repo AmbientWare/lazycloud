@@ -27,12 +27,14 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Protocol
 
 from foundation.process import ProcessResult, run_command_with_timeout
@@ -48,6 +50,7 @@ from shared.disks import (
 )
 from shared.http.errors import HttpApiError
 from shared.identity import TokenKind
+from shared.timestamps import utc_now
 
 from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.disk_volumes import DiskVolumeMounts
@@ -68,6 +71,7 @@ from worker.tools import (
     ContainerCredentials,
     WorkspaceStorageCredentials,
 )
+from worker.workspace_credential_refresh import REFRESH_AT_FRACTION
 
 LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +112,8 @@ _COLLECT_TIMEOUT_SECONDS = 3600.0
 _LIST_TIMEOUT_SECONDS = 60.0
 _USAGE_TIMEOUT_SECONDS = 30.0
 _EVICT_TIMEOUT_SECONDS = 600.0
+_STORE_RENEW_RETRY_SECONDS = 15.0
+_STORE_RENEW_MIN_SECONDS = 1.0
 
 
 class DiskEngineError(RuntimeError):
@@ -209,6 +215,12 @@ class DiskStoreFile(ContractModel):
     secret_key: str = Field(repr=False)
     session_token: str = Field(repr=False)
     force_path_style: bool
+    expires_at: datetime | None
+    """When the grant stops working; the engine reads the file again before then."""
+
+
+type DiskStoreSource = Callable[[], DiskStoreFile]
+"""Vends a fresh workspace storage grant each time it is called."""
 
 
 class DiskChainFileEntry(ContractModel):
@@ -238,7 +250,7 @@ class DiskEngine:
         *,
         mountpoint: Path,
         chain: list[DiskChainFileEntry],
-        store: DiskStoreFile,
+        store: DiskStoreSource,
         min_free_bytes: int,
     ) -> DiskEngineAttachResult:
         scratch = self._scratch_dir(disk.disk_id)
@@ -278,7 +290,7 @@ class DiskEngine:
         generation: int,
         parent: int,
         flatten: bool,
-        store: DiskStoreFile,
+        store: DiskStoreSource,
     ) -> DiskEnginePublishResult:
         with self._store_file(self._scratch_dir(disk_id), store) as store_path:
             argv = [
@@ -314,7 +326,7 @@ class DiskEngine:
         self._run(_COMPACT_TIMEOUT_SECONDS, "compact", *self._disk_args(root, disk_id))
 
     def collect(
-        self, root: Path, disk_id: str, *, generation: int, store: DiskStoreFile
+        self, root: Path, disk_id: str, *, generation: int, store: DiskStoreSource
     ) -> DiskEngineCollectResult:
         with self._store_file(self._scratch_dir(disk_id), store) as store_path:
             output = self._run(
@@ -357,7 +369,7 @@ class DiskEngine:
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
         return path
 
-    def _store_file(self, directory: Path, store: DiskStoreFile) -> _StoreFile:
+    def _store_file(self, directory: Path, store: DiskStoreSource) -> _StoreFile:
         return _StoreFile(directory / "store.json", store)
 
     def _run(self, timeout_seconds: float, *argv: str) -> str:
@@ -374,21 +386,87 @@ class DiskEngine:
 
 
 class _StoreFile:
-    """STORE.json for the length of one engine call, readable only by this user."""
+    """STORE.json for the length of one engine call, readable only by this user.
 
-    def __init__(self, path: Path, store: DiskStoreFile) -> None:
+    One engine call can outlast the grant it started with. A thread vends a new
+    grant once half the current one's remaining life has passed and swaps it into
+    the file, which the engine reads again as its copy nears expiry. A renewal
+    that fails is retried; if the grant runs out first, the engine fails naming
+    the expiry, and the call's error carries the renewal's failure.
+    """
+
+    def __init__(self, path: Path, source: DiskStoreSource) -> None:
         self.path = path
-        self.store = store
+        self.source = source
+        self.stop = threading.Event()
+        self.renewer: threading.Thread | None = None
+        self.renewal_error: Exception | None = None
 
     def __enter__(self) -> Path:
-        self.path.unlink(missing_ok=True)
-        descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(self.store.model_dump_json())
+        store = self.source()
+        self._write(store)
+        if store.expires_at is not None:
+            self.renewer = threading.Thread(
+                target=self._renew,
+                args=(store.expires_at,),
+                name=f"disk-store-{self.path.parent.name}",
+                daemon=True,
+            )
+            self.renewer.start()
         return self.path
 
-    def __exit__(self, *_: object) -> None:
+    def __exit__(
+        self,
+        _type: type[BaseException] | None,
+        error: BaseException | None,
+        _trace: TracebackType | None,
+    ) -> None:
+        self.stop.set()
+        if self.renewer is not None:
+            self.renewer.join()
         self.path.unlink(missing_ok=True)
+        if error is not None and self.renewal_error is not None:
+            error.add_note(
+                f"renewing the workspace storage credential failed: {self.renewal_error}"
+            )
+
+    def _renew(self, expires_at: datetime) -> None:
+        wait = _renew_after(expires_at)
+        while not self.stop.wait(wait):
+            try:
+                store = self.source()
+            except Exception as exc:
+                self.renewal_error = exc
+                wait = _STORE_RENEW_RETRY_SECONDS
+                LOGGER.warning(
+                    "renewing the workspace storage credential for disk %s failed; "
+                    "retrying in %.0fs",
+                    self.path.parent.name,
+                    wait,
+                    exc_info=True,
+                )
+                continue
+            self._write(store)
+            self.renewal_error = None
+            if store.expires_at is None:
+                return
+            wait = _renew_after(store.expires_at)
+
+    def _write(self, store: DiskStoreFile) -> None:
+        """Replace the file whole, so the engine never reads a partial grant."""
+        descriptor, staged = tempfile.mkstemp(dir=self.path.parent, prefix=".store-")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(store.model_dump_json())
+            os.replace(staged, self.path)
+        except BaseException:
+            Path(staged).unlink(missing_ok=True)
+            raise
+
+
+def _renew_after(expires_at: datetime) -> float:
+    remaining = (expires_at - utc_now()).total_seconds()
+    return max(remaining * REFRESH_AT_FRACTION, _STORE_RENEW_MIN_SECONDS)
 
 
 class DiskLease(ContractModel):
@@ -445,9 +523,6 @@ class _Attached:
 
     stopping: bool = False
     """A volume ran out of space and the container was asked to stop."""
-
-    store: DiskStoreFile | None = None
-    store_expires_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -1086,14 +1161,17 @@ class WorkerDurableDiskService:
             collected.removed_manifests,
         )
 
-    def _store(self, attached: _Attached) -> DiskStoreFile:
-        """Workspace bucket credentials, vended fresh and kept for when vending fails.
+    def _store(self, attached: _Attached) -> DiskStoreSource:
+        """Vends workspace bucket credentials for one engine call, and again as they age.
 
-        The last vended credential is still a real one for the rest of its life,
-        so a release whose container state has already expired can still publish.
+        Nothing falls back to an earlier grant when vending fails. A grant lasts
+        less than one engine call may take, so an earlier one would fail partway
+        through; the call fails at once with the vending error instead, and the
+        next publish pass or release retry vends again.
         """
         record = attached.leases
-        try:
+
+        def vend() -> DiskStoreFile:
             vended = self.credentials.vend(
                 ContainerCredentialRequest(
                     workspace_id=record.workspace_id,
@@ -1105,23 +1183,11 @@ class WorkerDurableDiskService:
                     workspace_id=record.workspace_id, token_kind=TokenKind.Worker
                 ),
             )
-        except Exception:
-            if attached.store is not None and (
-                attached.store_expires_at is None or attached.store_expires_at > datetime.now(UTC)
-            ):
-                LOGGER.warning(
-                    "workspace storage credential for container %s could not be renewed; "
-                    "using the unexpired one",
-                    record.container_id,
-                    exc_info=True,
-                )
-                return attached.store
-            raise
-        if vended.workspace_storage is None:
-            raise DiskEngineError("workspace storage credentials were not vended for the disk")
-        attached.store = disk_store_file(vended.workspace_storage)
-        attached.store_expires_at = vended.workspace_storage.expires_at
-        return attached.store
+            if vended.workspace_storage is None:
+                raise DiskEngineError("workspace storage credentials were not vended for the disk")
+            return disk_store_file(vended.workspace_storage)
+
+        return vend
 
     def _lease_path(self, container_id: str) -> Path:
         _require_path_segment(container_id, field="container id")
@@ -1170,6 +1236,7 @@ def disk_store_file(credentials: WorkspaceStorageCredentials) -> DiskStoreFile:
         secret_key=credentials.secret_key,
         session_token=credentials.session_token,
         force_path_style=credentials.force_path_style,
+        expires_at=credentials.expires_at,
     )
 
 
