@@ -79,12 +79,7 @@ from scheduler.tools import (
 
 DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS = 1.0
 PROVISIONING_RECHECK_SECONDS = 5.0
-"""How often demand whose machine is already starting is looked at again.
-
-Dispatch places the request the moment the machine's worker registers, so the
-recheck only follows the provisioning operation; each one reads the request,
-its reservation and the pool.
-"""
+"""How often demand waiting on capacity another operation provides is looked at again."""
 CONTAINER_DISPATCH_WAKE_SCOPE = "scheduler-container-dispatch"
 LOGGER = logging.getLogger(__name__)
 
@@ -979,10 +974,12 @@ class SchedulerContainerRequestService:
                                 "status": result.status.value,
                             },
                         )
-                    waiting = result.status in {
-                        CapacityAcquisitionStatus.ExistingPending,
-                        CapacityAcquisitionStatus.Requested,
-                    }
+                    # Requested means this request owns a provider operation in flight;
+                    # the next attempt reads the provider again, and that read is what
+                    # turns a refused launch into a failover. ExistingPending advances
+                    # nothing on another attempt: the machine registers and dispatch
+                    # places the request without it.
+                    waiting = result.status is CapacityAcquisitionStatus.ExistingPending
                     retry_at = (now or utc_now()) + timedelta(
                         seconds=max(
                             result.retry_delay_seconds,
