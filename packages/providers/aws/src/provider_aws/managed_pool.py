@@ -5,8 +5,10 @@ import hashlib
 import json
 import re
 import shlex
+import threading
+import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal, NotRequired, Protocol, Self, TypedDict, TypeGuard, overload
@@ -567,9 +569,28 @@ class _AssumeResponse(_Response):
     credentials: _Credentials = Field(alias="Credentials")
 
 
+ASSUMED_CLIENTS_REUSE_SECONDS = 45 * 60
+"""How long one role session's clients serve later calls. The session lasts an
+hour, so the last reuse still has a quarter hour for the call it makes."""
+
+
 @dataclass(frozen=True, slots=True)
 class Boto3AwsManagedPoolClientProvider:
+    """Clients for a connection's role, assumed once and reused while the session lasts.
+
+    Every disk volume step and pool reconciliation asks for clients. Assuming
+    the role and building boto3 clients each time cost two STS round trips and
+    about half a second per step, several times inside one container start.
+    """
+
     session_factory: AwsManagedPoolSessionFactory
+    clock: Callable[[], float] = time.monotonic
+    _assumed: dict[tuple[str, str, str, str], tuple[float, AwsManagedPoolClients]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     @classmethod
     def from_default_chain(cls) -> Self:
@@ -577,6 +598,23 @@ class Boto3AwsManagedPoolClientProvider:
 
     def assume(self, target: AwsAccountConnectionTarget) -> AwsManagedPoolClients:
         target.validated_scope()
+        key = (
+            target.account_id,
+            target.role_arn,
+            target.region,
+            hashlib.sha256(target.external_id.get_secret_value().encode()).hexdigest(),
+        )
+        now = self.clock()
+        with self._lock:
+            cached = self._assumed.get(key)
+            if cached is not None and now < cached[0]:
+                return cached[1]
+        clients = self._assume(target)
+        with self._lock:
+            self._assumed[key] = (now + ASSUMED_CLIENTS_REUSE_SECONDS, clients)
+        return clients
+
+    def _assume(self, target: AwsAccountConnectionTarget) -> AwsManagedPoolClients:
         source = self.session_factory(region_name=target.region)
         try:
             response = source.client("sts").assume_role(

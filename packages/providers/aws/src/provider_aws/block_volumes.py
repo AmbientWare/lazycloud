@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol, TypedDict, TypeGuard
 
-from botocore.exceptions import BotoCoreError, ClientError, WaiterError
+from botocore.exceptions import BotoCoreError, ClientError
 from compute.block_volumes import (
     BlockVolume,
     BlockVolumeMissingError,
@@ -61,7 +61,11 @@ VOLUME_TOKEN_TAG_KEY = "cloud-pool:volume-token"
 _DISK_DEVICE_NAMES = tuple(f"/dev/sd{letter}" for letter in "fghijklmnopqrstuvwxyz")
 
 _GIB = 1024**3
-_WAIT_DELAY_SECONDS = 2
+_POLL_FIRST_SECONDS = 0.25
+_POLL_MAX_SECONDS = 2.0
+"""A new gp3 volume is available, and an attachment attached, in about a second.
+Polling from a quarter second and doubling answers then, where a fixed two
+seconds held the container start for the rest of the interval."""
 
 
 def is_disk_volume_device(device_name: str) -> bool:
@@ -94,15 +98,6 @@ class _BlockDeviceModification(TypedDict):
     Ebs: _EbsModification
 
 
-class _WaiterConfig(TypedDict):
-    Delay: int
-    MaxAttempts: int
-
-
-class _VolumeWaiter(Protocol):
-    def wait(self, *, VolumeIds: list[str], WaiterConfig: _WaiterConfig) -> None: ...
-
-
 class AwsBlockVolumeEc2Client(Protocol):
     def create_volume(
         self,
@@ -132,7 +127,6 @@ class AwsBlockVolumeEc2Client(Protocol):
     def modify_instance_attribute(
         self, *, InstanceId: str, BlockDeviceMappings: list[_BlockDeviceModification]
     ) -> Mapping[str, object]: ...
-    def get_waiter(self, waiter_name: str) -> _VolumeWaiter: ...
 
 
 def is_block_volume_client(value: object) -> TypeGuard[AwsBlockVolumeEc2Client]:
@@ -146,7 +140,6 @@ def is_block_volume_client(value: object) -> TypeGuard[AwsBlockVolumeEc2Client]:
             "describe_instances",
             "describe_volumes",
             "detach_volume",
-            "get_waiter",
             "modify_instance_attribute",
         ),
     )
@@ -243,7 +236,6 @@ class AwsBlockVolumes(BlockVolumeProvider):
                 )
             volume_id = existing.volume_id
         self._wait(
-            "volume_available",
             volume_id,
             operation="wait for disk volume creation",
             deadline=deadline,
@@ -270,7 +262,6 @@ class AwsBlockVolumes(BlockVolumeProvider):
                 item.state == "detaching" for item in volume.attachments
             ):
                 self._wait(
-                    "volume_available",
                     volume_id,
                     operation="wait for disk volume",
                     deadline=deadline,
@@ -319,7 +310,6 @@ class AwsBlockVolumes(BlockVolumeProvider):
         elif volume.state == "available":
             return
         self._wait(
-            "volume_available",
             volume_id,
             operation="wait for disk volume detach",
             deadline=deadline,
@@ -383,6 +373,7 @@ class AwsBlockVolumes(BlockVolumeProvider):
         )
 
     def _await_attached(self, volume_id: str, *, instance_id: str, deadline: float) -> _Attachment:
+        delay = _POLL_FIRST_SECONDS
         while True:
             volume = self._require(volume_id)
             for attachment in volume.attachments:
@@ -398,7 +389,8 @@ class AwsBlockVolumes(BlockVolumeProvider):
                     )
             if self.monotonic() >= deadline:
                 raise BlockVolumePendingError(f"volume {volume_id} is still attaching")
-            self.sleep(_WAIT_DELAY_SECONDS)
+            self.sleep(delay)
+            delay = min(delay * 2, _POLL_MAX_SECONDS)
 
     def _devices(self, instance_id: str) -> frozenset[str]:
         described = _parse(
@@ -467,28 +459,29 @@ class AwsBlockVolumes(BlockVolumeProvider):
         volumes = _parse(_Volumes, response, operation="describe disk volume").volumes
         return volumes[0] if volumes else None
 
-    def _wait(self, waiter: str, volume_id: str, *, operation: str, deadline: float) -> None:
-        remaining = max(deadline - self.monotonic(), 0.0)
-        try:
-            self.ec2.get_waiter(waiter).wait(
-                VolumeIds=[volume_id],
-                WaiterConfig={
-                    "Delay": _WAIT_DELAY_SECONDS,
-                    "MaxAttempts": max(1, math.ceil(remaining / _WAIT_DELAY_SECONDS)),
-                },
-            )
-        except WaiterError as exc:
-            if "Max attempts exceeded" in str(exc):
-                raise BlockVolumePendingError(f"volume {volume_id}: {operation}") from exc
-            raise AwsProviderControlError(
-                AwsProviderControlErrorCode.UpstreamUnavailable,
-                operation=operation,
-                detail=f"volume {volume_id}: {exc}",
-            ) from exc
-        except ClientError as exc:
-            raise _control_error(exc, operation=operation) from exc
-        except BotoCoreError as exc:
-            raise upstream_error(exc, operation=operation) from exc
+    def _wait(self, volume_id: str, *, operation: str, deadline: float) -> None:
+        """Wait until the volume is available: created, or detached from its last machine."""
+        delay = _POLL_FIRST_SECONDS
+        while True:
+            volume = self._describe(volume_id)
+            if volume is None:
+                raise AwsProviderControlError(
+                    AwsProviderControlErrorCode.ResourceNotFound,
+                    operation=operation,
+                    detail=f"volume {volume_id} does not exist",
+                )
+            if volume.state == "available":
+                return
+            if volume.state in {"deleting", "deleted", "error"}:
+                raise AwsProviderControlError(
+                    AwsProviderControlErrorCode.UpstreamUnavailable,
+                    operation=operation,
+                    detail=f"volume {volume_id} is {volume.state}",
+                )
+            if self.monotonic() >= deadline:
+                raise BlockVolumePendingError(f"volume {volume_id}: {operation}")
+            self.sleep(delay)
+            delay = min(delay * 2, _POLL_MAX_SECONDS)
 
     @staticmethod
     def _call(operation: str, call: Callable[[], Mapping[str, object]]) -> Mapping[str, object]:
