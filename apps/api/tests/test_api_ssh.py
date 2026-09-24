@@ -114,6 +114,18 @@ def test_ssh_hosts_list_only_the_workspaces_ssh_pods_and_filter_by_app_and_pod(
         by_pod = client.get(
             "/api/v1/ssh/hosts", params={**workspace, "pod": "box"}, headers=fixture.member
         )
+        first_page = client.get(
+            "/api/v1/ssh/hosts", params={**workspace, "limit": 1}, headers=fixture.member
+        )
+        second_page = client.get(
+            "/api/v1/ssh/hosts",
+            params={
+                **workspace,
+                "limit": 1,
+                "cursor": SshHostListResponse.model_validate_json(first_page.content).next,
+            },
+            headers=fixture.member,
+        )
         refused = client.get("/api/v1/ssh/hosts", params=workspace, headers=fixture.outsider)
 
     assert certificate.status_code == 200
@@ -134,6 +146,11 @@ def test_ssh_hosts_list_only_the_workspaces_ssh_pods_and_filter_by_app_and_pod(
         for host in SshHostListResponse.model_validate_json(by_app.content).data
     ] == [("dev", "box")]
     assert len(SshHostListResponse.model_validate_json(by_pod.content).data) == 2
+    assert [
+        host.app
+        for page in (first_page, second_page)
+        for host in SshHostListResponse.model_validate_json(page.content).data
+    ] == ["ci", "dev"]
     assert refused.status_code == 403
 
 

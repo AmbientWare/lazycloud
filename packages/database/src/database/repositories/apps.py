@@ -60,7 +60,19 @@ from shared.identity import WorkspaceStatus
 from shared.placement import Placement
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
-from sqlalchemy import and_, case, delete, exists, func, or_, select, text, tuple_, update
+from sqlalchemy import (
+    and_,
+    case,
+    delete,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -1161,7 +1173,8 @@ class DeploymentRepository:
         ).where(candidates.c.ssh.is_(True))
         if after is not None:
             statement = statement.where(
-                tuple_(candidates.c.app_name, candidates.c.pod) > tuple_(*after)
+                tuple_(candidates.c.app_name, candidates.c.pod)
+                > tuple_(literal(after[0]), literal(after[1]))
             )
         rows = self.session.execute(
             statement.order_by(candidates.c.app_name, candidates.c.pod).limit(limit)
