@@ -225,9 +225,11 @@ export function DevboxConnect({
         <ConnectRow label="SSH config host" value={devbox.ssh_host} copyLabel="SSH host" />
       </div>
       <div className="min-w-0 space-y-3">
-        <FactGrid columns={4}>
+        {/* Status gets the widest column: "Waiting for a machine" is the longest reading. */}
+        <FactGrid columns={4} className="sm:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(0,1fr))]">
           <Fact
             label="Status"
+            title={PHASE_LABELS[devbox.phase]}
             value={
               <span className={devbox.phase === "failed" ? "text-destructive" : undefined}>
                 {PHASE_LABELS[devbox.phase]}
