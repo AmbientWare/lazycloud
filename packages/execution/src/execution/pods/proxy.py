@@ -60,8 +60,12 @@ class PodProxySession:
             if self._finished:
                 yield False
                 return
-            yield True
-            self._finished = True
+            try:
+                yield True
+            finally:
+                # A release cancelled while it waits has still been sent, so a
+                # second finish would take back a connection it never held.
+                self._finished = True
 
 
 class PodProxySocketClient(Protocol):
@@ -104,6 +108,36 @@ class PodProxyConnectionRepository(Protocol):
     async def decrement_total_connections(self, workspace_id: str, stub_id: str) -> int: ...
 
 
+async def release_pod_connection(
+    connections: PodProxyConnectionRepository,
+    *,
+    workspace_id: str,
+    stub_id: str,
+    container_id: str | None,
+    keep_warm_seconds: int | None,
+) -> None:
+    """Give back one connection, on the container too when it had reached one.
+
+    Every release goes through here because a client that goes away cancels
+    the task releasing for it, and a count left behind keeps the pod running
+    with nobody connected. The decrements are scheduled before the first await
+    and shielded from that cancellation, so they land whether or not the
+    caller is still there to see them.
+    """
+    total = connections.decrement_total_connections(workspace_id, stub_id)
+    if container_id is None:
+        await asyncio.shield(total)
+        return
+    await asyncio.shield(
+        asyncio.gather(
+            connections.decrement_container_connections(
+                workspace_id, stub_id, container_id, keep_warm_seconds=keep_warm_seconds
+            ),
+            total,
+        )
+    )
+
+
 @asynccontextmanager
 async def held_container_connection(
     connections: PodProxyConnectionRepository,
@@ -124,20 +158,23 @@ async def held_container_connection(
             workspace_id, stub_id, container_id, keep_warm_seconds=keep_warm_seconds
         )
     except BaseException:
-        await asyncio.shield(connections.decrement_total_connections(workspace_id, stub_id))
+        await release_pod_connection(
+            connections,
+            workspace_id=workspace_id,
+            stub_id=stub_id,
+            container_id=None,
+            keep_warm_seconds=keep_warm_seconds,
+        )
         raise
     try:
         yield
     finally:
-        # Shielded because a client going away cancels the holder, and a count
-        # left behind would keep the container up with nobody connected.
-        await asyncio.shield(
-            asyncio.gather(
-                connections.decrement_container_connections(
-                    workspace_id, stub_id, container_id, keep_warm_seconds=keep_warm_seconds
-                ),
-                connections.decrement_total_connections(workspace_id, stub_id),
-            )
+        await release_pod_connection(
+            connections,
+            workspace_id=workspace_id,
+            stub_id=stub_id,
+            container_id=container_id,
+            keep_warm_seconds=keep_warm_seconds,
         )
 
 

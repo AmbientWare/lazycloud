@@ -38,7 +38,7 @@ from storage.disks import disk_record
 
 from database import DatabaseClient
 from execution.containers.runtime_state import PodKeepAliveReader
-from execution.pods.proxy import PodProxyConnectionRepository
+from execution.pods.proxy import PodProxyConnectionRepository, release_pod_connection
 
 DEVBOX_START_WAIT_SECONDS = 30.0
 """How long a start holds its demand for the autoscaler to ask for a container."""
@@ -196,10 +196,12 @@ class DevboxService:
                     )
                 await asyncio.sleep(self.poll_interval_seconds)
         finally:
-            # Shielded: a caller that gives up cancels this, and demand left
-            # behind would keep the devbox running with nobody connected.
-            await asyncio.shield(
-                connections.decrement_total_connections(stub.workspace_id, stub.id)
+            await release_pod_connection(
+                connections,
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                container_id=None,
+                keep_warm_seconds=None,
             )
 
     def _activate_autoscaling(self, stub: StubRecord) -> None:

@@ -136,6 +136,7 @@ from execution.pods.proxy import (
     PodProxySocketClient,
     PodProxyTarget,
     PodProxyUnavailable,
+    release_pod_connection,
 )
 from execution.services import ExecutionServices
 
@@ -960,7 +961,13 @@ class PodControlService:
             )
         except BaseException:
             if demand_recorded:
-                await connections.decrement_total_connections(workspace_id, stub_id)
+                await release_pod_connection(
+                    connections,
+                    workspace_id=workspace_id,
+                    stub_id=stub_id,
+                    container_id=None,
+                    keep_warm_seconds=None,
+                )
             raise
         return PodProxySession(
             workspace_id=workspace_id,
@@ -1004,18 +1011,12 @@ class PodControlService:
         async with session.finalization() as should_finalize:
             if not should_finalize:
                 return
-            connections = self._pod_proxy_connections()
-            await asyncio.gather(
-                connections.decrement_container_connections(
-                    session.workspace_id,
-                    session.stub_id,
-                    session.target.container_id,
-                    keep_warm_seconds=session.keep_warm_seconds,
-                ),
-                connections.decrement_total_connections(
-                    session.workspace_id,
-                    session.stub_id,
-                ),
+            await release_pod_connection(
+                self._pod_proxy_connections(),
+                workspace_id=session.workspace_id,
+                stub_id=session.stub_id,
+                container_id=session.target.container_id,
+                keep_warm_seconds=session.keep_warm_seconds,
             )
 
     async def _wait_for_pod_proxy_target(
