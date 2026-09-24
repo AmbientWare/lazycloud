@@ -109,6 +109,7 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskStorageRequest,
 )
 from worker.event_bridge import worker_stream_event_from_bus_event
 from worker.events import (
@@ -229,7 +230,7 @@ from worker.repository_payloads import (
 )
 from worker.routes import backend_route_id
 from worker.ssh_identity import ContainerSshIdentity, ContainerSshIdentityRequest
-from worker.tools import ContainerCredentialRequest
+from worker.tools import ContainerCredentialRequest, WorkspaceStorageCredentials
 from worker_repository.admission import (
     WorkerRequestNotAdmissibleError,
     require_admissible_worker_request,
@@ -2206,6 +2207,27 @@ class WorkerRepositoryService:
             payload.container_id, worker_id=principal.worker_id, operation="disk collection"
         )
         self._disk_leases().collect(payload, container=container)
+
+    def disk_storage(
+        self,
+        payload: DiskStorageRequest,
+        *,
+        principal: WorkerRepositoryPrincipal,
+    ) -> WorkspaceStorageCredentials:
+        """Workspace storage for a disk's engine, on the lease rather than the container.
+
+        A stopped container's scheduler state expires, and the container
+        credential route goes with it. The disk still has to publish its last
+        generation before its lease is released, so this route asks only that the
+        worker was given the container and that the container still holds the disk.
+        """
+
+        container = self._authorize_worker_container(
+            payload.container_id, worker_id=principal.worker_id, operation="disk storage"
+        )
+        self._authorize_worker_tenancy(principal, container.workspace_id, operation="disk storage")
+        self._disk_leases().require_holder(payload, container=container)
+        return self.container_credentials.workspace_storage(container.workspace_id)
 
     def _disk_leases(self) -> WorkerDiskLeaseService:
         if self.services is None:

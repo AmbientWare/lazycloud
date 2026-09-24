@@ -258,6 +258,19 @@ class DiskRepository:
         rows = self.session.execute(statement.order_by(DiskTable.name).limit(limit)).tuples()
         return [disk_from_table(row, holder_live=bool(live)) for row, live in rows]
 
+    def lease(self, disk_id: str) -> tuple[str, str] | None:
+        """The live disk's holding container and lease token, empty when unheld."""
+        row = self.session.execute(
+            select(DiskTable.holder_container_id, DiskTable.lease_token).where(
+                DiskTable.id == disk_id,
+                DiskTable.deleted_at.is_(None),
+            )
+        ).first()
+        if row is None:
+            return None
+        holder_container_id, lease_token = row
+        return str(holder_container_id or ""), lease_token
+
     def lock(self, disk_id: str) -> DiskTable | None:
         return self.session.scalar(
             select(DiskTable)

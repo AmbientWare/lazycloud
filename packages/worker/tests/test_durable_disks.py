@@ -8,7 +8,6 @@ from pathlib import Path
 
 from foundation.process import ProcessResult
 from shared.timestamps import utc_now
-from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.durable_disk_records import (
     DiskAcquirePayload,
     DiskAcquireResult,
@@ -16,6 +15,7 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskStorageRequest,
 )
 from worker.durable_disks import (
     ContainerDiskLeases,
@@ -24,11 +24,7 @@ from worker.durable_disks import (
     DiskStoreFile,
     WorkerDurableDiskService,
 )
-from worker.tools import (
-    ContainerCredentialRequest,
-    ContainerCredentials,
-    WorkspaceStorageCredentials,
-)
+from worker.tools import WorkspaceStorageCredentials
 
 
 class _NoControlPlane:
@@ -44,9 +40,7 @@ class _NoControlPlane:
     def collect_disk(self, payload: DiskCollectPayload) -> None:
         raise AssertionError("recovery does not collect")
 
-    def vend(
-        self, request: ContainerCredentialRequest, *, principal: WorkerCredentialPrincipal
-    ) -> ContainerCredentials:
+    def disk_storage(self, payload: DiskStorageRequest) -> WorkspaceStorageCredentials:
         raise AssertionError("recovery vends no credentials")
 
 
@@ -63,7 +57,6 @@ def test_a_disk_that_cannot_be_recovered_does_not_stop_the_worker_starting(
     service = WorkerDurableDiskService(
         engine=DiskEngine(run_root=tmp_path / "run", run_command=engine_fails),
         leases=control_plane,
-        credentials=control_plane,
         layers_root=tmp_path / "layers",
         lease_root=tmp_path / "leases",
         mount_root=tmp_path / "mounts",
@@ -76,6 +69,7 @@ class _RecordingControlPlane:
     def __init__(self) -> None:
         self.published: list[DiskPublishPayload] = []
         self.released: list[DiskReleasePayload] = []
+        self.storage: list[DiskStorageRequest] = []
 
     def acquire_disk(self, payload: DiskAcquirePayload) -> DiskAcquireResult:
         raise AssertionError("a release does not acquire")
@@ -90,14 +84,9 @@ class _RecordingControlPlane:
     def collect_disk(self, payload: DiskCollectPayload) -> None:
         raise AssertionError("a layer building on a parent collects nothing")
 
-    def vend(
-        self, request: ContainerCredentialRequest, *, principal: WorkerCredentialPrincipal
-    ) -> ContainerCredentials:
-        return ContainerCredentials(
-            workspace_storage=WorkspaceStorageCredentials(
-                endpoint_url="http://store", bucket_name="b"
-            )
-        )
+    def disk_storage(self, payload: DiskStorageRequest) -> WorkspaceStorageCredentials:
+        self.storage.append(payload)
+        return WorkspaceStorageCredentials(endpoint_url="http://store", bucket_name="b")
 
 
 def test_a_release_resumes_from_the_generation_the_engine_committed(tmp_path: Path) -> None:
@@ -132,7 +121,6 @@ def test_a_release_resumes_from_the_generation_the_engine_committed(tmp_path: Pa
     service = WorkerDurableDiskService(
         engine=DiskEngine(run_root=tmp_path / "run", run_command=engine),
         leases=control_plane,
-        credentials=control_plane,
         layers_root=tmp_path / "layers",
         lease_root=tmp_path / "leases",
         mount_root=tmp_path / "mounts",
@@ -174,6 +162,10 @@ def test_a_release_resumes_from_the_generation_the_engine_committed(tmp_path: Pa
         "5",
     ] in commands
     assert [item.disk_id for item in control_plane.released] == ["disk-1"]
+    # On the lease, which outlives the stopped container's scheduler state.
+    assert {
+        (item.container_id, item.disk_id, item.lease_token) for item in control_plane.storage
+    } == {("container-1", "disk-1", "token")}
 
 
 def test_an_engine_call_that_outlives_its_grant_reads_a_renewed_one(tmp_path: Path) -> None:

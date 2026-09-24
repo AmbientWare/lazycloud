@@ -289,6 +289,19 @@ class DiskService:
             row.updated_at = utc_now()
             repository.delete_generations_below(disk_id, generation)
 
+    def require_lease(self, disk_id: str, *, container_id: str, lease_token: str) -> None:
+        """Refuse a container that no longer holds the disk under this lease."""
+        with self.database.session() as session:
+            lease = DiskRepository(session).lease(disk_id)
+        if lease is None:
+            raise NotFoundError(f"disk not found: {disk_id}")
+        holder_id, current_token = lease
+        if holder_id != container_id or not secrets.compare_digest(current_token, lease_token):
+            raise ConflictError(
+                f"container {container_id} no longer holds disk {disk_id}; its lease was "
+                "released or taken over"
+            )
+
     def request_deletion(self, name: str, *, workspace_id: str, now: datetime | None = None) -> str:
         """Record the intent to delete; the name is free and metering stops from here."""
         with self.database.session() as session:

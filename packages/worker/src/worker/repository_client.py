@@ -55,6 +55,7 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskStorageRequest,
 )
 from worker.events import (
     ContainerExecutionPhase,
@@ -175,7 +176,11 @@ from worker.source_cache_cleanup import (
 )
 from worker.source_code import SourceCodePackageMaterializer
 from worker.ssh_identity import ContainerSshIdentity, ContainerSshIdentityRequest
-from worker.tools import ContainerCredentialRequest, ContainerCredentials
+from worker.tools import (
+    ContainerCredentialRequest,
+    ContainerCredentials,
+    WorkspaceStorageCredentials,
+)
 
 type JsonObject = dict[str, JsonValue]
 
@@ -733,6 +738,11 @@ class WorkerRepositoryHttpClient:
 
     def collect_disk(self, payload: DiskCollectPayload) -> None:
         self.transport.post("/worker-repository/collect-disk", _model_payload(payload))
+
+    def disk_storage(self, payload: DiskStorageRequest) -> WorkspaceStorageCredentials:
+        return self._post_model(
+            "/worker-repository/disk-storage", payload, WorkspaceStorageCredentials
+        )
 
     def get_checkpoint_restore(
         self,

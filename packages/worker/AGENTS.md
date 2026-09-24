@@ -113,6 +113,18 @@ they do not reserve money or renew financial execution permits. CPU and memory
 cgroups remain the resource boundary. Builds register their process cancellation
 with the same stop registry and retain their final usage window during cleanup.
 
+A stop reaches the worker as an event on its stream, sent once. A worker whose
+connection to the control plane was down when the stop went out never hears it,
+and nothing sends it again. The cleanup list does: it names every container the
+platform has ended on this worker whose storage is still held, with the reason
+it ended. A cleanup pass stops any of those still running here, and the
+container's own execution finalizes it and releases its disks. Usage refused as
+past a recorded end means the same thing, so metering ends rather than retrying.
+
+A disk's engine gets workspace storage on the disk's lease, not on the
+container's scheduler state. That state expires a while after a stop, and the
+release after it still has to publish the disk's last generation.
+
 A container that outgrows its reservation is stopped here, not by the kernel.
 The worker holds the two readings the decision needs, its own memory pressure
 and what each container currently uses, and the kernel is seconds away once a
