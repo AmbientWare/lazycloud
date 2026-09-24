@@ -397,8 +397,8 @@ class AwsRetainedPool:
 
     def _retire_spot_request(self, slot: RetainedSlot, instance: _Instance | None) -> bool:
         # A persistent request relaunches an untagged instance from its original
-        # launch specification whenever its instance is terminated, so the request
-        # is cancelled before anything it launched is terminated.
+        # launch specification whenever its instance ends, so retirement cancels
+        # the request before terminating anything it launched.
         try:
             response = self.clients.ec2.describe_spot_instance_requests(
                 SpotInstanceRequestIds=[slot.spot_request_id]
