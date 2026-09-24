@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from threading import Event
 
@@ -22,12 +22,34 @@ class WorkerImagePreparation:
             self._prepared.add(pending[0])
         return sorted(self._prepared)
 
-    def ensure(self, image: str) -> bool:
+    def ensure(self, image: str, *, wait_seconds: float = 0.0) -> bool:
+        """Whether `image` is ready, starting its preparation and waiting briefly if not.
+
+        An image already on the host answers `docker image inspect` in well under
+        a second, so waiting that long here lets a resumed machine start its
+        worker on the stream that asked for it rather than one interval later.
+        A pull outlasts the wait and is reported on a later stream.
+        """
         if image in self.prepared():
             return True
         if self._pending is None:
             self.start(image)
-        return False
+        if wait_seconds > 0:
+            self.wait(wait_seconds)
+        return image in self.prepared()
+
+    def wait(self, timeout_seconds: float) -> bool:
+        """Wait for the image being prepared; True when one finished, however it ended."""
+        pending = self._pending
+        if pending is None:
+            return False
+        try:
+            pending[1].exception(timeout=timeout_seconds)
+        except TimeoutError:
+            return False
+        except CancelledError:
+            return True
+        return True
 
     def start(self, image: str) -> Future[None]:
         if self._pending is not None:
