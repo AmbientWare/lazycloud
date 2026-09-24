@@ -50,12 +50,15 @@ class ComputeCapacityPlacementRequest(ContractModel):
     """Where the workload's stub was pinned when it was created."""
     region: ProductRegion | None = None
     requirements: ComputeResourceRequirements
+    preferred_availability_zone: str = ""
+    """The zone of a volume the workload's disk left cached, where it attaches without a restore."""
 
 
 @dataclass(frozen=True, slots=True)
 class ComputeCapacityPurchase:
     capacity_owner_id: str
     prepare: Callable[[], None]
+    availability_zone: str = ""
 
 
 @dataclass(slots=True)
@@ -125,6 +128,7 @@ class ComputeCapacityPlacementService:
                 ComputeCapacityPurchase(
                     capacity_owner_id=owner_id,
                     prepare=partial(self._prepare_offer, provider, offer, requirements),
+                    availability_zone=offer.availability_zone,
                 ),
             )
         if not purchases:
@@ -135,9 +139,18 @@ class ComputeCapacityPlacementService:
                 f"no provider capacity meets the workload requirements and purchase policy{detail}",
                 code="offer_unavailable",
             )
+        # A stopped reserve starts in seconds and a purchase takes a minute, so any
+        # prepared pool comes first; within each, the disk's cached volume zone.
         prepared = self.compute.prepared_capacity_owner_ids()
+        preferred = request.preferred_availability_zone
         return tuple(
-            sorted(purchases.values(), key=lambda item: item.capacity_owner_id not in prepared)
+            sorted(
+                purchases.values(),
+                key=lambda item: (
+                    item.capacity_owner_id not in prepared,
+                    bool(preferred) and item.availability_zone != preferred,
+                ),
+            )
         )
 
     def _prepare_offer(

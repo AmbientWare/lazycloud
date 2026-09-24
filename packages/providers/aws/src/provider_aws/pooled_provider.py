@@ -49,7 +49,7 @@ from .managed_pool import (
 )
 from .network_egress import same_region_storage_destinations
 from .provider_control import AwsProviderControlError, AwsProviderControlErrorCode
-from .spot_prices import load_aws_spot_quotes
+from .spot_prices import AwsSpotMarket, AwsSpotQuoteCache, load_aws_spot_quotes
 from .supplier_prices import AwsRegionalPrices
 
 _PHASES = {
@@ -75,6 +75,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
     regional_prices: Mapping[str, AwsRegionalPrices] = field(
         default_factory=lambda: dict[str, AwsRegionalPrices]()
     )
+    spot_quotes: AwsSpotQuoteCache = field(kw_only=True)
 
     def unbilled_network_destinations(
         self, unit: ComputeUnitRecord, provider_instance_id: str
@@ -148,12 +149,9 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
                             regional_prices=regional_prices,
                         )
                     )
-            network = self._network(region)
-            clients = self.client_provider.assume(self._target(region))
-            market = load_aws_spot_quotes(
-                clients.ec2,
-                network=network,
-                instance_types=tuple(
+            market = self._spot_market(
+                region,
+                tuple(
                     instance.instance_type
                     for instance in instances
                     if True in instance.purchase_markets
@@ -376,6 +374,15 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
     def _provisioner(self, region: str) -> AwsManagedPoolProvisioner:
         target = self._target(region)
         return AwsManagedPoolProvisioner.assume(target, client_provider=self.client_provider)
+
+    def _spot_market(self, region: str, instance_types: tuple[str, ...]) -> AwsSpotMarket:
+        def load() -> AwsSpotMarket:
+            clients = self.client_provider.assume(self._target(region))
+            return load_aws_spot_quotes(
+                clients.ec2, network=self._network(region), instance_types=instance_types
+            )
+
+        return self.spot_quotes.market((self.connection.account_id, region, instance_types), load)
 
     def _network(self, region: str) -> AwsAccountNetwork:
         network = self.networks.get(region)

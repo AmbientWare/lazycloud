@@ -50,7 +50,8 @@ Customer capacity cannot satisfy the platform baseline.
 CPU reserves have separate stopped targets for Spot and On-Demand, independent
 of their running warm minimums. Running targets, stopped targets, preparation,
 and retiring assets share the CPU fleet budget. Placement prefers compatible
-stopped capacity before buying another node. Queued CPU work
+stopped capacity before buying another node, and within each the zone where the
+workload's disk left a cached volume. Queued CPU work
 takes priority over reserve replenishment. A stopped target being removed keeps
 its commitment until provider observation confirms its removal; disk destruction
 still requires the existing provider evidence.
@@ -65,7 +66,8 @@ Auto Scaling groups retain their recorded resource owner through cleanup.
 The agent proves its current binary and worker image before initial preparation
 completes, and the provider row records them. A stopped reserve that predates the
 active release is started and prepared again, one machine at a time and only while
-no CPU work waits, so a resume never updates itself first. A refused reserve launch
+no CPU work waits, so a resume never updates itself first. The scheduler looks for
+such reserves within one capacity pass of a release activating, then each minute. A refused reserve launch
 or an interrupted reserve leaves the pool serving. Until the failure's cooldown
 passes, that market keeps the reserves it holds and buys no more; the shortfall
 goes to another market. Finishing a preparation needs the

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from threading import Event
+from threading import Event, Timer
 from types import TracebackType
 from typing import Protocol
 
@@ -161,6 +161,9 @@ JOIN_RETRY_BASE_SECONDS = 2.0
 JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
+AGENT_LAST_PREPARED_IMAGE_FILE = "last-prepared-worker-image.json"
+IMAGE_REPORT_WAIT_SECONDS = 1.0
+BOOT_IMAGE_LOOKUP_SECONDS = 3.0
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
@@ -605,6 +608,7 @@ class DockerAgentWorkerController:
     joined machine, whose worker keeps disks on host storage."""
 
     _images: WorkerImagePreparation = field(init=False)
+    _last_prepared: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._images = WorkerImagePreparation(self._prepare_worker_image)
@@ -613,16 +617,101 @@ class DockerAgentWorkerController:
         self._images.close()
 
     def prepare_worker_image(self) -> Future[None] | None:
+        """Get the worker image this machine will run ready before the first stream.
+
+        The override, when set, is prepared in the background, pulling if needed.
+        Otherwise the image this machine last had prepared is only looked up: a
+        reserve resumes with it on disk, so the first stream already reports it,
+        and one that is gone is left for the stream to name the image it needs.
+        """
         if self.worker_image_override:
             return self._images.start(self.worker_image_override)
+        image = self._last_prepared_image()
+        if image and self._image_present(image):
+            self._images.mark_prepared(image)
         return None
 
+    def _image_present(self, image: str) -> bool:
+        """Whether docker has the image, answered within a few seconds or taken as no.
+
+        A no costs one stream; the stream then names the image and prepares it.
+        """
+        expired = Event()
+        timer = Timer(BOOT_IMAGE_LOOKUP_SECONDS, expired.set)
+        timer.start()
+        try:
+            inspected = self.runner.run(
+                [self.docker_binary, "image", "inspect", image], stop=expired
+            )
+        except Exception:
+            LOGGER.warning("looking up worker image %s at boot failed", image, exc_info=True)
+            return False
+        finally:
+            timer.cancel()
+        return inspected.returncode == 0
+
     def prepared_worker_images(self) -> list[str]:
-        return self._images.prepared()
+        prepared = self._images.prepared()
+        latest = self._images.latest
+        if latest and latest != self._last_prepared_image():
+            _write_json_atomic(self.last_prepared_image_path, latest, permissions=0o600)
+            self._last_prepared = latest
+        return prepared
+
+    @property
+    def last_prepared_image_path(self) -> Path:
+        return self.state_dir / AGENT_LAST_PREPARED_IMAGE_FILE
+
+    def _last_prepared_image(self) -> str:
+        """The image recorded as last prepared, read once; an unreadable record is none.
+
+        It is only a hint for the boot lookup, so a damaged file is removed rather
+        than allowed to stop the agent.
+        """
+        if self._last_prepared is not None:
+            return self._last_prepared
+        path = self.last_prepared_image_path
+        recorded: object = ""
+        try:
+            recorded = _JSON_VALUE_ADAPTER.validate_json(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            LOGGER.warning("ignoring the unreadable worker image record %s", path, exc_info=True)
+            with suppress(OSError):
+                path.unlink(missing_ok=True)
+        self._last_prepared = recorded if isinstance(recorded, str) else ""
+        return self._last_prepared
 
     def has_unreported_image(self, reported: Collection[str]) -> bool:
         """Whether the next stream has an image outcome the last one did not report."""
         return self._images.unreported(reported)
+
+    def pull_detached(self, images: Collection[str]) -> None:
+        """Start pulling images this host lacks in docker, outliving this process.
+
+        The agent is about to replace itself with an update, which cancels a pull
+        it is running. A pull started from a detached shell keeps going, so the
+        worker image downloads while the update installs, and the updated agent's
+        own pull joins it.
+        """
+        # A failed pull in progress is the updated agent's to report; it must not
+        # stop this update, so the pending result is left uncollected here.
+        for image in sorted(set(images) - self._images.known()):
+            try:
+                self.runner.run(
+                    [
+                        "sh",
+                        "-c",
+                        '"$0" pull --quiet "$1" >/dev/null 2>&1 &',
+                        self.docker_binary,
+                        image,
+                    ]
+                )
+            except (OSError, subprocess.SubprocessError):
+                LOGGER.warning("could not start pulling %s before the update", image, exc_info=True)
+                continue
+            LOGGER.info("pulling %s while the agent updates", image)
 
     def wait_for_image_preparation(self, timeout_seconds: float) -> bool:
         """Wait for a worker image being prepared; True once it has finished."""
@@ -783,6 +872,7 @@ class DockerAgentWorkerController:
             raise ValueError(msg)
         if image not in self._images.prepared():
             raise RuntimeError(f"worker image is not prepared for slot {slot.worker_id}")
+        timings = StepTimings()
         plan = plan_worker_container(
             bootstrap,
             slot,
@@ -803,10 +893,14 @@ class DockerAgentWorkerController:
             plan.config,
             permissions=0o600,
         )
-        self._collect_worker_exit(plan.name, slot.worker_id)
-        self.runner.run([self.docker_binary, "rm", "-f", plan.name])
+        with timings.step("collect_exit"):
+            self._collect_worker_exit(plan.name, slot.worker_id)
+        with timings.step("remove"):
+            self.runner.run([self.docker_binary, "rm", "-f", plan.name])
         args = [self.docker_binary, plan.docker_args[0], "--detach", *plan.docker_args[1:]]
-        result = self.runner.run(args)
+        with timings.step("run"):
+            result = self.runner.run(args)
+        timings.log(LOGGER, "worker %s container started", slot.worker_id)
         if result.returncode != 0:
             msg = f"start worker slot {slot.worker_id} failed: {result.stderr or result.stdout}"
             raise RuntimeError(msg)
@@ -1235,6 +1329,10 @@ class AgentDaemonService:
         timings = StepTimings()
         updater = AgentUpdater.running(self.state_store.state_dir)
         active_slots = self.worker_controller.active_slots()
+        # The first stream waits briefly for an image check started at boot so it
+        # can report the image; later streams never wait on a pull in progress.
+        if current_iterations == 1:
+            self.worker_controller.wait_for_image_preparation(IMAGE_REPORT_WAIT_SECONDS)
         self._reported_worker_images = self.worker_controller.prepared_worker_images()
         with timings.step("stream"):
             stream = self.client.stream_agent(
@@ -1362,6 +1460,9 @@ class AgentDaemonService:
         state = state.model_copy(update={"release_generation": release.generation})
         self.state_store.save(state)
         if release.update_agent and release.agent is not None:
+            self.worker_controller.pull_detached(
+                {slot.worker_image for slot in desired_slots if slot.worker_image}
+            )
             updater.install(release.agent, before_exec=before_agent_update)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,

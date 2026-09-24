@@ -11,6 +11,8 @@ class WorkerImagePreparation:
         default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="worker-image")
     )
     _prepared: set[str] = field(default_factory=set)
+    latest: str = ""
+    """The image whose preparation finished most recently in this process."""
     _pending: tuple[str, Future[None]] | None = None
     _stop: Event = field(default_factory=Event)
 
@@ -20,7 +22,16 @@ class WorkerImagePreparation:
             self._pending = None
             pending[1].result()
             self._prepared.add(pending[0])
+            self.latest = pending[0]
         return sorted(self._prepared)
+
+    def known(self) -> frozenset[str]:
+        """Images already found prepared, without collecting a pending result or its error."""
+        return frozenset(self._prepared)
+
+    def mark_prepared(self, image: str) -> None:
+        """Record an image found on the host without preparing it again."""
+        self._prepared.add(image)
 
     def ensure(self, image: str, *, wait_seconds: float = 0.0) -> bool:
         """Whether `image` is ready, starting its preparation and waiting briefly if not.

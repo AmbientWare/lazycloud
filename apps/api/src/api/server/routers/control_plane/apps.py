@@ -86,6 +86,7 @@ def _app_summary_response(
             else None
         ),
         workload_kinds=record.workload_kinds,
+        devbox_count=record.devbox_count,
         workload_count=record.workload_count,
         active_versions=record.active_versions,
         running_containers=record.running_containers,

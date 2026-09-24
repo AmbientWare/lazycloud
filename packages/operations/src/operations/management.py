@@ -61,8 +61,8 @@ from shared.container_requests import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.deployment_records import Deployment, keeps_one_active_version
-from shared.deployments import DeploymentKind
+from shared.deployment_records import Deployment, keeps_one_active_version, resolve_pod_role
+from shared.deployments import DeploymentKind, PodRole
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.client_manifests import INVOKABLE_DEPLOYMENT_KINDS, ClientManifestResource
 from shared.http.observability import (
@@ -289,6 +289,9 @@ class AppOperationalSummary(ContractModel):
     latest_workload: StubRecord | None = None
     latest_deployment: Deployment | None = None
     workload_kinds: dict[str, int] = Field(default_factory=dict)
+    """Workloads by kind; devboxes are counted in `devbox_count`, not as pods."""
+
+    devbox_count: int = 0
     workload_count: int = 0
     active_versions: int = 0
     running_containers: int = 0
@@ -775,10 +778,25 @@ class ManagementService:
                 key=lambda item: (item.deployment.created_at, item.deployment.version),
                 default=None,
             )
-            workloads = {
-                (resource.stub.kind.value, resource.stub.name) for resource in app_resources
+            # Each workload is classified by its current version: the newest active
+            # one, or the newest when none is active.
+            current: dict[tuple[str, str], DeploymentResource] = {}
+            for resource in app_resources:
+                key = (resource.stub.kind.value, resource.stub.name)
+                held = current.get(key)
+                if held is None or (
+                    resource.deployment.active,
+                    resource.deployment.version,
+                ) > (held.deployment.active, held.deployment.version):
+                    current[key] = resource
+            workloads = set(current)
+            devboxes = {
+                key
+                for key, resource in current.items()
+                if resolve_pod_role(resource.deployment.kind, resource.deployment.spec.role)
+                is PodRole.Devbox
             }
-            workload_kinds = Counter(kind for kind, _name in workloads)
+            workload_kinds = Counter(kind for kind, _name in workloads - devboxes)
             facts = execution.get(app.id)
             summaries.append(
                 AppOperationalSummary(
@@ -786,6 +804,7 @@ class ManagementService:
                     latest_workload=latest.stub if latest is not None else None,
                     latest_deployment=latest.deployment if latest is not None else None,
                     workload_kinds=dict(sorted(workload_kinds.items())),
+                    devbox_count=len(devboxes),
                     workload_count=len(workloads),
                     active_versions=sum(
                         1 for resource in app_resources if resource.deployment.active

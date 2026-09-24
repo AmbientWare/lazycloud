@@ -149,7 +149,9 @@ const appSummarySchema = z.object({
   app: appSchema,
   latest_workload: stubSchema.nullish(),
   latest_deployment: deploymentSchema.nullish(),
+  // Devboxes are counted in devbox_count, not as pods.
   workload_kinds: z.record(z.number()).default({}),
+  devbox_count: z.number().default(0),
   workload_count: z.number().default(0),
   active_versions: z.number().default(0),
   running_containers: z.number().default(0),
