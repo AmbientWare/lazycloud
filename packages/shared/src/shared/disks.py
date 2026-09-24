@@ -223,6 +223,9 @@ class DiskLayerFormat(StringEnum):
 class DiskStatus(StringEnum):
     Detached = "detached"
     Attached = "attached"
+    Saving = "saving"
+    """The container stopped and its worker is still publishing the disk's last writes."""
+
     Deleting = "deleting"
 
 
