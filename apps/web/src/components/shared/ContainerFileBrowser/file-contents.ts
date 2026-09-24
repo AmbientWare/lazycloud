@@ -18,8 +18,12 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   svg: "image/svg+xml",
 };
 
+/** The image MIME type a file's extension names; a dotfile or a name with no dot has none. */
 export function imageMimeForName(name: string): string | undefined {
-  return IMAGE_EXTENSIONS[name.slice(name.lastIndexOf(".") + 1).toLowerCase()];
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return undefined;
+  const extension = name.slice(dot + 1).toLowerCase();
+  return Object.hasOwn(IMAGE_EXTENSIONS, extension) ? IMAGE_EXTENSIONS[extension] : undefined;
 }
 
 type Signature = { label: string; image?: string; matches: (bytes: Uint8Array) => boolean };
