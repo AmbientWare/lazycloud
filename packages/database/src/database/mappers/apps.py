@@ -192,6 +192,10 @@ def stub_from_table(row: StubTable) -> StubRecord:
     config = dict(row.configuration)
     if row.object_id is not None:
         config["object_id"] = str(row.object_id)
+    if row.ssh is not None:
+        config["ssh"] = row.ssh
+    if row.role is not None:
+        config["role"] = row.role
     runtime_values: dict[str, JsonValue | list[str]] = {
         "region": row.runtime_region,
         "availability_zone": row.runtime_availability_zone,
@@ -330,6 +334,10 @@ def write_stub_row(row: StubTable, stub: StubRecord) -> None:
         stub.config.model_dump_json(exclude_unset=True, by_alias=True)
     )
     config.pop("object_id", None)
+    config.pop("ssh", None)
+    config.pop("role", None)
+    row.ssh = stub.config.ssh if "ssh" in stub.config.model_fields_set else None
+    row.role = stub.config.role.value if "role" in stub.config.model_fields_set else None
     row.runtime_region = (
         stub.config.runtime.region if "region" in stub.config.runtime.model_fields_set else None
     )

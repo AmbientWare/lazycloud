@@ -8,7 +8,6 @@ from typing import Annotated
 
 import typer
 from shared.deployments import DeploymentKind, DevboxPhase, PodRole
-from shared.http.errors import HttpApiError
 
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit
@@ -24,10 +23,9 @@ from lazycloud.session.ssh import (
     bridge_stdio,
     current_cli_command,
     install_ssh_include,
+    list_ssh_hosts,
     run_ssh,
 )
-
-_CONFLICT = 409
 
 AppOption = Annotated[
     str | None,
@@ -44,8 +42,10 @@ def ssh(
 ) -> None:
     """Open an SSH session to a devbox or pod. Arguments after `--` go to ssh."""
     with _setup_errors():
-        access = _access(workspace)
-        host = _pod_host(access, pod, app=app, workspace=workspace)
+        client = _client(workspace)
+        listed = list_ssh_hosts(client, app=app, pod=pod)
+        access = _access(client, listed.workspace)
+        host = _one_host(listed.hosts, pod)
         access.write_hosts([host])
         access.refresh_certificate()
         status = run_ssh(access.paths.config, host.alias, list(ctx.args))
@@ -138,7 +138,7 @@ def ssh_cert(
 ) -> None:
     """Refresh the SSH certificate when it is missing or past half its lifetime."""
     with _setup_errors():
-        access = _access(workspace)
+        access = _access(_client(workspace), workspace or workspace_client().current().name)
         refreshed = access.refresh_certificate(force=force)
     if quiet:
         return
@@ -156,24 +156,40 @@ def ssh_config(
         list[str] | None,
         typer.Argument(help="Devboxes and pods to configure; every one serving SSH when omitted."),
     ] = None,
+    prune: Annotated[
+        bool,
+        typer.Option(
+            "--prune",
+            "-p",
+            help="Remove this workspace's hosts for pods that no longer serve SSH.",
+        ),
+    ] = False,
     app: AppOption = None,
     workspace: WorkspaceOption = None,
 ) -> None:
-    """Write ~/.lazycloud/ssh/config so ssh and editors reach devboxes and pods by name.
-
-    With no names, the workspace's entries are replaced: hosts that stopped
-    serving SSH or were deleted are removed.
-    """
+    """Write ~/.lazycloud/ssh/config so ssh and editors reach devboxes and pods by name."""
+    if prune and pods:
+        raise typer.BadParameter("--prune needs every host, so it takes no names")
     removed: list[str] = []
     with _setup_errors():
-        access = _access(workspace)
+        client = _client(workspace)
+        listed = list_ssh_hosts(client, app=app)
+        access = _access(client, listed.workspace)
+        hosts = [_one_host(listed.hosts, pod) for pod in pods] if pods else listed.hosts
+        if not hosts and not prune:
+            raise ClientError(
+                "no devbox or pod serves SSH",
+                type="no_ssh_pods",
+                hint=(
+                    "Deploy a devbox, or a pod with ssh=True. "
+                    "`--prune` removes hosts left from earlier ones."
+                ),
+            )
         access.ensure_key()
-        if pods:
-            hosts = [_pod_host(access, pod, app=app, workspace=workspace) for pod in pods]
-            access.write_hosts(hosts)
-        else:
-            hosts = _ssh_enabled_pods(access, app=app, workspace=workspace)
+        if prune:
             removed = access.sync_hosts(hosts, app=app)
+        else:
+            access.write_hosts(hosts)
         if hosts:
             access.refresh_certificate()
         included = install_ssh_include(access.paths) if hosts else False
@@ -196,25 +212,36 @@ def ssh_config(
     )
 
 
-def _access(workspace: str | None) -> SshAccess:
+def _client(workspace: str | None) -> SshControlClient:
     config = control_config(workspace=workspace)
-    name = workspace or workspace_client().current().name
+    return SshControlClient.from_endpoint(
+        config.endpoint,
+        token=config.token,
+        timeout_seconds=config.timeout_seconds,
+        workspace=config.workspace,
+    )
+
+
+def _access(client: SshControlClient, workspace_name: str) -> SshAccess:
     return SshAccess(
-        client=SshControlClient.from_endpoint(
-            config.endpoint,
-            token=config.token,
-            timeout_seconds=config.timeout_seconds,
-            workspace=config.workspace,
-        ),
-        workspace=name,
+        client=client,
+        workspace=workspace_name,
         paths=SshPaths.current(),
         cli_command=current_cli_command(),
     )
 
 
-def _pod_host(access: SshAccess, pod: str, *, app: str | None, workspace: str | None) -> SshPodHost:
-    selected = app or _app_for_pod(resource_client(workspace=workspace), pod)
-    return access.pod_host(pod, app=selected)
+def _one_host(hosts: list[SshPodHost], pod: str) -> SshPodHost:
+    matches = [host for host in hosts if host.pod == pod]
+    if not matches:
+        raise ClientError(f"no devbox or pod named {pod!r} serves SSH", type="pod_not_found")
+    if len(matches) > 1:
+        raise ClientError(
+            f"{pod!r} is deployed in several apps: {', '.join(host.app for host in matches)}",
+            type="ambiguous_pod",
+            hint="Name one with --app.",
+        )
+    return matches[0]
 
 
 @contextmanager
@@ -223,52 +250,6 @@ def _setup_errors() -> Iterator[None]:
         yield
     except SshSetupError as exc:
         raise ClientError(str(exc), type="ssh_setup_failed") from exc
-
-
-def _app_for_pod(resources: ResourceControlClient, pod: str) -> str:
-    deployments = resources.list_deployments(active=True, name=pod, limit=100).data
-    app_ids = {
-        item.app_id for item in deployments if item.kind is DeploymentKind.Pod and item.app_id
-    }
-    if not app_ids:
-        raise ClientError(f"no deployed pod named {pod!r}", type="pod_not_found")
-    names = sorted(item.name for item in resources.list_apps().data if item.id in app_ids)
-    if len(names) != 1:
-        raise ClientError(
-            f"pod {pod!r} is deployed in several apps: {', '.join(names)}",
-            type="ambiguous_pod",
-            hint="Name one with --app.",
-        )
-    return names[0]
-
-
-def _ssh_enabled_pods(
-    access: SshAccess,
-    *,
-    app: str | None,
-    workspace: str | None,
-) -> list[SshPodHost]:
-    resources = resource_client(workspace=workspace)
-    app_names = {item.id: item.name for item in resources.list_apps().data}
-    pods: set[tuple[str, str]] = set()
-    cursor: str | None = None
-    while True:
-        page = resources.list_deployments(active=True, limit=100, cursor=cursor)
-        for item in page.data:
-            name = app_names.get(item.app_id or "")
-            if item.kind is DeploymentKind.Pod and name and (app is None or name == app):
-                pods.add((name, item.name))
-        if not page.next:
-            break
-        cursor = page.next
-    hosts: list[SshPodHost] = []
-    for app_name, pod in sorted(pods):
-        try:
-            hosts.append(access.pod_host(pod, app=app_name))
-        except HttpApiError as exc:
-            if exc.status_code != _CONFLICT:
-                raise
-    return hosts
 
 
 __all__ = ["ssh", "ssh_cert", "ssh_config", "ssh_proxy"]

@@ -91,10 +91,12 @@ unattended.
 uv run lazycloud deployment stop box
 uv run lazycloud deployment delete box
 uv run lazycloud disk delete box
+uv run lazycloud ssh-config --prune
 ```
 
 Stopping or deleting the devbox keeps its disk. Deleting the disk removes
-everything written to it.
+everything written to it. `ssh-config --prune` drops its host from your SSH
+config and editors.
 
 ## The same thing as a pod
 

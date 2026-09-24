@@ -23,7 +23,8 @@ from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
-from shared.http.ssh import SshCertificateResponse, SshHostKeyResponse
+from shared.http.ssh import SshCertificateResponse, SshHostListResponse
+from shared.ssh import ssh_host_alias
 from starlette.websockets import WebSocketDisconnect
 from tests.workspaces import owned_workspace, workspace_owner_user_id
 from websockets.sync.client import connect
@@ -57,12 +58,18 @@ def _fixture(services: ApiServices) -> _Fixture:
     control = ControlPlaneService(services.context)
     workspace = owned_workspace(control, "ssh-owner")
     outsider_workspace = owned_workspace(control, "ssh-outsider")
-    for name, ssh in (("box", True), ("web", False)):
+    for app, name, ssh in (("dev", "box", True), ("dev", "web", False), ("ci", "box", True)):
         services.deployments.deploy(
-            DeploymentSpec(name=name, kind=DeploymentKind.Pod, metadata={"app": "dev", "ssh": ssh}),
+            DeploymentSpec(name=name, kind=DeploymentKind.Pod, metadata={"app": app, "ssh": ssh}),
             workspace=workspace.id,
         )
-    resources = services.deployment_resources.list(workspace=workspace.id, name="box")
+    services.deployments.deploy(
+        DeploymentSpec(
+            name="theirs", kind=DeploymentKind.Pod, metadata={"app": "dev", "ssh": True}
+        ),
+        workspace=outsider_workspace.id,
+    )
+    resources = services.deployment_resources.list(workspace=workspace.id, name="box", app="dev")
     return _Fixture(
         workspace_id=workspace.id,
         credential_secret=_credential_secret(services, workspace.id),
@@ -74,7 +81,7 @@ def _fixture(services: ApiServices) -> _Fixture:
     )
 
 
-def test_ssh_certificate_and_host_key_are_served_only_to_members_for_ssh_pods(
+def test_ssh_hosts_list_only_the_workspaces_ssh_pods_and_filter_by_app_and_pod(
     isolated_services: ApiServices,
 ) -> None:
     fixture = _fixture(isolated_services)
@@ -100,36 +107,34 @@ def test_ssh_certificate_and_host_key_are_served_only_to_members_for_ssh_pods(
             json={"public_key": public_key},
             headers=fixture.outsider,
         )
-        host_key = client.get(
-            "/api/v1/pods/box/ssh/host-key",
-            params={**workspace, "app": "dev"},
-            headers=fixture.member,
+        every = client.get("/api/v1/ssh/hosts", params=workspace, headers=fixture.member)
+        by_app = client.get(
+            "/api/v1/ssh/hosts", params={**workspace, "app": "dev"}, headers=fixture.member
         )
-        refused_host_key = client.get(
-            "/api/v1/pods/box/ssh/host-key",
-            params={**workspace, "app": "dev"},
-            headers=fixture.outsider,
+        by_pod = client.get(
+            "/api/v1/ssh/hosts", params={**workspace, "pod": "box"}, headers=fixture.member
         )
-        not_ssh = client.get(
-            "/api/v1/pods/web/ssh/host-key",
-            params={**workspace, "app": "dev"},
-            headers=fixture.member,
-        )
+        refused = client.get("/api/v1/ssh/hosts", params=workspace, headers=fixture.outsider)
 
     assert certificate.status_code == 200
     assert SshCertificateResponse.model_validate_json(certificate.content).certificate.startswith(
         "ssh-ed25519-cert-v01@openssh.com "
     )
     assert refused_certificate.status_code == 403
-    assert host_key.status_code == 200
-    assert SshHostKeyResponse.model_validate_json(
-        host_key.content
-    ).host_public_key == openssh_public_key(
+    listed = SshHostListResponse.model_validate_json(every.content)
+    assert [(host.app, host.pod) for host in listed.data] == [("ci", "box"), ("dev", "box")]
+    dev_box = listed.data[1]
+    assert dev_box.alias == ssh_host_alias(listed.workspace, "dev", "box")
+    assert dev_box.host_public_key == openssh_public_key(
         pod_host_key(fixture.credential_secret, app_id=fixture.app_id, pod_name="box"),
         comment="dev-box",
     )
-    assert refused_host_key.status_code == 403
-    assert not_ssh.status_code == 409
+    assert [
+        (host.app, host.pod)
+        for host in SshHostListResponse.model_validate_json(by_app.content).data
+    ] == [("dev", "box")]
+    assert len(SshHostListResponse.model_validate_json(by_pod.content).data) == 2
+    assert refused.status_code == 403
 
 
 def test_ssh_tunnel_refuses_outsiders_and_pods_without_ssh(

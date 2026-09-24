@@ -278,9 +278,8 @@ class DiskRepository:
         """The workload each disk was last asked for by, for the disks that have one."""
         if not disk_ids:
             return {}
-        role = StubTable.configuration["role"].astext
         rows = self.session.execute(
-            select(DiskTable.id, AppTable.id, AppTable.name, StubTable.name, role)
+            select(DiskTable.id, AppTable.id, AppTable.name, StubTable.name, StubTable.role)
             .join(StubTable, StubTable.id == DiskTable.last_stub_id)
             .join(AppTable, AppTable.id == StubTable.app_id)
             .where(

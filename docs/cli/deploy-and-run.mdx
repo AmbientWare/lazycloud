@@ -94,16 +94,17 @@ running container.
 
 ```bash
 uv run lazycloud ssh NAME [--app <app>] [-- <ssh options> <command>]
-uv run lazycloud ssh-config [NAME...] [--app <app>]
+uv run lazycloud ssh-config [NAME...] [--app <app>] [--prune]
 ```
 
 `ssh` opens a session on a [devbox](/concepts/dev-machines), or on a pod that
 sets `ssh=True`. Anything after `--` goes to `ssh`, such as
 `-L 8080:localhost:8080` or a command to run. `ssh-config` writes host entries
 named `lazycloud-<workspace>-<app>-<name>` for VS Code, Cursor, and plain
-`ssh`, one per name. With no name it writes one for every devbox and SSH pod
-in the workspace and removes the workspace's entries for ones that stopped or
-were deleted. `--app` picks the app when several apps deploy the same name. The generated
+`ssh`, one per name, or one for every devbox and SSH pod in the workspace when
+none is named. `--prune`, or `-p`, also removes the workspace's entries for ones
+that stopped serving SSH or were deleted. `--app` picks the app when several
+apps deploy the same name. The generated
 config calls two hidden commands of its own to carry the connection and renew
 the login certificate.
 

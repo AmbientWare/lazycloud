@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_hex
 
-from shared.ssh import SSH_LOGIN_USER, ssh_host_alias, ssh_host_label
+from shared.ssh import SSH_LOGIN_USER, ssh_host_label
 
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.config import settings
@@ -81,6 +81,36 @@ class SshPodHost:
     host_public_key: str
 
 
+@dataclass(frozen=True, slots=True)
+class SshHostList:
+    workspace: str
+    """The workspace's name, which the aliases, certificate and host files are keyed by."""
+
+    hosts: list[SshPodHost]
+
+
+def list_ssh_hosts(
+    client: SshControlClient, *, app: str | None = None, pod: str | None = None
+) -> SshHostList:
+    """The workspace's SSH hosts as the control plane lists them, every page."""
+    hosts: list[SshPodHost] = []
+    cursor = ""
+    while True:
+        page = client.hosts(app=app, pod=pod, cursor=cursor)
+        hosts.extend(
+            SshPodHost(
+                alias=item.alias,
+                pod=item.pod,
+                app=item.app,
+                host_public_key=item.host_public_key.strip(),
+            )
+            for item in page.data
+        )
+        if not page.next:
+            return SshHostList(workspace=page.workspace, hosts=hosts)
+        cursor = page.next
+
+
 @dataclass(slots=True)
 class SshAccess:
     """SSH setup for one workspace, addressed by the workspace's name."""
@@ -119,15 +149,6 @@ class SshAccess:
         _private_directory(certificate.parent)
         _write_atomic(certificate, response.certificate.strip() + "\n", _PUBLIC_FILE_MODE)
         return True
-
-    def pod_host(self, pod: str, *, app: str) -> SshPodHost:
-        response = self.client.host_key(pod, app=app)
-        return SshPodHost(
-            alias=_alias(self.workspace, app, pod),
-            pod=pod,
-            app=app,
-            host_public_key=response.host_public_key.strip(),
-        )
 
     def write_hosts(self, hosts: list[SshPodHost]) -> None:
         self._refuse_alias_collisions(hosts)
@@ -421,13 +442,6 @@ def _label(value: str) -> str:
         raise SshSetupError(str(exc)) from exc
 
 
-def _alias(workspace: str, app: str, pod: str) -> str:
-    try:
-        return ssh_host_alias(workspace, app, pod)
-    except ValueError as exc:
-        raise SshSetupError(str(exc)) from exc
-
-
 def _config_path(path: Path) -> str:
     text = str(path)
     if any(character.isspace() or character == '"' for character in text):
@@ -466,11 +480,13 @@ def _write_atomic(path: Path, content: str, mode: int) -> None:
 __all__ = [
     "SSH_KEEPALIVE_INTERVAL_SECONDS",
     "SshAccess",
+    "SshHostList",
     "SshPaths",
     "SshPodHost",
     "SshSetupError",
     "bridge_stdio",
     "current_cli_command",
     "install_ssh_include",
+    "list_ssh_hosts",
     "run_ssh",
 ]

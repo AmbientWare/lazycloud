@@ -53,16 +53,24 @@ from shared.app_lifecycle import (
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
-from shared.deployments import DeploymentKind, StubKind
+from shared.deployments import DeploymentKind, PodRole, StubKind
 from shared.enums import StringEnum
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.placement import Placement
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
-from sqlalchemy import and_, case, delete, exists, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
+
+
+@dataclass(frozen=True, slots=True)
+class SshPodRow:
+    app_id: str
+    app_name: str
+    pod: str
+    role: PodRole
 
 
 class DeploymentResourceRow(BaseModel):
@@ -1108,6 +1116,65 @@ class DeploymentRepository:
                 f"subdomain {subdomain} already belongs to another resource; "
                 f"rename {name} to claim a different one"
             )
+
+    def ssh_pods(
+        self,
+        *,
+        workspace_id: str,
+        app: str | None = None,
+        pod: str | None = None,
+        after: tuple[str, str] | None = None,
+        limit: int,
+    ) -> list[SshPodRow]:
+        """Active pods whose newest active version serves SSH, ordered by app and name.
+
+        The newest version decides, because it is the one an SSH connection
+        reaches; an older version that served SSH does not make the pod serve it.
+        """
+        newest = (
+            select(
+                AppTable.id.label("app_id"),
+                AppTable.name.label("app_name"),
+                DeploymentTable.name.label("pod"),
+                StubTable.ssh.label("ssh"),
+                StubTable.role.label("role"),
+            )
+            .join(AppTable, AppTable.id == DeploymentTable.app_id)
+            .join(StubTable, StubTable.id == DeploymentTable.stub_id)
+            .where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.kind == DeploymentKind.Pod.value,
+                DeploymentTable.active.is_(True),
+                DeploymentTable.deleted_at.is_(None),
+                AppTable.deleted_at.is_(None),
+            )
+            .distinct(AppTable.name, DeploymentTable.name)
+            .order_by(AppTable.name, DeploymentTable.name, DeploymentTable.version.desc())
+        )
+        if app is not None:
+            newest = newest.where(AppTable.name == app)
+        if pod is not None:
+            newest = newest.where(DeploymentTable.name == pod)
+        candidates = newest.subquery()
+        statement = select(
+            candidates.c.app_id, candidates.c.app_name, candidates.c.pod, candidates.c.role
+        ).where(candidates.c.ssh.is_(True))
+        if after is not None:
+            statement = statement.where(
+                tuple_(candidates.c.app_name, candidates.c.pod) > tuple_(*after)
+            )
+        rows = self.session.execute(
+            statement.order_by(candidates.c.app_name, candidates.c.pod).limit(limit)
+        ).tuples()
+        return [
+            SshPodRow(
+                app_id=str(app_id),
+                app_name=app_name,
+                pod=pod_name,
+                role=PodRole(role) if role else PodRole.Service,
+            )
+            for app_id, app_name, pod_name, role in rows
+        ]
 
     def live_container_ids(
         self,

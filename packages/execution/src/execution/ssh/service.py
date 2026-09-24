@@ -10,6 +10,7 @@ from datetime import datetime
 
 from database.records.apps import StubRecord
 from database.repositories.apps import (
+    DeploymentRepository,
     DeploymentResourceRepository,
     DeploymentResourceRow,
     StubRepository,
@@ -19,8 +20,8 @@ from database.types import DatabaseSession
 from shared.deployment_subdomains import deployment_subdomain
 from shared.deployments import DeploymentKind, StubKind
 from shared.errors import ConflictError, NotFoundError
-from shared.http.ssh import SshCertificateResponse, SshHostKeyResponse
-from shared.ssh import SSH_CERTIFICATE_PRINCIPAL, SSH_WORKER_PORT
+from shared.http.ssh import SshCertificateResponse, SshHostListResponse, SshHostResponse
+from shared.ssh import SSH_CERTIFICATE_PRINCIPAL, SSH_WORKER_PORT, ssh_host_alias
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient, DatabaseClient
@@ -60,6 +61,9 @@ class PodSshTunnel:
     backend: socket.socket
 
 
+SSH_HOST_LIST_LIMIT = 100
+
+
 @dataclass(slots=True)
 class SshIdentityService:
     database: DatabaseClient
@@ -86,15 +90,50 @@ class SshIdentityService:
             expires_at=signed.expires_at,
         )
 
-    def pod_host_key(self, *, workspace_id: str, app: str, pod: str) -> SshHostKeyResponse:
+    def hosts(
+        self,
+        *,
+        workspace_id: str,
+        app: str | None = None,
+        pod: str | None = None,
+        cursor: str = "",
+        limit: int = SSH_HOST_LIST_LIMIT,
+    ) -> SshHostListResponse:
+        """The workspace's devboxes and pods that serve SSH, with their pinned host keys.
+
+        Two reads whatever the number of pods: the workspace's name and secret,
+        and the pods. Host keys are derived from the secret, not stored.
+        """
+        bounded = max(1, min(limit, SSH_HOST_LIST_LIMIT))
+        after = tuple(cursor.split("/", 1)) if cursor else None
         with self.database.session() as session:
-            target = ssh_pod_target(session, workspace_id=workspace_id, app=app, pod=pod)
-            secret = _credential_secret(session, workspace_id)
-        host_key = pod_host_key(secret, app_id=target.app_id, pod_name=target.pod_name)
-        return SshHostKeyResponse(
-            host_public_key=openssh_public_key(
-                host_key, comment=f"{target.app_name}-{target.pod_name}"
+            identity = WorkspaceRepository(session).name_and_credential_secret(workspace_id)
+            if identity is None:
+                raise NotFoundError(f"workspace not found: {workspace_id}")
+            rows = DeploymentRepository(session).ssh_pods(
+                workspace_id=workspace_id,
+                app=app,
+                pod=pod,
+                after=(after[0], after[1]) if after is not None and len(after) == 2 else None,
+                limit=bounded,
             )
+        workspace_name, secret = identity
+        return SshHostListResponse(
+            data=[
+                SshHostResponse(
+                    app=row.app_name,
+                    pod=row.pod,
+                    role=row.role,
+                    alias=ssh_host_alias(workspace_name, row.app_name, row.pod),
+                    host_public_key=openssh_public_key(
+                        pod_host_key(secret, app_id=row.app_id, pod_name=row.pod),
+                        comment=f"{row.app_name}-{row.pod}",
+                    ),
+                )
+                for row in rows
+            ],
+            next=f"{rows[-1].app_name}/{rows[-1].pod}" if len(rows) == bounded else "",
+            workspace=workspace_name,
         )
 
     def container_identity(self, *, workspace_id: str, stub_id: str) -> PodSshIdentity:
@@ -223,6 +262,7 @@ def _credential_secret(session: DatabaseSession, workspace_id: str) -> str:
 
 
 __all__ = [
+    "SSH_HOST_LIST_LIMIT",
     "PodSshIdentity",
     "PodSshTunnel",
     "PodSshTunnelService",

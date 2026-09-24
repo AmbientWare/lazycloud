@@ -6,7 +6,7 @@ from typing import Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from pydantic import JsonValue
-from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostKeyResponse
+from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostListResponse
 from shared.http_transport import HttpChannel
 from shared.urls import url_path_segment
 
@@ -53,10 +53,14 @@ class SshControlClient:
             )
         )
 
-    def host_key(self, pod: str, *, app: str) -> SshHostKeyResponse:
-        return SshHostKeyResponse.model_validate(
-            self.channel.get(self._pod_path(pod, "/ssh/host-key", app=app))
-        )
+    def hosts(
+        self, *, app: str | None = None, pod: str | None = None, cursor: str = ""
+    ) -> SshHostListResponse:
+        filters = {
+            key: value for key, value in (("app", app), ("pod", pod), ("cursor", cursor)) if value
+        }
+        query = urlencode({**filters, **workspace_query(self.workspace)})
+        return SshHostListResponse.model_validate(self.channel.get(f"/api/v1/ssh/hosts?{query}"))
 
     def tunnel_url(self, pod: str, *, app: str) -> str:
         parsed = urlsplit(self.endpoint.rstrip("/") + self._pod_path(pod, "/ssh", app=app))
