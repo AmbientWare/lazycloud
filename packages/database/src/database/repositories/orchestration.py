@@ -653,6 +653,13 @@ class ContainerPage:
     next: ContainerPageCursor | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class LiveContainer:
+    id: str
+    status: ContainerStatus
+    started_at: datetime | None
+
+
 @dataclass(slots=True)
 class ContainerRepository:
     session: Session
@@ -1104,6 +1111,30 @@ class ContainerRepository:
                 )
             )
             or 0
+        )
+
+    def newest_live_for_stub(self, stub_id: str) -> LiveContainer | None:
+        """The stub's newest live container, a running one ahead of any still pending."""
+        row = self.session.execute(
+            select(ContainerTable.id, ContainerTable.status, ContainerTable.started_at)
+            .where(
+                ContainerTable.stub_id == stub_id,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+            )
+            .order_by(
+                (ContainerTable.status == ContainerStatus.Running.value).desc(),
+                ContainerTable.created_at.desc(),
+                ContainerTable.id.desc(),
+            )
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        container_id, status, started_at = row
+        return LiveContainer(
+            id=str(container_id),
+            status=ContainerStatus(status),
+            started_at=started_at,
         )
 
     def count_live_for_stub(self, stub_id: str) -> int:

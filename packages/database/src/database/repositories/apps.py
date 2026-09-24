@@ -60,7 +60,7 @@ from shared.identity import WorkspaceStatus
 from shared.placement import Placement
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
-from sqlalchemy import and_, case, delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, text, update
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -942,6 +942,25 @@ class StubRepository:
 @dataclass(slots=True)
 class DeploymentRepository:
     session: Session
+
+    def name_live_in_other_app(
+        self, name: str, *, kind: DeploymentKind, app_id: str, workspace_id: str
+    ) -> bool:
+        """Whether an active deployment of this kind and name lives in another app."""
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        DeploymentTable.workspace_id == workspace_id,
+                        DeploymentTable.kind == kind.value,
+                        DeploymentTable.name == name,
+                        DeploymentTable.app_id != app_id,
+                        DeploymentTable.active.is_(True),
+                        DeploymentTable.deleted_at.is_(None),
+                    )
+                )
+            )
+        )
 
     def lock_live(self, deployment_id: str, *, workspace_id: str) -> bool:
         return (

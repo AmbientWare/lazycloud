@@ -8,6 +8,7 @@ from shared.callbacks import normalize_callback_url
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.deployment_records import CpuRequest, MemoryRequest, request_and_limit
+from shared.deployments import PodRole
 from shared.disks import DiskMount, validate_disk_mounts
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
@@ -278,6 +279,9 @@ class StubConfig(ContractModel):
     """Serve SSH through the API's authenticated tunnel; pods only."""
 
     disks: list[DiskMount] = Field(default_factory=list)
+    role: PodRole = PodRole.Service
+    """What a pod is for, resolved before the stub is written; `Service` on other kinds."""
+
     machine: str = ""
     """A joined machine this workload must run on, by name. Empty runs in the workspace."""
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
@@ -303,6 +307,18 @@ class StubConfig(ContractModel):
         if self.disks and self.autoscaler.max_containers > 1:
             msg = "a workload with a disk runs one container; set max_containers to 1"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def devbox_is_one_ssh_container_on_a_root_disk(self) -> StubConfig:
+        if self.role is not PodRole.Devbox:
+            return self
+        if not self.ssh:
+            raise ValueError("a devbox is reached over SSH and cannot turn ssh off")
+        if self.autoscaler.max_containers > 1:
+            raise ValueError("a devbox runs one container; set max_containers to 1")
+        if not any(disk.is_root for disk in self.disks):
+            raise ValueError("a devbox needs a disk at /")
         return self
 
     @model_validator(mode="after")

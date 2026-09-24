@@ -9,8 +9,13 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from shared.autoscaling import Autoscaler
 from shared.contracts import ContractModel
 from shared.custom_domains import normalize_assignable_hostname
-from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
-from shared.disks import DiskMount, validate_disk_mounts
+from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind, PodRole
+from shared.disks import (
+    DiskMount,
+    parse_disk_size_bytes,
+    validate_disk_mounts,
+    validate_disk_name,
+)
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageSpec
 from shared.lifecycle import LifecycleHooks
@@ -52,6 +57,12 @@ DEFAULT_POD_CPU = 1.0
 DEFAULT_POD_MEMORY = "128Mi"
 DEFAULT_POD_KEEP_WARM_SECONDS = 600
 DEFAULT_WORKLOAD_PREEMPTIBLE = True
+DEFAULT_DEVBOX_KEEP_WARM_SECONDS = 1800
+DEFAULT_DEVBOX_PREEMPTIBLE = False
+"""A reclaimed node would cut an SSH session off mid-command."""
+
+DEVBOX_COMMAND = ("sleep", "infinity")
+"""What a devbox runs when it names no command: nothing, for as long as it is kept."""
 
 
 class Resources(ContractModel):
@@ -67,7 +78,8 @@ class Resources(ContractModel):
     timeout_seconds: int | None = None
     concurrency: int = 1
     keep_warm: int | None = None
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
+    preemptible: bool | None = None
+    """Unset resolves by role when the deployment is registered."""
 
     @field_validator("disk", mode="before")
     @classmethod
@@ -132,18 +144,23 @@ class Resources(ContractModel):
         return value
 
 
-def default_keep_warm_seconds(kind: DeploymentKind | str) -> int:
-    """Idle seconds a workload's container survives for, by kind.
+def default_keep_warm_seconds(kind: DeploymentKind | str, role: PodRole | None = None) -> int:
+    """Idle seconds a workload's container survives for, by kind and a pod's role.
 
     A function's container outlives the invocation that started it, so a second
     call arriving inside this window reaches an interpreter that has already
     imported the handler and already run `on_start`. Short, because the window is
     also what an idle caller pays for.
 
+    A devbox waits longer than a service pod: the person who left it is usually
+    coming back, and every return inside the window skips a restore of its disk.
+
     A schedule is answered by `resolve_keep_warm_seconds` rather than here: it is
     a property of one deployment, not of a kind, and the value it wants is zero.
     """
     deployment_kind = _deployment_kind(kind)
+    if deployment_kind is DeploymentKind.Pod and role is PodRole.Devbox:
+        return DEFAULT_DEVBOX_KEEP_WARM_SECONDS
     if deployment_kind in {DeploymentKind.Endpoint, DeploymentKind.Asgi}:
         return DEFAULT_HTTP_KEEP_WARM_SECONDS
     if deployment_kind is DeploymentKind.Pod:
@@ -168,6 +185,7 @@ def resolve_keep_warm_seconds(
     *,
     min_containers: int = 0,
     scheduled: bool = False,
+    role: PodRole | None = None,
 ) -> int:
     """The idle seconds a container survives for, given what else was asked for.
 
@@ -192,7 +210,84 @@ def resolve_keep_warm_seconds(
         return int(value)
     if scheduled:
         return 0
-    return default_keep_warm_seconds(kind)
+    return default_keep_warm_seconds(kind, role)
+
+
+def resolve_pod_role(kind: DeploymentKind | str, role: PodRole | None) -> PodRole | None:
+    """A pod's role, `Service` when it names none; every other kind has none."""
+    if _deployment_kind(kind) is not DeploymentKind.Pod:
+        return None
+    return role or PodRole.Service
+
+
+def validate_pod_role(
+    kind: DeploymentKind | str,
+    role: PodRole | None,
+    *,
+    name: str,
+    ssh: bool | None,
+    disks: list[DiskMount],
+    root_disk_bytes: int | None,
+    max_containers: int | None,
+) -> None:
+    """Refuse a role its other settings contradict, before anything resolves it.
+
+    Shared by the two owners that accept a workload spec, the deployment record
+    and the gateway's stub request, so a devbox means the same thing on both.
+    """
+    if role is not None and _deployment_kind(kind) is not DeploymentKind.Pod:
+        raise ValueError("role is only supported for pod workloads")
+    if role is not PodRole.Devbox:
+        if root_disk_bytes is not None:
+            raise ValueError("root_disk_bytes is only supported for devboxes")
+        return
+    if ssh is False:
+        raise ValueError("a devbox is reached over SSH and cannot turn ssh off")
+    if max_containers is not None and max_containers > 1:
+        raise ValueError("a devbox runs one container; set max_containers to 1")
+    has_root = any(disk.is_root for disk in disks)
+    if has_root and root_disk_bytes is not None:
+        raise ValueError("a devbox has one root disk: size it or declare a disk at /, not both")
+    if not has_root and root_disk_bytes is None:
+        raise ValueError("a devbox needs a root disk; give its size")
+    if root_disk_bytes is not None:
+        try:
+            validate_disk_name(name)
+        except ValueError as exc:
+            raise ValueError(f"a devbox's root disk takes its name, so {exc}") from exc
+
+
+def resolve_pod_ssh(role: PodRole | None, ssh: bool | None) -> bool:
+    if ssh is not None:
+        return ssh
+    return role is PodRole.Devbox
+
+
+def resolve_pod_command(role: PodRole | None, command: list[str]) -> list[str]:
+    if command or role is not PodRole.Devbox:
+        return list(command)
+    return list(DEVBOX_COMMAND)
+
+
+def resolve_pod_disks(
+    role: PodRole | None,
+    *,
+    name: str,
+    disks: list[DiskMount],
+    root_disk_bytes: int | None,
+) -> list[DiskMount]:
+    """A pod's disks, with the root disk a devbox sized but did not declare."""
+    if role is not PodRole.Devbox or root_disk_bytes is None:
+        return list(disks)
+    return [DiskMount(name=name, size_bytes=root_disk_bytes), *disks]
+
+
+def resolve_preemptible(role: PodRole | None, value: bool | None) -> bool:
+    if value is not None:
+        return value
+    if role is PodRole.Devbox:
+        return DEFAULT_DEVBOX_PREEMPTIBLE
+    return DEFAULT_WORKLOAD_PREEMPTIBLE
 
 
 def request_and_limit(
@@ -328,6 +423,16 @@ class DeploymentSpec(ContractModel):
     disks: list[DiskMount] = Field(default_factory=list)
     route: str | None = None
     methods: list[str] = Field(default_factory=lambda: list(DEFAULT_ENDPOINT_METHODS))
+    role: PodRole | None = None
+    """What a pod is for; unset resolves to a service. Only a pod may carry one."""
+
+    root_disk_bytes: int | None = None
+    """Size of the root disk a devbox gets when it declares none at ``/``.
+
+    Resolved into `disks` under the devbox's own name when the deployment is
+    registered, so a stored spec never carries it.
+    """
+
     domain: str | None = None
     """Hostname this resource should serve, under a domain the workspace registered.
 
@@ -359,6 +464,11 @@ class DeploymentSpec(ContractModel):
     @classmethod
     def normalize_domain(cls, value: str | None) -> str | None:
         return None if value is None else normalize_assignable_hostname(value)
+
+    @field_validator("root_disk_bytes")
+    @classmethod
+    def root_disk_is_bounded(cls, value: int | None) -> int | None:
+        return None if value is None else parse_disk_size_bytes(value)
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> DeploymentSpec:
@@ -392,11 +502,24 @@ class DeploymentSpec(ContractModel):
             msg = "keep_warm=-1 is only supported for pod workloads and functions with a warm floor"
             raise ValueError(msg)
         autoscaler = self.metadata.get("autoscaler")
-        if autoscaler is not None:
-            autoscaler_config = Autoscaler.model_validate(autoscaler)
-            if self.resources.keep_warm == -1 and autoscaler_config.max_containers == 0:
-                msg = "keep_warm=-1 requires max_containers to be greater than zero"
-                raise ValueError(msg)
+        autoscaler_config = Autoscaler.model_validate(autoscaler) if autoscaler is not None else None
+        if (
+            autoscaler_config is not None
+            and self.resources.keep_warm == -1
+            and autoscaler_config.max_containers == 0
+        ):
+            msg = "keep_warm=-1 requires max_containers to be greater than zero"
+            raise ValueError(msg)
+        ssh = self.metadata.get("ssh")
+        validate_pod_role(
+            self.kind,
+            self.role,
+            name=self.name,
+            ssh=ssh if isinstance(ssh, bool) else None,
+            disks=self.disks,
+            root_disk_bytes=self.root_disk_bytes,
+            max_containers=autoscaler_config.max_containers if autoscaler_config else None,
+        )
         return self
 
 
@@ -437,6 +560,8 @@ class Deployment(ContractModel):
 
 
 __all__ = [
+    "DEFAULT_DEVBOX_KEEP_WARM_SECONDS",
+    "DEFAULT_DEVBOX_PREEMPTIBLE",
     "DEFAULT_DISK",
     "DEFAULT_FUNCTION_AUTHORIZED",
     "DEFAULT_FUNCTION_CPU",
@@ -453,6 +578,8 @@ __all__ = [
     "DEFAULT_POD_CPU",
     "DEFAULT_POD_KEEP_WARM_SECONDS",
     "DEFAULT_POD_MEMORY",
+    "DEFAULT_WORKLOAD_PREEMPTIBLE",
+    "DEVBOX_COMMAND",
     "CpuRequest",
     "Deployment",
     "DeploymentSpec",
@@ -469,6 +596,12 @@ __all__ = [
     "resolve_keep_warm_seconds",
     "resolve_max_pending_tasks",
     "resolve_memory",
+    "resolve_pod_command",
+    "resolve_pod_disks",
+    "resolve_pod_role",
+    "resolve_pod_ssh",
+    "resolve_preemptible",
     "resolve_retries",
     "resolve_timeout_seconds",
+    "validate_pod_role",
 ]

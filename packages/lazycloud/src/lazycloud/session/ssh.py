@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import os
-import re
 import shlex
 import shutil
 import struct
@@ -23,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_hex
 
-from shared.ssh import SSH_LOGIN_USER
+from shared.ssh import SSH_LOGIN_USER, ssh_host_alias, ssh_host_label
 
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.config import settings
@@ -32,7 +31,6 @@ SSH_KEEPALIVE_INTERVAL_SECONDS = 30
 _PRIVATE_FILE_MODE = 0o600
 _PUBLIC_FILE_MODE = 0o644
 _DIRECTORY_MODE = 0o700
-_ALIAS_UNSAFE = re.compile(r"[^a-z0-9-]+")
 _ED25519 = b"ssh-ed25519"
 
 
@@ -83,11 +81,6 @@ class SshPodHost:
     host_public_key: str
 
 
-def ssh_host_alias(workspace: str, app: str, pod: str) -> str:
-    """The host name a pod answers to in SSH config; pod names repeat across apps."""
-    return f"lazycloud-{_label(workspace)}-{_label(app)}-{_label(pod)}"
-
-
 @dataclass(slots=True)
 class SshAccess:
     """SSH setup for one workspace, addressed by the workspace's name."""
@@ -130,7 +123,7 @@ class SshAccess:
     def pod_host(self, pod: str, *, app: str) -> SshPodHost:
         response = self.client.host_key(pod, app=app)
         return SshPodHost(
-            alias=ssh_host_alias(self.workspace, app, pod),
+            alias=_alias(self.workspace, app, pod),
             pod=pod,
             app=app,
             host_public_key=response.host_public_key.strip(),
@@ -368,10 +361,17 @@ class _SshReader:
 
 
 def _label(value: str) -> str:
-    label = _ALIAS_UNSAFE.sub("-", value.strip().lower()).strip("-")
-    if not label:
-        raise SshSetupError(f"cannot build an SSH host name from {value!r}")
-    return label
+    try:
+        return ssh_host_label(value)
+    except ValueError as exc:
+        raise SshSetupError(str(exc)) from exc
+
+
+def _alias(workspace: str, app: str, pod: str) -> str:
+    try:
+        return ssh_host_alias(workspace, app, pod)
+    except ValueError as exc:
+        raise SshSetupError(str(exc)) from exc
 
 
 def _config_path(path: Path) -> str:
@@ -419,5 +419,4 @@ __all__ = [
     "current_cli_command",
     "install_ssh_include",
     "run_ssh",
-    "ssh_host_alias",
 ]

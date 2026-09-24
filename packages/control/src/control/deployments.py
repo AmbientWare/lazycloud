@@ -25,6 +25,11 @@ from shared.deployment_records import (
     resolve_keep_warm_seconds,
     resolve_max_pending_tasks,
     resolve_memory,
+    resolve_pod_command,
+    resolve_pod_disks,
+    resolve_pod_role,
+    resolve_pod_ssh,
+    resolve_preemptible,
     resolve_retries,
     resolve_timeout_seconds,
 )
@@ -404,6 +409,10 @@ def _claimed_hostname(
 def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
     default_retries = resolve_retries(spec.kind, None)
     metadata = dict(spec.metadata)
+    role = resolve_pod_role(spec.kind, spec.role)
+    if role is not None:
+        ssh = metadata.get("ssh")
+        metadata["ssh"] = resolve_pod_ssh(role, ssh if isinstance(ssh, bool) else None)
     if "authorized" not in metadata:
         metadata["authorized"] = resolve_authorized(spec.kind, None)
     if metadata.get("tcp") is True:
@@ -429,9 +438,20 @@ def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
                         spec.resources.keep_warm,
                         min_containers=declared_min_containers(spec.metadata),
                         scheduled=bool(spec.cron),
+                        role=role,
                     ),
+                    "preemptible": resolve_preemptible(role, spec.resources.preemptible),
                 }
             ),
+            "role": role,
+            "command": resolve_pod_command(role, spec.command),
+            "disks": resolve_pod_disks(
+                role,
+                name=spec.name,
+                disks=spec.disks,
+                root_disk_bytes=spec.root_disk_bytes,
+            ),
+            "root_disk_bytes": None,
             "retry_policy": (
                 spec.retry_policy
                 if spec.retry_policy is not None

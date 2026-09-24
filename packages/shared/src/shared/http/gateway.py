@@ -7,9 +7,9 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 
 from shared.app_slug import validate_app_slug
 from shared.compute_enrollment import AgentCapacityState
-from shared.deployment_records import DEFAULT_WORKLOAD_PREEMPTIBLE, CpuRequest, MemoryRequest
-from shared.deployments import DeploymentKind
-from shared.disks import DiskMount, validate_disk_mounts
+from shared.deployment_records import CpuRequest, MemoryRequest, validate_pod_role
+from shared.deployments import DeploymentKind, PodRole
+from shared.disks import DiskMount, parse_disk_size_bytes, validate_disk_mounts
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
 from shared.http.client_manifests import ClientContract
@@ -186,12 +186,20 @@ class GetOrCreateStubRequest(HttpModel):
     outputs: Schema = Field(default_factory=Schema)
     command: list[str] = Field(default_factory=list)
     tcp: bool = False
-    ssh: bool = False
+    ssh: bool | None = None
+    """Unset resolves by role: a devbox serves SSH, a service pod does not."""
+
     disks: list[DiskMount] = Field(default_factory=list)
+    role: PodRole | None = None
+    root_disk_bytes: int | None = None
+    """Size of the root disk a devbox gets when it declares none at ``/``."""
+
     block_network: bool = False
     allow_list: list[str] = Field(default_factory=list)
     docker_enabled: bool = False
-    preemptible: bool = DEFAULT_WORKLOAD_PREEMPTIBLE
+    preemptible: bool | None = None
+    """Unset resolves by role."""
+
     machine: str = Field(default="", max_length=63)
     """A joined machine this workload must run on, empty to run in the workspace."""
     region: ProductRegion | None = None
@@ -199,6 +207,11 @@ class GetOrCreateStubRequest(HttpModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     client_contract: ClientContract | None = None
     workspace: str = "default"
+
+    @field_validator("root_disk_bytes")
+    @classmethod
+    def root_disk_is_bounded(cls, value: int | None) -> int | None:
+        return None if value is None else parse_disk_size_bytes(value)
 
     @model_validator(mode="after")
     def workload_configuration_is_canonical(self) -> GetOrCreateStubRequest:
@@ -231,6 +244,15 @@ class GetOrCreateStubRequest(HttpModel):
         if self.keep_warm_seconds == -1 and self.autoscaler.max_containers == 0:
             msg = "keep_warm_seconds=-1 requires max_containers to be greater than zero"
             raise ValueError(msg)
+        validate_pod_role(
+            self.stub_type,
+            self.role,
+            name=self.name,
+            ssh=self.ssh,
+            disks=self.disks,
+            root_disk_bytes=self.root_disk_bytes,
+            max_containers=self.autoscaler.max_containers,
+        )
         return self
 
 
@@ -251,6 +273,8 @@ class DeployStubResponse(HttpModel):
     app_id: str | None = None
     version: int = 0
     invoke_url: str = ""
+    role: PodRole | None = None
+    """The pod's resolved role; unset for every other kind."""
 
 
 class GetUrlRequest(HttpModel):

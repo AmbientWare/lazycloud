@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 from lazycloud.clients.ssh.control import SshControlClient
-from lazycloud.session.ssh import SshAccess, SshPaths, SshPodHost, SshSetupError, ssh_host_alias
+from lazycloud.session.ssh import SshAccess, SshPaths, SshPodHost, SshSetupError
+from shared.ssh import ssh_host_alias
 
 _KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
 _OTHER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEiXkZ0yA7i4zb4bCVI0jQq1h0lJmNfZcBfMmbJ3m5c+"

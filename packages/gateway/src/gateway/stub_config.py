@@ -16,9 +16,14 @@ from shared.deployment_records import (
     resolve_disk,
     resolve_keep_warm_seconds,
     resolve_memory,
+    resolve_pod_command,
+    resolve_pod_disks,
+    resolve_pod_role,
+    resolve_pod_ssh,
+    resolve_preemptible,
     resolve_timeout_seconds,
 )
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, PodRole
 from shared.gpu import gpu_preference
 from shared.http.gateway import GetOrCreateStubRequest
 from shared.image_building.authoring import ImageBuildStep, ImageSpec
@@ -72,6 +77,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
     retry_policy = request.retry_policy or (
         RetryPolicy.from_retries(request.retries) if request.retries > 0 else None
     )
+    role = resolve_pod_role(request.stub_type, request.role)
     return StubConfig(
         object_id=request.object_id,
         image=StubImageConfig(
@@ -97,7 +103,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
         runtime=StubRuntimeConfig(
             region=request.region,
             availability_zone=request.availability_zone,
-            preemptible=request.preemptible,
+            preemptible=resolve_preemptible(role, request.preemptible),
             cpu=resolve_cpu(request.stub_type, request.cpu),
             memory=resolve_memory(request.stub_type, request.memory),
             disk=resolve_disk(request.disk),
@@ -113,6 +119,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
                 request.keep_warm_seconds,
                 min_containers=request.autoscaler.min_containers,
                 scheduled=bool(request.cron),
+                role=role,
             ),
             concurrency=request.concurrent_requests,
             in_process=request.in_process,
@@ -157,7 +164,7 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
         domain=request.domain,
         methods=request.methods,
         cron=request.cron or None,
-        command=request.command,
+        command=resolve_pod_command(role, request.command),
         ports={str(port): port for port in request.ports},
         volumes=[
             StubVolumeConfig.model_validate(item.model_dump(mode="python"))
@@ -181,8 +188,14 @@ def stub_config(request: GetOrCreateStubRequest) -> StubConfig:
             outputs=request.outputs.model_dump(mode="json"),
         ),
         tcp=request.tcp,
-        ssh=request.ssh,
-        disks=request.disks,
+        ssh=resolve_pod_ssh(role, request.ssh),
+        disks=resolve_pod_disks(
+            role,
+            name=request.name,
+            disks=request.disks,
+            root_disk_bytes=request.root_disk_bytes,
+        ),
+        role=role or PodRole.Service,
         machine=request.machine,
     )
 
@@ -195,6 +208,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
     return DeploymentSpec(
         name=name,
         kind=kind,
+        role=config.role if kind is DeploymentKind.Pod else None,
         handler=stub.handler,
         domain=config.domain,
         image=ImageSpec(
@@ -311,6 +325,7 @@ def _autoscaler_config(request: GetOrCreateStubRequest) -> StubAutoscalerConfig:
     keep_warm_seconds = resolve_keep_warm_seconds(
         request.stub_type,
         request.keep_warm_seconds,
+        role=resolve_pod_role(request.stub_type, request.role),
     )
     if kind is StubKind.Pod and keep_warm_seconds == -1:
         updates["min_containers"] = max(autoscaler.min_containers, 1)

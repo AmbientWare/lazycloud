@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
-from coordination.redis_client import RedisClient
+from coordination.redis_client import RedisClient, RedisWireScalar
 from shared.containers import ContainerRecord
 from shared.workload_keys import (
     pod_container_connections_key,
@@ -52,8 +52,24 @@ return remaining
 """
 
 
+@dataclass(frozen=True, slots=True)
+class PodKeepAlive:
+    """What keeps a running pod container from stopping, read from the proxy's counters."""
+
+    connections: int
+    """Connections the pod proxy holds open to the container."""
+
+    idle_seconds: int | None
+    """Seconds until the keep-warm marker expires; None while a connection holds
+    it or when it never expires."""
+
+
 class ContainerRuntimeStateRepository(Protocol):
     def release(self, *, workspace_id: str, stub_id: str, container_id: str) -> None: ...
+
+
+class PodKeepAliveReader(Protocol):
+    def keep_alive(self, *, workspace_id: str, stub_id: str, container_id: str) -> PodKeepAlive: ...
 
 
 def release_container_runtime_state(
@@ -99,9 +115,37 @@ class RedisContainerRuntimeStateRepository:
             self.redis.key(pod_total_connections_key(workspace_id, stub_id)),
         )
 
+    def keep_alive(self, *, workspace_id: str, stub_id: str, container_id: str) -> PodKeepAlive:
+        """The proxy's connection count and the keep-warm marker's remaining life.
+
+        The proxy persists the marker while a connection is open and sets its
+        expiry when the last one closes, so a positive TTL is the idle deadline.
+        """
+        raw = self.redis.get(
+            self.redis.key(pod_container_connections_key(workspace_id, stub_id, container_id))
+        )
+        ttl = self.redis.ttl(
+            self.redis.key(pod_keep_warm_lock_key(workspace_id, stub_id, container_id))
+        )
+        return PodKeepAlive(
+            connections=_count(raw),
+            idle_seconds=ttl if ttl > 0 else None,
+        )
+
+
+def _count(raw: RedisWireScalar | None) -> int:
+    if raw is None:
+        return 0
+    try:
+        return max(int(raw.decode() if isinstance(raw, bytes) else raw), 0)
+    except (TypeError, ValueError):
+        return 0
+
 
 __all__ = [
     "ContainerRuntimeStateRepository",
+    "PodKeepAlive",
+    "PodKeepAliveReader",
     "RedisContainerRuntimeStateRepository",
     "release_container_runtime_state",
 ]
