@@ -62,7 +62,8 @@ DISK_SNAPSHOT_CREATE_SILENCE_SECONDS = 5 * 60
 Far past any one CreateSnapshot call, so the sweep never races the holder's own.
 """
 
-DISK_SNAPSHOT_DELETE_RETRY_SECONDS = 60
+DISK_SNAPSHOT_RETRY_SECONDS = 60
+"""How long a snapshot the provider could not delete, or could not be asked about, waits."""
 DISK_SNAPSHOT_ORPHAN_INTERVAL_SECONDS = 60 * 60
 
 
@@ -192,9 +193,17 @@ class DiskSnapshotService:
                 self._settle(row, now=current)
             except Exception:
                 LOGGER.exception(
-                    "disk snapshot housekeeping failed; retrying next pass",
+                    "disk snapshot housekeeping failed; retrying later",
                     extra={"disk_id": row.disk_id, "snapshot_id": row.snapshot_id},
                 )
+                # Pushed back, so a provider that keeps refusing is asked once a
+                # minute rather than on every pass.
+                with self.database.session() as session:
+                    DiskSnapshotRepository(session).defer(
+                        row.id,
+                        state=row.state,
+                        due_at=current + timedelta(seconds=DISK_SNAPSHOT_RETRY_SECONDS),
+                    )
         self._collect_orphans_when_due(now=current)
 
     def remove_all(self, disk_id: str) -> None:
@@ -329,7 +338,7 @@ class DiskSnapshotService:
                         DiskSnapshotRepository(session).defer(
                             row.id,
                             state="deleting",
-                            due_at=now + timedelta(seconds=DISK_SNAPSHOT_DELETE_RETRY_SECONDS),
+                            due_at=now + timedelta(seconds=DISK_SNAPSHOT_RETRY_SECONDS),
                         )
                     return
                 with self.database.session() as session:
@@ -347,9 +356,9 @@ class DiskSnapshotService:
 
 __all__ = [
     "DISK_SNAPSHOT_CREATE_SILENCE_SECONDS",
-    "DISK_SNAPSHOT_DELETE_RETRY_SECONDS",
     "DISK_SNAPSHOT_ORPHAN_INTERVAL_SECONDS",
     "DISK_SNAPSHOT_POLL_SECONDS",
+    "DISK_SNAPSHOT_RETRY_SECONDS",
     "DiskSnapshotService",
     "DiskSnapshotTaken",
 ]
