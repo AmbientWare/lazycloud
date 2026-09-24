@@ -36,3 +36,27 @@ def test_pods_sharing_a_name_across_apps_get_separate_hosts_and_pins(tmp_path: P
     access.write_hosts([_host("dev-box", "x", _KEY)])
     with pytest.raises(SshSetupError, match="already names another pod"):
         access.write_hosts([_host("dev", "box-x", _OTHER_KEY)])
+
+
+def test_a_full_sync_removes_only_this_workspaces_stale_hosts(tmp_path: Path) -> None:
+    paths = SshPaths(root=tmp_path)
+    client = SshControlClient.from_endpoint("http://127.0.0.1:1")
+    acme = SshAccess(client=client, workspace="acme", paths=paths, cli_command=("lazycloud",))
+    other = SshAccess(client=client, workspace="other", paths=paths, cli_command=("lazycloud",))
+    acme.write_hosts([_host("dev", "box", _KEY), _host("dev", "gone", _OTHER_KEY)])
+    other_host = SshPodHost(
+        alias=ssh_host_alias("other", "dev", "box"), pod="box", app="dev", host_public_key=_KEY
+    )
+    other.write_hosts([other_host])
+    (paths.hosts / "mine.conf").write_text("Host mine\n    HostName example.test\n")
+
+    removed = acme.sync_hosts([_host("dev", "box", _KEY)])
+
+    assert removed == ["lazycloud-acme-dev-gone"]
+    assert sorted(path.name for path in paths.hosts.iterdir()) == [
+        "lazycloud-acme-dev-box.conf",
+        "lazycloud-other-dev-box.conf",
+        "mine.conf",
+    ]
+    assert "lazycloud-acme-dev-gone" not in paths.known_hosts.read_text()
+    assert f"lazycloud-other-dev-box {_KEY}" in paths.known_hosts.read_text().splitlines()

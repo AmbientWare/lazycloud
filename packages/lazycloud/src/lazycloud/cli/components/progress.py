@@ -8,6 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
+
 from lazycloud.cli.components.errors import debug_errors_enabled
 from lazycloud.cli.components.output import write_stream
 from lazycloud.terminal import Terminal, TerminalStep
@@ -49,8 +51,8 @@ class ConnectingIndicator:
 
     Shown only when stderr is a terminal: an editor running the SSH proxy gives
     it none, and a line written there would reach nobody. `describe` is asked
-    about once a second for what the machine is doing; it returns None when it
-    has nothing to say, and anything it raises leaves the label as it was.
+    about once a second for what the machine is doing, and returns None when it
+    has nothing to say.
     """
 
     target: str
@@ -85,7 +87,9 @@ class ConnectingIndicator:
         while describe is not None and not self._stopped.wait(CONNECTING_POLL_SECONDS):
             try:
                 detail = describe()
-            except Exception:  # a status read must never end the connection it describes
+            except (HttpApiError, HttpTransportError, HttpResponseDecodeError):
+                # A status read that fails leaves the label as it was; it must
+                # never end the connection it describes.
                 continue
             step = self._step
             if detail and step is not None and not self._stopped.is_set():

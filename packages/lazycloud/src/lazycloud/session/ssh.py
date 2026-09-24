@@ -141,6 +141,41 @@ class SshAccess:
         include = f"Include {_config_path(self.paths.hosts)}/*.conf\n"
         _write_atomic(self.paths.config, include, _PRIVATE_FILE_MODE)
 
+    def sync_hosts(self, hosts: list[SshPodHost], *, app: str | None = None) -> list[str]:
+        """Write these hosts and remove this workspace's others; returns the removed aliases.
+
+        A host file belongs to this workspace only when its owner header says so,
+        so files for other workspaces and files this CLI did not write stay. With
+        `app`, only that app's hosts are replaced.
+        """
+        self.write_hosts(hosts)
+        current = {host.alias for host in hosts}
+        removed = sorted(
+            path.stem
+            for path in self.paths.hosts.glob("*.conf")
+            if path.stem not in current and self._owned_here(path, app=app)
+        )
+        for alias in removed:
+            self.paths.host_config(alias).unlink(missing_ok=True)
+        if removed and self.paths.known_hosts.exists():
+            kept = [
+                line
+                for line in self.paths.known_hosts.read_text(encoding="utf-8").splitlines()
+                if line.split(" ", 1)[0] not in removed
+            ]
+            _write_atomic(
+                self.paths.known_hosts,
+                "\n".join(kept) + "\n" if kept else "",
+                _PUBLIC_FILE_MODE,
+            )
+        return removed
+
+    def _owned_here(self, path: Path, *, app: str | None) -> bool:
+        header = path.read_text(encoding="utf-8").split("\n", 1)[0].split()
+        return header[:3] == ["#", "lazycloud", f"workspace={self.workspace}"] and (
+            app is None or header[3:4] == [f"app={app}"]
+        )
+
     def _refuse_alias_collisions(self, hosts: list[SshPodHost]) -> None:
         # Labels are lowercased and hyphenated, so distinct app/pod names can
         # meet at one alias; pinning two host keys under it would break both.

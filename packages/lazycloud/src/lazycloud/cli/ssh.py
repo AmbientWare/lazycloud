@@ -159,37 +159,40 @@ def ssh_config(
     app: AppOption = None,
     workspace: WorkspaceOption = None,
 ) -> None:
-    """Write ~/.lazycloud/ssh/config so ssh and editors reach devboxes and pods by name."""
+    """Write ~/.lazycloud/ssh/config so ssh and editors reach devboxes and pods by name.
+
+    With no names, the workspace's entries are replaced: hosts that stopped
+    serving SSH or were deleted are removed.
+    """
+    removed: list[str] = []
     with _setup_errors():
         access = _access(workspace)
         access.ensure_key()
         if pods:
             hosts = [_pod_host(access, pod, app=app, workspace=workspace) for pod in pods]
+            access.write_hosts(hosts)
         else:
             hosts = _ssh_enabled_pods(access, app=app, workspace=workspace)
-        if not hosts:
-            raise ClientError(
-                "no deployed pod serves SSH",
-                type="no_ssh_pods",
-                hint="Deploy a devbox, or a pod with ssh=True, then run this again.",
-            )
-        access.write_hosts(hosts)
-        access.refresh_certificate()
-        included = install_ssh_include(access.paths)
+            removed = access.sync_hosts(hosts, app=app)
+        if hosts:
+            access.refresh_certificate()
+        included = install_ssh_include(access.paths) if hosts else False
+    lines = [f"ssh {host.alias}" for host in hosts] or [
+        f"No devbox or pod serves SSH in {access.workspace}."
+    ]
+    lines += [f"Removed {alias}" for alias in removed]
+    lines.append(
+        f"Config: {access.paths.config}" + (" (included from ~/.ssh/config)" if included else "")
+    )
     emit(
         ctx,
         payload={
             "config": str(access.paths.config),
             "hosts": [host.alias for host in hosts],
+            "removed": removed,
             "ssh_config_updated": included,
         },
-        view="\n".join(
-            [
-                *(f"ssh {host.alias}" for host in hosts),
-                f"Config: {access.paths.config}"
-                + (" (included from ~/.ssh/config)" if included else ""),
-            ]
-        ),
+        view="\n".join(lines),
     )
 
 

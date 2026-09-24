@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from shared.deployment_records import Deployment, resolve_pod_role
+from shared.deployment_records import Deployment, resolve_pod_role, resolve_preemptible
 from shared.deployments import DeploymentKind
 from shared.http.deployments import (
     DeploymentActionCapabilitiesResponse,
@@ -18,16 +18,21 @@ def deployment_response(
     actions: DeploymentActionCapabilitiesResponse | None = None,
 ) -> DeploymentResponse:
     spec = deployment.spec
+    role = resolve_pod_role(deployment.kind, spec.role)
     return DeploymentResponse(
         id=deployment.id,
         name=deployment.name,
         kind=deployment.kind,
-        role=resolve_pod_role(deployment.kind, spec.role),
+        role=role,
         app_id=deployment.app_id,
         stub_id=deployment.stub_id,
         version=deployment.version,
         spec=DeploymentSpecResponse(
-            resources=DeploymentResourcesResponse.model_validate(spec.resources),
+            resources=DeploymentResourcesResponse.model_validate(
+                spec.resources.model_copy(
+                    update={"preemptible": resolve_preemptible(role, spec.resources.preemptible)}
+                )
+            ),
             route=spec.route,
             methods=spec.methods,
             cron=spec.cron,
