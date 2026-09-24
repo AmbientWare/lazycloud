@@ -41,6 +41,12 @@ class SandboxFilesystemRequest(ContractModel):
     """Write the first `limit` bytes of a larger file instead of refusing it."""
 
 
+class SandboxDownloadReport(ContractModel):
+    """What the supervisor writes to stderr once a download's bytes are on stdout."""
+
+    bytes: int = Field(ge=0)
+
+
 class SandboxProcessEventType(StrEnum):
     Started = "started"
     Chunk = "chunk"

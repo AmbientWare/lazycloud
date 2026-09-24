@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import Thread
 from uuid import uuid4
 
+from pydantic import ValidationError
 from shared.app_identity import CONTAINER_HELPER_PATH
 from shared.contracts import ContractModel
 from shared.deployments import StubKind
@@ -70,6 +71,7 @@ from worker.container_service.models import (
     CONTAINER_NOT_FOUND_MESSAGE,
     SANDBOX_FILESYSTEM_OVER_LIMIT_EXIT,
     SANDBOX_PROCESS_MANAGER_NOT_READY_MESSAGE,
+    SandboxDownloadReport,
     SandboxFileOverLimitError,
     SandboxFilesystemRequest,
     SandboxProcessEvent,
@@ -450,7 +452,7 @@ class WorkerContainerService:
     ) -> ContainerSandboxDownloadFileResponse:
         try:
             instance = self._required_instance(request.container_id)
-            data = self._filesystem_bytes(
+            data, report = self._filesystem_output(
                 instance,
                 SandboxFilesystemRequest(
                     operation=SandboxFileOperation.DownloadFile,
@@ -459,6 +461,18 @@ class WorkerContainerService:
                     truncate=request.truncate,
                 ),
             )
+            try:
+                written = SandboxDownloadReport.model_validate_json(report).bytes
+            except ValidationError as exc:
+                raise RuntimeError(
+                    "the sandbox supervisor did not report the download's size; "
+                    "restart the container to update it"
+                ) from exc
+            if written != len(data):
+                raise RuntimeError(
+                    f"received {len(data)} of the {written} bytes the sandbox "
+                    f"supervisor wrote for {request.container_path}"
+                )
             return ContainerSandboxDownloadFileResponse(ok=True, data=data)
         except SandboxFileOverLimitError as exc:
             return ContainerSandboxDownloadFileResponse(
@@ -687,15 +701,16 @@ class WorkerContainerService:
     ) -> Response:
         try:
             instance = self._required_instance(container_id)
-            return response_type.model_validate_json(self._filesystem_bytes(instance, request))
+            stdout, _ = self._filesystem_output(instance, request)
+            return response_type.model_validate_json(stdout)
         except Exception as exc:
             return response_type.model_validate({"ok": False, "error_msg": str(exc)})
 
-    def _filesystem_bytes(
+    def _filesystem_output(
         self,
         instance: WorkerContainerServiceInstance,
         request: SandboxFilesystemRequest,
-    ) -> bytes:
+    ) -> tuple[bytes, bytes]:
         request.path = resolve_sandbox_container_path(request.path, cwd=instance.cwd)
         stdout, stderr, exit_code = self._sandbox_control_exec(
             instance, [CONTAINER_HELPER_PATH, "filesystem", request.model_dump_json()]
@@ -707,7 +722,7 @@ class WorkerContainerService:
                 stderr.decode("utf-8", errors="replace").strip()
                 or f"sandbox filesystem operation exited {exit_code}"
             )
-        return stdout
+        return stdout, stderr
 
     def _sandbox_control_exec(
         self,

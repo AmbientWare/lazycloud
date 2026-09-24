@@ -108,6 +108,56 @@ func TestStreamAckEvictsPersistedChunks(t *testing.T) {
 	}
 }
 
+func TestExecStreamsEveryByteBeforeReportingExit(t *testing.T) {
+	token, tokenPath := testControlToken(t)
+	// Past one pipe buffer, where the tail is still unread when the process
+	// exits, and past the replay window, which a watcher acking one chunk at
+	// a time falls behind.
+	for _, size := range []int{300_000, 300_000, 300_000, 3 * maxPendingLogBytes} {
+		path := filepath.Join(t.TempDir(), "blob")
+		want := bytes.Repeat([]byte("0123456789abcdef"), size/16+1)[:size]
+		if err := os.WriteFile(path, want, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s := &supervisor{
+			processes:      make(map[int]*processState),
+			directChildren: make(map[int]struct{}),
+			connections:    make(map[net.Conn]struct{}),
+			tokenPath:      tokenPath,
+		}
+		server, client := net.Pipe()
+		go s.handleConnection(server)
+		encoder := json.NewEncoder(client)
+		if err := encoder.Encode(request{Version: protocolVersion, Op: "exec", Argv: []string{"cat", path}, Token: token}); err != nil {
+			t.Fatal(err)
+		}
+		decoder := json.NewDecoder(bufio.NewReader(client))
+		var got []byte
+		for {
+			var event response
+			if err := decoder.Decode(&event); err != nil {
+				t.Fatalf("stream of %d bytes ended after %d: %v", size, len(got), err)
+			}
+			if event.Type == "error" {
+				t.Fatalf("stream of %d bytes failed after %d: %s", size, len(got), event.Error)
+			}
+			if event.Type == "chunk" {
+				got = append(got, event.Data...)
+				if err := encoder.Encode(request{Version: protocolVersion, Op: "ack", PID: event.PID, AckSeq: event.Seq, OK: true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if event.Type == "exited" {
+				break
+			}
+		}
+		_ = client.Close()
+		if !bytes.Equal(got, want) {
+			t.Fatalf("exec streamed %d of %d bytes", len(got), size)
+		}
+	}
+}
+
 func TestExitedProcessRetentionIsBounded(t *testing.T) {
 	s := &supervisor{processes: make(map[int]*processState)}
 	for pid := 1; pid <= maxRetainedExitedProcess+5; pid++ {

@@ -20,6 +20,7 @@ from worker.container_client.models import (
     ContainerExecRequest,
     ContainerExecResponse,
     ContainerKillRequest,
+    ContainerSandboxDownloadFileRequest,
     ContainerSandboxExecRequest,
     ContainerSandboxExposePortRequest,
     ContainerSandboxKillRequest,
@@ -321,6 +322,37 @@ def test_worker_container_service_runtime_and_process_operations(tmp_path: Path)
     assert processes.processes[0].pid == 101
     assert container_kill.ok
     assert runtime.kill_calls == [("ctr-1", 15, True)]
+
+
+@pytest.mark.parametrize(("received", "ok"), [(300_000, True), (262_144, False)])
+def test_a_download_returns_only_every_byte_the_supervisor_wrote(
+    tmp_path: Path, received: int, ok: bool
+) -> None:
+    def chunk(seq: int, stream: SandboxLogStream, data: bytes) -> SandboxProcessEvent:
+        return SandboxProcessEvent(
+            event_type=SandboxProcessEventType.Chunk, pid=9, seq=seq, stream=stream, data=data
+        )
+
+    manager = ProcessManager(
+        events=[
+            SandboxProcessEvent(event_type=SandboxProcessEventType.Started, pid=9),
+            chunk(1, SandboxLogStream.Stdout, b"x" * received),
+            chunk(2, SandboxLogStream.Stderr, b'{"bytes":300000}\n'),
+            SandboxProcessEvent(event_type=SandboxProcessEventType.Exited, pid=9, exit_code=0),
+        ]
+    )
+    service = WorkerContainerService(
+        instances=_store(_instance(tmp_path, sandbox_process_manager_ready=True)),
+        process_managers=ProcessManagerFactory(manager),
+    )
+
+    response = service.sandbox_download_file(
+        ContainerSandboxDownloadFileRequest(container_id="ctr-1", container_path="blob.bin")
+    )
+
+    assert response.ok is ok
+    assert response.data == (b"x" * received if ok else b"")
+    assert ok or "262144 of the 300000 bytes" in response.error_msg
 
 
 def test_supervisor_transport_authenticates_without_exposing_token_in_repr(
