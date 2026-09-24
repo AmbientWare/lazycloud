@@ -812,6 +812,9 @@ class WorkerDurableDiskService:
                 else:
                     self._recover_root(root)
             if live and lease.mountpoint:
+                if lease.volume_id:
+                    # The session's last window, which the next start wants first.
+                    self._sample_heat(lease)
                 self._publish_pending(attached, lease)
             else:
                 # A previous worker process attached this disk. Recovery, at
