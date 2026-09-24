@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { MarketingLayout } from "./MarketingLayout";
 import { CloudHero } from "./CloudHero";
+import { DevboxSection } from "./DevboxSection";
 import { MarketingReveal } from "./MarketingReveal";
 import { TypedExportSection } from "./TypedExportSection";
 import { FinalCta, MarketingCard, SectionHeading, shell } from "./MarketingPrimitives";
@@ -31,7 +32,7 @@ const platformStories: PlatformStory[] = [
   {
     key: "endpoints",
     label: "APIs",
-    title: "Ship an endpoint or a full ASGI app.",
+    title: "Deploy an endpoint or a full ASGI app.",
     body: "Deploy a Python function as an API, or bring your ASGI app with its routes and middleware. LazyCloud handles TLS, scaling, and idle shutdown.",
     visual: "application",
   },
@@ -80,9 +81,8 @@ function ParitySection() {
       <div className={shell}>
         <div className="flex flex-col items-center gap-8 sm:gap-10">
           <div className="text-center">
-            <h2 className="text-[clamp(1.85rem,4.6vw,4rem)] leading-[1.12] font-[550] tracking-[-0.045em]">
-              <span className="inline-block">One definition.</span>{" "}
-              <span className="inline-block text-brand">Three ways to run it.</span>
+            <h2 className="mx-auto max-w-[920px] text-[clamp(1.85rem,4.6vw,4rem)] leading-[1.12] font-[550] tracking-[-0.045em] text-balance">
+              Local to cloud, <span className="text-brand">one code definition.</span>
             </h2>
           </div>
           <Tabs
@@ -139,6 +139,8 @@ export function MarketingHome() {
       <main className="marketing-hero-page" id="marketing-main">
         <CloudHero />
 
+        <DevboxSection />
+
         <ParitySection />
 
         <PlatformStoryRail />
@@ -153,7 +155,13 @@ export function MarketingHome() {
         >
           <div className={shell}>
             <div className="flex flex-col items-start gap-0 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
-              <SectionHeading title="Example projects" />
+              <SectionHeading
+                title={
+                  <>
+                    Example <em>projects</em>
+                  </>
+                }
+              />
               <div className="-mt-6 mb-10 sm:mt-0 sm:mb-14">
                 <a
                   className="inline-flex min-h-11 items-center gap-2.5 text-[13px] font-semibold text-foreground"
