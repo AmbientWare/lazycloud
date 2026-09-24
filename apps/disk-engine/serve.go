@@ -134,7 +134,7 @@ func runServe(ctx context.Context, args []string) (any, error) {
 	defer cancel()
 	status.heatError(publishHeat(final, p, store, heat))
 	status.record(p, layers)
-	return status.snapshot(), err
+	return status.current(), err
 }
 
 // publishHeat saves the map beside the disk and in its bucket prefix, where
@@ -314,7 +314,7 @@ func (s *serveProgress) markDone() {
 	s.status.DoneAt = &now
 }
 
-func (s *serveProgress) snapshot() serveStatus {
+func (s *serveProgress) current() serveStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.status

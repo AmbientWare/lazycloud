@@ -235,12 +235,12 @@ func (l *lazyLayer) flush() error {
 		return nil
 	}
 	target := l.dirty
-	snapshot := slices.Clone(l.present)
+	bits := slices.Clone(l.present)
 	l.mu.Unlock()
 	if err := unix.Fdatasync(int(l.file.Fd())); err != nil {
 		return fmt.Errorf("flush %s: %w", l.name, err)
 	}
-	if _, err := l.bitmap.WriteAt(snapshot, 0); err != nil {
+	if _, err := l.bitmap.WriteAt(bits, 0); err != nil {
 		return err
 	}
 	if err := unix.Fdatasync(int(l.bitmap.Fd())); err != nil {
