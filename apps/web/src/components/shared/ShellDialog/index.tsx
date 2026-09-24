@@ -11,28 +11,39 @@ import { createContainerShell, shellWebSocketUrl } from "@/lib/queries/shells";
 import { useWorkspace } from "@/lib/workspace-context";
 
 type ShellButtonProps = {
-  containerId: string;
+  /** Null while the workload has no container to attach to. */
+  containerId: string | null;
   /** Gate the button on a running container; disabled otherwise. */
   running: boolean;
+  /** Shown on hover while the button is disabled. */
+  disabledReason?: string;
 };
 
 /** Opens the shared centered terminal for any server-authorized container. */
-export function ShellButton({ containerId, running }: ShellButtonProps) {
+export function ShellButton({
+  containerId,
+  running,
+  disabledReason = "Container is not running",
+}: ShellButtonProps) {
   const [open, setOpen] = useState(false);
+  const available = running && containerId !== null;
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!running}
-          title={running ? "Open container shell" : "Container is not running"}
-        >
-          <TerminalSquare className="size-3.5" />
-          Shell
-        </Button>
-      </Dialog.Trigger>
-      {open ? <ShellDialog containerId={containerId} /> : null}
+      {/* A disabled button takes no pointer events, so the wrapper carries its reason. */}
+      <span className="inline-flex" title={available ? undefined : disabledReason}>
+        <Dialog.Trigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!available}
+            title={available ? "Open container shell" : undefined}
+          >
+            <TerminalSquare className="size-3.5" />
+            Shell
+          </Button>
+        </Dialog.Trigger>
+      </span>
+      {open && containerId !== null ? <ShellDialog containerId={containerId} /> : null}
     </Dialog.Root>
   );
 }

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Play, Square } from "lucide-react";
 
 import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
@@ -13,13 +13,16 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
-import { LogViewer } from "@/components/shared/TaskDrawer/LogViewer";
+import { ShellButton } from "@/components/shared/ShellDialog";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import type { Devbox, DevboxPhase, DiskStatus } from "@/lib/api/schemas";
+import type { Deployment, Devbox, DevboxPhase } from "@/lib/api/schemas";
 import { formatBytes } from "@/lib/format";
+import { startDeploymentMutationOptions, stopDeploymentMutationOptions } from "@/lib/queries/apps";
 import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
 import { devboxQueryOptions } from "@/lib/queries/deployments";
+import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import type { WorkloadGroup } from "./grouping";
 import { VersionHistory } from "./VersionHistory";
@@ -36,12 +39,89 @@ const PHASE_LABELS: Record<DevboxPhase, string> = {
   failed: "Start failed",
 };
 
-const DISK_STATUS_LABELS: Record<DiskStatus, string> = {
-  detached: "detached",
-  attached: "attached",
-  saving: "saving",
-  deleting: "being deleted",
-};
+/**
+ * Shell, Start and Stop for the devbox header.
+ *
+ * Start and Stop switch the deployment on and off. Stop also stops the
+ * container; a started devbox still boots on its first connection, so Start is
+ * offered only while the deployment is off.
+ */
+export function DevboxActions({
+  workspaceId,
+  appId,
+  deployment,
+}: {
+  workspaceId: string;
+  appId: string;
+  deployment: Deployment;
+}) {
+  const queryClient = useQueryClient();
+  const status = useQuery(devboxQueryOptions(workspaceId, deployment.id));
+  const devbox = status.data;
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.deployments.devbox(workspaceId, deployment.id),
+      }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
+      queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
+      }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
+    ]);
+  };
+  const start = useMutation({
+    ...startDeploymentMutationOptions(workspaceId, deployment.id),
+    onSettled: refresh,
+  });
+  const stop = useMutation({
+    ...stopDeploymentMutationOptions(workspaceId, deployment.id),
+    onSettled: refresh,
+  });
+  if (!devbox) return null;
+
+  const running = devbox.state === "running";
+  const busy = start.isPending || stop.isPending || devbox.phase === "stopping";
+  const error = start.error ?? stop.error;
+
+  return (
+    <>
+      {error ? (
+        <p className="text-xs text-destructive" role="alert">
+          {error.message}
+        </p>
+      ) : null}
+      <ShellButton
+        containerId={devbox.container_id}
+        running={running}
+        disabledReason="Devbox is not running"
+      />
+      {devbox.state !== "stopped" && deployment.actions.can_stop ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => stop.mutate()}
+        >
+          <Square className="fill-current" />
+          {stop.isPending ? "Stopping" : "Stop"}
+        </Button>
+      ) : deployment.actions.can_start ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => start.mutate()}
+        >
+          <Play />
+          {start.isPending ? "Starting" : "Start"}
+        </Button>
+      ) : null}
+    </>
+  );
+}
 
 /** How to reach a devbox and what it is doing, from the server's devbox status. */
 export function DevboxConnect({
@@ -71,10 +151,7 @@ export function DevboxConnect({
     <div className="content-transition grid min-w-0 gap-x-8 gap-y-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
       <div className="min-w-0 space-y-2">
         <ConnectRow label="SSH" value={devbox.ssh_command} copyLabel="SSH command" prompt />
-        <ConnectRow label="Editor host" value={devbox.ssh_host} copyLabel="SSH host" />
-        <p className="text-[11px] text-muted-foreground">
-          Editors find this host after <code className="mono">lazycloud ssh-config</code>.
-        </p>
+        <ConnectRow label="SSH config host" value={devbox.ssh_host} copyLabel="SSH host" />
       </div>
       <div className="min-w-0 space-y-3">
         <FactGrid columns={4}>
@@ -99,15 +176,6 @@ export function DevboxConnect({
         {devbox.phase === "failed" && devbox.phase_reason ? (
           <p className="text-xs break-words text-destructive">{devbox.phase_reason}</p>
         ) : null}
-        {devbox.disk ? (
-          <p className="text-xs text-muted-foreground">
-            Disk <span className="mono text-foreground">{devbox.disk.name}</span> is{" "}
-            {DISK_STATUS_LABELS[devbox.disk.status]},{" "}
-            {devbox.disk.generation > 0
-              ? `${formatBytes(devbox.disk.stored_bytes)} saved in generation ${devbox.disk.generation.toLocaleString()}.`
-              : "not saved yet."}
-          </p>
-        ) : null}
       </div>
     </div>
   );
@@ -125,7 +193,7 @@ function ConnectRow({
   prompt?: boolean;
 }) {
   return (
-    <div className="grid min-w-0 grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-3">
+    <div className="grid min-w-0 grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-3">
       <span className="text-xs text-muted-foreground">{label}</span>
       <div className="flex min-w-0 items-center justify-between gap-2 rounded-md border border-border bg-muted/50 py-1 pr-1 pl-3">
         <code className="mono truncate text-xs" title={value}>
@@ -144,7 +212,7 @@ function idleStop(devbox: Devbox): ReactNode {
   return "None";
 }
 
-/** Files, logs, versions and configuration beside the devbox's metrics. */
+/** Files, versions and configuration beside the devbox's metrics. */
 export function DevboxWorkspace({
   workspaceId,
   workspaceName,
@@ -169,7 +237,6 @@ export function DevboxWorkspace({
   const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
   const devbox = status.data;
   const current = group.deployments.find((deployment) => deployment.id === deploymentId);
-  const logContainerId = devbox?.container_id ?? devbox?.failed_container_id ?? null;
 
   return (
     <>
@@ -180,7 +247,6 @@ export function DevboxWorkspace({
       >
         <LinearTabsList ariaLabel="Devbox views" className="min-h-11 shrink-0 bg-card px-2">
           <LinearTab value="files">Files</LinearTab>
-          <LinearTab value="logs">Logs</LinearTab>
           <LinearTab value="versions">Versions</LinearTab>
           <LinearTab value="configuration">Configuration</LinearTab>
         </LinearTabsList>
@@ -202,7 +268,7 @@ export function DevboxWorkspace({
             <PanelEmpty
               message={notRunningMessage(devbox)}
               detail={
-                devbox.phase === "stopped" || devbox.phase === "failed" ? (
+                current?.active && (devbox.phase === "stopped" || devbox.phase === "failed") ? (
                   <>
                     <code className="mono">{devbox.ssh_command}</code> starts it.
                   </>
@@ -210,40 +276,6 @@ export function DevboxWorkspace({
               }
               className="h-56"
             />
-          )}
-        </TabsContent>
-        <TabsContent value="logs" className="m-0 flex min-h-0 flex-1 flex-col overflow-hidden">
-          {status.isError ? (
-            <PanelError message={status.error.message} />
-          ) : !devbox ? (
-            <Skeleton className="m-3 h-40" aria-hidden="true" />
-          ) : logContainerId ? (
-            <>
-              <div className="flex min-h-9 shrink-0 items-center justify-end border-b border-border/80 px-3 text-xs">
-                <Link
-                  to="/w/$workspace/apps/$appId/workloads/$kind/$name/instances/$containerId"
-                  params={{
-                    workspace: workspaceName,
-                    appId,
-                    kind: group.kind,
-                    name: group.name,
-                    containerId: logContainerId,
-                  }}
-                  className="interactive-link text-muted-foreground hover:text-foreground"
-                >
-                  Container details
-                </Link>
-              </div>
-              <PanelErrorBoundary key={logContainerId} title="Logs could not be displayed">
-                <LogViewer
-                  workspaceId={workspaceId}
-                  scope={{ containerId: logContainerId }}
-                  className="min-h-0 flex-1"
-                />
-              </PanelErrorBoundary>
-            </>
-          ) : (
-            <PanelEmpty message="Logs appear once the devbox starts" className="h-56" />
           )}
         </TabsContent>
         <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">
