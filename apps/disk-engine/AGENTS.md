@@ -86,6 +86,34 @@ half each grant's remaining life for as long as the call runs. A file that still
 holds expired credentials fails the call and names the expiry. Signing with them
 anyway would only fail later, partway through an upload.
 
+A disk on a provider volume can be snapshotted whole. `snapshot-point` writes
+`snapshot.json`, the published chain as a restore should find it, and syncs the
+volume's filesystem; the control plane snapshots the volume after that. The
+snapshot is crash-consistent and needs nothing stronger. Published layers never
+change after their commit, and the head, the only file still being written, is
+dropped on restore. Nothing is frozen, so a snapshot never pauses the workload.
+
+A volume created from a snapshot holds the source's whole state, its attachment
+and head included. Attach is told which volume it runs on. When `snapshot.json`
+names a different volume and the state has not adopted that point, attach
+replaces the state with the recorded chain, deletes every other file and starts
+a fresh head. The source's attachment names devices on another machine, so
+none of it is torn down. When the chain attach is given has moved past the
+adopted generation, it downloads only the generations after it, and only while
+the local chain holds nothing unpublished.
+
+`heat` records which 1 MiB regions of the base layer were read or written since
+the last sample: it ages every region by one window, marks those in the page
+cache, then drops the file's cached pages so the next sample sees only the next
+window. A region is one byte of age, and regions double in size past 131072 of
+them, so the map stays under 128 KiB for any disk. It lives gzipped beside the
+state, so each snapshot carries the map as of its generation. Flattening and
+restoring drop the pages they read; otherwise the next sample would call every
+region hot. After adopting a snapshot, attach starts `hydrate` in the
+background: qcow2 metadata first, the hot regions most recent first, then the
+rest at a bounded rate. It reads with O_DIRECT, so hydration neither fills the
+page cache nor counts as use, and teardown stops it before the volume unmounts.
+
 Nothing here falls back. A missing binary, a missing `nbd` module, a busy device
 or a mismatched manifest fails the command with the reason on stderr. Hosts load
 `nbd` with `nbds_max=128` at boot, and the worker image ships the tools.

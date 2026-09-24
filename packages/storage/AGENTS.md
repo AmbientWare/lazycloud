@@ -60,6 +60,25 @@ that record is gone, even after the disk and its workspace are. Every volume
 carries the deployment's tags, and orphan collection deletes only detached
 volumes with this deployment's complete tag set that no disk row names.
 
+A disk on a provider volume is also snapshotted: after a publish commits a new
+generation, and once more at the final release. A snapshot is a second copy of
+a recorded generation, never the only one. Every generation still publishes
+its chunks, so a joined machine or another region restores from object storage
+as before, and a snapshot that is missing, pending or failed loses nothing.
+Only the current holder may take one, for the disk's current generation, and a
+retry for that generation in the same account and region returns the same
+snapshot. CreateSnapshot takes no client token, so the row is written first
+and its token rides in the snapshot's tags for a retry to find.
+
+A new volume starts from the newest completed snapshot in the machine's account
+and region whose generation is still in the published chain, and the engine
+downloads only what was published after it. A snapshot in another region is
+not copied; that restore takes the chunk path. Once a newer snapshot completes,
+older ones are deleted, except one a volume creation is still reading. Deleting
+a disk deletes its snapshots before its rows, and orphan collection deletes
+tagged snapshots no row records. A disk's stored bytes include the full size of
+its live snapshots, billed at the same Disk rate as its chunks.
+
 This package handles user data, so its invariants are the ones whose failure
 cannot be undone. Validate paths and keys against traversal, verify checksums,
 track multipart state, scope credentials and presigned URLs narrowly and briefly,
