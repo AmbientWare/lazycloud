@@ -9,6 +9,7 @@ from pathlib import Path
 from shared.managed_runtime_integrity import (
     managed_package_source_digest,
     managed_runtime_artifact_digest,
+    managed_runtime_artifact_inventory_digest,
 )
 from worker.managed_runtime_catalog import (
     MANAGED_RUNTIME_ARCHITECTURES,
@@ -105,6 +106,7 @@ def managed_runtime_catalog_root(
                 python_major_minor=python_version,
                 architecture=architecture,
                 digest=digest,
+                inventory_digest=managed_runtime_artifact_inventory_digest(destination),
                 relative_path=f"content/{digest}",
                 source_digest=source_digest,
                 lock_digest=hashlib.sha256(

@@ -20,12 +20,12 @@ from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient, Red
 from cryptography import x509
 from cryptography.x509.verification import PolicyBuilder, Store
 from database.settings import DatabaseApplicationName, DatabaseSettings
+from foundation.process_logs import configure_process_logging
 from gateway.settings import GatewaySettings, TunnelGatewaySettings
 from identity.tunnel_certificates import service_identity_from_verified_certificate
 from networking.dialer import split_host_port
 from networking.tunnel_gateway import AgentTunnelGateway
 from networking.tunnel_tls import TunnelCredentials, agent_certificate_request
-from observability.process_logs import configure_process_logging
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.agent_connections import AgentConnectionRecord

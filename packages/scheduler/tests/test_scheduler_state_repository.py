@@ -327,6 +327,7 @@ def _request_service(
         ),
         assignments=(assignments if assignments is not None else _RuntimeAssignmentRecorder()),
         dispatch_wake=(dispatch_wake if dispatch_wake is not None else _RecordingDispatchWake()),
+        capacity_wake=_RecordingDispatchWake(),
         lifecycle_events=(
             lifecycle_events if lifecycle_events is not None else _RecordingLifecycleEvents()
         ),

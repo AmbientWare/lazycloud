@@ -1,7 +1,8 @@
 """The scheduler's loops, and the supervisor that owns their lifetime.
 
 One process, several cadences. Placement answers in milliseconds because a
-caller is waiting for it; capacity keeps the fleet and its records agreeing;
+caller is waiting for it; acquisition starts or buys the machine a waiting
+request needs; capacity keeps the fleet and its records agreeing;
 housekeeping waits on Stripe, S3, and Cloudflare, which answer on
 their own schedule. Running all of it on one thread meant placement waited for
 the slowest of them, and a task took fifty-five seconds to start behind a
@@ -48,6 +49,16 @@ backlog grows. A one-second fallback bounds wake-free placement latency without
 running four full placement snapshots per second while the system is idle.
 """
 
+ACQUISITION_SWEEP_INTERVAL_SECONDS = 5.0
+"""How often acquisition looks for capacity demand nobody woke it for.
+
+Demand is normally announced on the capacity wake the moment a request finds
+no worker, so this sweep only bounds a lost wake, a retry that came due, or
+a capacity owner whose lease another replica held.
+"""
+
+ACQUISITION_CONTENDED_RETRY_SECONDS = 1.0
+
 CAPACITY_INTERVAL_SECONDS = 5.0
 """Cadence for the pass that decides what capacity exists.
 
@@ -64,6 +75,30 @@ outbox is durable, so a slower drain delays delivery rather than losing it.
 """
 
 LOOP_FAILURE_RETRY_MAX_SECONDS = 30.0
+
+
+@dataclass(slots=True)
+class _ContendedDemand:
+    """Demand the acquisition loop retries alone after it met a held lease."""
+
+    container_ids: tuple[str, ...] = ()
+    attempts: int = 0
+    full_sweep: bool = True
+
+    @property
+    def retrying(self) -> tuple[str, ...]:
+        return () if self.full_sweep else self.container_ids
+
+    def observe(self, contended: tuple[str, ...]) -> None:
+        self.attempts = self.attempts + 1 if contended and not self.full_sweep else 0
+        self.container_ids = contended
+        self.full_sweep = not contended
+
+    def delay_seconds(self) -> float:
+        return ACQUISITION_CONTENDED_RETRY_SECONDS * (1 << min(self.attempts, 3))
+
+    def sweep_next(self) -> None:
+        self.full_sweep = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,21 +196,25 @@ def start_scheduler_loops(
     resolved_beats = beats or {}
     loops: list[SchedulerLoop] = []
 
-    def wait_for_capacity(timeout: float) -> None:
+    def wait_for_demand(timeout: float) -> bool:
+        """Wait for the capacity wake or the timeout; True when the wake arrived."""
         wake = scheduler.workloads.capacity_wake
         if wake is None:
             resolved_stop.wait(timeout)
-            return
+            return False
         try:
             deadline = monotonic() + timeout
             while not resolved_stop.is_set():
                 remaining = deadline - monotonic()
+                if remaining <= 0:
+                    return False
                 # Stay below Redis's socket timeout and observe process shutdown between reads.
-                if remaining <= 0 or wake.wait(timeout_seconds=min(remaining, 1.0)):
-                    return
+                if wake.wait(timeout_seconds=min(remaining, 1.0)):
+                    return True
         except REDIS_UNAVAILABLE_ERRORS:
             LOGGER.warning("capacity wake unavailable; using the durable due-work sweep")
             resolved_stop.wait(timeout)
+        return False
 
     def spawn(
         name: SchedulerLoopName,
@@ -209,6 +248,33 @@ def start_scheduler_loops(
             autoscaling_limit=autoscaling_limit,
         ),
     )
+    retry = _ContendedDemand()
+
+    def acquire() -> SchedulerRunResult:
+        result = scheduler.run_acquisition_pass(
+            include_containers=include_containers,
+            container_limit=container_limit,
+            retry_container_ids=retry.retrying,
+        )
+        retry.observe(tuple(result.capacity_demand_contended))
+        return result
+
+    def wait_for_acquisition(timeout: float) -> None:
+        if not retry.container_ids:
+            wait_for_demand(timeout)
+            return
+        # A capacity owner's lease is held for one provider round trip. Demand
+        # that met it retries alone, one second later and then doubling, unless
+        # new demand wakes a whole pass first.
+        if wait_for_demand(min(retry.delay_seconds(), timeout)):
+            retry.sweep_next()
+
+    spawn(
+        SchedulerLoopName.Acquisition,
+        ACQUISITION_SWEEP_INTERVAL_SECONDS,
+        acquire,
+        wait=wait_for_acquisition,
+    )
     spawn(
         SchedulerLoopName.Capacity,
         capacity_interval_seconds,
@@ -217,7 +283,6 @@ def start_scheduler_loops(
             include_containers=include_containers,
             container_limit=container_limit,
         ),
-        wait=wait_for_capacity,
     )
     spawn(
         SchedulerLoopName.Housekeeping,
@@ -280,6 +345,7 @@ def scheduler_shutdown_handlers(
 
 
 __all__ = [
+    "ACQUISITION_SWEEP_INTERVAL_SECONDS",
     "CAPACITY_INTERVAL_SECONDS",
     "HOUSEKEEPING_INTERVAL_SECONDS",
     "PLACEMENT_SWEEP_INTERVAL_SECONDS",

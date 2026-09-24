@@ -168,6 +168,14 @@ class ProviderCapacityPolicy(ContractModel):
             raise ValueError("approved offers must belong to allowed regions")
         return self
 
+    def region_rank(self, region: str) -> int:
+        """Where a region stands in `allowed_regions`, which lists them in preference order."""
+        return (
+            self.allowed_regions.index(region)
+            if region in self.allowed_regions
+            else len(self.allowed_regions)
+        )
+
     def accepts(self, offer: ComputeOffer) -> bool:
         return offer.region in self.allowed_regions and any(
             limit.region == offer.region

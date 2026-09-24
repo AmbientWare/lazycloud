@@ -128,6 +128,7 @@ class DiskVolumeMounts:
                 f"the disk needs a volume of at least {min_size_bytes}"
             )
         node = self._device_node(volume.volume_id, device)
+        formatted = False
         if root not in mounted_paths():
             # The volume caches the object-storage chain, so a device with no
             # filesystem gets formatted whatever the control plane recorded,
@@ -155,14 +156,16 @@ class DiskVolumeMounts:
                     "largefile4",
                     str(node),
                 )
+                formatted = True
                 LOGGER.info("formatted volume %s for disk %s", volume.volume_id, disk_id)
             root.mkdir(parents=True, exist_ok=True, mode=0o700)
             self._run(
                 _MOUNT_TIMEOUT_SECONDS, "mount", "-t", "ext4", "-o", "noatime", str(node), str(root)
             )
         # An online resize needs no fsck, and it leaves a filesystem that
-        # already fills its device as it is.
-        self._run(_RESIZE_TIMEOUT_SECONDS, "resize2fs", str(node))
+        # already fills its device as it is. One formatted just now fills it.
+        if not formatted:
+            self._run(_RESIZE_TIMEOUT_SECONDS, "resize2fs", str(node))
         return root
 
     def remount(self, disk_id: str, volume_id: str) -> Path | None:

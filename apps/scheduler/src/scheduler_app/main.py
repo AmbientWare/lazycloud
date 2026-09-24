@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from compute.reclaim import ComputeReclaimSettings
+from foundation.process_logs import configure_process_logging
 from gateway.settings import GatewaySettings
 from images.settings import ImageBuildContainerSettings
-from observability.process_logs import configure_process_logging
 from observability.settings import (
     TelemetrySettings,
     VolumeMeteringSettings,
