@@ -1,7 +1,7 @@
-import { infiniteQueryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { apiRequest, withWorkspace } from "@/lib/api/client";
-import { deploymentListSchema, type Deployment } from "@/lib/api/schemas";
+import { deploymentDetailSchema, deploymentListSchema, type Deployment } from "@/lib/api/schemas";
 
 import {
   LIVE_LIST_MAX_PAGES,
@@ -42,6 +42,27 @@ export function deploymentsInfiniteQueryOptions(
     meta: workspaceLiveQueryMeta(true),
   });
 }
+
+/**
+ * A deployment with what only its detail carries, such as a devbox's status.
+ *
+ * Connections and the idle deadline change without a workspace event, so a
+ * devbox's detail refreshes on an interval while it is on screen.
+ */
+export function deploymentDetailQueryOptions(workspaceId: string, deploymentId: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.deployments.detail(workspaceId, deploymentId),
+    queryFn: () =>
+      apiRequest(
+        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, workspaceId),
+        deploymentDetailSchema,
+      ),
+    refetchInterval: DEVBOX_REFRESH_MS,
+    meta: workspaceLiveQueryMeta(false),
+  });
+}
+
+const DEVBOX_REFRESH_MS = 5_000;
 
 export function selectDeploymentList(
   data: InfiniteListQueryData<Deployment> | undefined,

@@ -8,6 +8,7 @@ from shared.deployments import DevboxPhase
 
 _IMAGE = ContainerExecutionPhase.LoadImage
 _ROOTFS = ContainerExecutionPhase.PrepareRootfs
+_NONE: frozenset[ContainerExecutionPhase] = frozenset()
 
 
 def _container(status: ContainerStatus, *, placed: bool = True) -> LiveContainer:
@@ -17,8 +18,8 @@ def _container(status: ContainerStatus, *, placed: bool = True) -> LiveContainer
 @pytest.mark.parametrize(
     ("container", "steps", "saving", "failure", "expected"),
     [
-        (_container(ContainerStatus.Pending, placed=False), frozenset(), False, None, "queued"),
-        (_container(ContainerStatus.Pending), frozenset(), False, None, "pulling_image"),
+        (_container(ContainerStatus.Pending, placed=False), _NONE, False, None, "queued"),
+        (_container(ContainerStatus.Pending), _NONE, False, None, "pulling_image"),
         (_container(ContainerStatus.Pending), frozenset({_IMAGE}), False, None, "restoring_disk"),
         (
             _container(ContainerStatus.Pending),
@@ -27,10 +28,10 @@ def _container(status: ContainerStatus, *, placed: bool = True) -> LiveContainer
             None,
             "starting",
         ),
-        (_container(ContainerStatus.Running), frozenset(), False, "old", "running"),
-        (None, frozenset(), True, "old", "stopping"),
-        (None, frozenset(), False, "image not found", "failed"),
-        (None, frozenset(), False, None, "stopped"),
+        (_container(ContainerStatus.Running), _NONE, False, "old", "running"),
+        (None, _NONE, True, "old", "stopping"),
+        (None, _NONE, False, "image not found", "failed"),
+        (None, _NONE, False, None, "stopped"),
     ],
 )
 def test_a_devbox_phase_follows_its_container_records(

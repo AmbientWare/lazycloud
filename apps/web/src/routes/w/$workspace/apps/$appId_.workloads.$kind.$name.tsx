@@ -24,6 +24,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 import { currentDeployment, findWorkloadGroup, type WorkloadGroup } from "./-workloads/grouping";
 import { CallMethods } from "./-workloads/CallMethods";
+import { DevboxPanel } from "./-workloads/DevboxPanel";
 import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
@@ -142,6 +143,11 @@ function WorkloadDetailPage() {
           : "flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"
       }
     >
+      {current.role === "devbox" ? (
+        <PanelErrorBoundary title="Devbox status could not be displayed">
+          <DevboxPanel workspaceId={workspace.id} deploymentId={current.id} />
+        </PanelErrorBoundary>
+      ) : null}
       <Tabs
         key={JSON.stringify([appId, group.kind, group.name])}
         defaultValue={defaultInspectorTab(group, showsInvoke)}
@@ -346,6 +352,7 @@ function kindLabel(group: WorkloadGroup): string {
   // A scheduled function still reads as a schedule here: it is what the person
   // looking at the list is scanning for, even though it is a function.
   if (group.latest.spec?.cron) return "Schedule";
+  if (group.latest.role === "devbox") return "Devbox";
   const labels: Record<string, string> = {
     function: "Function",
     endpoint: "Endpoint",
