@@ -35,6 +35,7 @@ _MANAGED_REQUEST_TAG: JsonValue = {
 
 DISK_VOLUME_TAG_KEY = "cloud-pool:resource"
 DISK_VOLUME_TAG_VALUE = "disk-volume"
+DISK_SNAPSHOT_TAG_VALUE = "disk-snapshot"
 
 _DISK_VOLUME_REQUEST_TAGS: JsonValue = {
     "StringEquals": {
@@ -46,6 +47,18 @@ _DISK_VOLUME_RESOURCE_TAGS: JsonValue = {
     "StringEquals": {
         f"ec2:ResourceTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,
         f"ec2:ResourceTag/{DISK_VOLUME_TAG_KEY}": DISK_VOLUME_TAG_VALUE,
+    }
+}
+_DISK_SNAPSHOT_REQUEST_TAGS: JsonValue = {
+    "StringEquals": {
+        f"aws:RequestTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,
+        f"aws:RequestTag/{DISK_VOLUME_TAG_KEY}": DISK_SNAPSHOT_TAG_VALUE,
+    }
+}
+_DISK_SNAPSHOT_RESOURCE_TAGS: JsonValue = {
+    "StringEquals": {
+        f"ec2:ResourceTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,
+        f"ec2:ResourceTag/{DISK_VOLUME_TAG_KEY}": DISK_SNAPSHOT_TAG_VALUE,
     }
 }
 
@@ -97,6 +110,8 @@ class ConcreteArns:
 
 _INSTANCE = "arn:{partition}:ec2:{region}:{account_id}:instance/*"
 _VOLUME = "arn:{partition}:ec2:{region}:{account_id}:volume/*"
+# Snapshot ARNs carry no account.
+_SNAPSHOT = "arn:{partition}:ec2:{region}::snapshot/*"
 _LAUNCH_TEMPLATE = "arn:{partition}:ec2:{region}:{account_id}:launch-template/*"
 _SECURITY_GROUP = "arn:{partition}:ec2:{region}:{account_id}:security-group/*"
 _SUBNET = "arn:{partition}:ec2:{region}:{account_id}:subnet/*"
@@ -147,6 +162,7 @@ def connection_role_statements(
                 "ec2:DescribeManagedPrefixLists",
                 "ec2:GetManagedPrefixListEntries",
                 "ec2:DescribeSecurityGroups",
+                "ec2:DescribeSnapshots",
                 "ec2:DescribeSpotPriceHistory",
                 "ec2:DescribeSpotInstanceRequests",
                 "ec2:DescribeSubnets",
@@ -354,6 +370,43 @@ def connection_role_statements(
                 "Resource": arns.arn(_INSTANCE),
                 "Condition": _MANAGED_RESOURCE_TAG,
             },
+            # Disk snapshots. The role snapshots only a disk volume, only into a
+            # snapshot carrying the managed and disk-snapshot tags, and deletes or
+            # makes volumes only from snapshots that carry both.
+            {
+                "Sid": "SnapshotTaggedDiskVolumes",
+                "Effect": "Allow",
+                "Action": "ec2:CreateSnapshot",
+                "Resource": arns.arn(_VOLUME),
+                "Condition": _DISK_VOLUME_RESOURCE_TAGS,
+            },
+            {
+                "Sid": "CreateTaggedDiskSnapshots",
+                "Effect": "Allow",
+                "Action": "ec2:CreateSnapshot",
+                "Resource": arns.arn(_SNAPSHOT),
+                "Condition": _DISK_SNAPSHOT_REQUEST_TAGS,
+            },
+            {
+                "Sid": "TagDiskSnapshotsOnCreate",
+                "Effect": "Allow",
+                "Action": "ec2:CreateTags",
+                "Resource": arns.arn(_SNAPSHOT),
+                "Condition": {
+                    "StringEquals": {
+                        f"aws:RequestTag/{MANAGED_TAG_KEY}": MANAGED_TAG_VALUE,
+                        f"aws:RequestTag/{DISK_VOLUME_TAG_KEY}": DISK_SNAPSHOT_TAG_VALUE,
+                        "ec2:CreateAction": "CreateSnapshot",
+                    }
+                },
+            },
+            {
+                "Sid": "UseTaggedDiskSnapshots",
+                "Effect": "Allow",
+                "Action": ["ec2:CreateVolume", "ec2:DeleteSnapshot"],
+                "Resource": arns.arn(_SNAPSHOT),
+                "Condition": _DISK_SNAPSHOT_RESOURCE_TAGS,
+            },
             {
                 "Sid": "CreateAutoScalingServiceRole",
                 "Effect": "Allow",
@@ -455,6 +508,7 @@ def connection_role_policy(
 
 
 __all__ = [
+    "DISK_SNAPSHOT_TAG_VALUE",
     "DISK_VOLUME_TAG_KEY",
     "DISK_VOLUME_TAG_VALUE",
     "MANAGED_TAG_KEY",

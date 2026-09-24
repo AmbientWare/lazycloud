@@ -16,6 +16,7 @@
         "ec2:DescribeManagedPrefixLists",
         "ec2:GetManagedPrefixListEntries",
         "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSnapshots",
         "ec2:DescribeSpotPriceHistory",
         "ec2:DescribeSpotInstanceRequests",
         "ec2:DescribeSubnets",
@@ -246,6 +247,58 @@
       "Effect": "Allow",
       "Resource": "arn:aws:ec2:*:*:instance/*",
       "Sid": "AttachDiskVolumesToManagedInstances"
+    },
+    {
+      "Action": "ec2:CreateSnapshot",
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/cloud-pool:managed-by": "control-plane",
+          "ec2:ResourceTag/cloud-pool:resource": "disk-volume"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:volume/*",
+      "Sid": "SnapshotTaggedDiskVolumes"
+    },
+    {
+      "Action": "ec2:CreateSnapshot",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/cloud-pool:managed-by": "control-plane",
+          "aws:RequestTag/cloud-pool:resource": "disk-snapshot"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Sid": "CreateTaggedDiskSnapshots"
+    },
+    {
+      "Action": "ec2:CreateTags",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/cloud-pool:managed-by": "control-plane",
+          "aws:RequestTag/cloud-pool:resource": "disk-snapshot",
+          "ec2:CreateAction": "CreateSnapshot"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Sid": "TagDiskSnapshotsOnCreate"
+    },
+    {
+      "Action": [
+        "ec2:CreateVolume",
+        "ec2:DeleteSnapshot"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/cloud-pool:managed-by": "control-plane",
+          "ec2:ResourceTag/cloud-pool:resource": "disk-snapshot"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*::snapshot/*",
+      "Sid": "UseTaggedDiskSnapshots"
     },
     {
       "Action": "iam:CreateServiceLinkedRole",

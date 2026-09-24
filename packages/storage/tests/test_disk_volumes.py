@@ -6,8 +6,13 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from compute.block_volumes import (
+    BlockSnapshot,
+    BlockSnapshotMissingError,
+    BlockSnapshotRequest,
+    BlockSnapshotState,
     BlockVolume,
     BlockVolumeMissingError,
+    BlockVolumeOwner,
     BlockVolumePendingError,
     BlockVolumeProvider,
     BlockVolumeRequest,
@@ -18,9 +23,10 @@ from database.repositories.disk_volumes import DiskVolumeHost, DiskVolumeReposit
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.disks import DISK_VOLUME_CACHE_SECONDS, DiskMount
-from shared.errors import DiskVolumePendingError
+from shared.disks import DISK_VOLUME_CACHE_SECONDS, DiskMount, disk_manifest_key
+from shared.errors import ConflictError, DiskVolumePendingError
 from shared.timestamps import utc_now
+from storage.disk_snapshots import DISK_SNAPSHOT_POLL_SECONDS, DiskSnapshotService
 from storage.disk_volumes import (
     DISK_VOLUME_LEASE_SILENCE_SECONDS,
     DISK_VOLUME_ORPHAN_MIN_AGE_SECONDS,
@@ -28,7 +34,7 @@ from storage.disk_volumes import (
     DISK_VOLUME_RELEASE_GRACE_SECONDS,
     DiskVolumeService,
 )
-from storage.disks import DiskDeletionService, DiskService, get_or_create_disks
+from storage.disks import DiskDeletionService, DiskPublication, DiskService, get_or_create_disks
 from tests.workspaces import on_team_plan
 
 GIB = 1024**3
@@ -42,17 +48,32 @@ class _Volume:
 
 
 @dataclass
+class _Snapshot:
+    request: BlockSnapshotRequest
+    volume_size_bytes: int
+    state: BlockSnapshotState = BlockSnapshotState.Pending
+    created_at: datetime = field(default_factory=utc_now)
+
+
+SNAPSHOT_STORED_BYTES = 3 * GIB
+
+
+@dataclass
 class _Provider(BlockVolumeProvider):
     """One account's volumes, answering the way the provider's own record would."""
 
     volumes: dict[str, _Volume] = field(default_factory=dict)
+    snapshots: dict[str, _Snapshot] = field(default_factory=dict)
     calls: list[str] = field(default_factory=list)
     lose_create_answer: bool = False
+    lose_snapshot_answer: bool = False
     attach_pending: bool = False
     while_detaching: Callable[[], None] | None = None
 
     def create_volume(self, request: BlockVolumeRequest, *, wait_seconds: float) -> BlockVolume:
         self.calls.append("create")
+        if request.snapshot_id and request.snapshot_id not in self.snapshots:
+            raise BlockSnapshotMissingError(request.snapshot_id)
         found = [key for key, item in self.volumes.items() if item.request.token == request.token]
         volume_id = found[0] if found else f"vol-{uuid4().hex[:12]}"
         self.volumes.setdefault(volume_id, _Volume(request))
@@ -90,6 +111,51 @@ class _Provider(BlockVolumeProvider):
 
     def describe_volumes(self, *, deployment: str) -> tuple[BlockVolume, ...]:
         return tuple(self._view(volume_id) for volume_id in self.volumes)
+
+    def create_snapshot(self, request: BlockSnapshotRequest) -> BlockSnapshot:
+        self.calls.append("snapshot")
+        found = self.find_snapshot(token=request.token)
+        if found is not None:
+            return found
+        snapshot_id = f"snap-{uuid4().hex[:12]}"
+        size = self.volumes[request.volume_id].request.size_bytes
+        self.snapshots[snapshot_id] = _Snapshot(request, volume_size_bytes=size)
+        if self.lose_snapshot_answer:
+            self.lose_snapshot_answer = False
+            raise TimeoutError("the answer to CreateSnapshot was lost")
+        return self._snapshot_view(snapshot_id)
+
+    def find_snapshot(self, *, token: str) -> BlockSnapshot | None:
+        for snapshot_id, snapshot in self.snapshots.items():
+            if snapshot.request.token == token:
+                return self._snapshot_view(snapshot_id)
+        return None
+
+    def describe_snapshot(self, snapshot_id: str) -> BlockSnapshot | None:
+        return self._snapshot_view(snapshot_id) if snapshot_id in self.snapshots else None
+
+    def delete_snapshot(self, snapshot_id: str) -> None:
+        self.calls.append("delete snapshot")
+        self.snapshots.pop(snapshot_id, None)
+
+    def describe_snapshots(self, *, deployment: str) -> tuple[BlockSnapshot, ...]:
+        return tuple(self._snapshot_view(snapshot_id) for snapshot_id in self.snapshots)
+
+    def complete_snapshots(self) -> None:
+        for snapshot in self.snapshots.values():
+            snapshot.state = BlockSnapshotState.Completed
+
+    def _snapshot_view(self, snapshot_id: str) -> BlockSnapshot:
+        snapshot = self.snapshots[snapshot_id]
+        return BlockSnapshot(
+            snapshot_id=snapshot_id,
+            state=snapshot.state,
+            volume_size_bytes=snapshot.volume_size_bytes,
+            stored_bytes=SNAPSHOT_STORED_BYTES,
+            owner=snapshot.request.owner,
+            creation_token=snapshot.request.token,
+            created_at=snapshot.created_at,
+        )
 
     def _view(self, volume_id: str) -> BlockVolume:
         volume = self.volumes[volume_id]
@@ -133,13 +199,16 @@ class _WorkerAbsence:
 
 
 def _host(
-    instance_id: str, zone: str = "use2-az1", connection_id: str | None = None
+    instance_id: str,
+    zone: str = "use2-az1",
+    connection_id: str | None = None,
+    region: str = "us-east-2",
 ) -> DiskVolumeHost:
     return DiskVolumeHost(
         workspace_id=str(uuid4()),
         provider_ref="aws:platform",
         connection_id=connection_id,
-        region="us-east-2",
+        region=region,
         zone=zone,
         instance_id=instance_id,
     )
@@ -167,6 +236,15 @@ def _setup(
         clock=clock,
     )
     return volumes, provider, clock, workspace_id, resolved.record.id
+
+
+def _snapshots(services: ApiServices, volumes: DiskVolumeService) -> DiskSnapshotService:
+    return DiskSnapshotService(
+        services.database,
+        providers=volumes.providers,
+        deployment=volumes.deployment,
+        clock=volumes.clock,
+    )
 
 
 def _container(services: ApiServices, workspace_id: str) -> str:
@@ -289,6 +367,7 @@ def test_a_lost_create_answer_and_a_dead_holder_recover_without_a_second_volume(
         isolated_services.database,
         disks=disks,
         volumes=volumes,
+        snapshots=_snapshots(isolated_services, volumes),
         objects=isolated_services.disk_deletion.objects,
         metering=isolated_services.disk_deletion.metering,
     )
@@ -326,6 +405,7 @@ def test_a_deletion_that_keeps_failing_backs_off_without_holding_up_newer_ones(
         isolated_services.database,
         disks=disks,
         volumes=volumes,
+        snapshots=_snapshots(isolated_services, volumes),
         objects=objects,
         metering=isolated_services.disk_deletion.metering,
     )
@@ -478,6 +558,7 @@ def test_an_abandoned_creation_outlives_its_disk_until_its_volume_is_collected(
         isolated_services.database,
         disks=disks,
         volumes=volumes,
+        snapshots=_snapshots(isolated_services, volumes),
         objects=isolated_services.disk_deletion.objects,
         metering=isolated_services.disk_deletion.metering,
     )
@@ -495,3 +576,152 @@ def test_an_abandoned_creation_outlives_its_disk_until_its_volume_is_collected(
     assert made not in provider.volumes
     with isolated_services.database.session() as session:
         assert not DiskVolumeRepository(session).connection_holds_volumes(connection_id)
+
+
+def _publish(
+    services: ApiServices, disk_id: str, container_id: str, token: str, generation: int
+) -> None:
+    services.disks.publish(
+        DiskPublication(
+            disk_id=disk_id,
+            container_id=container_id,
+            lease_token=token,
+            generation=generation,
+            parent_generation=generation - 1,
+            manifest_key=disk_manifest_key(disk_id, generation),
+            manifest_sha256=f"{generation:x}".rjust(64, "0"),
+            stored_bytes_added=10,
+        )
+    )
+
+
+def test_only_the_holder_snapshots_its_newest_generation_and_a_retry_finds_the_first(
+    isolated_services: ApiServices,
+) -> None:
+    volumes, provider, _, workspace_id, disk_id = _setup(isolated_services, "snap-fence")
+    snapshots = _snapshots(isolated_services, volumes)
+    holder = _container(isolated_services, workspace_id)
+    lease = isolated_services.disks.acquire(disk_id, container_id=holder, worker_id="worker")
+    volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
+    _publish(isolated_services, disk_id, holder, lease.lease_token, 1)
+
+    def take(generation: int, *, final: bool = False, token: str = lease.lease_token) -> str:
+        taken = snapshots.take(
+            disk_id, container_id=holder, lease_token=token, generation=generation, final=final
+        )
+        return taken.snapshot_id if taken.taken else ""
+
+    # CreateSnapshot has no client token; the row's token in the tags is how a
+    # retry after a lost answer finds the snapshot instead of making a second.
+    provider.lose_snapshot_answer = True
+    with pytest.raises(TimeoutError):
+        take(1)
+    first = take(1)
+    assert first and take(1) == first and list(provider.snapshots) == [first]
+
+    with pytest.raises(ConflictError):
+        take(1, token="a-lease-that-was-taken-over")
+    with pytest.raises(ConflictError):
+        take(2)
+
+    # A periodic snapshot waits for the pending one; the release's does not.
+    _publish(isolated_services, disk_id, holder, lease.lease_token, 2)
+    assert take(2) == ""
+    final = take(2, final=True)
+    assert final and final != first and len(provider.snapshots) == 2
+
+
+def test_a_new_volume_starts_from_the_newest_completed_snapshot_in_its_region(
+    isolated_services: ApiServices,
+) -> None:
+    volumes, provider, clock, workspace_id, disk_id = _setup(isolated_services, "snap-restore")
+    disks = isolated_services.disks
+    snapshots = _snapshots(isolated_services, volumes)
+    holder = _container(isolated_services, workspace_id)
+    lease = disks.acquire(disk_id, container_id=holder, worker_id="worker")
+    volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
+
+    def snapshot_generation(generation: int) -> str:
+        _publish(isolated_services, disk_id, holder, lease.lease_token, generation)
+        taken = snapshots.take(
+            disk_id,
+            container_id=holder,
+            lease_token=lease.lease_token,
+            generation=generation,
+            final=False,
+        )
+        provider.complete_snapshots()
+        clock.now += timedelta(seconds=DISK_SNAPSHOT_POLL_SECONDS)
+        snapshots.reconcile_due(now=clock.now)
+        return taken.snapshot_id
+
+    older = snapshot_generation(1)
+    newest = snapshot_generation(2)
+    # Completing the newest marked the older for deletion; the next pass deletes it.
+    snapshots.reconcile_due(now=clock.now)
+    assert list(provider.snapshots) == [newest] and older != newest
+    # Both generations' chunks, and the snapshot beside them.
+    assert disks.get("snap-restore", workspace_id=workspace_id).stored_bytes == (
+        20 + SNAPSHOT_STORED_BYTES
+    )
+
+    def start_elsewhere(host: DiskVolumeHost) -> str:
+        nonlocal holder, lease
+        assert disks.release(disk_id, container_id=holder, lease_token=lease.lease_token)
+        volumes.release(disk_id)
+        holder = _container(isolated_services, workspace_id)
+        lease = disks.acquire(disk_id, container_id=holder, worker_id="worker")
+        grant = volumes.attach(disk_id, host=host, lease_token=lease.lease_token)
+        return provider.volumes[grant.volume_id].request.snapshot_id
+
+    # The cached volume is in another zone, so a new one is made, from the snapshot.
+    assert start_elsewhere(_host("i-b", zone="use2-az2")) == newest
+    # A snapshot stays in its region; another region restores from object storage.
+    assert start_elsewhere(_host("i-c", zone="usw1-az1", region="us-west-1")) == ""
+    # A snapshot deleted behind the platform's back makes a blank volume, not a failure.
+    provider.snapshots.clear()
+    assert start_elsewhere(_host("i-d", zone="use2-az3")) == ""
+
+
+def test_deleting_a_disk_deletes_its_snapshots_and_collection_deletes_strays(
+    isolated_services: ApiServices,
+) -> None:
+    volumes, provider, clock, workspace_id, disk_id = _setup(isolated_services, "snap-delete")
+    disks = isolated_services.disks
+    snapshots = _snapshots(isolated_services, volumes)
+    holder = _container(isolated_services, workspace_id)
+    lease = disks.acquire(disk_id, container_id=holder, worker_id="worker")
+    grant = volumes.attach(disk_id, host=_host("i-a"), lease_token=lease.lease_token)
+    _publish(isolated_services, disk_id, holder, lease.lease_token, 1)
+    taken = snapshots.take(
+        disk_id, container_id=holder, lease_token=lease.lease_token, generation=1, final=True
+    )
+    provider.snapshots["snap-stray"] = _Snapshot(
+        BlockSnapshotRequest(
+            owner=BlockVolumeOwner(
+                deployment="deployment-a", workspace_id=workspace_id, disk_id=str(uuid4())
+            ),
+            volume_id=grant.volume_id,
+            generation=1,
+            token="a-creation-no-row-records",
+        ),
+        volume_size_bytes=GIB,
+        state=BlockSnapshotState.Completed,
+        created_at=clock.now - timedelta(hours=1),
+    )
+    assert snapshots.collect_orphans() == 1
+    assert list(provider.snapshots) == [taken.snapshot_id]
+
+    _stop(isolated_services, holder, storage_released=True)
+    deletion = DiskDeletionService(
+        isolated_services.database,
+        disks=disks,
+        volumes=volumes,
+        snapshots=snapshots,
+        objects=isolated_services.disk_deletion.objects,
+        metering=isolated_services.disk_deletion.metering,
+    )
+    disks.request_deletion("snap-delete", workspace_id=workspace_id, now=clock.now)
+    deletion.reconcile_due(now=clock.now)
+    assert provider.snapshots == {} and provider.volumes == {}
+    assert not disks.list(workspace_id=workspace_id).data

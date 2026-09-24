@@ -95,6 +95,7 @@ from shared.deployment_settings import MissingDeploymentSettingError
 from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
 from shared.workspace_storage import WorkspaceStorageProvider
 from storage.access_metering import StorageAccessMeteringService
+from storage.disk_snapshots import DiskSnapshotService
 from storage.disk_volumes import DiskVolumeService
 from storage.disks import DiskDeletionService, DiskService
 from storage.image_archive import ImageArchiveSettings
@@ -174,6 +175,7 @@ class SchedulerAppServices:
     volume_deletion: VolumeDeletionService
     disk_deletion: DiskDeletionService
     disk_volumes: DiskVolumeService
+    disk_snapshots: DiskSnapshotService
     meter_outbox: BillingMeterOutboxService
     email_outbox: EmailOutboxDrain
     plan_changes: BillingPlanChangeService
@@ -331,6 +333,11 @@ class SchedulerAppServices:
             providers=ResolvedBlockVolumes(provider_resolver),
             deployment=platform_namespace_id,
             worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        )
+        disk_snapshots = DiskSnapshotService(
+            context.database,
+            providers=ResolvedBlockVolumes(provider_resolver),
+            deployment=platform_namespace_id,
         )
         agent_version, agent_sha256 = (
             capacity.agent_binaries.require_amd64() if provider_resolver is not None else ("", "")
@@ -497,10 +504,12 @@ class SchedulerAppServices:
                 context.database,
                 disks=disks,
                 volumes=disk_volumes,
+                snapshots=disk_snapshots,
                 objects=volume_filesystem,
                 metering=volume_metering,
             ),
             disk_volumes=disk_volumes,
+            disk_snapshots=disk_snapshots,
             meter_outbox=meter_outbox,
             email_outbox=email_outbox,
             plan_changes=plan_changes,

@@ -31,7 +31,8 @@ class DiskBlockVolume(ContractModel):
     The worker finds the device by the volume's identifier, formats it on first
     use, and keeps the disk's local layers on it. The object-storage chain stays
     the durable copy; the volume is a cache that the control plane deletes a
-    while after the disk is released.
+    while after the disk is released. A volume made from a snapshot of the disk
+    arrives holding a filesystem, and the engine adopts what it finds there.
     """
 
     volume_id: str = Field(min_length=1)
@@ -91,6 +92,30 @@ class DiskCollectPayload(ContractModel):
     stored_bytes_removed: int = Field(ge=0)
 
 
+class DiskSnapshotPayload(ContractModel):
+    """Snapshot the holder's disk volume at the disk's current generation.
+
+    The engine has already recorded the generation's layers on the volume and
+    flushed it, so what the snapshot captures restores exactly that generation.
+    """
+
+    container_id: str = Field(min_length=1)
+    disk_id: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)
+    generation: int = Field(gt=0)
+    final: bool
+    """The holder's last snapshot before it lets the disk go, which never waits on an
+    earlier one still pending."""
+
+
+class DiskSnapshotResult(ContractModel):
+    taken: bool
+    """False when the control plane put this snapshot off; the next publish asks again."""
+
+    snapshot_id: str = ""
+    reason: str = ""
+
+
 class DiskReleasePayload(ContractModel):
     container_id: str = Field(min_length=1)
     disk_id: str = Field(min_length=1)
@@ -118,5 +143,7 @@ __all__ = [
     "DiskPublishPayload",
     "DiskPublishResult",
     "DiskReleasePayload",
+    "DiskSnapshotPayload",
+    "DiskSnapshotResult",
     "DiskStorageRequest",
 ]

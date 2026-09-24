@@ -213,6 +213,7 @@ from shared.image_building.credentials import parse_ecr_registry
 from shared.payments import PaymentProvider
 from shared.tasks import Task
 from shared.workspace_storage import WorkspaceStorageIssuer
+from storage.disk_snapshots import DiskSnapshotService
 from storage.disk_volumes import DiskVolumeService
 from storage.disks import DiskDeletionService, DiskService
 from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
@@ -493,6 +494,7 @@ class ApiServiceCore:
     devboxes: DevboxService
     disk_deletion: DiskDeletionService
     disk_volumes: DiskVolumeService
+    disk_snapshots: DiskSnapshotService
     payment_admission: DatabaseBillingAdmission
     redis_client: RedisClient
     binary_redis_client: RedisClient
@@ -872,10 +874,16 @@ class ApiServices(ApiServiceCore):
             deployment=platform_namespace_id,
             worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
         )
+        disk_snapshots = DiskSnapshotService(
+            context.database,
+            providers=ResolvedBlockVolumes(provider_resolver),
+            deployment=platform_namespace_id,
+        )
         disk_deletion = DiskDeletionService(
             context.database,
             disks=disks,
             volumes=disk_volumes,
+            snapshots=disk_snapshots,
             objects=resolved_volume_filesystem,
             metering=volume_metering_service,
         )
@@ -1071,6 +1079,7 @@ class ApiServices(ApiServiceCore):
             ),
             disk_deletion=disk_deletion,
             disk_volumes=disk_volumes,
+            disk_snapshots=disk_snapshots,
             aws_connections=aws_composition.service if aws_composition is not None else None,
             redis_client=redis,
             binary_redis_client=binary_redis_client,
@@ -1361,6 +1370,7 @@ def _compose_api_services(
         devboxes=core.devboxes,
         disk_deletion=core.disk_deletion,
         disk_volumes=core.disk_volumes,
+        disk_snapshots=core.disk_snapshots,
         redis_client=core.redis_client,
         binary_redis_client=core.binary_redis_client,
         async_io=core.async_io,
@@ -1526,7 +1536,7 @@ def _worker_repository_service(
             ),
             tasks=core.tasks,
             disk_leases=WorkerDiskLeaseService(
-                core.context.database, core.disks, core.disk_volumes
+                core.context.database, core.disks, core.disk_volumes, core.disk_snapshots
             ),
         ),
         redis=redis,

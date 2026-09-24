@@ -51,6 +51,7 @@ from database.tables.deployment_prunes import DeploymentPruneTable, DeploymentPr
 from database.tables.disks import (
     DiskAttachmentTable,
     DiskGenerationTable,
+    DiskSnapshotTable,
     DiskTable,
     DiskVolumeOrphanTable,
 )
@@ -153,6 +154,7 @@ __all__ = [
     "DiskAttachmentTable",
     "DiskGenerationTable",
     "DiskRateTable",
+    "DiskSnapshotTable",
     "DiskTable",
     "DiskVolumeOrphanTable",
     "EmailOutboxTable",

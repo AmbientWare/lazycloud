@@ -8,6 +8,7 @@ from database.repositories.apps import StubRepository
 from identity.auth import AuthorizationDeniedError
 from shared.containers import ContainerRecord
 from shared.errors import NotFoundError
+from storage.disk_snapshots import DiskSnapshotService
 from storage.disk_volumes import DiskVolumeService
 from storage.disks import DiskPublication, DiskService
 from worker.durable_disk_records import (
@@ -19,6 +20,8 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskSnapshotPayload,
+    DiskSnapshotResult,
     DiskStorageRequest,
 )
 
@@ -38,6 +41,7 @@ class WorkerDiskLeaseService:
     database: DatabaseClient
     disks: DiskService
     volumes: DiskVolumeService
+    snapshots: DiskSnapshotService
 
     def acquire(
         self, payload: DiskAcquirePayload, *, container: ContainerRecord, worker_id: str
@@ -90,6 +94,21 @@ class WorkerDiskLeaseService:
             )
         )
         return DiskPublishResult(generation=generation)
+
+    def snapshot(
+        self, payload: DiskSnapshotPayload, *, container: ContainerRecord
+    ) -> DiskSnapshotResult:
+        self._authorize(payload.disk_id, container=container)
+        taken = self.snapshots.take(
+            payload.disk_id,
+            container_id=container.id,
+            lease_token=payload.lease_token,
+            generation=payload.generation,
+            final=payload.final,
+        )
+        return DiskSnapshotResult(
+            taken=taken.taken, snapshot_id=taken.snapshot_id, reason=taken.reason
+        )
 
     def release(self, payload: DiskReleasePayload, *, container: ContainerRecord) -> bool:
         self._authorize(payload.disk_id, container=container)

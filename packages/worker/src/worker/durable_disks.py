@@ -48,6 +48,7 @@ from shared.disks import (
     DISK_ROOT_MOUNT_PATH,
     disk_volume_size_bytes,
 )
+from shared.errors import DiskVolumePendingError, domain_error_code
 from shared.http.errors import HttpApiError
 from shared.step_timings import StepTimings
 from shared.timestamps import utc_now
@@ -61,6 +62,8 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskSnapshotPayload,
+    DiskSnapshotResult,
     DiskStorageRequest,
 )
 from worker.events import ContainerRequestContext, DiskFilesystemUsage
@@ -97,6 +100,7 @@ DISK_VOLUME_CHECK_SECONDS = 5.0
 """How often a running disk's volume is checked for space between publishes."""
 
 _ACQUIRE_RETRY_STATUSES = frozenset({409, 503})
+_VOLUME_PENDING_CODE = domain_error_code(DiskVolumePendingError)
 _INSUFFICIENT_SPACE_EXIT_CODE = 3
 _ATTACH_TIMEOUT_SECONDS = 3600.0
 _PUBLISH_TIMEOUT_SECONDS = 3600.0
@@ -110,6 +114,13 @@ _COLLECT_TIMEOUT_SECONDS = 3600.0
 _LIST_TIMEOUT_SECONDS = 60.0
 _USAGE_TIMEOUT_SECONDS = 30.0
 _EVICT_TIMEOUT_SECONDS = 600.0
+_HEAT_TIMEOUT_SECONDS = 60.0
+_SNAPSHOT_POINT_TIMEOUT_SECONDS = 120.0
+DISK_FINAL_SNAPSHOT_WAIT_SECONDS = 60.0
+"""How long a release keeps asking for its final snapshot while the provider
+refuses one this soon after the last; well past its 15-second spacing."""
+
+DISK_FINAL_SNAPSHOT_RETRY_SECONDS = 5.0
 _STORE_RENEW_RETRY_SECONDS = 15.0
 _STORE_RENEW_MIN_SECONDS = 1.0
 
@@ -132,6 +143,8 @@ class DiskLeaseClient(Protocol):
 
     def release_disk(self, payload: DiskReleasePayload) -> None: ...
 
+    def snapshot_disk(self, payload: DiskSnapshotPayload) -> DiskSnapshotResult: ...
+
     def collect_disk(self, payload: DiskCollectPayload) -> None: ...
 
     def disk_storage(self, payload: DiskStorageRequest) -> WorkspaceStorageCredentials: ...
@@ -145,6 +158,22 @@ class DiskEngineAttachResult(ContractModel):
     generation: int
     restored_bytes: int = 0
     reused_local: bool = False
+    adopted_snapshot: bool = False
+
+
+class DiskEngineHeat(ContractModel):
+    regions: int = Field(ge=0)
+    region_bytes: int = Field(gt=0)
+    touched: int = Field(ge=0)
+    """Regions read or written since the previous sample."""
+
+    hot: int = Field(ge=0)
+    """Regions touched within every window the map remembers."""
+
+
+class DiskEngineSnapshotPoint(ContractModel):
+    generation: int = Field(gt=0)
+    point: str = Field(min_length=1)
 
 
 class DiskEngineSealResult(ContractModel):
@@ -243,7 +272,14 @@ class DiskEngine:
         chain: list[DiskChainFileEntry],
         store: DiskStoreSource,
         min_free_bytes: int,
+        volume_id: str,
     ) -> DiskEngineAttachResult:
+        """Attach the disk, restoring what the local chain lacks.
+
+        `volume_id` names the provider volume under `root`, empty on host
+        storage; on a volume made from a snapshot the engine adopts the
+        snapshot's chain rather than the state the snapshot copied.
+        """
         scratch = self._scratch_dir(disk.disk_id)
         chain_path = scratch / "chain.json"
         chain_path.write_text(
@@ -264,9 +300,29 @@ class DiskEngine:
                 str(store_path),
                 "--min-free-bytes",
                 str(min_free_bytes),
+                "--volume",
+                volume_id,
             )
         chain_path.unlink(missing_ok=True)
         return DiskEngineAttachResult.model_validate_json(output)
+
+    def heat(self, root: Path, disk_id: str) -> DiskEngineHeat:
+        return DiskEngineHeat.model_validate_json(
+            self._run(_HEAT_TIMEOUT_SECONDS, "heat", *self._disk_args(root, disk_id))
+        )
+
+    def snapshot_point(
+        self, root: Path, disk_id: str, *, volume_id: str
+    ) -> DiskEngineSnapshotPoint:
+        return DiskEngineSnapshotPoint.model_validate_json(
+            self._run(
+                _SNAPSHOT_POINT_TIMEOUT_SECONDS,
+                "snapshot-point",
+                *self._disk_args(root, disk_id),
+                "--volume",
+                volume_id,
+            )
+        )
 
     def seal(self, root: Path, disk_id: str) -> DiskEngineSealResult:
         return DiskEngineSealResult.model_validate_json(
@@ -481,6 +537,9 @@ class DiskLease(ContractModel):
     volume_id: str = ""
     """The provider volume holding this disk's layers; empty on host storage."""
 
+    snapshot_generation: int = 0
+    """Newest generation of this lease the control plane holds a volume snapshot of."""
+
     mountpoint: str = ""
     detached: bool = False
     """Everything written is published and the engine has let the disk go."""
@@ -628,12 +687,13 @@ class WorkerDurableDiskService:
                 timings.log(
                     LOGGER,
                     "disk %s attached for container %s at generation %d "
-                    "(restored %d bytes, reused local layers: %s, volume %s)",
+                    "(restored %d bytes, reused local layers: %s, from snapshot: %s, volume %s)",
                     disk.name,
                     request.container_id,
                     result.generation,
                     result.restored_bytes,
                     result.reused_local,
+                    result.adopted_snapshot,
                     volume.volume_id if volume is not None else "none",
                 )
                 if disk.mount_path == DISK_ROOT_MOUNT_PATH:
@@ -761,6 +821,8 @@ class WorkerDurableDiskService:
                 if pending:
                     self._resume_published(attached, lease)
                 self._publish_layers(attached, lease, pending=pending, live=False)
+            if lease.volume_id and self.volumes is not None:
+                self._final_snapshot(attached, lease)
             self.engine.detach(root, lease.disk_id)
             lease.detached = True
             self._save(attached.leases)
@@ -875,11 +937,16 @@ class WorkerDurableDiskService:
                     if lease.released or lease.detached or not lease.mountpoint:
                         continue
                     try:
+                        if lease.volume_id:
+                            # Before the publish, whose own reads the sample would count.
+                            self._sample_heat(lease)
                         self._publish_pending(attached, lease)
                         if draining and lease.volume_id:
                             self.engine.compact(self._root(lease), lease.disk_id)
                             lease.layers_since_compaction = 0
                             self._save(attached.leases)
+                        if lease.volume_id:
+                            self._snapshot(attached, lease, final=False)
                     except Exception:
                         LOGGER.exception(
                             "publishing disk %s for container %s failed; the next pass retries it",
@@ -985,6 +1052,7 @@ class WorkerDurableDiskService:
                 chain=chain,
                 store=self._store(attached, lease),
                 min_free_bytes=reserve,
+                volume_id=lease.volume_id,
             )
 
         try:
@@ -1132,6 +1200,79 @@ class WorkerDurableDiskService:
             else:
                 lease.layers_since_compaction = 0
                 self._save(attached.leases)
+
+    def _sample_heat(self, lease: DiskLease) -> None:
+        """Close one window of the disk's heat map; a failure costs only prefetch order."""
+        try:
+            self.engine.heat(self._root(lease), lease.disk_id)
+        except Exception:
+            LOGGER.exception("sampling the heat of disk %s failed", lease.name)
+
+    def _snapshot(self, attached: _Attached, lease: DiskLease, *, final: bool) -> None:
+        """Ask for a snapshot of the disk's volume at its newest committed generation.
+
+        The engine first records the generation's layers on the volume and flushes
+        it. A request the control plane puts off is asked again after the next
+        publish, until the generation has one.
+        """
+        if lease.generation == 0 or lease.snapshot_generation >= lease.generation:
+            return
+        point = self.engine.snapshot_point(
+            self._root(lease), lease.disk_id, volume_id=lease.volume_id
+        )
+        if point.generation != lease.generation:
+            raise DiskEngineError(
+                f"disk {lease.name} engine committed generation {point.generation}, "
+                f"the lease records {lease.generation}"
+            )
+        result = self.leases.snapshot_disk(
+            DiskSnapshotPayload(
+                container_id=attached.leases.container_id,
+                disk_id=lease.disk_id,
+                lease_token=lease.lease_token,
+                generation=point.generation,
+                final=final,
+            )
+        )
+        if not result.taken:
+            LOGGER.info(
+                "disk %s snapshot at generation %d put off: %s",
+                lease.name,
+                point.generation,
+                result.reason,
+            )
+            return
+        lease.snapshot_generation = point.generation
+        self._save(attached.leases)
+        LOGGER.info(
+            "disk %s snapshot %s holds generation %d",
+            lease.name,
+            result.snapshot_id,
+            point.generation,
+        )
+
+    def _final_snapshot(self, attached: _Attached, lease: DiskLease) -> None:
+        """Snapshot the volume once more before letting the disk go.
+
+        Never raises: the chunks already hold every generation, so a missing
+        snapshot only means the next start restores from object storage.
+        """
+        deadline = self.monotonic() + DISK_FINAL_SNAPSHOT_WAIT_SECONDS
+        while True:
+            try:
+                self._snapshot(attached, lease, final=True)
+                return
+            except HttpApiError as exc:
+                if exc.code == _VOLUME_PENDING_CODE and self.monotonic() < deadline:
+                    self.sleep(DISK_FINAL_SNAPSHOT_RETRY_SECONDS)
+                    continue
+                LOGGER.warning(
+                    "disk %s has no snapshot of its final generation: %s", lease.name, exc
+                )
+                return
+            except Exception:
+                LOGGER.exception("disk %s has no snapshot of its final generation", lease.name)
+                return
 
     def _release_lease(self, attached: _Attached, lease: DiskLease) -> None:
         self.leases.release_disk(
