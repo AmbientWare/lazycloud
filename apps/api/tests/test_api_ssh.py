@@ -181,7 +181,7 @@ def test_ssh_tunnel_accepts_at_once_and_holds_early_bytes_while_the_pod_wakes(
     tunnel_end, pod_end = socket.socketpair()
     pod_end.settimeout(5)
     ping_seconds = 0.1
-    wake_seconds = 10 * ping_seconds
+    wake_seconds = 20 * ping_seconds
     app = create_app(isolated_services)
     app.dependency_overrides[pod_ssh_tunnel_service] = lambda: _WakingPod(
         target=target, backend=tunnel_end, wake_seconds=wake_seconds
@@ -199,6 +199,10 @@ def test_ssh_tunnel_accepts_at_once_and_holds_early_bytes_while_the_pod_wakes(
     )
     thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
     thread.start()
+    started_by = time.monotonic() + 10
+    while not server.started and time.monotonic() < started_by:
+        time.sleep(0.01)
+    assert server.started
     url = (
         f"ws://127.0.0.1:{listener.getsockname()[1]}/api/v1/pods/box/ssh"
         f"?workspace={fixture.workspace_id}&app=dev"
