@@ -58,15 +58,15 @@ export function DevboxSection() {
         <div className="devbox-art-space" aria-hidden="true" />
         <div className="devbox-copy">
           <h2 id="devboxes-title">
-            <em>Dev boxes</em> for your coding agents.
+            <em>A computer</em> for every coding agent.
           </h2>
           <p className="devbox-intro">
-            Run Codex, Claude Code, OpenCode, Pi, or your own harness on separate machines. Connect
-            from your terminal or editor.
+            Run your coding agents away from your laptop, without buying hardware or managing
+            servers.
           </p>
           <p>
-            Define your tools once and provision boxes from the same image. Each gets its own
-            persistent disk, so repos and installed packages stay between sessions.
+            Create dev boxes with your own tools, connect from your terminal or editor, and keep
+            them running for longer jobs. Repos and installed packages stay between sessions.
           </p>
           <a href={`${DOCS_URL.replace(/\/$/, "")}/concepts/dev-machines`} className="devbox-link">
             Set up dev boxes
