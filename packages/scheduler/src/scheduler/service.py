@@ -1676,9 +1676,14 @@ class Scheduler:
         """
         if self.services is None:
             return
-        releases = DeploymentReleaseService()
-        release = releases.active()
-        if release is None or not releases.controls(release):
+        try:
+            releases = DeploymentReleaseService()
+            release = releases.active()
+            controlled = release is not None and releases.controls(release)
+        except Exception:
+            LOGGER.exception("reading the active release failed; stopped reserves wait")
+            return
+        if release is None or not controlled:
             return
         current_time = now or utc_now()
         if (
