@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 
 import { DOCS_URL } from "@/lib/env";
 
-import { shell } from "./MarketingPrimitives";
 import type { createDevboxScene } from "./devboxScene";
 import "./devbox.css";
 
@@ -20,8 +19,8 @@ export function DevboxSection() {
     const fail = () => {
       if (!disposed) setFailed(true);
     };
-    void Promise.all([import("./devboxScene"), document.fonts.ready])
-      .then(async ([{ createDevboxScene }]) => {
+    void import("./devboxScene")
+      .then(async ({ createDevboxScene }) => {
         if (disposed) return;
         scene = await createDevboxScene(target, frame, fail);
         if (disposed) scene.dispose();
@@ -45,6 +44,7 @@ export function DevboxSection() {
         data-marketing-overlay
         aria-label="Expand dev boxes"
         aria-pressed="false"
+        disabled={failed}
         title="Click to assemble or expand dev boxes"
       >
         <canvas ref={canvas} aria-hidden="true" />
@@ -54,15 +54,15 @@ export function DevboxSection() {
           </span>
         )}
       </button>
-      <div className={`${shell} devbox-layout`}>
+      <div className="devbox-layout">
         <div className="devbox-art-space" aria-hidden="true" />
         <div className="devbox-copy">
           <h2 id="devboxes-title">
             <em>Dev boxes</em> for your coding agents.
           </h2>
           <p className="devbox-intro">
-            Run Codex, Claude Code, OpenCode, Pi, or your own harness on separate machines. Work
-            with them all from your terminal or editor.
+            Run Codex, Claude Code, OpenCode, Pi, or your own harness on separate machines. Connect
+            from your terminal or editor.
           </p>
           <p>
             Define your tools once and provision boxes from the same image. Each gets its own

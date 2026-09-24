@@ -32,6 +32,13 @@ function spring(seconds: number, damping = 0.68, frequency = 22) {
   );
 }
 
+async function loadImage(url: string) {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  return image;
+}
+
 export async function createDevboxScene(
   canvas: HTMLCanvasElement,
   stage: HTMLButtonElement,
@@ -40,23 +47,17 @@ export async function createDevboxScene(
   const grainSource = getComputedStyle(stage).getPropertyValue("--surface-grain").trim();
   const grainUrl = /^url\(["']?(.*?)["']?\)$/.exec(grainSource)?.[1];
   if (!grainUrl) throw new Error("The surface grain texture is unavailable");
-  const images = await Promise.all(
-    [...AGENTS.map((agent) => `/agents/${agent}.svg`), "/lazycloud.png", grainUrl].map(
-      async (url) => {
-        const image = new Image();
-        image.src = url;
-        await image.decode();
-        return image;
-      },
-    ),
-  );
+  const [agentImages, logoImage, grainImage] = await Promise.all([
+    Promise.all(AGENTS.map((agent) => loadImage(`/agents/${agent}.svg`))),
+    loadImage("/lazycloud.png"),
+    loadImage(grainUrl),
+  ]);
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setClearColor(0x000000, 0);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   const scene = new THREE.Scene();
-  const world = new THREE.Group();
-  scene.add(world, new THREE.HemisphereLight("#e0e5e9", "#111519", 1.2));
+  scene.add(new THREE.HemisphereLight("#e0e5e9", "#111519", 1.2));
   const key = new THREE.DirectionalLight("#e2e8ed", 2);
   key.position.set(-3, 7, 4);
   const rim = new THREE.DirectionalLight("#7cabc4", 1.2);
@@ -86,7 +87,7 @@ export async function createDevboxScene(
   if (!grainContext) throw new Error("The surface texture canvas is unavailable");
   grainContext.fillStyle = "#bdbdbd";
   grainContext.fillRect(0, 0, 360, 360);
-  grainContext.drawImage(images[AGENTS.length + 1], 0, 0, 360, 360);
+  grainContext.drawImage(grainImage, 0, 0, 360, 360);
   const grain = new THREE.CanvasTexture(grainBitmap);
   grain.colorSpace = THREE.SRGBColorSpace;
   grain.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -117,14 +118,14 @@ export async function createDevboxScene(
   const caps = new THREE.InstancedMesh(capGeometry, capMaterial, COUNT);
   const seams = new THREE.InstancedMesh(seamGeometry, seamMaterial, COUNT);
   const instances: THREE.InstancedMesh[] = [bodies, caps, seams];
-  world.add(...instances);
+  scene.add(...instances);
 
   const agentMarks = AGENTS.map((agent, index) => {
     const bitmap = document.createElement("canvas");
     bitmap.width = bitmap.height = 256;
     const context = bitmap.getContext("2d");
     if (!context) throw new Error("Agent icon canvas is unavailable");
-    const image = images[index];
+    const image = agentImages[index];
     const ratio = image.naturalWidth / image.naturalHeight;
     const iconSize = agent === "pi" ? 330 : 220;
     const width = iconSize * Math.min(1, ratio);
@@ -151,7 +152,7 @@ export async function createDevboxScene(
       Math.ceil((COUNT - index) / AGENTS.length),
     );
     instances.push(mesh);
-    world.add(mesh);
+    scene.add(mesh);
     return { mesh, material };
   });
 
@@ -160,8 +161,8 @@ export async function createDevboxScene(
   const shellMaterial = surface("#30383e");
   shellMaterial.transparent = true;
   const shell = new THREE.Mesh(shellGeometry, shellMaterial);
-  world.add(shell);
-  const sharedTexture = new THREE.Texture(images[AGENTS.length]);
+  scene.add(shell);
+  const sharedTexture = new THREE.Texture(logoImage);
   sharedTexture.colorSpace = THREE.SRGBColorSpace;
   sharedTexture.needsUpdate = true;
   textures.push(sharedTexture);
@@ -183,7 +184,7 @@ export async function createDevboxScene(
       (Math.floor(index / 3) % 3) - 1,
       Math.floor(index / 9) - 1,
     ).multiplyScalar(0.96);
-    const size = index < 3 ? 1.4 : 0.65 + (index % 5) * 0.11;
+    const size = background ? 0.6 + (index % 4) * 0.1 : 0.65 + (index % 5) * 0.11;
     const rotation =
       index < 3
         ? foregroundRotations[index]
@@ -210,14 +211,10 @@ export async function createDevboxScene(
     };
   });
   const transform = new THREE.Object3D();
-  const local = new THREE.Matrix4();
   const matrix = new THREE.Matrix4();
-  const unitQuaternion = new THREE.Quaternion();
-  const capOffset = new THREE.Vector3(0, 0.49, 0);
-  const seamOffset = new THREE.Vector3(0, 0.475, 0);
-  const iconOffset = new THREE.Vector3(0, 0, 0.475);
-  const unitScale = new THREE.Vector3(1, 1, 1);
-  const iconScale = new THREE.Vector3(0.7, 0.7, 0.7);
+  const capTransform = new THREE.Matrix4().makeTranslation(0, 0.49, 0);
+  const seamTransform = new THREE.Matrix4().makeTranslation(0, 0.475, 0);
+  const iconTransform = new THREE.Matrix4().makeScale(0.7, 0.7, 0.7).setPosition(0, 0, 0.475);
   for (const mesh of instances) {
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     // The instances move beyond their initial bounds during the split.
@@ -271,8 +268,8 @@ export async function createDevboxScene(
       mark.material.opacity = recombining
         ? ease((fromExpansion - 0.15) / 0.55) * (1 - ease((transitionElapsed - 160) / 200))
         : ease((expansion - 0.15) / 0.55);
+    const drift = motion.matches ? 0 : ease(expansion);
     cubes.forEach((cube, index) => {
-      const spread = expansion;
       const rotationProgress =
         motion.matches || transitionElapsed >= transitionDuration
           ? 1
@@ -300,9 +297,8 @@ export async function createDevboxScene(
           rotationProgress,
         ),
       );
-      const drift = motion.matches ? 0 : ease(spread);
       const phase = ambientTime * (0.65 + (index % 5) * 0.08) + index * 2.39996;
-      transform.position.lerpVectors(cube.origin, cube.target, spread);
+      transform.position.lerpVectors(cube.origin, cube.target, expansion);
       if (recombining && !cube.background)
         transform.position
           .addScaledVector(cube.joined, gather)
@@ -316,8 +312,8 @@ export async function createDevboxScene(
         cube.orientation.z + Math.cos(phase * 0.9) * 0.012 * drift,
       );
       const size = cube.background
-        ? cube.size * ease(((recombining ? fromExpansion : spread) - 0.08) / 0.92)
-        : THREE.MathUtils.lerp(1, cube.size, recombining ? fromExpansion : spread);
+        ? cube.size * ease(((recombining ? fromExpansion : expansion) - 0.08) / 0.92)
+        : THREE.MathUtils.lerp(1, cube.size, recombining ? fromExpansion : expansion);
       transform.scale.setScalar(
         recombining
           ? cube.background
@@ -327,14 +323,11 @@ export async function createDevboxScene(
       );
       transform.updateMatrix();
       bodies.setMatrixAt(index, transform.matrix);
-      local.compose(capOffset, unitQuaternion, unitScale);
-      matrix.multiplyMatrices(transform.matrix, local);
+      matrix.multiplyMatrices(transform.matrix, capTransform);
       caps.setMatrixAt(index, matrix);
-      local.compose(seamOffset, unitQuaternion, unitScale);
-      matrix.multiplyMatrices(transform.matrix, local);
+      matrix.multiplyMatrices(transform.matrix, seamTransform);
       seams.setMatrixAt(index, matrix);
-      local.compose(iconOffset, unitQuaternion, iconScale);
-      matrix.multiplyMatrices(transform.matrix, local);
+      matrix.multiplyMatrices(transform.matrix, iconTransform);
       agentMarks[index % AGENTS.length].mesh.setMatrixAt(Math.floor(index / AGENTS.length), matrix);
     });
     for (const mesh of instances) mesh.instanceMatrix.needsUpdate = true;
@@ -416,13 +409,7 @@ export async function createDevboxScene(
         .addScaledVector(up, y * halfHeight * depthScale)
         .addScaledVector(cameraDirection, depth);
       if (cube.background) cube.origin.copy(cube.target);
-      cube.size = cube.background
-        ? 0.6 + (index % 4) * 0.1
-        : index < 3 && mobile
-          ? 0.98
-          : index < 3
-            ? 1.4
-            : 0.65 + (index % 5) * 0.11;
+      if (index < 3) cube.size = mobile ? 0.98 : 1.4;
     });
     renderer.setSize(width, height, false);
     requestDraw();
