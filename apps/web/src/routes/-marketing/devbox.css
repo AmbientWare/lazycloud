@@ -16,7 +16,7 @@
 }
 
 .devbox-art-space {
-  height: clamp(420px, 40vw, 560px);
+  height: clamp(480px, 46vw, 640px);
 }
 
 .devbox-copy {
@@ -122,7 +122,7 @@
   }
 
   .devbox-art-space {
-    height: clamp(300px, 65vw, 520px);
+    height: clamp(340px, 72vw, 580px);
   }
 }
 
