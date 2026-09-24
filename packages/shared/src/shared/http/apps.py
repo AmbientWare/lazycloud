@@ -45,6 +45,9 @@ class AppSummaryResponse(HttpModel):
     latest_workload: StubResponse | None = None
     latest_deployment: DeploymentResponse | None = None
     workload_kinds: dict[str, int] = Field(default_factory=dict)
+    """Workloads by kind; devboxes are counted in `devbox_count`, not as pods."""
+
+    devbox_count: int = 0
     workload_count: int = 0
     active_versions: int = 0
     running_containers: int = 0

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { SquareTerminal } from "lucide-react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
@@ -187,7 +188,14 @@ function AppCard({
               <span className="mono tabular-nums text-foreground">{count}</span>
             </span>
           ))}
-          {workloadKinds.length === 0 ? (
+          {item.devbox_count > 0 ? (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <SquareTerminal className="size-3.5 shrink-0" aria-hidden="true" />
+              <span>{item.devbox_count === 1 ? "Devbox" : "Devboxes"}</span>
+              <span className="mono tabular-nums text-foreground">{item.devbox_count}</span>
+            </span>
+          ) : null}
+          {workloadKinds.length === 0 && item.devbox_count === 0 ? (
             <span className="text-xs text-muted-foreground">None</span>
           ) : null}
         </div>
