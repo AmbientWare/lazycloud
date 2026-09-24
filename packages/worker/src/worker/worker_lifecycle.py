@@ -522,6 +522,7 @@ class WorkerLifecycleOrchestrator:
         action: WorkerLifecycleAction,
         callback: Callable[[], WorkerExecutionRecord | WorkerRemovalResult | None],
     ) -> WorkerLifecycleStepResult:
+        began = time.monotonic()
         try:
             result = callback()
         except Exception as exc:  # pragma: no cover - defensive boundary capture
@@ -529,8 +530,9 @@ class WorkerLifecycleOrchestrator:
                 action=action,
                 status=WorkerLifecycleStatus.Error,
                 error_message=f"{type(exc).__name__}: {exc}",
+                metadata={"duration_seconds": f"{time.monotonic() - began:.3f}"},
             )
-        metadata: dict[str, str] = {}
+        metadata: dict[str, str] = {"duration_seconds": f"{time.monotonic() - began:.3f}"}
         if isinstance(result, WorkerRemovalResult):
             metadata["requeued_count"] = str(result.requeued_count)
         return WorkerLifecycleStepResult(action=action, metadata=metadata)

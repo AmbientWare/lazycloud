@@ -399,8 +399,10 @@ def _report_registration(steps: list[WorkerLifecycleStepResult]) -> None:
         return
     for step in steps:
         detail = f": {step.error_message}" if step.error_message else ""
+        duration = step.metadata.get("duration_seconds")
+        took = f" in {duration}s" if duration else ""
         print(
-            f"container worker registration {step.action.value} {step.status.value}{detail}",
+            f"container worker registration {step.action.value} {step.status.value}{took}{detail}",
             file=sys.stderr,
         )
 

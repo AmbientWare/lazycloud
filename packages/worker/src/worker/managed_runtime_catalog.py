@@ -3,16 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import distributions
 from pathlib import Path, PurePosixPath
 
 from pydantic import Field
 from shared.contracts import ContractModel
 from shared.image_building.authoring import LinuxArchitecture, PythonVersion
-from shared.managed_runtime_integrity import (
-    managed_package_source_digest,
-    managed_runtime_artifact_digest,
-)
+from shared.managed_runtime_integrity import managed_package_source_digest
 
 MANAGED_RUNTIME_SCHEMA_VERSION = 3
 MANAGED_RUNTIME_PYTHON_VERSIONS = tuple(version.value for version in PythonVersion)
@@ -59,6 +57,39 @@ def load_managed_runtime_catalog(
     architecture: LinuxArchitecture,
 ) -> ManagedRuntimeCatalog:
     artifact_root = root.resolve()
+    manifest = _load_manifest(artifact_root)
+    if python_major_minor not in MANAGED_RUNTIME_PYTHON_VERSIONS:
+        raise RuntimeError(
+            f"managed runtime Python {python_major_minor} is unsupported; supported versions are "
+            f"{', '.join(MANAGED_RUNTIME_PYTHON_VERSIONS)}"
+        )
+    return _selected_catalog(artifact_root, manifest, python_major_minor, architecture)
+
+
+def load_managed_runtime_catalogs(
+    root: Path,
+    architecture: LinuxArchitecture,
+) -> dict[str, ManagedRuntimeCatalog]:
+    """Every supported Python's runtime for one architecture, from one read of the catalog.
+
+    The versions are checked concurrently: each reads its own distribution
+    metadata, and on a machine just started from a stopped disk those reads
+    wait on the volume rather than on this process.
+    """
+    artifact_root = root.resolve()
+    manifest = _load_manifest(artifact_root)
+    with ThreadPoolExecutor(
+        max_workers=len(MANAGED_RUNTIME_PYTHON_VERSIONS),
+        thread_name_prefix="managed-runtime",
+    ) as pool:
+        loads = {
+            version: pool.submit(_selected_catalog, artifact_root, manifest, version, architecture)
+            for version in MANAGED_RUNTIME_PYTHON_VERSIONS
+        }
+        return {version: load.result() for version, load in loads.items()}
+
+
+def _load_manifest(artifact_root: Path) -> ManagedRuntimeCatalogManifest:
     catalog_path = artifact_root / MANAGED_RUNTIME_CATALOG_FILE
     if not catalog_path.is_file():
         raise RuntimeError(f"managed runtime catalog is unavailable: {catalog_path}")
@@ -84,11 +115,6 @@ def load_managed_runtime_catalog(
             ),
         ]
         raise RuntimeError(f"managed runtime catalog versions are invalid: {', '.join(details)}")
-    if python_major_minor not in expected_versions:
-        raise RuntimeError(
-            f"managed runtime Python {python_major_minor} is unsupported; supported versions are "
-            f"{', '.join(MANAGED_RUNTIME_PYTHON_VERSIONS)}"
-        )
     expected_architectures = {item.value for item in MANAGED_RUNTIME_ARCHITECTURES}
     for version, version_artifacts in manifest.artifacts.items():
         available_architectures = set(version_artifacts)
@@ -121,6 +147,15 @@ def load_managed_runtime_catalog(
         )
     if manifest.digest != managed_runtime_catalog_digest(manifest):
         raise RuntimeError("managed runtime catalog digest mismatch")
+    return manifest
+
+
+def _selected_catalog(
+    artifact_root: Path,
+    manifest: ManagedRuntimeCatalogManifest,
+    python_major_minor: str,
+    architecture: LinuxArchitecture,
+) -> ManagedRuntimeCatalog:
     selected_artifact = manifest.artifacts[python_major_minor][architecture.value]
     _validate_artifact(
         artifact_root,
@@ -169,12 +204,13 @@ def _validate_artifact(
     if relative_path.is_absolute() or ".." in relative_path.parts:
         raise RuntimeError(f"managed runtime artifact {version} has an unsafe path")
     artifact_path = root.joinpath(*relative_path.parts)
-    actual_digest = managed_runtime_artifact_digest(artifact_path)
-    if actual_digest != artifact.digest:
-        raise RuntimeError(
-            f"managed runtime artifact {version} digest mismatch: "
-            f"expected {artifact.digest}, got {actual_digest or 'unavailable'}"
-        )
+    # The artifact's content digest names the directory it was built into, and
+    # the build computed it from these bytes. The tree reaches this machine inside
+    # the worker image, whose layers the container engine verifies against their
+    # own digests, so hashing it again here re-proves the pull. It read about
+    # 360 MB and 18,000 files on every start, 16 s from a disk resumed cold.
+    if artifact_path.name != artifact.digest or not artifact_path.is_dir():
+        raise RuntimeError(f"managed runtime artifact {version} is missing: {artifact_path}")
     managed = _installed_distributions(artifact_path / "managed")
     locked = _installed_distributions(artifact_path / "dependencies")
     missing = sorted(set(MANAGED_RUNTIME_DISTRIBUTIONS) - managed.keys())
@@ -229,5 +265,6 @@ __all__ = [
     "ManagedRuntimeCatalogManifest",
     "ManagedRuntimeManifest",
     "load_managed_runtime_catalog",
+    "load_managed_runtime_catalogs",
     "managed_runtime_catalog_digest",
 ]

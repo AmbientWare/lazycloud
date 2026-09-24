@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 from cache.server import (
@@ -15,6 +16,7 @@ from shared.disks import DiskStorage, disk_capacity_bytes
 from shared.identity import TokenKind
 from shared.placement import PlacementKind
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
+from shared.step_timings import StepTimings
 from worker.adapters import WorkerRouteIdentity
 from worker.automatic_checkpoints import WorkerAutomaticCheckpointService
 from worker.cache_assets import (
@@ -518,12 +520,20 @@ def _validate_worker_readiness(
     spec_builder: OciRuntimeSpecBuilder,
     network_backend: AgentBridgeNetworkBackend,
 ) -> None:
-    spec_builder.prepare_managed_runtimes()
-    if image_runtime is not None:
-        response = image_runtime.health()
-        if not response.ok:
-            raise RuntimeError(response.error or "image runtime is unavailable")
-    network_backend.initialize()
+    timings = StepTimings()
+    try:
+        with timings.step("managed_runtimes"):
+            spec_builder.prepare_managed_runtimes()
+        if image_runtime is not None:
+            with timings.step("image_runtime"):
+                response = image_runtime.health()
+            if not response.ok:
+                raise RuntimeError(response.error or "image runtime is unavailable")
+        with timings.step("network"):
+            network_backend.initialize()
+    finally:
+        # The worker has no log handler of its own; stderr is what the host keeps.
+        print(f"container worker readiness checks: {timings.summary()}", file=sys.stderr)
 
 
 def planned_scheduler_worker_record_from_settings(
