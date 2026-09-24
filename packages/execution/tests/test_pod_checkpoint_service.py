@@ -133,5 +133,5 @@ def test_a_devbox_starts_on_its_disk_without_the_uploaded_source(
     ).create_pod(CreatePodRequest(stub_id=stub.id))
 
     payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
-    assert payload.cwd == "/root"
+    assert payload.cwd == "/"
     assert all(mount.mount_path != WORKER_USER_CODE_VOLUME for mount in payload.mounts)

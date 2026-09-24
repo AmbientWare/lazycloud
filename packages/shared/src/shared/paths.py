@@ -8,7 +8,8 @@ from shared.app_identity import ENV_PREFIX, HOME_DIR
 
 HOME_ENV = f"{ENV_PREFIX}_HOME"
 DEFAULT_SANDBOX_WORKDIR = "/workspace"
-DEVBOX_WORKDIR = "/root"
+# Always present whatever user the image runs as; shells open in the login home.
+DEVBOX_WORKDIR = "/"
 
 
 def state_home(env: Mapping[str, str] | None = None) -> Path:
