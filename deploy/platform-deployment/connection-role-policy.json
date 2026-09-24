@@ -208,7 +208,8 @@
       "Action": [
         "ec2:AttachVolume",
         "ec2:DeleteVolume",
-        "ec2:DetachVolume"
+        "ec2:DetachVolume",
+        "ec2:ModifyInstanceAttribute"
       ],
       "Condition": {
         "StringEquals": {

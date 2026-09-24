@@ -322,7 +322,14 @@ def connection_role_statements(
             {
                 "Sid": "ManageTaggedDiskVolumes",
                 "Effect": "Allow",
-                "Action": ["ec2:AttachVolume", "ec2:DeleteVolume", "ec2:DetachVolume"],
+                # EC2 authorizes ModifyInstanceAttribute against the volume a
+                # block device mapping names as well as the instance.
+                "Action": [
+                    "ec2:AttachVolume",
+                    "ec2:DeleteVolume",
+                    "ec2:DetachVolume",
+                    "ec2:ModifyInstanceAttribute",
+                ],
                 "Resource": arns.arn(_VOLUME),
                 "Condition": _DISK_VOLUME_RESOURCE_TAGS,
             },
