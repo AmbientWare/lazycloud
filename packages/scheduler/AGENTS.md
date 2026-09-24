@@ -9,7 +9,7 @@ worker, and process composition belongs to apps.
 
 PostgreSQL owns the scheduling request, its capacity retry generation, and the
 worker assignment. Redis publishes and leases that work. Dispatch records unmet
-demand; the capacity loop performs provider calls. Recovery republishes only
+demand and wakes the acquisition loop, which performs the provider calls. Recovery republishes only
 unassigned requests, preserving their original timestamp and executable payload.
 
 An uncertain queue commit retains its PostgreSQL assignment. Clearing it requires
