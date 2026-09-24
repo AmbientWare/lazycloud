@@ -19,6 +19,7 @@ diff.
 | [ASGI app](/concepts/endpoints#asgi-applications) | A FastAPI or Starlette app | HTTPS requests | Autoscaler on requests in flight |
 | [Realtime handler](/concepts/endpoints#realtime-handlers) | A WebSocket service | WebSocket messages | Autoscaler on requests in flight |
 | [Pod](/concepts/pods) | A container command, such as a model server | Connections, or `create()` | By hand |
+| [Devbox](/concepts/dev-machines) | A machine you work in over SSH, for coding agents and remote editors | An SSH connection, or Start on its page | One container, stopped when idle |
 | [Sandbox](/concepts/sandboxes) | Generated code, agent workspaces | `create()` from your code | One container per `create()` |
 
 Containers start when work arrives and
