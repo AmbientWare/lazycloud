@@ -16,14 +16,15 @@ export function DevboxSection() {
     const frame = stage.current;
     if (!target || !frame) return;
     let disposed = false;
-    let scene: ReturnType<typeof createDevboxScene> | undefined;
+    let scene: Awaited<ReturnType<typeof createDevboxScene>> | undefined;
     const fail = () => {
       if (!disposed) setFailed(true);
     };
     void Promise.all([import("./devboxScene"), document.fonts.ready])
-      .then(([{ createDevboxScene }]) => {
+      .then(async ([{ createDevboxScene }]) => {
         if (disposed) return;
-        scene = createDevboxScene(target, frame, fail);
+        scene = await createDevboxScene(target, frame, fail);
+        if (disposed) scene.dispose();
       })
       .catch((error: unknown) => {
         console.error("Dev box preview could not load", error);
@@ -42,7 +43,7 @@ export function DevboxSection() {
           <canvas
             ref={canvas}
             role="img"
-            aria-label="One workstation connected over SSH to separate dev boxes running Codex, Claude Code, and OpenCode."
+            aria-label="A shared workspace connected to three separate cloud compute modules bearing the Codex, Claude Code, and OpenCode icons."
           />
           {failed && (
             <p className="devbox-preview-error" role="status">

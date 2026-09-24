@@ -82,7 +82,7 @@ function ParitySection() {
         <div className="flex flex-col items-center gap-8 sm:gap-10">
           <div className="text-center">
             <h2 className="mx-auto max-w-[920px] text-[clamp(1.85rem,4.6vw,4rem)] leading-[1.12] font-[550] tracking-[-0.045em] text-balance">
-              Local to cloud, with <span className="text-brand">one code definition.</span>
+              Local to cloud, <span className="text-brand">one code definition.</span>
             </h2>
           </div>
           <Tabs
