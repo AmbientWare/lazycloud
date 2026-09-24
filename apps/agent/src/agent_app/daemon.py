@@ -161,6 +161,8 @@ JOIN_RETRY_BASE_SECONDS = 2.0
 JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
+AGENT_LAST_PREPARED_IMAGE_FILE = "last-prepared-worker-image.json"
+IMAGE_REPORT_WAIT_SECONDS = 1.0
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
@@ -613,12 +615,42 @@ class DockerAgentWorkerController:
         self._images.close()
 
     def prepare_worker_image(self) -> Future[None] | None:
+        """Get the worker image this machine will run ready before the first stream.
+
+        The override, when set, is prepared in the background, pulling if needed.
+        Otherwise the image this machine last had prepared is only looked up: a
+        reserve resumes with it on disk, so the first stream already reports it,
+        and one that is gone is left for the stream to name the image it needs.
+        """
         if self.worker_image_override:
             return self._images.start(self.worker_image_override)
+        image = self._last_prepared_image()
+        if (
+            image
+            and self.runner.run([self.docker_binary, "image", "inspect", image]).returncode == 0
+        ):
+            self._images.mark_prepared(image)
         return None
 
     def prepared_worker_images(self) -> list[str]:
-        return self._images.prepared()
+        prepared = self._images.prepared()
+        latest = self._images.latest
+        if latest and latest != self._last_prepared_image():
+            _write_json_atomic(self.last_prepared_image_path, latest, permissions=0o600)
+        return prepared
+
+    @property
+    def last_prepared_image_path(self) -> Path:
+        return self.state_dir / AGENT_LAST_PREPARED_IMAGE_FILE
+
+    def _last_prepared_image(self) -> str:
+        try:
+            recorded = _JSON_VALUE_ADAPTER.validate_json(
+                self.last_prepared_image_path.read_text(encoding="utf-8")
+            )
+        except FileNotFoundError:
+            return ""
+        return recorded if isinstance(recorded, str) else ""
 
     def has_unreported_image(self, reported: Collection[str]) -> bool:
         """Whether the next stream has an image outcome the last one did not report."""
@@ -1265,6 +1297,9 @@ class AgentDaemonService:
         timings = StepTimings()
         updater = AgentUpdater.running(self.state_store.state_dir)
         active_slots = self.worker_controller.active_slots()
+        # The image check started at boot takes a fraction of a second; waiting
+        # for it lets this stream report the image instead of the next one.
+        self.worker_controller.wait_for_image_preparation(IMAGE_REPORT_WAIT_SECONDS)
         self._reported_worker_images = self.worker_controller.prepared_worker_images()
         with timings.step("stream"):
             stream = self.client.stream_agent(
