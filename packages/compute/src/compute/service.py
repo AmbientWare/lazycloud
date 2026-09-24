@@ -18,6 +18,7 @@ from database.repositories.compute import (
     ComputeOfferState,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
+    ComputeReserveInstance,
     ComputeUnitRepository,
 )
 from database.repositories.identity import WorkspaceRepository
@@ -135,6 +136,7 @@ from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
+_RESERVE_REFRESH_CANDIDATES = 4
 
 
 _UNCONFIRMED_OPERATION_STATUSES = frozenset(
@@ -3364,84 +3366,87 @@ class ComputeService:
         """
         if self.provider_resolver is None:
             return None
+        agent_sha256, worker_image = reserve_release_artifacts(release)
+        with self.context.database.session() as session:
+            candidates = ComputeProviderInstanceRepository(session).stale_platform_reserves(
+                agent_sha256=agent_sha256, worker_image=worker_image
+            )
+        if not candidates:
+            return None
         warm_owner = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
-        mutations = self._required_capacity_owner_mutations()
         try:
-            with mutations.mutation_lock(warm_owner):
+            with self._required_capacity_owner_mutations().mutation_lock(warm_owner):
                 with self.context.database.session() as session:
-                    reserves = ComputeProviderInstanceRepository(
-                        session
-                    ).platform_reserve_instances(
-                        statuses=(
-                            ReservationStatus.Preparing.value,
-                            ReservationStatus.Stopping.value,
-                            ReservationStatus.Stopped.value,
-                        )
-                    )
-                    if any(
-                        reserve.status != ReservationStatus.Stopped.value for reserve in reserves
-                    ):
-                        return None
-                    current = reserve_release_artifacts(release)
-                    stale = next(
-                        (
-                            reserve
-                            for reserve in reserves
-                            if (reserve.prepared_agent_sha256, reserve.prepared_worker_image)
-                            != current
-                        ),
-                        None,
-                    )
                     if (
-                        stale is None
+                        ComputeProviderInstanceRepository(session).platform_reserve_in_preparation()
                         or ContainerRepository(session).has_unplaced_platform_cpu_work()
                     ):
                         return None
-                    unit = ComputeUnitRepository(session).get(stale.pool_id)
-                if (
-                    unit is None
-                    or unit.phase in ENDED_UNIT_PHASES
-                    or unit.provider_state.degraded_reason is not None
-                ):
-                    return None
-                with mutations.mutation_lock(unit.capacity_owner_id):
-                    unit, provider, offer = self._internal_unit_provider(
-                        unit.workspace_id, unit.capacity_owner_id
-                    )
-                    if provider.pooled is None or provider.policy is None:
-                        return None
-                    if not provider.policy.can_purchase:
-                        return None
-                    snapshot = provider.pooled.refresh_machine(
-                        self._provider_unit_request(unit, offer), stale.instance_id
-                    )
-                    with self.context.database.session() as session:
-                        machine = MachineRepository(session).get(
-                            stale.machine_id, workspace_id=unit.workspace_id
+                for candidate in candidates[:_RESERVE_REFRESH_CANDIDATES]:
+                    try:
+                        refreshed = self._refresh_reserve(candidate, now=now)
+                    except CapacityReservationLockContendedError:
+                        continue
+                    except CapacityReservationLeaseLostError:
+                        raise
+                    except Exception:
+                        LOGGER.exception(
+                            "stopped reserve %s (%s) could not be prepared again",
+                            candidate.machine_id,
+                            candidate.instance_id,
                         )
-                        if machine is not None and machine_lifecycle_allowed(
-                            machine.lifecycle, MachineLifecycle.Resuming
-                        ):
-                            write_machine_lifecycle(
-                                session,
-                                machine,
-                                MachineLifecycle.Resuming,
-                                workspace_changes=self.workspace_changes,
-                                workspace_id=unit.workspace_id,
-                                message="Preparing the stopped reserve for the current release",
-                                now=now,
-                            )
-                    self.provider_machines._apply_pooled_snapshot(
-                        unit, offer, snapshot, provider=provider.pooled, now=now
-                    )
+                        continue
+                    if refreshed:
+                        LOGGER.info(
+                            "refreshing stopped reserve %s (%s) for the active release",
+                            candidate.machine_id,
+                            candidate.instance_id,
+                        )
+                        return candidate.machine_id
         except CapacityReservationLockContendedError:
             return None
-        LOGGER.info(
-            "refreshing stopped reserve %s (%s) for the active release",
-            stale.machine_id,
-            stale.instance_id,
-        )
-        return stale.machine_id
+        return None
+
+    def _refresh_reserve(self, candidate: ComputeReserveInstance, *, now: datetime) -> bool:
+        with self.context.database.session() as session:
+            unit = ComputeUnitRepository(session).get(candidate.pool_id)
+        if (
+            unit is None
+            or unit.phase in ENDED_UNIT_PHASES
+            or unit.provider_state.degraded_reason is not None
+        ):
+            return False
+        with self._required_capacity_owner_mutations().mutation_lock(unit.capacity_owner_id):
+            unit, provider, offer = self._internal_unit_provider(
+                unit.workspace_id, unit.capacity_owner_id
+            )
+            if provider.pooled is None or provider.policy is None:
+                return False
+            if not provider.policy.can_purchase:
+                return False
+            snapshot = provider.pooled.refresh_machine(
+                self._provider_unit_request(unit, offer), candidate.instance_id
+            )
+            with self.context.database.session() as session:
+                machine = MachineRepository(session).get(
+                    candidate.machine_id, workspace_id=unit.workspace_id
+                )
+                if machine is not None and machine_lifecycle_allowed(
+                    machine.lifecycle, MachineLifecycle.Resuming
+                ):
+                    write_machine_lifecycle(
+                        session,
+                        machine,
+                        MachineLifecycle.Resuming,
+                        workspace_changes=self.workspace_changes,
+                        workspace_id=unit.workspace_id,
+                        message="Preparing the stopped reserve for the current release",
+                        now=now,
+                    )
+            self.provider_machines._apply_pooled_snapshot(
+                unit, offer, snapshot, provider=provider.pooled, now=now
+            )
+        return True
 
     def _reconcile_platform_warm_markets(self, *, now: datetime) -> None:
         assert self.provider_resolver is not None

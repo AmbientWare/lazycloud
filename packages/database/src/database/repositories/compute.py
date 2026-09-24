@@ -168,14 +168,11 @@ class ComputeProviderInstanceRecord(ContractModel):
 
 @dataclass(frozen=True, slots=True)
 class ComputeReserveInstance:
-    """A platform CPU reserve machine and the release it was prepared with."""
+    """A stopped platform CPU reserve machine."""
 
     pool_id: str
     instance_id: str
     machine_id: str
-    status: str
-    prepared_agent_sha256: str
-    prepared_worker_image: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1670,42 +1667,49 @@ class ComputeProviderInstanceRepository:
             if row.machine_id is not None
         }
 
-    def platform_reserve_instances(
-        self, *, statuses: Collection[str]
+    def stale_platform_reserves(
+        self, *, agent_sha256: str, worker_image: str
     ) -> list[ComputeReserveInstance]:
+        """Stopped platform CPU reserves prepared with anything but this release."""
         table = ComputeProviderInstanceTable
         rows = self.session.execute(
-            select(
-                table.pool_id,
-                table.instance_id,
-                table.machine_id,
-                table.status,
-                table.prepared_agent_sha256,
-                table.prepared_worker_image,
-            )
+            select(table.pool_id, table.instance_id, table.machine_id)
             .join(ComputeUnitTable, ComputeUnitTable.id == table.pool_id)
             .where(
-                ComputeUnitTable.platform_fleet.is_(True),
-                ComputeUnitTable.worker_gpu_count == 0,
-                table.status.in_(statuses),
+                table.status == "stopped",
                 table.missing_since.is_(None),
                 table.instance_id.is_not(None),
                 table.machine_id.is_not(None),
+                or_(
+                    table.prepared_agent_sha256 != agent_sha256,
+                    table.prepared_worker_image != worker_image,
+                ),
+                ComputeUnitTable.platform_fleet.is_(True),
+                ComputeUnitTable.worker_gpu_count == 0,
             )
             .order_by(table.created_at.asc(), table.id.asc())
         ).tuples()
         return [
-            ComputeReserveInstance(
-                pool_id=pool_id,
-                instance_id=instance_id,
-                machine_id=machine_id,
-                status=status,
-                prepared_agent_sha256=agent_sha256,
-                prepared_worker_image=worker_image,
-            )
-            for pool_id, instance_id, machine_id, status, agent_sha256, worker_image in rows
+            ComputeReserveInstance(pool_id=pool_id, instance_id=instance_id, machine_id=machine_id)
+            for pool_id, instance_id, machine_id in rows
             if pool_id is not None and instance_id is not None and machine_id is not None
         ]
+
+    def platform_reserve_in_preparation(self) -> bool:
+        table = ComputeProviderInstanceTable
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        table.pool_id == ComputeUnitTable.id,
+                        table.status.in_(("preparing", "stopping")),
+                        table.missing_since.is_(None),
+                        ComputeUnitTable.platform_fleet.is_(True),
+                        ComputeUnitTable.worker_gpu_count == 0,
+                    )
+                )
+            )
+        )
 
     def record_prepared_release(
         self, *, machine_id: str, instance_id: str, agent_sha256: str, worker_image: str
