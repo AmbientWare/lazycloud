@@ -778,12 +778,21 @@ class ManagementService:
                 key=lambda item: (item.deployment.created_at, item.deployment.version),
                 default=None,
             )
-            workloads = {
-                (resource.stub.kind.value, resource.stub.name) for resource in app_resources
-            }
+            # Each workload is classified by its current version: the newest active
+            # one, or the newest when none is active.
+            current: dict[tuple[str, str], DeploymentResource] = {}
+            for resource in app_resources:
+                key = (resource.stub.kind.value, resource.stub.name)
+                held = current.get(key)
+                if held is None or (
+                    resource.deployment.active,
+                    resource.deployment.version,
+                ) > (held.deployment.active, held.deployment.version):
+                    current[key] = resource
+            workloads = set(current)
             devboxes = {
-                (resource.stub.kind.value, resource.stub.name)
-                for resource in app_resources
+                key
+                for key, resource in current.items()
                 if resolve_pod_role(resource.deployment.kind, resource.deployment.spec.role)
                 is PodRole.Devbox
             }
