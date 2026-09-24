@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import urllib.request
@@ -65,8 +66,21 @@ class AgentUpdateRestartError(RuntimeError):
 
 @lru_cache(maxsize=1)
 def running_binary_sha256(binary: Path) -> str:
-    if not binary.is_file():
+    """The binary's digest, hashed again only when the file on disk changes.
+
+    A stream asks for it several times and the binary is tens of megabytes.
+    """
+    try:
+        status = binary.stat()
+    except FileNotFoundError:
         return ""
+    if not stat.S_ISREG(status.st_mode):
+        return ""
+    return _file_sha256(binary, status.st_size, status.st_mtime_ns, status.st_ino)
+
+
+@lru_cache(maxsize=4)
+def _file_sha256(binary: Path, size: int, mtime_ns: int, inode: int) -> str:
     with binary.open("rb") as handle:
         if handle.read(4) != b"\x7fELF":
             return ""

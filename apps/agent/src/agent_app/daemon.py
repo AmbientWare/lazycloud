@@ -624,6 +624,31 @@ class DockerAgentWorkerController:
         """Whether the next stream has an image outcome the last one did not report."""
         return self._images.unreported(reported)
 
+    def pull_detached(self, images: Collection[str]) -> None:
+        """Start pulling images this host lacks in docker, outliving this process.
+
+        The agent is about to replace itself with an update, which cancels a pull
+        it is running. A pull started from a detached shell keeps going, so the
+        worker image downloads while the update installs, and the updated agent's
+        own pull joins it.
+        """
+        prepared = set(self._images.prepared())
+        for image in sorted(set(images) - prepared):
+            try:
+                self.runner.run(
+                    [
+                        "sh",
+                        "-c",
+                        '"$0" pull --quiet "$1" >/dev/null 2>&1 &',
+                        self.docker_binary,
+                        image,
+                    ]
+                )
+            except (OSError, subprocess.SubprocessError):
+                LOGGER.warning("could not start pulling %s before the update", image, exc_info=True)
+                continue
+            LOGGER.info("pulling %s while the agent updates", image)
+
     def wait_for_image_preparation(self, timeout_seconds: float) -> bool:
         """Wait for a worker image being prepared; True once it has finished."""
         return self._images.wait(timeout_seconds)
@@ -783,6 +808,7 @@ class DockerAgentWorkerController:
             raise ValueError(msg)
         if image not in self._images.prepared():
             raise RuntimeError(f"worker image is not prepared for slot {slot.worker_id}")
+        timings = StepTimings()
         plan = plan_worker_container(
             bootstrap,
             slot,
@@ -803,10 +829,14 @@ class DockerAgentWorkerController:
             plan.config,
             permissions=0o600,
         )
-        self._collect_worker_exit(plan.name, slot.worker_id)
-        self.runner.run([self.docker_binary, "rm", "-f", plan.name])
+        with timings.step("collect_exit"):
+            self._collect_worker_exit(plan.name, slot.worker_id)
+        with timings.step("remove"):
+            self.runner.run([self.docker_binary, "rm", "-f", plan.name])
         args = [self.docker_binary, plan.docker_args[0], "--detach", *plan.docker_args[1:]]
-        result = self.runner.run(args)
+        with timings.step("run"):
+            result = self.runner.run(args)
+        timings.log(LOGGER, "worker %s container started", slot.worker_id)
         if result.returncode != 0:
             msg = f"start worker slot {slot.worker_id} failed: {result.stderr or result.stdout}"
             raise RuntimeError(msg)
@@ -1362,6 +1392,9 @@ class AgentDaemonService:
         state = state.model_copy(update={"release_generation": release.generation})
         self.state_store.save(state)
         if release.update_agent and release.agent is not None:
+            self.worker_controller.pull_detached(
+                {slot.worker_image for slot in desired_slots if slot.worker_image}
+            )
             updater.install(release.agent, before_exec=before_agent_update)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
