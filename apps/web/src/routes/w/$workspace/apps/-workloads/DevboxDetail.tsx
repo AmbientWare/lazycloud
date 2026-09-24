@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play, Square } from "lucide-react";
 
@@ -13,8 +13,11 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
+import { DrawerHeader } from "@/components/shared/DrawerHeader";
 import { ShellButton } from "@/components/shared/ShellDialog";
+import { LogViewer } from "@/components/shared/TaskDrawer/LogViewer";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { Devbox, DevboxPhase } from "@/lib/api/schemas";
@@ -53,22 +56,22 @@ export function DevboxActions({
   const queryClient = useQueryClient();
   const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
   const devbox = status.data;
-  const settle = async (next: Devbox | undefined) => {
-    const key = workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId);
-    if (next) queryClient.setQueryData(key, next);
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: key }),
-      // A start switches a stopped deployment back on.
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
-    ]);
-  };
+  const key = workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId);
   const start = useMutation({
     ...startDevboxMutationOptions(workspaceId, deploymentId),
-    onSettled: settle,
+    onSuccess: async (next) => {
+      queryClient.setQueryData(key, next);
+      // A start switches a stopped deployment back on.
+      await queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.deployments.root(workspaceId),
+      });
+    },
+    onError: () => queryClient.invalidateQueries({ queryKey: key }),
   });
   const stop = useMutation({
     ...stopDevboxMutationOptions(workspaceId, deploymentId),
-    onSettled: settle,
+    onSuccess: (next) => queryClient.setQueryData(key, next),
+    onError: () => queryClient.invalidateQueries({ queryKey: key }),
   });
   if (!devbox) return null;
 
@@ -93,7 +96,10 @@ export function DevboxActions({
           variant="outline"
           size="sm"
           disabled={busy}
-          onClick={() => start.mutate()}
+          onClick={() => {
+            stop.reset();
+            start.mutate();
+          }}
         >
           <Play />
           {start.isPending ? "Starting" : "Start"}
@@ -104,7 +110,10 @@ export function DevboxActions({
           variant="outline"
           size="sm"
           disabled={busy}
-          onClick={() => stop.mutate()}
+          onClick={() => {
+            start.reset();
+            stop.mutate();
+          }}
         >
           <Square className="fill-current" />
           {stop.isPending ? "Stopping" : "Stop"}
@@ -164,11 +173,53 @@ export function DevboxConnect({
             value={devbox.disk ? formatBytes(devbox.disk.size_bytes) : "Created on first start"}
           />
         </FactGrid>
-        {devbox.phase === "failed" && devbox.phase_reason ? (
-          <p className="text-xs break-words text-destructive">{devbox.phase_reason}</p>
+        {devbox.phase === "failed" && (devbox.phase_reason || devbox.failed_container_id) ? (
+          <div className="flex min-w-0 items-start gap-3 text-xs">
+            {devbox.phase_reason ? (
+              <p className="min-w-0 break-words text-destructive">{devbox.phase_reason}</p>
+            ) : null}
+            {devbox.failed_container_id ? (
+              <StartLogs workspaceId={workspaceId} containerId={devbox.failed_container_id} />
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>
+  );
+}
+
+/** The failed start's container logs, in a drawer over the page. */
+function StartLogs({ workspaceId, containerId }: { workspaceId: string; containerId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className="interactive-link shrink-0 text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen(true)}
+      >
+        View logs
+      </button>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          aria-describedby={undefined}
+          className="gap-0 bg-background max-sm:left-0 max-sm:right-0 max-sm:max-w-none max-sm:border-l-0 sm:max-w-3xl xl:max-w-4xl"
+        >
+          <DrawerHeader className="flex min-h-14 items-center">
+            <SheetTitle>Start logs</SheetTitle>
+          </DrawerHeader>
+          {open ? (
+            <PanelErrorBoundary key={containerId} title="Logs could not be displayed">
+              <LogViewer
+                workspaceId={workspaceId}
+                scope={{ containerId }}
+                className="min-h-0 flex-1"
+              />
+            </PanelErrorBoundary>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 

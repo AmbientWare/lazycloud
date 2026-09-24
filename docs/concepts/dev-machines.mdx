@@ -86,7 +86,8 @@ from when the last session closes. `keep_warm=-1` suits an agent left to work
 unattended.
 
 On the devbox's page in the dashboard, Start boots it without a connection and
-Stop ends it now, as if its idle time had run out.
+keeps it up for at least 30 idle minutes. Stop ends it now, and it stays stopped
+until the next Start or connection.
 
 ## Stop and clean up
 
