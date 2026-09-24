@@ -9,6 +9,7 @@ from shared.routing import AgentBackendRoute
 
 from worker.container_client.models import ContainerExecResponse
 from worker.container_service.models import (
+    SandboxFilesystemOutput,
     SandboxProcessEvent,
     WorkerContainerServiceInstance,
     WorkerSandboxProcess,
@@ -56,6 +57,8 @@ class WorkerSandboxProcessManager(Protocol):
     ) -> Iterable[SandboxProcessEvent]: ...
 
     def ack(self, pid: int, seq: int, *, ok: bool) -> None: ...
+
+    def run_filesystem(self, payload: str) -> SandboxFilesystemOutput: ...
 
     def status(self, pid: int) -> int | None: ...
 

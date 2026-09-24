@@ -64,6 +64,7 @@ from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
 from sqlalchemy import (
     and_,
     case,
+    cast,
     delete,
     exists,
     func,
@@ -75,9 +76,11 @@ from sqlalchemy import (
     type_coerce,
     update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
+
+_ROOT_DISK_PATH = f'$[*] ? (!exists(@.mount_path) || @.mount_path == "{DISK_ROOT_MOUNT_PATH}")'
 
 
 @dataclass(frozen=True, slots=True)
@@ -666,11 +669,15 @@ class StubRepository:
         return stub_from_table(row) if row is not None else None
 
     def mounts_root_disk(self, stub_id: str, *, workspace_id: str) -> bool:
-        """Whether the stub mounts a disk at `/`, answered in SQL from its disk list alone."""
+        """Whether the stub mounts a disk at `/`, answered in SQL from its disk list alone.
+
+        A stored disk leaves `mount_path` out when it is the default `/`, so a
+        disk without one is a root disk.
+        """
         disks = type_coerce(StubTable.configuration, JSONB)["disks"]
         return bool(
             self.session.scalar(
-                select(disks.contains([{"mount_path": DISK_ROOT_MOUNT_PATH}])).where(
+                select(func.jsonb_path_exists(disks, cast(_ROOT_DISK_PATH, JSONPATH))).where(
                     StubTable.id == stub_id,
                     StubTable.workspace_id == workspace_id,
                 )

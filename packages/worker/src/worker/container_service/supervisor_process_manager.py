@@ -15,6 +15,7 @@ from pydantic import Field
 from shared.contracts import ContractModel
 
 from worker.container_service.models import (
+    SandboxFilesystemOutput,
     SandboxProcessEvent,
     SandboxProcessEventType,
     WorkerContainerServiceInstance,
@@ -28,6 +29,10 @@ SANDBOX_SUPERVISOR_PORT = 7111
 DEFAULT_SUPERVISOR_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_SUPERVISOR_RECONNECT_TIMEOUT_SECONDS = 30.0
 DEFAULT_SUPERVISOR_DRAIN_TIMEOUT_SECONDS = 5.0
+SUPERVISOR_WITHOUT_FILESYSTEM_MESSAGE = (
+    "this container's sandbox supervisor is too old to read or write its files; "
+    "restart the devbox or container to update it"
+)
 
 
 class SandboxSupervisorError(RuntimeError):
@@ -45,6 +50,7 @@ class SupervisorRequest(ContractModel):
     ack_seq: int = 0
     ok: bool = False
     token: str = Field(default="", repr=False)
+    payload: str = ""
 
 
 class SupervisorProcess(ContractModel):
@@ -196,6 +202,38 @@ class SupervisorSandboxProcessManager:
             self._transport.send(SupervisorRequest(op="ack", pid=pid, ack_seq=seq, ok=ok))
             if ok:
                 self._ack_seq = max(self._ack_seq, seq)
+
+    def run_filesystem(self, payload: str) -> SandboxFilesystemOutput:
+        """Run the file helper outside the process log and collect all of its output."""
+        transport = _SupervisorTransport.connect(
+            self.host,
+            self.port,
+            token=self.token,
+            timeout_seconds=5.0,
+            retry=False,
+            coordinator=self.connections,
+        )
+        transport.connection.settimeout(None)
+        stdout = bytearray()
+        try:
+            transport.send(SupervisorRequest(op="filesystem", payload=payload))
+            while response := transport.receive():
+                self._validate(response)
+                if response.type == "chunk":
+                    stdout.extend(base64.b64decode(response.data))
+                elif response.type == "exited":
+                    return SandboxFilesystemOutput(
+                        stdout=bytes(stdout),
+                        stderr=response.stderr.encode(),
+                        exit_code=response.exit_code,
+                    )
+                elif response.type == "error":
+                    if response.error == "unknown operation":
+                        raise SandboxSupervisorError(SUPERVISOR_WITHOUT_FILESYSTEM_MESSAGE)
+                    raise SandboxSupervisorError(response.error or "sandbox file operation failed")
+            raise SandboxSupervisorError("sandbox supervisor ended a file operation early")
+        finally:
+            transport.close()
 
     def status(self, pid: int) -> int | None:
         response = self._request(SupervisorRequest(op="status", pid=pid))
