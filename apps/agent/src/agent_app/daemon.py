@@ -1328,9 +1328,10 @@ class AgentDaemonService:
         timings = StepTimings()
         updater = AgentUpdater.running(self.state_store.state_dir)
         active_slots = self.worker_controller.active_slots()
-        # The image check started at boot takes a fraction of a second; waiting
-        # for it lets this stream report the image instead of the next one.
-        self.worker_controller.wait_for_image_preparation(IMAGE_REPORT_WAIT_SECONDS)
+        # The first stream waits briefly for an image check started at boot so it
+        # can report the image; later streams never wait on a pull in progress.
+        if current_iterations == 1:
+            self.worker_controller.wait_for_image_preparation(IMAGE_REPORT_WAIT_SECONDS)
         self._reported_worker_images = self.worker_controller.prepared_worker_images()
         with timings.step("stream"):
             stream = self.client.stream_agent(
