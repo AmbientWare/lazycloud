@@ -33,9 +33,10 @@ uv run lazycloud deploy dev:box
 uv run lazycloud ssh box
 ```
 
-`lazycloud ssh` opens a shell as `root`. LazyCloud serves SSH itself, so the
-image needs no `sshd`, and the devbox needs no command: left unset, the
-container stays up doing nothing.
+`lazycloud ssh` opens a shell as `root` in `/root`, on the disk. A devbox gets
+no copy of the app's source, so `git clone` your code onto the disk, where it
+stays. LazyCloud serves SSH itself, so the image needs no `sshd`, and the
+devbox needs no command: left unset, the container stays up doing nothing.
 
 `disk=` is the size of the root disk, which is named after the devbox. The
 image stays the base layer, and everything the devbox writes on top of it lands

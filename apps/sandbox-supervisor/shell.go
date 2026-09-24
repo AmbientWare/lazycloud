@@ -550,7 +550,12 @@ func shellChildEnvironment(term string) []string {
 	return append(environment, "TERM="+term)
 }
 
+// The worker starts the container in the directory its role works from, so a
+// devbox shell opens on its disk rather than in a source mount.
 func shellWorkingDirectory() string {
+	if current, err := os.Getwd(); err == nil && current != "/" {
+		return current
+	}
 	for _, candidate := range []string{"/mnt/code", "/workspace", os.Getenv("HOME"), "/"} {
 		if candidate == "" {
 			continue

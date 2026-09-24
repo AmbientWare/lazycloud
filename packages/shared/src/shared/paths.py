@@ -8,6 +8,7 @@ from shared.app_identity import ENV_PREFIX, HOME_DIR
 
 HOME_ENV = f"{ENV_PREFIX}_HOME"
 DEFAULT_SANDBOX_WORKDIR = "/workspace"
+DEVBOX_WORKDIR = "/root"
 
 
 def state_home(env: Mapping[str, str] | None = None) -> Path:
@@ -16,4 +17,4 @@ def state_home(env: Mapping[str, str] | None = None) -> Path:
     return Path(raw).expanduser().resolve()
 
 
-__all__ = ["DEFAULT_SANDBOX_WORKDIR", "HOME_ENV", "state_home"]
+__all__ = ["DEFAULT_SANDBOX_WORKDIR", "DEVBOX_WORKDIR", "HOME_ENV", "state_home"]
