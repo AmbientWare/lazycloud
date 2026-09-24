@@ -187,6 +187,7 @@ class ComputeService:
     capacity_owner_mutations: CapacityOwnerMutationLease | None = None
     reclaim: ComputeReclaimPolicy = field(default_factory=ComputeReclaimPolicy)
     fleet_policy: FleetCapacityPolicy = field(default_factory=FleetCapacityPolicy)
+    _warm_decisions: dict[bool, str] = field(default_factory=dict, init=False, repr=False)
     source_cache_lifecycle: SourceCacheStorageLifecycleService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -3820,22 +3821,19 @@ class ComputeService:
             + int(index < minimum % len(distinct_candidates))
             for index, candidate in enumerate(distinct_candidates)
         }
-        probes = [
+        warm = ",".join(
+            offer.id for _, offer, unit_id in distinct_candidates if unit_id in warm_owners
+        )
+        probes = ",".join(
             offer.id for _, offer, unit_id in distinct_candidates if unit_id not in warm_owners
-        ]
-        if probes or short_regions:
-            LOGGER.info(
-                "platform warm capacity for preemptible=%s: target %d, warm %s, trying %s, "
-                "cooling regions %s",
-                preemptible,
-                minimum,
-                ",".join(
-                    offer.id for _, offer, unit_id in distinct_candidates if unit_id in warm_owners
-                )
-                or "none",
-                ",".join(probes) or "none",
-                ",".join(sorted(f"{cloud}:{region}" for cloud, region in short_regions)) or "none",
-            )
+        )
+        cooling = ",".join(sorted(f"{cloud}:{region}" for cloud, region in short_regions))
+        decision = f"target {minimum}, warm {warm or 'none'}, trying {probes or 'none'}, "
+        decision += f"cooling regions {cooling or 'none'}"
+        # Every replica runs this pass every minute; a line per choice, not per pass.
+        if decision != self._warm_decisions.get(preemptible):
+            self._warm_decisions[preemptible] = decision
+            LOGGER.info("platform warm capacity for preemptible=%s: %s", preemptible, decision)
         prepared_count = 0
         for provider, offer, unit_id in distinct_candidates:
             policy = provider.policy
