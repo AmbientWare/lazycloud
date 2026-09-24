@@ -33,6 +33,7 @@ commands:
   list              --root R
   collect           --root R --disk D --store STORE.json --generation G
   usage             --root R --disk D
+  serve             --root R --disk D --store STORE.json
 `
 
 // exitInsufficientSpace tells the worker to evict cached disks and retry.
@@ -53,6 +54,7 @@ var commands = map[string]command{
 	"list":             runList,
 	"collect":          runCollect,
 	"usage":            runUsage,
+	"serve":            runServe,
 }
 
 func main() {

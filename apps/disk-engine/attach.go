@@ -20,6 +20,9 @@ type attachResult struct {
 	Generation    int64  `json:"generation"`
 	RestoredBytes int64  `json:"restored_bytes"`
 	ReusedLocal   bool   `json:"reused_local"`
+	// Lazy is true when the restore fetched no data up front: the published
+	// layers fill in from the bucket as they are read.
+	Lazy bool `json:"lazy"`
 }
 
 func runAttach(ctx context.Context, args []string) (any, error) {
@@ -72,6 +75,11 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if state != nil && state.Attachment == nil && state.ServerPID != 0 {
+		if err := teardown(ctx, p, state); err != nil {
+			return nil, err
+		}
+	}
 	if state != nil && state.Attachment != nil {
 		healthy, err := attachmentHealthy(p, state)
 		if err != nil {
@@ -121,19 +129,27 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	}
 	// Reusing the local copy downloads nothing, so it needs no reserve. The
 	// worker watches the room left for the head's writes. A restore is planned
-	// before the stale local copy is removed and counts that copy as free.
+	// before the stale local copy is removed and counts that copy as free. A
+	// lazy restore fills every layer in eventually, so it needs room for all
+	// of them; one that does not fit restores eagerly, committing as it goes.
 	var plan []bool
+	lazy := false
 	if !reuse {
 		have, err := freeBytes(p, true)
 		if err != nil {
 			return nil, err
 		}
-		if plan, err = planRestore(p, have, *minFree, manifests); err != nil {
-			return nil, err
+		if lazy = lazyFits(have, *minFree, manifests); !lazy {
+			if plan, err = planRestore(p, have, *minFree, manifests); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if reuse {
 		result.ReusedLocal = true
+		if err := settleLazyLayers(p, state); err != nil {
+			return nil, err
+		}
 		if state.SizeBytes < *size {
 			if err := growHead(ctx, p, state, *size); err != nil {
 				return nil, err
@@ -154,6 +170,12 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			}
 			state.Layers = []layer{base}
 			format = true
+		} else if lazy {
+			if err := restoreLazy(ctx, p, state, store, chain, manifests); err != nil {
+				return nil, err
+			}
+			result.Lazy = true
+			state.GrowFilesystem = manifests[len(manifests)-1].VirtualSizeBytes < *size
 		} else {
 			restored, err := restoreChain(ctx, p, state, store, chain, manifests, plan)
 			if err != nil {
@@ -168,9 +190,15 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 		}
 	}
 
+	if state.hasLazy() {
+		if err := startServer(ctx, p, state, *storePath); err != nil {
+			return nil, err
+		}
+	}
 	pid, err := startDaemon(ctx, p, state)
 	if err != nil {
-		return nil, err
+		stopErr := stopServer(context.WithoutCancel(ctx), p, state)
+		return nil, errors.Join(err, stopErr, saveState(p, state))
 	}
 	state.Attachment = &attachment{Mountpoint: target, DaemonPID: pid}
 	state.LastUsedAt = time.Now().UTC()
@@ -236,12 +264,18 @@ func reusable(p diskPaths, state *diskState, newest chainEntry) (bool, error) {
 		return false, nil
 	}
 	for _, l := range state.Layers {
-		present, err := pathExists(p.layerPath(l))
-		if err != nil {
-			return false, err
+		paths := []string{p.layerPath(l)}
+		if l.Lazy {
+			paths = append(paths, manifestPath(p, l), bitmapPath(p, l))
 		}
-		if !present {
-			return false, nil
+		for _, path := range paths {
+			present, err := pathExists(path)
+			if err != nil {
+				return false, err
+			}
+			if !present {
+				return false, nil
+			}
 		}
 	}
 	return true, nil
@@ -480,7 +514,8 @@ func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *obj
 
 func attachmentHealthy(p diskPaths, state *diskState) (bool, error) {
 	a := state.Attachment
-	if !a.Mounted || a.Device == "" || !daemonAlive(p, a.DaemonPID) || !nbdConnected(a.Device) {
+	if !a.Mounted || a.Device == "" || !daemonAlive(p, a.DaemonPID) || !nbdConnected(a.Device) ||
+		(state.hasLazy() && !serverAlive(p, state.ServerPID)) {
 		return false, nil
 	}
 	points, err := mountsOf(a.Device)
@@ -497,7 +532,11 @@ func attachmentHealthy(p diskPaths, state *diskState) (bool, error) {
 func teardown(ctx context.Context, p diskPaths, state *diskState) error {
 	a := state.Attachment
 	if a == nil {
-		return nil
+		// An attach that stopped between starting `serve` and the daemon.
+		if state.ServerPID == 0 {
+			return nil
+		}
+		return errors.Join(stopServer(ctx, p, state), saveState(p, state))
 	}
 	if a.Device != "" {
 		points, err := mountsOf(a.Device)
@@ -538,6 +577,10 @@ func teardown(ctx context.Context, p diskPaths, state *diskState) error {
 		}
 	} else {
 		state.HeadFresh = false
+	}
+	// After the daemon, which reads the lazy layers through it.
+	if err := stopServer(ctx, p, state); err != nil {
+		return err
 	}
 	state.Attachment = nil
 	state.LastUsedAt = time.Now().UTC()

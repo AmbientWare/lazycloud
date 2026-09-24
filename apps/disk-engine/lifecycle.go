@@ -202,8 +202,19 @@ func runPublish(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Flattening reads every layer's file directly, so it waits until the lazy
+	// ones hold all their chunks; until then the layer publishes as it is.
+	flat := *flatten
+	for _, l := range state.Layers[:state.lowestLocal()] {
+		if !flat {
+			break
+		}
+		if flat, err = lazyComplete(p, l); err != nil {
+			return nil, err
+		}
+	}
 	var result publishResult
-	if *flatten {
+	if flat {
 		result, err = uploadFlattened(ctx, store, p, state.Layers[:index+1], *generation)
 	} else {
 		result, err = uploadFile(ctx, store, p.id, p.layerPath(target), *generation, *parent)
@@ -360,11 +371,14 @@ func runCompact(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 	// Published layers form a prefix of the chain; the head is never committed.
-	top := 0
-	for i := 1; i < len(state.Layers)-1 && state.Layers[0].Generation > 0 && state.Layers[i].Generation > 0; i++ {
+	// Lazy layers are read through `serve` and never written, so the commit
+	// lands in the lowest layer above them.
+	bottom := state.lowestLocal()
+	top := bottom
+	for i := bottom + 1; i < len(state.Layers)-1 && state.Layers[bottom].Generation > 0 && state.Layers[i].Generation > 0; i++ {
 		top = i
 	}
-	if top == 0 {
+	if top == bottom {
 		return compactResult{}, nil
 	}
 	client, err := dialQMP(ctx, p.qmpSocket())
@@ -376,7 +390,7 @@ func runCompact(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 
-	base := state.Layers[0]
+	base := state.Layers[bottom]
 	jobID := fmt.Sprintf("compact-%d", state.Layers[top].Seq)
 	err = client.execute("block-commit", map[string]any{
 		"job-id":       jobID,
@@ -393,9 +407,9 @@ func runCompact(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 
-	removed := slices.Clone(state.Layers[1 : top+1])
-	state.Layers[0].Generation = state.Layers[top].Generation
-	state.Layers = slices.Delete(state.Layers, 1, top+1)
+	removed := slices.Clone(state.Layers[bottom+1 : top+1])
+	state.Layers[bottom].Generation = state.Layers[top].Generation
+	state.Layers = slices.Delete(state.Layers, bottom+1, top+1)
 	if err := saveState(p, state); err != nil {
 		return nil, err
 	}

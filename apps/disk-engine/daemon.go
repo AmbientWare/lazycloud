@@ -119,6 +119,16 @@ func chainNode(p diskPaths, layers []layer, top int) map[string]any {
 		"node-name": layers[top].node(),
 		"file":      fileChild(p.layerPath(layers[top])),
 	}
+	if layers[top].Lazy {
+		// Read through `serve`, which fetches what the file does not hold yet.
+		node["read-only"] = true
+		node["file"] = map[string]any{
+			"driver":    "nbd",
+			"read-only": true,
+			"server":    map[string]any{"type": "unix", "path": p.layersSocket()},
+			"export":    layers[top].file(),
+		}
+	}
 	if top == 0 {
 		// A raw base takes no backing option at all.
 		if !layers[0].Raw {
@@ -144,13 +154,15 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 	}
 	head := chainNode(p, state.Layers, len(state.Layers)-1)
 	head["discard"] = "unmap"
-	// Compaction commits zeroes a discard left in the head into the base;
-	// detecting them there frees the base's space instead of writing them.
+	// Compaction commits zeroes a discard left in the head into the layer it
+	// compacts into, the lowest one the daemon opens as a file; detecting them
+	// there frees its space instead of writing them.
+	target := state.lowestLocal()
 	base := head
-	for base["backing"] != nil {
+	for i := len(state.Layers) - 1; i > target; i-- {
 		base = base["backing"].(map[string]any)
 	}
-	if len(state.Layers) > 1 {
+	if target < len(state.Layers)-1 {
 		base["discard"] = "unmap"
 		base["detect-zeroes"] = "unmap"
 	}

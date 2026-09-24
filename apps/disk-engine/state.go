@@ -29,13 +29,17 @@ type diskPaths struct {
 	id   string
 }
 
-func (p diskPaths) dir() string       { return filepath.Join(p.root, p.id) }
-func (p diskPaths) statePath() string { return filepath.Join(p.dir(), "state.json") }
-func (p diskPaths) layerDir() string  { return filepath.Join(p.dir(), "layers") }
-func (p diskPaths) runDir() string    { return filepath.Join(p.dir(), "run") }
-func (p diskPaths) qmpSocket() string { return filepath.Join(p.runDir(), "qmp.sock") }
-func (p diskPaths) nbdSocket() string { return filepath.Join(p.runDir(), "nbd.sock") }
-func (p diskPaths) pidFile() string   { return filepath.Join(p.runDir(), "qsd.pid") }
+func (p diskPaths) dir() string             { return filepath.Join(p.root, p.id) }
+func (p diskPaths) statePath() string       { return filepath.Join(p.dir(), "state.json") }
+func (p diskPaths) layerDir() string        { return filepath.Join(p.dir(), "layers") }
+func (p diskPaths) runDir() string          { return filepath.Join(p.dir(), "run") }
+func (p diskPaths) qmpSocket() string       { return filepath.Join(p.runDir(), "qmp.sock") }
+func (p diskPaths) nbdSocket() string       { return filepath.Join(p.runDir(), "nbd.sock") }
+func (p diskPaths) pidFile() string         { return filepath.Join(p.runDir(), "qsd.pid") }
+func (p diskPaths) layersSocket() string    { return filepath.Join(p.runDir(), "lazy.sock") }
+func (p diskPaths) serveLog() string        { return filepath.Join(p.runDir(), "serve.log") }
+func (p diskPaths) serveStatusPath() string { return filepath.Join(p.runDir(), "serve.json") }
+func (p diskPaths) heatPath() string        { return filepath.Join(p.dir(), "heat") }
 func (p diskPaths) layerPath(l layer) string {
 	return filepath.Join(p.layerDir(), l.file())
 }
@@ -45,7 +49,7 @@ func (p diskPaths) layerPath(l layer) string {
 func (p diskPaths) lockPath() string { return filepath.Join(p.root, ".locks", p.id) }
 
 func (p diskPaths) checkSocketPaths() error {
-	for _, path := range []string{p.qmpSocket(), p.nbdSocket()} {
+	for _, path := range []string{p.qmpSocket(), p.nbdSocket(), p.layersSocket()} {
 		if len(path) > maxSocketPath {
 			return fmt.Errorf("socket path %s is %d bytes, over the %d a unix socket allows; use a shorter --root", path, len(path), maxSocketPath)
 		}
@@ -64,6 +68,10 @@ type layer struct {
 	// Raw marks a base restored from a flattened generation, which holds the
 	// disk's contents as a sparse raw file rather than as qcow2.
 	Raw bool `json:"raw,omitempty"`
+	// Lazy marks a published layer restored without its chunks, which `serve`
+	// fetches on first read. The daemon opens it through `serve` until an
+	// attach finds every chunk present.
+	Lazy bool `json:"lazy,omitempty"`
 }
 
 const (
@@ -124,6 +132,8 @@ type diskState struct {
 	Pending                 *pendingPublish   `json:"pending_publish,omitempty"`
 	Attachment              *attachment       `json:"attachment,omitempty"`
 	LastUsedAt              time.Time         `json:"last_used_at"`
+	// ServerPID is the `serve` process reading the lazy layers, while one runs.
+	ServerPID int `json:"server_pid,omitempty"`
 }
 
 func (s *diskState) record(generation int64) (publishedRecord, bool) {
@@ -141,6 +151,19 @@ func (s *diskState) newLayer() layer {
 	s.NextSeq++
 	return layer{Seq: s.NextSeq}
 }
+
+// lowestLocal is the index of the first layer the daemon opens as a plain
+// file; every layer below it is lazy.
+func (s *diskState) lowestLocal() int {
+	for i, l := range s.Layers {
+		if !l.Lazy {
+			return i
+		}
+	}
+	return len(s.Layers)
+}
+
+func (s *diskState) hasLazy() bool { return s.lowestLocal() > 0 }
 
 func (s *diskState) oldestUnpublished() int {
 	for i := 0; i < len(s.Layers)-1; i++ {

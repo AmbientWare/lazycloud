@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"time"
 )
@@ -105,9 +106,13 @@ func headDirty(ctx context.Context, p diskPaths, state *diskState) (bool, error)
 }
 
 type usageResult struct {
-	// UnmergedBytes is the space the layers above the base occupy. A
-	// compaction needs room to copy each of them into the base.
+	// UnmergedBytes is the space the layers above the one compaction commits
+	// into occupy. A compaction needs room to copy each of them into it.
 	UnmergedBytes int64 `json:"unmerged_bytes"`
+	// Unreadable says why the disk failed a read, empty while it has not. A
+	// lazy layer whose chunk could not be fetched, or whose server stopped,
+	// has already given the workload an I/O error.
+	Unreadable string `json:"unreadable"`
 }
 
 // runUsage reads the disk's state without its lock, because the worker asks
@@ -124,12 +129,24 @@ func runUsage(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 	var result usageResult
-	for _, l := range state.Layers[1:] {
+	for _, l := range state.Layers[min(state.lowestLocal()+1, len(state.Layers)):] {
 		allocated, err := allocatedBytes(p.layerPath(l))
 		if err != nil {
 			return nil, err
 		}
 		result.UnmergedBytes += allocated
+	}
+	if state.Attachment != nil && state.hasLazy() {
+		status, err := readServeStatus(p)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case status.FailedReads > 0:
+			result.Unreadable = fmt.Sprintf("%d reads failed; the last: %s", status.FailedReads, status.LastError)
+		case state.Attachment.Mounted && !serverAlive(p, state.ServerPID):
+			result.Unreadable = fmt.Sprintf("the process serving its lazy layers exited; see %s", p.serveLog())
+		}
 	}
 	return result, nil
 }
