@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Square } from "lucide-react";
+import { Loader2, Play, Square } from "lucide-react";
 
 import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
@@ -45,6 +45,38 @@ const PHASE_LABELS: Record<DevboxPhase, string> = {
   failed: "Start failed",
 };
 
+type DevboxAction =
+  { kind: "start" } | { kind: "stop" } | { kind: "busy"; label: string; reason: string };
+
+/**
+ * The one power action the header offers, from the server's state and what the
+ * person asked for. A start is followed by the server's own `starting` state; a
+ * stop is not visible in it until the container is gone, so the request is held
+ * locally until the server reports the devbox stopped.
+ */
+function devboxAction(
+  devbox: Devbox,
+  request: { starting: boolean; stopping: boolean },
+): DevboxAction {
+  if (request.stopping) {
+    return { kind: "busy", label: "Stopping…", reason: "Stopping the container" };
+  }
+  if (devbox.phase === "stopping") {
+    return {
+      kind: "busy",
+      label: "Stopping…",
+      reason: "Saving disk. Start is available once it is saved.",
+    };
+  }
+  if (devbox.state === "starting") {
+    return { kind: "busy", label: "Starting…", reason: PHASE_LABELS[devbox.phase] };
+  }
+  if (request.starting) {
+    return { kind: "busy", label: "Starting…", reason: "Asking for a machine" };
+  }
+  return devbox.state === "running" ? { kind: "stop" } : { kind: "start" };
+}
+
 /** Shell, Start and Stop for the devbox header. */
 export function DevboxActions({
   workspaceId,
@@ -54,11 +86,17 @@ export function DevboxActions({
   deploymentId: string;
 }) {
   const queryClient = useQueryClient();
-  const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
+  const [stopRequested, setStopRequested] = useState(false);
+  const status = useQuery(
+    devboxQueryOptions(workspaceId, deploymentId, { awaitingChange: stopRequested }),
+  );
   const devbox = status.data;
   const key = workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId);
+  // A poll that left before the request could land after its answer and undo it.
+  const cancelPolls = () => queryClient.cancelQueries({ queryKey: key });
   const start = useMutation({
     ...startDevboxMutationOptions(workspaceId, deploymentId),
+    onMutate: cancelPolls,
     onSuccess: async (next) => {
       queryClient.setQueryData(key, next);
       // A start switches a stopped deployment back on.
@@ -70,12 +108,31 @@ export function DevboxActions({
   });
   const stop = useMutation({
     ...stopDevboxMutationOptions(workspaceId, deploymentId),
+    onMutate: cancelPolls,
     onSuccess: (next) => queryClient.setQueryData(key, next),
-    onError: () => queryClient.invalidateQueries({ queryKey: key }),
+    onError: () => {
+      setStopRequested(false);
+      return queryClient.invalidateQueries({ queryKey: key });
+    },
   });
+  if (stopRequested && !stop.isPending && devbox?.state === "stopped") {
+    setStopRequested(false);
+  }
+
+  if (status.isPending) {
+    return (
+      <div className="flex items-center gap-2" aria-hidden="true">
+        <Skeleton className="h-8 w-20" />
+        <Skeleton className="h-8 w-24" />
+      </div>
+    );
+  }
   if (!devbox) return null;
 
-  const busy = start.isPending || stop.isPending || devbox.phase === "stopping";
+  const action = devboxAction(devbox, {
+    starting: start.isPending,
+    stopping: stop.isPending || stopRequested,
+  });
   const error = start.error ?? stop.error;
 
   return (
@@ -88,35 +145,49 @@ export function DevboxActions({
       <ShellButton
         containerId={devbox.container_id}
         running={devbox.state === "running"}
-        disabledReason="Devbox is not running"
+        disabledReason={
+          devbox.state === "starting"
+            ? "Shell opens once the devbox is running"
+            : "Start the devbox to open a shell"
+        }
       />
-      {devbox.state === "stopped" ? (
+      {action.kind === "busy" ? (
+        // A disabled button takes no pointer events, so the wrapper carries its reason.
+        <span className="inline-flex" title={action.reason}>
+          <Button type="button" variant="outline" size="sm" className="min-w-26" disabled>
+            <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            {action.label}
+            <span className="sr-only">{action.reason}</span>
+          </Button>
+        </span>
+      ) : action.kind === "start" ? (
         <Button
           type="button"
           variant="outline"
           size="sm"
-          disabled={busy}
+          className="min-w-26"
           onClick={() => {
             stop.reset();
             start.mutate();
           }}
         >
           <Play />
-          {start.isPending ? "Starting" : "Start"}
+          Start
         </Button>
       ) : (
         <Button
           type="button"
           variant="outline"
           size="sm"
-          disabled={busy}
+          className="min-w-26"
           onClick={() => {
             start.reset();
+            setStopRequested(true);
             stop.mutate();
           }}
         >
           <Square className="fill-current" />
-          {stop.isPending ? "Stopping" : "Stop"}
+          Stop
         </Button>
       )}
     </>
