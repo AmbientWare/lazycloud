@@ -25,7 +25,6 @@ from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import (
     AgentCapacityState,
     AgentWorkerSlotStatus,
-    CapacitySignalKind,
     PreflightSeverity,
 )
 from shared.contracts import ContractModel
@@ -871,7 +870,6 @@ class AgentAuthorityRevoked(ContractModel):
 
 
 class AgentCapacityInterruptionNotice(ContractModel):
-    kind: CapacitySignalKind = CapacitySignalKind.Interruption
     reason: str = Field(min_length=1, max_length=240)
     observed_at: datetime = Field(default_factory=utc_now)
     notice_at: datetime | None = None

@@ -2331,15 +2331,7 @@ class GatewayControlService:
             if current_observed_at is not None and request.observed_at < current_observed_at:
                 raise ConflictError("agent capacity interruption observation is stale")
             lifecycle = tuple(AgentCapacityState)
-            supersedes_planned_drain = (
-                enrollment.capacity_state is AgentCapacityState.Draining
-                and enrollment.capacity_notice_at is None
-                and request.state is AgentCapacityState.AtRisk
-            )
-            if (
-                lifecycle.index(request.state) < lifecycle.index(enrollment.capacity_state)
-                and not supersedes_planned_drain
-            ):
+            if lifecycle.index(request.state) < lifecycle.index(enrollment.capacity_state):
                 raise ConflictError("agent capacity interruption cannot reopen admission")
             if enrollment.capacity_notice_at is not None and (
                 request.notice_at is None or request.notice_at > enrollment.capacity_notice_at

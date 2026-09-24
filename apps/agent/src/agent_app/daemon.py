@@ -103,7 +103,6 @@ from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import AGENT_NAME, NAME
 from shared.compute_enrollment import (
     AgentCapacityState,
-    CapacitySignalKind,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
 )
@@ -1328,15 +1327,6 @@ class AgentDaemonService:
         if state.capacity_state in {AgentCapacityState.Preempting, AgentCapacityState.Cordoned}:
             return state
         if (
-            notice.kind is CapacitySignalKind.Rebalance
-            and state.capacity_state is not AgentCapacityState.Available
-            and not (
-                state.capacity_state is AgentCapacityState.Draining
-                and state.capacity_notice_at is None
-            )
-        ):
-            return state
-        if (
             state.capacity_state is AgentCapacityState.Draining
             and state.capacity_notice_at is not None
             and notice.notice_at is not None
@@ -1347,9 +1337,7 @@ class AgentDaemonService:
         updated = state.model_copy(
             update={
                 "capacity_state": (
-                    AgentCapacityState.AtRisk
-                    if notice.kind is CapacitySignalKind.Rebalance
-                    else AgentCapacityState.Draining
+                    AgentCapacityState.Draining
                     if notice.notice_at is not None
                     else AgentCapacityState.Preempting
                 ),
@@ -1371,13 +1359,10 @@ class AgentDaemonService:
         runtime_http_url: str,
     ) -> AgentDaemonRunResult:
         if (
-            state.capacity_state in {AgentCapacityState.AtRisk, AgentCapacityState.Draining}
+            state.capacity_state is AgentCapacityState.Draining
             and not self._capacity_shutdown.due()
         ):
-            if (
-                state.capacity_notice_at is not None
-                or state.capacity_state is AgentCapacityState.AtRisk
-            ) and not self._interruption_reported:
+            if state.capacity_notice_at is not None and not self._interruption_reported:
                 self._record_capacity_interruption(
                     state,
                     capacity_state=state.capacity_state,
@@ -1759,12 +1744,7 @@ def _provider_capacity_interruption_detector(
         if notice is None:
             return None
         return AgentCapacityInterruptionNotice(
-            kind=notice.kind,
-            reason=(
-                f"aws-ec2-spot-{notice.action.value}"
-                if notice.action is not None
-                else "aws-ec2-spot-rebalance"
-            ),
+            reason=f"aws-ec2-spot-{notice.action.value}",
             observed_at=notice.observed_at,
             notice_at=notice.notice_at,
         )
@@ -2034,8 +2014,7 @@ def _capacity_interruption_result(
         tunnel_connected=tunnel_connected,
         runtime_http_url=runtime_http_url,
         capacity_state=state.capacity_state,
-        capacity_interrupted=state.capacity_state
-        not in {AgentCapacityState.AtRisk, AgentCapacityState.Draining},
+        capacity_interrupted=state.capacity_state is not AgentCapacityState.Draining,
     )
 
 

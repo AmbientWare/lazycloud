@@ -10,14 +10,12 @@ export function capacityBadge({
 }: {
   lifecycle: MachineLifecycle;
   connected: boolean;
-  capacityState: "available" | "at_risk" | "draining" | "preempting" | "cordoned";
+  capacityState: "available" | "draining" | "preempting" | "cordoned";
 }): { label: string; tone: Tone } | null {
   if (lifecycle === "ready" && !connected) return { label: "Offline", tone: "danger" };
   switch (capacityState) {
     case "available":
       return null;
-    case "at_risk":
-      return { label: "At risk", tone: "warning" };
     case "preempting":
       return { label: "Preempting", tone: "danger" };
     case "draining":

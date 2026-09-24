@@ -2059,7 +2059,6 @@ class ComputeMachineEnrollmentRepository:
                 ComputeMachineEnrollmentTable.status == ComputeMachineEnrollmentStatus.Active.value,
                 ComputeMachineEnrollmentTable.capacity_state.in_(
                     (
-                        AgentCapacityState.AtRisk.value,
                         AgentCapacityState.Draining.value,
                         AgentCapacityState.Preempting.value,
                         AgentCapacityState.Cordoned.value,

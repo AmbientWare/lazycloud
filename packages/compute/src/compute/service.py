@@ -2796,10 +2796,7 @@ class ComputeService:
             enrollment = enrollments.by_machine(workspace_id, machine_id, for_update=True)
             if enrollment is None:
                 raise KeyError(f"machine enrollment not found: {machine_id}")
-            if enrollment.capacity_state not in {
-                AgentCapacityState.Available,
-                AgentCapacityState.AtRisk,
-            }:
+            if enrollment.capacity_state is not AgentCapacityState.Available:
                 return False
             enrollments.save(
                 enrollment.model_copy(

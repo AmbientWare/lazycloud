@@ -131,7 +131,6 @@ export type Machine = z.infer<typeof machineSchema>;
 const machinePreflightSeveritySchema = z.enum(["info", "warning", "error"]);
 const agentCapacityStateSchema = z.enum([
   "available",
-  "at_risk",
   "draining",
   "preempting",
   "cordoned",

@@ -501,7 +501,7 @@ class ComputeMachineEnrollmentTable(IdTable, DatabaseBase):
             name="ck_compute_machine_enrollments_tunnel_key",
         ),
         CheckConstraint(
-            "capacity_state IN ('available', 'at_risk', 'draining', 'preempting', 'cordoned')",
+            "capacity_state IN ('available', 'draining', 'preempting', 'cordoned')",
             name="ck_compute_machine_enrollments_capacity_state",
         ),
         Index(

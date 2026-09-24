@@ -80,13 +80,14 @@ until live preparation, restart, refill, interruption,
 and cleanup acceptance passes; then lower it to one within the same four-node cap.
 
 Within each purchase market, warm workers prefer distinct provider, region,
-availability-zone and instance-type combinations. A provider risk report closes
-new admission on its machine and records one durable recovery obligation.
+availability-zone and instance-type combinations. A provider interruption notice
+closes new admission on its machine and records one durable recovery obligation.
 Recovery buys compatible capacity outside that combination, within the existing
 fleet cap. Multiple threatened machines may recover together. Planned updates
 yield to recovery, and a source remains protected from elective retirement until
-its replacement accepts requests. A real interruption deadline still stops work
-on time. Advisory notices carry no deadline and do not stop active work.
+its replacement accepts requests. The interruption deadline still stops work on
+time. Rebalance advisories are not read: in a scarce Spot market EC2 posts one
+at boot, and acting on it retired every Spot machine before it served.
 
 PostgreSQL stores handoff sources, purchase demand IDs and fulfillment timestamps
 outside JSON projections, so older writers preserve them. The database rejects
