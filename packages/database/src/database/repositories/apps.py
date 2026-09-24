@@ -1155,32 +1155,58 @@ class DeploymentRepository:
             )
         )
 
-    def deactivate_other_versions(
+    def newest_active_version(
+        self, *, workspace_id: str, app_id: str | None, name: str, kind: DeploymentKind
+    ) -> int | None:
+        return self.session.scalar(
+            select(func.max(DeploymentTable.version)).where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.app_id.is_not_distinct_from(app_id),
+                DeploymentTable.name == name,
+                DeploymentTable.kind == kind.value,
+                DeploymentTable.deleted_at.is_(None),
+                DeploymentTable.active.is_(True),
+            )
+        )
+
+    def deactivate_superseded_versions(
         self,
-        deployment: Deployment,
         *,
         workspace_id: str,
-        older_only: bool,
+        app_id: str | None,
+        name: str,
+        kind: DeploymentKind,
         now: datetime,
     ) -> list[Deployment]:
-        """Switch off the workload's other active versions and return them.
+        """Switch off every active version below the newest registered active one.
 
-        `older_only` leaves newer versions alone, so two deploys that finish out
-        of order still leave the newest one on.
+        The version number decides, not the order deploys finish in: an older
+        deploy that registers last is switched off by its own call. A version
+        still registering does not count as newest, so a deploy that then fails
+        cannot leave the workload with nothing on. Locking the workload's rows
+        first makes two concurrent calls take turns.
         """
-        statement = update(DeploymentTable).where(
+        workload = and_(
             DeploymentTable.workspace_id == workspace_id,
-            DeploymentTable.app_id.is_not_distinct_from(deployment.app_id),
-            DeploymentTable.name == deployment.name,
-            DeploymentTable.kind == deployment.kind.value,
-            DeploymentTable.id != deployment.id,
+            DeploymentTable.app_id.is_not_distinct_from(app_id),
+            DeploymentTable.name == name,
+            DeploymentTable.kind == kind.value,
             DeploymentTable.deleted_at.is_(None),
-            DeploymentTable.active.is_(True),
         )
-        if older_only:
-            statement = statement.where(DeploymentTable.version < deployment.version)
+        self.session.execute(select(DeploymentTable.id).where(workload).with_for_update())
+        newest = (
+            select(func.max(DeploymentTable.version))
+            .where(
+                workload,
+                DeploymentTable.active.is_(True),
+                DeploymentTable.stub_id.is_not(None),
+            )
+            .scalar_subquery()
+        )
         rows = self.session.scalars(
-            statement.values(active=False, updated_at=now)
+            update(DeploymentTable)
+            .where(workload, DeploymentTable.active.is_(True), DeploymentTable.version < newest)
+            .values(active=False, updated_at=now)
             .returning(DeploymentTable)
             .execution_options(synchronize_session=False)
         )

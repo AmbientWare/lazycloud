@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
 from database.records.apps import StubRecord
-from database.repositories.apps import StubRepository
+from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.deployment_plans import DeploymentPlanRepository
 from database.repositories.execution import TaskRepository
 from execution.containers.service import ContainerService
@@ -51,6 +51,14 @@ class ProductionAppExecutionLifecycleEffects:
                     error="the workload this task belongs to was pruned",
                 )
         self._delete_app_ephemeral_state(workspace_id=workspace_id, stubs=stubs)
+
+    def stop_deployment_containers(self, *, workspace_id: str, deployment_id: str) -> None:
+        with self.context.database.session() as session:
+            container_ids = DeploymentRepository(session).live_container_ids(
+                workspace_id=workspace_id, deployment_id=deployment_id
+            )
+        for container_id in container_ids:
+            self.containers.stop(container_id)
 
     def stop_app_containers(
         self,

@@ -86,7 +86,7 @@ class DeploymentRegistrar(Protocol):
 
 
 class DeploymentScheduleWriter(Protocol):
-    """The one thing deploying needs from schedules: make this one's match."""
+    """What deploying needs from schedules: make this one's match, and pause a stopped one's."""
 
     def set_for_deployment(
         self,
@@ -95,6 +95,18 @@ class DeploymentScheduleWriter(Protocol):
         cron: str | None,
         workspace: str,
     ) -> CronJobRecord | None: ...
+
+    def set_deployment_enabled(
+        self,
+        deployment_id: str,
+        *,
+        enabled: bool,
+        workspace: str = "default",
+    ) -> list[CronJobRecord]: ...
+
+
+class DeploymentContainerStopper(Protocol):
+    def stop_deployment_containers(self, *, workspace_id: str, deployment_id: str) -> None: ...
 
 
 class CustomDomainUseAdmission(Protocol):
@@ -120,6 +132,7 @@ class DeploymentService:
     registrar: DeploymentRegistrar
     schedules: DeploymentScheduleWriter
     custom_domain_admission: CustomDomainUseAdmission
+    containers: DeploymentContainerStopper
     workspace_changes: WorkspaceChangePublisher | None = None
     placement_resources: DeploymentPlacementResourceManager | None = None
 
@@ -246,21 +259,8 @@ class DeploymentService:
                     [deployment_failure, *compensation_failures],
                 ) from None
             raise
-        if deployment.active and keeps_one_active_version(deployment.kind, deployment.spec.role):
-            # Registered first, so a failed deploy leaves the prior version on.
-            with self.context.database.session() as session:
-                superseded = DeploymentRepository(session).deactivate_other_versions(
-                    deployment,
-                    workspace_id=workspace_record.id,
-                    older_only=True,
-                    now=utc_now(),
-                )
-            for previous in superseded:
-                self._publish_change(
-                    previous,
-                    workspace_id=workspace_record.id,
-                    change=WorkspaceChangeType.Updated,
-                )
+        # After registration, so a failed deploy leaves the prior version on.
+        self.stop_superseded_versions(deployment, workspace_id=workspace_record.id)
         self.events.emit(
             "deployment.created",
             resource_type="deployment",
@@ -274,6 +274,44 @@ class DeploymentService:
             change=WorkspaceChangeType.Created,
         )
         return deployment
+
+    def stop_superseded_versions(self, deployment: Deployment, *, workspace_id: str) -> None:
+        """Stop the versions a single-version workload no longer runs, as a stop would.
+
+        Every version of a devbox mounts one root disk that one container holds
+        at a time, so only its newest active version may stay on. The others are
+        switched off, their schedules paused and their containers stopped now
+        rather than on the autoscaler's next pass, which releases the disk to the
+        version that replaced them.
+        """
+        if not keeps_one_active_version(deployment.kind, deployment.spec.role):
+            return
+        with self.context.database.session() as session:
+            superseded = DeploymentRepository(session).deactivate_superseded_versions(
+                workspace_id=workspace_id,
+                app_id=deployment.app_id,
+                name=deployment.name,
+                kind=deployment.kind,
+                now=utc_now(),
+            )
+        for previous in superseded:
+            self._publish_change(
+                previous, workspace_id=workspace_id, change=WorkspaceChangeType.Updated
+            )
+            self.schedules.set_deployment_enabled(
+                previous.id, enabled=False, workspace=workspace_id
+            )
+            self.containers.stop_deployment_containers(
+                workspace_id=workspace_id, deployment_id=previous.id
+            )
+            self.events.emit(
+                "deployment.stopped",
+                resource_type="deployment",
+                resource_id=previous.id,
+                message=f"stopped deployment {previous.name} v{previous.version}, "
+                f"replaced by a newer version",
+                workspace_id=workspace_id,
+            )
 
     def list(
         self,

@@ -19,7 +19,7 @@ from database.repositories.cleanup import (
 from database.repositories.storage import ObjectRepository
 from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
-from shared.app_identity import FUNCTION_IMAGE
+from shared.app_identity import FUNCTION_IMAGE, POD_IMAGE
 from shared.containers import ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind, PodRole, StubKind
@@ -643,11 +643,17 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
     )
 
 
-def test_a_devbox_keeps_one_version_on_because_its_versions_share_one_disk(
+def test_a_devbox_runs_only_its_newest_version_because_its_versions_share_one_disk(
     isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
 ) -> None:
+    services = services_with_redis_container_control(
+        isolated_services,
+        real_redis_actors.client(),
+    )
+
     def deploy_box() -> Deployment:
-        return isolated_services.deployments.deploy(
+        return services.deployments.deploy(
             DeploymentSpec(
                 name="box",
                 kind=DeploymentKind.Pod,
@@ -658,11 +664,21 @@ def test_a_devbox_keeps_one_version_on_because_its_versions_share_one_disk(
         )
 
     v1 = deploy_box()
+    container = services.containers.run(
+        "box-v1", POD_IMAGE, ["sleep", "infinity"], stub_id=v1.stub_id or ""
+    )
     v2 = deploy_box()
-    deployments = isolated_services.deployments
-    assert not deployments.get(v1.id).active
-    assert deployments.get(v2.id).active
 
-    ManagementService(isolated_services).set_deployment_active("default", v1.id, active=True)
-    assert deployments.get(v1.id).active
-    assert not deployments.get(v2.id).active
+    assert not services.deployments.get(v1.id).active
+    assert services.deployments.get(v2.id).active
+    assert services.containers.get(container.id).status is ContainerStatus.Stopped, (
+        "the replaced version still holds the disk its successor needs to start"
+    )
+
+    management = ManagementService(services)
+    with pytest.raises(ConflictError):
+        management.set_deployment_active("default", v1.id, active=True)
+    management.set_deployment_active("default", v2.id, active=False)
+    management.set_deployment_active("default", v1.id, active=True)
+    assert services.deployments.get(v1.id).active
+    assert not services.deployments.get(v2.id).active

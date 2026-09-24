@@ -841,21 +841,15 @@ class ManagementService:
             if not app.active:
                 msg = f"cannot start deployment while app is paused: {app.name}"
                 raise ConflictError(msg)
+        if active and keeps_one_active_version(deployment.kind, deployment.spec.role):
+            self._refuse_superseded_start(deployment, workspace_id=workspace_id)
         deployment.active = active
         deployment.updated_at = utc_now()
-        superseded: list[Deployment] = []
         with self.services.context.database.session() as session:
             updated = DeploymentRepository(session).upsert(
                 deployment,
                 workspace_id=workspace_id,
             )
-            if active and keeps_one_active_version(updated.kind, updated.spec.role):
-                superseded = DeploymentRepository(session).deactivate_other_versions(
-                    updated,
-                    workspace_id=workspace_id,
-                    older_only=False,
-                    now=updated.updated_at,
-                )
             if active:
                 targets = AutoscalingTargetRepository(session)
                 for stub in StubRepository(session).list_for_deployments(
@@ -878,9 +872,8 @@ class ManagementService:
         )
         if not active:
             self.stop_deployment_containers(workspace, updated, reason=None)
-        for previous in superseded:
-            self._publish_deployment_change(previous, workspace_id=workspace_id)
-            self.stop_deployment_containers(workspace, previous, reason=None)
+        else:
+            self.services.deployments.stop_superseded_versions(updated, workspace_id=workspace_id)
         self.services.events.emit(
             "deployment.started" if active else "deployment.stopped",
             resource_type="deployment",
@@ -889,6 +882,22 @@ class ManagementService:
             workspace_id=workspace_id,
         )
         return updated
+
+    def _refuse_superseded_start(self, deployment: Deployment, *, workspace_id: str) -> None:
+        """A workload that keeps one version on cannot start one older than the one it runs."""
+        with self.services.context.database.session() as session:
+            newest = DeploymentRepository(session).newest_active_version(
+                workspace_id=workspace_id,
+                app_id=deployment.app_id,
+                name=deployment.name,
+                kind=deployment.kind,
+            )
+        if newest is not None and newest > deployment.version:
+            msg = (
+                f"{deployment.name} v{deployment.version} is replaced by v{newest}; "
+                f"stop v{newest} before starting an older version"
+            )
+            raise ConflictError(msg)
 
     def scale_deployment(
         self,
