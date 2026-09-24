@@ -94,6 +94,9 @@ CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
 MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS = 60.0
 ORPHANED_CONTAINER_RECONCILE_INTERVAL_SECONDS = 30.0
 CAPACITY_PASS_SLOW_SECONDS = 2.0
+RELEASE_ACTIVATION_CLAIM_SECONDS = 3600
+"""How long one replica's claim on a release activation's reserve check lasts.
+Long enough that no replica seeing the generation late checks it again."""
 """A capacity pass at least this long logs the seconds each of its steps took."""
 ORPHANED_CONTAINER_CONFIRMATION_SECONDS = 60.0
 ORPHANED_CONTAINER_FAILURE_REASON = (
@@ -1672,7 +1675,9 @@ class Scheduler:
         reserve predates it then, and a devbox start that resumes one before it
         is refreshed pays for the agent update and the worker image pull.
         Reading the active release is a file read, so checking it each pass
-        costs nothing until the generation moves.
+        costs nothing until the generation moves. The first generation a process
+        reads is its starting point, not an activation, and one replica claims
+        each activation so the others keep their minute.
         """
         if self.services is None:
             return
@@ -1686,23 +1691,44 @@ class Scheduler:
         if release is None or not controlled:
             return
         current_time = now or utc_now()
-        if (
-            release.generation == self.last_reserve_refresh_generation
-            and self.last_reserve_refresh_at is not None
-            and (current_time - self.last_reserve_refresh_at).total_seconds()
-            < self.managed_compute_reconcile_interval_seconds
-        ):
+        activated = (
+            self.last_reserve_refresh_generation != 0
+            and release.generation != self.last_reserve_refresh_generation
+            and self._claim_release_activation(release.generation)
+        )
+        self.last_reserve_refresh_generation = release.generation
+        due = (
+            self.last_reserve_refresh_at is None
+            or (current_time - self.last_reserve_refresh_at).total_seconds()
+            >= self.managed_compute_reconcile_interval_seconds
+        )
+        if not activated and not due:
             return
-        if release.generation != self.last_reserve_refresh_generation:
+        if activated:
             LOGGER.info(
                 "release generation %d is active; checking stopped reserves", release.generation
             )
-        self.last_reserve_refresh_generation = release.generation
         self.last_reserve_refresh_at = current_time
         try:
             self.runtime_services.compute.refresh_stale_reserve(release.target, now=current_time)
         except Exception:
             LOGGER.exception("scheduler stopped reserve refresh failed")
+
+    def _claim_release_activation(self, generation: int) -> bool:
+        """Whether this replica is the one to check reserves for a newly active release."""
+        redis = self.states.cron_job_locks
+        if redis is None:
+            return True
+        try:
+            return try_acquire_token_lock(
+                redis,
+                redis.key("scheduler", "leases", "reserve-refresh", str(generation)),
+                uuid4().hex,
+                ttl_seconds=RELEASE_ACTIVATION_CLAIM_SECONDS,
+            )
+        except REDIS_UNAVAILABLE_ERRORS:
+            LOGGER.warning("claiming the release activation check failed; this replica checks")
+            return True
 
     def _best_effort_schedule_function_retries(
         self, *, now: datetime | None, limit: int
