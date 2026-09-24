@@ -46,6 +46,7 @@ from compute.offers import (
     ComputeOffer,
     OfferRequest,
     ReservationStatus,
+    cooling_regions,
     filter_offers,
     offer_selection_key,
 )
@@ -301,8 +302,11 @@ class CapacityRecoveryService:
             if source.platform_fleet
             else (source_provider,)
         )
+        # A platform machine serves any region's work, so its replacement may
+        # come from another region when the source's is short. A connected
+        # account's capacity stays in the region its owner placed it.
         request = OfferRequest(
-            regions=[source.region],
+            regions=[] if source.platform_fleet else [source.region],
             preemptible=source.worker_preemptible,
             min_storage_mb=source.root_volume_gib * 1024,
             architecture=source_offer.architecture,
@@ -349,6 +353,17 @@ class CapacityRecoveryService:
         }
         with self.compute.context.database.session() as session:
             states = ComputeUnitRepository(session).offer_states(tuple(identities))
+        short_regions = cooling_regions(
+            (
+                (
+                    identities[identity][1].market.cloud,
+                    identity[2],
+                    state.provider_state.last_capacity_failure_at,
+                )
+                for identity, state in states.items()
+            ),
+            now=now,
+        )
         eligible: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
         concentration: dict[tuple[str, str], int] = {}
         for identity, candidate in identities.items():
@@ -369,6 +384,9 @@ class CapacityRecoveryService:
             eligible,
             key=lambda item: (
                 item[1].availability_zone == source_offer.availability_zone,
+                (item[1].market.cloud, item[1].region) in short_regions,
+                item[1].region != source.region,
+                item[0].policy.region_rank(item[1].region) if item[0].policy is not None else 0,
                 concentration[(item[0].ref, item[1].id)],
                 offer_selection_key(item[1], request),
             ),

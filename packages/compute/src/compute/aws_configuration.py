@@ -11,7 +11,8 @@ class AwsComputeConfiguration:
     min_cpu_workers: int = 1
     min_free_cpu_millicores: int = 1_000
     min_free_memory_mib: int = CONTAINER_MEMORY_BURST_FLOOR_MIB
-    allowed_regions: tuple[str, ...] = ("us-east-1", "us-east-2", "us-west-1", "us-west-2")
+    allowed_regions: tuple[str, ...] = ("us-east-2", "us-west-1", "us-east-1", "us-west-2")
+    """In the order platform capacity prefers them when buying a machine."""
     idle_timeout_seconds: int = 300
     root_volume_gib: int = 200
 

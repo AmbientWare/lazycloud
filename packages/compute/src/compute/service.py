@@ -103,6 +103,7 @@ from compute.offers import (
     OfferRequest,
     ReservationStatus,
     choose_offer,
+    cooling_regions,
     filter_offers,
     offer_selection_key,
     record_purchase_terms,
@@ -3727,6 +3728,28 @@ class ComputeService:
             repository = ComputeUnitRepository(session)
             units = repository.list_platform_internal(preemptible=preemptible, gpu=False)
             states = repository.offer_states(tuple(identities))
+        short_regions = cooling_regions(
+            (
+                (
+                    identities[identity][1].market.cloud,
+                    identity[2],
+                    state.provider_state.last_capacity_failure_at,
+                )
+                for identity, state in states.items()
+            ),
+            now=now,
+        )
+
+        def region_order(
+            provider: ResolvedComputeProvider, offer: ComputeOffer
+        ) -> tuple[bool, int]:
+            policy = provider.policy
+            assert policy is not None
+            return (
+                (offer.market.cloud, offer.region) in short_regions,
+                policy.region_rank(offer.region),
+            )
+
         unavailable_owners = {
             unit.id
             for unit in states.values()
@@ -3765,6 +3788,7 @@ class ComputeService:
             key=lambda item: (
                 item[2] not in handoff_owners,
                 item[2] not in warm_owners,
+                region_order(item[0], item[1]),
                 offer_selection_key(item[1], request),
             ),
         )
@@ -3780,6 +3804,7 @@ class ComputeService:
                 remaining_candidates,
                 key=lambda item: (
                     item[2] not in warm_owners,
+                    region_order(item[0], item[1]),
                     item[1].availability_zone in zones,
                     offer_selection_key(item[1], request),
                 ),
@@ -3795,6 +3820,22 @@ class ComputeService:
             + int(index < minimum % len(distinct_candidates))
             for index, candidate in enumerate(distinct_candidates)
         }
+        probes = [
+            offer.id for _, offer, unit_id in distinct_candidates if unit_id not in warm_owners
+        ]
+        if probes or short_regions:
+            LOGGER.info(
+                "platform warm capacity for preemptible=%s: target %d, warm %s, trying %s, "
+                "cooling regions %s",
+                preemptible,
+                minimum,
+                ",".join(
+                    offer.id for _, offer, unit_id in distinct_candidates if unit_id in warm_owners
+                )
+                or "none",
+                ",".join(probes) or "none",
+                ",".join(sorted(f"{cloud}:{region}" for cloud, region in short_regions)) or "none",
+            )
         prepared_count = 0
         for provider, offer, unit_id in distinct_candidates:
             policy = provider.policy
