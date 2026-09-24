@@ -876,8 +876,8 @@ class App:
 
         Args:
             name: Devbox name; also the name of its root disk.
-            image: Image the devbox boots from the first time. Later boots keep
-                the disk's root filesystem.
+            image: Base image; what the devbox writes on top of it is kept on
+                the disk.
             disk: Root disk size, such as ``"100Gi"``; stored data is billed.
             cpu, memory, gpu, gpu_count: Compute resources for the container.
             keep_warm: Idle seconds before the container stops; unset uses the

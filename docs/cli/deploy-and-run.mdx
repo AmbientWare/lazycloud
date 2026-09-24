@@ -26,7 +26,8 @@ uv run lazycloud deploy quickstart:hello     # one workload
 
 The deployment name comes from the workload's `name=`. `--source-root <dir>`
 uploads a different directory. A failure stops the command and leaves what
-already deployed in place.
+already deployed in place. Deploying one pod or devbox prints its role and the
+idle time and capacity it resolved to; an app deploy lists its devboxes.
 
 ```bash
 uv run lazycloud deploy page_stats.api --diff
@@ -92,18 +93,18 @@ running container.
 ## lazycloud ssh
 
 ```bash
-uv run lazycloud ssh POD [--app <app>] [-- <ssh options> <command>]
-uv run lazycloud ssh-config [POD...] [--app <app>]
+uv run lazycloud ssh NAME [--app <app>] [-- <ssh options> <command>]
+uv run lazycloud ssh-config [NAME...] [--app <app>]
 ```
 
-`ssh` opens a session on a deployed pod that sets `ssh=True`; anything after
-`--` goes to `ssh`, such as `-L 8080:localhost:8080` or a command to run. `ssh-config`
-writes host entries named `lazycloud-<workspace>-<app>-<pod>` for VS Code,
-Cursor, and plain `ssh`, one per pod, or one for every such pod when none is
-named. `--app` picks the app when several apps deploy a pod with the same
-name. The generated config calls
-`lazycloud ssh-proxy`, which carries the connection, and `lazycloud ssh-cert`,
-which renews the login certificate. See [Dev machines](/concepts/dev-machines).
+`ssh` opens a session on a [devbox](/concepts/dev-machines), or on a pod that
+sets `ssh=True`. Anything after `--` goes to `ssh`, such as
+`-L 8080:localhost:8080` or a command to run. `ssh-config` writes host entries
+named `lazycloud-<workspace>-<app>-<name>` for VS Code, Cursor, and plain
+`ssh`, one per name, or one for every devbox and SSH pod when none is named.
+`--app` picks the app when several apps deploy the same name. The generated
+config calls two hidden commands of its own to carry the connection and renew
+the login certificate.
 
 ## lazycloud dev
 
