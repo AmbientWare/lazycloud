@@ -573,14 +573,58 @@ ASSUMED_CLIENTS_REUSE_SECONDS = 45 * 60
 """How long one role session's clients serve later calls. The session lasts an
 hour, so the last reuse still has a quarter hour for the call it makes."""
 
+_CREDENTIAL_ERROR_CODES = frozenset(
+    {
+        "AccessDenied",
+        "AuthFailure",
+        "ExpiredToken",
+        "InvalidClientTokenId",
+        "UnrecognizedClientException",
+    }
+)
+"""Errors that say the role session itself no longer works, so its clients are dropped."""
+
+
+class _EventHooks(Protocol):
+    def register(self, event_name: str, handler: Callable[..., None]) -> None: ...
+
+
+def _event_hooks(client: object) -> _EventHooks | None:
+    events: object = getattr(getattr(client, "meta", None), "events", None)
+    return events if _is_event_hooks(events) else None
+
+
+def _is_event_hooks(value: object) -> TypeGuard[_EventHooks]:
+    return has_operations(value, ("register",))
+
+
+class _CallErrorCode(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    code: str = Field(default="", alias="Code")
+
+
+class _CallError(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    error: _CallErrorCode | None = Field(default=None, alias="Error")
+
+
+def _credential_error(parsed: object) -> bool:
+    try:
+        error = _CallError.model_validate(parsed).error
+    except ValidationError:
+        return False
+    return error is not None and error.code in _CREDENTIAL_ERROR_CODES
+
 
 @dataclass(frozen=True, slots=True)
 class Boto3AwsManagedPoolClientProvider:
     """Clients for a connection's role, assumed once and reused while the session lasts.
 
-    Every disk volume step and pool reconciliation asks for clients. Assuming
-    the role and building boto3 clients each time cost two STS round trips and
-    about half a second per step, several times inside one container start.
+    Every disk volume step and pool reconciliation asks for clients, and an
+    assumption is two STS round trips. A call through the clients that fails
+    on its credentials drops them, and the next request assumes the role again.
     """
 
     session_factory: AwsManagedPoolSessionFactory
@@ -610,6 +654,17 @@ class Boto3AwsManagedPoolClientProvider:
             if cached is not None and now < cached[0]:
                 return cached[1]
         clients = self._assume(target)
+
+        def forget_on_credential_error(**event: object) -> None:
+            if _credential_error(event.get("parsed")):
+                with self._lock:
+                    if self._assumed.get(key, (0.0, None))[1] is clients:
+                        del self._assumed[key]
+
+        for client in (clients.ec2, clients.autoscaling):
+            hooks = _event_hooks(client)
+            if hooks is not None:
+                hooks.register("after-call", forget_on_credential_error)
         with self._lock:
             self._assumed[key] = (now + ASSUMED_CLIENTS_REUSE_SECONDS, clients)
         return clients
