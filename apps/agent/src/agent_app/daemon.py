@@ -608,6 +608,7 @@ class DockerAgentWorkerController:
     joined machine, whose worker keeps disks on host storage."""
 
     _images: WorkerImagePreparation = field(init=False)
+    _last_prepared: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._images = WorkerImagePreparation(self._prepare_worker_image)
@@ -654,6 +655,7 @@ class DockerAgentWorkerController:
         latest = self._images.latest
         if latest and latest != self._last_prepared_image():
             _write_json_atomic(self.last_prepared_image_path, latest, permissions=0o600)
+            self._last_prepared = latest
         return prepared
 
     @property
@@ -661,13 +663,25 @@ class DockerAgentWorkerController:
         return self.state_dir / AGENT_LAST_PREPARED_IMAGE_FILE
 
     def _last_prepared_image(self) -> str:
+        """The image recorded as last prepared, read once; an unreadable record is none.
+
+        It is only a hint for the boot lookup, so a damaged file is removed rather
+        than allowed to stop the agent.
+        """
+        if self._last_prepared is not None:
+            return self._last_prepared
+        path = self.last_prepared_image_path
+        recorded: object = ""
         try:
-            recorded = _JSON_VALUE_ADAPTER.validate_json(
-                self.last_prepared_image_path.read_text(encoding="utf-8")
-            )
+            recorded = _JSON_VALUE_ADAPTER.validate_json(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return ""
-        return recorded if isinstance(recorded, str) else ""
+            pass
+        except (OSError, ValueError):
+            LOGGER.warning("ignoring the unreadable worker image record %s", path, exc_info=True)
+            with suppress(OSError):
+                path.unlink(missing_ok=True)
+        self._last_prepared = recorded if isinstance(recorded, str) else ""
+        return self._last_prepared
 
     def has_unreported_image(self, reported: Collection[str]) -> bool:
         """Whether the next stream has an image outcome the last one did not report."""
