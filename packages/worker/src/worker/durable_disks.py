@@ -49,6 +49,7 @@ from shared.disks import (
     disk_volume_size_bytes,
 )
 from shared.http.errors import HttpApiError
+from shared.step_timings import StepTimings
 from shared.timestamps import utc_now
 
 from worker.disk_volumes import DiskVolumeMounts
@@ -612,22 +613,28 @@ class WorkerDurableDiskService:
         attachment = DurableDiskAttachment()
         with attached.lock:
             for disk in request.disks:
-                lease, chain, volume = self._acquire(attached, disk)
+                timings = StepTimings()
+                with timings.step("acquire"):
+                    lease, chain, volume = self._acquire(attached, disk)
                 disk = disk.model_copy(update={"size_bytes": lease.size_bytes})
-                root = self._mount_volume(lease, volume)
+                with timings.step("volume"):
+                    root = self._mount_volume(lease, volume)
                 mountpoint = self.mount_root / request.container_id / disk.disk_id
                 mountpoint.mkdir(parents=True, exist_ok=True)
-                result = self._attach_with_space(attached, lease, disk, root, mountpoint, chain)
+                with timings.step("engine"):
+                    result = self._attach_with_space(attached, lease, disk, root, mountpoint, chain)
                 lease.mountpoint = result.mountpoint
                 self._save(record)
-                LOGGER.info(
+                timings.log(
+                    LOGGER,
                     "disk %s attached for container %s at generation %d "
-                    "(restored %d bytes, reused local layers: %s)",
+                    "(restored %d bytes, reused local layers: %s, volume %s)",
                     disk.name,
                     request.container_id,
                     result.generation,
                     result.restored_bytes,
                     result.reused_local,
+                    volume.volume_id if volume is not None else "none",
                 )
                 if disk.mount_path == DISK_ROOT_MOUNT_PATH:
                     upper_root = Path(result.mountpoint) / DISK_OVERLAY_DIR_NAME

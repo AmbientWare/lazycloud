@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
+from collections.abc import Mapping
 from typing import Protocol, TextIO, runtime_checkable
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
 
+LOG_LEVEL_ENV = f"{ENV_PREFIX}_LOG_LEVEL"
 _LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 
 
@@ -18,24 +20,22 @@ class _TextStreamHandler(Protocol):
     def stream(self) -> TextIO: ...
 
 
-class ProcessLogSettings(BaseSettings):
-    # INFO rather than Python's WARNING. A service that says nothing while it
-    # works cannot be told from one that is not working.
-    log_level: str = "INFO"
+def process_log_level(environ: Mapping[str, str] | None = None) -> int:
+    """The level named by the log level variable, INFO when it is unset.
 
-    model_config = SettingsConfigDict(env_prefix=f"{ENV_PREFIX}_", extra="ignore")
-
-    def resolved_level(self) -> int:
-        name = self.log_level.strip().upper()
-        if name not in _LEVELS:
-            raise ValueError(
-                f"{ENV_PREFIX}_LOG_LEVEL is {self.log_level!r}; expected one of "
-                + ", ".join(sorted(_LEVELS))
-            )
-        return getattr(logging, name)
+    INFO rather than Python's WARNING. A service that says nothing while it
+    works cannot be told from one that is not working.
+    """
+    value = (os.environ if environ is None else environ).get(LOG_LEVEL_ENV, "INFO")
+    name = value.strip().upper()
+    if name not in _LEVELS:
+        raise ValueError(
+            f"{LOG_LEVEL_ENV} is {value!r}; expected one of " + ", ".join(sorted(_LEVELS))
+        )
+    return getattr(logging, name)
 
 
-def configure_process_logging(settings: ProcessLogSettings | None = None) -> int:
+def configure_process_logging(level: int | None = None) -> int:
     """Send this process's own logs to standard error at the configured level.
 
     Standard error rather than standard output, because a process whose result
@@ -46,7 +46,7 @@ def configure_process_logging(settings: ProcessLogSettings | None = None) -> int
     root handler that application loggers fall back to.
     """
 
-    resolved = (settings or ProcessLogSettings()).resolved_level()
+    resolved = process_log_level() if level is None else level
     root = logging.getLogger()
     root.setLevel(resolved)
     # HTTP transport logs include credential-bearing URLs and headers. Provider
@@ -63,4 +63,4 @@ def configure_process_logging(settings: ProcessLogSettings | None = None) -> int
     return resolved
 
 
-__all__ = ["ProcessLogSettings", "configure_process_logging"]
+__all__ = ["LOG_LEVEL_ENV", "configure_process_logging", "process_log_level"]

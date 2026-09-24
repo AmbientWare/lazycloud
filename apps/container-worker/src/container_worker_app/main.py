@@ -13,6 +13,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Protocol, runtime_checkable
 
+from foundation.process_logs import configure_process_logging
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import CONTAINER_WORKER_PROCESS_NAME
 from shared.container_requests import StopContainerReason
@@ -399,8 +400,10 @@ def _report_registration(steps: list[WorkerLifecycleStepResult]) -> None:
         return
     for step in steps:
         detail = f": {step.error_message}" if step.error_message else ""
+        duration = step.metadata.get("duration_seconds")
+        took = f" in {duration}s" if duration else ""
         print(
-            f"container worker registration {step.action.value} {step.status.value}{detail}",
+            f"container worker registration {step.action.value} {step.status.value}{took}{detail}",
             file=sys.stderr,
         )
 
@@ -638,6 +641,7 @@ def _raise_container_worker_shutdown(signum: int, _frame: FrameType | None) -> N
 
 
 def main(argv: list[str] | None = None) -> None:
+    configure_process_logging()
     args = _parse_arguments(argv)
     result = run_container_worker(
         once=args.once,

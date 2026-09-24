@@ -86,10 +86,14 @@ until live preparation, restart, refill, interruption,
 and cleanup acceptance passes; then lower it to one within the same four-node cap.
 
 Within each purchase market, warm workers prefer distinct provider, region,
-availability-zone and instance-type combinations. A provider interruption notice
-closes new admission on its machine and records one durable recovery obligation.
-Recovery buys compatible capacity outside that combination, within the existing
-fleet cap. Multiple threatened machines may recover together. Planned updates
+availability-zone and instance-type combinations. A provider lists its regions in
+the order platform purchases prefer them. When offers in two combinations of one
+region refuse launches within 30 minutes, that region ranks after the others, so
+a warm shortfall moves to the next region rather than walking the sold-out one
+type by type. Serving warm machines stay where they are. A provider interruption
+notice closes new admission on its machine and records one durable recovery
+obligation. Recovery buys compatible capacity outside that combination, within
+the existing fleet cap, and platform capacity may recover in another region. Multiple threatened machines may recover together. Planned updates
 yield to recovery, and a source remains protected from elective retirement until
 its replacement accepts requests. The interruption deadline still stops work on
 time. Rebalance advisories are not read: in a scarce Spot market EC2 posts one

@@ -6,13 +6,17 @@ Scheduling decisions stay in `packages/scheduler`; this app chooses the concrete
 adapters and runs the loops. Environment names here are part of the deployment
 contract and change together with the deployment assets that set them.
 
-## Four loops, one process
+## Five loops, one process
 
 `Scheduler` does the work and `loops.py` decides when. The passes exist because
 their cadences differ, not because their work is unrelated:
 
 - **placement**, every 1s, decides what needs to run. Autoscalers and
   function retries, and nothing that calls a service outside the cluster.
+- **acquisition** starts or buys the machine a waiting request needs, woken the
+  moment dispatch records demand and swept every 5s. It makes no provider
+  inventory reads, so a request that needs a stopped reserve started never
+  waits behind the capacity pass's.
 - **capacity**, every 5s, keeps the fleet and its records agreeing. Also billing
   enforcement, which touches only Postgres and whose interval is money, and cron
   firing, because a schedule that fires late was wrong.

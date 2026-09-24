@@ -57,6 +57,7 @@ from shared.disks import (
     disk_volume_size_bytes,
 )
 from shared.errors import ConflictError, DiskVolumePendingError, NotFoundError
+from shared.step_timings import StepTimings
 from shared.timestamps import to_utc, utc_now
 
 from database import DatabaseClient
@@ -464,6 +465,7 @@ class DiskVolumeService:
         now.
         """
         first = True
+        timings = StepTimings()
         for _ in range(_MAX_STEPS):
             snapshot = self._snapshot(disk_id)
             if snapshot.lease_token not in {goal.lease_token, ""}:
@@ -482,6 +484,8 @@ class DiskVolumeService:
             first = False
             step = next_step(snapshot, goal)
             if step is None:
+                if timings.steps:
+                    timings.log(LOGGER, "disk %s volume %s by %s", disk_id, snapshot.state, driver)
                 return snapshot
             if snapshot.state in _PROVIDER_STATES and snapshot.driver != driver:
                 if not self._abandoned(snapshot):
@@ -506,7 +510,8 @@ class DiskVolumeService:
                     continue
                 snapshot = claimed
             try:
-                self._perform(snapshot, step, goal, driver=driver, wait_seconds=remaining)
+                with timings.step(step.value):
+                    self._perform(snapshot, step, goal, driver=driver, wait_seconds=remaining)
             except BlockVolumePendingError as exc:
                 raise DiskVolumePendingError(
                     f"disk {disk_id} volume is still {snapshot.state}; retry shortly"

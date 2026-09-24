@@ -1231,6 +1231,103 @@ def test_two_warm_workers_use_distinct_availability_zones(service_context: Servi
     assert len(units) == 2 and sum(unit.desired_machines for unit in units) == 2
 
 
+def test_warm_shortfall_moves_to_the_next_region_while_one_refuses_launches(
+    service_context: ServiceContext,
+) -> None:
+    with service_context.database.session() as session:
+        workspace_id = PlatformNamespaceService(service_context.database).get().id
+    regions = ("us-east-2", "us-west-1")
+    providers: list[ResolvedComputeProvider] = []
+    for region, zone, hourly in (
+        ("us-east-2", "use2-az1", 100_000),
+        ("us-east-2", "use2-az2", 100_000),
+        ("us-west-1", "usw1-az1", 150_000),
+    ):
+        offer = _offer().model_copy(
+            update={
+                "provider": f"aws:{zone}",
+                "id": zone,
+                "capability_key": zone,
+                "region": region,
+                "availability_zone": zone,
+                "preemptible": True,
+                "cost_terms": SupplierCostTerms(
+                    compute_hourly_micros=hourly,
+                    root_disk_hourly_micros=0,
+                    public_ipv4_hourly_micros=0,
+                ),
+            }
+        )
+        providers.append(
+            ResolvedComputeProvider(
+                ref=offer.provider,
+                capacity_mode=ComputeCapacityMode.Pooled,
+                pooled=_PooledProvider(offer=offer),
+                policy=ResolvedProviderPolicy(
+                    workspace_id=workspace_id,
+                    placement=Placement.platform(),
+                    platform_fleet=True,
+                    default_region=regions[0],
+                    allowed_regions=regions,
+                    allowed_offers=(
+                        ProviderOfferEligibility(
+                            region=region, instance_type=offer.instance_type, preemptible=True
+                        ),
+                    ),
+                ),
+            )
+        )
+    resolver = WorkspaceComputeProviderResolver(
+        connections=lambda _workspace: (),
+        capacity_workspace=lambda _connection: workspace_id,
+        binaries_by_region={},
+        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
+        platform_providers=lambda: tuple(providers),
+    )
+    compute = ComputeService(
+        service_context,
+        provider_resolver=resolver,
+        scheduler_hooks=_SchedulerHooks(),
+        capacity_owner_mutations=_MutationLeases(),
+        pool_bootstrap_factory=_bootstrap,
+    )
+    now = datetime.now(UTC)
+    # Both of the preferred region's offers refused a launch eleven minutes ago:
+    # past their own cooldown, so either could be tried again.
+    refused_at = now - timedelta(minutes=11)
+    for provider in providers[:2]:
+        assert provider.pooled is not None
+        offer = next(iter(provider.pooled.list_offers(root_volume_gib=200)))
+        unit = compute.prepare_pooled_offer(
+            provider=provider,
+            offer=offer,
+            requirements=ComputeResourceRequirements(preemptible=True),
+        )
+        with service_context.database.session() as session:
+            ComputeUnitRepository(session).upsert(
+                unit.model_copy(
+                    update={
+                        "phase": ComputeUnitPhase.Degraded,
+                        "provider_state": unit.provider_state.model_copy(
+                            update={
+                                "degraded_reason": "provider_acquisition_rejected",
+                                "degraded_at": refused_at,
+                                "last_capacity_failure_at": refused_at,
+                            }
+                        ),
+                    }
+                )
+            )
+
+    compute.reconcile_platform_warm_capacity(now=now)
+
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session).list_platform_internal(gpu=False)
+    warm = {unit.offer_availability_zone: unit.desired_machines for unit in units}
+    assert warm["usw1-az1"] == 1
+    assert sum(warm.values()) == 2
+
+
 @pytest.mark.parametrize(
     "replacement_markets,failure_code",
     [
@@ -3160,7 +3257,7 @@ def test_disconnecting_connection_rejects_a_previously_selected_purchase(
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
     )
     provider = resolver.resolve(workspace_id, f"aws:{_CONNECTION_ID}")
-    approved = AWS_ALLOWED_OFFERS[0]
+    approved = next(item for item in AWS_ALLOWED_OFFERS if item.region == "us-east-1")
     offer = _offer().model_copy(
         update={
             "region": approved.region,

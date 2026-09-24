@@ -13,7 +13,7 @@ import subprocess
 import time
 import traceback
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from concurrent.futures import CancelledError, Future
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -133,6 +133,7 @@ from shared.http.releases import (
 from shared.http_transport import HttpChannel
 from shared.provider_config import ProviderKind
 from shared.routing import BackendRouteState
+from shared.step_timings import StepTimings
 from shared.timestamps import utc_now
 from worker.configuration import WorkerConfiguration, serialize_worker_configuration
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
@@ -149,6 +150,10 @@ from gateway import http
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_AGENT_STREAM_INTERVAL_SECONDS = 5.0
+WORKER_IMAGE_CHECK_WAIT_SECONDS = 3.0
+"""How long a stream waits for its worker image check before deferring the start."""
+SLOW_STREAM_ITERATION_SECONDS = 2.0
+"""A stream iteration at least this long logs its step timings even when it changed nothing."""
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
 NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
 JOIN_MAX_ATTEMPTS = 6
@@ -615,6 +620,14 @@ class DockerAgentWorkerController:
     def prepared_worker_images(self) -> list[str]:
         return self._images.prepared()
 
+    def has_unreported_image(self, reported: Collection[str]) -> bool:
+        """Whether the next stream has an image outcome the last one did not report."""
+        return self._images.unreported(reported)
+
+    def wait_for_image_preparation(self, timeout_seconds: float) -> bool:
+        """Wait for a worker image being prepared; True once it has finished."""
+        return self._images.wait(timeout_seconds)
+
     def _prepare_worker_image(self, image: str, stop: Event) -> None:
         try:
             self._pull_worker_image(image, stop)
@@ -659,10 +672,22 @@ class DockerAgentWorkerController:
         self,
         plan: AgentWorkerReconcilePlan,
         bootstrap: AgentBootstrap,
+        *,
+        reported_images: Collection[str],
     ) -> list[AgentWorkerReconcileAction]:
+        """Carry out the plan for every slot whose image the control plane knows is here.
+
+        A resuming reserve takes requests only once a stream has reported its
+        worker image prepared, and its worker registers as draining before that.
+        A slot whose image became ready during this call therefore waits for the
+        next stream, which the daemon sends at once rather than after an interval.
+        """
         active_by_id = {slot.worker_id: slot for slot in self.active_slots()}
         applied: list[AgentWorkerReconcileAction] = []
         prepared: set[str] = set()
+        # One wait per call, shared by every action, so a slow pull holds the
+        # stream for at most WORKER_IMAGE_CHECK_WAIT_SECONDS however many slots it has.
+        wait_until = time.monotonic() + WORKER_IMAGE_CHECK_WAIT_SECONDS
         for action in plan.actions:
             if action.action not in {
                 WorkerSlotAction.Prepare,
@@ -675,7 +700,10 @@ class DockerAgentWorkerController:
             image = action.slot.worker_image or self.worker_image_override
             if not image:
                 raise ValueError(f"worker image is required for slot {action.worker_id}")
-            if self._images.ensure(image):
+            if (
+                self._images.ensure(image, wait_seconds=max(wait_until - time.monotonic(), 0.0))
+                and image in reported_images
+            ):
                 prepared.add(action.worker_id)
         for action in plan.actions:
             if (
@@ -946,6 +974,8 @@ class AgentDaemonService:
     _bootstrap_failure_reported: bool = False
     _capacity_shutdown: CapacityShutdown = field(init=False)
     _interruption_reported: bool = False
+    _reported_worker_images: list[str] = field(default_factory=list)
+    _last_applied_actions: str = "nothing"
 
     def __post_init__(self) -> None:
         self._capacity_shutdown = CapacityShutdown(
@@ -1004,7 +1034,8 @@ class AgentDaemonService:
         if saved_state is not None and saved_state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(saved_state.capacity_notice_at)
         try:
-            self._report_bootstrap_phase(MachineLifecycle.Booting)
+            if saved_state is None:
+                self._report_bootstrap_phase(MachineLifecycle.Booting)
             state = self._join_step("identity.resolve", self.resolve_identity)
         except Exception:
             try:
@@ -1114,7 +1145,7 @@ class AgentDaemonService:
                 iterations = next_iteration
                 if self.options.once:
                     return last_result
-                time.sleep(self.options.stream_interval_seconds)
+                self._pause_between_streams(self.options.stream_interval_seconds)
         except Exception as exc:
             if not agent_authority_was_revoked(exc):
                 raise
@@ -1123,6 +1154,21 @@ class AgentDaemonService:
             return last_result.model_copy(update={"authority_revoked": True})
         finally:
             close_runtime()
+
+    def _pause_between_streams(self, seconds: float) -> None:
+        """Sleep until the next stream, or until a worker image being prepared is ready.
+
+        A slot waits until a stream has reported its image prepared, so an image
+        that becomes ready ends the pause and the next stream reports it.
+        """
+        if self.worker_controller.has_unreported_image(self._reported_worker_images):
+            return
+        began = time.monotonic()
+        if self.worker_controller.wait_for_image_preparation(seconds):
+            return
+        remaining = seconds - (time.monotonic() - began)
+        if remaining > 0:
+            time.sleep(remaining)
 
     def resolve_identity(self) -> AgentState:
         revoked = self.state_store.authority_revoked()
@@ -1186,20 +1232,25 @@ class AgentDaemonService:
             )
             if result.capacity_interrupted:
                 return result
+        timings = StepTimings()
         updater = AgentUpdater.running(self.state_store.state_dir)
         active_slots = self.worker_controller.active_slots()
-        stream = self.client.stream_agent(
-            StreamAgentRequest(
-                agent_token=state.agent_token,
-                generation=state.release_generation,
-                binary_sha256=updater.binary_sha256(),
-                active_worker_images={
-                    slot.worker_id: slot.worker_image for slot in active_slots if slot.worker_image
-                },
-                prepared_worker_images=self.worker_controller.prepared_worker_images(),
-                prepared_stop=read_stop_preparation(self.state_store.state_dir),
+        self._reported_worker_images = self.worker_controller.prepared_worker_images()
+        with timings.step("stream"):
+            stream = self.client.stream_agent(
+                StreamAgentRequest(
+                    agent_token=state.agent_token,
+                    generation=state.release_generation,
+                    binary_sha256=updater.binary_sha256(),
+                    active_worker_images={
+                        slot.worker_id: slot.worker_image
+                        for slot in active_slots
+                        if slot.worker_image
+                    },
+                    prepared_worker_images=self._reported_worker_images,
+                    prepared_stop=read_stop_preparation(self.state_store.state_dir),
+                )
             )
-        )
         if not stream.ok:
             msg = stream.err_msg or "agent stream rejected"
             if stream.retryable:
@@ -1253,13 +1304,17 @@ class AgentDaemonService:
             ipv6_subnet=network.bridge_ipv6_subnet,
         )
         tunnel.reconcile_listeners({bridge.gateway} if desired_slots or active_slots else set())
-        applied = self.worker_controller.apply(plan, state.bootstrap)
-        ready_routes = tunnel.reconcile_routes(
-            [
-                AgentTunnelRoute(route.route_id, route.local_target, route.state)
-                for route in stream.routes
-            ]
-        )
+        with timings.step("apply_slots"):
+            applied = self.worker_controller.apply(
+                plan, state.bootstrap, reported_images=self._reported_worker_images
+            )
+        with timings.step("routes"):
+            ready_routes = tunnel.reconcile_routes(
+                [
+                    AgentTunnelRoute(route.route_id, route.local_target, route.state)
+                    for route in stream.routes
+                ]
+            )
         for route_id in ready_routes:
             self.client.update_agent_route_status(
                 UpdateAgentRouteStatusRequest(
@@ -1269,18 +1324,38 @@ class AgentDaemonService:
                 )
             )
         route_count = len(stream.routes)
-        telemetry_sent = self._send_telemetry(
-            state,
-            desired_worker_count=len(desired_slots),
-            applied=applied,
-        )
-        updater.confirm()
-        release = self.client.agent_release(
-            AgentReleaseRequest(
-                agent_token=state.agent_token,
-                generation=state.release_generation,
-                binary_sha256=updater.binary_sha256(),
+        with timings.step("telemetry"):
+            telemetry_sent = self._send_telemetry(
+                state,
+                desired_worker_count=len(desired_slots),
+                applied=applied,
             )
+        updater.confirm()
+        with timings.step("release"):
+            release = self.client.agent_release(
+                AgentReleaseRequest(
+                    agent_token=state.agent_token,
+                    generation=state.release_generation,
+                    binary_sha256=updater.binary_sha256(),
+                )
+            )
+        actions = (
+            ",".join(f"{action.action.value}:{action.worker_id}" for action in applied) or "nothing"
+        )
+        # A draining machine repeats the same Prepare on every stream; only a
+        # change, or a slow iteration, is worth an INFO line.
+        changed = actions != self._last_applied_actions
+        self._last_applied_actions = actions
+        timings.log(
+            LOGGER,
+            "agent stream %d applied %s",
+            current_iterations,
+            actions,
+            level=(
+                logging.INFO
+                if changed or timings.total_seconds() >= SLOW_STREAM_ITERATION_SECONDS
+                else logging.DEBUG
+            ),
         )
         if release.generation < state.release_generation:
             raise RuntimeError("agent release instruction is stale")

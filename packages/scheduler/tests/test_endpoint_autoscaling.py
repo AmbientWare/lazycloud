@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from api.server.services import ApiServices
+from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
@@ -386,6 +387,7 @@ def _scheduler_request_service(
         failure_handler=persistence,
         assignments=persistence,
         dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
+        capacity_wake=RedisWakeSignal(redis, CAPACITY_WAKE_SCOPE),
         lifecycle_events=RedisEventStreamRepository(redis),
         workspace_owners=DatabaseWorkspaceOwners(services.context),
         disk_volume_attachments=DatabaseDiskVolumeAttachments(services.context),

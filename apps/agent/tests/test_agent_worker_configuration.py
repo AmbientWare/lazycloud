@@ -77,6 +77,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
         AgentBootstrap(
             gateway_public_http_url="https://gateway.example.test",
         ),
+        reported_images=controller.prepared_worker_images(),
     )
 
     config_path = tmp_path / "slots" / "worker-one" / "worker.yaml"
@@ -173,9 +174,16 @@ def test_agent_stop_treats_concurrent_container_removal_as_settled(
     )
 
     bootstrap = AgentBootstrap(gateway_public_http_url="https://gateway.example.test")
-    controller.apply(plan_worker_slot_reconciliation([slot], []), bootstrap)
+    reported = controller.prepared_worker_images()
+    controller.apply(
+        plan_worker_slot_reconciliation([slot], []), bootstrap, reported_images=reported
+    )
     assert [active.worker_id for active in controller.active_slots()] == [slot.worker_id]
 
-    controller.apply(plan_worker_slot_reconciliation([], controller.active_slots()), bootstrap)
+    controller.apply(
+        plan_worker_slot_reconciliation([], controller.active_slots()),
+        bootstrap,
+        reported_images=reported,
+    )
 
     assert controller.active_slots() == []

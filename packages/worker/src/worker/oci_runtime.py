@@ -67,9 +67,9 @@ from worker.managed_runtime import (
     plan_managed_runtime,
 )
 from worker.managed_runtime_catalog import (
-    MANAGED_RUNTIME_PYTHON_VERSIONS,
     ManagedRuntimeCatalog,
     load_managed_runtime_catalog,
+    load_managed_runtime_catalogs,
 )
 from worker.runtime_config import (
     DEFAULT_CONTAINER_CLI_PATH,
@@ -284,8 +284,14 @@ class OciRuntimeSpecBuilder:
         }
         if machine not in architectures:
             raise RuntimeError(f"unsupported managed runtime architecture: {machine}")
-        for version in MANAGED_RUNTIME_PYTHON_VERSIONS:
-            self._managed_runtime_catalog(version, architectures[machine])
+        root = self.managed_runtime_root
+        if root is None:
+            raise RuntimeError("managed runtime artifact catalog is unavailable")
+        architecture = architectures[machine]
+        catalogs = load_managed_runtime_catalogs(root, architecture)
+        with self._managed_runtime_catalog_lock:
+            for version, catalog in catalogs.items():
+                self._managed_runtime_catalogs[(version, architecture)] = catalog
 
     def build_spec(
         self,

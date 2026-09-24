@@ -102,6 +102,9 @@ def test_setting_the_stop_event_ends_every_loop() -> None:
         def run_placement_pass(self, **_: object) -> SchedulerRunResult:
             return SchedulerRunResult()
 
+        def run_acquisition_pass(self, **_: object) -> SchedulerRunResult:
+            return SchedulerRunResult()
+
         def run_capacity_pass(self, **_: object) -> SchedulerRunResult:
             return SchedulerRunResult()
 
@@ -114,7 +117,12 @@ def test_setting_the_stop_event_ends_every_loop() -> None:
         capacity_interval_seconds=0.01,
         housekeeping_interval_seconds=0.01,
     )
-    assert [loop.name for loop in supervisor.loops] == ["placement", "capacity", "housekeeping"]
+    assert [loop.name for loop in supervisor.loops] == [
+        "placement",
+        "acquisition",
+        "capacity",
+        "housekeeping",
+    ]
 
     supervisor.shutdown(timeout_seconds=5)
 

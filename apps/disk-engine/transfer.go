@@ -17,6 +17,10 @@ import (
 
 const transferConcurrency = 8
 
+// layerDownloadConcurrency bounds how many layers of a chain restore at once,
+// each fetching up to transferConcurrency chunks.
+const layerDownloadConcurrency = 4
+
 type publishResult struct {
 	ManifestKey      string `json:"manifest_key"`
 	ManifestSHA256   string `json:"manifest_sha256"`

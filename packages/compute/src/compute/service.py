@@ -103,6 +103,7 @@ from compute.offers import (
     OfferRequest,
     ReservationStatus,
     choose_offer,
+    cooling_regions,
     filter_offers,
     offer_selection_key,
     record_purchase_terms,
@@ -186,6 +187,7 @@ class ComputeService:
     capacity_owner_mutations: CapacityOwnerMutationLease | None = None
     reclaim: ComputeReclaimPolicy = field(default_factory=ComputeReclaimPolicy)
     fleet_policy: FleetCapacityPolicy = field(default_factory=FleetCapacityPolicy)
+    _warm_decisions: dict[bool, str] = field(default_factory=dict, init=False, repr=False)
     source_cache_lifecycle: SourceCacheStorageLifecycleService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -3727,6 +3729,28 @@ class ComputeService:
             repository = ComputeUnitRepository(session)
             units = repository.list_platform_internal(preemptible=preemptible, gpu=False)
             states = repository.offer_states(tuple(identities))
+        short_regions = cooling_regions(
+            (
+                (
+                    identities[identity][1].market.cloud,
+                    identity[2],
+                    state.provider_state.last_capacity_failure_at,
+                )
+                for identity, state in states.items()
+            ),
+            now=now,
+        )
+
+        def region_order(
+            provider: ResolvedComputeProvider, offer: ComputeOffer
+        ) -> tuple[bool, int]:
+            policy = provider.policy
+            assert policy is not None
+            return (
+                (offer.market.cloud, offer.region) in short_regions,
+                policy.region_rank(offer.region),
+            )
+
         unavailable_owners = {
             unit.id
             for unit in states.values()
@@ -3765,6 +3789,7 @@ class ComputeService:
             key=lambda item: (
                 item[2] not in handoff_owners,
                 item[2] not in warm_owners,
+                region_order(item[0], item[1]),
                 offer_selection_key(item[1], request),
             ),
         )
@@ -3780,6 +3805,7 @@ class ComputeService:
                 remaining_candidates,
                 key=lambda item: (
                     item[2] not in warm_owners,
+                    region_order(item[0], item[1]),
                     item[1].availability_zone in zones,
                     offer_selection_key(item[1], request),
                 ),
@@ -3795,6 +3821,19 @@ class ComputeService:
             + int(index < minimum % len(distinct_candidates))
             for index, candidate in enumerate(distinct_candidates)
         }
+        warm = ",".join(
+            offer.id for _, offer, unit_id in distinct_candidates if unit_id in warm_owners
+        )
+        probes = ",".join(
+            offer.id for _, offer, unit_id in distinct_candidates if unit_id not in warm_owners
+        )
+        cooling = ",".join(sorted(f"{cloud}:{region}" for cloud, region in short_regions))
+        decision = f"target {minimum}, warm {warm or 'none'}, trying {probes or 'none'}, "
+        decision += f"cooling regions {cooling or 'none'}"
+        # Every replica runs this pass every minute; a line per choice, not per pass.
+        if decision != self._warm_decisions.get(preemptible):
+            self._warm_decisions[preemptible] = decision
+            LOGGER.info("platform warm capacity for preemptible=%s: %s", preemptible, decision)
         prepared_count = 0
         for provider, offer, unit_id in distinct_candidates:
             policy = provider.policy

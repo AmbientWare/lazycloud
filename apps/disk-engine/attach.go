@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
 
@@ -251,11 +252,23 @@ func reusable(p diskPaths, state *diskState, newest chainEntry) (bool, error) {
 // least as large as the one it builds on and no larger than size.
 func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []chainEntry, size int64) ([]layerManifest, error) {
 	manifests := make([]layerManifest, len(chain))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(transferConcurrency)
 	for i, entry := range chain {
-		manifest, err := fetchManifest(ctx, store, entry)
-		if err != nil {
-			return nil, err
-		}
+		group.Go(func() error {
+			manifest, err := fetchManifest(groupCtx, store, entry)
+			if err != nil {
+				return err
+			}
+			manifests[i] = manifest
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	for i, entry := range chain {
+		manifest := manifests[i]
 		wantParent := int64(0)
 		if i > 0 {
 			wantParent = chain[i-1].Generation
@@ -274,7 +287,6 @@ func fetchChain(ctx context.Context, store *objectStore, diskID string, chain []
 		case manifest.Filesystem != diskFilesystem:
 			return nil, fmt.Errorf("generation %d holds %s, not %s", entry.Generation, manifest.Filesystem, diskFilesystem)
 		}
-		manifests[i] = manifest
 	}
 	return manifests, nil
 }
@@ -391,23 +403,53 @@ func allocatedBytes(dir string) (int64, error) {
 }
 
 // restoreChain downloads the chain, base first, committing the layers it
-// holds into the base where the plan says the next would not fit.
+// holds into the base where the plan says the next would not fit. When the
+// whole chain fits, every layer downloads at once and only the rebases, which
+// name the layer below, run in order.
 func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest, commitBefore []bool) (int64, error) {
+	layers := make([]layer, len(chain))
+	sizes := make([]int64, len(chain))
+	prefetched := !slices.Contains(commitBefore, true)
+	if prefetched {
+		for i := range chain {
+			layers[i] = state.newLayer()
+			layers[i].Raw = manifests[i].Format == formatRaw
+		}
+		group, groupCtx := errgroup.WithContext(ctx)
+		group.SetLimit(layerDownloadConcurrency)
+		for i, entry := range chain {
+			group.Go(func() error {
+				bytes, err := downloadLayer(groupCtx, store, manifests[i], p.layerPath(layers[i]))
+				if err != nil {
+					return fmt.Errorf("restore generation %d: %w", entry.Generation, err)
+				}
+				sizes[i] = bytes
+				return nil
+			})
+		}
+		if err := group.Wait(); err != nil {
+			return 0, err
+		}
+	}
 	var restored int64
 	for i, entry := range chain {
 		manifest := manifests[i]
-		if commitBefore[i] {
-			if err := commitHeld(ctx, p, state); err != nil {
-				return 0, err
+		next := layers[i]
+		if !prefetched {
+			if commitBefore[i] {
+				if err := commitHeld(ctx, p, state); err != nil {
+					return 0, err
+				}
 			}
+			next = state.newLayer()
+			next.Raw = manifest.Format == formatRaw
+			bytes, err := downloadLayer(ctx, store, manifest, p.layerPath(next))
+			if err != nil {
+				return 0, fmt.Errorf("restore generation %d: %w", entry.Generation, err)
+			}
+			sizes[i] = bytes
 		}
-		next := state.newLayer()
-		next.Raw = manifest.Format == formatRaw
-		bytes, err := downloadLayer(ctx, store, manifest, p.layerPath(next))
-		if err != nil {
-			return 0, fmt.Errorf("restore generation %d: %w", entry.Generation, err)
-		}
-		restored += bytes
+		restored += sizes[i]
 		next.Generation = entry.Generation
 		if i > 0 {
 			// Backing names are relative, so the chain survives the root moving.

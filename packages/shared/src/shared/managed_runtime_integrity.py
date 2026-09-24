@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 from pathlib import Path
 from typing import Protocol
 
@@ -45,6 +47,38 @@ def managed_runtime_artifact_digest(root: Path) -> str:
         relative = path.relative_to(artifact_root)
         _update_path_digest(digest, path, relative.as_posix())
     return digest.hexdigest()
+
+
+def managed_runtime_artifact_inventory_digest(root: Path) -> str:
+    """Digest of every path in the tree with its type, and each file's size and mode.
+
+    It reads metadata alone, so a worker can check the tree it mounts into user
+    containers at start-up without reading the files. A missing, added, resized
+    or re-permissioned file changes it; a same-size rewrite does not.
+    """
+    artifact_root = root.resolve()
+    if not artifact_root.is_dir():
+        return ""
+    digest = hashlib.sha256()
+    _update_inventory_digest(digest, str(artifact_root), "")
+    return digest.hexdigest()
+
+
+def _update_inventory_digest(digest: _Digest, directory: str, prefix: str) -> None:
+    with os.scandir(directory) as scanned:
+        entries = sorted(scanned, key=lambda entry: entry.name)
+    for entry in entries:
+        name = f"{prefix}{entry.name}"
+        try:
+            status = entry.stat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(status.st_mode):
+            digest.update(f"{name}/\0".encode())
+            if not entry.is_symlink():
+                _update_inventory_digest(digest, entry.path, f"{name}/")
+        elif stat.S_ISREG(status.st_mode):
+            digest.update(f"{name}\0{status.st_size}\0{stat.S_IMODE(status.st_mode):o}\0".encode())
 
 
 def _find_packages_root() -> Path | None:
@@ -109,4 +143,5 @@ __all__ = [
     "MANAGED_PACKAGE_NAMES",
     "managed_package_source_digest",
     "managed_runtime_artifact_digest",
+    "managed_runtime_artifact_inventory_digest",
 ]

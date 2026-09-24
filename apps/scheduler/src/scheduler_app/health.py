@@ -10,6 +10,7 @@ from shared.process_liveness import check_heartbeats, heartbeat_path
 
 class SchedulerLoopName(StrEnum):
     Placement = "placement"
+    Acquisition = "acquisition"
     Capacity = "capacity"
     Housekeeping = "housekeeping"
     Dispatch = "dispatch"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field
@@ -9,6 +11,14 @@ from shared.container_requests import OciRuntimeName, capacity_with_overhead
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts, gpu_preference_rank
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
+from shared.timestamps import to_utc
+
+REGION_FAILURE_WINDOW = timedelta(minutes=30)
+REGION_COOLING_FAILURES = 2
+"""Refusals from this many offers of one region within the window move new
+purchases to the next region. One refusal names a sold-out instance type or
+zone; two in the same region usually mean the region is short, and the warm
+pass tries one new offer a minute, too slowly to walk a region type by type."""
 
 
 class ReservationStatus(StrEnum):
@@ -289,11 +299,31 @@ def offer_cost_per_node(offer: ComputeOffer) -> float:
     return cost / capacity
 
 
+def cooling_regions(
+    failures: Iterable[tuple[str, str, datetime | None]], *, now: datetime
+) -> frozenset[tuple[str, str]]:
+    """The (cloud, region) pairs whose offers recently refused enough launches.
+
+    Each failure is a cloud, a region and when one of its offers last refused a
+    launch. A cooling region is ranked after the others rather than excluded, so
+    it is still used when nothing else can supply the capacity.
+    """
+    since = now - REGION_FAILURE_WINDOW
+    counts: dict[tuple[str, str], int] = {}
+    for cloud, region, failed_at in failures:
+        if failed_at is not None and to_utc(failed_at) >= since:
+            counts[(cloud, region)] = counts.get((cloud, region), 0) + 1
+    return frozenset(key for key, count in counts.items() if count >= REGION_COOLING_FAILURES)
+
+
 __all__ = [
+    "REGION_COOLING_FAILURES",
+    "REGION_FAILURE_WINDOW",
     "ComputeOffer",
     "OfferRequest",
     "ReservationStatus",
     "choose_offer",
+    "cooling_regions",
     "filter_offers",
     "offer_selection_key",
 ]

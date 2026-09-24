@@ -267,7 +267,7 @@ def test_draining_connection_keeps_cleanup_access_but_cannot_purchase() -> None:
         client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
     )
     provider_ref = f"aws:{connection.id}"
-    approved = AWS_ALLOWED_OFFERS[0]
+    approved = next(item for item in AWS_ALLOWED_OFFERS if item.region == "us-east-1")
     offer = ComputeOffer(
         id="approved-node",
         provider=provider_ref,

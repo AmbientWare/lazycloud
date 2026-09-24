@@ -12,7 +12,7 @@ from agent.binary import AgentBinarySettings
 from agent.service import AgentService
 from compute.agent_control import AgentImageConfig, GatewayEndpointConfig
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
-from compute.capacity_recovery import CAPACITY_RECOVERY_WAKE_SCOPE
+from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import ResolvedBlockVolumes
@@ -849,6 +849,7 @@ class ApiServices(ApiServiceCore):
             assignments=scheduling_persistence,
             usage=usage,
             dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
+            capacity_wake=RedisWakeSignal(redis, CAPACITY_WAKE_SCOPE),
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
             disk_volume_attachments=DatabaseDiskVolumeAttachments(context),
@@ -1431,7 +1432,7 @@ def _gateway_control_service(
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
         agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
-        capacity_recovery_wake=RedisWakeSignal(core.redis(), CAPACITY_RECOVERY_WAKE_SCOPE),
+        capacity_recovery_wake=RedisWakeSignal(core.redis(), CAPACITY_WAKE_SCOPE),
         capacity_interruption_sink=SchedulerAgentCapacityInterruptionSink(
             SchedulerCapacityInterruptionService(
                 SchedulerWorkerPreemptionService(
