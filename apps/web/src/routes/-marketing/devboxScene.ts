@@ -5,6 +5,7 @@ import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.j
 const AGENTS = ["codex", "claude-code", "opencode"];
 const ASSEMBLED_COUNT = 27;
 const COUNT = ASSEMBLED_COUNT + 36;
+const EXPANSION_DURATION = 800;
 
 function ease(value: number) {
   const t = THREE.MathUtils.clamp(value, 0, 1);
@@ -209,8 +210,8 @@ export async function createDevboxScene(
   let expansion = motion.matches ? 1 : 0;
   let fromExpansion = 0;
   let targetExpansion = 1;
-  let transitionElapsed = motion.matches ? 500 : -350;
-  let transitionDuration = 500;
+  let transitionElapsed = motion.matches ? EXPANSION_DURATION : -350;
+  let transitionDuration = EXPANSION_DURATION;
   let visible = false;
   let disposed = false;
   let lost = false;
@@ -362,7 +363,7 @@ export async function createDevboxScene(
   function toggleExpansion() {
     fromExpansion = expansion;
     targetExpansion = targetExpansion === 1 ? 0 : 1;
-    transitionDuration = targetExpansion === 1 ? 500 : 300;
+    transitionDuration = targetExpansion === 1 ? EXPANSION_DURATION : 300;
     transitionElapsed = motion.matches ? transitionDuration : 0;
     stage.setAttribute("aria-pressed", String(targetExpansion === 1));
     requestDraw();
