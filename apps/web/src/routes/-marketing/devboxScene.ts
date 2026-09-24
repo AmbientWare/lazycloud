@@ -2,10 +2,13 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
-const AGENTS = ["codex", "claude-code", "opencode"];
+const AGENTS = ["codex", "claude-code", "opencode", "pi"];
 const ASSEMBLED_COUNT = 27;
 const COUNT = ASSEMBLED_COUNT + 36;
 const EXPANSION_DURATION = 800;
+const ROTATION_SETTLE_DURATION = 1100;
+const RECOMBINE_DURATION = 850;
+const JOIN_ROTATION = -Math.PI / 6;
 const foregroundRotations = [
   new THREE.Euler(-0.18, 0.5, -0.14),
   new THREE.Euler(0.1, 0.05, 0.16),
@@ -17,9 +20,11 @@ function ease(value: number) {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
-function spring(seconds: number) {
-  const damping = 0.68;
-  const frequency = 22;
+function easeOut(value: number) {
+  return 1 - (1 - THREE.MathUtils.clamp(value, 0, 1)) ** 3;
+}
+
+function spring(seconds: number, damping = 0.68, frequency = 22) {
   const damped = frequency * Math.sqrt(1 - damping * damping);
   return (
     1 -
@@ -82,7 +87,7 @@ export async function createDevboxScene(
   if (!grainContext) throw new Error("The surface texture canvas is unavailable");
   grainContext.fillStyle = "#bdbdbd";
   grainContext.fillRect(0, 0, 360, 360);
-  grainContext.drawImage(images[4], 0, 0, 360, 360);
+  grainContext.drawImage(images[AGENTS.length + 1], 0, 0, 360, 360);
   const grain = new THREE.CanvasTexture(grainBitmap);
   grain.colorSpace = THREE.SRGBColorSpace;
   grain.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -122,8 +127,9 @@ export async function createDevboxScene(
     if (!context) throw new Error("Agent icon canvas is unavailable");
     const image = images[index];
     const ratio = image.naturalWidth / image.naturalHeight;
-    const width = 220 * Math.min(1, ratio);
-    const height = 220 / Math.max(1, ratio);
+    const iconSize = agent === "pi" ? 330 : 220;
+    const width = iconSize * Math.min(1, ratio);
+    const height = iconSize / Math.max(1, ratio);
     context.drawImage(image, (256 - width) / 2, (256 - height) / 2, width, height);
     if (agent !== "opencode") {
       context.globalCompositeOperation = "source-in";
@@ -140,7 +146,11 @@ export async function createDevboxScene(
       depthWrite: false,
     });
     materials.push(material);
-    const mesh = new THREE.InstancedMesh(plane, material, COUNT / AGENTS.length);
+    const mesh = new THREE.InstancedMesh(
+      plane,
+      material,
+      Math.ceil((COUNT - index) / AGENTS.length),
+    );
     instances.push(mesh);
     world.add(mesh);
     return { mesh, material };
@@ -152,7 +162,7 @@ export async function createDevboxScene(
   shellMaterial.transparent = true;
   const shell = new THREE.Mesh(shellGeometry, shellMaterial);
   world.add(shell);
-  const sharedTexture = new THREE.Texture(images[3]);
+  const sharedTexture = new THREE.Texture(images[AGENTS.length]);
   sharedTexture.colorSpace = THREE.SRGBColorSpace;
   sharedTexture.needsUpdate = true;
   textures.push(sharedTexture);
@@ -164,7 +174,7 @@ export async function createDevboxScene(
   materials.push(sharedMaterial);
   const sharedIcon = new THREE.Mesh(plane, sharedMaterial);
   sharedIcon.position.set(0, 0, 1.44);
-  sharedIcon.scale.setScalar(1.45);
+  sharedIcon.scale.setScalar(2.15);
   shell.add(sharedIcon);
 
   const cubes = Array.from({ length: COUNT }, (_, index) => {
@@ -190,10 +200,16 @@ export async function createDevboxScene(
     agentMarks[index % AGENTS.length].mesh.setColorAt(Math.floor(index / AGENTS.length), shade);
     return {
       packed,
+      joined: packed
+        .clone()
+        .multiplyScalar(0.55)
+        .applyAxisAngle(new THREE.Vector3(0, 1, 0), JOIN_ROTATION),
       origin: packed.clone(),
       target: new THREE.Vector3(),
       size,
       rotation,
+      orientation: new THREE.Euler(),
+      fromRotation: new THREE.Euler(),
       background,
     };
   });
@@ -213,40 +229,91 @@ export async function createDevboxScene(
   }
 
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  const pointer = new THREE.Vector2();
-  const look = new THREE.Vector2();
-  let expansion = motion.matches ? 1 : 0;
+  let expansion = 0;
   let fromExpansion = 0;
-  let targetExpansion = 1;
-  let transitionElapsed = motion.matches ? EXPANSION_DURATION : -350;
+  let targetExpansion = 0;
+  let transitionElapsed = EXPANSION_DURATION;
   let transitionDuration = EXPANSION_DURATION;
+  let entered = false;
+  let previousVisibility = 0;
   let visible = false;
   let disposed = false;
   let lost = false;
   let animation = 0;
   let previousTime = 0;
+  let ambientTime = 0;
 
   function draw() {
-    shellMaterial.opacity = 1 - ease(expansion / 0.15);
+    const recombining =
+      targetExpansion === 0 && fromExpansion > 0.04 && transitionElapsed < transitionDuration;
+    const gather = easeOut(transitionElapsed / 400);
+    const reveal = easeOut((transitionElapsed - 300) / 300);
+    shell.rotation.y = recombining
+      ? JOIN_ROTATION * (1 - spring(Math.max(0, transitionElapsed - 350) / 1000, 0.78, 15))
+      : 0;
+    shell.scale.setScalar(recombining ? reveal : 1);
+    shellMaterial.opacity = recombining ? 1 : 1 - ease(expansion / 0.15);
     sharedMaterial.opacity = shellMaterial.opacity;
-    shell.visible = shellMaterial.opacity > 0;
-    for (const mesh of instances) mesh.visible = expansion > 0.04;
-    for (const mark of agentMarks) mark.material.opacity = ease((expansion - 0.15) / 0.55);
+    shell.visible = shellMaterial.opacity > 0 && (!recombining || reveal > 0);
+    for (const mesh of instances)
+      mesh.visible = recombining ? transitionElapsed < 400 : expansion > 0.04;
+    for (const mark of agentMarks)
+      mark.material.opacity = recombining
+        ? ease((fromExpansion - 0.15) / 0.55) * (1 - ease((transitionElapsed - 160) / 200))
+        : ease((expansion - 0.15) / 0.55);
     cubes.forEach((cube, index) => {
       const spread = expansion;
-      const turn =
-        Math.sin(Math.PI * THREE.MathUtils.clamp(transitionElapsed / transitionDuration, 0, 1)) *
-        Math.abs(targetExpansion - fromExpansion);
-      transform.position.lerpVectors(cube.origin, cube.target, spread);
-      transform.rotation.set(
-        cube.rotation.x * spread + turn * ((index % 3) - 1) * 0.12,
-        cube.rotation.y * spread + turn * (index % 2 ? 0.4 : -0.4),
-        cube.rotation.z * spread + turn * ((index % 3) - 1) * 0.08,
+      const rotationProgress =
+        motion.matches || transitionElapsed >= transitionDuration
+          ? 1
+          : targetExpansion === 0
+            ? ease(transitionElapsed / 400)
+            : spring(
+                Math.max(0, transitionElapsed - ((index * 47) % 130)) / 1000,
+                0.5 + (index % 5) * 0.035,
+                12 + ((index * 7) % 9),
+              );
+      cube.orientation.set(
+        THREE.MathUtils.lerp(
+          cube.fromRotation.x,
+          cube.rotation.x * targetExpansion,
+          rotationProgress,
+        ),
+        THREE.MathUtils.lerp(
+          cube.fromRotation.y,
+          recombining ? JOIN_ROTATION : cube.rotation.y * targetExpansion,
+          rotationProgress,
+        ),
+        THREE.MathUtils.lerp(
+          cube.fromRotation.z,
+          cube.rotation.z * targetExpansion,
+          rotationProgress,
+        ),
       );
+      const drift = motion.matches ? 0 : ease(spread);
+      const phase = ambientTime * (0.65 + (index % 5) * 0.08) + index * 2.39996;
+      transform.position.lerpVectors(cube.origin, cube.target, spread);
+      if (recombining && !cube.background)
+        transform.position
+          .addScaledVector(cube.joined, gather)
+          .addScaledVector(cube.packed, -gather);
+      transform.position
+        .addScaledVector(right, Math.sin(phase * 0.83) * 0.035 * drift)
+        .addScaledVector(up, Math.cos(phase) * 0.065 * drift);
+      transform.rotation.set(
+        cube.orientation.x + Math.sin(phase) * 0.018 * drift,
+        cube.orientation.y + Math.sin(phase * 0.7) * 0.025 * drift,
+        cube.orientation.z + Math.cos(phase * 0.9) * 0.012 * drift,
+      );
+      const size = cube.background
+        ? cube.size * ease(((recombining ? fromExpansion : spread) - 0.08) / 0.92)
+        : THREE.MathUtils.lerp(1, cube.size, recombining ? fromExpansion : spread);
       transform.scale.setScalar(
-        cube.background
-          ? cube.size * ease((spread - 0.08) / 0.92)
-          : THREE.MathUtils.lerp(1, cube.size, spread),
+        recombining
+          ? cube.background
+            ? size * (1 - easeOut(transitionElapsed / 200))
+            : THREE.MathUtils.lerp(size, 0.55, easeOut(transitionElapsed / 160))
+          : size,
       );
       transform.updateMatrix();
       bodies.setMatrixAt(index, transform.matrix);
@@ -261,8 +328,6 @@ export async function createDevboxScene(
       agentMarks[index % AGENTS.length].mesh.setMatrixAt(Math.floor(index / AGENTS.length), matrix);
     });
     for (const mesh of instances) mesh.instanceMatrix.needsUpdate = true;
-    world.rotation.y = look.x * 0.1 - 0.12 * (1 - expansion);
-    world.rotation.x = look.y * 0.045;
     renderer.render(scene, camera);
   }
   function tick(now: number) {
@@ -270,18 +335,17 @@ export async function createDevboxScene(
     if (disposed || lost || !visible || document.hidden) return;
     const delta = previousTime ? Math.min(now - previousTime, 100) : 0;
     previousTime = now;
+    if (!motion.matches) ambientTime += delta / 1000;
     transitionElapsed = Math.min(transitionDuration, transitionElapsed + delta);
     const progress =
-      transitionElapsed >= transitionDuration
-        ? 1
-        : spring((Math.max(0, transitionElapsed) / 1000) * (500 / transitionDuration));
+      targetExpansion === 0
+        ? easeOut(transitionElapsed / 400)
+        : transitionElapsed >= EXPANSION_DURATION
+          ? 1
+          : spring((Math.max(0, transitionElapsed) / 1000) * (500 / EXPANSION_DURATION));
     expansion = THREE.MathUtils.lerp(fromExpansion, targetExpansion, progress);
-    look.lerp(pointer, 1 - Math.exp(-delta / 110));
     draw();
-    if (
-      !motion.matches &&
-      (transitionElapsed < transitionDuration || look.distanceTo(pointer) > 0.001)
-    )
+    if (!motion.matches && (targetExpansion === 1 || transitionElapsed < transitionDuration))
       animation = requestAnimationFrame(tick);
   }
   function requestDraw() {
@@ -295,8 +359,6 @@ export async function createDevboxScene(
     if (motion.matches) {
       expansion = targetExpansion;
       transitionElapsed = transitionDuration;
-      pointer.set(0, 0);
-      look.set(0, 0);
     }
     requestDraw();
   }
@@ -355,26 +417,17 @@ export async function createDevboxScene(
     renderer.setSize(width, height, false);
     requestDraw();
   }
-  function follow(event: PointerEvent) {
-    if (event.pointerType === "touch" || motion.matches) return;
-    const bounds = stage.getBoundingClientRect();
-    pointer.set(
-      ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
-      ((event.clientY - bounds.top) / bounds.height) * 2 - 1,
-    );
-    requestDraw();
-  }
-  function resetPointer() {
-    pointer.set(0, 0);
-    requestDraw();
-  }
-  function toggleExpansion() {
+  function transitionTo(target: 0 | 1) {
+    for (const cube of cubes) cube.fromRotation.copy(cube.orientation);
     fromExpansion = expansion;
-    targetExpansion = targetExpansion === 1 ? 0 : 1;
-    transitionDuration = targetExpansion === 1 ? EXPANSION_DURATION : 300;
+    targetExpansion = target;
+    transitionDuration = targetExpansion === 1 ? ROTATION_SETTLE_DURATION : RECOMBINE_DURATION;
     transitionElapsed = motion.matches ? transitionDuration : 0;
     stage.setAttribute("aria-pressed", String(targetExpansion === 1));
     requestDraw();
+  }
+  function toggleExpansion() {
+    transitionTo(targetExpansion === 1 ? 0 : 1);
   }
   function contextLost(event: Event) {
     event.preventDefault();
@@ -386,16 +439,31 @@ export async function createDevboxScene(
   const intersection = new IntersectionObserver(
     ([entry]) => {
       visible = entry.isIntersecting;
+      const coverage =
+        entry.intersectionRect.height /
+        Math.min(entry.boundingClientRect.height, window.innerHeight);
+      const arriving = coverage > previousVisibility;
+      if (!entered && coverage >= 0.6 && arriving) {
+        entered = true;
+        transitionTo(1);
+      } else if (entered && coverage <= 0.85 && !arriving) {
+        entered = false;
+        transitionTo(0);
+      }
+      previousVisibility = coverage;
+      if (!visible) {
+        expansion = fromExpansion = targetExpansion = 0;
+        transitionElapsed = transitionDuration;
+        stage.setAttribute("aria-pressed", "false");
+      }
       syncMotion();
     },
-    { threshold: 0.15 },
+    { threshold: [0, 0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 1] },
   );
   const resizeObserver = new ResizeObserver(resize);
   intersection.observe(stage);
   resizeObserver.observe(stage);
-  stage.addEventListener("pointermove", follow);
-  stage.addEventListener("pointerleave", resetPointer);
-  stage.setAttribute("aria-pressed", "true");
+  stage.setAttribute("aria-pressed", "false");
   stage.addEventListener("click", toggleExpansion);
   canvas.addEventListener("webglcontextlost", contextLost);
   document.addEventListener("visibilitychange", syncMotion);
@@ -408,8 +476,6 @@ export async function createDevboxScene(
       cancelAnimationFrame(animation);
       intersection.disconnect();
       resizeObserver.disconnect();
-      stage.removeEventListener("pointermove", follow);
-      stage.removeEventListener("pointerleave", resetPointer);
       stage.removeEventListener("click", toggleExpansion);
       canvas.removeEventListener("webglcontextlost", contextLost);
       document.removeEventListener("visibilitychange", syncMotion);

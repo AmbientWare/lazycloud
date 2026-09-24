@@ -32,7 +32,7 @@ const platformStories: PlatformStory[] = [
   {
     key: "endpoints",
     label: "APIs",
-    title: "Ship an endpoint or a full ASGI app.",
+    title: "Deploy an endpoint or a full ASGI app.",
     body: "Deploy a Python function as an API, or bring your ASGI app with its routes and middleware. LazyCloud handles TLS, scaling, and idle shutdown.",
     visual: "application",
   },

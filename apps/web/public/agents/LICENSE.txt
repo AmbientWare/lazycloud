@@ -10,6 +10,12 @@ https://github.com/anomalyco/opencode/blob/dev/packages/console/app/src/asset/br
 MIT License
 Copyright (c) 2025 opencode
 
+The Pi SVG is from its official website:
+https://pi.dev/logo.svg
+
+MIT License
+Copyright (c) 2025 Mario Zechner
+
 The following license applies to these assets. Product names and logos remain
 trademarks of their respective owners.
 

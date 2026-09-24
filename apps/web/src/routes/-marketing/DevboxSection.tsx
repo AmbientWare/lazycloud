@@ -61,8 +61,8 @@ export function DevboxSection() {
             <em>Dev boxes</em> for your coding agents.
           </h2>
           <p className="devbox-intro">
-            Run Codex, Claude Code, OpenCode, or your own harness on separate machines. Work with
-            them all from your terminal or editor.
+            Run Codex, Claude Code, OpenCode, Pi, or your own harness on separate machines. Work
+            with them all from your terminal or editor.
           </p>
           <p>
             Define your tools once and provision boxes from the same image. Each gets its own

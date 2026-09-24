@@ -5,6 +5,9 @@
 }
 
 .devbox-layout {
+  max-width: 1320px;
+  margin-left: max(var(--marketing-gutter), env(safe-area-inset-left), calc((100% - 1320px) / 2));
+  margin-right: max(var(--marketing-gutter), env(safe-area-inset-right), calc((100% - 1320px) / 2));
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
   align-items: center;
