@@ -249,7 +249,7 @@ def _register_shell(application: typer.Typer) -> None:
 def _register_ssh(application: typer.Typer) -> None:
     application.command(
         "ssh",
-        help="Open an SSH session to a deployed pod.",
+        help="Open an SSH session to a devbox or a pod that serves SSH.",
         context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
     )(ssh)
 
@@ -258,13 +258,14 @@ def _register_ssh_proxy(application: typer.Typer) -> None:
     application.command(
         "ssh-proxy",
         help="Carry an SSH connection to a pod over stdin and stdout.",
+        hidden=True,
     )(ssh_proxy)
 
 
 def _register_ssh_config(application: typer.Typer) -> None:
     application.command(
         "ssh-config",
-        help="Write SSH config for deployed pods.",
+        help="Write SSH config so ssh and editors reach devboxes and pods by name.",
     )(ssh_config)
 
 
@@ -272,6 +273,7 @@ def _register_ssh_cert(application: typer.Typer) -> None:
     application.command(
         "ssh-cert",
         help="Refresh the SSH certificate for the workspace.",
+        hidden=True,
     )(ssh_cert)
 
 

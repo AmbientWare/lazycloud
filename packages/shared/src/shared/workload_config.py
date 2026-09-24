@@ -8,7 +8,8 @@ from shared.callbacks import normalize_callback_url
 from shared.container_requests import OciRuntimeName
 from shared.contracts import ContractModel
 from shared.deployment_records import CpuRequest, MemoryRequest, request_and_limit
-from shared.disks import DiskMount, validate_disk_mounts
+from shared.deployments import PodRole
+from shared.disks import DiskMount, require_one_writer, validate_disk_mounts
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
 from shared.lifecycle import LifecycleHooks
@@ -18,6 +19,8 @@ from shared.resources import parse_memory_mib
 from shared.tasks import RetryPolicy
 
 _JSON_MAPPING_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+
+DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS = 300
 
 
 def cpu_limit_at_or_above_request(value: CpuRequest | None) -> CpuRequest | None:
@@ -167,6 +170,18 @@ class StubAutoscalerConfig(ContractModel):
     failed_container_window_seconds: int | None = Field(default=None, ge=0)
     failure_window_seconds: int | None = Field(default=None, ge=0)
 
+    @property
+    def failed_container_window(self) -> int:
+        """Seconds a failed container still counts against the stub.
+
+        The autoscaler stops starting containers for a stub that failed often
+        enough inside it, and the devbox status reports the failure for as long.
+        """
+        for value in (self.failed_container_window_seconds, self.failure_window_seconds):
+            if value is not None:
+                return max(value, 0)
+        return DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS
+
     @model_validator(mode="after")
     def minimum_cannot_exceed_maximum(self) -> StubAutoscalerConfig:
         if self.min_containers > self.max_containers:
@@ -278,6 +293,9 @@ class StubConfig(ContractModel):
     """Serve SSH through the API's authenticated tunnel; pods only."""
 
     disks: list[DiskMount] = Field(default_factory=list)
+    role: PodRole = PodRole.Service
+    """What a pod is for, resolved before the stub is written; `Service` on other kinds."""
+
     machine: str = ""
     """A joined machine this workload must run on, by name. Empty runs in the workspace."""
     inputs: dict[str, JsonValue] = Field(default_factory=dict)
@@ -300,9 +318,18 @@ class StubConfig(ContractModel):
 
     @model_validator(mode="after")
     def disks_have_one_writer(self) -> StubConfig:
-        if self.disks and self.autoscaler.max_containers > 1:
-            msg = "a workload with a disk runs one container; set max_containers to 1"
-            raise ValueError(msg)
+        if self.disks:
+            require_one_writer(self.autoscaler.max_containers)
+        return self
+
+    @model_validator(mode="after")
+    def devbox_is_one_ssh_container_on_a_root_disk(self) -> StubConfig:
+        if self.role is not PodRole.Devbox:
+            return self
+        if not self.ssh:
+            raise ValueError("a devbox is reached over SSH and cannot turn ssh off")
+        if not any(disk.is_root for disk in self.disks):
+            raise ValueError("a devbox needs a disk at /")
         return self
 
     @model_validator(mode="after")
@@ -314,6 +341,7 @@ class StubConfig(ContractModel):
 
 
 __all__ = [
+    "DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS",
     "StubAutoscalerConfig",
     "StubConfig",
     "StubImageConfig",

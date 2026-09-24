@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Annotated
 
 from execution.pods.proxy import PodProxyUnavailable
-from execution.ssh.service import PodSshTunnelService, SshIdentityService
+from execution.ssh.service import SSH_HOST_LIST_LIMIT, PodSshTunnelService, SshIdentityService
 from fastapi import APIRouter, Depends, Query, WebSocket, status
 from shared.errors import DomainError
-from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostKeyResponse
+from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostListResponse
 from shared.identity import AuthTokenRecord
 
 from api.server.auth import read_workspace, write_token, write_workspace
@@ -60,17 +60,20 @@ def create_ssh_certificate(
 
 
 @router.get(
-    "/api/v1/pods/{name}/ssh/host-key",
-    response_model=SshHostKeyResponse,
-    operation_id="get_pod_ssh_host_key",
+    "/api/v1/ssh/hosts",
+    response_model=SshHostListResponse,
+    operation_id="list_ssh_hosts",
 )
-def get_pod_ssh_host_key(
-    name: str,
-    app: AppQuery,
+def list_ssh_hosts(
     workspace_id: read_workspace,
     service: Annotated[SshIdentityService, Depends(ssh_identity_service)],
-) -> SshHostKeyResponse:
-    return service.pod_host_key(workspace_id=workspace_id, app=app, pod=name)
+    app: str | None = None,
+    pod: str | None = None,
+    cursor: str = "",
+    limit: int = SSH_HOST_LIST_LIMIT,
+) -> SshHostListResponse:
+    """Every devbox and pod in the workspace that serves SSH, with its pinned host key."""
+    return service.hosts(workspace_id=workspace_id, app=app, pod=pod, cursor=cursor, limit=limit)
 
 
 @router.websocket("/api/v1/pods/{name}/ssh")

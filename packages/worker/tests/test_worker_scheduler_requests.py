@@ -9,6 +9,7 @@ import pytest
 from pydantic import JsonValue
 from scheduler.state import RedisSchedulerContainerRepository
 from shared.container_requests import StopContainerReason, WorkerStartupKind
+from shared.containers import ContainerExecutionPhase
 from shared.placement import Placement
 from shared.scheduling import (
     ContainerStatusUpdatePlan,
@@ -23,7 +24,6 @@ from tests.real_redis import RealRedisActors
 from worker.adapters import WorkerRouteIdentity, WorkerRouteRecovery
 from worker.container_execution import (
     ContainerExecutionContext,
-    ContainerExecutionPhase,
     ContainerExecutionPhaseResult,
     ContainerExecutionResult,
 )

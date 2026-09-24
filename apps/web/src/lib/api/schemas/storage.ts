@@ -39,6 +39,16 @@ export const diskSchema = z.object({
   generation: z.number(),
   stored_bytes: z.number(),
   holder_container_id: z.string().default(""),
+  // The workload whose container last asked for the disk; the server resolves it.
+  workload: z
+    .object({
+      app_id: z.string(),
+      app_name: z.string(),
+      kind: z.enum(stubKinds),
+      name: z.string(),
+      role: z.enum(["service", "devbox"]),
+    })
+    .nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 });

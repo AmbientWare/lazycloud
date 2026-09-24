@@ -8,12 +8,12 @@ from enum import StrEnum
 from typing import Protocol
 
 from pydantic import Field
+from shared.containers import ContainerExecutionPhase
 from shared.contracts import ContractModel
 from shared.scheduling import ContainerStatusUpdatePlan, SchedulerContainerStatus
 from shared.timestamps import utc_now
 
 from worker.events import (
-    ContainerExecutionPhase,
     ContainerExitCode,
     ContainerRequestContext,
     StopContainerReason,

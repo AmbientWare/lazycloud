@@ -25,8 +25,8 @@ from shared.deployment_records import (
     MemoryRequest,
     VolumeMount,
 )
-from shared.deployments import DeploymentKind
-from shared.disks import DiskMount
+from shared.deployments import DeploymentKind, PodRole
+from shared.disks import DiskMount, parse_disk_size_bytes
 from shared.gpu import GpuInput
 from shared.http.deployment_plans import (
     DeploymentPlanRequest,
@@ -841,6 +841,81 @@ class App:
             metadata=dict(metadata or {}),
         )
         return self._register(Pod(_app_slug=self.slug, **kwargs))
+
+    def devbox(
+        self,
+        name: str,
+        *,
+        image: Image,
+        disk: str | int,
+        cpu: CpuRequest,
+        memory: MemoryRequest,
+        gpu: GpuInput = None,
+        gpu_count: int = 0,
+        keep_warm: int | None = None,
+        preemptible: bool | None = None,
+        command: Iterable[str] | None = None,
+        ports: Mapping[str, int] | None = None,
+        env: Mapping[str, str] | None = None,
+        secrets: Iterable[str] | None = None,
+        volumes: Iterable[VolumeMount | VolumeExport] | None = None,
+        disks: Iterable[Disk | DiskMount] | None = None,
+        docker_enabled: bool = False,
+        region: str | None = None,
+        availability_zone: str = "",
+        machine: MachineInput = None,
+    ) -> Pod:
+        """Create a dev machine: a pod you reach over SSH whose root filesystem is a disk.
+
+        Everything written outside a volume survives a stop, a redeploy, or a
+        move to another machine. `lazycloud ssh <name>` connects, and an open
+        connection keeps it running. The control plane fills in what is left
+        unset: SSH on, one container, a root disk named after the devbox, a
+        command that keeps it running, 30 minutes of idle time, and a node that
+        is not reclaimed mid-session.
+
+        Args:
+            name: Devbox name; also the name of its root disk.
+            image: Base image; what the devbox writes on top of it is kept on
+                the disk.
+            disk: Root disk size, such as ``"100Gi"``; stored data is billed.
+            cpu, memory, gpu, gpu_count: Compute resources for the container.
+            keep_warm: Idle seconds before the container stops; unset uses the
+                devbox default.
+            preemptible: Allow a reclaimable node; unset keeps the devbox on one
+                that is not.
+            command: Container command; unset keeps the container running idle.
+            ports, env, secrets, volumes: As on `pod`.
+            disks: Further disks, mounted away from ``/``.
+            docker_enabled: Allow Docker inside the devbox.
+            region, availability_zone, machine: Placement, as on `pod`.
+        """
+        return self._register(
+            Pod(
+                _app_slug=self.slug,
+                name=name,
+                image=image,
+                command=[str(item) for item in (command or [])],
+                ports=dict(ports or {}),
+                env=dict(env or {}),
+                cpu=cpu,
+                memory=memory,
+                gpu=gpu,
+                gpu_count=gpu_count,
+                keep_warm=keep_warm,
+                secrets=[str(secret) for secret in (secrets or [])],
+                volumes=volume_mounts(volumes or ()),
+                disks=disk_mounts(disks or ()),
+                ssh=None,
+                docker_enabled=docker_enabled,
+                preemptible=preemptible,
+                role=PodRole.Devbox,
+                root_disk_bytes=parse_disk_size_bytes(disk),
+                region=region,
+                availability_zone=availability_zone,
+                machine=machine,
+            )
+        )
 
     def sandbox(
         self,

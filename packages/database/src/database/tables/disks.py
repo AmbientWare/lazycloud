@@ -113,6 +113,10 @@ class DiskTable(IdTable, DatabaseBase):
 
     lease_token: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     last_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_stub_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    """The stub whose pod last asked for the disk, which names the workload using it.
+    No foreign key, for the reason the holder has none: a vanished stub names nothing."""
+
     metered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now()
     )

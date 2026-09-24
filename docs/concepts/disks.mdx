@@ -34,7 +34,8 @@ writable filesystem: packages installed with `apt-get`, files in `/root`, and
 anything else written outside a volume. The image still comes from the
 deployment, so a redeploy with a new image keeps what was written on top of
 it. `Disk("cache", size="20Gi", mount_path="/cache")` mounts at one directory
-instead.
+instead. A [devbox](/concepts/dev-machines) gets a root disk named after it
+without declaring one.
 
 ## How it persists
 

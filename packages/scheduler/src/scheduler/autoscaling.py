@@ -50,7 +50,7 @@ from shared.worker_events import (
     FUNCTION_SCALE_DECISION_ACTION,
     POD_SCALE_DECISION_ACTION,
 )
-from shared.workload_config import StubConfig
+from shared.workload_config import DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS, StubConfig
 from shared.workload_keys import (
     pod_container_connections_key,
     pod_keep_warm_lock_key,
@@ -69,7 +69,6 @@ type AutoscalingConfig = AutoscalingStubConfig | StubConfig
 
 AUTOSCALER_LOCK_TTL_SECONDS = 10
 AUTOSCALER_DEFAULT_FAILED_CONTAINER_THRESHOLD = 3
-AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS = 300
 CONTAINER_DELIVERY_DEADLINE_SECONDS = 60
 CONTAINER_START_DEADLINE_SECONDS = 600
 """Image preparation has a longer deadline than acknowledging a delivered request.
@@ -1310,7 +1309,7 @@ def load_autoscaling_placement_snapshot(
     current_time = now or utc_now()
     failed_window_seconds = max(
         (_failed_container_window_seconds(stub.config) for stub in selected),
-        default=AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
+        default=DEFAULT_FAILED_CONTAINER_WINDOW_SECONDS,
     )
     stub_ids = [stub.id for stub in selected]
     app_ids = [stub.app_id for stub in selected if stub.app_id]
@@ -1599,11 +1598,7 @@ def _failed_container_threshold(config: AutoscalingConfig) -> int:
 
 
 def _failed_container_window_seconds(config: AutoscalingConfig) -> int:
-    return _first_configured_non_negative(
-        config.autoscaler.failed_container_window_seconds,
-        config.autoscaler.failure_window_seconds,
-        default=AUTOSCALER_DEFAULT_FAILURE_WINDOW_SECONDS,
-    )
+    return config.autoscaler.failed_container_window
 
 
 def _ceil_div(numerator: int, denominator: int) -> int:

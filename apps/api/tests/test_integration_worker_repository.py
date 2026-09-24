@@ -88,7 +88,7 @@ from shared.compute_policy import (
     UnitName,
 )
 from shared.container_requests import ContainerShutdownTarget, StopContainerReason
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import ContainerExecutionPhase, ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.errors import (
@@ -129,7 +129,6 @@ from tests.releases import select_worker_release
 from tests.scheduler_composition import scheduler_request_service_for_redis
 from tests.workspaces import owned_workspace, workspace_owner_user_id
 from worker.events import (
-    ContainerExecutionPhase,
     ContainerLifecyclePayload,
     WorkerStreamEvent,
 )

@@ -179,6 +179,8 @@ class InteractiveShell:
     connector: ShellWebSocketConnector = field(default_factory=lambda: _connect_websocket)
     terminal: ShellTerminal = field(default_factory=LocalShellTerminal)
     poll_interval_seconds: float = 0.025
+    on_attached: Callable[[], None] | None = None
+    """Runs once, when the shell is ready or before its first output, whichever is first."""
 
     def run(
         self,
@@ -307,6 +309,8 @@ class InteractiveShell:
             msg = "shell backend sent an unexpected text message"
             raise ShellConnectionError(msg)
         for frame in decoder.feed(message):
+            if frame.frame_type in {ShellFrameType.Ready.value, ShellFrameType.Data.value}:
+                self._attached()
             if frame.frame_type == ShellFrameType.Ready.value:
                 state.ready = True
             elif frame.frame_type == ShellFrameType.Data.value:
@@ -319,6 +323,11 @@ class InteractiveShell:
             else:
                 msg = f"shell backend sent unknown frame type {frame.frame_type!r}"
                 raise ShellConnectionError(msg)
+
+    def _attached(self) -> None:
+        attached, self.on_attached = self.on_attached, None
+        if attached is not None:
+            attached()
 
     def _send_resize(self, websocket: ShellWebSocket) -> None:
         columns, rows = self.terminal.size()

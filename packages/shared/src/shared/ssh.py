@@ -13,6 +13,8 @@ to be revoked in the container.
 
 from __future__ import annotations
 
+import re
+
 SSH_WORKER_PORT = 2223
 """Where the supervisor's SSH server listens inside the container.
 
@@ -29,6 +31,25 @@ SSH_CONTAINER_IDENTITY_DIR = "/run/lazycloud/ssh"
 SSH_CONTAINER_HOST_KEY_PATH = f"{SSH_CONTAINER_IDENTITY_DIR}/ssh_host_ed25519_key"
 SSH_CONTAINER_USER_CA_PATH = f"{SSH_CONTAINER_IDENTITY_DIR}/user_ca.pub"
 
+_LABEL_UNSAFE = re.compile(r"[^a-z0-9-]+")
+
+
+def ssh_host_label(value: str) -> str:
+    """A name reduced to what an SSH host alias may hold."""
+    label = _LABEL_UNSAFE.sub("-", value.strip().lower()).strip("-")
+    if not label:
+        raise ValueError(f"cannot build an SSH host name from {value!r}")
+    return label
+
+
+def ssh_host_alias(workspace: str, app: str, pod: str) -> str:
+    """The host name a pod answers to in SSH config; pod names repeat across apps.
+
+    The CLI writes it into the SSH config and the dashboard shows it for editors,
+    so both have to derive it here.
+    """
+    return f"lazycloud-{ssh_host_label(workspace)}-{ssh_host_label(app)}-{ssh_host_label(pod)}"
+
 
 __all__ = [
     "SSH_CERTIFICATE_PRINCIPAL",
@@ -38,4 +59,6 @@ __all__ = [
     "SSH_CONTAINER_USER_CA_PATH",
     "SSH_LOGIN_USER",
     "SSH_WORKER_PORT",
+    "ssh_host_alias",
+    "ssh_host_label",
 ]

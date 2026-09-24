@@ -87,4 +87,38 @@ class ContainerRecord(ContractModel):
     preemption_settled_at: datetime | None = None
 
 
-__all__ = ["LIVE_CONTAINER_STATUSES", "ContainerRecord", "ContainerStatus"]
+class ContainerExecutionPhase(StringEnum):
+    """A step of a container's start or finish on a worker.
+
+    The worker reports each step it finishes as a lifecycle event, and the
+    control plane reads those reports back to say how far a start has got.
+    """
+
+    PublishWorkerAddress = "publish-worker-address"
+    HydrateCredentials = "hydrate-credentials"
+    LoadImage = "load-image"
+    AllocatePorts = "allocate-ports"
+    SetupNetwork = "setup-network"
+    PublishContainerRoutes = "publish-container-routes"
+    SetupWorkspaceStorage = "setup-workspace-storage"
+    SetupMounts = "setup-mounts"
+    PrepareRootfs = "prepare-rootfs"
+    AssignGpu = "assign-gpu"
+    BuildSpec = "build-spec"
+    PrepareRuntime = "prepare-runtime"
+    PrepareWorkload = "prepare-workload"
+    CompleteCheckpointStartup = "complete-checkpoint-startup"
+    MarkRunning = "mark-running"
+    RunRuntime = "run-runtime"
+    HandleOom = "handle-oom"
+    PublishExitEvent = "publish-exit-event"
+    Finalize = "finalize"
+    DelayedCleanup = "delayed-cleanup"
+
+
+__all__ = [
+    "LIVE_CONTAINER_STATUSES",
+    "ContainerExecutionPhase",
+    "ContainerRecord",
+    "ContainerStatus",
+]

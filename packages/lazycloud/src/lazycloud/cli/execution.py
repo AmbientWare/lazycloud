@@ -7,6 +7,7 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 import typer
 from pydantic import JsonValue
 from shared.app_slug import app_slug_or_default
+from shared.deployments import PodRole
 from shared.http.deployment_plans import (
     DeploymentPlanRequest,
     DeploymentPlanResponse,
@@ -32,7 +33,7 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.cli.components.progress import attach_terminal
+from lazycloud.cli.components.progress import ConnectingIndicator, attach_terminal
 from lazycloud.cli.components.results import emit_python_result
 from lazycloud.cli.control import resource_client
 from lazycloud.cli.handler_workflows import (
@@ -47,6 +48,7 @@ from lazycloud.control import control_workspace_scope, resolve_control_client_co
 from lazycloud.json_contracts import resource_payload
 from lazycloud.session.app_deployment import AppDeploymentSession, AppDeploymentTarget
 from lazycloud.session.deployment import DeploymentClient
+from lazycloud.terminal_shell import InteractiveShell
 
 deployment_app = typer.Typer(help="Manage deployments.")
 
@@ -288,14 +290,19 @@ def shell(
     except HandlerLoadError as exc:
         raise typer.BadParameter(str(exc)) from exc
     attach_terminal(user_object)
-    response = invoke_handler_method(
-        apply_handler_reference(user_object, handler),
-        "shell",
-        kwargs={"workspace": workspace, "sync_dir": sync_dir},
-    )
-    if isinstance(response, ShellSession):
-        open_shell_session(ctx, response, workspace=workspace)
-        return
+    target = apply_handler_reference(user_object, handler)
+    indicator = ConnectingIndicator(str(getattr(target, "name", handler))).start()
+    try:
+        response = invoke_handler_method(
+            target,
+            "shell",
+            kwargs={"workspace": workspace, "sync_dir": sync_dir},
+        )
+        if isinstance(response, ShellSession):
+            open_shell_session(ctx, response, workspace=workspace, indicator=indicator)
+            return
+    finally:
+        indicator.connected()
     print_payload(ctx, response)
 
 
@@ -307,10 +314,17 @@ def open_existing_shell(
     workspace: str | None = None,
 ) -> None:
     _require_interactive_output(ctx)
-    selected_workspace = current_workspace(workspace)
-    shell_client = Shell(workspace=selected_workspace)
-    session = shell_client.create_existing(container_id, sync_dir=sync_dir)
-    _exit_with_shell_status(shell_client.connect(session))
+    indicator = ConnectingIndicator(container_id[:12]).start()
+    try:
+        shell_client = Shell(
+            workspace=current_workspace(workspace),
+            interactive_shell=InteractiveShell(on_attached=indicator.connected),
+        )
+        session = shell_client.create_existing(container_id, sync_dir=sync_dir)
+        status = shell_client.connect(session)
+    finally:
+        indicator.connected()
+    _exit_with_shell_status(status)
 
 
 def open_shell_session(
@@ -318,10 +332,19 @@ def open_shell_session(
     session: ShellSession,
     *,
     workspace: str | None = None,
+    indicator: ConnectingIndicator | None = None,
 ) -> None:
     _require_interactive_output(ctx)
-    shell_client = Shell(workspace=current_workspace(workspace))
-    _exit_with_shell_status(shell_client.connect(session))
+    waiting = indicator or ConnectingIndicator(session.container_id[:12]).start()
+    try:
+        shell_client = Shell(
+            workspace=current_workspace(workspace),
+            interactive_shell=InteractiveShell(on_attached=waiting.connected),
+        )
+        status = shell_client.connect(session)
+    finally:
+        waiting.connected()
+    _exit_with_shell_status(status)
 
 
 def _require_interactive_output(ctx: typer.Context) -> None:
@@ -453,6 +476,11 @@ def _deployment_summary(
         ]
         if urls:
             summary["urls"] = urls
+        devboxes = [
+            resource.name for resource in response.resources if resource.role is PodRole.Devbox
+        ]
+        if devboxes:
+            summary["devboxes"] = devboxes
         if response.pruning is not None:
             summary["removed_versions"] = response.pruning.removed_versions
         return summary
@@ -464,6 +492,14 @@ def _deployment_summary(
     invoke_url = getattr(response, "invoke_url", "")
     if invoke_url:
         summary["url"] = invoke_url
+    if isinstance(response, DeployStubResponse) and response.role is not None:
+        summary["role"] = response.role.value
+        if response.keep_warm_seconds is not None:
+            summary["keep_warm"] = (
+                "always" if response.keep_warm_seconds == -1 else f"{response.keep_warm_seconds}s"
+            )
+        if response.preemptible is not None:
+            summary["preemptible"] = response.preemptible
     return summary
 
 

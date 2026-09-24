@@ -50,19 +50,42 @@ from shared.app_lifecycle import (
     AppDeploymentIntentTarget,
     AppLifecycleState,
 )
-from shared.containers import ContainerStatus
+from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
 from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
-from shared.deployments import DeploymentKind, StubKind
+from shared.deployments import DeploymentKind, PodRole, StubKind
 from shared.enums import StringEnum
 from shared.errors import ConflictError
 from shared.identity import WorkspaceStatus
 from shared.placement import Placement
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
-from sqlalchemy import and_, case, delete, func, or_, select, text, update
+from sqlalchemy import (
+    and_,
+    case,
+    delete,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.sql.elements import ColumnElement
+
+
+@dataclass(frozen=True, slots=True)
+class SshPodRow:
+    app_id: str
+    app_name: str
+    pod: str
+    role: PodRole
+    deployment_id: str
+    active: bool
+    ssh: bool
 
 
 class DeploymentResourceRow(BaseModel):
@@ -943,6 +966,25 @@ class StubRepository:
 class DeploymentRepository:
     session: Session
 
+    def name_live_in_other_app(
+        self, name: str, *, kind: DeploymentKind, app_id: str, workspace_id: str
+    ) -> bool:
+        """Whether an active deployment of this kind and name lives in another app."""
+        return bool(
+            self.session.scalar(
+                select(
+                    exists().where(
+                        DeploymentTable.workspace_id == workspace_id,
+                        DeploymentTable.kind == kind.value,
+                        DeploymentTable.name == name,
+                        DeploymentTable.app_id != app_id,
+                        DeploymentTable.active.is_(True),
+                        DeploymentTable.deleted_at.is_(None),
+                    )
+                )
+            )
+        )
+
     def lock_live(self, deployment_id: str, *, workspace_id: str) -> bool:
         return (
             self.session.scalar(
@@ -1089,6 +1131,142 @@ class DeploymentRepository:
                 f"subdomain {subdomain} already belongs to another resource; "
                 f"rename {name} to claim a different one"
             )
+
+    def ssh_pods(
+        self,
+        *,
+        workspace_id: str,
+        app: str | None = None,
+        pod: str | None = None,
+        after: tuple[str, str] | None = None,
+        limit: int,
+    ) -> list[SshPodRow]:
+        """Pods whose newest version is active and serves SSH, ordered by app and name.
+
+        The newest version decides, because it is the one an SSH connection
+        reaches. Filtered by `pod`, stopped pods and pods without SSH come back
+        too, marked as such, so a caller can say why it cannot connect.
+        """
+        newest = (
+            select(
+                AppTable.id.label("app_id"),
+                AppTable.name.label("app_name"),
+                DeploymentTable.name.label("pod"),
+                DeploymentTable.id.label("deployment_id"),
+                DeploymentTable.active.label("active"),
+                StubTable.ssh.label("ssh"),
+                StubTable.role.label("role"),
+            )
+            .join(AppTable, AppTable.id == DeploymentTable.app_id)
+            .join(StubTable, StubTable.id == DeploymentTable.stub_id)
+            .where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.kind == DeploymentKind.Pod.value,
+                DeploymentTable.deleted_at.is_(None),
+                AppTable.deleted_at.is_(None),
+            )
+            .distinct(AppTable.name, DeploymentTable.name)
+            .order_by(AppTable.name, DeploymentTable.name, DeploymentTable.version.desc())
+        )
+        if app is not None:
+            newest = newest.where(AppTable.name == app)
+        if pod is not None:
+            newest = newest.where(DeploymentTable.name == pod)
+        candidates = newest.subquery()
+        statement = select(
+            candidates.c.app_id,
+            candidates.c.app_name,
+            candidates.c.pod,
+            candidates.c.role,
+            candidates.c.deployment_id,
+            candidates.c.active,
+            candidates.c.ssh,
+        )
+        if pod is None:
+            statement = statement.where(candidates.c.ssh.is_(True), candidates.c.active.is_(True))
+        if after is not None:
+            statement = statement.where(
+                tuple_(candidates.c.app_name, candidates.c.pod)
+                > tuple_(literal(after[0]), literal(after[1]))
+            )
+        rows = self.session.execute(
+            statement.order_by(candidates.c.app_name, candidates.c.pod).limit(limit)
+        ).tuples()
+        return [
+            SshPodRow(
+                app_id=str(app_id),
+                app_name=app_name,
+                pod=pod_name,
+                role=PodRole(role) if role else PodRole.Service,
+                deployment_id=str(deployment_id),
+                active=bool(active),
+                ssh=bool(ssh),
+            )
+            for app_id, app_name, pod_name, role, deployment_id, active, ssh in rows
+        ]
+
+    def live_container_ids(
+        self,
+        *,
+        workspace_id: str,
+        deployment_id: str | None = None,
+        workload: tuple[str | None, str, DeploymentKind] | None = None,
+    ) -> list[str]:
+        """Live containers of one deployment, or of every live version of a workload.
+
+        `workload` is `(app_id, name, kind)`.
+        """
+        statement = (
+            select(ContainerTable.id)
+            .join(StubTable, StubTable.id == ContainerTable.stub_id)
+            .join(DeploymentTable, DeploymentTable.id == StubTable.deployment_id)
+            .where(
+                ContainerTable.workspace_id == workspace_id,
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                DeploymentTable.workspace_id == workspace_id,
+            )
+        )
+        if deployment_id is not None:
+            statement = statement.where(DeploymentTable.id == deployment_id)
+        if workload is not None:
+            app_id, name, kind = workload
+            statement = statement.where(
+                DeploymentTable.app_id.is_not_distinct_from(app_id),
+                DeploymentTable.name == name,
+                DeploymentTable.kind == kind.value,
+                DeploymentTable.deleted_at.is_(None),
+            )
+        return [str(container_id) for container_id in self.session.scalars(statement)]
+
+    def delete_versions(
+        self,
+        *,
+        workspace_id: str,
+        app_id: str | None,
+        name: str,
+        kind: DeploymentKind,
+        now: datetime,
+    ) -> list[Deployment]:
+        """Soft-delete every live version of one workload and return them.
+
+        A stopped older version is still listed as the workload, so deleting only
+        the newest leaves the workload standing.
+        """
+        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        rows = self.session.scalars(
+            update(DeploymentTable)
+            .where(
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.app_id.is_not_distinct_from(app_id),
+                DeploymentTable.name == name,
+                DeploymentTable.kind == kind.value,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .values(active=False, deleted_at=now, updated_at=now)
+            .returning(DeploymentTable)
+            .execution_options(synchronize_session=False)
+        )
+        return [deployment_from_table(row) for row in rows]
 
     def deactivate_for_workspace_deletion(
         self,
