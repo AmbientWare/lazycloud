@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +22,9 @@ type filesystemRequest struct {
 	Mode        uint32 `json:"mode"`
 	Pattern     string `json:"pattern"`
 	Replacement string `json:"replacement"`
+	// Limit caps the entries a listing returns and the bytes a download
+	// writes; zero leaves both unbounded.
+	Limit int64 `json:"limit"`
 }
 
 type filesystemInfo struct {
@@ -46,6 +50,8 @@ type filesystemResponse struct {
 	FileInfo *filesystemInfo   `json:"file_info,omitempty"`
 	Files    []filesystemInfo  `json:"files,omitempty"`
 	Results  []filesystemMatch `json:"results,omitempty"`
+	// Truncated says a listing stopped at its limit with entries left unread.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 func runFilesystem(payload string) error {
@@ -90,8 +96,20 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 			return response, err
 		}
 		defer input.Close()
-		_, err = io.Copy(os.Stdout, input)
-		return response, err
+		if request.Limit <= 0 {
+			_, err = io.Copy(os.Stdout, input)
+			return response, err
+		}
+		// Reading one byte past the limit tells a file that grew after its
+		// size was checked apart from one that fits exactly.
+		written, err := io.CopyN(os.Stdout, input, request.Limit+1)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return response, err
+		}
+		if written > request.Limit {
+			return response, fmt.Errorf("file is larger than the %d-byte download limit: %q", request.Limit, path)
+		}
+		return response, nil
 	case "create-directory":
 		if err := os.MkdirAll(path, mode); err != nil {
 			return response, err
@@ -124,23 +142,30 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 		if err != nil {
 			return response, err
 		}
-		paths := []string{path}
-		if info.IsDir() {
-			entries, err := os.ReadDir(path)
-			if err != nil {
-				return response, err
-			}
-			paths = nil
-			for _, entry := range entries {
-				paths = append(paths, filepath.Join(path, entry.Name()))
-			}
+		if !info.IsDir() {
+			response.Files = []filesystemInfo{filesystemInfoOf(info)}
+			return response, nil
 		}
-		for _, child := range paths {
-			info, err := filesystemStat(child)
+		names, truncated, err := directoryNames(path, request.Limit)
+		if err != nil {
+			return response, err
+		}
+		response.Truncated = truncated
+		for _, name := range names {
+			child := filepath.Join(path, name)
+			info, err := os.Stat(child)
+			if err != nil {
+				// A link whose target is gone is still an entry, so the
+				// link itself is reported.
+				info, err = os.Lstat(child)
+			}
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			if err != nil {
 				return response, err
 			}
-			response.Files = append(response.Files, info)
+			response.Files = append(response.Files, filesystemInfoOf(info))
 		}
 		return response, nil
 	case "find-in-files", "replace-in-files":
@@ -184,17 +209,45 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 	}
 }
 
+// directoryNames reads at most limit names, sorted, and whether more remain.
+// Reading stops at the limit, so a directory's size never sets the cost.
+func directoryNames(path string, limit int64) ([]string, bool, error) {
+	directory, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer directory.Close()
+	count := -1
+	if limit > 0 {
+		count = int(limit) + 1
+	}
+	names, err := directory.Readdirnames(count)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false, err
+	}
+	truncated := limit > 0 && int64(len(names)) > limit
+	if truncated {
+		names = names[:limit]
+	}
+	sort.Strings(names)
+	return names, truncated, nil
+}
+
 func filesystemStat(path string) (filesystemInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return filesystemInfo{}, err
 	}
+	return filesystemInfoOf(info), nil
+}
+
+func filesystemInfoOf(info os.FileInfo) filesystemInfo {
 	stat := info.Sys().(*syscall.Stat_t)
 	return filesystemInfo{
 		Name: info.Name(), Mode: stat.Mode, Size: info.Size(), ModTime: info.ModTime().Unix(),
 		Owner: strconv.FormatUint(uint64(stat.Uid), 10), Group: strconv.FormatUint(uint64(stat.Gid), 10),
 		IsDir: info.IsDir(), Permissions: stat.Mode & 0777,
-	}, nil
+	}
 }
 
 func uploadFilesystemFile(source, target string, mode os.FileMode) error {

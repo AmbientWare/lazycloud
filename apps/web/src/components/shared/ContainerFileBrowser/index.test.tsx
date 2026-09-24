@@ -7,7 +7,7 @@ import type { Workspace } from "@/lib/api/schemas";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { WorkspaceContext } from "@/lib/workspace-context";
 
-import { SandboxFileBrowser } from ".";
+import { ContainerFileBrowser } from ".";
 
 const workspace: Workspace = {
   id: "workspace-1",
@@ -61,7 +61,7 @@ it("invalidates an in-flight preview when its file is deleted", async () => {
     completePreview = resolve;
   });
   vi.stubGlobal("fetch", (input: string, init?: RequestInit) =>
-    input.includes("/download/")
+    input.includes("/files/download?")
       ? previewResponse
       : Promise.resolve(Response.json(init?.method === "DELETE" ? {} : { files: [] })),
   );
@@ -91,7 +91,7 @@ it("shows failed previews as errors and catches failed downloads", async () => {
 });
 
 function renderBrowser() {
-  const queryKey = workspaceQueryKeys.sandboxes.files(workspace.id, "container-1", "/workspace");
+  const queryKey = workspaceQueryKeys.containers.files(workspace.id, "container-1", "/workspace");
   client.setQueryData(queryKey, {
     files: [
       { name: "old.txt", size: 4, mode: 0, is_dir: false },
@@ -100,13 +100,13 @@ function renderBrowser() {
     ],
   });
   client.setQueryData(
-    workspaceQueryKeys.sandboxes.files(workspace.id, "container-1", "/workspace/folder"),
+    workspaceQueryKeys.containers.files(workspace.id, "container-1", "/workspace/folder"),
     { files: [] },
   );
   return render(
     <QueryClientProvider client={client}>
       <WorkspaceContext.Provider value={{ workspace, workspaces: [workspace] }}>
-        <SandboxFileBrowser containerId="container-1" writable />
+        <ContainerFileBrowser containerId="container-1" rootPath="/workspace" writable />
       </WorkspaceContext.Provider>
     </QueryClientProvider>,
   );

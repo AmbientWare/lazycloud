@@ -593,10 +593,25 @@ class PodControlService:
         self,
         container_id: str,
         container_path: str,
+        *,
+        max_bytes: int | None = None,
     ) -> PodSandboxDownloadFileResponse:
-        response = self._client(container_id).sandbox_download_file(
+        """A file's bytes, refused before reading when it is larger than `max_bytes`."""
+        client = self._client(container_id)
+        if max_bytes is not None:
+            stat = client.sandbox_stat_file(container_id, container_path)
+            _raise_container_response_error(stat)
+            if stat.file_info.is_dir:
+                raise InvalidInputError(f"{container_path} is a directory")
+            if stat.file_info.size > max_bytes:
+                raise InvalidInputError(
+                    f"{container_path} is {stat.file_info.size} bytes, over the "
+                    f"{max_bytes}-byte download limit"
+                )
+        response = client.sandbox_download_file(
             container_id,
             container_path,
+            max_bytes=max_bytes or 0,
         )
         _raise_container_response_error(response)
         return PodSandboxDownloadFileResponse.from_bytes(response.data)
@@ -617,14 +632,18 @@ class PodControlService:
         self,
         container_id: str,
         container_path: str,
+        *,
+        limit: int | None = None,
     ) -> PodSandboxListFilesResponse:
         response = self._client(container_id).sandbox_list_files(
             container_id,
             container_path,
+            limit=limit or 0,
         )
         _raise_container_response_error(response)
         return PodSandboxListFilesResponse(
             files=[_file_info(item) for item in response.files],
+            truncated=response.truncated,
         )
 
     def sandbox_delete_file(

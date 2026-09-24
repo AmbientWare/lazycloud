@@ -204,6 +204,8 @@ class ContainerSandboxUploadFileResponse(ContractModel):
 class ContainerSandboxDownloadFileRequest(ContractModel):
     container_id: str
     container_path: str
+    max_bytes: int = Field(default=0, ge=0)
+    """The largest file the download returns; 0 is unbounded."""
 
 
 class ContainerSandboxDownloadFileResponse(ContractModel):
@@ -268,12 +270,15 @@ class ContainerSandboxStatFileResponse(ContractModel):
 class ContainerSandboxListFilesRequest(ContractModel):
     container_id: str
     container_path: str = "."
+    limit: int = Field(default=0, ge=0)
+    """The most entries the listing returns; 0 is unbounded."""
 
 
 class ContainerSandboxListFilesResponse(ContractModel):
     ok: bool = True
     error_msg: str = ""
     files: tuple[ContainerSandboxFileInfo, ...] = Field(default_factory=tuple)
+    truncated: bool = False
 
 
 class ContainerSandboxReplaceInFilesRequest(ContractModel):

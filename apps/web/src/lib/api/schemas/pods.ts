@@ -9,8 +9,10 @@ const podFileInfoSchema = z.object({
 });
 export type PodFileInfo = z.infer<typeof podFileInfoSchema>;
 
+// Synced to packages/shared/src/shared/http/pods.py (PodSandboxListFilesResponse).
 export const podFileListSchema = z.object({
   files: z.array(podFileInfoSchema).default([]),
+  truncated: z.boolean().default(false),
 });
 
 export const podFileDownloadSchema = z.object({

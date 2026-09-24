@@ -25,6 +25,8 @@ def container_metrics_timeseries(
             continue
         payload = ContainerMetricsPayload.model_validate(data)
         metrics = payload.metrics
+        # A container with a root disk writes there rather than to its layer.
+        root_disk = metrics.root_disk_total_bytes > 0
         points.append(
             ContainerMetricsPointResponse(
                 timestamp=datetime.fromisoformat(raw_time),
@@ -38,6 +40,12 @@ def container_metrics_timeseries(
                 network_sent_bytes=metrics.network_sent_bytes,
                 disk_read_bytes=metrics.disk_read_bytes,
                 disk_write_bytes=metrics.disk_write_bytes,
+                disk_used_bytes=(
+                    metrics.root_disk_used_bytes if root_disk else metrics.disk_used_bytes
+                ),
+                disk_total_bytes=(
+                    metrics.root_disk_total_bytes if root_disk else metrics.disk_total_bytes
+                ),
                 gpu_memory_used_bytes=metrics.gpu_memory_used_bytes,
                 gpu_memory_total_bytes=metrics.gpu_memory_total_bytes,
                 gpu_type=metrics.gpu_type,

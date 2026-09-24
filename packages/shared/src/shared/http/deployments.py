@@ -99,6 +99,9 @@ class DevboxResponse(HttpModel):
     phase_reason: str = ""
     """Why the last start failed, when `phase` is `failed`."""
 
+    container_id: str | None = None
+    """The container running or starting the devbox; null while it is stopped."""
+
     open_connections: int = Field(ge=0)
     """Connections held open through the pod's proxy, SSH sessions included."""
 

@@ -212,6 +212,12 @@ class ContainerMetricsPointResponse(HttpModel):
     network_sent_bytes: int = 0
     disk_read_bytes: int = 0
     disk_write_bytes: int = 0
+    disk_used_bytes: int = 0
+    """Space used on the filesystem the container writes to."""
+
+    disk_total_bytes: int = 0
+    """That filesystem's size; 0 when the worker did not report one."""
+
     gpu_memory_used_bytes: int = 0
     gpu_memory_total_bytes: int = 0
     gpu_type: str = ""

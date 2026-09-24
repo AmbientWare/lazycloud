@@ -60,6 +60,11 @@ class ContainerMetricsData(ContractModel):
     # cumulative /proc io counters and say nothing about space consumed.
     disk_used_bytes: int = 0
     disk_total_bytes: int = 0
+    # The durable root disk's filesystem, where a container that has one writes
+    # instead of its layer. It bills on stored bytes, so it stays out of the
+    # usage figures above.
+    root_disk_used_bytes: int = 0
+    root_disk_total_bytes: int = 0
     network_recv_bytes: int = 0
     network_sent_bytes: int = 0
     network_recv_packets: int = 0

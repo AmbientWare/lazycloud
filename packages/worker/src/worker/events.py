@@ -201,6 +201,11 @@ class GpuMemoryCounters(ContractModel):
     total_bytes: int = 0
 
 
+class DiskFilesystemUsage(ContractModel):
+    used_bytes: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+
+
 class WorkerUsageMetricPlan(ContractModel):
     name: WorkerUsageMetricName
     labels: dict[str, JsonValue]
@@ -532,6 +537,7 @@ def build_container_metrics_payload(
     network_io: NetworkIoCounters | None = None,
     gpu_memory: GpuMemoryCounters | None = None,
     disk_used_bytes: int = 0,
+    root_disk: DiskFilesystemUsage | None = None,
 ) -> ContainerMetricsPayload:
     process = process_io or ProcessIoCounters()
     network = network_io or NetworkIoCounters()
@@ -558,6 +564,8 @@ def build_container_metrics_payload(
             disk_write_bytes=process.disk_write_bytes,
             disk_used_bytes=disk_used_bytes,
             disk_total_bytes=request.disk_limit_bytes,
+            root_disk_used_bytes=root_disk.used_bytes if root_disk is not None else 0,
+            root_disk_total_bytes=root_disk.total_bytes if root_disk is not None else 0,
             network_recv_bytes=network.bytes_recv,
             network_sent_bytes=network.bytes_sent,
             network_recv_packets=network.packets_recv,

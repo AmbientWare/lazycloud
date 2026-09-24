@@ -24,6 +24,8 @@ class SandboxFilesystemRequest(ContractModel):
     mode: int = 0o644
     pattern: str = ""
     replacement: str = ""
+    limit: int = Field(default=0, ge=0)
+    """Entries a listing returns or bytes a download writes; 0 is unbounded."""
 
 
 class SandboxProcessEventType(StrEnum):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from execution.pods.service import PodControlService
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from shared.http.pods import (
     PodSandboxDeleteFileResponse,
     PodSandboxDownloadFileResponse,
@@ -40,11 +40,14 @@ def sandbox_upload_file(
 def sandbox_download_file(
     container_id: str,
     container_path: str,
+    max_bytes: int | None = Query(default=None, ge=1),
+    *,
     _auth: read_container,
     _transfer: read_transfer,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxDownloadFileResponse:
-    return service.sandbox_download_file(container_id, container_path)
+    """A file's bytes; with `max_bytes`, a larger file is refused before it is read."""
+    return service.sandbox_download_file(container_id, container_path, max_bytes=max_bytes)
 
 
 @router.get("/{container_id}/files/stat", response_model=PodSandboxStatFileResponse)
@@ -61,11 +64,13 @@ def sandbox_stat_file(
 def sandbox_list_files(
     container_id: str,
     container_path: str = ".",
+    limit: int | None = Query(default=None, ge=1),
     *,
     _auth: read_container,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxListFilesResponse:
-    return service.sandbox_list_files(container_id, container_path)
+    """A directory's entries; with `limit`, at most that many, sorted by name."""
+    return service.sandbox_list_files(container_id, container_path, limit=limit)
 
 
 @router.delete(

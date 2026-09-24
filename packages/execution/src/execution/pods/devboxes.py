@@ -172,6 +172,7 @@ class DevboxService:
             ssh_host=ssh_host_alias(workspace_name, resource.app.name, deployment.name),
             state=_state(container),
             phase=phase,
+            container_id=container.id if container is not None else None,
             phase_reason=reason,
             open_connections=connections,
             idle_deadline=idle_deadline,

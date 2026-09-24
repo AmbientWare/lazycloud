@@ -62,7 +62,7 @@ from worker.durable_disk_records import (
     DiskReleasePayload,
     DiskStorageRequest,
 )
-from worker.events import ContainerRequestContext
+from worker.events import ContainerRequestContext, DiskFilesystemUsage
 from worker.execution import OciMount
 from worker.repository_errors import WorkerRepositoryClientError
 from worker.tools import (
@@ -657,6 +657,35 @@ class WorkerDurableDiskService:
             )
             attached.watcher.start()
         return attachment
+
+    def root_disk_usage(self, container_id: str) -> DiskFilesystemUsage | None:
+        """The filesystem of the container's root disk as the container sees it.
+
+        A statvfs of the mounted disk, so a sample costs the same however many
+        files it holds.
+        """
+        with self._attached_lock:
+            attached = self._attached.get(container_id)
+        if attached is None:
+            return None
+        lease = next(
+            (
+                lease
+                for lease in attached.leases.disks
+                if lease.mount_path == DISK_ROOT_MOUNT_PATH
+                and lease.mountpoint
+                and not lease.detached
+                and not lease.released
+            ),
+            None,
+        )
+        if lease is None:
+            return None
+        stat = os.statvfs(lease.mountpoint)
+        return DiskFilesystemUsage(
+            used_bytes=(stat.f_blocks - stat.f_bfree) * stat.f_frsize,
+            total_bytes=stat.f_blocks * stat.f_frsize,
+        )
 
     def release(self, container_id: str) -> None:
         """Publish what the container wrote and give every lease back.

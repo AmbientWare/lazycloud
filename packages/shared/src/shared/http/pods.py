@@ -105,6 +105,8 @@ class PodSandboxFileInfo(HttpModel):
 
 class PodSandboxListFilesResponse(HttpModel):
     files: list[PodSandboxFileInfo] = Field(default_factory=list)
+    truncated: bool = False
+    """The listing stopped at the requested limit with entries left unread."""
 
 
 class PodSandboxDeleteFileResponse(HttpModel):

@@ -451,7 +451,9 @@ class WorkerContainerService:
             data = self._filesystem_bytes(
                 instance,
                 SandboxFilesystemRequest(
-                    operation=SandboxFileOperation.DownloadFile, path=request.container_path
+                    operation=SandboxFileOperation.DownloadFile,
+                    path=request.container_path,
+                    limit=request.max_bytes,
                 ),
             )
             return ContainerSandboxDownloadFileResponse(ok=True, data=data)
@@ -515,7 +517,9 @@ class WorkerContainerService:
         return self._filesystem_response(
             request.container_id,
             SandboxFilesystemRequest(
-                operation=SandboxFileOperation.ListFiles, path=request.container_path
+                operation=SandboxFileOperation.ListFiles,
+                path=request.container_path,
+                limit=request.limit,
             ),
             ContainerSandboxListFilesResponse,
         )
