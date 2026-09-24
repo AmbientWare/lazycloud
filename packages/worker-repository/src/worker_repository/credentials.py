@@ -147,9 +147,7 @@ class WorkerCredentialService:
             env.append(f"{GATEWAY_TOKEN_ENV}={self._gateway_token(request.workspace_id)}")
 
         workspace_storage = (
-            self._workspace_storage_credentials(request.workspace_id)
-            if request.workspace_storage
-            else None
+            self.workspace_storage(request.workspace_id) if request.workspace_storage else None
         )
         mount_credentials = self._mount_credentials(request) if request.mount_credentials else []
         return ContainerCredentials(
@@ -259,7 +257,8 @@ class WorkerCredentialService:
             if self._gateway_token_leases.get(workspace_id) is lease:
                 del self._gateway_token_leases[workspace_id]
 
-    def _workspace_storage_credentials(self, workspace_id: str) -> WorkspaceStorageCredentials:
+    def workspace_storage(self, workspace_id: str) -> WorkspaceStorageCredentials:
+        """A grant on the workspace's bucket; the caller has established the authority."""
         if self.storage_issuer is None:
             msg = "workspace storage issuer is required to vend workspace credentials"
             raise UpstreamUnavailableError(msg)

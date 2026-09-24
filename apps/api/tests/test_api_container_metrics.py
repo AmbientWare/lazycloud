@@ -115,7 +115,6 @@ def test_account_metrics_stop_at_membership_and_keep_two_workspaces_apart(
     api_runtime: tuple[ApiServices, TestClient],
     api_workspace: WorkspaceRecord,
 ) -> None:
-
     services, client = api_runtime
     control = ControlPlaneService(services.context)
     held = api_workspace

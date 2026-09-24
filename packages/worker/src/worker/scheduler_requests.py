@@ -45,6 +45,7 @@ from worker.image_build_requests import IMAGE_BUILD_REQUEST_KIND
 from worker.image_build_resources import ImageBuildResources
 from worker.memory_pressure import ResidentContainer
 from worker.monitoring import WorkerUsageWindowRecorder
+from worker.repository_payloads import ContainerCleanupTarget
 from worker.runtime_config import absolute_container_cgroup_path
 from worker.status import (
     WorkerDeliveredRequestPlan,
@@ -104,7 +105,17 @@ class WorkerSchedulerRequestWorkerRepository(Protocol):
 class WorkerSchedulerRequestContainerRepository(ContainerFinalizationRepository, Protocol):
     def get_container_state(self, container_id: str) -> WorkerContainerState | None: ...
 
-    def list_pending_storage_cleanup(self) -> list[str]: ...
+    def list_pending_storage_cleanup(self) -> list[ContainerCleanupTarget]: ...
+
+
+class WorkerSchedulerRequestContainerStopper(Protocol):
+    def stop_container(
+        self,
+        container_id: str,
+        *,
+        force: bool,
+        reason: StopContainerReason,
+    ) -> None: ...
 
 
 class WorkerSchedulerRequestLifecycle(Protocol):
@@ -212,6 +223,15 @@ class WorkerSchedulerRequestProcessor:
     machine that silently reports the wrong card bills the wrong rate.
     """
 
+    container_stopper: WorkerSchedulerRequestContainerStopper
+    """Stops a container still running here after the platform recorded its end.
+
+    The stop event reaches only a worker whose event stream is connected when it
+    is sent, and is not sent again. The cleanup list names every container the
+    platform has ended on this worker, so a stop missed while the control plane
+    was unreachable still lands on the next cleanup pass after it returns.
+    """
+
     node_cpu_millicores: int = 0
     node_memory_mib: int = 0
     """What this worker's machine holds, or zero when it could not be read.
@@ -238,6 +258,10 @@ class WorkerSchedulerRequestProcessor:
     _delivery_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _image_build_result_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _cleanup_after: float = field(default=0, init=False)
+    _ending: set[str] = field(default_factory=set, init=False)
+    """Containers a cleanup pass found still running and asked to stop."""
+
+    _ending_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def run_once(self) -> WorkerSchedulerRequestResult:
         self._recover_cleanup()
@@ -614,14 +638,52 @@ class WorkerSchedulerRequestProcessor:
         try:
             with self._image_build_result_lock:
                 pending_results = set(self._pending_image_build_results)
-            container_ids = [
-                container_id
-                for container_id in self.containers.list_pending_storage_cleanup()
-                if container_id not in self._background and container_id not in pending_results
-            ]
-            self.execution.recover_cleanup(container_ids)
+            targets = self.containers.list_pending_storage_cleanup()
+            for target in targets:
+                if target.container_id in self._background:
+                    self._end_missed_stop(target)
+            self.execution.recover_cleanup(
+                [
+                    target.container_id
+                    for target in targets
+                    if target.container_id not in self._background
+                    and target.container_id not in pending_results
+                ]
+            )
         except Exception:
             LOGGER.exception("container storage cleanup recovery failed")
+
+    def _end_missed_stop(self, target: ContainerCleanupTarget) -> None:
+        """Stop a container the platform has ended; its own execution then finalizes it.
+
+        A container that exited by itself is listed here too, between reporting
+        its exit and releasing its storage, and stopping it again does nothing.
+        The stop waits out the graceful window, so it runs beside the poll loop.
+        """
+
+        with self._ending_lock:
+            if target.container_id in self._ending:
+                return
+            self._ending.add(target.container_id)
+        threading.Thread(
+            target=self._stop_ended_container,
+            args=(target,),
+            name=f"container-end-{target.container_id}",
+            daemon=True,
+        ).start()
+
+    def _stop_ended_container(self, target: ContainerCleanupTarget) -> None:
+        try:
+            self.container_stopper.stop_container(
+                target.container_id, force=False, reason=target.stop_reason
+            )
+        except Exception:
+            LOGGER.exception(
+                "stopping container %s, which the platform recorded as ended, failed",
+                target.container_id,
+            )
+            with self._ending_lock:
+                self._ending.discard(target.container_id)
 
     def _pop_completed_background(self) -> WorkerSchedulerRequestResult | None:
         for container_id, active in tuple(self._background.items()):
@@ -631,6 +693,8 @@ class WorkerSchedulerRequestProcessor:
             if thread is not None:
                 thread.join(timeout=0)
             self._background.pop(container_id, None)
+            with self._ending_lock:
+                self._ending.discard(container_id)
             if active.result is not None:
                 return active.result
             return WorkerSchedulerRequestResult(

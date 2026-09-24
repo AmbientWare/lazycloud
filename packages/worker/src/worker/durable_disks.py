@@ -49,10 +49,8 @@ from shared.disks import (
     disk_volume_size_bytes,
 )
 from shared.http.errors import HttpApiError
-from shared.identity import TokenKind
 from shared.timestamps import utc_now
 
-from worker.credential_payloads import WorkerCredentialPrincipal
 from worker.disk_volumes import DiskVolumeMounts
 from worker.durable_disk_records import (
     DiskAcquirePayload,
@@ -62,13 +60,12 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskStorageRequest,
 )
 from worker.events import ContainerRequestContext
 from worker.execution import OciMount
 from worker.repository_errors import WorkerRepositoryClientError
 from worker.tools import (
-    ContainerCredentialRequest,
-    ContainerCredentials,
     WorkspaceStorageCredentials,
 )
 from worker.workspace_credential_refresh import REFRESH_AT_FRACTION
@@ -114,7 +111,6 @@ _USAGE_TIMEOUT_SECONDS = 30.0
 _EVICT_TIMEOUT_SECONDS = 600.0
 _STORE_RENEW_RETRY_SECONDS = 15.0
 _STORE_RENEW_MIN_SECONDS = 1.0
-_STORE_REUSE_MIN_SECONDS = 300.0
 
 
 class DiskEngineError(RuntimeError):
@@ -137,14 +133,7 @@ class DiskLeaseClient(Protocol):
 
     def collect_disk(self, payload: DiskCollectPayload) -> None: ...
 
-
-class DiskCredentialVendor(Protocol):
-    def vend(
-        self,
-        request: ContainerCredentialRequest,
-        *,
-        principal: WorkerCredentialPrincipal,
-    ) -> ContainerCredentials: ...
+    def disk_storage(self, payload: DiskStorageRequest) -> WorkspaceStorageCredentials: ...
 
 
 type DiskCommandRunner = Callable[[float, list[str]], ProcessResult]
@@ -525,9 +514,6 @@ class _Attached:
     stopping: bool = False
     """A volume ran out of space and the container was asked to stop."""
 
-    store: DiskStoreFile | None = None
-    """The last grant vended for this disk's container."""
-
 
 @dataclass(slots=True)
 class WorkerDurableDiskService:
@@ -539,7 +525,6 @@ class WorkerDurableDiskService:
 
     engine: DiskEngine
     leases: DiskLeaseClient
-    credentials: DiskCredentialVendor
     layers_root: Path
     """Host directory every disk's layers live under when the machine has no volumes."""
 
@@ -632,7 +617,7 @@ class WorkerDurableDiskService:
                 root = self._mount_volume(lease, volume)
                 mountpoint = self.mount_root / request.container_id / disk.disk_id
                 mountpoint.mkdir(parents=True, exist_ok=True)
-                result = self._attach_with_space(attached, disk, root, mountpoint, chain)
+                result = self._attach_with_space(attached, lease, disk, root, mountpoint, chain)
                 lease.mountpoint = result.mountpoint
                 self._save(record)
                 LOGGER.info(
@@ -939,6 +924,7 @@ class WorkerDurableDiskService:
     def _attach_with_space(
         self,
         attached: _Attached,
+        lease: DiskLease,
         disk: RequestDisk,
         root: Path,
         mountpoint: Path,
@@ -961,7 +947,7 @@ class WorkerDurableDiskService:
                 disk,
                 mountpoint=mountpoint,
                 chain=chain,
-                store=self._store(attached),
+                store=self._store(attached, lease),
                 min_free_bytes=reserve,
             )
 
@@ -1071,7 +1057,7 @@ class WorkerDurableDiskService:
                 generation=generation,
                 parent=lease.generation,
                 flatten=flatten,
-                store=self._store(attached),
+                store=self._store(attached, lease),
             )
             self.leases.publish_disk(
                 DiskPublishPayload(
@@ -1132,7 +1118,7 @@ class WorkerDurableDiskService:
                 self._root(lease),
                 lease.disk_id,
                 generation=lease.generation,
-                store=self._store(attached),
+                store=self._store(attached, lease),
             )
         except Exception:
             LOGGER.exception("collecting disk %s failed; the next flatten retries", lease.name)
@@ -1165,56 +1151,23 @@ class WorkerDurableDiskService:
             collected.removed_manifests,
         )
 
-    def _store(self, attached: _Attached) -> DiskStoreSource:
+    def _store(self, attached: _Attached, lease: DiskLease) -> DiskStoreSource:
         """Vends workspace bucket credentials for one engine call, and again as they age.
 
-        The control plane stops vending once a stopped container's state expires,
-        and a release can still be publishing then. A failed vend falls back to the
-        last grant while it has at least five minutes left, which the renewal
-        thread keeps trying to extend; with less, the call fails with the vending
-        error and the next publish pass or release retry vends again.
+        Vended on the disk's lease rather than the container's scheduler state,
+        which expires a while after a stop. The lease lasts until the release, so
+        a release that runs long after the stop can still publish.
         """
-        record = attached.leases
+        request = DiskStorageRequest(
+            container_id=attached.leases.container_id,
+            disk_id=lease.disk_id,
+            lease_token=lease.lease_token,
+        )
 
         def vend() -> DiskStoreFile:
-            vended = self.credentials.vend(
-                ContainerCredentialRequest(
-                    workspace_id=record.workspace_id,
-                    stub_id=record.stub_id,
-                    container_id=record.container_id,
-                    workspace_storage=True,
-                ),
-                principal=WorkerCredentialPrincipal(
-                    workspace_id=record.workspace_id, token_kind=TokenKind.Worker
-                ),
-            )
-            if vended.workspace_storage is None:
-                raise DiskEngineError("workspace storage credentials were not vended for the disk")
-            return disk_store_file(vended.workspace_storage)
+            return disk_store_file(self.leases.disk_storage(request))
 
-        def vend_or_reuse() -> DiskStoreFile:
-            try:
-                store = vend()
-            except Exception:
-                cached = attached.store
-                if (
-                    cached is None
-                    or cached.expires_at is None
-                    or (cached.expires_at - utc_now()).total_seconds() < _STORE_REUSE_MIN_SECONDS
-                ):
-                    raise
-                LOGGER.warning(
-                    "vending workspace storage for disk container %s failed; "
-                    "using the grant that expires at %s",
-                    record.container_id,
-                    cached.expires_at.isoformat(),
-                    exc_info=True,
-                )
-                return cached
-            attached.store = store
-            return store
-
-        return vend_or_reuse
+        return vend
 
     def _lease_path(self, container_id: str) -> Path:
         _require_path_segment(container_id, field="container id")

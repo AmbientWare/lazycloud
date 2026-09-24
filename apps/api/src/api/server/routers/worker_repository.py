@@ -21,6 +21,7 @@ from worker.durable_disk_records import (
     DiskPublishPayload,
     DiskPublishResult,
     DiskReleasePayload,
+    DiskStorageRequest,
 )
 from worker.events import WorkerStreamEvent
 from worker.origin_access import (
@@ -131,7 +132,7 @@ from worker.repository_payloads import (
     WorkerRepositoryPrincipal,
 )
 from worker.ssh_identity import ContainerSshIdentity, ContainerSshIdentityRequest
-from worker.tools import ContainerCredentialRequest
+from worker.tools import ContainerCredentialRequest, WorkspaceStorageCredentials
 
 from api.server.dependencies import (
     AuthorizationCredentials,
@@ -741,6 +742,15 @@ def release_disk(
     principal: WorkerPrincipal,
 ) -> None:
     service.release_disk(request, principal=principal)
+
+
+@router.post("/worker-repository/disk-storage", response_model=WorkspaceStorageCredentials)
+def disk_storage(
+    request: DiskStorageRequest,
+    service: WorkerRepo,
+    principal: WorkerPrincipal,
+) -> WorkspaceStorageCredentials:
+    return service.disk_storage(request, principal=principal)
 
 
 @router.post(

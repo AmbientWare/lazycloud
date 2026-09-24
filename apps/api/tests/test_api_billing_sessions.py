@@ -14,7 +14,6 @@ from tests.workspaces import workspace_owner_user_id
 
 @pytest.fixture
 def stripe_key(monkeypatch: pytest.MonkeyPatch) -> None:
-
     # Resolved while building the billing services, before card admission.
     monkeypatch.setenv("LAZYCLOUD_STRIPE_API_KEY", "sk_test_unused_by_this_path")
 
@@ -23,7 +22,6 @@ def test_a_billing_return_address_must_be_on_this_platform(
     api_runtime: tuple[ApiServices, TestClient],
     api_client: TestClient,
 ) -> None:
-
     services, _ = api_runtime
     client = api_client
     own_origin = services.gateway_settings.public_http_url
@@ -62,7 +60,6 @@ def test_subscribing_without_a_card_answers_402(
     stripe_key: None,
     isolated_services: ApiServices,
 ) -> None:
-
     # An administrator holds no membership by design, and billing resolves the
     # workspace an account owns — so this run needs an owner, which is what the
     # default workspace already has.

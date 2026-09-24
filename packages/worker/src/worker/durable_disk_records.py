@@ -97,6 +97,18 @@ class DiskReleasePayload(ContractModel):
     lease_token: str = Field(min_length=1)
 
 
+class DiskStorageRequest(ContractModel):
+    """Workspace storage for the disk's engine, on the authority of its lease.
+
+    The lease outlives the container's scheduler state: a release after a stop
+    still has to publish the disk's last generation, which needs the bucket.
+    """
+
+    container_id: str = Field(min_length=1)
+    disk_id: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)
+
+
 __all__ = [
     "DiskAcquirePayload",
     "DiskAcquireResult",
@@ -106,4 +118,5 @@ __all__ = [
     "DiskPublishPayload",
     "DiskPublishResult",
     "DiskReleasePayload",
+    "DiskStorageRequest",
 ]

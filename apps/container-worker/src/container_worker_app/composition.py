@@ -234,7 +234,6 @@ def build_worker_process_services(
     durable_disks = WorkerDurableDiskService(
         engine=DiskEngine(run_root=Path(DEFAULT_DISK_RUN_ROOT)),
         leases=repository,
-        credentials=container_credentials,
         layers_root=disk_layers_root,
         lease_root=disk_lease_root,
         mount_root=Path(DEFAULT_DISK_RUN_ROOT) / "mounts",

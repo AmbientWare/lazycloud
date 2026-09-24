@@ -719,7 +719,12 @@ class ContainerRepository:
             )
         )
 
-    def list_pending_storage_cleanup(self, worker_id: str) -> list[str]:
+    def list_pending_storage_cleanup(self, worker_id: str) -> dict[str, StopContainerReason]:
+        """Terminal containers on this worker whose storage is not yet released.
+
+        Each maps to the reason recorded for its end, which a worker still
+        running one needs in order to stop it the way the platform ended it.
+        """
         runtime_worker_id = ContainerTable.runtime_worker_id
         assigned_worker = runtime_worker_id == worker_id
         physical_worker_id = try_uuid(worker_id)
@@ -731,8 +736,8 @@ class ContainerRepository:
                     ContainerTable.worker_id == physical_worker_id,
                 ),
             )
-        rows = self.session.scalars(
-            select(ContainerTable.id)
+        rows = self.session.execute(
+            select(ContainerTable.id, ContainerTable.termination_reason)
             .where(
                 ContainerTable.storage_released_at.is_(None),
                 ContainerTable.status.not_in([status.value for status in LIVE_CONTAINER_STATUSES]),
@@ -740,7 +745,7 @@ class ContainerRepository:
             )
             .order_by(ContainerTable.id)
         )
-        return list(rows)
+        return {container_id: StopContainerReason(reason) for container_id, reason in rows}
 
     def mark_storage_released(self, container_id: str, *, worker_id: str, now: datetime) -> None:
         row = self.session.scalar(
