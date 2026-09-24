@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -17,7 +17,7 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { PodFileDownload, PodFileInfo } from "@/lib/api/schemas";
+import type { PodFileInfo } from "@/lib/api/schemas";
 import { base64ToBytes, downloadBlob } from "@/lib/files";
 import { exactTime, formatBytes, relativeTime } from "@/lib/format";
 import {
@@ -25,18 +25,13 @@ import {
   containerFilesQueryOptions,
   deleteContainerFileMutationOptions,
   downloadContainerFile,
-  readContainerFilePreview,
   uploadContainerFileMutationOptions,
 } from "@/lib/queries/container-files";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
-type Preview =
-  | { path: string; state: "reading" }
-  | { path: string; state: "text"; content: string }
-  | { path: string; state: "note"; message: string }
-  | { path: string; state: "error"; message: string };
+import { ContainerFilePreviewDialog, type PreviewTarget } from "./FilePreviewDialog";
 
 /** Browse a running container's filesystem through its pod file API. */
 export function ContainerFileBrowser({
@@ -54,21 +49,14 @@ export function ContainerFileBrowser({
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState(rootPath);
-  const [preview, setPreview] = useState<Preview | null>(null);
+  // Each opening gets its own key, so the dialog reads the file afresh.
+  const [preview, setPreview] = useState<(PreviewTarget & { opening: number }) | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const previewOpener = useRef<HTMLElement | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const previewRequest = useRef<{ path: string; controller: AbortController } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
-  useEffect(() => () => previewRequest.current?.controller.abort(), []);
-
-  const clearPreview = () => {
-    previewRequest.current?.controller.abort();
-    previewRequest.current = null;
-    setPreview(null);
-  };
-
   const navigateDirectory = (target: string) => {
-    clearPreview();
     setPath(target);
     setDeleteTarget(null);
     setDownloadError(null);
@@ -89,39 +77,20 @@ export function ContainerFileBrowser({
   });
   const remove = useMutation({
     ...deleteContainerFileMutationOptions(workspace.id, containerId),
-    onMutate: (target) => {
-      if (previewRequest.current?.path === target) clearPreview();
-    },
-    onSuccess: async (_, target) => {
+    onSuccess: async () => {
       setDeleteTarget(null);
-      if (previewRequest.current?.path === target) clearPreview();
       await invalidateFiles();
     },
   });
 
-  const openFile = async (file: PodFileInfo) => {
-    const target = joinPath(path, file.name);
-    clearPreview();
-    const controller = new AbortController();
-    previewRequest.current = { path: target, controller };
-    setPreview({ path: target, state: "reading" });
-    try {
-      const download = await readContainerFilePreview(
-        workspace.id,
-        containerId,
-        target,
-        controller.signal,
-      );
-      if (controller.signal.aborted) return;
-      setPreview(decodePreview(target, download, file.size));
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      setPreview({
-        path: target,
-        state: "error",
-        message: error instanceof Error ? error.message : "Failed to read file",
-      });
-    }
+  const openFile = (file: PodFileInfo, opener: HTMLElement) => {
+    previewOpener.current = opener;
+    setPreview((current) => ({
+      path: joinPath(path, file.name),
+      file,
+      opening: (current?.opening ?? 0) + 1,
+    }));
+    setPreviewOpen(true);
   };
 
   const downloadFile = async (file: PodFileInfo) => {
@@ -136,13 +105,8 @@ export function ContainerFileBrowser({
   };
 
   return (
-    <div
-      className={cn(
-        "grid min-h-0 grid-rows-[minmax(12rem,1fr)_minmax(12rem,1fr)] overflow-hidden lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1",
-        className,
-      )}
-    >
-      <div className="flex min-h-0 flex-col overflow-hidden border-b border-border lg:border-b-0 lg:border-r">
+    <div className={cn("flex min-h-0 flex-col overflow-hidden", className)}>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-10 items-center gap-1 border-b border-border px-3 py-2 text-xs">
           <nav aria-label="Directory" className="flex min-w-0 flex-1 items-center overflow-x-auto">
             {breadcrumbs(path).map((crumb, index) => (
@@ -228,8 +192,10 @@ export function ContainerFileBrowser({
                     <button
                       type="button"
                       className="interactive-row flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm"
-                      onClick={() =>
-                        file.is_dir ? navigateDirectory(target) : void openFile(file)
+                      onClick={(event) =>
+                        file.is_dir
+                          ? navigateDirectory(target)
+                          : openFile(file, event.currentTarget)
                       }
                     >
                       {file.is_dir ? (
@@ -321,36 +287,17 @@ export function ContainerFileBrowser({
         </ContentTransition>
       </div>
 
-      <div className="flex min-h-0 flex-col overflow-hidden">
-        <div className="flex min-h-10 items-center border-b border-border px-3 py-2 text-xs text-muted-foreground">
-          {preview ? (
-            <span className="mono truncate text-foreground">{preview.path}</span>
-          ) : (
-            "Preview"
-          )}
-        </div>
-        <ContentTransition
-          pending={preview?.state === "reading"}
-          className="min-h-0 flex-1 overflow-auto p-3"
-        >
-          {preview === null ? (
-            <p className="text-sm text-muted-foreground">Select a file to preview.</p>
-          ) : preview.state === "reading" ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
-              Reading
-            </div>
-          ) : preview.state === "error" ? (
-            <PanelError message={preview.message} />
-          ) : preview.state === "note" ? (
-            <p className="text-sm text-muted-foreground">{preview.message}</p>
-          ) : (
-            <pre className="mono whitespace-pre-wrap break-words text-xs text-foreground">
-              {preview.content}
-            </pre>
-          )}
-        </ContentTransition>
-      </div>
+      {preview ? (
+        <ContainerFilePreviewDialog
+          key={preview.opening}
+          workspaceId={workspace.id}
+          containerId={containerId}
+          target={preview}
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
+          returnFocus={previewOpener}
+        />
+      ) : null}
     </div>
   );
 }
@@ -386,19 +333,4 @@ function breadcrumbs(path: string): Array<{ label: string; path: string }> {
     crumbs.push({ label: part, path: current });
   }
   return crumbs;
-}
-
-function decodePreview(path: string, download: PodFileDownload, size: number): Preview {
-  const bytes = base64ToBytes(download.value_base64);
-  if (bytes.subarray(0, 512).some((byte) => byte === 0)) {
-    return { path, state: "note", message: `Binary file, ${formatBytes(size)}.` };
-  }
-  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  return {
-    path,
-    state: "text",
-    content: download.truncated
-      ? `[first ${formatBytes(bytes.length)} of ${formatBytes(size)}]\n${text}`
-      : text,
-  };
 }

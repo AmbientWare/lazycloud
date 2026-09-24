@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
 
 import { ContentTransition } from "@/components/shared/ContentTransition";
+import { FilePreviewBody, ImagePreview, TextPreview } from "@/components/shared/FilePreview";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import type { ArtifactSummary } from "@/lib/api/schemas";
@@ -58,11 +58,7 @@ export function ArtifactPreview({
   }, [blob, kind]);
 
   return (
-    <div
-      aria-busy={pending}
-      className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
-    >
-      {pending && <PreviewLoading />}
+    <FilePreviewBody pending={pending}>
       {failure ? (
         <div className="m-auto p-4 text-center">
           <PanelError message={failure} />
@@ -83,37 +79,13 @@ export function ArtifactPreview({
                 className={`min-h-0 w-full flex-1 border-0 ${pdfLoaded ? "visible" : "invisible"}`}
               />
             ) : kind === "image" ? (
-              <div className="flex min-h-0 flex-1 items-center justify-center p-3">
-                <img
-                  src={content.url}
-                  alt={artifact.filename}
-                  className="max-h-full max-w-full object-contain"
-                />
-              </div>
+              <ImagePreview url={content.url} alt={artifact.filename} />
             ) : (
-              <pre className="mono min-h-0 flex-1 overflow-auto p-4 text-xs whitespace-pre-wrap break-words">
-                {content.text}
-              </pre>
+              <TextPreview text={content.text ?? ""} />
             )}
           </ContentTransition>
         )
       )}
-    </div>
-  );
-}
-
-function PreviewLoading() {
-  return (
-    <ContentTransition
-      pending
-      role="status"
-      aria-label="Loading preview"
-      className="absolute inset-0 flex items-center justify-center"
-    >
-      <Loader2
-        className="size-5 animate-spin text-muted-foreground motion-reduce:animate-none"
-        aria-hidden="true"
-      />
-    </ContentTransition>
+    </FilePreviewBody>
   );
 }
