@@ -4,7 +4,8 @@ import logging
 import secrets
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
@@ -17,6 +18,7 @@ from database.types import DatabaseSession
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
 from shared.container_requests import WorkerStartupKind
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.deployments import PodRole
 from shared.env import parse_environment
 from shared.errors import NotFoundError, UpstreamUnavailableError
 from shared.events import EventLevel
@@ -53,6 +55,7 @@ from execution.mounts import (
 )
 from execution.placement import workload_placement
 from execution.pods.config import PodStubConfig
+from execution.pods.proxy import PodProxyConnectionRepository, held_container_connection
 from execution.services import ExecutionServices
 from execution.shells.planning import (
     SHELL_SERVER_PROBE_TIMEOUT_SECONDS,
@@ -116,6 +119,7 @@ class ShellControlService:
         backend_connector: Callable[[ShellBackendTarget], socket.socket],
         async_database: AsyncDatabaseClient | None = None,
         async_scheduler_containers: AsyncShellContainerDirectory | None = None,
+        connections: PodProxyConnectionRepository | None = None,
         poll_interval_seconds: float = 1.0,
     ) -> None:
         self.services = services
@@ -128,6 +132,7 @@ class ShellControlService:
         self.backend_connector = backend_connector
         self.async_database = async_database
         self.async_scheduler_containers = async_scheduler_containers
+        self.connections = connections
         self.poll_interval_seconds = poll_interval_seconds
 
     def create_standalone_shell(
@@ -548,13 +553,13 @@ class ShellControlService:
         container_id: str,
         workspace_id: str | None = None,
     ) -> ShellBackendTarget:
-        container = self._shell_container(
+        stub, container = self._shell_container(
             stub_id=stub_id,
             container_id=container_id,
             workspace_id=workspace_id,
         )
         address_map = self._container_client_factory().address_map_for(container_id)
-        return self._shell_backend_target(container, address_map, stub_id=stub_id)
+        return self._shell_backend_target(stub, container, address_map)
 
     async def shell_backend_target_async(
         self,
@@ -565,7 +570,7 @@ class ShellControlService:
     ) -> ShellBackendTarget:
         if self.async_database is None or self.async_scheduler_containers is None:
             raise RuntimeError("asynchronous shell routing is not configured")
-        container = await self.async_database.run_transaction(
+        stub, container = await self.async_database.run_transaction(
             lambda session: self._shell_container_in_session(
                 session,
                 stub_id=stub_id,
@@ -574,15 +579,39 @@ class ShellControlService:
             )
         )
         address_map = await self.async_scheduler_containers.get_container_address_map(container_id)
-        return self._shell_backend_target(container, address_map, stub_id=stub_id)
+        return self._shell_backend_target(stub, container, address_map)
+
+    @asynccontextmanager
+    async def devbox_connection(
+        self, target: ShellBackendTarget, *, workspace_id: str
+    ) -> AsyncIterator[None]:
+        """Hold a devbox's connection count while a shell into it is open.
+
+        An open shell is someone at the devbox as much as an SSH session is, so
+        it holds off the idle stop the same way. A shell into any other
+        container holds nothing.
+        """
+        if not target.devbox:
+            yield
+            return
+        if self.connections is None:
+            raise RuntimeError("pod connection counters are not configured")
+        async with held_container_connection(
+            self.connections,
+            workspace_id=workspace_id,
+            stub_id=target.stub_id,
+            container_id=target.container_id,
+            keep_warm_seconds=target.keep_warm_seconds,
+        ):
+            yield
 
     @staticmethod
     def _shell_backend_target(
+        stub: StubRecord,
         container: ContainerRecord,
         address_map: SchedulerContainerAddressMap,
-        *,
-        stub_id: str,
     ) -> ShellBackendTarget:
+        stub_id = stub.id
         plan = plan_shell_proxy(stub_id, container.id)
         address = address_map.address_map.get(SHELL_WORKER_PORT, "")
         if not address:
@@ -600,6 +629,8 @@ class ShellControlService:
             worker_port=SHELL_WORKER_PORT,
             buffer_size_bytes=plan.buffer_size_bytes,
             dial_timeout_seconds=plan.dial_timeout_seconds,
+            devbox=stub.config.role is PodRole.Devbox,
+            keep_warm_seconds=stub.config.runtime.keep_warm,
         )
 
     def _shell_container_in_session(
@@ -609,7 +640,7 @@ class ShellControlService:
         stub_id: str,
         container_id: str,
         workspace_id: str | None,
-    ) -> ContainerRecord:
+    ) -> tuple[StubRecord, ContainerRecord]:
         try:
             stub = self.control_plane.get_stub_in_session(
                 session,
@@ -626,7 +657,7 @@ class ShellControlService:
             if workspace_id is not None
             else repository.get_across_workspaces(container_id)
         )
-        return self._validated_shell_container(stub, container)
+        return stub, self._validated_shell_container(stub, container)
 
     def _container_client_factory(
         self,
@@ -750,7 +781,7 @@ class ShellControlService:
         stub_id: str,
         container_id: str,
         workspace_id: str | None,
-    ) -> ContainerRecord:
+    ) -> tuple[StubRecord, ContainerRecord]:
         with self.services.context.database.session() as session:
             return self._shell_container_in_session(
                 session,

@@ -15,6 +15,7 @@ from control.service import ControlPlaneService, StubKind
 from control.tcp_ingress import tcp_pod_url
 from coordination.redis_client import RedisClient
 from database.records.apps import StubRecord
+from database.repositories.apps import StubRepository
 from database.repositories.execution import PodUrlRepository
 from database.repositories.images import CheckpointRepository
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
@@ -128,6 +129,7 @@ from execution.pods.proxy import (
     DEFAULT_POD_PROXY_TIMEOUT_SECONDS,
     PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS,
     AsyncPodProxyForwardClient,
+    PodConnectionHold,
     PodProxyConnectionRepository,
     PodProxyHttpRequest,
     PodProxyPortUnavailable,
@@ -158,6 +160,26 @@ class AsyncPodSchedulerContainerDirectory(Protocol):
         self,
         container_ids: Sequence[str],
     ) -> dict[str, SchedulerContainerAddressMap]: ...
+
+
+def wake_pod(
+    session: DatabaseSession,
+    *,
+    stub_id: str,
+    workspace_id: str,
+    woken_at: datetime | None = None,
+) -> None:
+    """Undo a stop's park and have the autoscaler look at the pod now.
+
+    A connection wakes a pod this way before it waits for a container. A start
+    passes `woken_at`, which also asks for a container while nobody is connected.
+    """
+    StubRepository(session).wake(stub_id, workspace_id=workspace_id, woken_at=woken_at)
+    AutoscalingTargetRepository(session).activate(
+        stub_id=stub_id,
+        workspace_id=workspace_id,
+        target_kind=AutoscalerTargetKind.Pod,
+    )
 
 
 @dataclass(slots=True)
@@ -921,7 +943,6 @@ class PodControlService:
         )
         workspace_id = stub.workspace_id
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
-        connections = self._pod_proxy_connections()
         request = PodProxyRequest(
             port=port,
             container_id=container_id,
@@ -929,19 +950,19 @@ class PodControlService:
             query_string=_query_string(query_params),
             protocol=protocol,
         )
-        demand_recorded = False
+        hold = PodConnectionHold(
+            self._pod_proxy_connections(),
+            workspace_id,
+            stub_id,
+            config.runtime.keep_warm if stub.kind is StubKind.Pod else None,
+        )
         try:
             if container_id is not None:
                 target = await self._pinned_container_proxy_target(stub, request, config)
             else:
-                await connections.increment_total_connections(workspace_id, stub_id)
-                demand_recorded = True
+                await hold.demand()
                 await self._async_database().run_transaction(
-                    lambda session: AutoscalingTargetRepository(session).activate(
-                        stub_id=stub_id,
-                        workspace_id=workspace_id,
-                        target_kind=AutoscalerTargetKind.Pod,
-                    )
+                    lambda session: wake_pod(session, stub_id=stub_id, workspace_id=workspace_id)
                 )
                 target = await self._wait_for_pod_proxy_target(
                     stub,
@@ -949,26 +970,11 @@ class PodControlService:
                     health_path=config.runtime.health_check_path,
                     health_port=config.runtime.health_check_port,
                 )
-            if not demand_recorded:
-                await connections.increment_total_connections(workspace_id, stub_id)
-                demand_recorded = True
-            await connections.increment_container_connections(
-                workspace_id,
-                stub_id,
-                target.container_id,
-                keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
-            )
+            await hold.attach(target.container_id)
         except BaseException:
-            if demand_recorded:
-                await connections.decrement_total_connections(workspace_id, stub_id)
+            await hold.release()
             raise
-        return PodProxySession(
-            workspace_id=workspace_id,
-            stub_id=stub_id,
-            target=target,
-            keep_warm_seconds=(config.runtime.keep_warm if stub.kind is StubKind.Pod else None),
-            pinned=container_id is not None,
-        )
+        return PodProxySession(target=target, hold=hold, pinned=container_id is not None)
 
     async def open_pod_proxy_http_stream(
         self,
@@ -1001,22 +1007,7 @@ class PodControlService:
             raise
 
     async def finish_pod_proxy(self, session: PodProxySession) -> None:
-        async with session.finalization() as should_finalize:
-            if not should_finalize:
-                return
-            connections = self._pod_proxy_connections()
-            await asyncio.gather(
-                connections.decrement_container_connections(
-                    session.workspace_id,
-                    session.stub_id,
-                    session.target.container_id,
-                    keep_warm_seconds=session.keep_warm_seconds,
-                ),
-                connections.decrement_total_connections(
-                    session.workspace_id,
-                    session.stub_id,
-                ),
-            )
+        await session.hold.release()
 
     async def _wait_for_pod_proxy_target(
         self,

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import socket
 from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 
 from execution.shells.service import ShellControlService
 from fastapi import (
@@ -173,7 +174,12 @@ async def shell_connect_tunnel(
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Failed to connect to container") from exc
     return StreamingResponse(
-        _proxy_http_shell_stream(request, backend, target.buffer_size_bytes),
+        _proxy_http_shell_stream(
+            request,
+            backend,
+            target.buffer_size_bytes,
+            hold=service.devbox_connection(target, workspace_id=workspace_id),
+        ),
         media_type="application/octet-stream",
         headers={"cache-control": "no-store"},
     )
@@ -196,67 +202,76 @@ async def shell_connect_websocket(
     )
     await websocket.accept()
     target = None
-    try:
-        target = await service.shell_backend_target_async(
-            stub_id=stub_id,
-            container_id=container_id,
-            workspace_id=authorization.audience.workspace_id,
-        )
-        backend = await asyncio.to_thread(
-            connect_shell_backend,
-            target,
-            route_dialer=route_dialer,
-        )
-    except Exception as exc:
-        # Surface why the shell tunnel could not be established — without this
-        # the client just sees an immediate disconnect and the cause (backend
-        # dial failure, missing port publication) is invisible in the logs.
-        backend_address = getattr(target, "address", "") if target is not None else ""
-        logger.error(
-            "shell tunnel failed for stub=%s container=%s backend=%s: %s",
-            stub_id,
-            container_id,
-            backend_address or "<unresolved>",
-            exc,
-            exc_info=True,
-        )
-        await websocket.close(
-            code=status.WS_1011_INTERNAL_ERROR,
-            reason=str(exc)[:120],
-        )
-        return
-    try:
-        await websocket.send_text("OK")
-        await bridge_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
-    except (WebSocketDisconnect, asyncio.CancelledError):
-        return
-    except OSError as exc:
-        await websocket.close(
-            code=status.WS_1011_INTERNAL_ERROR,
-            reason=f"connection to the container shell failed: {exc}"[:120],
-        )
-    finally:
-        backend.close()
+    async with AsyncExitStack() as held:
+        try:
+            target = await service.shell_backend_target_async(
+                stub_id=stub_id,
+                container_id=container_id,
+                workspace_id=authorization.audience.workspace_id,
+            )
+            await held.enter_async_context(
+                service.devbox_connection(target, workspace_id=authorization.audience.workspace_id)
+            )
+            backend = await asyncio.to_thread(
+                connect_shell_backend,
+                target,
+                route_dialer=route_dialer,
+            )
+        except Exception as exc:
+            # Surface why the shell tunnel could not be established — without this
+            # the client just sees an immediate disconnect and the cause (backend
+            # dial failure, missing port publication, a connection count that
+            # could not be taken) is invisible in the logs.
+            backend_address = getattr(target, "address", "") if target is not None else ""
+            logger.error(
+                "shell tunnel failed for stub=%s container=%s backend=%s: %s",
+                stub_id,
+                container_id,
+                backend_address or "<unresolved>",
+                exc,
+                exc_info=True,
+            )
+            await websocket.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason=str(exc)[:120],
+            )
+            return
+        try:
+            await websocket.send_text("OK")
+            await bridge_websocket_to_socket(websocket, backend, target.buffer_size_bytes)
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            return
+        except OSError as exc:
+            await websocket.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason=f"connection to the container shell failed: {exc}"[:120],
+            )
+        finally:
+            backend.close()
 
 
 async def _proxy_http_shell_stream(
     request: Request,
     backend: socket.socket,
     buffer_size_bytes: int,
+    *,
+    hold: AbstractAsyncContextManager[None],
 ) -> AsyncIterator[bytes]:
+    # Held inside the stream so a response that never starts takes no count.
     backend.setblocking(False)
     loop = asyncio.get_running_loop()
     writer = asyncio.create_task(_request_body_to_socket(request, backend, loop))
     try:
-        yield b"OK"
-        while True:
-            try:
-                data = await loop.sock_recv(backend, max(buffer_size_bytes, 1))
-            except OSError:
-                return
-            if not data:
-                return
-            yield data
+        async with hold:
+            yield b"OK"
+            while True:
+                try:
+                    data = await loop.sock_recv(backend, max(buffer_size_bytes, 1))
+                except OSError:
+                    return
+                if not data:
+                    return
+                yield data
     finally:
         writer.cancel()
         await asyncio.gather(writer, return_exceptions=True)

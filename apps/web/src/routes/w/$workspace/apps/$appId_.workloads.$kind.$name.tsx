@@ -24,7 +24,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 import { currentDeployment, findWorkloadGroup, type WorkloadGroup } from "./-workloads/grouping";
 import { CallMethods } from "./-workloads/CallMethods";
-import { DevboxConnect, DevboxWorkspace } from "./-workloads/DevboxDetail";
+import { DevboxActions, DevboxConnect, DevboxWorkspace } from "./-workloads/DevboxDetail";
 import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
@@ -138,7 +138,12 @@ function WorkloadDetailPage() {
             ]}
           />
         }
-        actions={backLink}
+        actions={
+          <>
+            <DevboxActions workspaceId={workspace.id} deploymentId={current.id} />
+            {backLink}
+          </>
+        }
         headerDetails={
           <PanelErrorBoundary title="Devbox status could not be displayed">
             <DevboxConnect workspaceId={workspace.id} deploymentId={current.id} />

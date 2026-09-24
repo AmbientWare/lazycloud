@@ -74,7 +74,8 @@ CPU headroom grows after reserved CPU or RAM leaves at most 20 percent free for
 capacity prevents duplicate growth. Each enabled stopped market retains its
 configured minimum or 20 percent of its running target, whichever is larger.
 A zero stopped minimum disables that market's reserve. The default stopped
-minimums are two Spot and zero On-Demand. Keep the running Spot floor at two
+minimums are one Spot and one On-Demand, so On-Demand work such as a devbox
+resumes a stopped machine instead of buying one. Keep the running Spot floor at two
 until live preparation, restart, refill, interruption,
 and cleanup acceptance passes; then lower it to one within the same four-node cap.
 

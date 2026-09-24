@@ -419,7 +419,8 @@ async def test_endpoint_retry_requeues_the_relational_dispatch(
         )
     )
     stub = _stub_for_deployment(async_services, deployment.id)
-    _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=1)
+    # Room for both attempts on a slow runner; this test is about the retry.
+    _set_endpoint_dispatch_limits(async_services, stub, timeout_seconds=30)
     container_id = str(uuid5(NAMESPACE_URL, "lazycloud:test:retry-container"))
     containers = _EndpointContainers(
         states=[

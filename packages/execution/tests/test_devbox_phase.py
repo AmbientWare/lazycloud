@@ -42,8 +42,31 @@ def test_a_devbox_phase_follows_its_container_records(
     expected: str,
 ) -> None:
     phase, reason = devbox_phase(
-        container, finished_steps=steps, saving_disk=saving, recent_failure=failure
+        container,
+        finished_steps=steps,
+        saving_disk=saving,
+        waking=False,
+        refusal=None,
+        recent_failure=failure,
     )
 
     assert phase is DevboxPhase(expected)
     assert reason == (failure if phase is DevboxPhase.Failed else "")
+
+
+@pytest.mark.parametrize(
+    ("refusal", "expected"), [(None, DevboxPhase.Queued), ("unfunded", DevboxPhase.Failed)]
+)
+def test_a_start_waits_for_a_container_unless_the_autoscaler_refused_one(
+    refusal: str | None, expected: DevboxPhase
+) -> None:
+    phase, reason = devbox_phase(
+        None,
+        finished_steps=_NONE,
+        saving_disk=False,
+        waking=True,
+        refusal=refusal,
+        recent_failure="an older failure",
+    )
+
+    assert (phase, reason) == (expected, refusal or "")
