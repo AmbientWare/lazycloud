@@ -221,7 +221,8 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 // otherwise it returns -1 and the attach restores the whole chain.
 func planExtension(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, size, minFree int64) (int, []layerManifest, error) {
 	if state == nil || state.Pending != nil || state.Attachment != nil || !state.HeadFresh ||
-		state.unpublishedSealed() > 0 || state.SizeBytes > size || state.PublishedGeneration == 0 {
+		len(state.Layers) < 2 || state.unpublishedSealed() > 0 || state.SizeBytes > size ||
+		state.PublishedGeneration == 0 {
 		return -1, nil, nil
 	}
 	from := slices.IndexFunc(chain, func(entry chainEntry) bool {

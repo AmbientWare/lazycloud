@@ -938,7 +938,8 @@ class WorkerDurableDiskService:
                         continue
                     try:
                         if lease.volume_id:
-                            # Before the publish, whose own reads the sample would count.
+                            # Before the publish: a flatten drops the cached pages a
+                            # sample reads, and with them this window's use.
                             self._sample_heat(lease)
                         self._publish_pending(attached, lease)
                         if draining and lease.volume_id:
